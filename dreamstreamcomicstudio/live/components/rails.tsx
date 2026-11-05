@@ -183,7 +183,7 @@ export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestIn
       <div className="people-scroll">
         <div className="people-sect">On air · {1 + guests.length}</div>
         <div className="person">
-          <Avatar name={hostName} size={34} ring />
+          <Avatar name={hostName} size={34} ring self />
           <div className="pz-meta">
             <div className="pz-name">
               You <span className="cm-role host">host</span>

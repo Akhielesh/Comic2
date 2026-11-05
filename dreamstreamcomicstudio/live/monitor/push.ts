@@ -438,7 +438,7 @@ export async function localNotify(title: string, body: string, tag: string, url:
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     const reg = await navigator.serviceWorker?.getRegistration(SW_SCOPE);
-    if (reg) await reg.showNotification(title, { body, tag, data: { url }, icon: '/stream-studio.svg', badge: '/stream-studio.svg' } as NotificationOptions);
+    if (reg) await reg.showNotification(title, { body, tag, data: { url }, icon: '/icons/stream-192.png', badge: '/icons/stream-badge-96.png' } as NotificationOptions);
     else new Notification(title, { body, tag });
   } catch { /* ignore */ }
 }

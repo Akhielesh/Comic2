@@ -162,6 +162,9 @@ Auth: reuse Supabase sessions. Roles per event: `host`, `moderator`, `viewer`
 
 ## 6. Design language (see mockup)
 
+> **Current look: the Atlas skin (§13).** What follows is the original v1 brief; the
+> shipped surface moved to "calm studio" (§9) and then to the Atlas language (§13).
+
 Minimalist and quiet: Inter, hairline borders, 12 px radii, generous whitespace, one
 accent per state (red = live/record, brand yellow reserved for primary CTAs), true
 light + dark themes via CSS variables (`data-theme`), no chrome that competes with the
@@ -553,3 +556,100 @@ defaulted, meeting end log, `ice` STUN-only vs STUN+TURN, never for viewers).
 **Real-device QA still owed:** iOS Safari (audio unlock, share sheet), Android Chrome, a
 guest on mobile data (needs TURN), a 3-person meeting where guests hear each other with
 no echo.
+
+## 13. The Atlas look (2026-11-05)
+
+Stream Studio speaks the Atlas Studio language — the same one Comic Studio's
+`data-ds-skin="atlas"` uses (`docs/design/atlas-skin.md`): monochrome white paper and
+black ink, hue only for status (always with a word or an icon), IBM Plex Sans body at
+14 px, Space Grotesk 600 only for page-level and public / sign-in titles, big numbers and the
+stage slates (sheet, dialog, card, settings-section, help, tour and empty-state titles are
+Plex 600, as Atlas sets them), 8 px controls, 12 px cards, 16 px dialogs, Atlas shadows,
+Atlas motion. Overlays (sheets, menus, popovers, the help panel, tour cards, toasts) sit on
+`--raised`: white in light, `#1a1a1a` in dark — one step above the `#111111` cards — with
+the light hairline edge.
+
+**How it is wired (no rewrite of the 2,990 lines of `live/styles/*.css`):**
+
+- `live.html` carries `data-ds-skin="atlas"` on `<html>` statically (no script). Nothing
+  strips it yet: the build-time kill switch (`VITE_DS_SKIN_EVERYWHERE=off`) is the
+  DreamStream session's planned `vite.config.ts` work and has not landed, so until it does
+  the look is turned off by removing the attribute. Without it Stream Studio is the
+  cream-and-clay studio, except that titles fall back to Georgia (Newsreader is no longer
+  requested) and the two web manifests' splash colour is white, not cream (manifests are
+  static, one per host, and follow the default look).
+- `live/styles/atlas-skin.css` (imported last by `live/main.tsx`) re-points Stream's own
+  tokens (`--bg --panel --text --muted --faint --accent* --green/--amber/--blue/--live …`)
+  to the Atlas values in a light and a dark block, then fixes only what tokens can't
+  reach: hard-coded serif fonts, eyebrow labels (the Atlas overline), the always-dark stage
+  ("room": neutral black in both themes; controls selected on it are white), the red
+  LIVE / REC fills, overlays, the phone tab bar, motion. `--green/--amber/--blue/--live` are
+  the *readable* status inks (Atlas toneText) because the app uses them as text; a fill
+  carrying white text uses `--live-fill` / `--green-solid` / `--amber-solid`.
+- `live/theme.ts`: under the skin no `--accent*` is written inline (an inline style beats
+  every stylesheet), the accent picker is gone (hue never decorates) and a stored accent is
+  ignored, not deleted. Theme (light by default, whatever the OS says), density (calm/pro)
+  and corners (soft/sharp) stay the person's choice. A theme flip is one view-transition
+  cross-fade. `<meta name="theme-color">` follows the in-app theme (`#ffffff` / `#0a0a0a`).
+  New events start on the ink cover; covers stay the host's choice. An event that has no
+  cover stored shows the default cover (ink under the skin) everywhere a cover is drawn,
+  and is saved to the account with it; a stored cover (clay included) is kept as chosen.
+- Fonts are self-hosted from `/fonts/*.woff2` (Plex 400 and 600 and Grotesk 600, plus
+  Grotesk 500 for the lockup's "Studio", preloaded). Hanken Grotesk still loads: the compositor draws it into broadcasts and
+  recordings (content); nothing in the page's own UI uses it any more, so the compositor
+  asks for both weights when it starts (`warmProgramFonts`) and redraws once they arrive,
+  and the first frames of a broadcast never use the fallback face for long. Newsreader is
+  gone. JetBrains Mono stays for `.mono` figures.
+- **The nursery and the tracker:** chart series (the week, the trends, the sleep chart, the
+  sound chart's motion line) use the Atlas greyscale ramp (`--chart-1…5`), told apart by
+  step, by shape and by the legend's words; quick-log tiles, the running timer, log rows and
+  the log sheet are ink. Green / amber / red stay only where they say a status (sound bands,
+  cry and alert tones).
+- **Boot:** a static splash in `#live-root` (the on-air mark, the wordmark, a progress line
+  that appears after 400 ms, a CSS-only "still loading" line after 12 s — `visibility:
+  hidden` until then, so the status region only announces it when it shows — and a
+  `<noscript>` note, the only text in the status without JavaScript) instead of a blank
+  page. If `live-theme-boot.js` fails to load, the splash follows the OS colour scheme until
+  the bundle applies the stored theme. `public/live-theme-boot.js` (a plain external script —
+  the page allows no inline script) applies the stored theme / density / corners before
+  first paint. The account splash (`SignInGate` `GateSplash`) reuses the splash's rules and
+  continues its progress line (`live/bootSplash.ts`), so the hand-over moves nothing.
+- **Brand** (the shared studio marks, `components/brand`, `docs/design/brand-marks.md`): the
+  rail, the phone top bar, the viewer / event / guest top bars and the sign-in and
+  secure-account cards wear `StudioLogo studio="stream" size="compact"` (28 px On-air mark,
+  17 px Space Grotesk wordmark: the Atlas header lockup); the studio top bar's back button is
+  the mark alone (the button carries the name, as the rail's does, since the slim rail hides
+  the wordmark). The boot splash draws the same mark's markup and loops its broadcast from the
+  render-blocking bundle CSS (`studio-marks.css`; still without JavaScript and under reduced
+  motion); the account splash's `StudioMark loading` takes the loop over at the same phase.
+  "Your studios" (Settings, and the chips in the account menu) shows each studio's own mark:
+  Comic Studio the Grin, Chat Studio the D (it lives in the DreamStream app, whose mark that
+  is), Stream Studio On air; the baby monitor, part of Stream Studio, keeps its icon in a tile
+  of the marks' size and corner. `live.html` links `/icons/stream-favicon.ico` and `.svg` and
+  the 180 px PNG touch icon (iOS ignores SVG); both manifests list the On-air PNG 192 / 512 /
+  maskable set and revalidate on every request (`public/_headers`); notifications show
+  `/icons/stream-192.png` with the white-on-transparent `/icons/stream-badge-96.png` badge.
+- **Navigation:** the phone tab bar has five places (Dashboard, Go live, Monitor, Calls,
+  Settings; labels ≥ 11 px, 52 px targets, the current one an ink pill). Help & tours moved
+  to the phone top bar (and stays in the account menu), next to a theme switch phones never
+  had (44 px targets; the logo and account buttons beside them are 44 px too). Under
+  360 px the phone, event and viewer top bars show the mark without the wordmark (still
+  named for screen readers) so "Sign in" and the legal links fit. The desktop
+  rail keeps its collapse; its active row is the Atlas menu-active fill.
+
+**Tests:** `live/styles/atlasSkinParity.unit.test.ts` (every mapped colour equals the
+`--ds-*` value in `index.css`'s Atlas block, both themes — the two layers can't drift),
+`live/styles/atlasSkinContrast.unit.test.ts` (every token pair, and a scan of every rule
+that colours text with a token, AA in both themes), `live/theme.unit.test.ts` (both
+looks), `live/themeBoot.unit.test.ts` (the boot script decides exactly what `theme.ts`
+decides; its content-hash URL and caching), `live/liveHtml.unit.test.ts` (the static page:
+attribute, no inline script, theme-color pair, icons, fonts, splash and its mark against
+`components/brand/studios.ts`), `live/bootSplash.unit.test.ts` (the line and the mark's loop
+carry on), `live/LiveApp.nav.unit.test.tsx` (five tabs, Help and theme in the top bar, the
+accent picker only without the skin, the shared lockup and the rail's name),
+`live/components/StudiosCard.test.tsx` (each studio's mark), `live/studio/compositor.unit.test.ts`
+(the program's faces are requested when the compositor starts), and
+`tests/edge/liveCsp.built.test.ts` against the built page — including live.html's inline
+`<style>` blocks (the `<noscript>` one too) against `style-src-elem` and the font preloads
+against `font-src`, since both splashes are styled only by that inline CSS: a policy that
+keeps style attributes but blocks inline `<style>` fails there, not in production.

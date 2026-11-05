@@ -17,7 +17,7 @@ import { ChatRail, ReactBar } from '../components/rails';
 import { normalizeQuick } from '../emoji';
 import { Icon } from '../ui/icons';
 import { LiveLegalLinks } from '../ui/legalLinks';
-import { StreamStudioLogo } from '../ui/logo';
+import { StudioLogo } from '../../components/brand';
 import {
   Avatar, Btn, FloatLayer, Pill, cx, useFloatingEmoji, useMediaQuery, type PushToast,
 } from '../ui/primitives';
@@ -373,7 +373,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
 
   // ----------------------------------------------------------------- render
   const liveFor = startedAt && status === 'live' ? fmtDuration((Date.now() - startedAt) / 1000) : null;
-  const cover = coverGradient(meta?.cover ?? 0);
+  const cover = coverGradient(meta?.cover);
 
   const metricRows: [string, string][] = useMemo(() => {
     const player = playerRef.current;
@@ -701,7 +701,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   return (
     <div className="viewer-root">
       <div className="viewer-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><StreamStudioLogo /></span>
+        <span className="rail-logo" style={{ cursor: 'default' }}><StudioLogo studio="stream" size="compact" /></span>
         <span className="spacer" />
         <LiveLegalLinks compact />
         {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}

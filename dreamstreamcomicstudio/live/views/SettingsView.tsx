@@ -25,7 +25,7 @@ import { NAME_MAX, cleanName } from '@/shared/accountName';
 import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
-import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
+import { Btn, Field, Segmented, Slider, Toggle, cx, revealOnFocus, type PushToast } from '../ui/primitives';
 import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { cloudCopySettingDesc } from '../costCopy';
 import { AccountUsageCard } from './settings/UsageCard';
@@ -224,7 +224,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           {SET_CATS.map((c) => (
-            <button key={c.id} className={cx('set-nav-item', cat === c.id && 'active')} onClick={() => setCat(c.id)}>
+            <button key={c.id} className={cx('set-nav-item', cat === c.id && 'active')} onClick={() => setCat(c.id)} onFocus={revealOnFocus}>
               <Icon name={c.icon} size={17} />
               {c.label}
             </button>

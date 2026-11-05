@@ -2,6 +2,7 @@
 // buttons, pills, toggles, segmented controls, sliders, avatars, tabs, meters,
 // charts, sheets, fields and toasts. Plain CSS classes from styles/app.css.
 import React, { useEffect, useRef, useState } from 'react';
+import { atlasSkin } from '../theme';
 import { Icon } from './icons';
 
 export const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(' ');
@@ -13,23 +14,41 @@ const AVATAR_GRADS: [string, string][] = [
   ['#f87171', '#fb923c'], ['#a3e635', '#22c55e'],
 ];
 
-export function gradFor(name: string): string {
+const nameHash = (name: string): number => {
   let x = 0;
   for (let i = 0; i < name.length; i++) x = (x * 31 + name.charCodeAt(i)) >>> 0;
-  const [a, b] = AVATAR_GRADS[x % AVATAR_GRADS.length];
+  return x;
+};
+
+/** Under the Atlas skin a person's colour is neutral: hue never decorates (the stage's dark ink). */
+const ATLAS_PERSON_FILL = 'linear-gradient(160deg, #3a3a3a, #0a0a0a)';
+
+/** A person's colour (avatars, the incoming-call screen): a gradient per name, neutral under the skin. */
+export function gradFor(name: string): string {
+  if (atlasSkin()) return ATLAS_PERSON_FILL;
+  const [a, b] = AVATAR_GRADS[nameHash(name) % AVATAR_GRADS.length];
   return `linear-gradient(135deg, ${a}, ${b})`;
 }
+
+/** Atlas avatar tones (atlas-skin.css: --avatar-*): 0 is the ink disc, reserved for the signed-in
+ *  person (`self`); everyone else gets one of the other greyscale steps by name, so faces in a list
+ *  still tell apart and nobody else ever wears your disc. */
+export const AVATAR_TONES = 3;
+export const avatarTone = (name: string): number => 1 + (nameHash(name) % (AVATAR_TONES - 1));
 
 export function initials(name: string): string {
   const p = name.trim().split(/\s+/);
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || name.slice(0, 2).toUpperCase();
 }
 
-export function Avatar({ name, size = 30, className, ring }: { name: string; size?: number; className?: string; ring?: boolean }) {
+/** `self`: the signed-in person's own avatar (the ink disc under the Atlas skin). */
+export function Avatar({ name, size = 30, className, ring, self }: { name: string; size?: number; className?: string; ring?: boolean; self?: boolean }) {
+  const skin = atlasSkin();
   return (
     <span
       className={cx('avatar', ring && 'avatar-ring', className)}
-      style={{ width: size, height: size, background: gradFor(name), fontSize: size * 0.38 }}
+      style={{ width: size, height: size, fontSize: size * 0.38, ...(skin ? null : { background: gradFor(name) }) }}
+      data-tone={skin ? (self ? 0 : avatarTone(name)) : undefined}
       aria-hidden
     >
       {initials(name)}
@@ -177,11 +196,21 @@ export interface TabDef {
   badge?: number;
 }
 
+/**
+ * For an item in a sideways-scrolling row (the phone's settings categories, the dashboard's tabs):
+ * on focus, scroll it fully into view. Browsers leave a partly visible element where it is, so Tab
+ * could land on a category whose label and most of its ring sit past the edge of a row with no
+ * scrollbar. `nearest` moves nothing when it already fits.
+ */
+export function revealOnFocus(e: React.FocusEvent<HTMLElement>): void {
+  e.currentTarget.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+}
+
 export function Tabs({ tabs, value, onChange, className }: { tabs: TabDef[]; value: string; onChange: (id: string) => void; className?: string }) {
   return (
     <div className={cx('tabs', className)} role="tablist">
       {tabs.map((t) => (
-        <button key={t.id} className={cx('tab', value === t.id && 'active')} onClick={() => onChange(t.id)} role="tab" aria-selected={value === t.id}>
+        <button key={t.id} className={cx('tab', value === t.id && 'active')} onClick={() => onChange(t.id)} onFocus={revealOnFocus} role="tab" aria-selected={value === t.id}>
           {t.icon && <Icon name={t.icon} size={15} />}
           {t.label}
           {t.badge != null && t.badge > 0 && <span className="tab-badge">{t.badge}</span>}

@@ -16,6 +16,7 @@
 import { purgeLiveAccountData } from './accountPurge';
 import { addMyEvent, listMyEvents, type MyEvent } from './events';
 import type { StudioPrefs } from './prefs';
+import { defaultCover } from './theme';
 
 export interface StudioAccess {
   signedIn: boolean;
@@ -213,7 +214,8 @@ const toRow = (ev: MyEvent, uid: string): Omit<CloudEventRow, 'user_id'> & { use
   status: ev.status ?? 'idle',
   quality: ev.quality ?? null,
   access: ev.access ?? null,
-  cover: ev.cover ?? 0,
+  // No cover chosen: the default one (ink under the skin), not the cream studio's clay.
+  cover: ev.cover ?? defaultCover(),
   scheduled_at_ms: ev.scheduledAt ?? null,
   started_at_ms: ev.startedAt ?? null,
   ended_at_ms: ev.endedAt ?? null,

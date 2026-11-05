@@ -5,16 +5,39 @@ import React, { useEffect, useState } from 'react';
 import { fetchAccountAccess, onAccountAccessChange, type AccountAccess, type StudioAccess } from '@/services/studioAccessApi';
 import { openLiveApp, openMainApp } from '@/services/liveLink';
 import { isStreamUrl } from '@/shared/streamHost';
+import { StudioMark, type Studio } from '../../components/brand';
 import { useAccount } from '../account';
 import { Icon } from '../ui/icons';
 import { cx } from '../ui/primitives';
 
+/**
+ * Each studio wears its own mark (components/brand): Comic Studio the Grin, Stream Studio On air,
+ * and Chat Studio the D, because it lives in the DreamStream app itself (the D is that app's icon,
+ * the "suite" mark). The baby monitor is part of Stream Studio, not a studio, so it keeps a line
+ * icon in a tile of the marks' size and corner, and the column still lines up.
+ */
+const MARK: Partial<Record<StudioAccess['id'], Studio>> = {
+  comic_studio: 'comic',
+  chat_studio: 'dreamstream',
+  stream_studio: 'stream',
+};
 const ICON: Record<StudioAccess['id'], string> = {
   comic_studio: 'book',
   chat_studio: 'chat',
   stream_studio: 'broadcast',
   baby_monitor: 'baby',
 };
+
+/** The studio's mark (decorative: its name is always written beside it), or its icon. */
+function StudioGlyph({ id, compact }: { id: StudioAccess['id']; compact?: boolean }) {
+  const mark = MARK[id];
+  if (compact) return mark ? <StudioMark studio={mark} className="studio-chip-mark" /> : <Icon name={ICON[id]} size={16} />;
+  return mark ? (
+    <StudioMark studio={mark} className="studio-mark" />
+  ) : (
+    <span className="studio-ic" aria-hidden="true"><Icon name={ICON[id]} size={18} /></span>
+  );
+}
 const BADGE: Record<StudioAccess['status'], { text: string; icon: string }> = {
   open: { text: 'Yours', icon: 'check' },
   needs_code: { text: 'One step', icon: 'lock' },
@@ -75,9 +98,11 @@ export function StudiosCard({ compact }: { compact?: boolean }) {
       <div className="studio-chips" aria-label="Your studios">
         {data.studios.map((s) => (
           <button key={s.id} className={cx('studio-chip', `st-${s.status}`)} onClick={() => go(s.action?.href ?? s.href)} title={`${s.label} — ${s.detail}`}>
-            <Icon name={ICON[s.id]} size={14} />
+            <StudioGlyph id={s.id} compact />
             <span>{s.label.replace(' & family calls', '')}</span>
-            <i aria-label={BADGE[s.status].text} />
+            {/* Open is the norm, so only an exception says anything — in words, not a coloured dot. */}
+            {/* The space keeps the button's name two words ("Comic Studio Locked"); a flex row doesn't draw it. */}
+            {s.status !== 'open' && <>{' '}<span className="studio-chip-state">{BADGE[s.status].text}</span></>}
           </button>
         ))}
       </div>
@@ -92,7 +117,7 @@ export function StudiosCard({ compact }: { compact?: boolean }) {
       <div className="studios-list">
         {data.studios.map((s) => (
           <div key={s.id} className={cx('studio-row', `st-${s.status}`)}>
-            <span className="studio-ic"><Icon name={ICON[s.id]} size={18} /></span>
+            <StudioGlyph id={s.id} />
             <span className="studio-txt">
               <b>{s.label}</b>
               <small>{s.status === 'open' ? s.tagline : s.detail}</small>

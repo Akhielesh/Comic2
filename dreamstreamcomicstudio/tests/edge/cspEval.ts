@@ -109,6 +109,16 @@ export function allowsInlineScript(policy: Policy, body: string): boolean {
   return list.includes("'unsafe-inline'") && !hasHashOrNonce;
 }
 
+/** An inline <style> block applies only with 'unsafe-inline' (and no hash/nonce present) or its hash,
+ *  on style-src-elem (or its fallbacks). */
+export function allowsInlineStyleElement(policy: Policy, body: string): boolean {
+  const list = sourcesFor(policy, 'style-src-elem');
+  if (!list) return true;
+  if (list.includes(sha256Source(body))) return true;
+  const hasHashOrNonce = list.some((s) => /^'(sha(256|384|512)|nonce)-/.test(s));
+  return list.includes("'unsafe-inline'") && !hasHashOrNonce;
+}
+
 /** A style="" attribute needs 'unsafe-inline' on style-src-attr (or its fallbacks). */
 export function allowsInlineStyleAttribute(policy: Policy): boolean {
   const list = sourcesFor(policy, 'style-src-attr');

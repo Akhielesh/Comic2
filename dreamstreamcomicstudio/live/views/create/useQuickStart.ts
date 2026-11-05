@@ -13,6 +13,7 @@ import { loadPrefs, savePrefs } from '../../prefs';
 import { QUICK_DEFAULTS, autoTitle, setStudioIntent, type QuickKind } from '../../quickStart';
 import { primeAudioContext } from '../../studio/audioMixer';
 import { pushEventToCloud } from '../../sync';
+import { INK_COVER, atlasSkin } from '../../theme';
 
 export interface QuickStartOptions {
   /** Typed title; blank → an auto title. */
@@ -77,7 +78,8 @@ export function useQuickStart(nav: Nav) {
       const title = (o.title ?? '').trim() || autoTitle(kind, o.titleName ?? account.name ?? '');
       const host = (o.host ?? '').trim() || prefs.hostName.trim() || account.name || 'Host';
       const access = o.access ?? QUICK_DEFAULTS.access;
-      const cover = o.cover ?? QUICK_DEFAULTS.cover;
+      // The ink cover under the Atlas skin (theme.ts defaultCover); clay without it, as before.
+      const cover = o.cover ?? (atlasSkin() ? INK_COVER : QUICK_DEFAULTS.cover);
       const eventKind = kind === 'meeting' ? 'meeting' : 'broadcast';
       const res = await createEvent({
         title,

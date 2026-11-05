@@ -1,0 +1,196 @@
+// @vitest-environment jsdom
+// The shell's navigation in both looks: the phone tab bar holds at most five places (Help & tours
+// lives in the phone top bar and the account menu), the active place is marked for assistive tech,
+// the phone top bar carries Help and the theme switch, the accent picker exists only without the
+// Atlas skin (hue never decorates under it), and the brand in the rail and the top bar is the
+// shared On-air lockup (components/brand). The views are stand-ins; the shell is real.
+import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LiveAccount } from './account';
+
+const h = vi.hoisted(() => ({
+  account: { status: 'member', userId: 'u1', email: 'ada@example.com', name: 'Ada Lovelace' } as LiveAccount,
+  openHelp: vi.fn(),
+  stub: (id: string) => () => <div data-testid={id} />,
+}));
+
+vi.mock('./account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./account')>()),
+  consumeAuthReturn: vi.fn(async () => null),
+  useAccount: () => h.account,
+  openAuth: vi.fn(),
+}));
+vi.mock('./components/Guide', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./components/Guide')>()),
+  openHelp: h.openHelp,
+  GuideHost: () => null,
+  useFirstVisitTour: () => undefined,
+}));
+vi.mock('./sync', () => ({ pullPrefsFromCloud: vi.fn(async () => undefined) }));
+vi.mock('./components/SaveSheet', () => ({ sweepDiscardedRecordings: vi.fn(async () => undefined) }));
+vi.mock('./calls/callCenter', () => ({ useCalls: () => ({ log: [], uid: null }) }));
+vi.mock('./views/calls/CallHost', () => ({ CallHost: () => null }));
+vi.mock('./views/monitor/InviteHost', () => ({ InviteHost: () => null }));
+vi.mock('./components/AuthSheet', () => ({ AuthSheetHost: () => null }));
+vi.mock('./components/StudiosCard', () => ({ StudiosCard: () => null }));
+vi.mock('./monitor/push', () => ({ reconcileLegacyAlerts: vi.fn(async () => undefined) }));
+vi.mock('./views/DashboardView', () => ({ DashboardView: h.stub('dashboard') }));
+vi.mock('./views/CreateView', () => ({ CreateView: h.stub('create') }));
+vi.mock('./views/SettingsView', () => ({ SettingsView: h.stub('settings') }));
+vi.mock('./views/MonitorHome', () => ({ MonitorHome: h.stub('monitor'), NurseryHub: h.stub('nursery') }));
+vi.mock('./views/CallsView', () => ({ CallsView: h.stub('calls') }));
+
+import { LiveApp, TAB_LABELS } from './LiveApp';
+
+const html = document.documentElement;
+const settle = () => act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
+const tabbar = () => document.querySelector<HTMLElement>('nav.tabbar')!;
+const rail = () => document.querySelector<HTMLElement>('nav.rail')!;
+const topbar = () => document.querySelector<HTMLElement>('header.mtop')!;
+
+beforeEach(() => {
+  localStorage.clear();
+  h.openHelp.mockReset();
+  history.replaceState(null, '', '/live');
+  html.removeAttribute('style');
+  for (const a of ['data-theme', 'data-ds-skin']) html.removeAttribute(a);
+});
+afterEach(() => {
+  html.removeAttribute('data-ds-skin');
+});
+
+describe('the phone tab bar', () => {
+  it('holds at most five places, with readable labels — Help is not one of them', async () => {
+    render(<LiveApp />);
+    await settle();
+    const tabs = within(tabbar()).getAllByRole('button');
+    expect(tabs.length).toBeLessThanOrEqual(5);
+    expect(tabs.map((t) => t.textContent)).toEqual(Object.values(TAB_LABELS));
+    expect(within(tabbar()).queryByText(/help/i)).toBeNull();
+  });
+
+  it('marks the current place, and moves with the route', async () => {
+    render(<LiveApp />);
+    await settle();
+    expect(within(tabbar()).getByRole('button', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(within(tabbar()).getByRole('button', { name: 'Monitor' }));
+    await settle();
+    expect(within(tabbar()).getByRole('button', { name: 'Monitor' })).toHaveAttribute('aria-current', 'page');
+    expect(within(tabbar()).getByRole('button', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('carries the welcome tour’s targets, so the tour works on phones too', async () => {
+    render(<LiveApp />);
+    await settle();
+    for (const id of ['create', 'monitor', 'calls', 'settings']) expect(tabbar().querySelector(`[data-tour="nav-${id}"]`)).toBeTruthy();
+  });
+});
+
+describe('the phone top bar', () => {
+  it('opens Help & tours', async () => {
+    render(<LiveApp />);
+    await settle();
+    fireEvent.click(within(topbar()).getByRole('button', { name: 'Help & tours' }));
+    expect(h.openHelp).toHaveBeenCalledTimes(1);
+    expect(topbar().querySelector('[data-tour="help"]')).toBeTruthy();
+  });
+
+  it('switches the theme (phones had no way to before)', async () => {
+    render(<LiveApp />);
+    await settle();
+    expect(html.getAttribute('data-theme')).toBe('light');
+    fireEvent.click(within(topbar()).getByRole('button', { name: 'Dark mode' }));
+    await settle();
+    expect(html.getAttribute('data-theme')).toBe('dark');
+    expect(JSON.parse(localStorage.getItem('ds-live-appearance')!).theme).toBe('dark');
+    expect(within(topbar()).getByRole('button', { name: 'Light mode' })).toBeTruthy();
+  });
+
+  it('comes first in the focus order, as it is drawn: top bar, then the page, then the tab bar', async () => {
+    render(<LiveApp />);
+    await settle();
+    const page = document.querySelector('.content')!;
+    expect(topbar().compareDocumentPosition(page) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(page.compareDocumentPosition(tabbar()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe('the accent picker', () => {
+  it('is in the rail without the Atlas skin, and colours the page as before', async () => {
+    render(<LiveApp />);
+    await settle();
+    const picker = screen.getByRole('radiogroup', { name: 'Accent color' });
+    fireEvent.click(within(picker).getByRole('radio', { name: 'Sage accent' }));
+    await settle();
+    expect(html.style.getPropertyValue('--accent')).toBe('#5f7d4f');
+  });
+
+  it('is gone under the Atlas skin, and nothing writes an accent — the stored one is kept', async () => {
+    html.setAttribute('data-ds-skin', 'atlas');
+    localStorage.setItem('ds-live-appearance', JSON.stringify({ theme: 'light', accent: 'plum', density: 'pro', corners: 'sharp', studioLayout: 'chat-right' }));
+    render(<LiveApp />);
+    await settle();
+    expect(screen.queryByRole('radiogroup', { name: 'Accent color' })).toBeNull();
+    expect(html.style.getPropertyValue('--accent')).toBe('');
+    // Density and corners stay the person's choice.
+    expect(html.getAttribute('data-density')).toBe('pro');
+    expect(html.getAttribute('data-corners')).toBe('sharp');
+    expect(JSON.parse(localStorage.getItem('ds-live-appearance')!).accent).toBe('plum');
+  });
+});
+
+describe('the brand', () => {
+  it('is the shared Stream Studio lockup in the rail and the phone top bar: the On-air mark, decorative beside its wordmark', async () => {
+    render(<LiveApp />);
+    await settle();
+    for (const bar of [rail(), topbar()]) {
+      const logo = bar.querySelector('.rail-logo .ds-logo')!;
+      expect(logo.classList.contains('ds-logo--compact')).toBe(true);
+      expect(logo.textContent).toBe('Stream Studio');
+      const mark = logo.querySelector('svg.ds-logo-mark')!;
+      expect(mark.getAttribute('data-studio')).toBe('stream');
+      expect(mark.getAttribute('aria-hidden')).toBe('true');
+      expect(mark.classList.contains('ds-logo-mark--loading')).toBe(false);
+    }
+    // The old clay tile with its accent fill is gone.
+    expect(document.querySelector('.rail-logo [fill^="var(--accent"]')).toBeNull();
+  });
+
+  it('keeps the dashboard link named when the slim rail hides the wordmark', async () => {
+    render(<LiveApp />);
+    await settle();
+    const home = within(rail()).getByRole('button', { name: 'Stream Studio — dashboard' });
+    // The slim rail (and every rail under 880 px) hides .logo-text: the name can't depend on it.
+    expect(home.querySelector('.ds-logo-word')?.classList.contains('logo-text')).toBe(true);
+    fireEvent.click(within(rail()).getByRole('button', { name: 'Collapse navigation' }));
+    await settle();
+    expect(rail().classList.contains('slim')).toBe(true);
+    expect(within(rail()).getByRole('button', { name: 'Stream Studio — dashboard' })).toBe(home);
+  });
+
+  it('fits a 320 px phone with the account offline ("Sign in" showing): the top bar keeps the mark and the button’s name, the wordmark leaves the view', async () => {
+    // At 320 px the wordmark + Help + theme + "Sign in" measured 345 px (the capture harness's
+    // stream-qa/scripts/topbar-mtop.mjs measures the bar; jsdom can't). Under 360 px the word is
+    // visually hidden — not display: none, so it is still read — and the button keeps its label.
+    h.account = { status: 'offline' } as LiveAccount; // the account couldn't be read: the gate stays open, "Sign in" shows
+    try {
+      render(<LiveApp />);
+      await settle();
+      const home = within(topbar()).getByRole('button', { name: 'Stream Studio — dashboard' });
+      expect(home.querySelector('.ds-logo-word')).not.toBeNull();
+      expect(within(topbar()).getByRole('button', { name: /Sign in/ })).toBeTruthy();
+    } finally {
+      h.account = { status: 'member', userId: 'u1', email: 'ada@example.com', name: 'Ada Lovelace' } as LiveAccount;
+    }
+    const css = readFileSync(path.join(process.cwd(), 'live/styles/features.css'), 'utf8');
+    const narrow = /@media \(max-width: 359px\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(narrow).toMatch(/\.mtop[^{]*\.ds-logo-word\s*\{[^}]*position:\s*absolute[^}]*clip:/);
+    expect(narrow).not.toMatch(/display:\s*none/);
+    // 44 px targets for the logo and the account button, like Help and the theme switch.
+    expect(css).toMatch(/\.mtop \.rail-logo\s*\{[^}]*min-height:\s*44px/);
+    expect(css).toMatch(/\.acct-wrap\.compact \.rail-user\s*\{[^}]*min-width:\s*44px;\s*min-height:\s*44px/);
+  });
+});

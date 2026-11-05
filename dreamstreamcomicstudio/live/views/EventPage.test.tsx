@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Nav } from '../nav';
@@ -115,5 +117,57 @@ describe('EventPage — push, not poll (ADR 0007 C2)', () => {
     expect(vi.mocked(getEvent).mock.calls.length).toBeGreaterThan(1);
     expect(screen.queryByText('Event not found')).toBeNull();
     expect(screen.getByText('Launch party')).toBeTruthy();
+  });
+});
+
+describe('EventPage — the top bar fits a phone', () => {
+  // Widths jsdom can't measure: the capture harness (stream-qa/scripts/topbar-event.mjs, a real
+  // Chromium on the production build, touch and mouse) found the narrowest window each bar fits
+  // on one line with the wordmark: 402 px for an ended event (mark + wordmark + legal links +
+  // "Ended"), plus the pill's 12 px = 414 px; 422 px in Hanken Grotesk without the skin. A
+  // scheduled event's bar (no pill): 353 px.
+  const ENDED_BAR_NEEDS = 422;
+  const PLAIN_BAR_NEEDS = 353;
+  const css = (file: string) => readFileSync(path.join(process.cwd(), 'live/styles', file), 'utf8');
+  /** The widest `max-width` media block that visually hides the wordmark for `selector`. */
+  const hidesWordUnder = (selector: RegExp) => {
+    let widest = 0;
+    for (const m of css('features.css').matchAll(/@media \(max-width: (\d+)px\)\s*\{([\s\S]*?)\n\}/g)) {
+      const rule = new RegExp(`${selector.source}[^{]*\\.ds-logo-word\\s*\\{([^}]*)\\}`).exec(m[2]);
+      if (!rule) continue;
+      // Visually hidden, never display: none — the mark's name is still read out.
+      expect(rule[1]).toMatch(/position:\s*absolute[^}]*clip:/);
+      expect(rule[1]).not.toMatch(/display:\s*none/);
+      widest = Math.max(widest, Number(m[1]) + 1);
+    }
+    return widest;
+  };
+
+  it('marks the bar of an ended event, which also holds the "Ended" pill', async () => {
+    vi.mocked(getEvent).mockResolvedValue(meta({ status: 'ended', endedAt: T0 - MIN }));
+    renderPage();
+    await act(async () => undefined);
+    const bar = document.querySelector('.event-topbar')!;
+    expect(bar.classList.contains('has-pill')).toBe(true);
+    expect(bar.querySelector(':scope > .pill')?.textContent).toBe('Ended');
+    expect(bar.querySelector('.ds-logo-word')).not.toBeNull();
+  });
+
+  it('leaves a scheduled event’s bar unmarked (no pill)', async () => {
+    vi.mocked(getEvent).mockResolvedValue(meta());
+    renderPage();
+    await act(async () => undefined);
+    const bar = document.querySelector('.event-topbar')!;
+    expect(bar.classList.contains('has-pill')).toBe(false);
+    expect(bar.querySelector('.pill')).toBeNull();
+  });
+
+  it('drops the wordmark from view wherever the bar would run off a touch screen', () => {
+    // On touch screens the bar's legal links never wrap (app.css), so the wordmark must go first.
+    expect(css('app.css')).toMatch(/\(pointer: coarse\)[\s\S]*\.event-topbar[^{]*\.legal-links\.compact\s*\{\s*flex-wrap:\s*nowrap/);
+    expect(hidesWordUnder(/\.event-topbar\.has-pill/)).toBeGreaterThanOrEqual(ENDED_BAR_NEEDS);
+    expect(hidesWordUnder(/\.event-topbar(?![.\w-])/)).toBeGreaterThanOrEqual(PLAIN_BAR_NEEDS); // any event bar
+    // The pill's 12 px is part of the measured width.
+    expect(css('screens.css')).toMatch(/\.event-topbar > \.pill\s*\{\s*margin-left:\s*12px/);
   });
 });

@@ -10,7 +10,7 @@ import { useState } from 'react';
 import { SECURE_TOKEN, failed, openAuth, secureAccount, type SecureAccountFailure, type SecureAccountResult } from '../../account';
 import type { Nav } from '../../nav';
 import { Icon } from '../../ui/icons';
-import { StreamStudioLogo } from '../../ui/logo';
+import { StudioLogo } from '../../../components/brand';
 import { Btn } from '../../ui/primitives';
 import './account.css';
 
@@ -29,7 +29,7 @@ export function SecureAccount({ token, nav }: { token: string; nav: Nav }) {
   return (
     <main className="secure-page">
       <div className="card card-pad secure-card">
-        <div style={{ marginBottom: 14 }}><StreamStudioLogo /></div>
+        <div style={{ marginBottom: 14 }}><StudioLogo studio="stream" size="compact" /></div>
         {!valid ? (
           <>
             <h1 className="serif">This link isn’t complete</h1>

@@ -16,7 +16,7 @@ import { downloadIcs, formatCountdown } from '../schedule';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
 import { LiveLegalLinks } from '../ui/legalLinks';
-import { StreamStudioLogo } from '../ui/logo';
+import { StudioLogo } from '../../components/brand';
 import { useOnPageReturn, usePageVisible } from '../ui/pageVisibility';
 import { Avatar, Btn, Pill, cx, type PushToast } from '../ui/primitives';
 
@@ -153,8 +153,10 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
 
   return (
     <div className="event-page-root">
-      <div className="event-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><StreamStudioLogo /></span>
+      {/* has-pill: an ended event's bar also holds the "Ended" pill — too wide for a phone with the
+          wordmark (features.css shows the mark only there). */}
+      <div className={cx('event-topbar', meta.status === 'ended' && 'has-pill')}>
+        <span className="rail-logo" style={{ cursor: 'default' }}><StudioLogo studio="stream" size="compact" /></span>
         <span className="spacer" />
         <LiveLegalLinks compact />
         {meta.status === 'ended' && <Pill tone="neutral">Ended</Pill>}

@@ -37,6 +37,37 @@ describe('StudiosCard', () => {
     expect(screen.getByText('An admin set which studios this account can use.')).toBeTruthy();
   });
 
+  it('shows each studio’s own mark (decorative: the name is beside it), the baby monitor its icon tile', async () => {
+    const withChat: AccountAccess = {
+      ...access,
+      studios: [access.studios[0], { id: 'chat_studio', label: 'Chat Studio', tagline: 'The assistant', status: 'open', detail: 'Included', href: '/?view=chat' }, ...access.studios.slice(1)],
+    };
+    vi.mocked(fetchAccountAccess).mockResolvedValueOnce(withChat);
+    const { container } = render(<StudiosCard />);
+    await waitFor(() => expect(screen.getByText('Your studios')).toBeTruthy());
+    const rows = [...container.querySelectorAll('.studio-row')];
+    const glyph = (row: Element) => row.querySelector('svg.studio-mark')?.getAttribute('data-studio') ?? (row.querySelector('.studio-ic') ? 'icon' : null);
+    // Comic → the Grin, Chat → the D (it lives in the DreamStream app), Stream → On air.
+    expect(rows.map(glyph)).toEqual(['comic', 'dreamstream', 'stream', 'icon']);
+    for (const mark of container.querySelectorAll('svg.studio-mark')) expect(mark.getAttribute('aria-hidden')).toBe('true');
+    // Ink when it's yours, muted when it isn't (the badge says which in words).
+    expect(rows[0].classList.contains('st-locked')).toBe(true);
+    expect(rows[2].classList.contains('st-open')).toBe(true);
+  });
+
+  it('the account menu’s chips carry the marks too, at the 16 px minimum', async () => {
+    const { container } = render(<StudiosCard compact />);
+    await waitFor(() => expect(container.querySelector('.studio-chips')).toBeTruthy());
+    const chips = [...container.querySelectorAll('.studio-chip')];
+    // Open is the norm and says nothing; only the exception says so, in words (no coloured dot).
+    expect(chips.map((c) => c.textContent)).toEqual(['Comic Studio Locked', 'Stream Studio', 'Baby monitor']);
+    expect(chips[0].querySelector('.studio-chip-state')?.textContent).toBe('Locked');
+    expect(chips[0]).toHaveAccessibleName('Comic Studio Locked');
+    expect(container.querySelectorAll('.studio-chip i')).toHaveLength(0);
+    expect(chips.map((c) => c.querySelector('svg.studio-chip-mark')?.getAttribute('data-studio') ?? null)).toEqual(['comic', 'stream', null]);
+    expect(chips[0].getAttribute('title')).toBe('Comic Studio — Not part of your account yet');
+  });
+
   it('re-reads after the account changes (e.g. a rename in Settings)', async () => {
     render(<StudiosCard />);
     await waitFor(() => expect(screen.getByText('Your studios')).toBeTruthy());

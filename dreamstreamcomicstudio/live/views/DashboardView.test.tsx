@@ -1,8 +1,8 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEvent, probeLiveWorker } from '../api';
-import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
+import { addMyEvent, hydrateMyEvents, listMyEvents, listMyRecordings, type MyEvent } from '../events';
 import type { Nav } from '../nav';
 import { takeScheduleRequest, takeStudioIntent } from '../quickStart';
 import { fetchStudioAccess, syncMyEvents } from '../sync';
@@ -17,6 +17,7 @@ vi.mock('../api', () => ({
 vi.mock('../events', () => ({
   addMyEvent: vi.fn(),
   hydrateMyEvents: vi.fn(),
+  listMyEvents: vi.fn(),
   listMyRecordings: vi.fn(),
 }));
 
@@ -69,6 +70,7 @@ describe('DashboardView live-worker readiness gate', () => {
     vi.mocked(syncMyEvents).mockResolvedValue(undefined);
     vi.mocked(hydrateMyEvents).mockResolvedValue([]);
     vi.mocked(listMyRecordings).mockReturnValue([]);
+    vi.mocked(listMyEvents).mockReturnValue([]);
   });
 
   it('lets hosts retry a failed backend probe and re-enables the quick starts when the live worker recovers', async () => {
@@ -119,5 +121,27 @@ describe('DashboardView live-worker readiness gate', () => {
     expect(await screen.findByText('Team sync')).toBeInTheDocument();
     expect(screen.getByText('Meeting')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rejoin' })).toBeInTheDocument();
+  }, 15_000);
+
+  it('paints this browser’s last snapshot first, so the live hero is there before the cloud answers', async () => {
+    vi.mocked(probeLiveWorker).mockResolvedValue(reachableProbe);
+    const cached: MyEvent = { id: 'l1', hostKey: 'k', title: 'Friday studio session', createdAt: Date.now(), scheduledAt: null, status: 'live', viewers: 3, startedAt: Date.now() - 60_000 };
+    vi.mocked(listMyEvents).mockReturnValue([cached]);
+    let answer: (evs: MyEvent[]) => void = () => undefined;
+    vi.mocked(hydrateMyEvents).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+
+    render(<DashboardView nav={createNav()} push={vi.fn()} />);
+
+    // First frame, cloud still pending: the hero, the live subtitle and the row — no empty state.
+    expect(screen.getByText('On air now')).toBeInTheDocument();
+    expect(screen.getByText(/You're live right now/)).toBeInTheDocument();
+    expect(screen.queryByText('No streams yet')).toBeNull();
+    expect(screen.queryByLabelText('Loading streams')).toBeNull();
+
+    // The cloud's answer refreshes the numbers in place.
+    await waitFor(() => expect(hydrateMyEvents).toHaveBeenCalled());
+    await act(async () => answer([{ ...cached, viewers: 23 }]));
+    await waitFor(() => expect(document.querySelector('.lh-stats b')?.textContent).toBe('23'));
+    expect(screen.getByText('On air now')).toBeInTheDocument();
   }, 15_000);
 });
