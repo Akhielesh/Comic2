@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import { DEFAULT_CAPS, sanitizeStudioUsage, withHistoryCaps, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
+import { DEFAULT_CAPS, sanitizeStudioUsage, steerOn, withHistoryCaps, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
 import {
   CAST_KINDS,
   collectAssetPaths,
@@ -33,7 +33,17 @@ import {
   type RefAsset,
   type RenderState
 } from '../../../shared/comic/doc.js';
-import { encodeStudioEvent, normalizeTimeZone, type AttachmentTarget, type StreamRequest, type StudioEvent, type StudioFocus } from '../../../shared/comic/events.js';
+import {
+  STEER_LIMITS,
+  encodeStudioEvent,
+  normalizeTimeZone,
+  type AttachmentTarget,
+  type SteerRequest,
+  type SteerResponse,
+  type StreamRequest,
+  type StudioEvent,
+  type StudioFocus
+} from '../../../shared/comic/events.js';
 import { editionProgress, i18nOf, localizeDoc } from '../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages.js';
 import { DOC_LIMITS, EDITOR_LIMITS } from '../../../shared/comic/limits.js';
@@ -49,6 +59,7 @@ import { consumeAllowanceNotices } from '../services/usageEnforcer.js';
 import { checkQualityAccess, studioCapsFor, type StudioCapsDeps } from '../comic/access.js';
 import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
 import { createStudioContext, signAssetPaths, type OrchestratorContext, type StudioContextDeps } from '../comic/context.js';
+import { notAvailableError } from '../comic/extensions.js';
 import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
 import { recordOptionAnswer, runDirectorTurn, type OptionAnswerRef } from '../comic/director.js';
 import { canFastPath, parseIntent, routeIntent } from '../comic/intents.js';
@@ -66,7 +77,7 @@ import {
 } from '../comic/safety/index.js';
 import { CRISIS_LINE } from '../comic/safety/contentPolicy.js';
 import { composeTurnReply } from '../comic/replies.js';
-import { getStudioSession, peekStudioSession, scheduleVariantBackfill, type StudioSession } from '../comic/session.js';
+import { getStudioSession, peekStudioSession, scheduleVariantBackfill, type SteerRefusal, type StudioSession } from '../comic/session.js';
 import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
 import { ANALYZE_SOURCE_MIN_CHARS, buildTurnToolset, createDirectorTurn } from '../comic/tools.js';
 import { toolGroups } from '../comic/tools/index.js';
@@ -105,6 +116,14 @@ export const STREAM_ACTION_TYPES: ReadonlySet<string> = new Set([...SPEND_ACTION
 // ── User-facing copy ─────────────────────────────────────────────────────────
 
 export const BUSY_MESSAGE = "I'm still working on your last message — wait for it to finish, or press stop.";
+/** POST /steer (agent-editor plan §3 A2). Every refusal keeps the note: the client queues it in Up next instead. */
+export const STEER_OFF_MESSAGE = "Adding a note while the director works isn't on yet — your note waits in Up next and goes when it finishes.";
+export const STEER_NOT_RUNNING_MESSAGE = "The director isn't working on anything right now — your note goes as a new message.";
+export const STEER_FULL_MESSAGE = `The director already has ${STEER_LIMITS.inbox} notes to read — this one waits in Up next and goes when it finishes.`;
+export const STEER_LONG_MESSAGE = "That note is long, so it goes as its own message once the director finishes (long scripts are saved as the source).";
+export const STEER_BLOCKED_MESSAGE = "That note doesn't fit DreamStream's content rules, so it wasn't added. Try different wording — bold action and spooky moments are fine.";
+/** The longest note steering takes mid-turn. Longer text is a pasted script: it goes as a message (saved as the source). */
+export const MAX_STEER_CHARS = 6000;
 export const HIDDEN_MESSAGE_TEXT = "[Message hidden — it didn't fit DreamStream's content rules]";
 export const RESTRICTED_SPEND_MESSAGE =
   'Your account is limited right now, so new drawing and translation are paused. You can still read and edit your comic for free.';
@@ -430,6 +449,26 @@ export function parseFocus(raw: unknown): StudioFocus | undefined {
   }
   return Object.keys(out).length ? out : undefined;
 }
+
+/**
+ * POST /steer body → SteerRequest (agent-editor plan §3 A2): trimmed text, 1 to MAX_STEER_CHARS characters (a longer
+ * note answers LIMIT: it goes as its own message, where a pasted script is saved as the source), and the same focus
+ * rules as a message. Throws a 400 for anything else.
+ */
+export function parseSteerRequest(body: unknown): SteerRequest {
+  const bad = (message: string) => new StudioError('BAD_REQUEST', message, { status: 400 });
+  if (!isObject(body)) throw bad('Type a note to add.');
+  const text = typeof body.text === 'string' ? body.text.trim() : '';
+  if (!text) throw bad('Type a note to add.');
+  if (text.length > MAX_STEER_CHARS) throw new StudioError('LIMIT', STEER_LONG_MESSAGE, { status: 409 });
+  const focus = parseFocus(body.focus);
+  return { text, ...(focus ? { focus } : {}) };
+}
+
+/** The 409 body for a steer the inbox can't take: no director turn is reading it (NOT_RUNNING) or it is full (BUSY). */
+export const steerRefusalBody = (why: SteerRefusal) => ({
+  error: { message: why === 'NOT_RUNNING' ? STEER_NOT_RUNNING_MESSAGE : STEER_FULL_MESSAGE, code: why }
+});
 
 /** One quick-assign target (null = leave it to the director). Throws on a malformed entry. */
 const parseTarget = (raw: unknown, bad: (m: string) => StudioError): AttachmentTarget => {
@@ -1161,6 +1200,80 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     })
   );
 
+  /**
+   * POST /projects/:id/steer (agent-editor plan §3 A2; COMIC_STEER, D2): a note for the director turn that is running.
+   * The note is screened like a chat message (a block answers CONTENT_POLICY and keeps nothing), then committed as a
+   * user message marked `steered` and queued on the session's inbox, which the director reads before its next model
+   * call. Refusals change nothing and keep the note for the client's queue: NOT_AVAILABLE (steering is off),
+   * NOT_RUNNING (no director turn is reading), BUSY (STEER_LIMITS.inbox notes already wait), LIMIT (a long note goes
+   * as a message), COOLDOWN. Free: no model call of its own beyond the capped safety classifier; no spend path.
+   */
+  router.post(
+    '/projects/:id/steer',
+    requireActive,
+    owned(async (req, res) => {
+      const userId = requireUser(req);
+      const steer = parseSteerRequest(req.body);
+      /** NOT_RUNNING / BUSY: the same {error} body and refusal log line as a StudioError, with the stream's codes. */
+      const refuse = (why: SteerRefusal) => {
+        logRequestRefused(req, { code: why, status: 409 });
+        res.status(409).json(steerRefusalBody(why));
+      };
+      const session = await sessionFor(req);
+      const { contextDeps, keys, byok } = keysFor(req);
+      const caps = await capsFor(req, byok);
+      if (!steerOn(caps)) throw notAvailableError(STEER_OFF_MESSAGE);
+      // The cheap refusals first: a note nobody will read is never screened (the screen may call the classifier).
+      const early = session.steerRefusal();
+      if (early) return refuse(early);
+      const cooldown = await safety.cooldownFor(userId).catch((err) => {
+        logger.warn('comic_cooldown_lookup_failed', { userId, message: (err as Error)?.message });
+        return null;
+      });
+      if (cooldown && cooldown.until > Date.now()) throw new StudioError('COOLDOWN', cooldownMessage(cooldown.until), { status: 429 });
+      const rating = effectiveRating(session.doc, caps.ratingCeiling).rating;
+      const ctx = createStudioContext({
+        req,
+        session,
+        // Its own signal: a Stop of the running turn never fails this screen; the inbox check below answers instead.
+        signalFrom: new AbortController().signal,
+        deps: { ...contextDeps, keys, assets: contextDeps.assets || assets() },
+        caps,
+        rating
+      });
+      let screened: ScreenResult;
+      try {
+        screened = await safety.screenTurnInput(ctx, { text: steer.text, attachments: [], rating });
+      } catch (err) {
+        // The same fail-open rule as the owner's chat message (decisions-final #10): logged, never silent.
+        logger.warn('comic_screen_failed_open', { requestId: req.requestId, projectId: session.projectId, kind: 'steer', message: (err as Error)?.message });
+        screened = ALLOW;
+      }
+      if (screened.decision === 'block') {
+        const crisis = typeof screened.note === 'string' && screened.note.includes(CRISIS_LINE) ? ` ${CRISIS_LINE}` : '';
+        throw new StudioError('CONTENT_POLICY', `${STEER_BLOCKED_MESSAGE}${crisis}`, { status: 422 });
+      }
+      // The turn may have ended (or the inbox filled) while the screen ran: check again, then commit and queue in one
+      // synchronous step, so a committed note is always one the running turn will read or answer for.
+      const late = session.steerRefusal();
+      if (late) return refuse(late);
+      const at = Date.now();
+      const msg: Msg = { id: newId('msg'), role: 'user', text: steer.text, at, steered: true };
+      session.commit([{ op: 'message', msg }]);
+      session.pushSteer({
+        msgId: msg.id,
+        text: steer.text,
+        at,
+        ...(steer.focus ? { focus: steer.focus } : {}),
+        ...(screened.note ? { safetyNote: screened.note } : {})
+      });
+      logger.info('comic_steer', { requestId: req.requestId, projectId: session.projectId, chars: steer.text.length, decision: screened.decision });
+      const out: SteerResponse = { ok: true, msgId: msg.id };
+      res.set('Cache-Control', 'private, no-store');
+      res.json(out);
+    })
+  );
+
   router.post(
     '/projects/:id/urls',
     owned(async (req, res) => {
@@ -1188,7 +1301,17 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     });
   });
 
+  /** One stream request. Whatever happens in it, a turn it reserved is released when it ends (G19: never stuck BUSY). */
   async function stream(req: Request, res: Response) {
+    const turn: { release: () => void } = { release: () => undefined };
+    try {
+      await streamRequest(req, res, turn);
+    } finally {
+      turn.release();
+    }
+  }
+
+  async function streamRequest(req: Request, res: Response, turn: { release: () => void }) {
     const userId = requireUser(req);
     const request = parseStreamRequest(req.body);
     const session = await sessionFor(req);
@@ -1213,7 +1336,15 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
 
     // Refusals that persist nothing: busy → cooldown → restricted account.
     let refusal: { code: string; message: string } | null = null;
-    if (request.kind === 'message' && session.turnRunning) refusal = { code: 'BUSY', message: BUSY_MESSAGE };
+    // The BUSY check and the turn reservation are one synchronous step (G19): a second message that arrives while this
+    // one awaits its cooldown lookup, caps or upload is BUSY, instead of passing the check and waiting unseen on the
+    // turn lock. The reservation is released once this message's turn is over, or on any refusal or failure before.
+    if (request.kind === 'message') {
+      const reservation = session.reserveTurn();
+      if (reservation) turn.release = reservation;
+      else refusal = { code: 'BUSY', message: BUSY_MESSAGE };
+    }
+    const releaseTurn = () => turn.release();
     // From here to the end of the request (every path closes it): a message that will run is a
     // director turn in flight for Stop, under its own controller (see StopScope).
     const stops = openStopScope(session, request.kind === 'message' && !refusal);
@@ -1229,6 +1360,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const message = restrictedRefusal(request);
       if (message) refusal = { code: 'FORBIDDEN', message };
     }
+    // A refused message never runs: its reservation goes now, so the next message is not BUSY behind a refusal.
+    if (refusal) releaseTurn();
 
     let ctx: OrchestratorContext | null = null;
     let prepared: PreparedMessage | null = null;
@@ -1261,6 +1394,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         }
       } catch (err) {
         stops.close();
+        releaseTurn();
         throw err;
       }
     }
@@ -1314,7 +1448,9 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           try {
             await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape));
           } finally {
-            // The turn is over (its reply is in): from now on Stop is "Stop drawing" for its renders.
+            // The turn is over (its reply is in): from now on Stop is "Stop drawing" for its renders, and the
+            // next message may run (the turn lock is free; the reservation goes with it).
+            releaseTurn();
             stops.endTurn();
           }
         } else {
