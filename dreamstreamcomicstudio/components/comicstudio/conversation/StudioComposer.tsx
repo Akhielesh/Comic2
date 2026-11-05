@@ -36,11 +36,15 @@
 //    reply lands Send comes back while the pages it started keep drawing; their Stop is the
 //    activity line's ("Stop drawing") above the docked composer, and beside Send in the phone
 //    sheet, which has no activity line.
+//  - Live queue (agent-editor plan §3 A1; the controller carries `queue` only while caps.liveAgent.queue is on): while
+//    the turn is locked the box stays open and Send becomes "Queue" beside Stop; Enter queues the note into Up next.
+//    The draft clears only once studio.send() says the message was sent or queued — a 'refused' outcome keeps it in
+//    the box (the controller says why). The phone ask sheet shows Up next itself and stays open on a queued note.
 //  - A selection in the page editor shows as a focus chip ("Page 3 · 2 balloons ×"); the next
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
+import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
 import { TIER_PRESETS } from '../../../shared/comic/models';
 import { refInboxOf } from '../../../shared/comic/doc';
 import type { AttachmentTarget } from '../../../shared/comic/events';
@@ -52,7 +56,10 @@ import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { voiceInputSupported } from '../../../hooks/useDictation';
-import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
+import { CONTROL_BTN, FOCUS_RING, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
+import { cn } from '../../../lib/utils';
+import { sendOutcomeOf } from '../messageQueue';
+import { QueuedMessages } from './QueuedMessages';
 import type { PendingAttachment, SendOptions } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { COMPOSE_EVENT, type ComposeRequest } from './composerBus';
@@ -418,7 +425,12 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const hasContent = text.trim().length > 0 || attachments.length > 0;
   // Photos still uploading hold Send (the server only takes inbox paths that exist).
   const uploadsBusy = attachments.some((a) => a.kind === 'image' && isUploadBusy(a.upload));
-  const canSend = ready && hasContent && !messageBusy && !uploadsBusy;
+  // Live queue (plan §3 A1): the controller exposes `queue` only while the queue is on. Then a locked turn (the director
+  // working, or a plan_pages run) takes notes into Up next instead of refusing them.
+  const queueMode = Array.isArray(studio.queue);
+  const locked = queueMode ? (studio.turnLocked ?? messageBusy) : messageBusy;
+  const queueing = queueMode && locked;
+  const canSend = ready && hasContent && (!locked || queueMode) && !uploadsBusy;
   // The phone sheet has no activity line: renders still drawing after the reply get their Stop here.
   const stopDrawing = inSheet && ready && !messageBusy && studio.renderingTotal > 0;
 
@@ -908,7 +920,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const sendNow = useCallback(
     (rawText: string, list: ComposerAttachment[]) => {
-      if (!ready || messageBusy) return false;
+      if (!ready || (locked && !queueMode)) return false;
       // Photos still on their way in: the server only takes inbox paths that exist — wait.
       if (list.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) return false;
       // Photos in the comic's inbox travel by path; the rest (no uploader, failed) go inline.
@@ -924,27 +936,54 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       // Aligned with the IMAGE attachments as sent: inline photos first, then inbox photos.
       const targets: AttachmentTarget[] = [...inline.filter((a) => a.kind === 'image'), ...uploaded].map((a) => a.target ?? null);
       const [sendText, opts] = sendArgs(outgoing, inboxPaths, focusActive, targets);
-      void studio.send(sendText, opts);
-      // Sent photos leave the pipeline (their inbox copies now belong to the message).
-      for (const a of list) {
-        const rt = runtime.current.get(a.id);
-        runtime.current.delete(a.id);
-        revokeUrl(rt?.preview);
+      // Never lose a draft (plan §3 A1, G20). A free turn: the message goes now, so the box clears at once (and the
+      // phone sheet closes); were it refused after all, every word and photo comes back. A locked turn: the note goes
+      // to Up next, and the box clears only once send() says it was queued — 'refused' leaves it all where it was
+      // (the controller says why).
+      const sentNow = !queueing;
+      const clearSent = () => {
+        setText((prev) => (prev === rawText ? '' : prev));
+        setAttachments((prev) => prev.filter((a) => !list.some((x) => x.id === a.id)));
+        setRows([]);
+        setHint(null);
+        setPanel(null);
+        setAttachOpen(false);
+        setAssigning(null);
+        requestAnimationFrame(() => {
+          if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        });
+      };
+      if (sentNow) {
+        clearSent();
+        onSent?.();
       }
-      setText('');
-      setAttachments([]);
-      setRows([]);
-      setHint(null);
-      setPanel(null);
-      setAttachOpen(false);
-      setAssigning(null);
-      requestAnimationFrame(() => {
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
-      });
-      onSent?.();
+      void Promise.resolve(studio.send(sendText, opts))
+        .then(sendOutcomeOf, () => 'refused' as const)
+        .then((outcome) => {
+          if (outcome !== 'refused') {
+            // Sent photos leave the pipeline (their inbox copies now belong to the message).
+            for (const a of list) {
+              const rt = runtime.current.get(a.id);
+              runtime.current.delete(a.id);
+              revokeUrl(rt?.preview);
+            }
+          }
+          if (!mountedRef.current) return;
+          if (outcome === 'refused') {
+            if (sentNow) {
+              setText((prev) => (prev.trim() ? prev : rawText));
+              setAttachments((prev) => (prev.length ? prev : list));
+            }
+            return;
+          }
+          if (sentNow) return;
+          clearSent();
+          // The phone ask sheet stays open on a queued note, so its Up next shows where it went.
+          if (outcome === 'sent' || !inSheet) onSent?.();
+        });
       return true;
     },
-    [messageBusy, ready, studio, focusActive, onSent, showNotice]
+    [locked, queueMode, queueing, ready, studio, focusActive, onSent, showNotice, inSheet]
   );
 
   const submit = () => {
@@ -987,9 +1026,10 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     const said = (spoken || '').trim();
     if (!said) return;
     const joined = joinDictation(said);
-    if (autoSend && ready && !messageBusy && sendNow(joined, attachmentsRef.current)) return;
-    // Not sent (photos still uploading, or auto-send is off): the words wait in the box.
+    // The words go in the box first: they leave it only once the message is sent or queued (else they wait there).
     setText(joined);
+    if (autoSend && ready && (!locked || queueMode) && sendNow(joined, attachmentsRef.current)) return;
+    // Not sent (photos still uploading, or auto-send is off): the words wait in the box.
     if (autoSend && attachmentsRef.current.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) {
       showNotice('Your photos are still uploading — tap Send when they’re in.');
     }
@@ -1079,6 +1119,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   // Short windows put the box beside its controls: a placeholder that fits one line there.
   const placeholder =
     hint ||
+    (queueing ? (roomy ? 'Add a note — it goes when the director finishes this step…' : 'Add a note for Up next…') : null) ||
     placeholderProp ||
     (ff.layout === 'single-rail'
       ? 'Message the director…'
@@ -1273,6 +1314,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           </div>
         )}
 
+        {inSheet && queueMode && <QueuedMessages studio={studio} variant="inline" className="mb-2" />}
+
         {queueItems.length > 0 && (
           <UploadQueue
             className="mb-2"
@@ -1452,7 +1495,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 {/* The shared dictation control keeps its desktop look; on touch the mic and its settings caret are real 44 px targets. */}
                 <span className="contents coarse:[&_button]:min-h-[44px] coarse:[&_button]:min-w-[44px]">
                   <DictationButton
-                    disabled={!ready || messageBusy}
+                    disabled={!ready || (locked && !queueMode)}
                     onStart={() => {
                       dictationBaseRef.current = text;
                     }}
@@ -1548,7 +1591,43 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 {roomy && <span className="whitespace-nowrap">{cancelling ? 'Stopping…' : 'Stop drawing'}</span>}
               </button>
             )}
-            {messageBusy ? (
+            {queueing ? (
+              <>
+                {messageBusy && (
+                  <button
+                    type="button"
+                    onClick={() => void studio.cancel()}
+                    disabled={cancelling}
+                    aria-label={cancelling ? 'Stopping' : 'Stop'}
+                    title={cancelling ? 'Stopping…' : 'Stop the director (your queued notes wait)'}
+                    className={cn(
+                      'grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[var(--ds-control-border)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-50 coarse:h-11 coarse:w-11',
+                      TRANSITION,
+                      FOCUS_RING
+                    )}
+                  >
+                    <Square className="h-3 w-3 fill-current" aria-hidden />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={!canSend}
+                  aria-label="Queue"
+                  title={uploadsBusy ? 'Waiting for your photos to finish uploading' : 'Adds to Up next. The director reads it when it finishes this step'}
+                  className={cn(
+                    'inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--ds-ink)] text-[13px] font-medium text-[var(--ds-canvas)] hover:opacity-85 disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:min-w-11',
+                    roomy ? 'px-3.5' : 'px-0',
+                    TRANSITION,
+                    FOCUS_RING,
+                    PRESS
+                  )}
+                >
+                  <ListPlus className="h-4 w-4 shrink-0" aria-hidden />
+                  {roomy && <span className="whitespace-nowrap">Queue</span>}
+                </button>
+              </>
+            ) : messageBusy ? (
               <button
                 type="button"
                 onClick={() => void studio.cancel()}

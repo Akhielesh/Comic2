@@ -8,6 +8,11 @@
 // still send themselves, and v4 object suggestions ({ label, action | tab | say }) are upgraded
 // on the fly. The chip's accessible name is its visible text (label + price), so voice-control
 // users can say what they see.
+//
+// Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): the latest reply's chips stay
+// visible while the director works. A text chip tapped then goes to Up next (send() queues it) instead of doing
+// nothing; a chip that runs an action waits until the turn is free, so nothing spends behind the director's back;
+// client chips (open the reader, a tab, undo) never reach the server and stay live.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -146,8 +151,18 @@ export const freeTitle = (step: NextStep): string => {
   return 'Free — no charge to you';
 };
 
-/** Text chips go to the director, so they wait while a turn is streaming. */
-const sendsText = (c: ChipModel) => c.legacy || (!c.step.action && !c.step.client);
+/** Text chips go to the director, so they wait while a turn is streaming (or queue, with the live queue on). */
+export const sendsText = (c: ChipModel) => c.legacy || (!c.step.action && !c.step.client);
+
+/**
+ * Whether a chip is unavailable right now. Without the live queue a text chip waits for the director (and for a text
+ * chip already on its way). With it, a text chip queues instead and only an action chip waits for the turn lock.
+ */
+export const chipDisabled = (chip: ChipModel, opts: { pending: boolean; textPending: boolean; messageBusy: boolean; queueMode: boolean; turnLocked: boolean }): boolean => {
+  if (opts.pending) return true;
+  if (opts.queueMode) return !!chip.step.action && !chip.legacy && opts.turnLocked;
+  return sendsText(chip) && (opts.messageBusy || opts.textPending);
+};
 
 export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioController; className?: string }> = ({ chips, studio, className }) => {
   // Per chip: a long-running action (a render streams until it lands) must not freeze the
@@ -156,6 +171,8 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
   const cost = useCostFormat(studio);
   const pendingRef = useRef(new Set<string>());
   const mounted = useRef(true);
+  const queueMode = Array.isArray(studio.queue);
+  const turnLocked = queueMode ? (studio.turnLocked ?? studio.messageBusy) : studio.messageBusy;
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -187,14 +204,22 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
         const badge = priceBadge(usd, cost);
         const label = chipLabel(chip.step.label, badge);
         const busy = pending.has(key);
-        // Text chips wait for the director; a second text chip waits for the first one's turn.
-        const disabled = busy || (sendsText(chip) && (studio.messageBusy || chips.some((c, j) => sendsText(c) && pending.has(`${c.step.label}:${j}`))));
+        // Text chips wait for the director (or queue into Up next); a second text chip waits for the first one's turn.
+        const disabled = chipDisabled(chip, {
+          pending: busy,
+          textPending: chips.some((c, j) => sendsText(c) && pending.has(`${c.step.label}:${j}`)),
+          messageBusy: studio.messageBusy,
+          queueMode,
+          turnLocked
+        });
+        const queuesNow = queueMode && turnLocked && sendsText(chip);
         return (
           <ChipButton
             key={key}
             onClick={() => void tap(chip, key)}
             disabled={disabled}
             aria-busy={busy || undefined}
+            title={queuesNow ? 'Adds to Up next. The director reads it when it finishes this step' : disabled && queueMode && turnLocked ? 'Available once the director finishes this step' : undefined}
             className="min-w-0"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
