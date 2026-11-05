@@ -9,7 +9,8 @@
 //      cap is reserved for auth mail (EMAIL_AUTH_RESERVE_PER_*; abuse-ops-4): other templates
 //      stop at the cap minus the reserve, and a send a signed-out request triggered counts
 //      against that sender's daily allowance (EMAIL_ANON_MAX_PER_CLIENT_PER_DAY, per IPv4
-//      address / IPv6 /64), so a stranger can never use up the mail sign-in needs;
+//      address / IPv6 /64), so a stranger can never use up the mail sign-in needs — nor delay
+//      it: auth mail is checked in a lane of its own (see "Cap gate");
 //   4. logs every attempt to email_log (observability + the cost accounting above);
 //   5. builds the working one-click unsubscribe link (marketing) + read-receipt pixel.
 //
@@ -124,8 +125,12 @@ const noteThreshold = (label: string, period: 'day' | 'month', used: number, cap
   }
 };
 
-/** Test hook: forget which thresholds were already reported. */
-export const resetMailerWarnings = (): void => warnedThresholds.clear();
+/** Test hook: forget which thresholds were already reported and which caps were last seen closed. */
+export const resetMailerWarnings = (): void => {
+  warnedThresholds.clear();
+  closedLanes.auth = null;
+  closedLanes.other = null;
+};
 
 const ANON_WINDOW_MS = 24 * 60 * 60_000;
 /** True when this signed-out sender has used up its daily allowance (and counts this try). */
@@ -139,15 +144,47 @@ const anonymousSenderOverLimit = async (ip: string): Promise<boolean> => {
   }
 };
 
+// ── Cap gate ────────────────────────────────────────────────────────────────────
 // The check-then-log step of a send (read usage → apply the caps → log `queued`) runs one at a
-// time in this process, so parallel requests at the edge of a cap cannot all read the same count
-// and all pass: the next one reads the `queued` row the previous one wrote. Only that step is
-// serialized — the round trip to the email Worker is not.
-let capGate: Promise<unknown> = Promise.resolve();
-const oneAtATime = <T>(step: () => Promise<T>): Promise<T> => {
-  const run = capGate.then(step, step);
-  capGate = run.catch(() => undefined);
+// time per lane in this process, so parallel requests at the edge of a cap cannot all read the
+// same count and all pass: the next one reads the `queued` row the previous one wrote. Only that
+// step is serialized — not a refusal's log row, not the round trip to the email Worker.
+//
+// Auth mail has a lane of its own, so sign-in, confirm and reset mail never waits behind a queue
+// of other mail. One send from each lane can pass at the same moment, so the hard cap (and, when
+// an auth row lands between the four counts, the non-auth share) may be passed by one email per
+// process; auth may use the whole cap anyway.
+type Lane = 'auth' | 'other';
+const laneOf = (template: string): Lane => (isAuthTemplate(template) ? 'auth' : 'other');
+const laneGates: Record<Lane, Promise<unknown>> = { auth: Promise.resolve(), other: Promise.resolve() };
+const oneAtATime = <T>(lane: Lane, step: () => Promise<T>): Promise<T> => {
+  const run = laneGates[lane].then(step, step);
+  laneGates[lane] = run.catch(() => undefined);
   return run;
+};
+
+// Once the caps refuse a lane, its later sends are refused without reading usage or waiting in
+// the gate (sends already queued drain the same way), so a flood of refused mail costs only its
+// own log rows. The lane is checked again after a minute — a queued send that failed frees its
+// place — and at the next UTC midnight, when the day count starts over.
+const CLOSED_RECHECK_MS = 60_000;
+interface ClosedLane {
+  until: number;
+  /** The email_log error a refusal carries: 'auth_reserve' for the share, none for the hard cap. */
+  error?: string;
+}
+const closedLanes: Record<Lane, ClosedLane | null> = { auth: null, other: null };
+const closeLanes = (lanes: Lane[], error?: string): void => {
+  const now = Date.now();
+  const d = new Date(now);
+  const nextUtcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  for (const lane of lanes) closedLanes[lane] = { until: Math.min(now + CLOSED_RECHECK_MS, nextUtcMidnight), error };
+};
+const closedLane = (lane: Lane): ClosedLane | null => {
+  const closed = closedLanes[lane];
+  if (closed && Date.now() < closed.until) return closed;
+  closedLanes[lane] = null;
+  return null;
 };
 
 /** Usage snapshot + caps, for ops/cost dashboards and honest cost alerts. */
@@ -212,60 +249,74 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   }
 
   // (3b)–(4) under the cap gate: the caps read in-flight sends, and this send is logged `queued`
-  // before the next one reads them.
-  const admitted = await oneAtATime(async (): Promise<{ refused: SendResult } | { logId: string | null; unsubscribeUrl?: string }> => {
-    // (3b) hard cost cap — never exceed the configured ceiling
-    const usage = await getUsage();
-    const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
-    const overDay = EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY;
-    if (overMonth || overDay) {
-      console.error(
-        `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
-          `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
-          `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
-      );
-      await logSend({ ...baseLog, status: 'rate_limited' });
-      return { refused: { ok: false, skipped: 'rate_limited' } };
-    }
-    // (3c) the auth reserve: every other template stops at its share of the caps
-    const parts = usageParts(usage);
-    const share = otherShare();
-    if (!isAuthTemplate(template)) {
-      const overShareDay = EMAIL_MAX_PER_DAY > 0 && parts.otherDay >= share.day;
-      const overShareMonth = EMAIL_MAX_PER_MONTH > 0 && parts.otherMonth >= share.month;
-      if (overShareDay || overShareMonth) {
-        console.warn(
-          `[email][RESERVE] Non-auth mail reached its share (day ${parts.otherDay}/${share.day}, month ` +
-            `${parts.otherMonth}/${share.month}); the rest is kept for sign-in and password mail. ` +
-            `Skipping ${template} → ${maskEmail(to)}.`
+  // before the next one in its lane reads them. A refusal is logged after the gate is released.
+  type Refusal = { refused: SendResult; log: { status: 'rate_limited' | 'skipped'; error?: string } };
+  type Admission = { logId: string | null; unsubscribeUrl?: string };
+  const lane = laneOf(template);
+  const refusedByClosedLane = (): Refusal | null => {
+    const closed = closedLane(lane);
+    return closed ? { refused: { ok: false, skipped: 'rate_limited' }, log: { status: 'rate_limited', error: closed.error } } : null;
+  };
+  const admitted: Refusal | Admission =
+    refusedByClosedLane() ??
+    (await oneAtATime(lane, async (): Promise<Refusal | Admission> => {
+      const known = refusedByClosedLane();
+      if (known) return known;
+      // (3b) hard cost cap — never exceed the configured ceiling
+      const usage = await getUsage();
+      const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
+      const overDay = EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY;
+      if (overMonth || overDay) {
+        console.error(
+          `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
+            `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
+            `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
         );
-        await logSend({ ...baseLog, status: 'rate_limited', error: 'auth_reserve' });
-        return { refused: { ok: false, skipped: 'rate_limited' } };
+        closeLanes(['auth', 'other']);
+        return { refused: { ok: false, skipped: 'rate_limited' }, log: { status: 'rate_limited' } };
       }
-    }
-    // Honest early warnings at 50% and 80%: all mail against the caps, other mail against its share.
-    noteThreshold('all mail', 'day', usage.day, EMAIL_MAX_PER_DAY);
-    noteThreshold('all mail', 'month', usage.month, EMAIL_MAX_PER_MONTH);
-    if (!isAuthTemplate(template)) {
-      noteThreshold('non-auth mail', 'day', parts.otherDay, share.day);
-      noteThreshold('non-auth mail', 'month', parts.otherMonth, share.month);
-    }
-
-    // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
-    let unsubscribeUrl = params.unsubscribeUrl;
-    if (kind === 'marketing' && !unsubscribeUrl) {
-      if (!EMAIL_PUBLIC_BASE_URL) {
-        console.warn(`[email] Refusing marketing send (${template}) — EMAIL_PUBLIC_BASE_URL unset; cannot build unsubscribe link.`);
-        await logSend({ ...baseLog, status: 'skipped', error: 'no_unsub_base' });
-        return { refused: { ok: false, skipped: 'no_unsub_base' } };
+      // (3c) the auth reserve: every other template stops at its share of the caps
+      const parts = usageParts(usage);
+      const share = otherShare();
+      if (lane === 'other') {
+        const overShareDay = EMAIL_MAX_PER_DAY > 0 && parts.otherDay >= share.day;
+        const overShareMonth = EMAIL_MAX_PER_MONTH > 0 && parts.otherMonth >= share.month;
+        if (overShareDay || overShareMonth) {
+          console.warn(
+            `[email][RESERVE] Non-auth mail reached its share (day ${parts.otherDay}/${share.day}, month ` +
+              `${parts.otherMonth}/${share.month}); the rest is kept for sign-in and password mail. ` +
+              `Skipping ${template} → ${maskEmail(to)}.`
+          );
+          closeLanes(['other'], 'auth_reserve');
+          return { refused: { ok: false, skipped: 'rate_limited' }, log: { status: 'rate_limited', error: 'auth_reserve' } };
+        }
       }
-      unsubscribeUrl = `${EMAIL_PUBLIC_BASE_URL}/api/newsletter/unsubscribe?e=${encodeURIComponent(to)}&t=${unsubscribeToken(to)}`;
-    }
+      // Honest early warnings at 50% and 80%: all mail against the caps, other mail against its share.
+      noteThreshold('all mail', 'day', usage.day, EMAIL_MAX_PER_DAY);
+      noteThreshold('all mail', 'month', usage.month, EMAIL_MAX_PER_MONTH);
+      if (lane === 'other') {
+        noteThreshold('non-auth mail', 'day', parts.otherDay, share.day);
+        noteThreshold('non-auth mail', 'month', parts.otherMonth, share.month);
+      }
 
-    // (4) log 'queued' first so we have an id for the read-receipt pixel (and the next send's caps see it)
-    return { logId: await logSend({ ...baseLog, status: 'queued' }), unsubscribeUrl };
-  });
-  if ('refused' in admitted) return admitted.refused;
+      // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
+      let unsubscribeUrl = params.unsubscribeUrl;
+      if (kind === 'marketing' && !unsubscribeUrl) {
+        if (!EMAIL_PUBLIC_BASE_URL) {
+          console.warn(`[email] Refusing marketing send (${template}) — EMAIL_PUBLIC_BASE_URL unset; cannot build unsubscribe link.`);
+          return { refused: { ok: false, skipped: 'no_unsub_base' }, log: { status: 'skipped', error: 'no_unsub_base' } };
+        }
+        unsubscribeUrl = `${EMAIL_PUBLIC_BASE_URL}/api/newsletter/unsubscribe?e=${encodeURIComponent(to)}&t=${unsubscribeToken(to)}`;
+      }
+
+      // (4) log 'queued' first so we have an id for the read-receipt pixel (and the next send's caps see it)
+      return { logId: await logSend({ ...baseLog, status: 'queued' }), unsubscribeUrl };
+    }));
+  if ('refused' in admitted) {
+    // Refusals are not counted by the caps (they read queued / sent), so this row needs no gate.
+    await logSend({ ...baseLog, ...admitted.log });
+    return admitted.refused;
+  }
   const { logId } = admitted;
   if (admitted.unsubscribeUrl) params.unsubscribeUrl = admitted.unsubscribeUrl;
   if (opts.track === false) {

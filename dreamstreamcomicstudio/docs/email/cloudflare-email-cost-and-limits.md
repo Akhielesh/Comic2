@@ -67,9 +67,17 @@ use up what sign-in needs:
 - `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` — default **10**: mail a signed-out `/api/newsletter/subscribe`
   triggers (newsletter confirm, access-request acknowledgement) per IPv4 address / IPv6 /64 in a
   rolling day, in memory (`error='anon_sender_cap'`). The welcome after a confirm click is not
-  counted (the click needs the token from the inbox). `0` turns it off.
+  counted: it goes out only when that click's live token flips a pending address to confirmed,
+  so there is one welcome per confirm email at most, and that confirm email was already counted.
+  A click on an address that is already confirmed (whatever its `t=`) lands on "confirmed" and
+  sends nothing. `0` turns it off.
 - The caps count mail in flight (`status='queued'`) as well as `sent`, and the read-check-log step
   runs one send at a time per process, so parallel requests at the edge of a cap cannot all pass it.
+  Auth mail has a lane of its own in that step, so a queue of other mail never delays a sign-in,
+  confirm or reset email (one send from each lane can pass at once: the hard cap may be passed by
+  one email per process). Once a cap refuses a lane, later sends in it are refused without reading
+  the counts or waiting (still logged `rate_limited`) until a re-check a minute later, or UTC
+  midnight if sooner.
 - A pending newsletter address is re-sent its confirm link at most once per 10 minutes and 3
   times a day, both read from `email_log` (`queued` / `sent`), so a confirm that was refused or
   failed never blocks a retry; otherwise the link already in its inbox stays valid, and a

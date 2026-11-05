@@ -14,12 +14,13 @@
 //   critical, with a 1,000-character message and 4,500 bytes of metadata, within an in-memory
 //   budget of 300 rows per IPv4 address or IPv6 /64 and 3,000 rows in all per UTC day. A signed-in
 //   account may store 5,000 events and 50 feedback rows a UTC day. Server-side 5xx records have a
-//   budget of their own (the same sizes), so a flood of client events can't stop them being kept.
+//   row budget of their own (300 per sender, 3,000 a day) and a size ceiling of their own.
 //   Above 150 MB in the two tables (public.telemetry_table_bytes(),
 //   server/sql/telemetry_table_bytes_2026_11.sql; the check is skipped while that function is
-//   absent) nothing more is stored, except signed-in feedback up to 160 MB; between two size
-//   reads (5 minutes apart) the bytes stored since the last read count too. Everything refused is
-//   still logged.
+//   absent) nothing more is stored, except signed-in feedback up to 160 MB and server 5xx records
+//   up to 170 MB: past 160 MB only the server writes, so a flood of client rows can neither use up
+//   the 5xx records' budget nor close their size gate. Between two size reads (5 minutes apart)
+//   the bytes stored since the last read count too. Everything refused is still logged.
 
 import type { FeedbackInput, TelemetryEventInput, TelemetrySeverity } from '../../../apiTypes.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
@@ -156,6 +157,13 @@ const takeBudget = (pool: Pool, sender: string, wanted: number, now = Date.now()
 export const TELEMETRY_STORAGE_LIMIT_BYTES = 150 * 1024 * 1024;
 /** Signed-in feedback still lands up to here: deliberate, 50 a day per account, so 10 MB of room. */
 export const FEEDBACK_STORAGE_LIMIT_BYTES = 160 * 1024 * 1024;
+/**
+ * Server 5xx records (the failure-spike check's input) land up to here. Past the feedback ceiling
+ * only they are written: 10 MB of their own, about a day and a half at the pool's worst case
+ * (3,000 rows a day of up to ~2.5 KB) and far longer at a normal error rate. The purge (§2.4f,
+ * owner O8) is what keeps the gate open for good.
+ */
+export const SERVER_STORAGE_LIMIT_BYTES = 170 * 1024 * 1024;
 const SIZE_CHECK_TTL_MS = 5 * 60_000;
 /** The last size read (null bytes: unknown — function absent or the call failed). */
 let sizeCheck: { at: number; bytes: number | null } | null = null;
@@ -294,9 +302,11 @@ const recordEvents = async (rawEvents: unknown[], ctx: TelemetryContext, origin:
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
     return { accepted: rows.length, persisted: false };
   }
-  // Not tied to an account: only warn and above. Then the sender's day budget in its pool.
+  // Not tied to an account: only warn and above. Then the size gate (the server's 5xx records
+  // stop at their own, higher ceiling) and the sender's day budget in its pool.
   let toStore = ctx.userId ? rows : rows.filter((row) => ANON_STORED_SEVERITIES.has(row.severity));
-  if (toStore.length === 0 || (await telemetryStorageFull())) return { accepted: rows.length, persisted: false };
+  const sizeLimit = origin === 'server' ? SERVER_STORAGE_LIMIT_BYTES : TELEMETRY_STORAGE_LIMIT_BYTES;
+  if (toStore.length === 0 || (await telemetryStorageFull(sizeLimit))) return { accepted: rows.length, persisted: false };
   const pool: Pool = origin === 'server' ? 'server' : ctx.userId ? 'account_events' : 'anon';
   toStore = toStore.slice(0, takeBudget(pool, senderKey(ctx), toStore.length));
   if (toStore.length === 0) return { accepted: rows.length, persisted: false };
@@ -395,8 +405,9 @@ export const recordFeedback = async (raw: unknown, ctx: TelemetryContext): Promi
 // Best-effort capture of a server-side error as a telemetry event. Called from the
 // error-handling middleware for 5xx failures so "every failed request" lands in the
 // same store as client-reported failures. Fire-and-forget; never blocks the response.
-// Its rows draw on the server pool, never a client's: a flood of client-sent events must not
-// stop the 5xx records the failure-spike check reads (verification/checks/telemetryFailureSpike.ts).
+// Its rows draw on the server pool, never a client's, and stop at SERVER_STORAGE_LIMIT_BYTES, past
+// what any client row may reach: a flood of client-sent events must not stop the 5xx records the
+// failure-spike check reads (verification/checks/telemetryFailureSpike.ts).
 export const recordServerError = (fields: {
   requestId?: string;
   path?: string;

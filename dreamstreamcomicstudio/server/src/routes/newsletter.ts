@@ -29,8 +29,10 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const reqIds = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
 // Mail a signed-out /subscribe triggers counts against its sender's daily allowance (mailer.ts,
-// abuse-ops-4). The welcome after a confirm click does not: that click needs the token from the
-// inbox, so it is no way to make us mail anyone, and counting it would halve a shared network's
+// abuse-ops-4). The welcome after a confirm click does not: it goes out only when that click's
+// live token flips a pending row (confirmSubscriber → 'confirmed'), which happens once per confirm
+// email, and that confirm email was already counted. A click on an already-confirmed address
+// (any `t` gets there) sends nothing. Counting the click as well would halve a shared network's
 // allowance for real sign-ups.
 const subscribeMeta = (req: Request) => ({
   ...reqIds(req),
@@ -170,11 +172,13 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const token = String(req.query.t ?? '');
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
 
-    const confirmed = await confirmSubscriber(email, token);
-    if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
+    const outcome = await confirmSubscriber(email, token);
+    if (!outcome) return res.redirect(302, redirectToApp('invalid'));
 
-    // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqIds(req));
+    // Welcome is marketing → only once they've opted in, and only from the click that opted them
+    // in. A repeat click (or a scanner's prefetch beating the person to it) still lands on
+    // "confirmed", without a second welcome.
+    if (outcome === 'confirmed') void sendNewsletterWelcome(email, undefined, reqIds(req));
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

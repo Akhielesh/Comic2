@@ -125,9 +125,10 @@ All notable user-facing changes. Format loosely follows
 
 ### Security
 - **Abuse limits (2026-11-05):** sign-in emails (confirm, password reset, magic link) keep a
-  share of the daily and monthly email allowance that newsletter and invite mail can't use, and a
-  newsletter address is re-sent its confirm link at most once every 10 minutes and 3 times a
-  day (new product picks you add meanwhile are still saved). Invite-page RSVPs refuse links as
+  share of the daily and monthly email allowance that newsletter and invite mail can't use, and
+  never wait behind a burst of other mail. The newsletter welcome comes once, from the click
+  that confirms, and a newsletter address is re-sent its confirm link at most once every 10
+  minutes and 3 times a day (new product picks you add meanwhile are still saved). Invite-page RSVPs refuse links as
   names and are limited per network and per event ("Add your name — links aren't allowed
   here."); a full guest list says so instead of dropping the first guests. Error reports and
   feedback are capped per visitor and per account so they can't fill the database. Rate limits

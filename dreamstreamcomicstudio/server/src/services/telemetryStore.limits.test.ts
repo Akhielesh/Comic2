@@ -1,7 +1,8 @@
 // @vitest-environment node
 // abuse-ops-3: what a sender can make the free-plan database keep. Severity filter, message /
 // metadata caps, the per-/64, per-account and per-day budgets, the server's own budget for 5xx
-// records, and the 150 MB size gate (with the bytes stored between two size reads).
+// records, and the 150 MB size gate (with the bytes stored between two size reads; signed-in
+// feedback stops at 160 MB and the server's 5xx records at 170 MB).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ import {
   ANON_ROWS_PER_DAY,
   FEEDBACK_STORAGE_LIMIT_BYTES,
   SERVER_ROWS_PER_SENDER_PER_DAY,
+  SERVER_STORAGE_LIMIT_BYTES,
   TELEMETRY_STORAGE_LIMIT_BYTES,
   recordFeedback,
   recordServerError,
@@ -197,6 +199,35 @@ describe('the 150 MB size gate', () => {
     db.rpc.mockImplementation(async () => ({ data: FEEDBACK_STORAGE_LIMIT_BYTES + 1, error: null }));
     expect(await recordFeedback({ vote: 'dislike', comment: 'broken' }, { userId: 'u1' })).toEqual({ persisted: false });
     expect(storedFeedback()).toHaveLength(0);
+  });
+
+  it('server 5xx records are still stored past the event and feedback ceilings, up to their own', async () => {
+    db.rpc.mockImplementation(async () => ({ data: FEEDBACK_STORAGE_LIMIT_BYTES + 1, error: null }));
+    expect((await recordTelemetryEvents(errors(1), { userId: 'u1' })).persisted).toBe(false);
+    expect(await recordFeedback({ vote: 'dislike', comment: 'broken' }, { userId: 'u1' })).toEqual({ persisted: false });
+    recordServerError({ path: '/api/x', status: 500, message: 'boom', ip: '203.0.113.77' });
+    await vi.waitFor(() => expect(storedEvents()).toHaveLength(1));
+    expect(storedEvents()[0]).toMatchObject({ severity: 'critical', message: 'boom' });
+
+    resetTelemetryLimits();
+    db.rpc.mockImplementation(async () => ({ data: SERVER_STORAGE_LIMIT_BYTES + 1, error: null }));
+    recordServerError({ path: '/api/x', status: 500, message: 'boom', ip: '203.0.113.77' });
+    await vi.waitFor(() => expect(vi.mocked(logger.warn)).toHaveBeenCalledWith('telemetry_storage_full', expect.objectContaining({ limitBytes: SERVER_STORAGE_LIMIT_BYTES })));
+    expect(storedEvents()).toHaveLength(1);
+  });
+
+  it('a client flood that closes the event gate leaves the 5xx records’ gate open', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T10:00:00Z'));
+    const big = (n: number) => Array.from({ length: n }, () => ({ eventType: 'x', severity: 'error', message: 'm'.repeat(2_000), metadata: { blob: 'z'.repeat(7_000) } }));
+    // Just under the event limit; a handful of accounts at their route limit push it past.
+    db.rpc.mockImplementation(async () => ({ data: TELEMETRY_STORAGE_LIMIT_BYTES - 1024, error: null }));
+    for (let i = 0; i < 5; i++) await recordTelemetryEvents(big(50), { userId: `u${i}` });
+    expect((await recordTelemetryEvents(big(1), { userId: 'u9' })).persisted).toBe(false);
+    const clientRows = storedEvents().length;
+    recordServerError({ path: '/api/x', status: 500, message: 'boom', userId: 'u1' });
+    await vi.waitFor(() => expect(storedEvents()).toHaveLength(clientRows + 1));
+    expect(storedEvents().at(-1)).toMatchObject({ severity: 'critical', user_id: 'u1' });
   });
 
   it('between two size reads the bytes stored since the last one count: the gate closes without waiting 5 minutes', async () => {

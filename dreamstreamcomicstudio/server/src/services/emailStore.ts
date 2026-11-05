@@ -397,8 +397,16 @@ export const mergeSubscriberIntent = async (email: string, kind: 'updates' | 'ac
   }
 };
 
-/** Verify a confirm token and flip the row to confirmed. Returns true on success. */
-export const confirmSubscriber = async (email: string, token: string): Promise<boolean> => {
+/**
+ * What a confirm click did: `'confirmed'` — this request's live token flipped the pending row (the
+ * only outcome that may send the welcome); `'already'` — the row was already confirmed (any `t`
+ * reaches this, so it must never mail anyone) or another click flipped it first; `false` — no such
+ * row, a wrong or expired token, or the flip failed.
+ */
+export type ConfirmOutcome = 'confirmed' | 'already' | false;
+
+/** Verify a confirm token and flip the row to confirmed. */
+export const confirmSubscriber = async (email: string, token: string): Promise<ConfirmOutcome> => {
   const db = adminOrNull();
   if (!db || !token) return false;
   const normalized = normalizeEmail(email);
@@ -411,7 +419,9 @@ export const confirmSubscriber = async (email: string, token: string): Promise<b
     .maybeSingle();
   if (!data) return false;
   const row = data as { id: string; confirm_token: string | null; confirmed: boolean; confirm_sent_at: string | null };
-  if (row.confirmed) return true; // already confirmed — treat as success (idempotent link)
+  // Already confirmed: the link stays idempotent for the person (they land on "confirmed"), but the
+  // token is not checked here, so this outcome sends nothing.
+  if (row.confirmed) return 'already';
   // Constant-time token comparison.
   const a = Buffer.from(row.confirm_token || '');
   const b = Buffer.from(token);
@@ -425,11 +435,19 @@ export const confirmSubscriber = async (email: string, token: string): Promise<b
       return false;
     }
   }
-  await db
+  // Flip only a row that is still pending: two clicks at once (a mail scanner's prefetch and the
+  // person) both pass the token check, and only the one whose update changed the row confirmed it.
+  const { data: flipped, error } = await db
     .from('waitlist_signups')
     .update({ confirmed: true, confirmed_at: new Date().toISOString(), confirm_token: null })
-    .eq('id', row.id);
-  return true;
+    .eq('id', row.id)
+    .eq('confirmed', false)
+    .select('id');
+  if (error) {
+    console.warn('[email] confirmSubscriber update error', error.message);
+    return false; // the token is untouched, so the same link works on a retry
+  }
+  return Array.isArray(flipped) && flipped.length > 0 ? 'confirmed' : 'already';
 };
 
 /** Stamp the waitlist row(s) unsubscribed and add the address to the suppression list. */

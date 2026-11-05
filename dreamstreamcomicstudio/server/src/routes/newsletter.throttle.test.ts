@@ -4,7 +4,8 @@
 // failed confirm never blocks a retry), the address keeps the link already in its inbox (no new
 // token, no new email) — new picks are still recorded. abuse-ops-4: the confirm a signed-out
 // request triggers carries the sender's address to the mailer's per-sender allowance; the welcome
-// after a confirm click does not.
+// after a confirm click does not, and goes out only when that click's live token flips a pending
+// row (an already-confirmed address answers any token, so a click there must mail nothing).
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,10 +17,12 @@ const h = vi.hoisted(() => ({
   sends: [] as { email: string; meta: Record<string, unknown> | undefined }[],
   welcomes: [] as { email: string; meta: Record<string, unknown> | undefined }[],
   db: {
-    row: null as null | { confirmed: boolean },
+    row: null as null | WaitlistRow,
     /** email_log rows for the address, newest first (what the query returns). */
     logRows: [] as { created_at: string }[],
     logError: null as null | { message: string },
+    /** The waitlist_signups update's answer when set (else it is applied to `row`). */
+    updateError: null as null | { message: string },
     calls: [] as [string, string, unknown[]][]
   }
 }));
@@ -38,16 +41,31 @@ vi.mock('../services/mailer.js', () => ({
 }));
 vi.mock('../services/invites.js', () => ({ resendPendingInvite: vi.fn(async () => ({ status: 'none' })) }));
 vi.mock('../services/turnstile.js', () => ({ verifyTurnstile: vi.fn(async () => true) }));
-// A minimal PostgREST stand-in: one waitlist row, the address's email_log rows.
+// A minimal PostgREST stand-in: one waitlist row, the address's email_log rows. A waitlist update
+// filtered on `confirmed = false` changes the row only while it is pending, and (with .select())
+// answers the rows it changed, as PostgREST does.
 vi.mock('../services/supabase.js', () => ({
   getSupabaseAdmin: () => ({
     from: (table: string) => {
       const q: Record<string, unknown> = {};
+      const chain: [string, unknown[]][] = [];
       for (const m of ['select', 'eq', 'in', 'gte', 'order', 'limit', 'update']) {
-        q[m] = (...args: unknown[]) => (h.db.calls.push([table, m, args]), q);
+        q[m] = (...args: unknown[]) => (h.db.calls.push([table, m, args]), chain.push([m, args]), q);
       }
-      q.maybeSingle = async () => ({ data: h.db.row, error: null });
-      q.then = (resolve: (v: unknown) => void) => resolve({ data: h.db.logError ? null : h.db.logRows, error: h.db.logError });
+      // A snapshot, as a real read is: a later update does not change what an earlier read saw.
+      q.maybeSingle = async () => ({ data: h.db.row && { ...h.db.row }, error: null });
+      q.then = (resolve: (v: unknown) => void) => {
+        const update = chain.find(([m]) => m === 'update');
+        if (table !== 'waitlist_signups' || !update) {
+          return resolve({ data: h.db.logError ? null : h.db.logRows, error: h.db.logError });
+        }
+        if (h.db.updateError) return resolve({ data: null, error: h.db.updateError });
+        const onlyPending = chain.some(([m, a]) => m === 'eq' && a[0] === 'confirmed' && a[1] === false);
+        const changed = h.db.row && (!onlyPending || !h.db.row.confirmed) ? [h.db.row] : [];
+        for (const row of changed) Object.assign(row, update[1][0]);
+        const selected = chain.findIndex(([m]) => m === 'select') > chain.indexOf(update);
+        return resolve({ data: selected ? changed.map((r) => ({ id: r.id })) : null, error: null });
+      };
       return q;
     }
   })
@@ -61,13 +79,19 @@ vi.mock('../services/emailStore.js', async (importOriginal) => {
       h.merges.push([email, kind, intent]);
       return real.mergeSubscriberIntent(email, kind as 'updates', intent as never);
     }),
-    upsertSubscriber: vi.fn(async (email: string) => (h.upserts.push(email), { outcome: 'pending' as const })),
-    confirmSubscriber: vi.fn(async () => true)
+    upsertSubscriber: vi.fn(async (email: string) => (h.upserts.push(email), { outcome: 'pending' as const }))
   };
 });
 
 import { newsletterRouter } from './newsletter.js';
-import { newsletterConfirmThrottled } from '../services/emailStore.js';
+import { confirmSubscriber, newsletterConfirmThrottled } from '../services/emailStore.js';
+
+interface WaitlistRow {
+  id?: string;
+  confirmed: boolean;
+  confirm_token?: string | null;
+  confirm_sent_at?: string | null;
+}
 
 let base = '';
 let close: () => void = () => undefined;
@@ -92,7 +116,7 @@ beforeEach(() => {
   h.merges.length = 0;
   h.sends.length = 0;
   h.welcomes.length = 0;
-  h.db = { row: null, logRows: [], logError: null, calls: [] };
+  h.db = { row: null, logRows: [], logError: null, updateError: null, calls: [] };
 });
 
 const subscribe = (headers: Record<string, string> = {}, extra: Record<string, unknown> = {}) =>
@@ -130,12 +154,68 @@ describe('POST /api/newsletter/subscribe — re-send throttle', () => {
   });
 });
 
-describe('GET /api/newsletter/confirm — the welcome is not charged to the clicker’s network', () => {
-  it('sends the welcome without the anonymous sender address', async () => {
-    const r = await fetch(`${base}/api/newsletter/confirm?e=ada%40example.com&t=tok`, { redirect: 'manual', headers: { 'x-forwarded-for': '2001:db8:1:2::3' } });
-    expect(r.status).toBe(302);
+describe('GET /api/newsletter/confirm — one welcome, from the click that confirms', () => {
+  const pending = (): WaitlistRow => ({ id: 'r1', confirmed: false, confirm_token: 'tok', confirm_sent_at: null });
+  const click = (t: string) =>
+    fetch(`${base}/api/newsletter/confirm?e=ada%40example.com&t=${encodeURIComponent(t)}`, {
+      redirect: 'manual',
+      headers: { 'x-forwarded-for': '2001:db8:1:2::3' }
+    }).then((r) => ({ status: r.status, location: r.headers.get('location') ?? '' }));
+
+  it('the live token flips the pending row and sends the welcome, not charged to the clicker’s network', async () => {
+    h.db.row = pending();
+    expect(await click('tok')).toEqual({ status: 302, location: expect.stringContaining('newsletter=confirmed') });
     expect(h.welcomes).toHaveLength(1);
+    expect(h.welcomes[0].email).toBe('ada@example.com');
     expect(h.welcomes[0].meta).not.toHaveProperty('anonymousClientIp');
+    expect(h.db.row).toMatchObject({ confirmed: true, confirm_token: null });
+  });
+
+  it('an already-confirmed address: any token lands on "confirmed" and mails nothing', async () => {
+    h.db.row = pending();
+    await click('tok');
+    h.welcomes.length = 0;
+    // The person's second click, then forged ones: the confirmed row never checks the token.
+    for (const t of ['tok', 'x', 'not-the-token']) {
+      expect(await click(t)).toEqual({ status: 302, location: expect.stringContaining('newsletter=confirmed') });
+    }
+    expect(h.welcomes).toEqual([]);
+  });
+
+  it('a wrong token for a pending address: "invalid", nothing sent, the row stays pending', async () => {
+    h.db.row = pending();
+    expect(await click('nope')).toEqual({ status: 302, location: expect.stringContaining('newsletter=invalid') });
+    expect(h.welcomes).toEqual([]);
+    expect(h.db.row).toMatchObject({ confirmed: false, confirm_token: 'tok' });
+  });
+
+  it('a failed flip reads "invalid" and keeps the token, so the same link works on a retry', async () => {
+    h.db.row = pending();
+    h.db.updateError = { message: 'timeout' };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await click('tok')).toEqual({ status: 302, location: expect.stringContaining('newsletter=invalid') });
+    warn.mockRestore();
+    expect(h.welcomes).toEqual([]);
+    h.db.updateError = null;
+    expect((await click('tok')).location).toContain('newsletter=confirmed');
+    expect(h.welcomes).toHaveLength(1);
+  });
+});
+
+describe('confirmSubscriber', () => {
+  it('two clicks at once (a scanner’s prefetch and the person): only the one whose update changed the row confirmed it', async () => {
+    h.db.row = { id: 'r1', confirmed: false, confirm_token: 'tok', confirm_sent_at: null };
+    const outcomes = await Promise.all([confirmSubscriber('ada@example.com', 'tok'), confirmSubscriber('ada@example.com', 'tok')]);
+    expect(outcomes.sort()).toEqual(['already', 'confirmed']);
+    const filters = h.db.calls.filter(([t, m]) => t === 'waitlist_signups' && m === 'eq').map(([, , a]) => a);
+    expect(filters).toContainEqual(['confirmed', false]);
+  });
+
+  it('unknown address, or no token: false', async () => {
+    h.db.row = null;
+    expect(await confirmSubscriber('ada@example.com', 'tok')).toBe(false);
+    h.db.row = { id: 'r1', confirmed: true, confirm_token: null };
+    expect(await confirmSubscriber('ada@example.com', '')).toBe(false);
   });
 });
 

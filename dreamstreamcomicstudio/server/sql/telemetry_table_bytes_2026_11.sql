@@ -2,7 +2,8 @@
 --
 -- server/src/services/telemetryStore.ts calls public.telemetry_table_bytes() at most once per 5
 -- minutes; above 150 MB in telemetry_events + user_feedback it stops storing (everything is still
--- logged), except a signed-in person's feedback. Until this function exists the check is skipped.
+-- logged), except a signed-in person's feedback (to 160 MB) and the server's own 5xx records (to
+-- 170 MB). Until this function exists the check is skipped.
 --
 -- This is only the read-only size function from SECURITY-PLAN §2.4f, identical to it. The purge and
 -- its cron schedule in §2.4f delete data, so they wait for the owner to choose the retention periods

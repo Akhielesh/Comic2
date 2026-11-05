@@ -1,8 +1,9 @@
 // @vitest-environment node
 // abuse-ops-4: the auth reserve (other mail stops at the cap minus the reserve; auth mail may use
 // the whole cap), the per-sender allowance for mail a signed-out request triggers, the 50% / 80%
-// warnings, and abuse-ops-15: no log line carries a full recipient address.
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+// warnings, the cap gate (auth mail never waits behind other mail; a closed lane refuses without
+// reading usage), and abuse-ops-15: no log line carries a full recipient address.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.hoisted(() => {
   vi.stubEnv('EMAIL_WORKER_URL', 'https://email-worker.test');
@@ -20,12 +21,18 @@ const store = vi.hoisted(() => ({
   usage: { day: 0, month: 0, authDay: 0, authMonth: 0 },
   /** When set, usage is derived from the logged rows (queued / sent count), answered after a DB-like delay. */
   live: false,
+  /** Milliseconds each usage read and log insert takes (0: answered at once). */
+  delayMs: 0,
   logs: [] as Record<string, unknown>[]
 }));
+const dbDelay = () => (store.delayMs ? new Promise((r) => setTimeout(r, store.delayMs)) : Promise.resolve());
 vi.mock('./emailStore.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./emailStore.js')>()),
   getUsage: vi.fn(async () => {
-    if (!store.live) return { ...store.usage };
+    if (!store.live) {
+      await dbDelay();
+      return { ...store.usage };
+    }
     // Like the database: the count is taken when the query runs, the answer arrives later.
     const counted = store.logs.filter((l) => l.status === 'queued' || l.status === 'sent');
     const auth = counted.filter((l) => String(l.template).startsWith('auth-')).length;
@@ -33,16 +40,24 @@ vi.mock('./emailStore.js', async (importOriginal) => ({
     return { day: store.usage.day + counted.length, month: store.usage.month + counted.length, authDay: store.usage.authDay + auth, authMonth: store.usage.authMonth + auth };
   }),
   isSuppressed: vi.fn(async () => false),
-  logSend: vi.fn(async (entry: Record<string, unknown>) => (store.logs.push(entry), 'log-1')),
+  logSend: vi.fn(async (entry: Record<string, unknown>) => {
+    await dbDelay();
+    store.logs.push(entry);
+    return 'log-1';
+  }),
   patchLog: vi.fn(async () => undefined)
 }));
 
 const { getEmailUsageStatus, resetMailerWarnings, sendEmail, sendNewsletterConfirm } = await import('./mailer.js');
+const { getUsage } = await import('./emailStore.js');
 
 const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ ok: true, messageId: 'm1' })));
 vi.stubGlobal('fetch', fetchMock);
 const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+afterEach(() => {
+  vi.useRealTimers();
+});
 afterAll(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -55,9 +70,16 @@ beforeEach(() => {
   error.mockClear();
   store.logs.length = 0;
   store.live = false;
+  store.delayMs = 0;
   store.usage = { day: 0, month: 0, authDay: 0, authMonth: 0 };
   resetMailerWarnings();
 });
+/** Move the clock (Date only: timers stay real, so the DB-like delays still run). */
+const setClock = (iso: string | number) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(typeof iso === 'number' ? iso : Date.parse(iso));
+};
+const usageReads = () => vi.mocked(getUsage).mock.calls.length;
 
 const logged = () => [...warn.mock.calls, ...error.mock.calls].map((c) => c.join(' ')).join('\n');
 
@@ -138,6 +160,71 @@ describe('the auth reserve (abuse-ops-4)', () => {
   });
 });
 
+describe('the cap gate: auth mail has its own lane; a closed lane refuses without reading usage', () => {
+  it('a sign-in email does not wait behind queued other mail', async () => {
+    store.delayMs = 10; // each usage read and log insert: 10 ms
+    const N = 40; // ≈ 40 × 2 × 10 ms = 800 ms of other mail in the gate, all of it admitted
+    let othersDone = 0;
+    const flood = Array.from({ length: N }, (_, i) =>
+      sendEmail({ to: `n${i}@example.com`, template: 'access-requested' }).then((r) => (othersDone++, r))
+    );
+    await new Promise((r) => setTimeout(r, 5)); // the flood is in the gate first
+    const t0 = performance.now();
+    const auth = await sendEmail({ to: 'real@example.com', template: 'auth-recovery', params: { actionUrl: 'https://x.test/r' }, track: false });
+    const waited = performance.now() - t0;
+    const othersWhenAuthDone = othersDone;
+    const results = await Promise.all(flood);
+    expect(auth).toEqual({ ok: true, messageId: 'm1' });
+    expect(waited).toBeLessThan(200); // its own read + insert, not the queue's
+    expect(othersWhenAuthDone).toBeLessThan(N / 2);
+    expect(results.every((r) => r.ok)).toBe(true); // other mail still goes out, one check at a time
+  });
+
+  it('once other mail’s share is used up, the rest is refused without a usage read or a wait — and still logged', async () => {
+    store.delayMs = 10;
+    store.usage = { day: 5, month: 5, authDay: 0, authMonth: 0 }; // other mail's 5 used
+    setClock('2026-11-05T12:00:00Z');
+    const reads = usageReads();
+    const t0 = performance.now(); // real time (only Date is faked)
+    const results = await Promise.all(
+      Array.from({ length: 30 }, (_, i) => sendNewsletterConfirm(`n${i}@example.com`, 'https://api.test/c'))
+    );
+    // One usage read, then the log inserts side by side: ~20 ms, not 30 × (read + insert) ≈ 600 ms.
+    expect(performance.now() - t0).toBeLessThan(200);
+    expect(results.every((r) => r.skipped === 'rate_limited')).toBe(true);
+    expect(usageReads() - reads).toBe(1); // the first one read the counts and closed the lane
+    expect(store.logs.filter((l) => l.status === 'rate_limited' && l.error === 'auth_reserve')).toHaveLength(30);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('[email][RESERVE]'))).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Later arrivals do not enter the gate either.
+    expect((await sendEmail({ to: 'late@example.com', template: 'beta-invite' })).skipped).toBe('rate_limited');
+    expect(usageReads() - reads).toBe(1);
+    // The auth lane is open: sign-in mail still reads the counts and goes out.
+    expect((await sendEmail({ to: 'real@example.com', template: 'auth-recovery', track: false })).ok).toBe(true);
+    // A minute later the lane reads the counts again: a queued send that failed freed a place.
+    setClock('2026-11-05T12:01:01Z');
+    store.usage = { day: 4, month: 4, authDay: 0, authMonth: 0 };
+    expect((await sendNewsletterConfirm('ada@example.com', 'https://api.test/c')).ok).toBe(true);
+  });
+
+  it('the hard cap closes both lanes, until UTC midnight at the latest', async () => {
+    setClock('2026-11-05T23:59:50Z');
+    store.usage = { day: 10, month: 10, authDay: 6, authMonth: 6 };
+    expect((await sendEmail({ to: 'a@example.com', template: 'auth-magic-link' })).skipped).toBe('rate_limited');
+    const reads = usageReads();
+    expect((await sendEmail({ to: 'b@example.com', template: 'auth-recovery' })).skipped).toBe('rate_limited');
+    expect((await sendNewsletterConfirm('c@example.com', 'https://api.test/c')).skipped).toBe('rate_limited');
+    expect(usageReads()).toBe(reads);
+    expect(store.logs.at(-1)).toMatchObject({ status: 'rate_limited' });
+    expect(store.logs.at(-1)?.error).toBeUndefined(); // the hard cap, not the reserve
+    // 11 seconds later it is a new UTC day: the day count starts over and both lanes read it.
+    setClock('2026-11-06T00:00:01Z');
+    store.usage = { day: 0, month: 10, authDay: 0, authMonth: 6 };
+    expect((await sendEmail({ to: 'b@example.com', template: 'auth-recovery', track: false })).ok).toBe(true);
+    expect((await sendNewsletterConfirm('c@example.com', 'https://api.test/c')).ok).toBe(true);
+  });
+});
+
 describe('mail a signed-out request triggers: per IPv4 address / IPv6 /64 a day', () => {
   it('2 a day per /64, rotating addresses does not help; another network and signed-in sends are unaffected', async () => {
     const send = (ip?: string) => sendNewsletterConfirm('ada@example.com', 'https://api.test/c', undefined, ip === undefined ? {} : { anonymousClientIp: ip });
@@ -154,10 +241,14 @@ describe('mail a signed-out request triggers: per IPv4 address / IPv6 /64 a day'
 
 describe('mailer logs never carry a full recipient address (abuse-ops-15)', () => {
   it('masks the address on the cost cap, the reserve, a failed send and a network error', async () => {
+    // A minute between the steps: a refused lane reads the counts again only after one.
+    setClock('2026-11-05T12:00:00Z');
     store.usage = { day: 10, month: 10, authDay: 0, authMonth: 0 };
     await sendEmail({ to: 'Grace.Hopper@Example.com', template: 'auth-recovery' });
+    setClock('2026-11-05T12:01:01Z');
     store.usage = { day: 5, month: 5, authDay: 0, authMonth: 0 };
     await sendNewsletterConfirm('grace.hopper@example.com', 'https://api.test/c');
+    setClock('2026-11-05T12:02:02Z');
     store.usage = { day: 0, month: 0, authDay: 0, authMonth: 0 };
     fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ ok: false, error: 'bounced' }), { status: 502 }));
     await sendEmail({ to: 'grace.hopper@example.com', template: 'welcome' });
