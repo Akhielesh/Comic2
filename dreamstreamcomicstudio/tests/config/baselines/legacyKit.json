@@ -2,7 +2,7 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 771, "brand-blue": 210, "brand-red": 51, "brand-yellow": 216, "font-comic": 98, "font-display": 224, "shadow-comic": 138 },
+  "totals": { "border-black": 764, "brand-blue": 208, "brand-red": 51, "brand-yellow": 214, "font-comic": 98, "font-display": 222, "shadow-comic": 137 },
   "files": {
     "App.tsx": { "border-black": 5, "brand-yellow": 3, "font-display": 3, "shadow-comic": 5 },
     "components/AccountSettings.tsx": { "border-black": 32, "brand-blue": 5, "brand-yellow": 3, "font-comic": 2, "font-display": 18, "shadow-comic": 5 },
@@ -46,9 +46,6 @@
     "components/common/InfoTooltip.tsx": { "border-black": 1, "shadow-comic": 1 },
     "components/feedback/FeedbackButtons.tsx": { "border-black": 2, "brand-red": 1, "brand-yellow": 2 },
     "components/feedback/FeedbackWidget.tsx": { "border-black": 7, "brand-red": 1, "brand-yellow": 4, "font-display": 1 },
-    "components/layout/BrandLockup.tsx": { "border-black": 1, "brand-blue": 1, "brand-yellow": 1, "font-display": 2 },
-    "components/layout/NavDropdown.tsx": { "border-black": 1, "brand-blue": 1, "shadow-comic": 1 },
-    "components/layout/StaticSiteHeader.tsx": { "border-black": 5, "brand-yellow": 1 },
     "components/modals/BubbleEditorModal.tsx": { "border-black": 1, "brand-blue": 3, "shadow-comic": 1 },
     "components/modals/CharacterLibraryModal.tsx": { "border-black": 3, "brand-blue": 5, "font-comic": 1, "font-display": 2 },
     "components/modals/HistoryModal.tsx": { "border-black": 2, "font-display": 1, "shadow-comic": 1 },

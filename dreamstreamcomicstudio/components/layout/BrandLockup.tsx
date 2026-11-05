@@ -1,35 +1,51 @@
 import React from 'react';
+import { StudioLogo } from '../brand';
+import { cn } from '../../lib/utils';
+import { FOCUS_RING } from '../chat/studioDesign';
+import { COMPANY_NAME, HOME_HREF, isPlainClick } from './siteLinks';
 
 interface BrandLockupProps {
+  /** Opens the home page inside the app (a plain click; a new-tab click follows `href`). */
   onClick?: () => void;
+  /** false: the lockup alone, not a link. */
   clickable?: boolean;
+  href?: string;
   className?: string;
+  /** Phone width: the mark and "DreamStream" only, so the header row fits a 320 px screen. */
+  compactOnPhone?: boolean;
 }
 
-export const BrandLockup: React.FC<BrandLockupProps> = ({ onClick, clickable = true, className = '' }) => {
-  const content = (
-    <>
-      <div className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center text-black font-display text-xl shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 shrink-0">
-        D
-      </div>
-      <div className="leading-none">
-        <div className="font-display text-xl text-slate-900">DreamStream</div>
-        <div className="text-[10px] font-bold text-brand-blue uppercase tracking-widest mt-0.5">Studio</div>
-      </div>
-    </>
+/**
+ * The DreamStream lockup (components/brand StudioLogo: the house mark and "DreamStream Studio" in Space
+ * Grotesk, "Studio" muted) at the Atlas header size: a 32 px mark and a 17 px wordmark. Drawn in
+ * currentColor, so it follows the theme; hovering the link plays the mark's pin drop.
+ */
+export const BrandLockup: React.FC<BrandLockupProps> = ({ onClick, clickable = true, href = HOME_HREF, className, compactOnPhone = false }) => {
+  const logo = (
+    <StudioLogo
+      studio="dreamstream"
+      className={cn(
+        // "Studio" at 60 %, not the sheet's 55 %: 5.3:1 on white instead of 4.4:1 at this 17 px size.
+        '[--ds-logo-gap:10px] [--ds-logo-mark-size:32px] [--ds-logo-text-size:17px] [&_.ds-logo-word-muted]:opacity-60',
+        compactOnPhone && '[&_.ds-logo-word-muted]:hidden sm:[&_.ds-logo-word-muted]:inline'
+      )}
+    />
   );
 
-  if (clickable) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={`flex items-center gap-3 hover:opacity-80 transition-opacity ${className}`}
-      >
-        {content}
-      </button>
-    );
-  }
+  if (!clickable) return <span className={cn('inline-flex min-w-0 text-ds-ink', className)}>{logo}</span>;
 
-  return <div className={`flex items-center gap-3 ${className}`}>{content}</div>;
+  return (
+    <a
+      href={href}
+      aria-label={`${COMPANY_NAME} home`}
+      onClick={(e) => {
+        if (!onClick || !isPlainClick(e)) return;
+        e.preventDefault();
+        onClick();
+      }}
+      className={cn('inline-flex min-w-0 shrink-0 items-center rounded-[var(--ds-radius-control)] text-ds-ink', FOCUS_RING, className)}
+    >
+      {logo}
+    </a>
+  );
 };

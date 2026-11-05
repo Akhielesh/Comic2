@@ -65,6 +65,7 @@ import { AppStatusBar } from './components/status/AppStatusBar';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
+import { collapsesFloatingChrome, useFloatingChromePhone, usePublicViewHistory } from './components/layout/publicShell';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
@@ -552,6 +553,11 @@ const App: React.FC = () => {
       window.history.replaceState({}, '', url);
     } catch { /* history unavailable; navigation still works via state */ }
   }, [currentView, activeProjectId, pendingStudioTarget]);
+
+  // Browser Back / Forward between the public pages restore the page (a strict no-op on studios, readers and
+  // signed-in workspaces, which own their history), and the phone check for the floating chrome below.
+  usePublicViewHistory(currentView, setCurrentView, !!user);
+  const phoneViewport = useFloatingChromePhone();
 
   useEffect(() => {
     if (!user?.email || user.email !== 'admin@test.com') {
@@ -1050,7 +1056,11 @@ const App: React.FC = () => {
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  // On a phone the public pages keep both floating launchers off their hero and footer (components/layout/publicShell.ts):
+  // no Feedback pill, and no assistant launcher (an assistant already open stays open).
+  const collapseFloatingChrome = collapsesFloatingChrome(effectiveView, phoneViewport);
+  if (collapseFloatingChrome) assistant.hideLauncher = true;
+  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic' && !collapseFloatingChrome;
   // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
   const publicComicIsOwner =
     !!publicComicRoute?.slug &&

@@ -1,14 +1,19 @@
-import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio, ExternalLink } from 'lucide-react';
-import { Button } from '../Button';
-import { BrandLockup } from './BrandLockup';
-import { NavDropdown } from './NavDropdown';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { ArrowRight, Menu, X } from 'lucide-react';
+import { cn } from '../../lib/utils';
+import { FOCUS_RING, HEADER_GLASS, STICKY_HEADER, Z } from '../chat/studioDesign';
+import { buttonClasses, IconButton } from '../ds';
 import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
-import { useProductAccess } from '../../services/productAccess';
-import { comicsEntryUrl } from '../../services/productHost';
-import { openLiveApp } from '../../services/liveLink';
+import { BrandLockup } from './BrandLockup';
+import { MobileMenu } from './MobileMenu';
+import { NavDropdown } from './NavDropdown';
+import { EntryMark, useSiteEntries, type SiteEntry } from './studioEntries';
+import { isPlainClick } from './siteLinks';
+import { ThemeToggle } from './ThemeControls';
+import { useDismiss } from './useDismiss';
+import { DESKTOP_NAV_QUERY, useMediaQuery } from './useMediaQuery';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -20,12 +25,43 @@ interface StaticSiteHeaderProps {
   onEnterStudio: () => void;
   onSignIn: () => void;
   onRequestAccess?: () => void;
-  /** Jump to the "stay updated" capture (used by the Live "coming soon" product). */
+  /** Jump to the "stay updated" capture (a confined account's Stream Studio "Soon" row). */
   onNotify?: () => void;
   onOpenProfile: () => void;
   onNavigate: (view: string, id?: string) => void;
 }
 
+/** One public page in the desktop row: a real link with Atlas's drawn underline, held under the page on screen. */
+const NavLink: React.FC<{ entry: SiteEntry }> = ({ entry }) => (
+  <a
+    href={entry.href}
+    aria-current={entry.current ? 'page' : undefined}
+    onClick={(e) => {
+      if (!entry.onClick || !isPlainClick(e)) return;
+      e.preventDefault();
+      void entry.onClick();
+    }}
+    className={cn(
+      'ds-link rounded-[var(--ds-radius-control)] bg-origin-content px-2.5 py-1.5 text-sm transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]',
+      FOCUS_RING,
+      entry.current ? 'font-medium text-ds-ink [background-size:100%_1px]' : 'text-ds-muted hover:text-ds-ink'
+    )}
+  >
+    {entry.label}
+  </a>
+);
+
+/**
+ * The shared site header (Atlas PublicSiteChrome on the DreamStream tokens): sticky, 64 px, the page colour at
+ * rest and frosted with the one header blur once content scrolls under it (STICKY_HEADER + HEADER_GLASS).
+ *
+ * - Left: the DreamStream lockup (home).
+ * - Desktop (≥ 1024 px): "Studios", the studio switcher (DreamStream, Comic, Chat, Stream and Atlas Studio,
+ *   each with its mark), then How it works, Library and Models.
+ * - Right: the theme toggle (≥ 640 px), then the account (credits, notifications, avatar) or, signed out,
+ *   "Sign in" and the ink "Request access" pill (phones keep one pill, "Sign in"); below 1024 px the menu
+ *   button opens the same places in one panel (MobileMenu).
+ */
 export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   isAuthenticated,
   isAdmin = false,
@@ -37,201 +73,141 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   onRequestAccess,
   onNotify,
   onOpenProfile,
-  onNavigate,
+  onNavigate
 }) => {
-  const isHome = currentView === 'home';
+  const requestAccess = onRequestAccess ?? onSignIn;
   const notify = onNotify ?? (() => onNavigate('home'));
-  const [mobileOpen, setMobileOpen] = useState(false);
-  // Run an action then close the mobile menu.
-  const go = (fn: () => void) => () => { fn(); setMobileOpen(false); };
+  const entries = useSiteEntries({ isAdmin, currentView, onGoHome, onEnterStudio, onViewComics, onNavigate, onNotify: notify });
 
-  // Per-account studio confinement (product_access): null = unrestricted → show all.
-  // Confined accounts only see the product groups in their active set (admins are never
-  // gated; marketing pages and the Models catalog stay visible to everyone).
-  const allowedProducts = useProductAccess();
-  const confined = !isAdmin && allowedProducts !== null;
-  const showComic = !confined || allowedProducts!.has('comic_studio');
-  const showChat = !confined || allowedProducts!.has('chat_studio');
-  const showLive = !confined || allowedProducts!.has('stream_studio');
-  // Comic Studio's own address (comics.dreamstreamstudio.ai) — offered on the production main site only.
-  // Separate host = separate sign-in, so the in-app "Studio" entry stays for signed-in people.
-  const comicsAppHref = comicsEntryUrl();
-  const openComicsApp = () => { if (comicsAppHref) window.location.href = comicsAppHref; };
+  const headerRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const desktop = useMediaQuery(DESKTOP_NAV_QUERY);
 
-  // Same products as the desktop nav, flattened for the mobile menu (<1024px).
-  const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
-    ...(showComic ? [{ heading: 'Comic', items: [
-      { label: 'How It Works', onClick: () => onNavigate('how-it-works') },
-      { label: 'Comic Studio', onClick: onEnterStudio },
-      { label: 'Library', onClick: onViewComics },
-      ...(comicsAppHref ? [{ label: 'Comic Studio app', onClick: openComicsApp }] : []),
-    ] }] : []),
-    ...(showChat ? [{ heading: 'Chat Studio', items: [
-      { label: 'Open Chat Studio', onClick: () => onNavigate('chat') },
-      { label: 'Model Catalog', onClick: () => onNavigate('models') },
-    ] }] : []),
-    { heading: 'Live', items: showLive
-      ? [{ label: 'Open Stream Studio', onClick: () => { void openLiveApp('/live.html'); } }]
-      : [{ label: 'Get notified', onClick: notify }] },
-    { heading: 'Models', items: [
-      { label: 'Browse Models', onClick: () => onNavigate('models') },
-    ] },
-  ];
+  // Frosted only once something scrolls under it (Atlas's app header): at the top it is the plain page.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 2);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const closeMenu = useCallback((returnFocus = false) => {
+    setMenuOpen(false);
+    if (returnFocus) menuButtonRef.current?.focus();
+  }, []);
+  useDismiss(menuOpen, (reason) => closeMenu(reason === 'escape'), [headerRef]);
+  // The desktop row replaces the menu: a window widened past it closes the panel.
+  useEffect(() => {
+    if (desktop) setMenuOpen(false);
+  }, [desktop]);
+  // While the panel is open the page under it does not scroll.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const root = document.documentElement;
+    const previous = root.style.overflow;
+    root.style.overflow = 'hidden';
+    return () => {
+      root.style.overflow = previous;
+    };
+  }, [menuOpen]);
+  // A page change (Back, a link elsewhere) closes it too.
+  useEffect(() => setMenuOpen(false), [currentView]);
+
+  const studiosActive = entries.studios.some((s) => s.current);
 
   return (
-    <header className="sticky top-0 z-50 bg-white border-b-4 border-black">
-      {/* Announcement banner — home page only */}
-      {isHome && (
-        <div className="bg-brand-yellow border-b-2 border-black py-1.5 px-4 text-center text-xs font-bold text-black tracking-wide">
-          <span className="inline-flex items-center gap-2">
-            <Sparkles size={11} />
-            Chat Studio is live — converse with Claude, Gemini &amp; 100+ models
-            <button
-              onClick={() => onNavigate('chat')}
-              className="underline hover:no-underline ml-1"
-            >
-              Try it free →
-            </button>
-          </span>
-        </div>
-      )}
+    <header
+      ref={headerRef}
+      // While the phone menu is open the header (with its scrim and panel) rises to the popover layer, above the
+      // page's own fixed bars (the Feedback pill, the catalog's compare tray).
+      className={cn(STICKY_HEADER, menuOpen && Z.popover, 'text-ds-ink')}
+      data-scrolled={scrolled ? 'true' : undefined}
+    >
+      <div aria-hidden="true" className={HEADER_GLASS} />
+      <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-2 px-4 sm:px-6">
+        <BrandLockup onClick={onGoHome} compactOnPhone />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="flex items-center justify-between h-16">
+        <nav aria-label="Main" className="ml-6 hidden items-center gap-1 lg:flex">
+          <NavDropdown
+            label="Studios"
+            align="start"
+            active={studiosActive}
+            panelClassName="w-[22rem]"
+            items={entries.studios.map((s) => ({
+              label: s.label,
+              description: s.description,
+              icon: <EntryMark mark={s.mark} className="mt-0.5 size-7" />,
+              href: s.href,
+              onClick: s.onClick,
+              external: s.external,
+              current: s.current,
+              badge: s.badge,
+              busyLabel: s.busyLabel,
+              separated: s.id === 'atlas'
+            }))}
+          />
+          {entries.pages.map((page) => (
+            <NavLink key={page.id} entry={page} />
+          ))}
+        </nav>
 
-          {/* Logo */}
-          <BrandLockup onClick={onGoHome} />
-
-          {/* Centre nav — desktop only (≥1024px). The four products, each with its own hover menu. */}
-          <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
-            {showComic && (
-              <NavDropdown
-                label="Comic"
-                icon={<BookOpen size={14} />}
-                items={[
-                  { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
-                  { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
-                  { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
-                  ...(comicsAppHref
-                    ? [{ label: 'Comic Studio', description: 'Its own home at comics.dreamstreamstudio.ai', icon: <ExternalLink size={16} />, onClick: openComicsApp }]
-                    : []),
-                ]}
-              />
-            )}
-            {showChat && (
-              <NavDropdown
-                label="Chat Studio"
-                icon={<Bot size={14} />}
-                variant="blue"
-                items={[
-                  { label: 'Open Chat Studio', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
-                  { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
-                ]}
-              />
-            )}
-            {showLive ? (
-              <NavDropdown
-                label="Live"
-                icon={<Radio size={14} />}
-                variant="blue"
-                items={[
-                  { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { void openLiveApp('/live.html'); } },
-                ]}
-              />
-            ) : (
-              <NavDropdown
-                label="Live"
-                icon={<Radio size={14} />}
-                variant="muted"
-                badge="Coming soon"
-                caption="🚧 In the workshop"
-                items={[
-                  { label: 'Get notified', description: 'Be first to know when Live launches', icon: <Mail size={16} />, onClick: notify },
-                ]}
-              />
-            )}
-            <NavDropdown
-              label="Models"
-              icon={<Cpu size={14} />}
-              items={[
-                { label: 'Browse Models', description: 'Specs, pricing & benchmarks', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
-                { label: 'Use in Chat Studio', description: 'Start a conversation with any model', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
-              ]}
-            />
-          </nav>
-
-          {/* Auth controls */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* Hamburger — shows the product nav below the desktop breakpoint (<1024px). */}
-            <button
-              onClick={() => setMobileOpen((o) => !o)}
-              className="lg:hidden inline-flex items-center justify-center h-9 w-9 rounded-lg border-2 border-black bg-white hover:bg-slate-100 transition-colors"
-              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-              aria-expanded={mobileOpen}
-            >
-              {mobileOpen ? <X size={18} /> : <Menu size={18} />}
-            </button>
-
-            {isAuthenticated ? (
-              <>
-                <div className="hidden sm:block">
-                  <TokenAvailabilityPill />
-                </div>
-                <NotificationBell onNavigate={onNavigate} />
-                <UserAvatar onClick={onOpenProfile} />
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={onSignIn}
-                  className="hidden sm:block px-3 py-1.5 text-sm font-bold text-slate-600 hover:text-black transition-colors"
-                >
-                  Sign In
-                </button>
-                {/* New signups are invite-only — collect interest instead of opening registration.
-                    Compact label on phones so the header never overflows a ~360px viewport. */}
-                <Button onClick={onRequestAccess ?? onSignIn} size="sm" icon={<Mail size={14} />}>
-                  <span className="hidden sm:inline">Request Access</span>
-                  <span className="sm:hidden">Join</span>
-                </Button>
-              </>
-            )}
-          </div>
-
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <ThemeToggle className="hidden sm:inline-flex" />
+          {isAuthenticated ? (
+            <>
+              <div className="hidden sm:block">
+                <TokenAvailabilityPill />
+              </div>
+              <NotificationBell onNavigate={onNavigate} />
+              <UserAvatar onClick={onOpenProfile} />
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={onSignIn} className={buttonClasses({ variant: 'ghost', className: 'hidden rounded-full sm:inline-flex' })}>
+                Sign in
+              </button>
+              {/* New sign-ups are invite-only: the pill asks for access. Phones keep the one pill, Sign in;
+                  Request access is in the menu there. */}
+              <button type="button" onClick={requestAccess} className={buttonClasses({ className: 'group hidden rounded-full sm:inline-flex' })}>
+                Request access
+                <ArrowRight aria-hidden="true" className="size-3.5 transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:group-hover:translate-x-0.5" />
+              </button>
+              <button type="button" onClick={onSignIn} className={buttonClasses({ className: 'rounded-full px-3.5 sm:hidden' })}>
+                Sign in
+              </button>
+            </>
+          )}
+          <IconButton
+            ref={menuButtonRef}
+            label={menuOpen ? 'Close menu' : 'Open menu'}
+            title={null}
+            variant="outline"
+            size="lg"
+            aria-expanded={menuOpen}
+            aria-controls={menuOpen ? menuId : undefined}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="rounded-full lg:hidden"
+          >
+            {menuOpen ? <X className="size-4" /> : <Menu className="size-4" />}
+          </IconButton>
         </div>
       </div>
 
-      {/* Mobile product menu (<1024px) — restores the nav that the desktop bar hides. */}
-      {mobileOpen && (
-        <div className="lg:hidden border-t-2 border-black bg-white max-h-[75vh] overflow-auto">
-          <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-3">
-            {mobileGroups.map((g) => (
-              <div key={g.heading}>
-                <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">{g.heading}</p>
-                <div className="mt-1 grid">
-                  {g.items.map((it) => (
-                    <button
-                      key={it.label}
-                      onClick={go(it.onClick)}
-                      className="text-left px-3 py-2 rounded-lg font-semibold text-slate-800 hover:bg-slate-100 transition-colors"
-                    >
-                      {it.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {!isAuthenticated && (
-              <button
-                onClick={go(onSignIn)}
-                className="w-full text-left px-3 py-2 rounded-lg font-semibold text-slate-800 hover:bg-slate-100 transition-colors"
-              >
-                Sign In
-              </button>
-            )}
-          </nav>
-        </div>
-      )}
+      {menuOpen ? (
+        <MobileMenu
+          id={menuId}
+          entries={entries}
+          isAuthenticated={isAuthenticated}
+          onSignIn={onSignIn}
+          onRequestAccess={requestAccess}
+          onClose={() => closeMenu()}
+          panelRef={menuPanelRef}
+        />
+      ) : null}
     </header>
   );
 };
