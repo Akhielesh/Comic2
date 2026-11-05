@@ -93,6 +93,8 @@ const projectFor = (d: ComicDevice, extra: Partial<Project> = {}): Project => {
 };
 
 const DEVICE_SPECS = /(studio|editor|reader|public|shared|kit|a11y|pwa|perf)\.[a-z.]*spec\.ts$/;
+/** The layout smoke, the component scenes (qa/KitScenes.tsx) and the model picker scenes. */
+const SMOKE_SPECS = /(layout\.smoke|kit\.scenes|models\.picker)\.spec\.ts$/;
 
 const config: PlaywrightTestConfig = {
   testDir: HERE,
@@ -129,13 +131,14 @@ const config: PlaywrightTestConfig = {
     projectFor(REFLOW_320, { testMatch: /(studio\.layout|public\.reader|kit\.scenes|models\.picker|a11y)\.spec\.ts$/ }),
     // visualqa.md §7: the per-PR layout smoke (4 viewports, light) + the component scenes (qa/KitScenes.tsx).
     // (+ the model picker scenes, M1-PICKER-UI: tests/e2e/models.picker.spec.ts.)
-    ...SMOKE_VIEWPORTS.map((d) => projectFor(d, { testMatch: /(layout\.smoke|kit\.scenes|models\.picker)\.spec\.ts$/ })),
-    // DS-1b (master plan §1.4): the app scenes (qa/app/scenes) at the 320 px reflow width, under the page-level
-    // Atlas skin, in the OS dark scheme and with motion on. Only the `@app` tests run here; the studio smoke
-    // keeps the projects above.
-    ...APP_SMOKE_DEVICES.map((d) => projectFor(d, { testMatch: /layout\.smoke\.spec\.ts$/, grep: /@app\b/ })),
-    // Detector + allowlist self-tests (synthetic pages; proves every assertion can actually fail).
-    { name: 'harness-selftest', testMatch: /harness\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
+    ...SMOKE_VIEWPORTS.map((d) => projectFor(d, { testMatch: SMOKE_SPECS })),
+    // DS-1b (master plan §1.4): the page-level Atlas skin (smoke-360x740-atlas) and the OS dark scheme
+    // (smoke-1440x900-dark) run the whole smoke over the app scenes AND the studio, kit and model-picker scenes;
+    // the 320 px reflow width (smoke-320x640) and motion on run the app scenes (`@app`) only.
+    ...APP_SMOKE_DEVICES.map((d) => projectFor(d, d.look?.skin || d.look?.theme ? { testMatch: SMOKE_SPECS } : { testMatch: /layout\.smoke\.spec\.ts$/, grep: /@app\b/ })),
+    // Detector + allowlist self-tests (synthetic pages; proves every assertion can actually fail), and the app
+    // harness's own probes (tests/e2e/app-harness.selftest.spec.ts).
+    { name: 'harness-selftest', testMatch: /(harness|app-harness)\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],
   webServer: process.env.QA_BASE_URL
     ? undefined

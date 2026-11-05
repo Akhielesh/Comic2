@@ -341,10 +341,11 @@ const smoke = (name: string): ComicDevice => {
 };
 
 /**
- * DS-1b (master plan §1.3, §1.4): the projects that run ONLY the app scenes (`@app` in layout.smoke.spec.ts;
- * the studio smoke keeps its own projects). The smoke viewports above run the app scenes too, in light and dark;
- * these add the WCAG reflow width, the page-level Atlas skin on a phone, the OS dark scheme on a desktop, and
- * motion on (prefers-reduced-motion: no-preference) for the entrances.
+ * DS-1b (master plan §1.3, §1.4): the smoke under other looks. The smoke viewports above run the app scenes in
+ * light and dark; these add the page-level Atlas skin on a phone and the OS dark scheme on a desktop (both run the
+ * whole smoke: app, studio, kit and model-picker scenes), and the WCAG reflow width and motion on
+ * (prefers-reduced-motion: no-preference, for the entrances), which run the app scenes (`@app`) only
+ * (playwright.config.ts).
  */
 export const APP_SMOKE_DEVICES: ComicDevice[] = [
   { ...REFLOW_320, name: 'smoke-320x640', notes: 'the app scenes at the WCAG reflow width (light and dark)' },

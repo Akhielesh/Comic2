@@ -9,7 +9,9 @@
 // Looks (DS-1b): a project's `look` (devices.ts: skin=atlas, theme=dark, motion on) or the env vars
 // QA_SKIN=atlas / QA_THEME=dark make every open() ask for that skin / theme unless the test names its own;
 // projects without a look (and no env) open exactly the URLs they always did. The app surface
-// (`surface: 'app'`, qa/app/index.tsx) adds appScenes(), legacyClasses() and the motion probes.
+// (`surface: 'app'`, qa/app/index.tsx) adds appScenes(), legacyClasses(), duplicateIds(), eachScrollStep() and the
+// motion probes (recordMotionStarts() / motionStarts(), animations(), settleAnimations()); tests/e2e/
+// app-harness.selftest.spec.ts proves each of them can fail.
 //
 // Every page gets: fixture images served from fixtures/genImages.ts, every other origin BLOCKED (the
 // harness is offline by construction), page errors collected as `console` findings, and the known
@@ -105,6 +107,7 @@ export class QaHarness {
   /** The project's look (skin / theme / motion) — the defaults of every open(). */
   readonly look: ProjectLook;
   private routed = false;
+  private motionRecorder = false;
 
   constructor(
     readonly page: Page,
@@ -204,6 +207,102 @@ export class QaHarness {
     }));
   }
 
+  /**
+   * Record every motion START in each document from the next navigation on (an init script, so it sees the first
+   * frame): CSS animations that run for longer than 0 s (`animationstart`), CSS transitions (`transitionrun`) and
+   * `Element.animate()` calls with a duration. Under reduced motion the smoke expects none, so an entrance that
+   * ignores the preference fails even when it has ended by the time the page is measured. Call before open().
+   */
+  async recordMotionStarts(): Promise<void> {
+    if (this.motionRecorder) return;
+    this.motionRecorder = true;
+    await this.page.addInitScript(() => {
+      const w = window as unknown as { __qaMotionStarts?: string[] };
+      const log: string[] = [];
+      w.__qaMotionStarts = log;
+      const push = (entry: string) => {
+        if (log.length < 50) log.push(entry);
+      };
+      const label = (t: EventTarget | null, pseudo = '') => {
+        if (!(t instanceof Element)) return '';
+        const cls = (t.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 4).join('.');
+        return `${t.tagName.toLowerCase()}${cls ? '.' + cls : ''}${pseudo}`.slice(0, 120);
+      };
+      const ms = (v: string) => (v.trim().endsWith('ms') ? parseFloat(v) : parseFloat(v) * 1000) || 0;
+      // The computed duration of the named animation (a 0 s animation, e.g. a motion token collapsed to 0ms, moves nothing).
+      const animationMs = (el: Element, name: string, pseudo: string) => {
+        const cs = getComputedStyle(el, pseudo || null);
+        const names = cs.animationName.split(',').map((n) => n.trim());
+        const durations = cs.animationDuration.split(',');
+        const i = names.indexOf(name);
+        return i < 0 ? NaN : ms(durations[i % durations.length] || '0s');
+      };
+      document.addEventListener(
+        'animationstart',
+        (e) => {
+          const a = e as AnimationEvent;
+          const d = a.target instanceof Element ? animationMs(a.target, a.animationName, a.pseudoElement) : NaN;
+          if (d === 0) return;
+          push(`animation ${a.animationName}${Number.isFinite(d) ? ` ${Math.round(d)}ms` : ''} on ${label(a.target, a.pseudoElement)}`);
+        },
+        true
+      );
+      document.addEventListener('transitionrun', (e) => push(`transition ${(e as TransitionEvent).propertyName} on ${label(e.target, (e as TransitionEvent).pseudoElement)}`), true);
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
+        const d = typeof options === 'number' ? options : Number(options?.duration ?? 0) || 0;
+        if (d > 0) push(`animate() ${Math.round(d)}ms on ${label(this)}`);
+        return animate.call(this, keyframes, options);
+      };
+    });
+  }
+
+  /** The motion recordMotionStarts() saw in the current document; null when the recorder is not installed. */
+  async motionStarts(): Promise<string[] | null> {
+    return this.page.evaluate(() => (window as unknown as { __qaMotionStarts?: string[] }).__qaMotionStarts?.slice() ?? null);
+  }
+
+  /** Ids that more than one element carries: a `<label for>` or `aria-labelledby` then names the first one only. */
+  async duplicateIds(): Promise<string[]> {
+    return this.page.evaluate(() => {
+      const seen = new Set<string>();
+      const dup = new Set<string>();
+      for (const el of Array.from(document.querySelectorAll('[id]'))) {
+        if (!el.id) continue;
+        if (seen.has(el.id)) dup.add(el.id);
+        else seen.add(el.id);
+      }
+      return [...dup];
+    });
+  }
+
+  /**
+   * Walk a page that scrolls the document: scroll down in viewport-tall steps that overlap by `overlap` px and call
+   * `at(top)` at each step past the first screen (the caller has measured that one), then scroll back to the top.
+   * The detector measures only what is fully on screen, so a control cut by one step's edge lies fully inside the
+   * next step (the default overlap is a 44 px target twice over). Returns the scroll tops visited (none when the
+   * page fits one screen; a page that scrolls an inner box instead of the document is not walked).
+   */
+  async eachScrollStep(at: (top: number) => Promise<unknown>, overlap = 88): Promise<number[]> {
+    const visited: number[] = [];
+    const { height, vh } = await this.page.evaluate(() => ({ height: (document.scrollingElement || document.documentElement).scrollHeight, vh: window.innerHeight }));
+    let bottom = vh;
+    while (bottom < height - 1) {
+      const want = Math.max(0, Math.min(bottom - overlap, height - vh));
+      const top = await this.page.evaluate((y) => {
+        window.scrollTo({ top: y, left: 0, behavior: 'instant' as ScrollBehavior });
+        return Math.round(window.scrollY);
+      }, want);
+      if (top + vh <= bottom) break; // the document would not scroll any further
+      visited.push(top);
+      await this.settle(100);
+      await at(top);
+      bottom = top + vh;
+    }
+    if (visited.length) await this.page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior }));
+    return visited;
+  }
+
   /** Does the page prefer reduced motion (the project's emulation, as the page sees it)? */
   async prefersReducedMotion(): Promise<boolean> {
     return this.page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -229,9 +328,9 @@ export class QaHarness {
   }
 
   /**
-   * Under reduced motion: wait up to `ms` for every animation to end, and return the ones still in effect (the
-   * smoke expects none). With motion on: let the finite animations (entrances) finish, up to `ms`, and return the
-   * ones still running (infinite loops such as a busy spinner).
+   * Let the finite animations (entrances) finish, up to `ms`, and return the ones still in effect: infinite loops
+   * such as a busy spinner, or anything that outlasted `ms`. The motion-on smoke uses it; under reduced motion the
+   * smoke does NOT wait (it checks recordMotionStarts() and animations() as the page opened).
    */
   async settleAnimations(ms = 1500): Promise<RunningAnimation[]> {
     const deadline = Date.now() + ms;
