@@ -124,6 +124,17 @@ describe('fetchPublicUrl: every hop re-checked, nothing internal reached', () =>
     expect(transport.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
   });
 
+  it('connects through the pinned transport (the lookup that checked the IP), never the global fetch', async () => {
+    const transport = vi.fn(async (_url: string, _init?: RequestInit) => new Response('ok', { status: 200 }));
+    const global = vi.fn(async () => new Response('unpinned', { status: 200 }));
+    vi.stubGlobal('fetch', global);
+    restoreNet = __setNetForTests({ transport, resolve: publicResolver });
+    expect(await (await fetchPublicUrl('https://public.test/x')).text()).toBe('ok');
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(global).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it('follows a public redirect and stops after maxRedirects', async () => {
     const transport = vi.fn(async (url: string) =>
       url.endsWith('/final') ? new Response('ok', { status: 200 }) : new Response(null, { status: 301, headers: { location: '/final' } })
