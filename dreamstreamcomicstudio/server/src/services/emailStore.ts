@@ -9,7 +9,8 @@
 
 import crypto from 'crypto';
 import { getSupabaseAdmin } from './supabase.js';
-import { NEWSLETTER_CONFIRM_TTL_HOURS } from '../config.js';
+import { confirmTokenExpired, confirmTokenIssuedAt } from './confirmToken.js';
+import { STUDIO_INTEREST_IDS, sanitizeStudioInterests, type StudioInterestId } from '../../../services/studioInterests.js';
 
 export type EmailKind = 'essential' | 'marketing';
 export type EmailStatus = 'queued' | 'sent' | 'failed' | 'suppressed' | 'rate_limited' | 'skipped';
@@ -213,6 +214,76 @@ export const latestAuthEmailAt = async (email: string): Promise<string | null> =
   }
 };
 
+// ── Per-recipient newsletter-confirm throttle (services/interestStore.ts) ───────────
+// Same idea as the auth throttle above, for the double opt-in email (security finding
+// abuse-ops-11: re-subscribing used to re-send it on every request). Unlike the auth helpers,
+// these report a log they couldn't read (undefined / null) instead of 0, so the caller can fall
+// back to the subscriber row's own confirm_sent_at rather than silently allowing a send.
+
+export const NEWSLETTER_CONFIRM_TEMPLATE = 'newsletter-confirm';
+
+/** When this address was last sent a confirmation email (ISO); null = never; undefined = log unreadable. */
+export const latestConfirmEmailAt = async (email: string): Promise<string | null | undefined> => {
+  const db = adminOrNull();
+  if (!db) return undefined;
+  try {
+    const { data, error } = await db
+      .from('email_log')
+      .select('created_at')
+      .eq('to_email', normalizeEmail(email))
+      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
+      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return undefined;
+    return (data as { created_at?: string } | null)?.created_at ?? null;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Confirmation emails sent to this address since `sinceIso`; null = log unreadable. */
+export const countRecentConfirmEmails = async (email: string, sinceIso: string): Promise<number | null> => {
+  const db = adminOrNull();
+  if (!db) return null;
+  try {
+    const { count, error } = await db
+      .from('email_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('to_email', normalizeEmail(email))
+      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
+      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .gte('created_at', sinceIso);
+    if (error) return null;
+    return count ?? 0;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Confirmation emails sent to ANY address since `sinceIso` (the template's own budget, so
+ * unauthenticated confirmation mail can't use up the capacity sign-in and recovery mail need);
+ * null = log unreadable.
+ */
+export const countConfirmEmailsSince = async (sinceIso: string): Promise<number | null> => {
+  const db = adminOrNull();
+  if (!db) return null;
+  try {
+    const { count, error } = await db
+      .from('email_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
+      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .gte('created_at', sinceIso);
+    if (error) return null;
+    return count ?? 0;
+  } catch {
+    return null;
+  }
+};
+
 /** Recent send-log rows for the admin Email Console (delivery + opens). Service-role only. */
 export const recentLog = async (limit = 50): Promise<Array<Record<string, unknown>>> => {
   const db = adminOrNull();
@@ -232,10 +303,13 @@ export const recentLog = async (limit = 50): Promise<Array<Record<string, unknow
 // ── Newsletter double opt-in ────────────────────────────────────────────────────
 export const newConfirmToken = (): string => crypto.randomBytes(24).toString('hex');
 
-export type SubscribeOutcome = 'new' | 'pending' | 'already_confirmed' | 'already_registered';
+export type SubscribeOutcome = 'new' | 'already_registered';
 
-/** Product ids a signup can register interest in (whitelist for the intent capture). */
-export const WAITLIST_PRODUCTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
+/**
+ * Studio ids a signup can register interest in — the one shared list in
+ * services/studioInterests.ts (the retired code_studio / dashboards are gone).
+ */
+export const WAITLIST_PRODUCTS = STUDIO_INTEREST_IDS;
 
 export interface SubscriberIntent {
   /** Whitelisted product ids the person wants first access to. */
@@ -246,9 +320,7 @@ export interface SubscriberIntent {
 
 const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string[]; feedback?: string } => {
   const out: { product_interests?: string[]; feedback?: string } = {};
-  const products = Array.isArray(intent?.productInterests)
-    ? [...new Set(intent!.productInterests.filter((p) => (WAITLIST_PRODUCTS as readonly string[]).includes(p)))]
-    : [];
+  const products = sanitizeStudioInterests(intent?.productInterests);
   if (products.length) out.product_interests = products;
   const feedback = typeof intent?.feedback === 'string' ? intent.feedback.trim().slice(0, 1000) : '';
   if (feedback) out.feedback = feedback;
@@ -256,28 +328,32 @@ const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string
 };
 
 /**
- * Upsert a waitlist subscriber and return what happened. For 'updates' we (re)issue a
- * confirm token unless the address is already confirmed. For 'access' an existing row
- * (there is no confirm flow) reports 'already_registered' and is left untouched —
- * except that newly provided intent (product interests / feedback) is merged in, so
- * someone re-registering with picks still gets them recorded.
- * Idempotent on (lower(email), kind).
+ * Upsert a request-access (kind 'access') waitlist row and return what happened. There is no
+ * confirm flow for these: an existing row reports 'already_registered' and is left as it was,
+ * except that newly picked studios are ADDED to its picks (never replacing or dropping one), and
+ * a note is stored only if the row has none. Anyone can type anyone's address, so a stranger can
+ * neither wipe someone's picks nor overwrite their note. Idempotent on (lower(email), kind).
+ *
+ * Newsletter / interest rows (kind 'updates') go through registerInterest() in
+ * services/interestStore.ts instead: it owns the double opt-in and the per-recipient throttle.
  */
 export const upsertSubscriber = async (
   email: string,
-  kind: 'updates' | 'access',
+  kind: 'access',
   token: string,
   metadata: Record<string, unknown> = {},
   intent?: SubscriberIntent
 ): Promise<{ outcome: SubscribeOutcome }> => {
   const db = adminOrNull();
   const normalized = normalizeEmail(email);
-  if (!db) return { outcome: 'pending' };
+  if (!db) return { outcome: 'new' };
   const intentCols = sanitizeIntent(intent);
 
+  // '*' rather than named columns: on a database without product_interests / feedback the lookup
+  // still finds the row (and there is then nothing to merge).
   const { data: existing } = await db
     .from('waitlist_signups')
-    .select('id, confirmed')
+    .select('*')
     .eq('email', normalized)
     .eq('kind', kind)
     .limit(1)
@@ -285,19 +361,18 @@ export const upsertSubscriber = async (
 
   const now = new Date().toISOString();
   if (existing) {
-    // Merge any newly provided intent onto the existing row (never clears old picks).
-    if (Object.keys(intentCols).length) {
-      await db.from('waitlist_signups').update(intentCols).eq('id', (existing as { id: string }).id);
+    const row = existing as { id: string; product_interests?: unknown; feedback?: unknown };
+    const fields: Record<string, unknown> = {};
+    if (intentCols.product_interests) {
+      const stored = sanitizeStudioInterests(row.product_interests);
+      const merged = sanitizeStudioInterests([...stored, ...intentCols.product_interests]);
+      if (merged.length !== stored.length) fields.product_interests = merged;
     }
+    const hasNote = typeof row.feedback === 'string' && row.feedback.trim() !== '';
+    if (intentCols.feedback && !hasNote) fields.feedback = intentCols.feedback;
+    if (Object.keys(fields).length) await db.from('waitlist_signups').update(fields).eq('id', row.id);
     // 'access' rows have no confirm step — the email is simply already on the list.
-    if (kind === 'access') return { outcome: 'already_registered' };
-    if ((existing as { confirmed?: boolean }).confirmed) return { outcome: 'already_confirmed' };
-    // Re-issue a fresh token + restart the expiry clock.
-    await db
-      .from('waitlist_signups')
-      .update({ confirm_token: token, confirm_sent_at: now, unsubscribed_at: null })
-      .eq('id', (existing as { id: string }).id);
-    return { outcome: 'pending' };
+    return { outcome: 'already_registered' };
   }
 
   await db.from('waitlist_signups').insert({
@@ -313,42 +388,150 @@ export const upsertSubscriber = async (
   return { outcome: 'new' };
 };
 
-/** Verify a confirm token and flip the row to confirmed. Returns true on success. */
-export const confirmSubscriber = async (email: string, token: string): Promise<boolean> => {
-  const db = adminOrNull();
-  if (!db || !token) return false;
-  const normalized = normalizeEmail(email);
-  const { data } = await db
+// ── Confirming (the link in newsletter-confirm) ─────────────────────────────────
+// Two steps, on purpose. GET /api/newsletter/confirm only LOOKS at the link (inspectConfirmLink)
+// and shows a page with a Confirm button: mail-security scanners fetch every link in incoming
+// mail, and a plain fetch must never subscribe anyone or undo their unsubscribe. Only the POST
+// that button sends (a person's click) runs confirmSubscriber.
+
+/** Studio picks a confirmed subscriber asked for that wait for their next confirm click. */
+export const PENDING_INTERESTS_KEY = 'pending_interests';
+
+export type ConfirmOutcome =
+  /** This click opted the address in (new, or back after unsubscribing): send the welcome. */
+  | 'confirmed'
+  /** An active subscriber confirmed new studio picks. */
+  | 'updated'
+  /** The token holder is already subscribed (a second click, or an older link). */
+  | 'already_confirmed';
+
+interface ConfirmRow {
+  id: string;
+  confirm_token: string | null;
+  confirmed: boolean;
+  unsubscribed_at: string | null;
+  product_interests?: string[] | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+const isSubscribedRow = (row: { confirmed: boolean; unsubscribed_at?: string | null }) =>
+  Boolean(row.confirmed && !row.unsubscribed_at);
+
+const sameToken = (stored: string | null, given: string): boolean => {
+  const a = Buffer.from(stored || '');
+  const b = Buffer.from(given);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+/**
+ * The newsletter row a confirm link points at, once the token proves this server issued it for
+ * this address and it hasn't expired. A forged or unknown token never reaches the database.
+ */
+const loadConfirmTarget = async (
+  db: NonNullable<ReturnType<typeof adminOrNull>>,
+  email: string,
+  token: string
+): Promise<{ row: ConfirmRow; matches: boolean } | null> => {
+  const issuedAt = confirmTokenIssuedAt(email, token);
+  if (issuedAt === null || confirmTokenExpired(issuedAt)) return null;
+  const { data, error } = await db
     .from('waitlist_signups')
-    .select('id, confirm_token, confirmed, confirm_sent_at')
-    .eq('email', normalized)
+    .select('id, confirm_token, confirmed, unsubscribed_at, product_interests, metadata')
+    .eq('email', email)
     .eq('kind', 'updates')
     .limit(1)
     .maybeSingle();
-  if (!data) return false;
-  const row = data as { id: string; confirm_token: string | null; confirmed: boolean; confirm_sent_at: string | null };
-  if (row.confirmed) return true; // already confirmed — treat as success (idempotent link)
-  // Constant-time token comparison.
-  const a = Buffer.from(row.confirm_token || '');
-  const b = Buffer.from(token);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
-  // Strict link timeout: reject an expired confirm link (0 hours = never expires).
-  if (NEWSLETTER_CONFIRM_TTL_HOURS > 0 && row.confirm_sent_at) {
-    const ageMs = Date.now() - new Date(row.confirm_sent_at).getTime();
-    if (ageMs > NEWSLETTER_CONFIRM_TTL_HOURS * 3_600_000) {
-      // Expired — clear the stale token so it can't be retried.
-      await db.from('waitlist_signups').update({ confirm_token: null }).eq('id', row.id);
-      return false;
-    }
-  }
-  await db
-    .from('waitlist_signups')
-    .update({ confirmed: true, confirmed_at: new Date().toISOString(), confirm_token: null })
-    .eq('id', row.id);
-  return true;
+  if (error || !data) return null;
+  const row = data as ConfirmRow;
+  return { row, matches: sameToken(row.confirm_token, token) };
 };
 
-/** Stamp the waitlist row(s) unsubscribed and add the address to the suppression list. */
+/**
+ * What a still-good confirm link would do, so the Confirm page can say it before the click.
+ * `subscribed`: the address already gets updates, about `current`, and pressing Confirm adds
+ * `adding` (the picks waiting on this click). Otherwise pressing Confirm subscribes it to
+ * `adding` (the picks stored on the row). Studio ids only, from the shared list.
+ */
+export type ConfirmLinkState =
+  | { state: 'ready'; subscribed: boolean; current: StudioInterestId[]; adding: StudioInterestId[] }
+  | { state: 'already_confirmed' };
+
+/**
+ * GET: is this confirm link still good? 'ready' = show the Confirm button, with what it confirms;
+ * 'already_confirmed' = nothing left to do; null = invalid or expired. Read-only.
+ */
+export const inspectConfirmLink = async (email: string, token: string): Promise<ConfirmLinkState | null> => {
+  const db = adminOrNull();
+  if (!db || !token) return null;
+  const target = await loadConfirmTarget(db, normalizeEmail(email), token);
+  if (!target) return null;
+  const { row } = target;
+  if (!target.matches) return isSubscribedRow(row) ? { state: 'already_confirmed' } : null;
+  const stored = sanitizeStudioInterests(row.product_interests);
+  if (!isSubscribedRow(row)) return { state: 'ready', subscribed: false, current: [], adding: stored };
+  // The same picks confirmSubscriber applies on the click.
+  const waiting = row.metadata && typeof row.metadata === 'object' ? row.metadata[PENDING_INTERESTS_KEY] : undefined;
+  const adding = sanitizeStudioInterests(waiting).filter((id) => !stored.includes(id));
+  return { state: 'ready', subscribed: true, current: stored, adding };
+};
+
+/**
+ * POST (the Confirm button): flip the row to confirmed, apply studio picks waiting on this click,
+ * and lift an earlier unsubscribe. The address leaves the MARKETING suppression list ('all', i.e.
+ * bounces and complaints, is never lifted here): a person just pressed Confirm on a link only
+ * their inbox received. Single-use: the update only lands while the row still holds this token.
+ * null = invalid, expired, or superseded.
+ */
+export const confirmSubscriber = async (email: string, token: string): Promise<ConfirmOutcome | null> => {
+  const db = adminOrNull();
+  if (!db || !token) return null;
+  const normalized = normalizeEmail(email);
+  const target = await loadConfirmTarget(db, normalized, token);
+  if (!target) return null;
+  const { row, matches } = target;
+  const wasSubscribed = isSubscribedRow(row);
+  if (!matches) return wasSubscribed ? 'already_confirmed' : null;
+
+  const fields: Record<string, unknown> = { confirmed: true, confirm_token: null, unsubscribed_at: null };
+  if (!wasSubscribed) fields.confirmed_at = new Date().toISOString();
+  const metadata = row.metadata && typeof row.metadata === 'object' ? { ...row.metadata } : null;
+  if (metadata && PENDING_INTERESTS_KEY in metadata) {
+    // Picks asked for while already subscribed take effect now. (A row that wasn't subscribed
+    // keeps the picks it was registered with; anything else stashed there is dropped.)
+    const pending = sanitizeStudioInterests(metadata[PENDING_INTERESTS_KEY]);
+    delete metadata[PENDING_INTERESTS_KEY];
+    fields.metadata = metadata;
+    if (wasSubscribed && pending.length) {
+      fields.product_interests = sanitizeStudioInterests([...(row.product_interests ?? []), ...pending]);
+    }
+  }
+  const { data: updated, error } = await db
+    .from('waitlist_signups')
+    .update(fields)
+    .eq('id', row.id)
+    .eq('confirm_token', token)
+    .select('id');
+  if (error) {
+    console.warn('[email] confirmSubscriber update failed', error.message);
+    return null;
+  }
+  // Another click used this token a moment ago, and it is confirmed now.
+  if (!Array.isArray(updated) || updated.length === 0) return 'already_confirmed';
+  try {
+    await db.from('email_suppressions').delete().eq('email', normalized).eq('scope', 'marketing');
+  } catch (err) {
+    console.warn('[email] confirmSubscriber unsuppress error', (err as Error)?.message);
+  }
+  return wasSubscribed ? 'updated' : 'confirmed';
+};
+
+/**
+ * Stamp the waitlist row(s) unsubscribed and add the address to the suppression list. The
+ * newsletter / interest row also drops what only mattered while subscribed — its studio picks
+ * (including any waiting for a confirm click), free-text note and any pending confirm token — so
+ * an unsubscribed address keeps no interests. The suppression row stays: it's what stops us
+ * emailing the address again.
+ */
 export const markUnsubscribed = async (email: string): Promise<void> => {
   const db = adminOrNull();
   const normalized = normalizeEmail(email);
@@ -359,6 +542,19 @@ export const markUnsubscribed = async (email: string): Promise<void> => {
       .from('waitlist_signups')
       .update({ unsubscribed_at: new Date().toISOString() })
       .eq('email', normalized);
+    // Separate statement: on a database without the interest columns, the stamp above still lands.
+    await db
+      .from('waitlist_signups')
+      .update({ product_interests: [], feedback: null, confirm_token: null })
+      .eq('email', normalized)
+      .eq('kind', 'updates');
+    const { data } = await db.from('waitlist_signups').select('id, metadata').eq('email', normalized).eq('kind', 'updates');
+    for (const r of (data as Array<{ id: string; metadata: Record<string, unknown> | null }> | null) ?? []) {
+      if (!r.metadata || typeof r.metadata !== 'object' || !(PENDING_INTERESTS_KEY in r.metadata)) continue;
+      const metadata = { ...r.metadata };
+      delete metadata[PENDING_INTERESTS_KEY];
+      await db.from('waitlist_signups').update({ metadata }).eq('id', r.id);
+    }
   } catch (err) {
     console.warn('[email] markUnsubscribed error', (err as Error)?.message);
   }
