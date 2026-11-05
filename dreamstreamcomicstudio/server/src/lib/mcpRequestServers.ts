@@ -1,14 +1,18 @@
 // web-surface-1: what a chat request may say about MCP servers.
 //
-// `ChatRequest.mcpServers` comes from the browser (services/mcpServers.ts, localStorage). It used to
-// reach ai/tools/mcpClient.ts buildMcpTools as sent, and buildMcpTools trusts an entry's `trusted`
-// flag (operator servers may use http and internal hosts) — so `{ url: 'http://127.0.0.1:…',
-// trusted: true }` in a request body skipped the SSRF guard. Two rules close it, route side:
-//   1. A request entry is REBUILT from plain fields (id, name, url, headers): `trusted` and anything
+// `ChatRequest.mcpServers` comes from the browser (services/mcpServers.ts, localStorage). Trust is
+// decided tool side: ai/tools/mcpClient.ts `mayUseInternalHosts` lets an entry use http and internal
+// hosts only when it is `trusted` AND its URL is one of the operator's (envDesignMcpServers), so a
+// request body's `{ url: 'http://127.0.0.1:…', trusted: true }` already gets the strict SSRF guard
+// there. This module is the route side (prepareChat) on top of that:
+//   1. A request entry is REBUILT from plain fields (id, name, url, headers), with size caps: `trusted` and anything
 //      else the body carries is dropped, and only an https URL that passes the strict guard
 //      (isSafeMcpUrl, never `allowInternal`) is kept. At most MAX_REQUEST_MCP_SERVERS.
 //   2. An operator server (envDesignMcpServers, STUDIO_*_MCP_URL) is never replaced by a request or
-//      saved entry that reuses its URL. The operator entry keeps its id — `nango`, whose
+//      saved entry that reuses its URL. Without this rule such an entry, sent with `trusted: true`,
+//      took the operator's place in prepareChat's by-URL merge, passed mayUseInternalHosts, and got
+//      the operator's headers under its own id (`mcp_<its id>_*`), outside the free-turn
+//      `mcp_nango_*` gate. With it, the operator entry keeps its id — `nango`, whose
 //      `mcp_nango_*` tools the connected-account privacy gate (ai/privacy/connectorData.ts
 //      isConnectorMcpToolName) withholds from free turns and counts on paid ones — its headers
 //      (the operator's secret) and its trust. URLs are compared as a browser would (scheme and host

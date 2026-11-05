@@ -57,9 +57,24 @@ const BLOCKED_PRAGMAS = new Set([
  * printf / format: a `*` width or precision, or one of 1000 or more (`printf('%.*c', 1e9, 'x')`). A
  * leading `0` is the zero-pad flag, not part of the number, so `%0100d` (width 100) and `%.0999f`
  * (precision 999) run while `%01000d` is refused.
+ *
+ * The format is read one conversion at a time, as SQLite's printf reads it: flags, width, `.precision`,
+ * `l` or `ll`, then the type character, which may itself be `%`. So every literal percent is a whole
+ * conversion (`%%`, but also `%l%`, `%5l%`, `%.3ll%`), and it cannot pair up with the `%` that starts
+ * the next one (`'%l%%1000d'` is `%l%` then `%1000d`).
+ *
+ * This is a fast path for a literal first argument only. A computed or parenthesised format
+ * (`printf(('%.*c'), …)`, `printf(col, …)`, `printf('%' || …)`) is not read here: the worker's
+ * `hard_heap_limit` is what bounds those widths (`out of memory`).
  */
 const FORMAT_FUNCTIONS = new Set(['printf', 'format']);
-const HUGE_FORMAT_SPEC = /%[-+ 0#,!]*(\*|[1-9]\d{3,}|\d*\.(\*|0*[1-9]\d{3,}))/;
+const FORMAT_CONVERSION = /%[-+ 0#,!]*(\*|\d+)?(?:\.(\*|\d*))?l{0,2}(?:[\s\S]|$)/g;
+const hugeFormat = (format: string): boolean => {
+  for (const [, width, precision] of format.matchAll(FORMAT_CONVERSION)) {
+    for (const n of [width, precision]) if (n === '*' || (n && Number(n) >= 1000)) return true;
+  }
+  return false;
+};
 
 type SqlToken = { kind: 'word' | 'quoted' | 'string' | 'punct'; text: string };
 
@@ -183,7 +198,7 @@ export const refusedSql = (sql: string): string | null => {
       // The format is the first argument; a double-quoted one is a string too (SQLite's legacy rule).
       const fmt = toks[i + 2];
       const literal = fmt?.kind === 'string' || fmt?.kind === 'quoted';
-      if (FORMAT_FUNCTIONS.has(fn) && literal && HUGE_FORMAT_SPEC.test(fmt.text.replace(/%%/g, ''))) {
+      if (FORMAT_FUNCTIONS.has(fn) && literal && hugeFormat(fmt.text)) {
         return 'printf/format widths over 999 (or “*”) aren’t available in this playground.';
       }
     }

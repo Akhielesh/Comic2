@@ -177,6 +177,12 @@ describe('functions and statements that only exhaust the sandbox are refused up 
     // A zero-pad flag does not hide a big width or precision.
     "SELECT printf('%01000d', 1)",
     "SELECT printf('%.01000f', 1)",
+    // Every literal percent is one whole conversion, as SQLite reads it (`%l%`, `%5l%`, `%.3ll%`), so
+    // it does not pair up with the `%` of the next one.
+    "SELECT printf('%l%%1000d', 1)",
+    "SELECT printf('%ll%%1000d', 1)",
+    "SELECT printf('%5l%%1000d', 1)",
+    "SELECT printf('%.5l%%.*c', 1000000000, 'x')",
     // SQLite reads U+FEFF where a token starts as space, so it hides nothing either (mid-text, where
     // runSql's trim() never reaches it).
     "SELECT 1; \ufeffATTACH ':memory:' AS x",
@@ -235,6 +241,7 @@ describe('functions and statements that only exhaust the sandbox are refused up 
       "SELECT printf('%05d', 1)",
       "SELECT printf('%0999d', 1)",
       "SELECT printf('%.0999f', 1)",
+      "SELECT printf('%l%|%ll%|%5l%|%5d', 7)",
       'PRAGMA page_count'
     ]) {
       expect([ok, refusedSql(ok)]).toEqual([ok, null]);
@@ -242,9 +249,9 @@ describe('functions and statements that only exhaust the sandbox are refused up 
   });
 
   it('zero-padded printf widths run', async () => {
-    const r = await runSql('', "SELECT printf('%05d', 1), length(printf('%0100d', 1)), printf('%%%05d', 7)");
+    const r = await runSql('', "SELECT printf('%05d', 1), length(printf('%0100d', 1)), printf('%%%05d', 7), printf('%l%|%5l%|%5d', 7)");
     expect(r.error).toBeUndefined();
-    expect(r.rows).toEqual([['00001', 100, '%00007']]);
+    expect(r.rows).toEqual([['00001', 100, '%00007', '%|    %|    7']]);
   });
 
   it('a lesson whose seed data says “Vacuum” runs (the schema is model-written)', async () => {
