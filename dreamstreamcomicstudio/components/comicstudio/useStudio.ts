@@ -41,7 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
-import type { AttachmentTarget, SteerRequest, SteerResponse, StreamRequest, StudioEvent, StudioFocus } from '../../shared/comic/events';
+import { STEER_LIMITS, type AttachmentTarget, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
 import {
   mapAssetRefs,
   variantFor,
@@ -210,6 +210,16 @@ const QUEUE_REFUSAL_COPY: Record<QueueAddRefusal | 'inline' | 'card', string> = 
   inline: 'Script files and photos that didn’t upload can’t wait in Up next. Send this once the director finishes this step.',
   card: 'Answer that question once the director finishes this step.'
 };
+
+/**
+ * "Send now" with steering on, when the note cannot join the running step (POST /steer's refusals, agent-editor plan
+ * §3 A2). Every refusal keeps the note: the 409s and a long note go next without stopping the director; a cooldown keeps
+ * it in its place.
+ */
+export const STEER_GOES_NEXT_COPY = {
+  BUSY: `The director already has ${STEER_LIMITS.inbox} notes in hand — yours stays in Up next and goes when it finishes.`,
+  LIMIT: 'That note is long, so it goes as its own message once the director finishes.'
+} as const;
 
 /** Don't auto-switch the board tab within this long of the user picking one. */
 export const MANUAL_TAB_HOLD_MS = 20_000;
@@ -1546,10 +1556,14 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
   /**
    * "Send now" on a queued note. The turn is free (the queue is only held): it goes at once. A director turn is running:
-   * with steering on (caps.liveAgent.steer and a steer call) the note joins that turn; NOT_RUNNING means the turn just
-   * ended, so it goes next. A steer refused for its content keeps the note and says why; any other steer failure falls
-   * back to D2 with a calm notice. Steering off, or a note with photos (a steer carries text only): Stop the director,
-   * then send it (D2). A plan_pages run is never stopped from here: the note goes the moment the plan is in.
+   * with steering on (caps.liveAgent.steer and a steer call) the note joins that turn. The steer route's refusals (plan
+   * §3 A2) keep the note: NOT_RUNNING (the turn just ended or has not reached the director yet), BUSY (the director
+   * already holds STEER_LIMITS.inbox notes) and LIMIT (longer than STEER_LIMITS.noteChars; such a note never tries) put
+   * it first in Up next to go as a message when the turn ends, without stopping the director; COOLDOWN says why and
+   * keeps it where it is; a note refused for its content keeps it with the reason. NOT_AVAILABLE (steering switched off
+   * on the server) and any other failure fall back to D2 with a calm notice. Steering off, or a note with photos (a
+   * steer carries text only): Stop the director, then send it (D2). A plan_pages run is never stopped from here: the
+   * note goes the moment the plan is in.
    */
   const sendNow = useCallback(
     async (id: string): Promise<SendOutcome> => {
@@ -1562,6 +1576,12 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       }
       const steer = depsRef.current.steerStudio ?? DEFAULT_STEER;
       if (isMessageBusy(s) && steerOn(capsRef.current) && steer && !note.inboxPaths?.length) {
+        // Too long to join the step (the server would answer LIMIT): it goes first, as its own message, when it ends.
+        if (note.text.length > STEER_LIMITS.noteChars) {
+          dispatch({ type: 'queue_express', id });
+          say({ kind: 'info', text: STEER_GOES_NEXT_COPY.LIMIT });
+          return 'queued';
+        }
         const generation = generationRef.current;
         try {
           await steer(projectRef.current, { text: note.text, ...(note.focus ? { focus: note.focus } : {}) });
@@ -1575,16 +1595,26 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
             dispatch({ type: 'set_error', message: e.message, ...(e.code ? { code: e.code } : {}) });
             return 'refused';
           }
-          // NOT_RUNNING: the turn just ended, so it goes next. Anything else (a full steer inbox, steering switched off on
-          // the server, the network): fall back to D2 — Stop the director, then send it — and say so calmly.
+          // A cooldown: the words are fine but nothing can go yet. The note keeps its place; nothing stops.
+          if (e.code === 'COOLDOWN') {
+            dispatch({ type: 'set_error', message: e.message, code: e.code });
+            return 'refused';
+          }
+          // NOT_RUNNING (the turn just ended), BUSY (the director already has its notes) or LIMIT (too long for a step):
+          // it goes first, as a message, when the turn ends — the director is never stopped for it.
+          if (e.code === 'NOT_RUNNING' || e.code === 'BUSY' || e.code === 'LIMIT') {
+            dispatch({ type: 'queue_express', id });
+            if (e.code !== 'NOT_RUNNING') say({ kind: 'info', text: e.message || STEER_GOES_NEXT_COPY[e.code] });
+            return 'queued';
+          }
+          // Anything else (steering switched off on the server, the network): fall back to D2 — Stop the director, then
+          // send it — and say so calmly.
           dispatch({ type: 'queue_express', id });
-          if (e.code !== 'NOT_RUNNING') {
-            const stillWorking = isMessageBusy(stateRef.current);
-            say({ kind: 'info', text: stillWorking ? 'Couldn’t add it to this step, so the director stops and it goes next.' : 'Couldn’t add it to this step, so it goes next.' });
-            if (stillWorking) {
-              stopForSendNowRef.current = true;
-              void cancel();
-            }
+          const stillWorking = isMessageBusy(stateRef.current);
+          say({ kind: 'info', text: stillWorking ? 'Couldn’t add it to this step, so the director stops and it goes next.' : 'Couldn’t add it to this step, so it goes next.' });
+          if (stillWorking) {
+            stopForSendNowRef.current = true;
+            void cancel();
           }
           return 'queued';
         }

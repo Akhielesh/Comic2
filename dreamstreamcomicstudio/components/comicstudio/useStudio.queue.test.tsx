@@ -24,7 +24,8 @@ vi.mock('./studioApi', async (importOriginal) => {
 });
 
 import { StudioApiError } from './studioApi';
-import { useStudio, type UseStudioDeps } from './useStudio';
+import { STEER_GOES_NEXT_COPY, useStudio, type UseStudioDeps } from './useStudio';
+import { STEER_LIMITS } from '../../shared/comic/events';
 
 interface FakeStream {
   req: StreamRequest;
@@ -570,6 +571,72 @@ describe('Send now', () => {
     await waitFor(() => expect(messages()).toHaveLength(2));
     expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} make it rain`);
     expect(result.current.queue?.map((n) => n.text)).toEqual(['first']);
+  });
+
+  for (const code of ['BUSY', 'LIMIT'] as const) {
+    it(`a steer refused with ${code} goes first when the turn ends — the director is not stopped`, async () => {
+      const message = code === 'BUSY' ? 'The director already has 3 notes in hand.' : 'That note is long.';
+      const kind = code === 'BUSY' ? 'conflict' : 'limit';
+      const steerStudio = vi.fn(async () => {
+        throw new StudioApiError(kind, message, { status: 409, code });
+      });
+      const { result } = await setup(STEER_ON, { steerStudio });
+      act(() => void result.current.send('go'));
+      const s1 = lastStream();
+      await act(async () => void (await result.current.send('first')));
+      await act(async () => void (await result.current.send('make it rain')));
+      const id = result.current.queue![1].id;
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.sendNow!(id);
+      });
+      expect(outcome).toBe('queued');
+      expect(api.cancelStudio).not.toHaveBeenCalled();
+      expect(result.current.error).toBeNull();
+      expect(result.current.notice?.text).toBe(message);
+      expect(result.current.queueSendingNow).toBe(id);
+      // The director finishes on its own; that note then goes first, alone.
+      reply(s1, 'Done.');
+      await waitFor(() => expect(messages()).toHaveLength(2));
+      expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} make it rain`);
+      expect(result.current.queue?.map((n) => n.text)).toEqual(['first']);
+    });
+  }
+
+  it('a steer refused with COOLDOWN says why and keeps the note where it is (nothing stops, nothing jumps the line)', async () => {
+    const steerStudio = vi.fn(async () => {
+      throw new StudioApiError('cooldown', 'Give it a few seconds, then try again.', { status: 429, code: 'COOLDOWN' });
+    });
+    const { result } = await setup(STEER_ON, { steerStudio });
+    act(() => void result.current.send('go'));
+    await act(async () => void (await result.current.send('first')));
+    await act(async () => void (await result.current.send('make it rain')));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(result.current.queue![1].id);
+    });
+    expect(outcome).toBe('refused');
+    expect(result.current.error).toBe('Give it a few seconds, then try again.');
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+    expect(result.current.queueSendingNow).toBeNull();
+    expect(result.current.queue?.map((n) => n.text)).toEqual(['first', 'make it rain']);
+  });
+
+  it(`a note over STEER_LIMITS.noteChars (${STEER_LIMITS.noteChars}) never tries to steer: it goes first when the turn ends`, async () => {
+    const steerStudio = vi.fn(async () => ({ ok: true as const, msgId: 'msg_steer' }));
+    const { result } = await setup(STEER_ON, { steerStudio });
+    act(() => void result.current.send('go'));
+    await act(async () => void (await result.current.send('x'.repeat(STEER_LIMITS.noteChars + 1))));
+    const id = result.current.queue![0].id;
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(id);
+    });
+    expect(outcome).toBe('queued');
+    expect(steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+    expect(result.current.notice?.text).toBe(STEER_GOES_NEXT_COPY.LIMIT);
+    expect(result.current.queueSendingNow).toBe(id);
   });
 
   it('a steer refused for its content (CONTENT_POLICY) says why and keeps the note', async () => {
