@@ -1,8 +1,10 @@
 // Library image post-processing (assets.md §3.3 F, §4.5): $0 sharp work. Re-encodes a generated
 // image to WebP (≤ 2048 px long edge) with @640 and @320 thumbnails, and turns texture seeds
-// into seamless tiles (centre crop → mirror tile → half-offset crossfade).
+// into seamless tiles (centre crop → mirror tile → half-offset crossfade). P3-ST2 adds a tiny
+// blurred LQIP (≤ 20 px, ~300 bytes as a data URL) that every tile can paint before the image loads.
 
 import sharp from 'sharp';
+import { LIBRARY_LQIP_MAX } from '../../../../shared/comic/library.js';
 import { decodeImageDataUrl } from '../assets.js';
 import { SHARP_INPUT, withSharpSlot } from '../imageMeasure.js';
 import { StudioError } from '../types.js';
@@ -13,6 +15,9 @@ export const LIBRARY_WEBP_QUALITY = 90;
 export const LIBRARY_THUMB_QUALITY = 82;
 /** Seamless tile edge (assets.md: 1024²). */
 export const TEXTURE_TILE = 1024;
+/** LQIP long edge (a 4:5 image → 16×20). */
+export const LIBRARY_LQIP_EDGE = 20;
+export const LIBRARY_LQIP_QUALITY = 40;
 
 export interface EncodedLibraryImage {
   full: Buffer;
@@ -20,6 +25,8 @@ export interface EncodedLibraryImage {
   h: number;
   bytes: number;
   thumbs: { 640: Buffer; 320: Buffer };
+  /** data:image/webp;base64,… ≤ LIBRARY_LQIP_MAX chars; absent when it couldn't be made (never fails the encode). */
+  lqip?: string;
 }
 
 /**
@@ -79,8 +86,18 @@ export async function encodeLibraryImage(dataUrl: string, opts: { seamless?: boo
       .toBuffer({ resolveWithObject: true });
     const thumb = (width: number) =>
       sharp(full.data).resize({ width, withoutEnlargement: true }).webp({ quality: LIBRARY_THUMB_QUALITY, effort: 4 }).toBuffer();
-    const [t640, t320] = await Promise.all([thumb(640), thumb(320)]);
-    return { full: full.data, w: full.info.width, h: full.info.height, bytes: full.data.byteLength, thumbs: { 640: t640, 320: t320 } };
+    const lqip = (): Promise<string | undefined> =>
+      sharp(full.data)
+        .resize(LIBRARY_LQIP_EDGE, LIBRARY_LQIP_EDGE, { fit: 'inside' })
+        .webp({ quality: LIBRARY_LQIP_QUALITY, effort: 4 })
+        .toBuffer()
+        .then((b) => {
+          const url = webpDataUrl(b);
+          return url.length <= LIBRARY_LQIP_MAX ? url : undefined;
+        })
+        .catch(() => undefined);
+    const [t640, t320, preview] = await Promise.all([thumb(640), thumb(320), lqip()]);
+    return { full: full.data, w: full.info.width, h: full.info.height, bytes: full.data.byteLength, thumbs: { 640: t640, 320: t320 }, ...(preview ? { lqip: preview } : {}) };
   });
 }
 

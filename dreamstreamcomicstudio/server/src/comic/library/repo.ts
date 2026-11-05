@@ -5,8 +5,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
+  AdminSpendKey,
   LibraryAssetStatus,
   LibraryKind,
+  LibraryProvenance,
   LibraryQuote,
   LibraryRefineStrategy,
   LibraryRunView,
@@ -39,6 +41,20 @@ export interface LibraryCandidate {
   palette?: string[];
   textFound?: string[];
   costUsd?: number;
+  // Provenance facts (P3-ST2; no DDL: they live in the candidates jsonb). Absent on candidates drawn before ST-A.
+  /** The exact final prompt sent (≤ LIBRARY_PROMPT_MAX) and its hash. */
+  prompt?: string;
+  promptHash?: string;
+  /** The provider's model id requested and the version it reported. */
+  providerModel?: string;
+  modelVersion?: string;
+  /** The vision model that scored it. */
+  checkerModel?: string;
+  /** Which platform key paid (a name, never the key), and the route that drew it. */
+  key?: AdminSpendKey;
+  route?: 'openrouter' | 'gemini';
+  /** ~300-byte blurred WebP preview (data URL). */
+  lqip?: string;
 }
 
 /** What the public index serves (kept live while a rebuild runs, until a better candidate replaces it). */
@@ -53,6 +69,9 @@ export interface LibraryPublishedSnapshot {
   tags: string[];
   palette: string[];
   at: number;
+  /** How the live image was made (allow-listed again when the public index is built). */
+  provenance?: LibraryProvenance;
+  lqip?: string;
 }
 
 export interface LibraryAssetRow {
@@ -104,6 +123,19 @@ export interface LibraryRunRequest {
   maxRetries: 0 | 1 | 2;
   /** Regenerate with an art-director note (one-asset runs). */
   note?: string;
+  /** Which key the run spends on (P3-ST1; a name, never the key). */
+  key?: AdminSpendKey;
+  /** The provider-side limit when the run started (the console's billing line; never fetched on page load). */
+  preflight?: LibraryRunPreflight;
+}
+
+/** The admin spend key's OpenRouter limit as checked by startRun. */
+export interface LibraryRunPreflight {
+  limitUsd: number | null;
+  remainingUsd: number | null;
+  /** The budget that blocks first (workspace / member / key), when one applies. */
+  budgetRemainingUsd: number | null;
+  checkedAt: number;
 }
 
 export interface LibraryRunRow {
@@ -160,7 +192,12 @@ export interface LibraryRepo {
   releaseLease(id: string): Promise<void>;
   /** Platform spend ledger. Never throws (a ledger failure is logged and swallowed). */
   recordCost(event: LibraryCostEvent): Promise<void>;
+  /** library_runs.spent_usd summed over every run started at or after `sinceIso` (the monthly cap; P3-ST1). */
+  monthSpentUsd(sinceIso: string): Promise<number>;
 }
+
+/** Runs read for the monthly sum (a month holds a handful; the cap is $20). */
+export const MONTH_RUNS_READ_LIMIT = 1000;
 
 export const TABLE_MISSING_MESSAGE = "The library tables aren't installed yet. Apply server/sql/comic_library.sql, then reload.";
 
@@ -311,6 +348,11 @@ export function createSupabaseLibraryRepo(admin: () => SupabaseClient = getSupab
       const { error } = await admin().from(RUNS).update({ lease_until: null }).eq('id', id);
       if (error) logger.warn('comic_library_release_lease_failed', { id, message: error.message });
     },
+    async monthSpentUsd(sinceIso) {
+      const { data, error } = await admin().from(RUNS).select('spent_usd').gte('started_at', sinceIso).limit(MONTH_RUNS_READ_LIMIT);
+      if (error) throw dbError('monthSpentUsd', error);
+      return Math.round((data || []).reduce((n, r) => n + num((r as Record<string, unknown>).spent_usd), 0) * 10000) / 10000;
+    },
     async recordCost(e) {
       try {
         if (!(e.costUsd > 0)) return;
@@ -440,6 +482,10 @@ export function createMemoryLibraryRepo(opts: { now?: () => number } = {}): Memo
     },
     async recordCost(e) {
       if (e.costUsd > 0) repo.costs.push(clone(e));
+    },
+    async monthSpentUsd(sinceIso) {
+      if (repo.missing) throw tableMissingError();
+      return Math.round([...repo.runs.values()].filter((r) => r.started_at >= sinceIso).reduce((n, r) => n + (r.spent_usd || 0), 0) * 10000) / 10000;
     }
   };
   return repo;

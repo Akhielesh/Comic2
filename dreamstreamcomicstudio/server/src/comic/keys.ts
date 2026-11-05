@@ -4,11 +4,13 @@
 // in production, or the user's own) and Gemini direct. Keys are read from the request's
 // already-resolved key map (middleware/keys.ts → attachKeys, then accountKeys.ts), so the
 // `X-Allowed-Sources` governance header and the account BYOK store apply exactly as they
-// do for every other route. Nothing here reads raw headers or env vars.
+// do for every other route. Nothing here reads raw headers; the only env read is admin spend
+// (adminSpendKeys → library/adminSpend.ts, per call, never at import).
 
 import type { Request } from 'express';
 import { GEMINI_API_KEY, OPENROUTER_API_KEY } from '../config.js';
 import { allowedProviderFilter } from '../middleware/keys.js';
+import { adminSpendKeyValue } from './library/adminSpend.js';
 import type { ResolvedKey, StudioKeys } from './types.js';
 
 /** OpenRouter keys are recognisable by prefix; Gemini direct can never use one. */
@@ -82,4 +84,16 @@ export function platformStudioKeys(source: { openrouter?: string; gemini?: strin
   if (openrouter) keys.openrouter = { key: openrouter, byok: false };
   if (gemini && !OPENROUTER_KEY_PREFIX.test(gemini)) keys.gemini = { key: gemini, byok: false };
   return keys.openrouter || keys.gemini ? keys : null;
+}
+
+/**
+ * The key ADMIN image spend runs on: the library runner and Model Lab (Program 3 ST-A, bug B7). That is the
+ * model-test key (DREAMSTREAMSTUDIO_MODELTEST), or the platform OpenRouter key only when COMIC_ADMIN_SPEND_KEY=platform
+ * says so explicitly. OpenRouter ONLY: the platform Gemini key is never returned, so admin spend can't land on it.
+ * Null when that key is unset: callers fail closed (nothing is built, nothing is spent). byok:false (platform-paid).
+ * `env` is for tests (fake values); production reads process.env on every call.
+ */
+export function adminSpendKeys(env: Record<string, string | undefined> = process.env): StudioKeys | null {
+  const key = adminSpendKeyValue(env);
+  return key ? { openrouter: { key, byok: false } } : null;
 }
