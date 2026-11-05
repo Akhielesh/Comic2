@@ -42,15 +42,37 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4.151.2 deploy
 
-      - name: Verify the relay reaches an allowlisted upstream
+      # The relay fails closed (data-egress/src/index.ts): no EGRESS_SHARED_SECRET on the worker → 503
+      # for everything; a request without the right x-egress-key → 403. So the probe checks both:
+      # an unkeyed request is refused, and a keyed one (the same value as the worker's secret, stored
+      # as the EGRESS_SHARED_SECRET secret of this Environment) reaches Yahoo.
+      - name: Verify the relay refuses unkeyed requests and serves keyed ones
+        env:
+          EGRESS_KEY: ${{ secrets.EGRESS_SHARED_SECRET }}
         run: |
           sleep 10
-          body=$(curl -s --max-time 25 'https://dreamstreamstudio.ai/egress/fetch?url=https%3A%2F%2Fquery1.finance.yahoo.com%2Fv8%2Ffinance%2Fchart%2FAAPL%3Frange%3D1d%26interval%3D1d')
-          echo "egress AAPL probe -> ${body:0:200}"
+          probe='https://dreamstreamstudio.ai/egress/fetch?url=https%3A%2F%2Fquery1.finance.yahoo.com%2Fv8%2Ffinance%2Fchart%2FAAPL%3Frange%3D1d%26interval%3D1d'
+          unkeyed=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$probe")
+          echo "egress probe without a key -> HTTP $unkeyed"
+          if [ "$unkeyed" = "503" ]; then
+            echo '::error::The relay answers 503 "Relay not configured": EGRESS_SHARED_SECRET is not set on the worker, so every market-data fallback fails. Do owner step O4 (docs/infrastructure/request-surface-hardening.md).'
+            exit 1
+          elif [ "$unkeyed" != "403" ]; then
+            echo "::warning::Expected 403 for a request without x-egress-key, got $unkeyed (a bot challenge to the CI runner looks like this too)."
+          fi
+          if [ -z "$EGRESS_KEY" ]; then
+            echo '::warning::No EGRESS_SHARED_SECRET secret in the production-deploy Environment, so the keyed probe was skipped (the deploy itself succeeded).'
+            exit 0
+          fi
+          body=$(curl -s --max-time 25 -H "x-egress-key: $EGRESS_KEY" "$probe")
+          echo "egress AAPL probe with the key -> ${body:0:200}"
           if echo "$body" | grep -q '"chart"'; then
             echo "Relay active — Yahoo JSON received through the edge."
           elif echo "$body" | grep -qi 'challenge-platform\|Just a moment'; then
             echo '::warning::Cloudflare bot challenge served to the CI runner — relay health could not be verified from CI (deploy itself succeeded).'
+          elif echo "$body" | grep -q 'Bad or missing x-egress-key'; then
+            echo '::error::The worker refused the key: the GitHub secret EGRESS_SHARED_SECRET does not match the worker secret (and so, likely, the backend DATA_EGRESS_SECRET).'
+            exit 1
           else
             echo '::warning::Relay did not return Yahoo JSON from CI — check the worker logs (deploy itself succeeded).'
           fi

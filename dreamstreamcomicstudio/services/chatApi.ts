@@ -40,13 +40,25 @@ export interface UnfurlResult {
 
 const unfurlCache = new Map<string, Promise<UnfurlResult>>();
 
-/** Fetch OG/meta preview for a link (cached per URL). */
+/**
+ * Keep `p` in `cache` under `url` while it is pending and once it succeeds; when the request itself
+ * fails (a 429 from the per-caller limit, a network error, a 5xx), drop it, so a later call (the click
+ * after a hover prefetch was refused) asks again instead of replaying the failure for the session.
+ */
+const memoOnSuccess = <T>(cache: Map<string, Promise<T>>, url: string, p: Promise<T>, fallback: () => T): Promise<T> => {
+  const settled = p.catch((): T => {
+    if (cache.get(url) === settled) cache.delete(url);
+    return fallback();
+  });
+  cache.set(url, settled);
+  return settled;
+};
+
+/** Fetch OG/meta preview for a link (cached per URL; a failed request is not cached). */
 export const unfurlLink = (url: string): Promise<UnfurlResult> => {
   const cached = unfurlCache.get(url);
   if (cached) return cached;
-  const p = get<UnfurlResult>(`/api/chat/unfurl?url=${encodeURIComponent(url)}`).catch((): UnfurlResult => ({ url }));
-  unfurlCache.set(url, p);
-  return p;
+  return memoOnSuccess(unfurlCache, url, get<UnfurlResult>(`/api/chat/unfurl?url=${encodeURIComponent(url)}`), () => ({ url }));
 };
 
 export interface ReadArticleResult {
@@ -62,15 +74,20 @@ export interface ReadArticleResult {
 
 const readCache = new Map<string, Promise<ReadArticleResult>>();
 
-/** Fetch extracted reader-mode content for an article URL (cached per URL). */
+/**
+ * Fetch extracted reader-mode content for an article URL (cached per URL). An article the server could
+ * not read (`ok: false` in a 200) stays cached; a failed request (429, network, 5xx) does not.
+ */
 export const readArticle = (url: string): Promise<ReadArticleResult> => {
   const cached = readCache.get(url);
   if (cached) return cached;
-  const p = get<ReadArticleResult>(`/api/chat/read-url?url=${encodeURIComponent(url)}`).catch(
-    (): ReadArticleResult => ({ url, host: '', blocks: [], ok: false, error: 'fetch failed' })
-  );
-  readCache.set(url, p);
-  return p;
+  return memoOnSuccess(readCache, url, get<ReadArticleResult>(`/api/chat/read-url?url=${encodeURIComponent(url)}`), () => ({
+    url,
+    host: '',
+    blocks: [],
+    ok: false,
+    error: 'fetch failed'
+  }));
 };
 
 /**

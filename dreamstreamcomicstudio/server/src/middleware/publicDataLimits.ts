@@ -10,11 +10,20 @@
 //     /64, so keying a single v6 address would let a caller rotate addresses and never meet a limit.
 // Same counter store as middleware/rateLimit.ts (Redis when configured, else in memory) and the same
 // 429 body, so a client that already handles RATE_LIMITED needs nothing new. A store failure fails
-// open, as there.
+// open, as there. routes/learn.ts reuses createPublicDataLimit for the SQL playground.
 //
-// The client memoises unfurl and reader-mode results per URL (services/chatApi.ts) and a dashboard
-// refreshes a tile at most every 30 s (monitors are clamped 30–3600 s), so the numbers below sit far
-// above real use: they bound a script, not a person.
+// Sized against what the client really sends, not against one widget:
+//   - unfurl and reader mode are memoised per URL (services/chatApi.ts), but the news list prefetches
+//     an article on HOVER and focus, so moving down a long list spends one reader call per new link;
+//     60/min covers that (unfurl, the same shape of work, has the same number).
+//   - widget refresh counts every tile on every tick: Dashboards re-runs each data tile of the open
+//     board every 5 min while the tab is visible (12 calls/h per tile), and a live monitor refreshes as
+//     often as every 30 s (120 calls/h). So the per-minute window (30) is the one that bounds a script.
+//     The daily window is per audience: an anonymous caller (a stale session, or a script; many people
+//     can share one IPv4 address) gets 300/day; a signed-in account gets 10,000/day, above a 10-tile
+//     board plus two 30 s monitors left open around the clock (8,640), so it never stops a real
+//     dashboard. The paid-key tools need sign-in (SIGNED_IN_REFRESH_TOOLS below) and their spend is
+//     bounded by the provider budgets in ai/tools (DreamStream session), not by this window.
 
 import type { NextFunction, Request, Response } from 'express';
 import { clientKey } from '../lib/clientKey.js';
@@ -25,6 +34,8 @@ export type PublicDataWindow = {
   scope: string;
   windowMs: number;
   maxRequests: number;
+  /** Count only these callers (default: everyone). */
+  appliesTo?: 'anonymous' | 'signedIn';
 };
 
 const MINUTE = 60_000;
@@ -39,7 +50,9 @@ export const createPublicDataLimit =
   (...windows: PublicDataWindow[]) =>
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const requester = publicRequesterKey(req);
+    const audience = req.user?.id ? 'signedIn' : 'anonymous';
     for (const w of windows) {
+      if (w.appliesTo && w.appliesTo !== audience) continue;
       let count: number;
       let resetAt: number;
       try {
@@ -74,10 +87,11 @@ export const createPublicDataLimit =
 /** The windows for each public data route (exported for tests and docs). */
 export const PUBLIC_DATA_WINDOWS = {
   unfurl: [{ scope: 'chat_unfurl', windowMs: MINUTE, maxRequests: 60 }],
-  readUrl: [{ scope: 'chat_read_url', windowMs: MINUTE, maxRequests: 20 }],
+  readUrl: [{ scope: 'chat_read_url', windowMs: MINUTE, maxRequests: 60 }],
   toolRefresh: [
     { scope: 'chat_tool_refresh', windowMs: MINUTE, maxRequests: 30 },
-    { scope: 'chat_tool_refresh_day', windowMs: DAY, maxRequests: 300 }
+    { scope: 'chat_tool_refresh_day', windowMs: DAY, maxRequests: 300, appliesTo: 'anonymous' },
+    { scope: 'chat_tool_refresh_day', windowMs: DAY, maxRequests: 10_000, appliesTo: 'signedIn' }
   ]
 } as const satisfies Record<string, readonly PublicDataWindow[]>;
 

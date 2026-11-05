@@ -20,6 +20,11 @@ import { isSafeMcpUrl } from '../ai/tools/mcpClient.js';
 import type { McpServerConfig } from '../../../apiTypes.js';
 
 export const MAX_REQUEST_MCP_SERVERS = 10;
+/**
+ * Entries looked at, valid or not. The body may be 10 MB of entries; each one costs a URL parse, so
+ * the scan is bounded, not just the output. The client sends only the chat's enabled servers.
+ */
+export const MAX_REQUEST_MCP_ENTRIES_SCANNED = 32;
 const MAX_ID = 64;
 const MAX_NAME = 80;
 const MAX_URL = 2048;
@@ -45,11 +50,14 @@ const plainHeaders = (raw: unknown): Record<string, string> | undefined => {
   return n ? out : undefined;
 };
 
-/** The request's MCP servers as plain configs: strict-safe https URLs only, no `trusted`, at most 10. */
+/**
+ * The request's MCP servers as plain configs: strict-safe https URLs only, no `trusted`, at most 10,
+ * taken from the first 32 entries.
+ */
 export const sanitizeRequestMcpServers = (raw: unknown): McpServerConfig[] => {
   if (!Array.isArray(raw)) return [];
   const out: McpServerConfig[] = [];
-  for (const entry of raw) {
+  for (const entry of raw.slice(0, MAX_REQUEST_MCP_ENTRIES_SCANNED)) {
     if (out.length >= MAX_REQUEST_MCP_SERVERS) break;
     const s = record(entry);
     if (!s || typeof s.id !== 'string' || typeof s.url !== 'string') continue;

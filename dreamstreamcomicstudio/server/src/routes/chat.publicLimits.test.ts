@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
+import type { PublicDataWindow } from '../middleware/publicDataLimits.js';
 
 vi.mock('../services/supabase.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/supabase.js')>()),
@@ -16,6 +17,13 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
 }));
 vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
 const fetched = vi.hoisted(() => ({ unfurl: 0, read: 0, tools: [] as string[] }));
+// The real in-memory counter store, on a clock a test can move forward (days of dashboard use in ms).
+const clock = vi.hoisted(() => ({ offsetMs: 0 }));
+vi.mock('../middleware/rateLimitStore.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../middleware/rateLimitStore.js')>();
+  const store = new mod.InMemoryRateLimitStore(() => Date.now() + clock.offsetMs);
+  return { ...mod, getRateLimitStore: () => store };
+});
 vi.mock('../ai/tools/unfurl.js', () => ({
   unfurlUrl: async (url: string) => {
     fetched.unfurl += 1;
@@ -43,7 +51,7 @@ vi.mock('../ai/tools/registry.js', async (importOriginal) => ({
 }));
 
 const { chatPublicRouter } = await import('./chat.js');
-const { PUBLIC_DATA_WINDOWS, publicRequesterKey } = await import('../middleware/publicDataLimits.js');
+const { PUBLIC_DATA_WINDOWS, publicRequesterKey, toolRefreshLimit } = await import('../middleware/publicDataLimits.js');
 
 const app = express();
 app.set('trust proxy', true); // the client address comes from X-Forwarded-For below
@@ -105,16 +113,16 @@ describe('limits on the public data routes', () => {
     expect((await unfurl({})).status).toBe(200);
   });
 
-  it('read-url: 20 a minute', async () => {
+  it('read-url: 60 a minute (the news list prefetches an article on hover)', async () => {
     const ip = v4();
-    expect(await statuses(20, () => readUrl({ ip }))).toEqual(Array(20).fill(200));
+    expect(await statuses(60, () => readUrl({ ip }))).toEqual(Array(60).fill(200));
     expect((await readUrl({ ip })).status).toBe(429);
   });
 
   it('a signed-in caller is counted per account, wherever they connect from', async () => {
     const user = `u-${seq++}`;
-    // 20 reads from 20 different addresses use up the account's allowance…
-    expect(await statuses(20, () => readUrl({ user }))).toEqual(Array(20).fill(200));
+    // 60 reads from 60 different addresses use up the account's allowance…
+    expect(await statuses(60, () => readUrl({ user }))).toEqual(Array(60).fill(200));
     const res = await readUrl({ user });
     expect(res.status).toBe(429);
     expect((await res.json()).error.details.keyType).toBe('user');
@@ -124,16 +132,18 @@ describe('limits on the public data routes', () => {
 
   it('anonymous IPv6 callers share one allowance per /64 (rotating the interface id does not help)', async () => {
     const prefix = `2001:db8:${(seq++).toString(16)}:1`;
-    expect(await statuses(20, () => readUrl({ ip: `${prefix}::${(seq++).toString(16)}` }))).toEqual(Array(20).fill(200));
+    expect(await statuses(60, () => readUrl({ ip: `${prefix}::${(seq++).toString(16)}` }))).toEqual(Array(60).fill(200));
     expect((await readUrl({ ip: `${prefix}:dead:beef:1:2` })).status).toBe(429);
     // The next /64 is someone else.
     expect((await readUrl({ ip: `2001:db8:${(seq++).toString(16)}:2::1` })).status).toBe(200);
   });
 
-  it('tool-refresh: 30 a minute and 300 a day', async () => {
-    expect(PUBLIC_DATA_WINDOWS.toolRefresh.map((w) => [w.windowMs, w.maxRequests])).toEqual([
-      [60_000, 30],
-      [24 * 60 * 60_000, 300]
+  it('tool-refresh: 30 a minute for everyone; a day is 300 anonymous, 10,000 signed in', async () => {
+    const windows: readonly PublicDataWindow[] = PUBLIC_DATA_WINDOWS.toolRefresh;
+    expect(windows.map((w) => [w.windowMs, w.maxRequests, w.appliesTo ?? 'all'])).toEqual([
+      [60_000, 30, 'all'],
+      [24 * 60 * 60_000, 300, 'anonymous'],
+      [24 * 60 * 60_000, 10_000, 'signedIn']
     ]);
     const ip = v4();
     expect(await statuses(30, () => refresh({ ip }))).toEqual(Array(30).fill(200));
@@ -146,6 +156,73 @@ describe('limits on the public data routes', () => {
     expect(publicRequesterKey({ ip: undefined } as never)).toBe('ip:unknown');
     expect(publicRequesterKey({ ip: '::ffff:203.0.113.9' } as never)).toBe('ip:4:203.0.113.9');
     expect(publicRequesterKey({ ip: '203.0.113.9', user: { id: 'u1' } } as never)).toBe('user:u1');
+  });
+});
+
+describe('tool-refresh daily windows against real client cadence', () => {
+  const MIN = 60_000;
+  // Drive the limiter as Express would, on the store's movable clock; returns the refusal scope or null.
+  const hit = async (who: { user?: string; ip: string }): Promise<string | null> => {
+    let refused: string | null = null;
+    const res = {
+      setHeader: () => undefined,
+      status: () => res,
+      json: (body: { error: { details: { scope: string } } }) => {
+        refused = body.error.details.scope;
+      }
+    };
+    let passed = false;
+    await toolRefreshLimit({ ip: who.ip, user: who.user ? { id: who.user } : undefined } as never, res as never, () => {
+      passed = true;
+    });
+    expect(passed).toBe(refused === null);
+    return refused;
+  };
+  const start = clock.offsetMs;
+  afterAll(() => {
+    clock.offsetMs = start;
+  });
+
+  it('a signed-in 10-tile board (every 5 min) plus a 30 s live monitor, open for 8 hours, is never refused', async () => {
+    const who = { user: `u-board-${seq++}`, ip: v4() };
+    const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN); // a fresh day for every window
+    const refusals: string[] = [];
+    let calls = 0;
+    for (let t = 0; t <= 8 * 60 * MIN; t += 30_000) {
+      clock.offsetMs = t0 + t;
+      const due = 1 + (t % (5 * MIN) === 0 ? 10 : 0); // the monitor every tick, the 10 tiles every 5 min
+      for (let i = 0; i < due; i++) {
+        calls += 1;
+        const r = await hit(who);
+        if (r) refusals.push(r);
+      }
+    }
+    expect(calls).toBe(961 + 970); // 961 monitor ticks + 97 board refreshes × 10 tiles
+    expect(refusals).toEqual([]);
+  });
+
+  it('an anonymous caller still stops at 300 a day, even when spread under the minute limit', async () => {
+    const who = { ip: v4() };
+    const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN);
+    const scopes: (string | null)[] = [];
+    for (let i = 0; i < 301; i++) {
+      clock.offsetMs = t0 + Math.floor(i / 20) * MIN; // 20 a minute
+      scopes.push(await hit(who));
+    }
+    expect(scopes.slice(0, 300).every((s) => s === null)).toBe(true);
+    expect(scopes[300]).toBe('chat_tool_refresh_day');
+  });
+
+  it('a signed-in account stops at 10,000 a day', async () => {
+    const who = { user: `u-script-${seq++}`, ip: v4() };
+    const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN);
+    let last: string | null = null;
+    for (let i = 0; i < 10_001; i++) {
+      clock.offsetMs = t0 + Math.floor(i / 30) * MIN; // the most the minute window allows
+      last = await hit(who);
+      if (i < 10_000) expect(last).toBeNull();
+    }
+    expect(last).toBe('chat_tool_refresh_day');
   });
 });
 

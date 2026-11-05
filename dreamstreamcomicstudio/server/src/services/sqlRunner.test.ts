@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, it, expect } from 'vitest';
-import { __setSqlLimitsForTests, __sqlRunnerLoad, refusedSql, runSql } from './sqlRunner.js';
+import { __setSqlLimitsForTests, __sqlRunnerLoad, refusedSql, runSql, SQL_ONE_AT_A_TIME_MESSAGE } from './sqlRunner.js';
 
 const schema = 'CREATE TABLE users(id INTEGER, name TEXT, age INTEGER);' +
   'INSERT INTO users VALUES (1,"Ann",30),(2,"Bob",25),(3,"Cy",40);';
@@ -81,7 +81,9 @@ describe('runSql never blocks the server (abuse-ops-2)', () => {
     expect(elapsed).toBeLessThan(5_000);
     // A blocked event loop would have ticked once or twice; a free one ticks every 10 ms.
     expect(ticks).toBeGreaterThan(Math.floor(400 / 10 / 3));
-    // The next run starts clean.
+    // The next run starts clean (on the default deadline: 400 ms also covers a fresh isolate's
+    // database setup, which a loaded CI runner can exceed).
+    __setSqlLimitsForTests();
     expect((await runSql(schema, 'SELECT count(*) FROM users')).rows).toEqual([[3]]);
   });
 
@@ -98,15 +100,21 @@ describe('runSql never blocks the server (abuse-ops-2)', () => {
     expect(r.error).toMatch(/was stopped/);
   });
 
+  // Each memory test isolates its layer: the RSS watchdog reads the whole process, so on a loaded runner
+  // it could stop a run first (also a correct outcome in production, but not the layer under test).
+  const ONLY_SQLITE_LIMITS = { rssGrowthBytes: 1024 * 1024 * 1024, deadlineMs: 10_000 };
+
   it('memory: SQLite’s heap limit fails a runaway string cleanly (a string doubling past 32 MiB)', async () => {
+    __setSqlLimitsForTests(ONLY_SQLITE_LIMITS);
     const r = await runSql('', "WITH RECURSIVE r(n, s) AS (SELECT 1, 'x' UNION ALL SELECT n + 1, s || s FROM r WHERE n < 40) SELECT max(length(s)) FROM r");
     expect(r.error).toMatch(/out of memory/i);
-  });
+  }, 15_000);
 
   it('memory: a database that grows past its page cap stops with "full"', async () => {
+    __setSqlLimitsForTests(ONLY_SQLITE_LIMITS);
     const r = await runSql('', "CREATE TABLE t AS WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM r) SELECT x, printf('%.900c', 'x') AS pad FROM r");
     expect(r.error).toMatch(/full/i);
-  });
+  }, 15_000);
 
   it('memory: the RSS watchdog kills a run that grows the process past its allowance', async () => {
     // Lift the page cap so only the watchdog can stop it; 1 MiB of growth is enough to trip it.
@@ -115,16 +123,33 @@ describe('runSql never blocks the server (abuse-ops-2)', () => {
     expect(r.error).toMatch(/too much memory/);
   }, 15_000);
 
-  it('at most 2 run at once; the rest wait their turn, and a flood is told the playground is busy', async () => {
+  it('one runs at a time; the rest wait their turn, and a flood is told the playground is busy', async () => {
     __setSqlLimitsForTests({ deadlineMs: 300 });
-    const runs = Array.from({ length: 4 }, () => runSql('', INFINITE));
+    const runs = Array.from({ length: 3 }, () => runSql('', INFINITE));
     await new Promise((r) => setTimeout(r, 20));
-    expect(__sqlRunnerLoad()).toEqual({ running: 2, waiting: 2 });
-    const flood = await Promise.all(Array.from({ length: 20 }, () => runSql('', 'SELECT 1')));
-    expect(flood.filter((r) => /busy/.test(r.error || '')).length).toBe(6); // 16 may wait, the other 6 are refused
+    expect(__sqlRunnerLoad()).toEqual({ running: 1, waiting: 2 });
+    const flood = await Promise.all(Array.from({ length: 10 }, () => runSql('', 'SELECT 1')));
+    expect(flood.filter((r) => /busy/.test(r.error || '')).length).toBe(4); // 8 may wait, the other 4 are refused
     const results = await Promise.all(runs);
     for (const r of results) expect(r.error).toMatch(/was stopped/);
     expect(__sqlRunnerLoad()).toEqual({ running: 0, waiting: 0 });
+  }, 20_000);
+
+  it('a caller holds one place at a time, so one account cannot fill the queue', async () => {
+    __setSqlLimitsForTests({ deadlineMs: 300 });
+    const first = runSql('', INFINITE, 'user:a');
+    const again = await runSql('', 'SELECT 1', 'user:a');
+    expect(again).toEqual({ columns: [], rows: [], rowCount: 0, truncated: false, error: SQL_ONE_AT_A_TIME_MESSAGE });
+    // Someone else still gets in line behind it.
+    const other = runSql('', 'SELECT 2', 'user:b');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(__sqlRunnerLoad()).toEqual({ running: 1, waiting: 1 });
+    expect((await first).error).toMatch(/was stopped/);
+    // It ran (here on the short test deadline, so only "not refused" is certain).
+    expect((await other).error ?? '').not.toMatch(/busy|still running/);
+    // Once the run has ended, the same caller runs again.
+    __setSqlLimitsForTests();
+    expect((await runSql('', 'SELECT 3', 'user:a')).rows).toEqual([[3]]);
   }, 20_000);
 });
 
@@ -139,7 +164,19 @@ describe('functions and statements that only exhaust the sandbox are refused up 
     'VACUUM',
     'PRAGMA max_page_count = 1000000000',
     'PRAGMA temp_store = FILE',
-    'pragma Hard_Heap_Limit = 0'
+    'pragma Hard_Heap_Limit = 0',
+    // Spellings SQLite accepts: quoted names, comments between tokens, a schema prefix, a later statement.
+    'SELECT length("randomblob"(1000000000))',
+    'SELECT length([zeroblob] /* c */ (1000000000))',
+    "PRAGMA 'max_page_count' = 1000000000",
+    'PRAGMA main . "cache_size" = 1000000',
+    "SELECT 1; attach ':memory:' AS x",
+    'EXPLAIN QUERY PLAN VACUUM',
+    "SELECT printf('%%%1000d', 1)",
+    'SELECT printf("%.*c", 1000000000, \'x\')',
+    // A Tcl-style parameter `$a(')` is one token to SQLite, so its quote does not hide what follows.
+    "SELECT $a(') , length(randomblob(1000000000)) , $b(')",
+    "SELECT :a(') ; VACUUM ; SELECT :b(')"
   ])('%s', async (q) => {
     const r = await runSql(schema, q);
     expect(r.error).toMatch(/isn’t available in this playground|aren’t available in this playground/);
@@ -156,9 +193,30 @@ describe('functions and statements that only exhaust the sandbox are refused up 
       'SELECT attachments FROM mail',
       "SELECT printf('%5.2f', 3.14159)",
       'PRAGMA table_info(users)',
-      'SELECT format(\'%d items\', 3)'
+      'SELECT format(\'%d items\', 3)',
+      // Words that are blocked only as calls, statements or pragma names: data, columns, comments.
+      "INSERT INTO products VALUES (1, 'Robot Vacuum', 'Appliances', 299.0)",
+      'INSERT INTO products VALUES (2, "Vacuum Sealer", "Kitchen", 49.0)',
+      'CREATE TABLE settings(id INTEGER, page_size INTEGER, cache_size INTEGER)',
+      'SELECT page_size, cache_size FROM settings',
+      "INSERT INTO tasks VALUES (1, 'Attach the invoice'), (2, 'Detach the trailer')",
+      'SELECT 1 -- randomblob(5) is not a call in a comment\n',
+      "SELECT 'randomblob(1000000000)' AS note /* zeroblob(9) */",
+      "SELECT printf('%.2f', price) FROM orders WHERE order_date LIKE '%2024%'",
+      "SELECT printf('%d', id) FROM t WHERE id % 1000 = 0",
+      "SELECT printf('%%1000 of them')",
+      'PRAGMA page_count'
     ]) {
       expect([ok, refusedSql(ok)]).toEqual([ok, null]);
     }
+  });
+
+  it('a lesson whose seed data says “Vacuum” runs (the schema is model-written)', async () => {
+    const products =
+      'CREATE TABLE products(id INTEGER, name TEXT, category TEXT, price REAL, page_size INTEGER);' +
+      "INSERT INTO products VALUES (1,'Robot Vacuum','Appliances',299.0,20),(2,'Attach-a-Lens','Photo',19.0,10);";
+    const r = await runSql(products, "SELECT name, printf('%.2f', price) AS p FROM products WHERE price > 100 AND name LIKE '%Vac%'");
+    expect(r.error).toBeUndefined();
+    expect(r.rows).toEqual([['Robot Vacuum', '299.00']]);
   });
 });
