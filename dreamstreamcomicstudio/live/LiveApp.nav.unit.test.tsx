@@ -5,6 +5,8 @@
 // Atlas skin (hue never decorates under it), and the brand in the rail and the top bar is the
 // shared On-air lockup (components/brand). The views are stand-ins; the shell is real.
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveAccount } from './account';
@@ -167,5 +169,28 @@ describe('the brand', () => {
     await settle();
     expect(rail().classList.contains('slim')).toBe(true);
     expect(within(rail()).getByRole('button', { name: 'Stream Studio — dashboard' })).toBe(home);
+  });
+
+  it('fits a 320 px phone with the account offline ("Sign in" showing): the top bar keeps the mark and the button’s name, the wordmark leaves the view', async () => {
+    // At 320 px the wordmark + Help + theme + "Sign in" measured 345 px (the capture harness's
+    // stream-qa/scripts/topbar-mtop.mjs measures the bar; jsdom can't). Under 360 px the word is
+    // visually hidden — not display: none, so it is still read — and the button keeps its label.
+    h.account = { status: 'offline' } as LiveAccount; // the account couldn't be read: the gate stays open, "Sign in" shows
+    try {
+      render(<LiveApp />);
+      await settle();
+      const home = within(topbar()).getByRole('button', { name: 'Stream Studio — dashboard' });
+      expect(home.querySelector('.ds-logo-word')).not.toBeNull();
+      expect(within(topbar()).getByRole('button', { name: /Sign in/ })).toBeTruthy();
+    } finally {
+      h.account = { status: 'member', userId: 'u1', email: 'ada@example.com', name: 'Ada Lovelace' } as LiveAccount;
+    }
+    const css = readFileSync(path.join(process.cwd(), 'live/styles/features.css'), 'utf8');
+    const narrow = /@media \(max-width: 359px\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(narrow).toMatch(/\.mtop[^{]*\.ds-logo-word\s*\{[^}]*position:\s*absolute[^}]*clip:/);
+    expect(narrow).not.toMatch(/display:\s*none/);
+    // 44 px targets for the logo and the account button, like Help and the theme switch.
+    expect(css).toMatch(/\.mtop \.rail-logo\s*\{[^}]*min-height:\s*44px/);
+    expect(css).toMatch(/\.acct-wrap\.compact \.rail-user\s*\{[^}]*min-width:\s*44px;\s*min-height:\s*44px/);
   });
 });

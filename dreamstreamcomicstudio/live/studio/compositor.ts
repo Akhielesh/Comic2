@@ -79,6 +79,27 @@ export function fitCanvasToSource(srcW: number, srcH: number, presetW: number, p
   return portrait ? { w: short, h: long } : { w: long, h: short };
 }
 
+/** The faces the program draws (tile labels, "+N more in Grid", the empty-seat slate). They are
+ *  content, burned into the broadcast and the recording; nothing in the page's own UI uses them, so
+ *  nothing else asks for them and a canvas-only face would load on its first draw — those first
+ *  frames would go out in the fallback face. */
+export const PROGRAM_FONTS = ["500 16px 'Hanken Grotesk'", "600 16px 'Hanken Grotesk'"] as const;
+
+/** Ask for the program's faces now; `onReady` runs once they are in (or never, if the browser can't
+ *  say — the draws then fall back as before). Never throws. */
+export function warmProgramFonts(onReady?: () => void): void {
+  try {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (!fonts?.load) return;
+    void Promise.all(PROGRAM_FONTS.map((f) => fonts.load(f))).then(
+      () => onReady?.(),
+      () => {},
+    );
+  } catch {
+    /* no FontFaceSet: nothing to warm */
+  }
+}
+
 export class ProgramCompositor {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -121,6 +142,10 @@ export class ProgramCompositor {
     this.camVideo = document.createElement('video');
     this.camVideo.muted = true;
     this.camVideo.playsInline = true;
+    // Redraw once the faces are in, so a label first drawn in the fallback is replaced at once.
+    warmProgramFonts(() => {
+      this.dirty = true;
+    });
   }
 
   /** Resize the program before going live (e.g. once the camera reports its

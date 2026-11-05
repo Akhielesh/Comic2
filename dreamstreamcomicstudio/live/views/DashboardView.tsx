@@ -92,7 +92,7 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
     <div className={cx('event-card', live && 'is-live')}>
       <button
         className="ec-thumb"
-        style={{ background: coverGradient(ev.cover ?? 0) }}
+        style={{ background: coverGradient(ev.cover) }}
         aria-label={ended ? 'Open recap' : 'Open studio'}
         onClick={() => (ended ? nav.summary(ev.id, ev.hostKey) : nav.studio(ev.id, ev.hostKey))}
       >
@@ -332,7 +332,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
       {live.map((ev) => (
         <div className="live-hero" key={ev.id}>
           <div className="lh-preview">
-            <div className="lh-cover" style={{ background: coverGradient(ev.cover ?? 0) }} />
+            <div className="lh-cover" style={{ background: coverGradient(ev.cover) }} />
             <Icon name="broadcast" size={36} />
             <span className="lh-live"><span className="pill-dot pulse" />LIVE</span>
           </div>

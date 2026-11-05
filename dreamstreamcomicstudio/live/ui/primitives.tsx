@@ -30,10 +30,11 @@ export function gradFor(name: string): string {
   return `linear-gradient(135deg, ${a}, ${b})`;
 }
 
-/** Atlas avatar tones: 0 is the ink disc (always the signed-in person); other people get one of
- *  three greyscale steps by name, so faces in a list still tell apart (atlas-skin.css: --avatar-*). */
+/** Atlas avatar tones (atlas-skin.css: --avatar-*): 0 is the ink disc, reserved for the signed-in
+ *  person (`self`); everyone else gets one of the other greyscale steps by name, so faces in a list
+ *  still tell apart and nobody else ever wears your disc. */
 export const AVATAR_TONES = 3;
-export const avatarTone = (name: string): number => nameHash(name) % AVATAR_TONES;
+export const avatarTone = (name: string): number => 1 + (nameHash(name) % (AVATAR_TONES - 1));
 
 export function initials(name: string): string {
   const p = name.trim().split(/\s+/);
@@ -195,11 +196,21 @@ export interface TabDef {
   badge?: number;
 }
 
+/**
+ * For an item in a sideways-scrolling row (the phone's settings categories, the dashboard's tabs):
+ * on focus, scroll it fully into view. Browsers leave a partly visible element where it is, so Tab
+ * could land on a category whose label and most of its ring sit past the edge of a row with no
+ * scrollbar. `nearest` moves nothing when it already fits.
+ */
+export function revealOnFocus(e: React.FocusEvent<HTMLElement>): void {
+  e.currentTarget.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+}
+
 export function Tabs({ tabs, value, onChange, className }: { tabs: TabDef[]; value: string; onChange: (id: string) => void; className?: string }) {
   return (
     <div className={cx('tabs', className)} role="tablist">
       {tabs.map((t) => (
-        <button key={t.id} className={cx('tab', value === t.id && 'active')} onClick={() => onChange(t.id)} role="tab" aria-selected={value === t.id}>
+        <button key={t.id} className={cx('tab', value === t.id && 'active')} onClick={() => onChange(t.id)} onFocus={revealOnFocus} role="tab" aria-selected={value === t.id}>
           {t.icon && <Icon name={t.icon} size={15} />}
           {t.label}
           {t.badge != null && t.badge > 0 && <span className="tab-badge">{t.badge}</span>}

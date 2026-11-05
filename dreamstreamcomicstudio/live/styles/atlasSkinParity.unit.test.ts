@@ -23,6 +23,7 @@ const MAP: [stream: string, ds: string][] = [
   ['--panel-3', '--ds-accent-soft'],
   ['--hover', '--ds-hover'],
   ['--sidebar', '--ds-sidebar'],
+  ['--raised', '--ds-surface-strong'], // overlays: a step above the cards in dark (Atlas --popover)
   ['--line', '--ds-hairline'],
   ['--line-soft', '--ds-hairline-soft'],
   ['--text', '--ds-ink'],
@@ -90,6 +91,23 @@ describe('Stream Studio’s Atlas skin = the main app’s Atlas skin (colours)',
         if (!close(a, b)) drift.push(`${stream} ${show(a)} ≠ ${ds} ${show(b)}`);
       }
       expect(drift).toEqual([]);
+    });
+  }
+
+  // The greyscale chart ramp: checked once index.css names it (the token commit adds --ds-chart-1…5);
+  // until then the values are Atlas's --chart-1…5 (AtlasD app/globals.css), pinned here.
+  const ATLAS_CHART = {
+    light: ['#0a0a0a', '#525252', '#858585', '#b0b0b0', '#d4d4d4'],
+    dark: ['#fafafa', '#b8b8b8', '#8a8a8a', '#5e5e5e', '#3d3d3d'],
+  } as const;
+  for (const theme of ['light', 'dark'] as const) {
+    it(`the chart ramp is Atlas's (${theme})`, () => {
+      const hasDs = DS_LIGHT.has('--ds-chart-1');
+      ATLAS_CHART[theme].forEach((hex, i) => {
+        const ours = color(`--chart-${i + 1}`, theme);
+        const want = hasDs ? dsColor(`--ds-chart-${i + 1}`, theme) : color(hex, theme);
+        expect(close(ours, want), `--chart-${i + 1} ${show(ours)} (${theme})`).toBe(true);
+      });
     });
   }
 

@@ -113,8 +113,19 @@
     padding: calc(6px + env(safe-area-inset-top)) 12px 6px; min-height: 52px;
     background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
   }
-  .mtop .rail-logo { padding: 4px 0; }
+  /* 44 px targets, like the Help and theme buttons beside them. */
+  .mtop .rail-logo { padding: 4px 0; min-height: 44px; }
+  .acct-wrap.compact .rail-user { min-width: 44px; min-height: 44px; justify-content: center; }
   .toast-stack { bottom: calc(80px + env(safe-area-inset-bottom)); }
+}
+/* Under 360 px the top bars keep the mark and drop the wordmark from view (still read out: the
+   buttons and screen readers keep the name), so the controls beside it never run off the edge —
+   the phone bar's "Sign in" / "Enter code", the legal links on the event and viewer bars. */
+@media (max-width: 359px) {
+  :is(.mtop, .event-topbar, .viewer-topbar) .ds-logo-word {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 }
 
 /* -------------------------------------------------------------- studio */
@@ -1203,7 +1214,9 @@
 /* Only a studio that isn't open says so, in words ("One step", "Locked"). */
 .studio-chip-state { font-size: 11px; font-weight: 600; color: var(--muted); }
 .studio-chip.st-needs_code .studio-chip-state { color: var(--amber); }
-.studio-chip.st-locked { opacity: .65; }
+/* A locked studio dims its mark and name, never the word that says so: "Locked" is the only cue,
+   so it keeps --muted at full strength (≥ 4.5:1). */
+.studio-chip.st-locked > :not(.studio-chip-state) { opacity: .65; }
 
 /* ---- tracker: the week at a glance ---- */
 .wkv-legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }

@@ -131,9 +131,33 @@ describe('the boot splash (static, inside #live-root until React renders)', () =
     expect(noscript).toMatch(/\.boot-mark \*\s*\{\s*animation:\s*none !important/);
   });
 
+  it('without JavaScript the status says only that JavaScript is needed — not "Opening…", not "Still loading"', () => {
+    const noscript = [...doc.head.querySelectorAll('noscript')].map((n) => n.textContent).join('');
+    const hidden = /([^{}]+)\{\s*display:\s*none/.exec(noscript)![1].split(',').map((x) => x.trim());
+    const status = splash!.querySelector('[role="status"]')!;
+    for (const child of status.children) {
+      if (child.tagName === 'NOSCRIPT') continue;
+      const cls = [...child.classList].map((c) => `.${c}`);
+      expect(cls.some((c) => hidden.includes(c)), `${child.outerHTML.slice(0, 60)} is hidden without JavaScript`).toBe(true);
+    }
+  });
+
   it('says so if loading stalls, without a script (a CSS-delayed line, out of the layout)', () => {
     expect(splash!.querySelector('.boot-slow')?.textContent).toMatch(/Still loading/);
-    expect(style).toMatch(/\.boot-slow\s*\{[^}]*position:\s*absolute[^}]*animation:\s*live-boot-show[^;]*12s/);
+    expect(style).toMatch(/\.boot-slow\s*\{[^}]*position:\s*absolute[^}]*animation:\s*live-boot-slow[^;]*12s/);
+  });
+
+  it('keeps "Still loading" out of the status (and so out of screen readers) until it shows', () => {
+    // Opacity alone leaves text in the accessibility tree: the line is visibility: hidden until its
+    // own keyframes reveal it, so the status announces it at 12 s, not the moment the page opens.
+    const rule = /\.boot-slow\s*\{([^}]*)\}/.exec(style)![1];
+    expect(rule).toMatch(/visibility:\s*hidden/);
+    expect(style).toMatch(/@keyframes live-boot-slow\s*\{\s*to\s*\{[^}]*opacity:\s*1[^}]*visibility:\s*visible/);
+    // The shared progress-line keyframes stay opacity-only: a forwards-filled visibility there
+    // would beat the reduced-motion `.boot-bar { visibility: hidden }`.
+    expect(/@keyframes live-boot-show\s*\{([^}]*\})\s*\}/.exec(style)![1]).not.toMatch(/visibility/);
+    // Reduced motion: it still appears after the delay (no transition, same 12 s).
+    expect(style).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*?\.boot-slow\s*\{\s*animation-duration:\s*0s/);
   });
 
   it('is calm: no entrance; under reduced motion no moving line; dark without JavaScript when the OS is dark', () => {

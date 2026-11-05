@@ -6,7 +6,9 @@
  * allowed values, and themeColorFor's four colours. live/themeBoot.unit.test.ts runs this file next
  * to theme.ts on the same inputs and fails if they ever disagree; change both together. The accent
  * is never read here: the bundle writes it (without the Atlas skin only), so nothing here can
- * colour the page wrongly. Any failure leaves the page exactly as the HTML says (light). */
+ * colour the page wrongly. If this file fails to load or throws, <html> has no data-theme: the splash
+ * then follows the OS colour scheme (live.html's inline rules, the same ones a visitor without
+ * JavaScript gets) until the bundle applies the stored theme, which can mean one flip on load. */
 (function () {
   'use strict';
   var KEY = 'ds-live-appearance';

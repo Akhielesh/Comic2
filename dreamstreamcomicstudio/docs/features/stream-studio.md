@@ -562,14 +562,22 @@ no echo.
 Stream Studio speaks the Atlas Studio language — the same one Comic Studio's
 `data-ds-skin="atlas"` uses (`docs/design/atlas-skin.md`): monochrome white paper and
 black ink, hue only for status (always with a word or an icon), IBM Plex Sans body at
-14 px, Space Grotesk 600 for page titles and big numbers, 8 px controls, 12 px cards,
-16 px dialogs, Atlas shadows (dark overlays get a light hairline edge), Atlas motion.
+14 px, Space Grotesk 600 only for page-level and public / sign-in titles, big numbers and the
+stage slates (sheet, dialog, card, settings-section, help, tour and empty-state titles are
+Plex 600, as Atlas sets them), 8 px controls, 12 px cards, 16 px dialogs, Atlas shadows,
+Atlas motion. Overlays (sheets, menus, popovers, the help panel, tour cards, toasts) sit on
+`--raised`: white in light, `#1a1a1a` in dark — one step above the `#111111` cards — with
+the light hairline edge.
 
 **How it is wired (no rewrite of the 2,990 lines of `live/styles/*.css`):**
 
-- `live.html` carries `data-ds-skin="atlas"` on `<html>` statically (no script; the build's
-  kill switch strips it, and without it Stream Studio is the cream-and-clay studio exactly
-  as before).
+- `live.html` carries `data-ds-skin="atlas"` on `<html>` statically (no script). Nothing
+  strips it yet: the build-time kill switch (`VITE_DS_SKIN_EVERYWHERE=off`) is the
+  DreamStream session's planned `vite.config.ts` work and has not landed, so until it does
+  the look is turned off by removing the attribute. Without it Stream Studio is the
+  cream-and-clay studio, except that titles fall back to Georgia (Newsreader is no longer
+  requested) and the two web manifests' splash colour is white, not cream (manifests are
+  static, one per host, and follow the default look).
 - `live/styles/atlas-skin.css` (imported last by `live/main.tsx`) re-points Stream's own
   tokens (`--bg --panel --text --muted --faint --accent* --green/--amber/--blue/--live …`)
   to the Atlas values in a light and a dark block, then fixes only what tokens can't
@@ -583,13 +591,26 @@ black ink, hue only for status (always with a word or an icon), IBM Plex Sans bo
   ignored, not deleted. Theme (light by default, whatever the OS says), density (calm/pro)
   and corners (soft/sharp) stay the person's choice. A theme flip is one view-transition
   cross-fade. `<meta name="theme-color">` follows the in-app theme (`#ffffff` / `#0a0a0a`).
-  New events start on the ink cover; covers stay the host's choice.
+  New events start on the ink cover; covers stay the host's choice. An event that has no
+  cover stored shows the default cover (ink under the skin) everywhere a cover is drawn,
+  and is saved to the account with it; a stored cover (clay included) is kept as chosen.
 - Fonts are self-hosted from `/fonts/*.woff2` (Plex 400 and 600 and Grotesk 600, plus
   Grotesk 500 for the lockup's "Studio", preloaded). Hanken Grotesk still loads: the compositor draws it into broadcasts and
-  recordings (content). Newsreader is gone. JetBrains Mono stays for `.mono` figures.
+  recordings (content); nothing in the page's own UI uses it any more, so the compositor
+  asks for both weights when it starts (`warmProgramFonts`) and redraws once they arrive,
+  and the first frames of a broadcast never use the fallback face for long. Newsreader is
+  gone. JetBrains Mono stays for `.mono` figures.
+- **The nursery and the tracker:** chart series (the week, the trends, the sleep chart, the
+  sound chart's motion line) use the Atlas greyscale ramp (`--chart-1…5`), told apart by
+  step, by shape and by the legend's words; quick-log tiles, the running timer, log rows and
+  the log sheet are ink. Green / amber / red stay only where they say a status (sound bands,
+  cry and alert tones).
 - **Boot:** a static splash in `#live-root` (the on-air mark, the wordmark, a progress line
-  that appears after 400 ms, a CSS-only "still loading" line after 12 s, a `<noscript>`
-  note) instead of a blank page. `public/live-theme-boot.js` (a plain external script —
+  that appears after 400 ms, a CSS-only "still loading" line after 12 s — `visibility:
+  hidden` until then, so the status region only announces it when it shows — and a
+  `<noscript>` note, the only text in the status without JavaScript) instead of a blank
+  page. If `live-theme-boot.js` fails to load, the splash follows the OS colour scheme until
+  the bundle applies the stored theme. `public/live-theme-boot.js` (a plain external script —
   the page allows no inline script) applies the stored theme / density / corners before
   first paint. The account splash (`SignInGate` `GateSplash`) reuses the splash's rules and
   continues its progress line (`live/bootSplash.ts`), so the hand-over moves nothing.
@@ -611,7 +632,9 @@ black ink, hue only for status (always with a word or an icon), IBM Plex Sans bo
 - **Navigation:** the phone tab bar has five places (Dashboard, Go live, Monitor, Calls,
   Settings; labels ≥ 11 px, 52 px targets, the current one an ink pill). Help & tours moved
   to the phone top bar (and stays in the account menu), next to a theme switch phones never
-  had (44 px targets). The desktop
+  had (44 px targets; the logo and account buttons beside them are 44 px too). Under
+  360 px the phone, event and viewer top bars show the mark without the wordmark (still
+  named for screen readers) so "Sign in" and the legal links fit. The desktop
   rail keeps its collapse; its active row is the Atlas menu-active fill.
 
 **Tests:** `live/styles/atlasSkinParity.unit.test.ts` (every mapped colour equals the
@@ -624,5 +647,9 @@ attribute, no inline script, theme-color pair, icons, fonts, splash and its mark
 `components/brand/studios.ts`), `live/bootSplash.unit.test.ts` (the line and the mark's loop
 carry on), `live/LiveApp.nav.unit.test.tsx` (five tabs, Help and theme in the top bar, the
 accent picker only without the skin, the shared lockup and the rail's name),
-`live/components/StudiosCard.test.tsx` (each studio's mark), and
-`tests/edge/liveCsp.built.test.ts` against the built page.
+`live/components/StudiosCard.test.tsx` (each studio's mark), `live/studio/compositor.unit.test.ts`
+(the program's faces are requested when the compositor starts), and
+`tests/edge/liveCsp.built.test.ts` against the built page — including live.html's inline
+`<style>` blocks (the `<noscript>` one too) against `style-src-elem` and the font preloads
+against `font-src`, since both splashes are styled only by that inline CSS: a policy that
+keeps style attributes but blocks inline `<style>` fails there, not in production.

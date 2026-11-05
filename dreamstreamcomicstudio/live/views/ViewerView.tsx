@@ -373,7 +373,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
 
   // ----------------------------------------------------------------- render
   const liveFor = startedAt && status === 'live' ? fmtDuration((Date.now() - startedAt) / 1000) : null;
-  const cover = coverGradient(meta?.cover ?? 0);
+  const cover = coverGradient(meta?.cover);
 
   const metricRows: [string, string][] = useMemo(() => {
     const player = playerRef.current;

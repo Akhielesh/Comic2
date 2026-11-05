@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { type Rgba, type Rule, ratio, topLevelSplit } from '../../tests/config/cssTokens';
-import { type ThemeName, ATLAS_SKIN_DARK, ATLAS_SKIN_LIGHT, color, declaration, liveStylesheets, onto, read, STYLES_DIR } from './skinTokens';
+import { type ThemeName, ATLAS_SKIN_DARK, ATLAS_SKIN_LIGHT, color, declaration, liveStylesheets, onto, read, skinCss, STYLES_DIR } from './skinTokens';
 import path from 'node:path';
 
 /**
@@ -23,7 +23,7 @@ const THEMES: ThemeName[] = ['light', 'dark'];
 const AA = 4.5;
 const LARGE = 3;
 
-const SURFACES = ['--bg', '--panel', '--panel-2', '--panel-3', '--hover', '--sidebar', '--chip'] as const;
+const SURFACES = ['--bg', '--panel', '--panel-2', '--panel-3', '--hover', '--sidebar', '--chip', '--raised'] as const;
 const TEXT = ['--text', '--muted', '--faint', '--accent-ink', '--accent', '--green', '--amber', '--blue', '--live'] as const;
 
 const c = (v: string, t: ThemeName) => color(v, t);
@@ -61,7 +61,8 @@ describe('Atlas skin tokens: text on every surface (AA 4.5:1)', () => {
       const pairs: [string, string][] = [
         ['--on-accent', '--accent'], // solid button, pills, tab badge
         ['--on-accent', '--accent-2'], // solid button hover
-        ['--bg', '--text'], // the toast, the phone tab bar's active pill
+        ['--bg', '--text'], // the phone tab bar's active pill
+        ['--text', '--raised'], // the toast (an Atlas notification card), menus, sheets
         ['#ffffff', '--live-fill'], // Go live, REC, End, missed-call badge, LIVE over video
         ['#ffffff', '--green-solid'], // done steps, ready checks
         ['#ffffff', '--amber-solid'],
@@ -75,11 +76,45 @@ describe('Atlas skin tokens: text on every surface (AA 4.5:1)', () => {
     });
 
     it(`non-text marks reach 3:1: focus outline, field edges, status dots and bars (${t})`, () => {
-      for (const bg of ['--bg', '--panel', '--panel-2']) {
+      for (const bg of ['--bg', '--panel', '--panel-2', '--raised']) {
         for (const mark of ['--accent', '--control-border', '--green', '--amber', '--live']) {
           expect(measure(c(mark, t), surface(bg, t)), `${mark} on ${bg} (${t})`).toBeGreaterThanOrEqual(LARGE);
         }
       }
+    });
+  }
+});
+
+describe('controls whose state is a mark or a word (skin on, both themes)', () => {
+  const sheets = liveStylesheets();
+  for (const t of THEMES) {
+    it(`an off switch shows its shape and its knob at 3:1 (WCAG 1.4.11) (${t})`, () => {
+      // The grey track alone is 1.48:1 on a white card: the skin draws an edge and a knob hairline.
+      expect(skinCss).toMatch(/\.toggle:not\(\.on\)\s*\{\s*box-shadow:\s*inset 0 0 0 1px var\(--control-border\)/);
+      expect(skinCss).toMatch(/\.toggle:not\(\.on\) \.toggle-knob\s*\{\s*box-shadow:\s*0 0 0 1px var\(--control-border\)/);
+      for (const bg of ['--bg', '--panel', '--panel-2', '--raised']) {
+        expect(measure(c('--control-border', t), surface(bg, t)), `the track's edge on ${bg} (${t})`).toBeGreaterThanOrEqual(LARGE);
+      }
+      const hairlineOnTrack = onto(c('--control-border', t), c('--switch-off', t));
+      expect(ratio(c('#ffffff', t), hairlineOnTrack), `the knob against its hairline (${t})`).toBeGreaterThanOrEqual(LARGE);
+    });
+
+    it(`a locked studio chip dims its mark and name, never the word "Locked" (the only cue) (${t})`, () => {
+      const dimming = sheets.flatMap(({ file, rules }) =>
+        rules.filter((r) => /\.studio-chip\.st-locked/.test(r.selector) && declaration(r.body, 'opacity')).map((r) => ({ file, r })),
+      );
+      expect(dimming.length).toBeGreaterThan(0);
+      for (const { file, r } of dimming) {
+        for (const sel of topLevelSplit(r.selector)) {
+          expect(sel, `${file}: an opacity on the chip itself would dim "Locked" too`).toMatch(/>\s*:not\(\.studio-chip-state\)\s*$/);
+        }
+      }
+      // The chip's grey fill, inside the account menu (an overlay surface).
+      const chip = onto(c('--panel-2', t), c('--raised', t));
+      expect(measure(c('--muted', t), chip), `"Locked" (--muted) on the chip (${t})`).toBeGreaterThanOrEqual(AA);
+      const opacity = Number(declaration(dimming[0].r.body, 'opacity'));
+      const name = c('--text', t);
+      expect(measure({ ...name, a: name.a * opacity }, chip), `the dimmed name (${t})`).toBeGreaterThanOrEqual(AA);
     });
   }
 });

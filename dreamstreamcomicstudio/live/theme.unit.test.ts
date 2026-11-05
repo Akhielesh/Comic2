@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 // Appearance in both looks (live/theme.ts). With the Atlas skin (data-ds-skin="atlas" on <html>,
 // static in live.html): no inline accent ever, the stored accent kept, the browser chrome white /
-// near-black, new events on the ink cover. Without it (the build's kill switch): exactly as before —
+// near-black, new events on the ink cover. Without it (the attribute removed): exactly as before —
 // the accent written inline, the cream theme colours, clay covers. Theme, density and corners work
 // the same in both.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ACCENTS,
   APPEARANCE_KEY,
+  COVER_THEMES,
   INK_COVER,
   LEGACY_THEME_KEY,
   applyAppearance,
   atlasSkin,
+  coverGradient,
+  coverStops,
   defaultCover,
   loadAppearance,
   parseAppearance,
@@ -118,6 +121,11 @@ describe('without the Atlas skin (the kill switch): exactly as before', () => {
   it('new events start on clay', () => {
     expect(defaultCover()).toBe(0);
   });
+
+  it('an event with no cover stored shows clay, as before', () => {
+    expect(coverGradient(undefined)).toBe(coverGradient(0));
+    expect(coverStops(null)).toEqual(COVER_THEMES[0]);
+  });
 });
 
 describe('with the Atlas skin: hue never decorates', () => {
@@ -158,6 +166,17 @@ describe('with the Atlas skin: hue never decorates', () => {
 
   it('new events start on the ink cover', () => {
     expect(defaultCover()).toBe(INK_COVER);
+  });
+
+  it('an event with no cover stored (or an unreadable one) shows the ink cover, never the old clay default', () => {
+    const ink = coverGradient(INK_COVER);
+    expect(ink).toContain('#0a0a0a');
+    expect(coverGradient(undefined)).toBe(ink);
+    expect(coverGradient(null)).toBe(ink);
+    expect(coverGradient(Number.NaN)).toBe(ink);
+    // A cover the host picked is kept, clay included.
+    expect(coverStops(0)).toEqual(COVER_THEMES[0]);
+    expect(coverStops(2)).toEqual(COVER_THEMES[2]);
   });
 });
 

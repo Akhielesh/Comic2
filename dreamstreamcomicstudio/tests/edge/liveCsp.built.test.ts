@@ -4,8 +4,11 @@
  *
  * Serves dist/ (the output of `npm run build`) through the real Pages middleware with the
  * policy ENFORCED, then checks the response's own header against:
- *   - every tag in the built live.html (scripts, module preloads, styles, manifest, icons,
- *     inline scripts, style attributes, event handlers);
+ *   - every tag in the built live.html (scripts, module preloads, stylesheets, font preloads,
+ *     manifest, icons, inline scripts, inline <style> blocks — the <noscript> one included —,
+ *     style attributes, event handlers). The boot splash and the account splash that follows it
+ *     are styled ONLY by live.html's inline <style>, so a policy that blocks inline style
+ *     elements (a style-src-elem without 'unsafe-inline') must fail here, not in production;
  *   - every chunk the page can reach (entry → modulepreloads → dynamic imports → workers →
  *     wasm loaders): each external origin written in that code must be allowed by the policy
  *     or be on NOT_FETCHED with the reason it is never loaded;
@@ -24,7 +27,7 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import { SUPABASE_ORIGIN, createOnRequest } from '../../functions/_middleware';
 import { SW_URL } from '../../live/monitor/push';
-import { allowsInlineScript, allowsInlineStyleAttribute, allowsUrl, allowsWasm, allowsEval, parsePolicy, type Policy } from './cspEval';
+import { allowsInlineScript, allowsInlineStyleAttribute, allowsInlineStyleElement, allowsUrl, allowsWasm, allowsEval, parsePolicy, type Policy } from './cspEval';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const DIST = path.join(ROOT, 'dist');
@@ -86,6 +89,27 @@ const HOSTS = [
   { name: 'apex /live', page: 'https://dreamstreamstudio.ai/live' },
 ];
 
+describe('the inline-style check itself (no build needed)', () => {
+  const html = readFileSync(path.join(ROOT, 'live.html'), 'utf8');
+  const splashCss = /<style>([\s\S]*?)<\/style>/.exec(html)![1];
+
+  it('passes today’s policy (style-src keeps \'unsafe-inline\')', () => {
+    const today = parsePolicy("default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+    expect(allowsInlineStyleElement(today, splashCss)).toBe(true);
+  });
+
+  it('fails a CSP3 hardening that keeps inline style ATTRIBUTES but blocks inline <style> — which would leave both splashes unstyled', () => {
+    const hardened = parsePolicy(
+      "default-src 'self'; style-src-elem 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'",
+    );
+    expect(allowsInlineStyleAttribute(hardened)).toBe(true); // the old check alone stayed green
+    expect(allowsInlineStyleElement(hardened, splashCss)).toBe(false);
+    // A hash for the block (or a nonce) next to 'unsafe-inline' disables 'unsafe-inline'.
+    const hashed = parsePolicy("style-src 'self' 'unsafe-inline' 'sha256-AAAA'");
+    expect(allowsInlineStyleElement(hashed, splashCss)).toBe(false);
+  });
+});
+
 describe.skipIf(!BUILT)('Stream Studio CSP vs the built app (dist/)', () => {
   const buildSupabase = process.env.VITE_SUPABASE_URL;
   const files = BUILT ? reachable('live.html') : [];
@@ -127,16 +151,32 @@ describe.skipIf(!BUILT)('Stream Studio CSP vs the built app (dist/)', () => {
         doc.querySelectorAll('link[rel~="stylesheet"]').forEach((l) => need('style-src-elem', l.getAttribute('href')));
         doc.querySelectorAll('link[rel="manifest"]').forEach((l) => need('manifest-src', l.getAttribute('href')));
         doc.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]').forEach((l) => need('img-src', l.getAttribute('href')));
+        // Self-hosted chrome fonts, preloaded (and later requested by @font-face): font-src.
+        const fontPreloads = [...doc.querySelectorAll('link[rel="preload"][as="font"]')];
+        expect(fontPreloads.length, 'live.html preloads its chrome fonts').toBeGreaterThan(0);
+        fontPreloads.forEach((l) => need('font-src', l.getAttribute('href')));
         doc.querySelectorAll('script:not([src])').forEach((s) => {
           if (!allowsInlineScript(policy, s.textContent ?? '')) problems.push(`inline script: ${(s.textContent ?? '').slice(0, 60)}`);
         });
+        // Inline <style> blocks: the head's, and the one inside <noscript> (a browser without
+        // JavaScript parses and applies it; JSDOM here keeps a noscript's content as text).
+        const styleBodies = [...doc.querySelectorAll('style')].map((s) => s.textContent ?? '');
+        doc.querySelectorAll('noscript').forEach((n) => {
+          for (const m of (n.textContent ?? '').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) styleBodies.push(m[1]);
+        });
+        expect(styleBodies.some((b) => /\.boot-page\b/.test(b)), 'the splash rules are found (inline <style>)').toBe(true);
+        expect(styleBodies.some((b) => /\.boot-bar,[^{]*\{\s*display:\s*none/.test(b)), 'the <noscript> style is found').toBe(true);
+        for (const body of styleBodies) {
+          if (!allowsInlineStyleElement(policy, body)) problems.push(`inline <style>: ${body.trim().slice(0, 60)}`);
+        }
         if (doc.querySelector('[style]') && !allowsInlineStyleAttribute(policy)) problems.push('style attribute');
         doc.querySelectorAll('*').forEach((el) => {
           for (const a of el.attributes) if (/^on/i.test(a.name)) problems.push(`${el.tagName}[${a.name}] handler`);
         });
         expect(problems).toEqual([]);
-        // The Google Fonts stylesheet's font files.
-        need('font-src', 'https://fonts.gstatic.com/s/newsreader/v1/x.woff2');
+        // The Google Fonts stylesheet's font files (Hanken Grotesk for the compositor, JetBrains Mono).
+        need('font-src', 'https://fonts.gstatic.com/s/hankengrotesk/v8/x.woff2');
+        need('font-src', 'https://fonts.gstatic.com/s/jetbrainsmono/v20/x.woff2');
         expect(problems).toEqual([]);
       });
 

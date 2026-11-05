@@ -1,8 +1,9 @@
 /**
  * Appearance: theme / accent / density / corners — persisted, applied to <html>.
  *
- * Two looks, one switch: `data-ds-skin="atlas"` on <html> (static in live.html; the build's kill
- * switch strips it) puts Stream Studio in the Atlas language (live/styles/atlas-skin.css):
+ * Two looks, one switch: `data-ds-skin="atlas"` on <html> (static in live.html; the DreamStream
+ * session's planned build switch VITE_DS_SKIN_EVERYWHERE=off will strip it — not landed yet, so
+ * today it is removed by hand) puts Stream Studio in the Atlas language (live/styles/atlas-skin.css):
  * monochrome, hue only for status. Under it the accent picker is gone and no `--accent*` is written
  * inline (an inline style would beat the skin's tokens); a stored accent is kept, never deleted, so
  * turning the skin off brings it back. Density (calm / pro) and corners (soft / sharp) stay the
@@ -54,14 +55,17 @@ export const INK_COVER = COVER_THEMES.length - 1;
 /** Under the Atlas skin the ink cover is true ink (the cream studio's is a warm near-black). */
 const ATLAS_INK_COVER: [string, string] = ['#3a3a3a', '#0a0a0a'];
 
-/** A cover's two gradient stops (index clamped); the other covers are the host's choice, kept as they are. */
-export const coverStops = (i: number): [string, string] => {
-  const at = Math.min(COVER_THEMES.length - 1, Math.max(0, Number.isFinite(i) ? Math.trunc(i) : 0));
+/** A cover's two gradient stops (index clamped); the other covers are the host's choice, kept as they
+ *  are. No cover stored (or an unreadable one) is the default cover — the ink one under the skin —
+ *  not clay, which was only ever the cream studio's silent default. */
+export const coverStops = (i: number | null | undefined): [string, string] => {
+  const n = typeof i === 'number' && Number.isFinite(i) ? Math.trunc(i) : defaultCover();
+  const at = Math.min(COVER_THEMES.length - 1, Math.max(0, n));
   if (at === INK_COVER && atlasSkin()) return ATLAS_INK_COVER;
   return COVER_THEMES[at] || COVER_THEMES[0];
 };
 
-export const coverGradient = (i: number): string => {
+export const coverGradient = (i: number | null | undefined): string => {
   const c = coverStops(i);
   return `linear-gradient(135deg, ${c[0]}, ${c[1]})`;
 };

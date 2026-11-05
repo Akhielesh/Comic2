@@ -347,7 +347,8 @@ export function LiveApp() {
     applyAppearance(appearance);
     saveAppearance(appearance);
   }, [appearance]);
-  // Read once: the attribute is static in live.html (the build's kill switch strips it).
+  // Read once: the attribute is static in live.html (a planned build switch, VITE_DS_SKIN_EVERYWHERE=off,
+  // will strip it; it has not landed yet).
   const [skin] = useState(atlasSkin);
   const toggleTheme = () => {
     const next: Appearance = { ...appearance, theme: appearance.theme === 'dark' ? 'light' : 'dark' };

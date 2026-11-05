@@ -1,9 +1,12 @@
 /* ============================================================================
    atlas-skin.css — Stream Studio in the Atlas language (step 2a).
 
-   Imported LAST by live/main.tsx. Everything here hangs off `data-ds-skin="atlas"` on <html>
-   (static in live.html; the build's kill switch strips it), so without the attribute Stream
-   Studio is exactly the cream-and-clay studio of tokens.css.
+   Imported LAST by live/main.tsx. Everything here hangs off `data-ds-skin="atlas"` on <html>,
+   which live.html carries statically. Nothing strips it yet: the build-time kill switch
+   (VITE_DS_SKIN_EVERYWHERE=off) is the DreamStream session's planned vite.config.ts work and has
+   not landed, so today turning the look off means removing the attribute. Without it Stream Studio
+   is the cream-and-clay studio of tokens.css, with two known differences: titles set in Georgia
+   (Newsreader is no longer requested) and the manifests' white splash colour.
 
    How: Stream Studio's own token names (--bg, --panel, --text, --accent, …) are re-pointed to
    the Atlas values (docs: the Atlas → DreamStream bridge §3.4) — the 2,990 lines of the other
@@ -102,6 +105,10 @@ html[data-ds-skin="atlas"] {
   --muted:     #5c5c5c;                 /* --muted-foreground      (= --ds-muted) */
   --faint:     #6b6b6b;                 /* Stream-only: used as small TEXT, so AA (≥ 4.63:1 on every surface) */
   --sidebar:   #fafafa;                 /* --sidebar               (= --ds-sidebar) */
+  --raised:    #ffffff;                 /* --popover: menus, sheets, popovers (= --ds-surface-strong) */
+  /* The greyscale chart ramp (Atlas --chart-1…5; the token commit names them --ds-chart-1…5):
+     series are told apart by step and by their legend's words, never by hue. */
+  --chart-1: #0a0a0a; --chart-2: #525252; --chart-3: #858585; --chart-4: #b0b0b0; --chart-5: #d4d4d4;
 
   --accent:      #0a0a0a;               /* --primary: ink          (= --ds-accent) */
   --accent-2:    #2f2f2f;               /* primary at 85 %         (= --ds-accent-hover) */
@@ -183,6 +190,8 @@ html[data-ds-skin="atlas"][data-theme="dark"] {
   --muted:     #a3a3a3;
   --faint:     #8a8a8a;                 /* ≥ 4.77:1 on every dark surface */
   --sidebar:   #0d0d0d;
+  --raised:    #1a1a1a;                 /* overlays sit one step above the cards (#111111) */
+  --chart-1: #fafafa; --chart-2: #b8b8b8; --chart-3: #8a8a8a; --chart-4: #5e5e5e; --chart-5: #3d3d3d;
 
   --accent:      #fafafa;
   --accent-2:    #d6d6d6;
@@ -273,14 +282,26 @@ html[data-ds-skin="atlas"] :is(h1, h2, h3, h4) { text-wrap-style: balance; }
 html[data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote) { text-wrap-style: pretty; }
 
 /* ============================================================== typography */
-/* Display face (Space Grotesk 600, Atlas page-title tracking) where the serif was: page titles,
-   sheet / card titles that carried .serif, big numbers and the stage slates. */
-html[data-ds-skin="atlas"] :is(.serif, .page-title, .st-value, .bs-value, .nc-name, .mv-title, .mvs-state, .cam-sheet-head b,
-  .mv-takeover h2, .bs-clock, .viewer-slate .vs-title, .preview-slate .slate-title, .center-card h2, .ev-cal-d, .sk-initial) {
+/* Where the serif was, two faces, as Atlas sets them (bridge §0.6; the accepted D2):
+   - every other title that carried .serif (sheet and dialog titles, settings sections, card, help,
+     tour and empty-state titles): Plex 600, like Atlas's DialogTitle and CardTitle;
+   - the display face (Space Grotesk 600, page-title tracking) only on page-level and public / auth
+     titles, big numbers and the stage slates. The second rule is the more specific, so a page title
+     that also carries .serif keeps the display face. */
+html[data-ds-skin="atlas"] :is(.serif, .nc-name, .cam-sheet-head b) {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+html[data-ds-skin="atlas"] :is(.page-title, .ev-title, .vj-title, .vd-title, .mv-title, .gate-card h1, .secure-card h1,
+  .center-card h2, .gv-setup h2, .st-value, .bs-value, .bs-clock, .mvs-state, .mv-takeover h2, .viewer-slate .vs-title,
+  .preview-slate .slate-title, .brb-title, .sk-initial, .ev-cal-d) {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: -0.02em;
 }
+/* A sheet's title is a dialog title: 20 px (Atlas text-xl). */
+html[data-ds-skin="atlas"] .sheet-title { font-size: 20px; line-height: 1.25; }
 html[data-ds-skin="atlas"] .page-title { font-size: 30px; line-height: 1.15; }
 html[data-ds-skin="atlas"] .page-sub { font-size: 14.5px; line-height: 1.55; }
 /* The metrics overlay is chrome, not broadcast content. */
@@ -299,6 +320,8 @@ html[data-ds-skin="atlas"] :is(.nav-sect, .inv-sect, .inv-sub, .save-label, .hel
   text-transform: uppercase;
   color: var(--muted);
 }
+/* The dashboard's "On air now" is a status (red, beside its icon), set as the same overline. */
+html[data-ds-skin="atlas"] .lh-eyebrow { font-size: 11px; font-weight: 600; line-height: 16px; letter-spacing: 0.12em; }
 /* A calendar tile's month is a date, not a status: ink, not red. */
 html[data-ds-skin="atlas"] .ev-cal-m { color: var(--muted); }
 /* Dates, times, sizes and counts: the chrome face with even-width figures (Atlas meta) — .mono and
@@ -332,14 +355,19 @@ html[data-ds-skin="atlas"] .toggle { background: var(--switch-off); }
 html[data-ds-skin="atlas"] .toggle.on { background: var(--accent); }
 html[data-ds-skin="atlas"] .toggle.on .toggle-knob { background: var(--on-accent); }
 html[data-ds-skin="atlas"] .toggle-knob { transition: left var(--motion-panel) var(--ease-spring); }
+/* Off, the grey track is 1.48:1 on a white card (Atlas's own switch): a control-border edge on the
+   track and a hairline round the knob give the shape and the knob's place 3:1 (WCAG 1.4.11). */
+html[data-ds-skin="atlas"] .toggle:not(.on) { box-shadow: inset 0 0 0 1px var(--control-border); }
+html[data-ds-skin="atlas"] .toggle:not(.on) .toggle-knob { box-shadow: 0 0 0 1px var(--control-border), 0 1px 2px rgb(0 0 0 / 0.2); }
 /* Segmented: the raised pill of Atlas PanelTabs. */
 html[data-ds-skin="atlas"] .segmented { background: color-mix(in srgb, var(--panel-2) 60%, transparent); border-color: color-mix(in srgb, var(--line) 70%, transparent); }
 html[data-ds-skin="atlas"] .seg.active { background: var(--bg); box-shadow: var(--segment-pill-shadow); }
 html[data-ds-skin="atlas"][data-theme="dark"] .seg.active { background: #1f1f1f; }
 /* Dashboard stat tiles: their icon chips were tinted per tile (decoration) — ink on grey here. */
 html[data-ds-skin="atlas"] .st-ic { color: var(--text); background: var(--panel-2); }
-/* Cover swatches and selected looks: the ink ring. */
-html[data-ds-skin="atlas"] .cover-sw.sel { border-color: var(--text); }
+/* A selected cover: the Atlas offset ring (card colour, then ink), as the look picker draws it —
+   an ink border alone vanishes on the ink cover, the default. */
+html[data-ds-skin="atlas"] .cover-sw.sel { border-color: transparent; box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text); }
 /* Avatars: an ink disc with page-colour initials (Atlas), never a rainbow gradient; Avatar sets
    data-tone (0 = the signed-in person) instead of its inline gradient under the skin. */
 html[data-ds-skin="atlas"] .avatar:not(.avatar-ghost) { background-color: var(--avatar-0); color: var(--avatar-ink); text-shadow: none; font-weight: 600; }
@@ -379,8 +407,8 @@ html[data-ds-skin="atlas"] :is(.cam-check-dot, .setup-steps li.done .setup-num, 
   --green: var(--green-solid);
   --amber: var(--amber-solid);
 }
-/* LIVE badges written over video. */
-html[data-ds-skin="atlas"] :is(.lh-live, .vj-live, .ov-pill.live, .ov-pill.rec, .state-chip.tone-live) {
+/* LIVE badges written over video, and the monitor's "talking" and too-loud pills: one red. */
+html[data-ds-skin="atlas"] :is(.lh-live, .vj-live, .ov-pill.live, .ov-pill.rec, .state-chip.tone-live, .mv-talking, .ov-pill.db.hot) {
   background: color-mix(in srgb, var(--live-fill) 92%, transparent);
 }
 html[data-ds-skin="atlas"] :is(.pv-ctl.off, .ms-round.off) { background: color-mix(in srgb, var(--live-fill) 82%, transparent); }
@@ -423,9 +451,21 @@ html[data-ds-skin="atlas"] .tab.active::after { background: var(--text); }
 html[data-ds-skin="atlas"] :is(.sheet-scrim, .help-scrim) { background: var(--scrim); -webkit-backdrop-filter: none; backdrop-filter: none; }
 html[data-ds-skin="atlas"] .tour-scrim { background: rgba(0,0,0,0.5); }
 html[data-ds-skin="atlas"] .tour-hole { box-shadow: 0 0 0 9999px rgba(0,0,0,0.5), 0 0 0 3px var(--accent); }
+/* Overlays are a surface of their own: white in light, one step above the cards in dark (#1a1a1a
+   on #111111, Atlas --popover), so a menu never flattens into the card it opens over. */
 html[data-ds-skin="atlas"] :is(.sheet, .acct-menu, .tour-card, .help-panel, .emoji-pop, .mfa-nudge, .call-confirm, .ready-check,
   .cam-issue, .mv-soothe) {
+  background: var(--raised);
   border-color: var(--overlay-edge);
+}
+/* Phones: the bottom sheet's corners on the radius scale (dialogs are 16). */
+@media (max-width: 640px) {
+  html[data-ds-skin="atlas"] .sheet { border-radius: var(--r-xl) var(--r-xl) 0 0; }
+}
+/* The toast is an Atlas notification card (rounded-2xl, hairline, panel shadow), not an ink pill. */
+html[data-ds-skin="atlas"] .toast {
+  background: var(--raised); color: var(--text); border: 1px solid var(--overlay-edge);
+  border-radius: var(--r-xl); box-shadow: var(--shadow); font-weight: 500;
 }
 html[data-ds-skin="atlas"] .sheet-icon { background: var(--panel-2); color: var(--text); }
 /* The account menu is a popover: the 16 px corner (Atlas rounded-2xl), its rows nested at 10 px. */
@@ -454,10 +494,65 @@ html[data-ds-skin="atlas"] .vc-react.more.active { background: var(--accent); co
    skin's dark theme those tints are dark): fixed pale inks, whatever the page theme. */
 html[data-ds-skin="atlas"] :is(.call-busy, .call-ring.stranger .call-ring-who span, .cam-busy svg) { color: #dcbd64; }
 html[data-ds-skin="atlas"] .call-relay-tag { color: #e5e5e5; }
-/* Keyboard focus on the stage: a light outline (cards floating on it keep the ink one). */
+/* Keyboard focus on the stage: a light outline. Every light surface that can open inside a stage
+   container (cards, sheets, the camera setup card, the reactions picker, menus, popovers) keeps the
+   ink one — a #fafafa ring on a white panel is 1.04:1. */
 html[data-ds-skin="atlas"] :is(.preview-wrap, .viewer-stage, .vm-video, .mstudio-fill, .cam-run, .mv-stage, .call-root, .gv-stage, .bedside)
-  :focus-visible:not(:is(.card, .sheet, .ready-check, .cam-issue, .mv-soothe) *) {
+  :focus-visible:not(:is(.card, .sheet, .cam-sheet, .emoji-pop, .acct-menu, .tour-card, .help-panel, .call-confirm, .mfa-nudge,
+    .ready-check, .cam-issue, .mv-soothe) *) {
   outline-color: #fafafa;
+}
+
+/* ============================================================== the nursery */
+/* The tracker's kinds and the monitor's sleep and motion lines were coloured for decoration. Chart
+   series take the greyscale ramp here — told apart by step, by shape (bars, dots) and by the
+   legend's words — and every control or icon that wore a kind's colour is ink. Green / amber / red
+   stay where they say a status: sound bands, cry and alert tones, "new food". */
+html[data-ds-skin="atlas"] {
+  --tk-indigo: var(--chart-1);   /* sleep, night sleep */
+  --tk-rose: var(--chart-2);     /* feeds, breast */
+  --tk-violet: var(--chart-2);   /* pump (a feed), diapers "both" */
+  --tk-red: var(--chart-2);
+  --tk-teal: var(--chart-3);     /* diapers, wet */
+  --tk-sky: var(--chart-3);      /* naps */
+  --tk-green: var(--chart-3);    /* growth percentile lines */
+  --tk-neutral: var(--chart-3);
+  --tk-amber: var(--chart-4);    /* bottle, solids, activity */
+  --tk-brown: var(--chart-4);    /* diapers, dirty */
+  --sleep: var(--chart-1);       /* the sleep chart: night */
+  --sleep-2: var(--chart-3);     /*                  naps */
+  --sleep-wash: var(--panel-2);
+  --sleep-ink: var(--text);
+  --violet: var(--muted);        /* a visit, the motion line, the third timeline band: grey, readable as text */
+  --violet-wash: var(--panel-2);
+}
+html[data-ds-skin="atlas"][data-theme="dark"] {
+  --tk-indigo: var(--chart-1); --tk-rose: var(--chart-2); --tk-violet: var(--chart-2); --tk-red: var(--chart-2);
+  --tk-teal: var(--chart-3); --tk-sky: var(--chart-3); --tk-green: var(--chart-3); --tk-neutral: var(--chart-3);
+  --tk-amber: var(--chart-4); --tk-brown: var(--chart-4);
+  --sleep: var(--chart-1); --sleep-2: var(--chart-3); --sleep-wash: var(--panel-2); --sleep-ink: var(--text);
+  --violet: var(--muted); --violet-wash: var(--panel-2);
+}
+/* Quick-log tiles, the running timer, log rows and the log sheet: ink, not the kind's colour. */
+html[data-ds-skin="atlas"] :is(.tk-q, .tk-item, .timer-card, .ts-sheet) { --tk: var(--text); }
+html[data-ds-skin="atlas"] .tc-icon { background: var(--text); color: var(--on-accent); }
+/* An info state over video: the grey info fill (white on it), not a blue. */
+html[data-ds-skin="atlas"] .state-chip.tone-info { background: rgb(38 38 38 / 0.9); }
+/* The bedside clock's ring for a non-alert: a light pulse on the black, not blue. */
+html[data-ds-skin="atlas"] .bedside.ring:is(.t-blue, .t-green, .t-violet, .t-neutral) { --ring: #fafafa; }
+/* The nursery's setup checklist is a card like any other; its progress is ink (Atlas progress). */
+html[data-ds-skin="atlas"] .setup-card { border-color: var(--line); }
+html[data-ds-skin="atlas"] .setup-bar i { background: var(--text); }
+/* A usage tip is advice, not a status. */
+html[data-ds-skin="atlas"] .usage-tip { background: var(--panel-2); }
+html[data-ds-skin="atlas"] .usage-tip svg { color: var(--text); }
+
+/* Loading blocks (Atlas skeleton): a 1.6 s glint. In dark the grey block is barely a step on a card
+   and a glint of page colour reads as a hole, so the block is lifted with ink and the glint is lighter. */
+html[data-ds-skin="atlas"] .skeleton::after { animation-duration: 1.6s; animation-timing-function: ease-in-out; }
+html[data-ds-skin="atlas"][data-theme="dark"] .skeleton { background: color-mix(in srgb, var(--text) 9%, transparent); }
+html[data-ds-skin="atlas"][data-theme="dark"] .skeleton::after {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 7%, transparent), transparent);
 }
 
 /* ================================================================== motion */

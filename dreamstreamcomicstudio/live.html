@@ -23,7 +23,7 @@
     <!-- The stored theme, density and corners before first paint: an external file, because this page
          allows no inline script (CSP script-src 'self'). The ?v= is the file's content hash
          (live/themeBoot.unit.test.ts keeps it current), so it can be cached for good. -->
-    <script src="/live-theme-boot.js?v=9cf4ea09"></script>
+    <script src="/live-theme-boot.js?v=d0efa217"></script>
     <!-- Chrome fonts, self-hosted (@font-face in live/styles/atlas-skin.css): the body and label
          weights, and the display face the wordmark and page titles use (600, and the wordmark's
          "Studio" at 500, so the lockup on every screen paints without a font swap). -->
@@ -74,16 +74,21 @@
         position: relative; margin: 0; min-height: 20px; max-width: 320px; text-align: center;
         font-size: 13px; line-height: 20px; color: var(--muted, #5c5c5c);
       }
-      /* Out of the flow, so the splash keeps the account splash's exact height. */
+      /* Out of the flow, so the splash keeps the account splash's exact height. Hidden (not just
+         transparent) until it shows: opacity alone leaves it in the status region, so a screen
+         reader would hear "Still loading" the moment the page opens. Its own keyframes reveal it;
+         live-boot-show stays opacity-only, or its forwards fill would beat the reduced-motion
+         .boot-bar { visibility: hidden } below. */
       .boot-slow {
         position: absolute; top: 0; left: 50%; width: 300px; margin-left: -150px;
-        opacity: 0; animation: live-boot-show 0.3s ease 12s forwards;
+        opacity: 0; visibility: hidden; animation: live-boot-slow 0.3s ease 12s forwards;
       }
       .boot-sr {
         position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
         clip: rect(0 0 0 0); white-space: nowrap; border: 0;
       }
       @keyframes live-boot-show { to { opacity: 1; } }
+      @keyframes live-boot-slow { to { opacity: 1; visibility: visible; } }
       @keyframes live-boot-sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
       @media (prefers-color-scheme: dark) {
         html:not([data-theme]) .boot-page { background: #0a0a0a; color: #fafafa; }
@@ -97,8 +102,9 @@
         .boot-slow { animation-duration: 0s; }
       }
     </style>
-    <!-- Without JavaScript nothing is loading: no progress line, no slow note, the mark holds still. -->
-    <noscript><style>.boot-bar, .boot-slow { display: none; } .boot-mark * { animation: none !important; }</style></noscript>
+    <!-- Without JavaScript nothing is loading: no progress line, no slow note, no "Opening…" for screen
+         readers (only the noscript line is in the status), the mark holds still. -->
+    <noscript><style>.boot-bar, .boot-slow, .boot-sr { display: none; } .boot-mark * { animation: none !important; }</style></noscript>
   </head>
   <body style="margin:0">
     <div id="live-root"><div class="boot-page" data-live-boot=""><div class="boot"><svg class="boot-mark ds-logo-mark ds-logo-mark--stream ds-logo-mark--loading" data-studio="stream" viewBox="0 0 64 64" fill="none" aria-hidden="true" focusable="false"><mask id="live-boot-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" rx="16" fill="#fff"/><path class="ds-logo-cut" d="M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/><circle class="ds-logo-point" cx="32" cy="32" r="3.6" fill="#000"/></mask><rect width="64" height="64" rx="16" fill="currentColor" mask="url(#live-boot-cut)"/></svg><span class="boot-word" aria-hidden="true">Stream <span>Studio</span></span><span class="boot-bar" aria-hidden="true"><i></i></span><p class="boot-note" role="status"><span class="boot-sr">Opening Stream Studio…</span><span class="boot-slow">Still loading — check your connection, then reload this page.</span><noscript>Stream Studio needs JavaScript. Turn it on for this site, then reload the page.</noscript></p></div></div></div>

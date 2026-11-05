@@ -283,21 +283,24 @@ describe('the art', () => {
   });
 
   const maskables = ICON_SETS.flatMap((s) => s.outputs.filter((o) => o.kind === 'square' && o.size === 512).map((o) => o.file));
-  it.each(maskables)('%s keeps the glyph inside the maskable safe zone (radius 40%%) on full-bleed ink', async (rel) => {
+  // One assertion per image, not per pixel (262,144 expect() calls per 512 px icon timed out under load).
+  it.each(maskables)('%s keeps the glyph inside the maskable safe zone (the central circle, 0.4 of the width) on full-bleed ink', async (rel) => {
     const img = await rgba(path.join(ROOT, rel));
     const c = img.w / 2;
     let glyph = 0;
     let farthest = 0;
+    let notOpaque = 0;
     for (let y = 0; y < img.h; y++) {
       for (let x = 0; x < img.w; x++) {
         const [r, g, b, a] = img.at(x, y);
-        expect(a).toBe(255);
+        if (a !== 255) notOpaque++;
         if (r + g + b > 3 * 128) {
           glyph++;
           farthest = Math.max(farthest, Math.hypot(x + 0.5 - c, y + 0.5 - c));
         }
       }
     }
+    expect(notOpaque, 'full bleed: every pixel opaque').toBe(0);
     expect(glyph, 'the glyph is drawn').toBeGreaterThan(img.w * img.h * 0.05);
     expect(farthest / img.w, 'inside the 80% safe-zone circle').toBeLessThanOrEqual(0.4);
     expect(farthest / img.w, 'not shrunk into a dot').toBeGreaterThan(0.3);

@@ -13,7 +13,8 @@ import './styles/monitor-video.css';
 import './styles/invite.css';
 import './styles/usage.css';
 // Last: the Atlas skin re-points the tokens above and fixes what tokens can't reach. Inert without
-// data-ds-skin="atlas" on <html> (live.html carries it; the build's kill switch strips it).
+// data-ds-skin="atlas" on <html> (static in live.html; the planned VITE_DS_SKIN_EVERYWHERE=off build
+// switch will strip it once the DreamStream session lands it).
 import './styles/atlas-skin.css';
 import { captureBootSplash } from './bootSplash';
 

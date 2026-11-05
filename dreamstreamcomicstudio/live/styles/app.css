@@ -213,9 +213,12 @@
   .btn-sm::after { content: ''; position: absolute; inset: -8px 0; }
   .linkish::after { content: ''; position: absolute; inset: -14px -4px; }
   /* Footer links (15 px tall): 45 px tall areas; a wrapped second row sits 30 px below the first,
-     so the two rows' areas meet instead of overlapping. */
+     so the two rows' areas meet instead of overlapping. The links in the event and viewer top bars
+     stay on one line instead (a second row would grow the bar by 30 px); under 360 px those bars
+     drop the wordmark from view to make room (features.css). */
   :is(.legal-links a, .gate-foot > a)::after { content: ''; position: absolute; inset: -15px -4px; }
   :is(.legal-links, .legal-links.compact, .gate-foot) { row-gap: 30px; }
+  :is(.event-topbar, .viewer-topbar) .legal-links.compact { flex-wrap: nowrap; }
 }
 
 /* ------------------------------------------------------------ accent menu */
