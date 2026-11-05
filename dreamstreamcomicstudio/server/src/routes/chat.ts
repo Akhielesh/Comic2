@@ -2411,12 +2411,14 @@ chatPublicRouter.get('/unfurl', unfurlLimit, async (req, res) => {
 });
 
 // Reader mode: fetch a public article and return its extracted readable content so the
-// chat can show it inline (news sites block iframing). SSRF-guarded in readArticle.
+// chat can show it inline (news sites block iframing). SSRF-guarded in readArticle. Only a
+// signed-in caller may fall back to the budgeted Jina reader; said explicitly here rather
+// than left to readArticle's account-context default.
 chatPublicRouter.get('/read-url', readUrlLimit, async (req, res) => {
   const url = String(req.query.url || '');
   if (!url) return res.status(400).json({ error: { message: 'url is required' } });
   try {
-    const data = await readArticle(url);
+    const data = await readArticle(url, undefined, { allowJina: Boolean(req.user?.id) });
     res.json(data);
   } catch (err) {
     res.status(200).json({ url, host: '', blocks: [], ok: false, error: (err as Error)?.message || 'read failed' });

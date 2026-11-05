@@ -174,6 +174,15 @@ describe('functions and statements that only exhaust the sandbox are refused up 
     'EXPLAIN QUERY PLAN VACUUM',
     "SELECT printf('%%%1000d', 1)",
     'SELECT printf("%.*c", 1000000000, \'x\')',
+    // A zero-pad flag does not hide a big width or precision.
+    "SELECT printf('%01000d', 1)",
+    "SELECT printf('%.01000f', 1)",
+    // SQLite reads U+FEFF where a token starts as space, so it hides nothing either (mid-text, where
+    // runSql's trim() never reaches it).
+    "SELECT 1; \ufeffATTACH ':memory:' AS x",
+    'PRAGMA \ufeff max_page_count = 1000000',
+    'SELECT randomblob \ufeff(9)',
+    'SELECT 1; \ufeff VACUUM',
     // A Tcl-style parameter `$a(')` is one token to SQLite, so its quote does not hide what follows.
     "SELECT $a(') , length(randomblob(1000000000)) , $b(')",
     "SELECT :a(') ; VACUUM ; SELECT :b(')"
@@ -181,6 +190,22 @@ describe('functions and statements that only exhaust the sandbox are refused up 
     const r = await runSql(schema, q);
     expect(r.error).toMatch(/isn’t available in this playground|aren’t available in this playground/);
     expect(r.rows).toEqual([]);
+  });
+
+  it('U+FEFF counts as space wherever a token starts, also at the very start (no trim() involved)', () => {
+    for (const q of [
+      '\ufeffVACUUM',
+      "\ufeff\ufeffATTACH ':memory:' AS x",
+      'PRAGMA main.\ufeffmax_page_count = 1000000',
+      'SELECT length(\ufeffzeroblob /* c */\ufeff(9))',
+      'SELECT 1;\ufeff\nDETACH x'
+    ]) {
+      expect([q, refusedSql(q)]).toEqual([q, expect.stringMatching(/isn’t available in this playground/)]);
+    }
+    // Inside a name it is part of the name, as in SQLite: `randomblob\ufeff` is no function SQLite has,
+    // and `PRAGMA\ufeffmax_page_count` is one word, a syntax error.
+    expect(refusedSql('SELECT randomblob\ufeff(9)')).toBeNull();
+    expect(refusedSql('PRAGMA\ufeffmax_page_count = 1000000')).toBeNull();
   });
 
   it('in the schema too', async () => {
@@ -205,10 +230,21 @@ describe('functions and statements that only exhaust the sandbox are refused up 
       "SELECT printf('%.2f', price) FROM orders WHERE order_date LIKE '%2024%'",
       "SELECT printf('%d', id) FROM t WHERE id % 1000 = 0",
       "SELECT printf('%%1000 of them')",
+      // A leading 0 is the zero-pad flag: these widths and precisions are under 1000.
+      "SELECT printf('%0100d', 1)",
+      "SELECT printf('%05d', 1)",
+      "SELECT printf('%0999d', 1)",
+      "SELECT printf('%.0999f', 1)",
       'PRAGMA page_count'
     ]) {
       expect([ok, refusedSql(ok)]).toEqual([ok, null]);
     }
+  });
+
+  it('zero-padded printf widths run', async () => {
+    const r = await runSql('', "SELECT printf('%05d', 1), length(printf('%0100d', 1)), printf('%%%05d', 7)");
+    expect(r.error).toBeUndefined();
+    expect(r.rows).toEqual([['00001', 100, '%00007']]);
   });
 
   it('a lesson whose seed data says “Vacuum” runs (the schema is model-written)', async () => {

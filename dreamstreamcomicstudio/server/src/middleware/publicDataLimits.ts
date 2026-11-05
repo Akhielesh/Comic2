@@ -12,15 +12,18 @@
 // 429 body, so a client that already handles RATE_LIMITED needs nothing new. A store failure fails
 // open, as there. routes/learn.ts reuses createPublicDataLimit for the SQL playground.
 //
-// Sized against what the client really sends, not against one widget:
-//   - unfurl and reader mode are memoised per URL (services/chatApi.ts), but the news list prefetches
-//     an article on HOVER and focus, so moving down a long list spends one reader call per new link;
-//     60/min covers that (unfurl, the same shape of work, has the same number).
-//   - widget refresh counts every tile on every tick: Dashboards re-runs each data tile of the open
-//     board every 5 min while the tab is visible (12 calls/h per tile), and a live monitor refreshes as
-//     often as every 30 s (120 calls/h). So the per-minute window (30) is the one that bounds a script.
-//     The daily window is per audience: an anonymous caller (a stale session, or a script; many people
-//     can share one IPv4 address) gets 300/day; a signed-in account gets 10,000/day, above a 10-tile
+// Sized against what the client really sends, not against one widget. An anonymous caller is a stale
+// session or a script (and many people can share one IPv4 address), so it gets the tighter numbers:
+//   - unfurl and reader mode are memoised per URL (services/chatApi.ts), but the news list (signed-in
+//     chat, dashboards and gallery only) prefetches an article on HOVER and focus, so moving down a
+//     long list spends one reader call per new link: reader mode is 60/min signed in, 20/min
+//     anonymous (each read is the heaviest unauthenticated request on the main thread). Unfurl, a
+//     small page head, is 60/min for everyone.
+//   - widget refresh counts every tile on every tick: Dashboards re-runs every data tile of the open
+//     board AT ONCE, on open and every 5 min while the tab is visible (12 calls/h per tile), and a live
+//     monitor refreshes as often as every 30 s (120 calls/h). Boards have no tile cap, so a signed-in
+//     account gets a 120/min burst window (a 40-tile board plus monitors in one minute); anonymous
+//     callers keep 30/min. The daily window is 300 anonymous and 10,000 signed in, above a 10-tile
 //     board plus two 30 s monitors left open around the clock (8,640), so it never stops a real
 //     dashboard. The paid-key tools need sign-in (SIGNED_IN_REFRESH_TOOLS below) and their spend is
 //     bounded by the provider budgets in ai/tools (DreamStream session), not by this window.
@@ -87,9 +90,13 @@ export const createPublicDataLimit =
 /** The windows for each public data route (exported for tests and docs). */
 export const PUBLIC_DATA_WINDOWS = {
   unfurl: [{ scope: 'chat_unfurl', windowMs: MINUTE, maxRequests: 60 }],
-  readUrl: [{ scope: 'chat_read_url', windowMs: MINUTE, maxRequests: 60 }],
+  readUrl: [
+    { scope: 'chat_read_url', windowMs: MINUTE, maxRequests: 20, appliesTo: 'anonymous' },
+    { scope: 'chat_read_url', windowMs: MINUTE, maxRequests: 60, appliesTo: 'signedIn' }
+  ],
   toolRefresh: [
-    { scope: 'chat_tool_refresh', windowMs: MINUTE, maxRequests: 30 },
+    { scope: 'chat_tool_refresh', windowMs: MINUTE, maxRequests: 30, appliesTo: 'anonymous' },
+    { scope: 'chat_tool_refresh', windowMs: MINUTE, maxRequests: 120, appliesTo: 'signedIn' },
     { scope: 'chat_tool_refresh_day', windowMs: DAY, maxRequests: 300, appliesTo: 'anonymous' },
     { scope: 'chat_tool_refresh_day', windowMs: DAY, maxRequests: 10_000, appliesTo: 'signedIn' }
   ]

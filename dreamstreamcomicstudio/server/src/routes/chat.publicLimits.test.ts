@@ -16,7 +16,7 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
   }
 }));
 vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
-const fetched = vi.hoisted(() => ({ unfurl: 0, read: 0, tools: [] as string[] }));
+const fetched = vi.hoisted(() => ({ unfurl: 0, read: 0, readAllowJina: [] as (boolean | undefined)[], tools: [] as string[] }));
 // The real in-memory counter store, on a clock a test can move forward (days of dashboard use in ms).
 const clock = vi.hoisted(() => ({ offsetMs: 0 }));
 vi.mock('../middleware/rateLimitStore.js', async (importOriginal) => {
@@ -31,8 +31,9 @@ vi.mock('../ai/tools/unfurl.js', () => ({
   }
 }));
 vi.mock('../ai/tools/readArticle.js', () => ({
-  readArticle: async (url: string) => {
+  readArticle: async (url: string, _signal?: AbortSignal, opts?: { allowJina?: boolean }) => {
     fetched.read += 1;
+    fetched.readAllowJina.push(opts?.allowJina);
     return { url, host: 'example.com', blocks: [], ok: true };
   }
 }));
@@ -113,10 +114,26 @@ describe('limits on the public data routes', () => {
     expect((await unfurl({})).status).toBe(200);
   });
 
-  it('read-url: 60 a minute (the news list prefetches an article on hover)', async () => {
+  it('read-url: 20 a minute anonymous, 60 signed in (the signed-in news list prefetches on hover)', async () => {
+    const windows: readonly PublicDataWindow[] = PUBLIC_DATA_WINDOWS.readUrl;
+    expect(windows.map((w) => [w.windowMs, w.maxRequests, w.appliesTo ?? 'all'])).toEqual([
+      [60_000, 20, 'anonymous'],
+      [60_000, 60, 'signedIn']
+    ]);
     const ip = v4();
-    expect(await statuses(60, () => readUrl({ ip }))).toEqual(Array(60).fill(200));
-    expect((await readUrl({ ip })).status).toBe(429);
+    expect(await statuses(20, () => readUrl({ ip }))).toEqual(Array(20).fill(200));
+    const res = await readUrl({ ip });
+    expect(res.status).toBe(429);
+    expect((await res.json()).error.details).toMatchObject({ scope: 'chat_read_url', limit: 20, keyType: 'ip' });
+    // A signed-in caller on that same address has its own, larger allowance.
+    expect((await readUrl({ ip, user: `u-${seq++}` })).status).toBe(200);
+  });
+
+  it('read-url: only a signed-in caller may fall back to the Jina reader (allowJina passed explicitly)', async () => {
+    const before = fetched.readAllowJina.length;
+    expect((await readUrl({})).status).toBe(200);
+    expect((await readUrl({ user: `u-${seq++}` })).status).toBe(200);
+    expect(fetched.readAllowJina.slice(before)).toEqual([false, true]);
   });
 
   it('a signed-in caller is counted per account, wherever they connect from', async () => {
@@ -132,16 +149,17 @@ describe('limits on the public data routes', () => {
 
   it('anonymous IPv6 callers share one allowance per /64 (rotating the interface id does not help)', async () => {
     const prefix = `2001:db8:${(seq++).toString(16)}:1`;
-    expect(await statuses(60, () => readUrl({ ip: `${prefix}::${(seq++).toString(16)}` }))).toEqual(Array(60).fill(200));
+    expect(await statuses(20, () => readUrl({ ip: `${prefix}::${(seq++).toString(16)}` }))).toEqual(Array(20).fill(200));
     expect((await readUrl({ ip: `${prefix}:dead:beef:1:2` })).status).toBe(429);
     // The next /64 is someone else.
     expect((await readUrl({ ip: `2001:db8:${(seq++).toString(16)}:2::1` })).status).toBe(200);
   });
 
-  it('tool-refresh: 30 a minute for everyone; a day is 300 anonymous, 10,000 signed in', async () => {
+  it('tool-refresh: a minute is 30 anonymous, 120 signed in; a day is 300 anonymous, 10,000 signed in', async () => {
     const windows: readonly PublicDataWindow[] = PUBLIC_DATA_WINDOWS.toolRefresh;
     expect(windows.map((w) => [w.windowMs, w.maxRequests, w.appliesTo ?? 'all'])).toEqual([
-      [60_000, 30, 'all'],
+      [60_000, 30, 'anonymous'],
+      [60_000, 120, 'signedIn'],
       [24 * 60 * 60_000, 300, 'anonymous'],
       [24 * 60 * 60_000, 10_000, 'signedIn']
     ]);
@@ -159,7 +177,7 @@ describe('limits on the public data routes', () => {
   });
 });
 
-describe('tool-refresh daily windows against real client cadence', () => {
+describe('tool-refresh windows against real client cadence', () => {
   const MIN = 60_000;
   // Drive the limiter as Express would, on the store's movable clock; returns the refusal scope or null.
   const hit = async (who: { user?: string; ip: string }): Promise<string | null> => {
@@ -201,6 +219,44 @@ describe('tool-refresh daily windows against real client cadence', () => {
     expect(refusals).toEqual([]);
   });
 
+  it('a signed-in 40-tile board refreshed all at once, plus a 30 s live monitor, is never refused (8 hours)', async () => {
+    // Dashboards fires every data tile of the open board in the same moment, on open and on every
+    // 5-minute tick, and boards have no tile cap: 41 calls land in one minute, over the anonymous 30.
+    const who = { user: `u-board40-${seq++}`, ip: v4() };
+    const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN);
+    const refusals: string[] = [];
+    let calls = 0;
+    for (let t = 0; t <= 8 * 60 * MIN; t += 30_000) {
+      clock.offsetMs = t0 + t;
+      const due = 1 + (t % (5 * MIN) === 0 ? 40 : 0);
+      for (let i = 0; i < due; i++) {
+        calls += 1;
+        const r = await hit(who);
+        if (r) refusals.push(r);
+      }
+    }
+    expect(calls).toBe(961 + 97 * 40);
+    expect(refusals).toEqual([]);
+  });
+
+  it('the same 40-tile burst from an anonymous caller stops at 30 in the minute', async () => {
+    const who = { ip: v4() };
+    clock.offsetMs += 2 * 24 * 60 * MIN;
+    const scopes: (string | null)[] = [];
+    for (let i = 0; i < 41; i++) scopes.push(await hit(who));
+    expect(scopes.slice(0, 30).every((s) => s === null)).toBe(true);
+    expect(new Set(scopes.slice(30))).toEqual(new Set(['chat_tool_refresh']));
+  });
+
+  it('a signed-in account still stops at 120 in a minute', async () => {
+    const who = { user: `u-burst-${seq++}`, ip: v4() };
+    clock.offsetMs += 2 * 24 * 60 * MIN;
+    const scopes: (string | null)[] = [];
+    for (let i = 0; i < 121; i++) scopes.push(await hit(who));
+    expect(scopes.slice(0, 120).every((s) => s === null)).toBe(true);
+    expect(scopes[120]).toBe('chat_tool_refresh');
+  });
+
   it('an anonymous caller still stops at 300 a day, even when spread under the minute limit', async () => {
     const who = { ip: v4() };
     const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN);
@@ -218,7 +274,7 @@ describe('tool-refresh daily windows against real client cadence', () => {
     const t0 = (clock.offsetMs += 2 * 24 * 60 * MIN);
     let last: string | null = null;
     for (let i = 0; i < 10_001; i++) {
-      clock.offsetMs = t0 + Math.floor(i / 30) * MIN; // the most the minute window allows
+      clock.offsetMs = t0 + Math.floor(i / 120) * MIN; // the most the signed-in minute window allows
       last = await hit(who);
       if (i < 10_000) expect(last).toBeNull();
     }

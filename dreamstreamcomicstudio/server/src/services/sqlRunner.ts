@@ -53,14 +53,23 @@ const BLOCKED_PRAGMAS = new Set([
   'soft_heap_limit',
   'hard_heap_limit'
 ]);
-/** printf / format: a `*` width or precision, or one of 4+ digits (`printf('%.*c', 1e9, 'x')`). */
+/**
+ * printf / format: a `*` width or precision, or one of 1000 or more (`printf('%.*c', 1e9, 'x')`). A
+ * leading `0` is the zero-pad flag, not part of the number, so `%0100d` (width 100) and `%.0999f`
+ * (precision 999) run while `%01000d` is refused.
+ */
 const FORMAT_FUNCTIONS = new Set(['printf', 'format']);
-const HUGE_FORMAT_SPEC = /%[-+ 0#,!]*(\*|\d{4,}|\d*\.(\*|\d{4,}))/;
+const HUGE_FORMAT_SPEC = /%[-+ 0#,!]*(\*|[1-9]\d{3,}|\d*\.(\*|0*[1-9]\d{3,}))/;
 
 type SqlToken = { kind: 'word' | 'quoted' | 'string' | 'punct'; text: string };
 
-/** What separates tokens (SQLite's tokenizer), and what ends a `$name(…)` suffix (sqlite3Isspace). */
-const SQL_SPACE = /[ \t\n\f\r]/;
+/**
+ * What separates tokens (SQLite's tokenizer), and what ends a `$name(…)` suffix (sqlite3Isspace).
+ * SQLite reads a U+FEFF (the UTF-8 BOM bytes) where a token starts as space (CC_BOM), so
+ * `SELECT 1; \uFEFFATTACH …` is an ATTACH to it; inside a name it stays part of the name (IDENT_PART),
+ * and SQL_SPACE is only tested where a token starts.
+ */
+const SQL_SPACE = /[ \t\n\f\r\ufeff]/;
 const C_SPACE = /[ \t\n\v\f\r]/;
 const IDENT_START = /[A-Za-z_\u0080-\uffff]/;
 const IDENT_PART = /[A-Za-z0-9_$\u0080-\uffff]/;
