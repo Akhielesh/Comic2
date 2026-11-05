@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { HelpCircle, Check, Send } from 'lucide-react';
 import type { ClarifyArtifact, ClarifyQuestion } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle } from './kit';
+import type { ArtifactTurn } from './ChatArtifacts';
+import { SettledArtifactLine } from './CalendarEventDraft';
 
 // Interactive clarifying-questions card (the "ask, don't guess" widget). The model
 // emits this when a request is ambiguous or multi-faceted instead of dumping a wall of
@@ -9,6 +11,11 @@ import { Surface, SurfaceTitle, SurfaceSubtitle } from './kit';
 // answers are sent back as their next message via the `dreamstream:send` window event —
 // so the conversation stays a real back-and-forth and the next turn can keep building
 // widgets from the answers.
+//
+// SENT ONCE (CHAT-0, bug B5). Inside a chat the card records "answers sent" on its turn
+// (`turn.settle`) before posting them, and once the conversation has moved on it settles to one line
+// with no controls (lead decision D3): "You answered 3 questions", or "Not answered — you moved on".
+// A reload never brings the form back.
 
 const OTHER = '__other__';
 
@@ -124,10 +131,29 @@ const answerText = (q: ClarifyQuestion, a: Answer): string => {
 
 const isAnswered = (a: Answer): boolean => a.choices.some((c) => c !== OTHER) || a.text.trim().length > 0;
 
-export const ClarifyCard: React.FC<{ data: ClarifyArtifact }> = ({ data }) => {
+/** True when the card shows its settled line: its answers were sent, or the conversation moved on. */
+export const clarifySettled = (_data: ClarifyArtifact, turn?: ArtifactTurn): boolean =>
+  !!turn && (turn.state?.status === 'sent' || turn.passed);
+
+const ClarifySettled: React.FC<{ turn: ArtifactTurn }> = ({ turn }) => {
+  if (turn.state?.status === 'sent') {
+    const n = turn.state.result?.answered ?? 0;
+    return <SettledArtifactLine type="clarify" tone="success" text={n > 0 ? `You answered ${n} question${n === 1 ? '' : 's'}` : 'You answered'} />;
+  }
+  return <SettledArtifactLine type="clarify" tone="neutral" text="Not answered — you moved on" />;
+};
+
+export const ClarifyCard: React.FC<{ data: ClarifyArtifact; turn?: ArtifactTurn }> = ({ data, turn }) => {
+  if (turn && clarifySettled(data, turn)) return <ClarifySettled turn={turn} />;
+  return <ClarifyForm data={data} turn={turn} />;
+};
+
+const ClarifyForm: React.FC<{ data: ClarifyArtifact; turn?: ArtifactTurn }> = ({ data, turn }) => {
   const questions = data.questions ?? [];
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [sent, setSent] = useState(false);
+  // While the chat is answering, the composer drops a send: hold the answers until it is free.
+  const waiting = !!turn?.busy;
 
   const get = (id: string): Answer => answers[id] ?? emptyAnswer();
   const set = (id: string, a: Answer) => setAnswers((prev) => ({ ...prev, [id]: a }));
@@ -140,7 +166,7 @@ export const ClarifyCard: React.FC<{ data: ClarifyArtifact }> = ({ data }) => {
   const anyAnswered = questions.some((q) => isAnswered(get(q.id)));
 
   const submit = () => {
-    if (missingRequired || sent) return;
+    if (missingRequired || sent || waiting) return;
     const lines = questions
       .map((q) => {
         const txt = answerText(q, get(q.id));
@@ -149,6 +175,8 @@ export const ClarifyCard: React.FC<{ data: ClarifyArtifact }> = ({ data }) => {
       .filter(Boolean);
     if (lines.length === 0) return;
     const message = `Here are my answers:\n${lines.join('\n')}`;
+    // Recorded on the turn first (saved even if the view goes away): the form never comes back.
+    turn?.settle({ status: 'sent', at: Date.now(), result: { answered: lines.length } });
     // Send as the user's next message so the model continues with the answers in context.
     window.dispatchEvent(new CustomEvent('dreamstream:send', { detail: { text: message } }));
     setSent(true);
@@ -181,12 +209,12 @@ export const ClarifyCard: React.FC<{ data: ClarifyArtifact }> = ({ data }) => {
         ))}
         <div className="flex items-center justify-between gap-3 pt-0.5">
           <p className="text-[11px] text-[var(--ds-muted)]">
-            {sent ? 'Answers sent — continuing…' : missingRequired ? 'Answer the required questions to continue.' : 'Pick what fits — skip anything that doesn’t.'}
+            {sent ? 'Answers sent — continuing…' : waiting ? 'You can send these when the answer above finishes.' : missingRequired ? 'Answer the required questions to continue.' : 'Pick what fits — skip anything that doesn’t.'}
           </p>
           <button
             type="button"
             onClick={submit}
-            disabled={missingRequired || sent || !anyAnswered}
+            disabled={missingRequired || sent || !anyAnswered || waiting}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 py-1.5 text-[12px] font-semibold text-white transition-opacity duration-200 hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Send className="h-3.5 w-3.5" />

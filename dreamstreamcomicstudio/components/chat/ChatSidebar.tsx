@@ -11,15 +11,47 @@ import { useTheme, type ThemePreference } from '../../services/theme';
 import {
   SIDEBAR_BG, HAIRLINE, MENU, MENU_ITEM, MUTED, INK, LABEL, TRANSITION,
   PRIMARY_BTN, CONTROL_BTN, NAV_ROW, NAV_ROW_ACTIVE, RAIL_ROW, RAIL_ROW_ACTIVE,
-  ACCENT_TEXT, ACCENT_BG
+  ACCENT_TEXT, ACCENT_BG, FOCUS_RING
 } from './studioDesign';
+
+/**
+ * Close a menu on a click outside it or on Escape (CHAT-0, nav N-8: menus ignored Escape). Escape is
+ * marked handled, so the phone drawer around the sidebar stays open, and focus returns to the button
+ * that opened the menu.
+ */
+const useDismissableMenu = (
+  open: boolean,
+  close: () => void,
+  containerRef: React.RefObject<HTMLElement | null>,
+  triggerRef: React.RefObject<HTMLButtonElement | null>
+) => {
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      close();
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+};
 
 interface ChatSidebarProps {
   sessions: ChatSession[];
   projects: ChatProject[];
   activeId: string | null;
   /** Ids of chats currently generating an answer (shows a spinner). */
-  generatingIds?: Set<string>;
+  generatingIds?: ReadonlySet<string>;
   hasMemory: boolean;
   /** Which main view is showing — used to highlight Library/Dashboards rows. */
   view?: 'chat' | 'home' | 'library' | 'dashboards' | 'gallery';
@@ -64,15 +96,8 @@ const SessionRow: React.FC<{
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onClick = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [menuOpen]);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useDismissableMenu(menuOpen, () => setMenuOpen(false), menuRef, menuButtonRef);
 
   const commitRename = () => {
     const next = draft.trim();
@@ -103,15 +128,29 @@ const SessionRow: React.FC<{
       className={`group relative flex items-center gap-1.5 cursor-pointer ${active ? RAIL_ROW_ACTIVE : RAIL_ROW}`}
       onClick={onSelect}
     >
-      {generating && <Loader2 className={`w-3.5 h-3.5 shrink-0 ${ACCENT_TEXT} animate-spin`} />}
-      {!generating && session.parentSessionId && <GitBranch className="w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)]" />}
-      <span className={`flex-1 min-w-0 truncate ${active ? `font-medium ${INK}` : 'text-[var(--ds-ink)]'}`}>{session.title}</span>
+      {/* The row is a real button (keyboard: Tab to it, Enter/Space to open the chat); the
+          surrounding padding still opens it on a click. */}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onSelect(); }}
+        aria-current={active ? 'true' : undefined}
+        className={`flex flex-1 min-w-0 items-center gap-1.5 rounded-md text-left ${FOCUS_RING}`}
+      >
+        {generating && <Loader2 aria-hidden className={`w-3.5 h-3.5 shrink-0 ${ACCENT_TEXT} animate-spin`} />}
+        {!generating && session.parentSessionId && <GitBranch aria-hidden className="w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)]" />}
+        <span className={`flex-1 min-w-0 truncate ${active ? `font-medium ${INK}` : 'text-[var(--ds-ink)]'}`}>{session.title}</span>
+        {generating && <span className="sr-only">(answering)</span>}
+      </button>
 
       <div ref={menuRef} className="relative shrink-0">
         <button
+          ref={menuButtonRef}
           onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-          className={`tap-target p-1 rounded-md ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
+          className={`tap-target p-1 rounded-md ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
           title="Options"
+          aria-label={`Options for ${session.title}`}
+         
+          aria-expanded={menuOpen}
         >
           <MoreVertical className="w-3.5 h-3.5" />
         </button>
@@ -162,16 +201,11 @@ const ProjectGroup: React.FC<{
 }> = ({ project, sessions, collapsed, dragOver, onToggle, onEdit, onDelete, onDropSession, onDragOver, onDragLeave, renderSession }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const Icon = iconByName(project.icon);
   // Swatch kept for project identity, rendered as a quiet dot.
   const swatch = colorByKey(project.color);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onClick = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false); };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [menuOpen]);
+  useDismissableMenu(menuOpen, () => setMenuOpen(false), menuRef, menuButtonRef);
 
   return (
     <div
@@ -181,7 +215,7 @@ const ProjectGroup: React.FC<{
       className={`rounded-lg border ${dragOver ? 'border-[#D97757] border-dashed bg-[#D97757]/5' : 'border-transparent'} ${TRANSITION}`}
     >
       <div className={`group flex items-center gap-1 rounded-lg px-1.5 py-1 hover:bg-[var(--ds-hover)] ${TRANSITION}`}>
-        <button onClick={onToggle} className="flex items-center gap-1.5 min-w-0 flex-1">
+        <button onClick={onToggle} aria-expanded={!collapsed} className={`flex items-center gap-1.5 min-w-0 flex-1 rounded-md ${FOCUS_RING}`}>
           {collapsed ? <ChevronRight className="w-3 h-3 shrink-0 text-[var(--ds-muted)]" /> : <ChevronDown className="w-3 h-3 shrink-0 text-[var(--ds-muted)]" />}
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${swatch.dot}`} aria-hidden />
           <Icon className="w-3 h-3 shrink-0 text-[var(--ds-muted)]" />
@@ -189,7 +223,7 @@ const ProjectGroup: React.FC<{
           <span className="text-[10px] text-[var(--ds-muted)] shrink-0">{sessions.length}</span>
         </button>
         <div ref={menuRef} className="relative">
-          <button onClick={() => setMenuOpen((v) => !v)} title="Project options" className={`tap-target p-1 rounded-md ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}>
+          <button ref={menuButtonRef} onClick={() => setMenuOpen((v) => !v)} title="Project options" aria-label={`Options for ${project.name}`} aria-expanded={menuOpen} className={`tap-target p-1 rounded-md ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}>
             <MoreHorizontal className="w-3.5 h-3.5" />
           </button>
           {menuOpen && (
@@ -248,13 +282,8 @@ const FooterAccount: React.FC<{
   const { preference, setPreference } = useTheme();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useDismissableMenu(open, () => setOpen(false), ref, triggerRef);
 
   const initial = (userName.trim()[0] || '?').toUpperCase();
 
@@ -280,9 +309,12 @@ const FooterAccount: React.FC<{
         </div>
       )}
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
-        className={`w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--ds-hover)] ${TRANSITION} text-left`}
+        className={`w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} text-left`}
         title="Account, theme & exit"
+       
+        aria-expanded={open}
       >
         <span className={`w-7 h-7 rounded-full ${ACCENT_BG} text-white flex items-center justify-center text-[11px] font-semibold shrink-0`} aria-hidden>
           {initial}

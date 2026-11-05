@@ -109,8 +109,11 @@ export interface ChatArtifactState {
   result?: {
     /** The written event's page (calendar create/update). */
     htmlLink?: string;
-    /** Batch create: each listed row's outcome, by its index in the card's original list. */
-    rows?: Array<'idle' | 'done' | 'error'>;
+    /**
+     * Batch create: each listed row's outcome, by its index in the card's original list ('pending':
+     * its write was sent and may have landed — never sent again).
+     */
+    rows?: Array<'idle' | 'pending' | 'done' | 'error'>;
     /** Batch create: rows the user removed before adding (indexes in the original list). */
     removed?: number[];
     /** Clarify: how many questions were answered. */
