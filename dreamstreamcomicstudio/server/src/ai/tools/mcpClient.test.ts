@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { buildMcpTools, fetchPublicUrl, isSafeMcpUrl, mayUseInternalHosts } from './mcpClient.js';
+import { buildMcpTools, fetchPublicUrl, isSafeMcpUrl, listMcpTools, mayUseInternalHosts, MCP_MAX_RESPONSE_BYTES } from './mcpClient.js';
 import { __setNetForTests } from './safeNet.js';
 import { envDesignMcpServers } from '../studio/designSystem.js';
 
@@ -82,6 +82,30 @@ describe('buildMcpTools: the trusted flag needs an operator-configured URL', () 
     expect(String(net.mock.calls[0][0])).toBe('http://127.0.0.1:8001/mcp');
   });
 
+  it("a request copy of an operator URL is sent with the operator's headers only, never its own", async () => {
+    const net = rpcServer();
+    vi.stubGlobal('fetch', net);
+    vi.stubEnv('STUDIO_SHADCN_MCP_URL', 'http://127.0.0.1:8001/mcp');
+    vi.stubEnv('STUDIO_SHADCN_MCP_URL_HEADERS', JSON.stringify({ 'x-operator': 'op-secret' }));
+    // What a request body can shape: the env URL, trusted:true, and headers of the caller's choosing.
+    const tools = await buildMcpTools([
+      { id: 'shadcn', name: 'shadcn', url: 'http://127.0.0.1:8001/mcp', trusted: true, headers: { 'x-connection-id': 'someone-else', 'x-operator': 'forged' } }
+    ]);
+    expect(tools.map((t) => t.name)).toEqual(['mcp_shadcn_hello']);
+    expect(net).toHaveBeenCalled();
+    for (const [url, init] of net.mock.calls) {
+      expect(String(url)).toBe('http://127.0.0.1:8001/mcp');
+      const headers = (init?.headers || {}) as Record<string, string>;
+      expect(headers['x-operator']).toBe('op-secret');
+      expect(headers).not.toHaveProperty('x-connection-id');
+    }
+    // A tool call made later goes the same way.
+    net.mockClear();
+    await tools[0].execute({}, undefined);
+    expect(net).toHaveBeenCalled();
+    for (const [, init] of net.mock.calls) expect((init?.headers || {}) as Record<string, string>).not.toHaveProperty('x-connection-id');
+  });
+
   it('mayUseInternalHosts: flag AND operator URL, never either alone', () => {
     const ops = new Set(['http://sidecar:8001/mcp']);
     expect(mayUseInternalHosts({ url: 'http://sidecar:8001/mcp', trusted: true }, ops)).toBe(true);
@@ -149,5 +173,58 @@ describe('fetchPublicUrl: every hop re-checked, nothing internal reached', () =>
     restoreNet = __setNetForTests({ transport: loop, resolve: publicResolver });
     await expect(fetchPublicUrl('https://public.test/start', {}, 2)).rejects.toThrow(/too many redirects/);
     expect(loop).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('MCP responses are read with a byte cap', () => {
+  let restoreNet: (() => void) | null = null;
+  afterEach(() => {
+    restoreNet?.();
+    restoreNet = null;
+  });
+
+  /** A JSON-RPC body that never ends: 1 MB per pull, counted (a fuse errors it far past the cap). */
+  const endlessRpc = () => {
+    const stats = { pulls: 0, cancelled: false };
+    const chunk = new TextEncoder().encode('x'.repeat(1024 * 1024));
+    const body = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"'));
+        },
+        pull(controller) {
+          stats.pulls += 1;
+          if (stats.pulls > 64) controller.error(new Error('test fuse: read far past the cap'));
+          else controller.enqueue(chunk);
+        },
+        cancel() {
+          stats.cancelled = true;
+        }
+      });
+    return { stats, body };
+  };
+
+  it(`a tools/list body past ${MCP_MAX_RESPONSE_BYTES / 1_000_000} MB fails as too large and its stream is cancelled`, async () => {
+    const big = endlessRpc();
+    const transport = vi.fn(async (_url: string, init?: RequestInit) => {
+      const method = (JSON.parse(String(init?.body || '{}')) as { method?: string }).method;
+      if (method === 'tools/list') return new Response(big.body(), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18' } }), { status: 200 });
+    });
+    restoreNet = __setNetForTests({ transport, resolve: async () => [{ address: '93.184.216.34', family: 4 }] });
+    await expect(listMcpTools({ id: 'big', name: 'Big', url: 'https://mcp-big.test/mcp' })).rejects.toThrow(/too large/);
+    expect(big.stats.cancelled).toBe(true);
+    expect(big.stats.pulls).toBeLessThanOrEqual(Math.ceil(MCP_MAX_RESPONSE_BYTES / (1024 * 1024)) + 2);
+    // buildMcpTools isolates it: no tools, no throw.
+    expect(await buildMcpTools([{ id: 'big2', name: 'Big', url: 'https://mcp-big2.test/mcp' }])).toEqual([]);
+  });
+
+  it('an error body is read only a little (it is quoted, 200 chars)', async () => {
+    const big = endlessRpc();
+    const transport = vi.fn(async () => new Response(big.body(), { status: 500 }));
+    restoreNet = __setNetForTests({ transport, resolve: async () => [{ address: '93.184.216.34', family: 4 }] });
+    await expect(listMcpTools({ id: 'err', name: 'Err', url: 'https://mcp-err.test/mcp' })).rejects.toThrow(/failed: 500/);
+    expect(big.stats.cancelled).toBe(true);
+    expect(big.stats.pulls).toBeLessThanOrEqual(2);
   });
 });

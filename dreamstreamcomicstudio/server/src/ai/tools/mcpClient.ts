@@ -13,8 +13,17 @@ import type { ChatTool, ToolExecResult } from './registry.js';
 import { capToolOutput, MCP_TOOL_OUTPUT_MAX } from './capToolOutput.js';
 import { envDesignMcpServers } from '../studio/designSystem.js';
 import { isPrivateAddress, pinnedFetch, resolveHost } from './safeNet.js';
+import { readTextCapped } from './cappedBody.js';
 
 const MCP_TIMEOUT_MS = 15_000;
+/**
+ * Largest JSON-RPC response read (after any Content-Encoding is undone). Room for a tool's base64
+ * image; a bigger body (or a small compressed one that inflates past it) stops at the cap and the
+ * call fails — it is never held in memory whole.
+ */
+export const MCP_MAX_RESPONSE_BYTES = 8_000_000;
+/** An error body is only quoted (200 chars), so only a little of it is read. */
+const MCP_ERROR_BODY_BYTES = 16_384;
 const TOOLS_CACHE_TTL_MS = 5 * 60_000;
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -191,10 +200,11 @@ const rpc = async (
     }
     if (isNotification) return { result: null, sessionId: sid };
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
+      const body = await readTextCapped(res, MCP_ERROR_BODY_BYTES).then((r) => r.text, () => '');
       throw new Error(`MCP ${method} failed: ${res.status} ${body.slice(0, 200)}`);
     }
-    const text = await res.text();
+    const { text, truncated } = await readTextCapped(res, MCP_MAX_RESPONSE_BYTES);
+    if (truncated) throw new Error(`MCP ${method} response too large (over ${Math.round(MCP_MAX_RESPONSE_BYTES / 1_000_000)} MB)`);
     const json = parseRpcBody(text);
     if (json?.error) throw new Error(`MCP ${method} error: ${json.error.message || 'unknown'}`);
     return { result: json?.result, sessionId: sid };
@@ -331,6 +341,24 @@ export const mayUseInternalHosts = (
   server: { url: string; trusted?: boolean },
   operatorUrls: ReadonlySet<string> = new Set(envDesignMcpServers().map((s) => s.url))
 ): boolean => server.trusted === true && operatorUrls.has(server.url);
+
+/**
+ * A trusted server as the operator configured it: same id/name for tool naming, but the URL and
+ * headers come from the env entry (the one whose headers match, else the first for that URL).
+ */
+const withOperatorConfig = <S extends McpServerConfig & { trusted?: boolean }>(
+  server: S,
+  operatorServers: readonly { url: string; headers?: Record<string, string> }[]
+): S => {
+  const sameUrl = operatorServers.filter((o) => o.url === server.url);
+  const want = JSON.stringify(server.headers || {});
+  const op = sameUrl.find((o) => JSON.stringify(o.headers || {}) === want) || sameUrl[0];
+  if (!op) return server;
+  const next: S = { ...server, url: op.url };
+  if (op.headers) next.headers = op.headers;
+  else delete next.headers;
+  return next;
+};
 // Cap tools imported from a single server so one chatty server can't flood the model's
 // tool list (and blow past provider tool limits).
 const MAX_TOOLS_PER_SERVER = 40;
@@ -358,10 +386,15 @@ export const buildMcpTools = async (
 
   // Discover servers in PARALLEL — a slow/broken one no longer serializes latency across
   // all of them (and never fails the chat: per-server failures are isolated).
-  const operatorUrls = new Set(envDesignMcpServers().map((s) => s.url));
+  const operatorServers = envDesignMcpServers();
+  const operatorUrls = new Set(operatorServers.map((s) => s.url));
   const settled = await Promise.allSettled(
-    servers.map(async (server): Promise<ChatTool[]> => {
-      const allowInternal = mayUseInternalHosts(server, operatorUrls);
+    servers.map(async (requested): Promise<ChatTool[]> => {
+      const allowInternal = mayUseInternalHosts(requested, operatorUrls);
+      // The internal (unpinned, http-allowed) path talks to the operator's server exactly as the
+      // operator configured it: its URL and ITS headers (env *_HEADERS), never headers a request
+      // body attached to a copy of that URL (e.g. a connector-scoping header of the caller's choosing).
+      const server = allowInternal ? withOperatorConfig(requested, operatorServers) : requested;
       if (!isSafeMcpUrl(server.url, { allowInternal }).ok) return [];
       const tools = await listMcpTools(server, signal, allowInternal);
       return tools.slice(0, MAX_TOOLS_PER_SERVER).map((tool) => wrap(server, tool, allowInternal));

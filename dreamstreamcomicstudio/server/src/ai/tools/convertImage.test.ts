@@ -9,6 +9,7 @@ vi.mock('./mcpClient.js', async (importOriginal) => {
 
 import { assertSafePublicUrl } from './mcpClient.js';
 import { convertImageTool } from './convertImage.js';
+import { __setNetForTests, type Transport } from './safeNet.js';
 
 const run = (args: Record<string, unknown>) => convertImageTool.execute(args, new AbortController().signal);
 
@@ -37,7 +38,22 @@ const expectRefused = (res: Awaited<ReturnType<typeof run>>, why: RegExp) => {
   expect(res.content).toMatch(why);
 };
 
+let restoreNet: (() => void) | null = null;
+/**
+ * Serve URL fetches through the pinned transport (safeNet test hook). The global fetch is a spy
+ * that must never be used for a user URL: it would resolve the name a second time.
+ */
+const useTransport = (transport: Transport) => {
+  restoreNet?.();
+  restoreNet = __setNetForTests({ transport });
+  const unpinned = vi.fn(async () => new Response('unpinned fetch used', { status: 500 }));
+  vi.stubGlobal('fetch', unpinned);
+  return unpinned;
+};
+
 afterEach(() => {
+  restoreNet?.();
+  restoreNet = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -135,11 +151,36 @@ describe('convert_image: inputs are admitted by their bytes (JPEG, PNG, WebP, GI
       const body = url.endsWith('.svg') ? SVG : await canvas(12, 12).png().toBuffer();
       return new Response(new Uint8Array(body), { status: 200, headers: { 'content-type': 'image/png' } });
     });
-    vi.stubGlobal('fetch', fetchMock);
+    const unpinned = useTransport(fetchMock);
     expectRefused(await run({ image: 'https://images.example.com/logo.svg', to: 'png' }), /SVG/);
     const ok = await run({ image: 'https://images.example.com/photo.png', to: 'jpeg' });
     expect(ok.images).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(unpinned).not.toHaveBeenCalled();
+  });
+
+  it('fetches only through the pinned transport (no second, unchecked DNS lookup) and never follows a redirect', async () => {
+    vi.mocked(assertSafePublicUrl).mockResolvedValue(undefined);
+    const transport = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://169.254.169.254/latest/meta-data/' } }));
+    const unpinned = useTransport(transport);
+    const res = await run({ image: 'https://images.example.com/moved.png' });
+    expect(res.images).toBeUndefined();
+    expect(res.content).toBe("Couldn't load the image: redirects are not followed.");
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(unpinned).not.toHaveBeenCalled();
+  });
+
+  it('a name that rebinds to a private address after the check is refused at connect time', async () => {
+    // The pre-connect check passed (mocked); the real pinned transport resolves again inside its
+    // lookup hook and refuses the loopback answer before any byte is sent.
+    vi.mocked(assertSafePublicUrl).mockResolvedValue(undefined);
+    restoreNet = __setNetForTests({ resolve: async () => [{ address: '127.0.0.1', family: 4 }] });
+    const unpinned = vi.fn(async () => new Response('unpinned fetch used', { status: 200 }));
+    vi.stubGlobal('fetch', unpinned);
+    const res = await run({ image: 'https://rebind.example.com/x.png' });
+    expect(res.images).toBeUndefined();
+    expect(res.content).toMatch(/^Couldn't load the image: /);
+    expect(unpinned).not.toHaveBeenCalled();
   });
 
   it('sharp must decode the bytes as the format they were sniffed as', async () => {
@@ -172,7 +213,7 @@ describe('convert_image: a fetched body is never read past the 12 MB cap', () =>
   const serve = (body: ReadableStream<Uint8Array>, headers: Record<string, string> = {}) => {
     vi.mocked(assertSafePublicUrl).mockResolvedValue(undefined);
     const fetchMock = vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'image/png', ...headers } }));
-    vi.stubGlobal('fetch', fetchMock);
+    useTransport(fetchMock);
     return fetchMock;
   };
   const expectTooLarge = (res: Awaited<ReturnType<typeof run>>) => {

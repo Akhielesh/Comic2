@@ -1,11 +1,14 @@
 import type { ChatTool, ToolExecResult } from './types.js';
 import sharp from 'sharp';
 import { assertSafePublicUrl } from './mcpClient.js';
+import { pinnedFetch } from './safeNet.js';
 import { allowedImageWords, checkImageBytes } from '../../services/sharpGuard.js';
 
 // `convert_image` — deterministic, NON-AI image conversion/resizing via sharp (libvips).
 // No AI touches the pixels: the model only picks the operation; sharp does the work.
-// Accepts an https image URL (SSRF-guarded) or a data:image/... URI, converts to
+// Accepts an https image URL (SSRF-guarded: public host checked, then fetched through pinnedFetch,
+// which connects only to the address its own lookup checked — no DNS-rebinding window — and never
+// follows a redirect) or a data:image/... URI, converts to
 // PNG/JPEG/WebP/AVIF and optionally resizes, and returns the result as a data URI.
 //
 // Input is admitted by its BYTES, never by the data-URI subtype or the URL's Content-Type
@@ -68,8 +71,14 @@ async function loadImage(input: string, signal?: AbortSignal): Promise<Buffer> {
     return buf;
   }
   if (/^https:\/\//i.test(s)) {
-    await assertSafePublicUrl(s); // SSRF guard: https + public host + rebind-safe
-    const resp = await fetch(s, { redirect: 'error', signal });
+    await assertSafePublicUrl(s); // SSRF guard: https + public host (a clear refusal before any connect)
+    // Connect through the pinned transport: the socket goes only to an address that passed the
+    // private-address check in the same lookup, so a rebinding answer after the check above is refused.
+    const resp = await pinnedFetch(s, { signal });
+    if (resp.status >= 300 && resp.status < 400) {
+      await resp.body?.cancel().catch(() => undefined);
+      throw new Error('redirects are not followed');
+    }
     if (!resp.ok) {
       await resp.body?.cancel().catch(() => undefined);
       throw new Error(`couldn't fetch the image (HTTP ${resp.status})`);
