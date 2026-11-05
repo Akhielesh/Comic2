@@ -323,10 +323,11 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     expect(screen.getByRole('dialog').textContent).not.toMatch(/gallery/i);
   });
 
-  it('choosing "Library + link" publishes ONE request with visibility public (listed and linked at once)', async () => {
+  it('choosing "Library + link" publishes ONE request with visibility public, then shows the link and the Library entry', async () => {
     const studio = studioWith(privateView());
     vi.mocked(api.publishComic).mockResolvedValue(view({ visibility: 'public' }));
-    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    const onClose = vi.fn();
+    const { rerender } = render(<ShareSheet studio={studio} open onClose={onClose} />);
     fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
@@ -334,6 +335,12 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     // The privacy confirm guards listing a LIVE link; from private, the panel is the one confirmation.
     expect(api.updatePublication).not.toHaveBeenCalled();
     await waitFor(() => expect(studio.refresh).toHaveBeenCalled());
+    // The owner view comes back listed and live: the sheet leaves the panel and leads with the link.
+    rerender(<ShareSheet studio={{ ...studio, publication: view({ visibility: 'public' }) }} open onClose={onClose} />);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull());
+    expect(screen.getByLabelText('Read-only link')).toHaveValue(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    expect(screen.getByRole('link', { name: 'See it in the Library' })).toHaveAttribute('href', '/?view=gallery');
+    expect(api.publishComic).toHaveBeenCalledTimes(1);
   });
 
   it('published as Library + link: the read-only link comes first, then a 44 px "See it in the Library" link to the public Library', () => {
