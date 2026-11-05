@@ -55,7 +55,7 @@ vi.mock('../ai/privacy/replyProvenance.js', async (importOriginal) => {
   return { ...actual, recordConnectorReply: vi.fn((userId: string | undefined, text: unknown) => actual.recordConnectorReply(userId, text)) };
 });
 
-const FREE_A = 'meta-llama/llama-3.3-70b-instruct:free';
+const FREE_A = 'vendor/free-a:free';
 vi.mock('../services/modelCatalog.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/modelCatalog.js')>();
   const textModel = (id: string, promptPerToken = 0, completionPerToken = 0) => ({
@@ -70,17 +70,22 @@ vi.mock('../services/modelCatalog.js', async (importOriginal) => {
   });
   return {
     ...actual,
-    getCatalog: async () => ({
-      models: [
-        textModel('meta-llama/llama-3.3-70b-instruct:free'),
-        textModel('qwen/qwen3-32b:free'),
-        textModel('vendor/smart', 0.000003, 0.000015),
-        textModel('google/gemini-2.5-flash', 0.0000003, 0.0000025),
-        textModel('openai/gpt-4o-mini', 0.00000015, 0.0000006)
-      ],
-      fetchedAt: Date.now(),
-      degraded: false
-    })
+    // The route's own default and paid-net models are priced under the ids the code uses (read lazily, at call time).
+    getCatalog: async () => {
+      const { OPENROUTER_TEXT_MODEL } = await import('../config.js');
+      const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
+      return {
+        models: [
+          textModel('vendor/free-a:free'),
+          textModel('vendor/free-b:free'),
+          textModel('vendor/smart', 0.000003, 0.000015),
+          textModel(OPENROUTER_TEXT_MODEL, 0.0000003, 0.0000025),
+          textModel(TEXT_FALLBACK, 0.00000015, 0.0000006)
+        ],
+        fetchedAt: Date.now(),
+        degraded: false
+      };
+    }
   };
 });
 vi.mock('../ai/autoRouter.js', async (importOriginal) => ({
