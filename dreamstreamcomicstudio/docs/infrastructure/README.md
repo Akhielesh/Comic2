@@ -11,7 +11,7 @@ Supabase + Cloudflare live APIs cross-checked against repo config).
 | **[ENV_MATRIX.md](./ENV_MATRIX.md)** | Every env var → its consumer → required/optional → cost impact. |
 | **[SECURITY_FINDINGS.md](./SECURITY_FINDINGS.md)** | Live security posture — Supabase advisor results + worker hardening to-dos, and the ADR 0006 findings (F1–F18) with their status. |
 | **[live-security-runbook.md](./live-security-runbook.md)** | Stream Studio security operations — secrets and rotation, R2 lifecycle, rate limits, the Supabase settings checklist, the APNs probe, what each Admin → Costs security / Phase 0 alert means, and the account-takeover playbook. |
-| **[request-surface-hardening.md](./request-surface-hardening.md)** | What the public request surface refuses or bounds (MCP servers in chat requests, public data-route limits, the SQL playground worker, key validation, the egress relay secret, main-app framing) and the deploy order it needs. |
+| **[request-surface-hardening.md](./request-surface-hardening.md)** | What the public request surface refuses or bounds (MCP servers in chat requests, public data-route limits, the SQL playground worker, the egress relay secret, main-app framing) and the deploy order it needs. |
 | **[phase0-owner-checklist.md](./phase0-owner-checklist.md)** | Every ADR 0006 Phase 0 step that needs the owner's accounts, with exact clicks and commands, in order. |
 
 ## Why this exists
