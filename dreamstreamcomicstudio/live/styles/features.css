@@ -1200,9 +1200,9 @@
 .studio-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .studio-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 5px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
 .studio-chip-mark { width: 16px; height: 16px; }   /* the marks' minimum size */
-.studio-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.studio-chip.st-open i { background: var(--green); }
-.studio-chip.st-needs_code i { background: var(--amber); }
+/* Only a studio that isn't open says so, in words ("One step", "Locked"). */
+.studio-chip-state { font-size: 11px; font-weight: 600; color: var(--muted); }
+.studio-chip.st-needs_code .studio-chip-state { color: var(--amber); }
 .studio-chip.st-locked { opacity: .65; }
 
 /* ---- tracker: the week at a glance ---- */

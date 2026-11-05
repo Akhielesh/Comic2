@@ -151,7 +151,7 @@ function NeedsCode({ push }: { push: PushToast }) {
   return (
     <GatePage title="One more step">
       <div className="gate-who">
-        <Avatar name={name || account.email || 'You'} size={36} />
+        <Avatar name={name || account.email || 'You'} size={36} self />
         <div className="gate-who-text">
           <span className="faint">Signed in as</span>
           <b>{name || account.email || 'your DreamStream account'}</b>

@@ -63,9 +63,13 @@ describe('Atlas skin tokens: text on every surface (AA 4.5:1)', () => {
         ['--on-accent', '--accent-2'], // solid button hover
         ['--bg', '--text'], // the toast, the phone tab bar's active pill
         ['#ffffff', '--live-fill'], // Go live, REC, End, missed-call badge, LIVE over video
-        ['#ffffff', '--green-solid'], // done steps, ready checks, the "video" call chip
+        ['#ffffff', '--green-solid'], // done steps, ready checks
         ['#ffffff', '--amber-solid'],
         ['--accent-ink', '--accent-wash'], // the selected nav row, accent pills
+        // Avatar initials on each of the three neutral tones (Avatar's data-tone).
+        ['--avatar-ink', '--avatar-0'],
+        ['--avatar-ink', '--avatar-1'],
+        ['--avatar-ink', '--avatar-2'],
       ];
       for (const [fg, bg] of pairs) expect(measure(c(fg, t), surface(bg, t)), `${fg} on ${bg} (${t})`).toBeGreaterThanOrEqual(AA);
     });

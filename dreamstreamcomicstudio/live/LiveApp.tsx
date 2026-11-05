@@ -221,7 +221,7 @@ function AccountButton({ onSettings, push, compact }: { onSettings: () => void; 
   return (
     <div className={cx('acct-wrap', compact && 'compact')}>
       <button className="rail-user" data-tour="account" onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-label="Account menu">
-        <Avatar name={name} size={32} />
+        <Avatar name={name} size={32} self />
         <div className="ru-txt">
           <div className="ru-name">{name}</div>
           <div className="ru-meta">{account.status === 'needs_code' ? 'Enter welcome code' : 'Signed in'}</div>
@@ -551,16 +551,10 @@ export function LiveApp() {
         </nav>
       )}
 
-      <div className={cx('content', !fullBleed && 'has-tabbar')} style={fullBleed ? { minHeight: '100vh' } : undefined}>
-        {gate !== 'open' ? (
-          <SignInGate gate={gate} view={route.view} finishing={authPending} push={push} />
-        ) : (
-          <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 140 }} aria-label="Loading" /></div>}>{screen()}</Suspense>
-        )}
-      </div>
-
       {/* Phones: compact top bar (brand, help, theme, account) and a thumb-reach bottom tab bar of
-          the five places — Help lives up here (and in the account menu), not in the tab bar. */}
+          the five places — Help lives up here (and in the account menu), not in the tab bar. The top
+          bar comes before the page in the DOM (it's fixed, so only the focus order changes): Tab
+          reaches it first, as it's drawn, then the page, then the tab bar. */}
       {!fullBleed && (
         <header className="mtop">
           <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Stream Studio — dashboard"><StudioLogo studio="stream" size="compact" /></button>
@@ -574,6 +568,14 @@ export function LiveApp() {
           <AccountButton onSettings={() => nav.settings()} push={push} compact />
         </header>
       )}
+
+      <div className={cx('content', !fullBleed && 'has-tabbar')} style={fullBleed ? { minHeight: '100vh' } : undefined}>
+        {gate !== 'open' ? (
+          <SignInGate gate={gate} view={route.view} finishing={authPending} push={push} />
+        ) : (
+          <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 140 }} aria-label="Loading" /></div>}>{screen()}</Suspense>
+        )}
+      </div>
       {!fullBleed && (
         <nav className="tabbar" aria-label="Main">
           {NAV_ITEMS.map((n) => (

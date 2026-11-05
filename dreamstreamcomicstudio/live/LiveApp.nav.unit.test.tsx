@@ -106,6 +106,14 @@ describe('the phone top bar', () => {
     expect(JSON.parse(localStorage.getItem('ds-live-appearance')!).theme).toBe('dark');
     expect(within(topbar()).getByRole('button', { name: 'Light mode' })).toBeTruthy();
   });
+
+  it('comes first in the focus order, as it is drawn: top bar, then the page, then the tab bar', async () => {
+    render(<LiveApp />);
+    await settle();
+    const page = document.querySelector('.content')!;
+    expect(topbar().compareDocumentPosition(page) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(page.compareDocumentPosition(tabbar()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe('the accent picker', () => {

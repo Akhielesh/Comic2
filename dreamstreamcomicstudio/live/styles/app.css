@@ -202,6 +202,22 @@
 @keyframes fadeUp { from { transform: translateY(8px); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
 
+/* ------------------------------------------------------------ touch areas */
+/* Touch screens: small controls get a ~44 px touch area without growing — an invisible hit slop
+   (::after) around them. A slop is never wider than the gap to the next control (a later sibling's
+   slop paints over an earlier one), so a tap inside a control's visible box always reaches it. */
+@media (pointer: coarse) {
+  :where(.ms-topbtn, .ms-x, .ms-chatbtn, .btn-sm, .linkish, .legal-links a, .gate-foot > a) { position: relative; }
+  :is(.ms-topbtn, .ms-x)::after { content: ''; position: absolute; inset: -7px -3px; }
+  .ms-chatbtn::after { content: ''; position: absolute; inset: -7px -5px; }
+  .btn-sm::after { content: ''; position: absolute; inset: -8px 0; }
+  .linkish::after { content: ''; position: absolute; inset: -14px -4px; }
+  /* Footer links (15 px tall): 45 px tall areas; a wrapped second row sits 30 px below the first,
+     so the two rows' areas meet instead of overlapping. */
+  :is(.legal-links a, .gate-foot > a)::after { content: ''; position: absolute; inset: -15px -4px; }
+  :is(.legal-links, .legal-links.compact, .gate-foot) { row-gap: 30px; }
+}
+
 /* ------------------------------------------------------------ accent menu */
 .accent-swatches { display: flex; gap: 8px; padding: 6px 11px 10px; }
 .acc-sw { width: 24px; height: 24px; border-radius: 7px; border: 2px solid transparent; cursor: pointer; transition: transform .1s; padding: 0; }

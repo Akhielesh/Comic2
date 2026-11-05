@@ -2,7 +2,7 @@
 // worker — cloud truth) and your recording downloads.
 import React, { useEffect, useMemo, useState } from 'react';
 import { probeLiveWorker, type LiveWorkerProbeResult } from '../api';
-import { addMyEvent, findMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
+import { addMyEvent, findMyEvent, hydrateMyEvents, listMyEvents, listMyRecordings, type MyEvent } from '../events';
 import { SaveSheet } from '../components/SaveSheet';
 import { listUnsavedRecordings, openUnsavedRecording, type FinishedRecording, type UnsavedRecording } from '../recorder';
 import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
@@ -136,7 +136,10 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
 
 export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [tab, setTab] = useState('all');
-  const [events, setEvents] = useState<MyEvent[]>([]);
+  // First paint = this browser's registry with its last cloud snapshot (status, viewers…), so the
+  // page arrives in its final layout (the live hero, the stats) instead of an empty state that jumps
+  // when the cloud answers; the hydrate below then refreshes the numbers in place.
+  const [events, setEvents] = useState<MyEvent[]>(listMyEvents);
   const [loaded, setLoaded] = useState(false);
   const [access, setAccess] = useState<StudioAccess | null>(null);
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);

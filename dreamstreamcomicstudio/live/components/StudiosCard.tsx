@@ -100,7 +100,9 @@ export function StudiosCard({ compact }: { compact?: boolean }) {
           <button key={s.id} className={cx('studio-chip', `st-${s.status}`)} onClick={() => go(s.action?.href ?? s.href)} title={`${s.label} — ${s.detail}`}>
             <StudioGlyph id={s.id} compact />
             <span>{s.label.replace(' & family calls', '')}</span>
-            <i aria-label={BADGE[s.status].text} />
+            {/* Open is the norm, so only an exception says anything — in words, not a coloured dot. */}
+            {/* The space keeps the button's name two words ("Comic Studio Locked"); a flex row doesn't draw it. */}
+            {s.status !== 'open' && <>{' '}<span className="studio-chip-state">{BADGE[s.status].text}</span></>}
           </button>
         ))}
       </div>

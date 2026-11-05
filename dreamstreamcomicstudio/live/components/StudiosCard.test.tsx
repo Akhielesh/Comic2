@@ -59,7 +59,11 @@ describe('StudiosCard', () => {
     const { container } = render(<StudiosCard compact />);
     await waitFor(() => expect(container.querySelector('.studio-chips')).toBeTruthy());
     const chips = [...container.querySelectorAll('.studio-chip')];
-    expect(chips.map((c) => c.textContent)).toEqual(['Comic Studio', 'Stream Studio', 'Baby monitor']);
+    // Open is the norm and says nothing; only the exception says so, in words (no coloured dot).
+    expect(chips.map((c) => c.textContent)).toEqual(['Comic Studio Locked', 'Stream Studio', 'Baby monitor']);
+    expect(chips[0].querySelector('.studio-chip-state')?.textContent).toBe('Locked');
+    expect(chips[0]).toHaveAccessibleName('Comic Studio Locked');
+    expect(container.querySelectorAll('.studio-chip i')).toHaveLength(0);
     expect(chips.map((c) => c.querySelector('svg.studio-chip-mark')?.getAttribute('data-studio') ?? null)).toEqual(['comic', 'stream', null]);
     expect(chips[0].getAttribute('title')).toBe('Comic Studio — Not part of your account yet');
   });

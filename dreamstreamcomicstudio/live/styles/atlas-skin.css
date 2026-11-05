@@ -147,6 +147,12 @@ html[data-ds-skin="atlas"] {
   --scrim:              rgba(0,0,0,0.40);
   --segment-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06);
   --tile-dark: linear-gradient(160deg, #525252, #262626);                  /* camera-off tile (studio.css) */
+  /* Avatars: the ink disc (the signed-in person, tone 0) and two greyscale steps for telling other
+     people apart (the Atlas chart ramp), initials in the page colour on all three. */
+  --avatar-0: var(--accent);
+  --avatar-1: #525252;
+  --avatar-2: #737373;
+  --avatar-ink: var(--on-accent);
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
   /* Motion: the --ds-* tokens when a shared motion file is loaded, Atlas's values otherwise. */
@@ -215,6 +221,10 @@ html[data-ds-skin="atlas"][data-theme="dark"] {
   --scrim:              rgba(0,0,0,0.60);
   --segment-pill-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08);
   --tile-dark: linear-gradient(160deg, #262626, #111111);
+  --avatar-0: var(--accent);
+  --avatar-1: #b8b8b8;
+  --avatar-2: #8a8a8a;
+  --avatar-ink: var(--on-accent);
 }
 
 /* Sharp corners stay a choice under the skin (the skin's radii would otherwise win over tokens.css). */
@@ -265,8 +275,8 @@ html[data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote) { text-wrap-st
 /* ============================================================== typography */
 /* Display face (Space Grotesk 600, Atlas page-title tracking) where the serif was: page titles,
    sheet / card titles that carried .serif, big numbers and the stage slates. */
-html[data-ds-skin="atlas"] :is(.serif, .page-title, .st-value, .nc-name, .mv-title, .mvs-state, .cam-sheet-head b,
-  .mv-takeover h2, .bs-clock, .viewer-slate .vs-title, .preview-slate .slate-title) {
+html[data-ds-skin="atlas"] :is(.serif, .page-title, .st-value, .bs-value, .nc-name, .mv-title, .mvs-state, .cam-sheet-head b,
+  .mv-takeover h2, .bs-clock, .viewer-slate .vs-title, .preview-slate .slate-title, .center-card h2, .ev-cal-d, .sk-initial) {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -291,6 +301,21 @@ html[data-ds-skin="atlas"] :is(.nav-sect, .inv-sect, .inv-sub, .save-label, .hel
 }
 /* A calendar tile's month is a date, not a status: ink, not red. */
 html[data-ds-skin="atlas"] .ev-cal-m { color: var(--muted); }
+/* Dates, times, sizes and counts: the chrome face with even-width figures (Atlas meta) — .mono and
+   the classes that name the monospace themselves (the live timer, chat and log times, the slate's
+   countdown, the stream-health numbers). The monospace stays only where the characters are the
+   point: codes, passcodes, links, file names, keys (.hotkey), log tags and the metrics overlay. */
+html[data-ds-skin="atlas"] :is(.mono, .st-timer, .cm-time, .log-time, .vs-count, .hs-value, .ht-value) {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+html[data-ds-skin="atlas"] :is(.input.mono, .lb-url, .invite-link, .inv-pass-shown .mono) {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+/* Buttons don't inherit the page font: the phone broadcaster's round buttons and the dashboard
+   thumbnail's LIVE badge (inside a button) name it, at a readable 10 px. */
+html[data-ds-skin="atlas"] :is(.ms-round, .ms-chatbtn, .ec-livebadge) { font-family: var(--font-sans); }
+html[data-ds-skin="atlas"] :is(.ms-round span, .ms-chatbtn, .ec-livebadge) { font-size: 10px; }
 
 /* ================================================================ controls */
 html[data-ds-skin="atlas"] .btn { font-weight: 500; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease), transform var(--motion-panel) var(--ease-spring); }
@@ -315,6 +340,32 @@ html[data-ds-skin="atlas"][data-theme="dark"] .seg.active { background: #1f1f1f;
 html[data-ds-skin="atlas"] .st-ic { color: var(--text); background: var(--panel-2); }
 /* Cover swatches and selected looks: the ink ring. */
 html[data-ds-skin="atlas"] .cover-sw.sel { border-color: var(--text); }
+/* Avatars: an ink disc with page-colour initials (Atlas), never a rainbow gradient; Avatar sets
+   data-tone (0 = the signed-in person) instead of its inline gradient under the skin. */
+html[data-ds-skin="atlas"] .avatar:not(.avatar-ghost) { background-color: var(--avatar-0); color: var(--avatar-ink); text-shadow: none; font-weight: 600; }
+html[data-ds-skin="atlas"] .avatar[data-tone="1"]:not(.avatar-ghost) { background-color: var(--avatar-1); }
+html[data-ds-skin="atlas"] .avatar[data-tone="2"]:not(.avatar-ghost) { background-color: var(--avatar-2); }
+/* On the always-dark call screens the dark theme's light discs, whatever the page theme. */
+html[data-ds-skin="atlas"] :is(.call-root, .call-mini, .call-ring) {
+  --avatar-0: #fafafa; --avatar-1: #b8b8b8; --avatar-2: #8a8a8a; --avatar-ink: #0a0a0a;
+}
+/* Call buttons are actions, not a status: a neutral voice chip, the ink video chip (green was decoration). */
+html[data-ds-skin="atlas"] .call-chip { background: var(--panel-2); color: var(--text); }
+html[data-ds-skin="atlas"] .call-chip:hover:not(:disabled) { background: var(--panel-3); }
+html[data-ds-skin="atlas"] .call-chip.video { background: var(--accent); color: var(--on-accent); }
+html[data-ds-skin="atlas"] .call-chip.video:hover:not(:disabled) { background: var(--accent-2); }
+/* "Go live now" on Create is the same action as the dashboard's ink button: ink, not red (red is
+   for the LIVE / REC state only). */
+html[data-ds-skin="atlas"] .qc-live .qc-icon { background: var(--accent-wash); color: var(--accent-ink); }
+html[data-ds-skin="atlas"] .qc-live .qc-cta { color: var(--accent-ink); }
+/* Reassurance lines ("— free", "no account needed") are not a status: muted ink beside their icon. */
+html[data-ds-skin="atlas"] .cost-line { color: var(--muted); }
+html[data-ds-skin="atlas"] .cost-line:not(.servers) svg { color: var(--text); }
+html[data-ds-skin="atlas"] .ev-noacct { color: var(--muted); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+/* Hard-coded corners snapped to the scale: badges 4, pills and controls 8, icon tiles 12. */
+html[data-ds-skin="atlas"] :is(.lh-live, .vj-live) { border-radius: var(--r-xs); }
+html[data-ds-skin="atlas"] :is(.ov-pill, .nc-act) { border-radius: var(--r-sm); }
+html[data-ds-skin="atlas"] :is(.qc-icon, .ci-icon) { border-radius: var(--r-lg); }
 
 /* ============================================================ status fills */
 /* LIVE / REC and every red badge carrying white: the one red fill. */
@@ -324,7 +375,7 @@ html[data-ds-skin="atlas"] :is(.btn-live, .tbtn.rec.on, .ms-end, .ms-round.rec-o
 }
 html[data-ds-skin="atlas"] .btn-live:hover:not(:disabled) { filter: none; background: color-mix(in srgb, var(--live-fill) 88%, #000); }
 /* Green / amber fills carrying white text or a white check. */
-html[data-ds-skin="atlas"] :is(.cam-check-dot, .setup-steps li.done .setup-num, .guard-dot, .ts-food b, .call-chip.video) {
+html[data-ds-skin="atlas"] :is(.cam-check-dot, .setup-steps li.done .setup-num, .guard-dot, .ts-food b) {
   --green: var(--green-solid);
   --amber: var(--amber-solid);
 }
@@ -332,7 +383,7 @@ html[data-ds-skin="atlas"] :is(.cam-check-dot, .setup-steps li.done .setup-num, 
 html[data-ds-skin="atlas"] :is(.lh-live, .vj-live, .ov-pill.live, .ov-pill.rec, .state-chip.tone-live) {
   background: color-mix(in srgb, var(--live-fill) 92%, transparent);
 }
-html[data-ds-skin="atlas"] .pv-ctl.off { background: color-mix(in srgb, var(--live-fill) 82%, transparent); }
+html[data-ds-skin="atlas"] :is(.pv-ctl.off, .ms-round.off) { background: color-mix(in srgb, var(--live-fill) 82%, transparent); }
 
 /* ================================================================== shell */
 html[data-ds-skin="atlas"] .rail { background: var(--sidebar); }
@@ -364,6 +415,8 @@ html[data-ds-skin="atlas"] .tab.active::after { background: var(--text); }
   html[data-ds-skin="atlas"] .tab-item.active { color: var(--text); background: none; font-weight: 600; }
   html[data-ds-skin="atlas"] .tab-item.active .tab-ic { background: var(--text); color: var(--bg); }
   html[data-ds-skin="atlas"] .tab-item .nav-badge { top: 0; left: calc(50% + 8px); }
+  /* The account menu keeps the 16 px page gutter (the top bar's right padding is 10 px). */
+  html[data-ds-skin="atlas"] .acct-wrap.compact .acct-menu { right: 6px; max-width: calc(100vw - 32px); }
 }
 
 /* ================================================================ overlays */
@@ -375,6 +428,9 @@ html[data-ds-skin="atlas"] :is(.sheet, .acct-menu, .tour-card, .help-panel, .emo
   border-color: var(--overlay-edge);
 }
 html[data-ds-skin="atlas"] .sheet-icon { background: var(--panel-2); color: var(--text); }
+/* The account menu is a popover: the 16 px corner (Atlas rounded-2xl), its rows nested at 10 px. */
+html[data-ds-skin="atlas"] .acct-menu { border-radius: var(--r-xl); }
+html[data-ds-skin="atlas"] .acct-menu button { border-radius: var(--r-md); }
 
 /* ============================================================ the stage room */
 /* The video stage and previews stay a dark room in both themes — neutral black, not warm. */
