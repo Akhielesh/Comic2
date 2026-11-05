@@ -17,6 +17,7 @@ import { streamPathOf } from '../usage/sessionMeter';
 import { IceClock } from '../rtcIce';
 import { ChatRail } from '../components/rails';
 import { Icon } from '../ui/icons';
+import { isImeComposing } from '../ui/hotkeys';
 import { StreamStudioLogo } from '../ui/logo';
 import { Btn, Pill, cx, useMediaQuery, type PushToast } from '../ui/primitives';
 
@@ -402,7 +403,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
                 placeholder={meeting ? 'Your name' : 'Your name (shown on the program)'}
                 aria-label={meeting ? 'Your name' : 'Guest name'}
                 onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && join()}
+                onKeyDown={(e) => e.key === 'Enter' && !isImeComposing(e) && join()}
               />
               <Btn variant="solid" icon={meeting ? 'users' : 'broadcast'} disabled={!name.trim() || !cam} onClick={join}>{meeting ? 'Join meeting' : 'Join'}</Btn>
             </div>
