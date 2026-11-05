@@ -13,6 +13,7 @@ import {
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
+import { InterestUnavailableError, registerInterest } from '../services/interestStore.js';
 import { resendPendingInvite } from '../services/invites.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
@@ -21,16 +22,20 @@ import { verifyTurnstile } from '../services/turnstile.js';
 // optionalAuth BEFORE the global requireAuth (like /api/telemetry), so the marketing site
 // can call it while signed out. Reads/writes go through the service role under the hood;
 // the client never sees tokens or the list.
+//
+// The current frontend registers newsletter interest through POST /api/interest
+// (routes/interest.ts); /subscribe with kind 'updates' stays for tabs still running the previous
+// frontend and shares its service (registerInterest), so both get the same per-recipient
+// confirmation throttle. /confirm and /unsubscribe serve both.
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const reqMeta = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
 
-// Prefer the configured public origin; fall back to the request's own origin so confirm
-// links still work before EMAIL_PUBLIC_BASE_URL is set.
-const baseUrl = (req: Request): string =>
-  EMAIL_PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
+// The configured public origin, else the app's. Never the request's Host header: a forged Host
+// would put an attacker's domain into a confirmation email we send to someone else.
+const baseUrl = (): string => EMAIL_PUBLIC_BASE_URL || APP_PUBLIC_URL;
 
 const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter=${encodeURIComponent(status)}`;
 
@@ -112,7 +117,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {}, intent);
 
       // Dedupe 2: already on the waitlist — soft success, no duplicate row, no re-email.
-      if (outcome === 'already_registered' || outcome === 'already_confirmed') {
+      if (outcome === 'already_registered') {
         return res.json({
           ok: true,
           status: 'already-registered',
@@ -133,16 +138,35 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       });
     }
 
-    // Newsletter double opt-in.
-    const token = newConfirmToken();
-    const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
-    if (outcome === 'already_confirmed') {
+    // Newsletter double opt-in (same service as POST /api/interest, so the same throttle).
+    const result = await registerInterest({
+      email,
+      studios: intent.productInterests ?? [],
+      source,
+      feedback: intent.feedback
+    });
+    if (result.outcome === 'confirmed') {
       return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
     }
-    const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
+    if (result.outcome === 'throttled') {
+      // No new email (abuse-ops-11): the earlier link still works.
+      return res.json({
+        ok: true,
+        message:
+          result.throttle.code === 'too_many'
+            ? 'We’ve already sent several confirmation emails to this address today — check your inbox and spam folder.'
+            : 'We sent you a confirmation link a few minutes ago — check your inbox and spam folder.'
+      });
+    }
+    const confirmUrl = `${baseUrl()}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${result.token}`;
     void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
+    // A database without the interest columns: 503, which the older client answers with its own
+    // direct insert (services/waitlist.ts) — the same as any other backend outage.
+    if (err instanceof InterestUnavailableError) {
+      return res.status(503).json({ ok: false, code: 'interest_unavailable', message: 'Signups are unavailable right now.' });
+    }
     next(err);
   }
 });
@@ -154,11 +178,12 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const token = String(req.query.t ?? '');
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
 
-    const confirmed = await confirmSubscriber(email, token);
-    if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
+    const outcome = await confirmSubscriber(email, token);
+    if (!outcome) return res.redirect(302, redirectToApp('invalid'));
 
-    // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    // Welcome is marketing → only goes out once they've opted in (here), and only on the click
+    // that actually opted them in (not on every later click of the same link).
+    if (outcome === 'confirmed') void sendNewsletterWelcome(email, undefined, reqMeta(req));
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

@@ -12,7 +12,7 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 
 | Email | Template | Kind | Trigger |
 |-------|----------|------|---------|
-| Newsletter confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/newsletter/subscribe` (kind=updates) |
+| Newsletter / register-interest confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/interest` (current form), `POST /api/newsletter/subscribe` (kind=updates, older tabs). Per-recipient throttle: none within 10 min of the last, max 3/day; no open pixel. |
 | Newsletter welcome | `newsletter-welcome` | marketing | clicking the confirm link |
 | Product update / broadcast | `product-update` | marketing | `sendProductUpdate(...)` |
 | Admin announcement / notice | `announcement` | essential | admin Email Console / `sendAnnouncement(...)` |
@@ -80,10 +80,14 @@ the worker, so authentication, branding and abuse-control live in one auditable 
 | `server/src/services/mailer.ts` | Backend send API: dormant-until-configured, hard cost cap, suppression, logging, unsubscribe + read-receipt links, typed helpers. |
 | `server/src/services/emailStore.ts` | Supabase (service-role) persistence: `email_log`, `email_suppressions`, waitlist double opt-in. |
 | `server/src/routes/newsletter.ts` | Public subscribe / confirm / unsubscribe (one-click GET + RFC 8058 POST). |
+| `server/src/routes/interest.ts` | Public `POST /api/interest` (register interest in studios: Turnstile, per-IP limit, double opt-in through the newsletter row) + admin `GET /api/admin/interest/summary` (counts only). |
+| `server/src/services/interestStore.ts` | Interest registration on the `kind='updates'` waitlist row: merged studio picks, the confirmation throttle, token reuse, missing-schema detection, the admin summary. |
+| `services/studioInterests.ts` | The one studio list for the form, the API and the SQL `CHECK` (pinned by `services/studioInterests.test.ts`). |
 | `server/src/routes/authEmail.ts` | Public auth emails (`/api/auth/email/{signup,resend,recovery,magiclink}`): GoTrue `generateLink` + our templates, Turnstile, per-recipient throttle. |
 | `server/src/services/authEmailLinks.ts` | Pure link builder + the strict link-origin allowlist (`APP_PUBLIC_URL` + `AUTH_LINK_ORIGINS`). |
 | `server/src/routes/email.ts` | Public open-tracking pixel. |
 | `server/sql/email_system.sql` | DB migration (log + suppression + double opt-in columns). |
+| `server/sql/register_interest_2026_11.sql` | Register interest: studio `CHECK` on `product_interests`, the summary RPC, the 30-day retention job for unconfirmed / unsubscribed rows, an `email_log` lookup index. |
 | `scripts/email-preview.ts` | Renders every template to `docs/email/previews/`. |
 
 ## Storage & logging

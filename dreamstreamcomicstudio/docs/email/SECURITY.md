@@ -12,6 +12,8 @@
 | **Injection in templates** | All dynamic values are `escapeHtml`-escaped; URLs pass `safeUrl` (http/https/mailto only — `javascript:`/`data:` neutralised to `#`). Covered by `shared/email/templates.test.ts`. |
 | **Auth-link hijack / account takeover** | The backend's auth emails (`/api/auth/email/*`) carry GoTrue `token_hash` links whose origin comes only from `APP_PUBLIC_URL` or the **exact** origins in `AUTH_LINK_ORIGINS` — never the CORS wildcard, which covers user-controlled `*.dreamstreamstudio.ai` preview hosts. A hostile `Origin` header is ignored. The raw `email_otp` is never mailed. |
 | **Auth-email abuse / enumeration** | `/api/auth/email/*`: Turnstile (a sent token must verify; sign-up needs one unless it's a live-app sign-up holding a valid welcome ticket), 10 requests / 10 min per IP, and a durable per-recipient throttle in `email_log` (1/min, 5/h, 10/day). `/resend`, `/recovery`, `/magiclink` answer identically for unknown addresses and never create accounts. Logs mask addresses. |
+| **Confirmation-email bombing (abuse-ops-11)** | `POST /api/interest` and `POST /api/newsletter/subscribe` (kind=updates) share `registerInterest` (`server/src/services/interestStore.ts`): Turnstile, 10 requests / 10 min per IP on `/api/interest`, and a durable per-recipient throttle on `newsletter-confirm` in `email_log` — none within 10 minutes of the last, at most 3 per day (failed or capped sends don't count; if the log can't be read, the row's `confirm_sent_at` still enforces the 10 minutes). A re-request inside the window re-sends nothing and reuses the still-valid token, so links already sent keep working. Confirm links are built from `EMAIL_PUBLIC_BASE_URL` / `APP_PUBLIC_URL`, never the request's `Host` header. |
+| **Interest list exposure** | Interest registrations live on the service-role-only `waitlist_signups` row; the admin summary (`GET /api/admin/interest/summary`, `requireAdmin`) returns counts per studio only — no address, token or note. Unconfirmed and unsubscribed rows are deleted after 30 days by `waitlist_interest_retention()` (pg_cron, `server/sql/register_interest_2026_11.sql`); unsubscribing clears the studio picks at once. |
 | **Spend abuse / runaway cost** | Hard caps (`EMAIL_MAX_PER_DAY` / `EMAIL_MAX_PER_MONTH`, default under the free tier) enforced before every send; over-cap sends are skipped + alerted, never delivered. Per-route rate limits apply (`systemRateLimit`). |
 | **Forged sign-in alerts** | `POST /security` (new-sign-in alerts from the Supabase access-token hook, ADR 0006) requires an `x-ds-signature` HMAC-SHA256 over `"<t>.<payload>"` with `SECURITY_HOOK_SECRET` (shared only with Supabase Vault and the live Worker), ±5 min; 503 when the secret is unset. IPs arrive already masked and are masked again; the "Not you?" link carries a one-time token whose SHA-256 is all the database keeps. |
 | **Secrets** | `EMAIL_HMAC_SECRET`, `SUPABASE_AUTH_HOOK_SECRET` and `SECURITY_HOOK_SECRET` live as Worker secrets (and, for the backend's copy of `EMAIL_HMAC_SECRET`, D1 `backend_env`), never in the repo. `.env*` is git-ignored (only `.env.example`). Rotation order: `docs/infrastructure/live-security-runbook.md` §1. |
@@ -38,7 +40,9 @@ Marketing **and** essential mail can embed a 1×1 open-tracking pixel
 block remote images or pre-fetch them, so opens are a weak signal, not proof of reading. The
 pixel only records the open timestamp against our own log row — no third-party tracker, no
 profile, no cross-site cookies. To disable tracking entirely, leave `EMAIL_PUBLIC_BASE_URL`
-unset (no pixel URL is generated) or strip `params.pixelUrl` in the mailer.
+unset (no pixel URL is generated) or strip `params.pixelUrl` in the mailer. Mail that carries a
+one-time link sends no pixel (`track: false`): the auth emails and the double opt-in
+`newsletter-confirm`.
 
 ## Bot protection — Cloudflare Turnstile
 

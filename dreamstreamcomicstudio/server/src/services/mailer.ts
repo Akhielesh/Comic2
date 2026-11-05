@@ -195,8 +195,10 @@ const meta = (req?: { userId?: string | null; requestId?: string | null }) => ({
   requestId: req?.requestId ?? null
 });
 
+// No read-receipt pixel on the double opt-in email (like auth mail): it carries a one-time link
+// for someone who hasn't agreed to anything yet, so we don't record whether they opened it.
 export const sendNewsletterConfirm = (email: string, confirmUrl: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
-  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, ...meta(req) });
+  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, track: false, ...meta(req) });
 
 export const sendNewsletterWelcome = (email: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
   sendEmail({ to: email, template: 'newsletter-welcome', params: { firstName }, ...meta(req) });
