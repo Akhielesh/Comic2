@@ -828,3 +828,81 @@ describe('WS-7 edge gates: Origin allowlist and rate limits on sockets', () => {
     clearMemberCache();
   });
 });
+
+describe('invite-page RSVPs at the edge (abuse-ops-13)', () => {
+  beforeEach(() => resetEdgeState());
+
+  const rsvp = (w: ReturnType<typeof edgeWorld>, ip: string, body = JSON.stringify({ name: 'Grandma' }), id = 'abc123') =>
+    w.go(`/api/events/${id}/rsvp`, { method: 'POST', body, headers: { 'cf-connecting-ip': ip, 'content-type': 'application/json' } });
+
+  it('3 a minute per address and event, an IPv6 /64 counting as one address; the room is never woken for a refusal', async () => {
+    const c = counter(3);
+    const w = edgeWorld({ RL_RSVP: c.rl });
+    const statuses: number[] = [];
+    for (let i = 1; i <= 5; i++) statuses.push((await rsvp(w, `2001:db8:44:1::${i}`)).status);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(2);
+    expect(w.roomHits('/rsvp')).toHaveLength(3);
+    const refused = await rsvp(w, '2001:db8:44:1::99');
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get('retry-after')).toBe('60');
+    expect(await refused.json()).toMatchObject({ error: 'rate_limited' });
+    expect([...c.n.keys()]).toEqual(['edge:rsvp:abc123:6:2001:0db8:0044:0001']);
+    // Another event, and another network, have their own allowance.
+    await rsvp(w, '2001:db8:44:1::1', undefined, 'def456');
+    await rsvp(w, '198.51.100.9');
+    expect(w.roomHits('/rsvp')).toHaveLength(5);
+    expect(c.n.get('edge:rsvp:def456:6:2001:0db8:0044:0001')).toBe(1);
+    expect(c.n.get('edge:rsvp:abc123:4:198.51.100.9')).toBe(1);
+  });
+
+  it('refuses an oversized body before the limiter or the room, and forwards exactly what was sent', async () => {
+    const c = counter(3);
+    const w = edgeWorld({ RL_RSVP: c.rl });
+    const big = await rsvp(w, '203.0.113.5', JSON.stringify({ name: 'x'.repeat(600) }));
+    expect(big.status).toBe(413);
+    expect(c.n.size).toBe(0);
+    expect(w.roomHits('/rsvp')).toHaveLength(0);
+    await rsvp(w, '203.0.113.5', '{"name":"Ana"}');
+    expect(w.roomHits('/rsvp')[0].body).toBe('{"name":"Ana"}');
+    // The room learns the sender from the Worker, never from the client.
+    expect(w.roomHits('/rsvp')[0].headers.get('x-rsvp-client')).toBe('4:203.0.113.5');
+    await w.go('/api/events/abc123/rsvp', {
+      method: 'POST',
+      body: '{"name":"Raj"}',
+      headers: { 'cf-connecting-ip': '198.51.100.7', 'x-rsvp-client': '4:1.2.3.4', 'content-type': 'application/json' },
+    });
+    expect(w.roomHits('/rsvp')[1].headers.get('x-rsvp-client')).toBe('4:198.51.100.7');
+  });
+
+  it('a streamed body with no Content-Length is counted as it arrives and cut off past 512 bytes', async () => {
+    const w = edgeWorld();
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new TextEncoder().encode('x'.repeat(200));
+    const endless = new ReadableStream<Uint8Array>({
+      pull(ctl) {
+        pulled++;
+        ctl.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await w.go('/api/events/abc123/rsvp', {
+      method: 'POST',
+      body: endless,
+      headers: { 'cf-connecting-ip': '203.0.113.5', 'content-type': 'application/json' },
+      duplex: 'half',
+    } as RequestInit & { headers: Record<string, string> });
+    expect(res.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(5); // 3 chunks pass the cap; a stream is never read to the end
+    expect(w.roomHits('/rsvp')).toHaveLength(0);
+  });
+
+  it('fails open without the binding, as every edge limit does', async () => {
+    const w = edgeWorld();
+    for (let i = 0; i < 5; i++) await rsvp(w, '203.0.113.5');
+    expect(w.roomHits('/rsvp')).toHaveLength(5);
+  });
+});

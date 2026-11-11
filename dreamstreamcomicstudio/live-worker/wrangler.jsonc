@@ -56,7 +56,10 @@
     { "name": "RL_GUEST", "namespace_id": "60602", "simple": { "limit": 10, "period": 60 } },
     { "name": "RL_GUEST_NID", "namespace_id": "60603", "simple": { "limit": 30, "period": 60 } },
     // Creating a Stream Studio event, per account (each one is a new Durable Object).
-    { "name": "RL_EVENT", "namespace_id": "60604", "simple": { "limit": 10, "period": 60 } }
+    { "name": "RL_EVENT", "namespace_id": "60604", "simple": { "limit": 10, "period": 60 } },
+    // Invite-page RSVPs (no account needed), per address and event (abuse-ops-13). The room also
+    // refuses links as names and caps new names per event per hour (src/eventRoom.ts).
+    { "name": "RL_RSVP", "namespace_id": "60605", "simple": { "limit": 3, "period": 60 } }
   ],
 
   "vars": {

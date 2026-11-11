@@ -6,7 +6,7 @@
 // invitePoll.ts: ≤ 12 requests per waiting tab-hour), never while the tab is
 // hidden, and once more when you come back to it.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { getEvent, rsvpEvent } from '../api';
+import { getEvent, rsvpEvent, RsvpRefused } from '../api';
 import { loadViewerName, saveViewerName } from '../events';
 import { canLookNow, planInviteCheck, pruneLooks } from '../invitePoll';
 import type { Nav } from '../nav';
@@ -143,8 +143,8 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
         setRsvped(true);
         setMeta((m) => (m ? { ...m, rsvpCount: res.rsvpCount } : m));
         push("You're on the list — see you there", { icon: 'check' });
-      } catch {
-        push('Could not save your spot — try again', { icon: 'alert' });
+      } catch (err) {
+        push(err instanceof RsvpRefused ? err.message : 'Could not save your spot — try again', { icon: 'alert' });
       }
     } else {
       nav.viewer(meta.id);

@@ -208,7 +208,40 @@ export const LIVE_WATCHDOG_MS = 10 * 60_000;
 /** A sweep that can't empty R2 retries hourly; past this it stops trying (R2's lifecycle rule takes the rest). */
 export const SWEEP_GRACE_MS = 2 * 24 * 60 * 60_000;
 const HEALTH_MIN_INTERVAL_MS = 20_000;
-const RSVP_CAP = 500;
+/** Names an invite's list holds. Once full, new names are refused — a flood never pushes real guests off. */
+export const RSVP_CAP = 500;
+/** New names one sender (IPv4 address / IPv6 /64, named by the edge) adds to an event in an hour (abuse-ops-13). */
+export const RSVP_NEW_PER_CLIENT_PER_HOUR = 10;
+/**
+ * New names an event takes in an hour from everyone: a backstop for a flood spread over many
+ * networks. A real invite never comes close; one sender alone can no longer reach it.
+ */
+export const RSVP_NEW_PER_HOUR = 120;
+const RSVP_WINDOW_MS = 60 * 60_000;
+type RsvpWindow = { at: number; n: number; by?: Record<string, { at: number; n: number }> };
+/**
+ * A link where a name should be (abuse-ops-13): the names are shown on the public invite page and
+ * in the host's activity log, so a name may not advertise a site. Read after NFKC folding (a
+ * fullwidth `．` is a `.`) with the ideographic full stops browsers also accept as dots mapped
+ * to `.`. Refused: a scheme, `www.`, a dotted IPv4 address, `word.tld` with a common TLD, any
+ * `word.word` with a path, and any other dot joining two runs of 2+ letters or digits (`evil.fun`,
+ * `evil.store`) — except after an honorific (`Mrs.Cole`, `St.Louis`, `Dr.Ana`). `J.R. Smith`,
+ * `A.J.`, `Dr. Ana` and `@handle` stay fine.
+ */
+const LINK_IN_NAME =
+  /(?:[a-z][a-z0-9+.-]*:\/\/|\bwww\.|\b\d{1,3}(?:\.\d{1,3}){3}\b|[a-z0-9-]{2,}\.(?:com|net|org|io|ai|co|app|dev|me|info|biz|xyz|ly|gg|tk|ru|cn|link|site|online|top|shop|club|live|tv|to|cc|us|uk|de|in)\b|[\p{L}\p{N}-]+\.[\p{L}]{2,}\/)/iu;
+/** A dot between two runs of letters / digits; the right run is only looked at, so `a.b.c` is checked pair by pair. */
+const DOTTED_PAIR = /([\p{L}\p{N}-]+)\.(?=\p{L}{2,})/gu;
+const HONORIFICS = new Set(['mr', 'mrs', 'ms', 'mx', 'dr', 'st', 'ste', 'mt', 'ft', 'jr', 'sr', 'prof', 'rev', 'fr', 'sgt', 'capt', 'lt', 'col', 'gen', 'hon', 'sen', 'rep', 'gov', 'pres', 'mme', 'mlle']);
+export const rsvpNameHasLink = (name: string): boolean => {
+  const folded = name.normalize('NFKC').replace(/[\u3002\uff0e\uff61]/g, '.');
+  if (LINK_IN_NAME.test(folded)) return true;
+  for (const m of folded.matchAll(DOTTED_PAIR)) {
+    const left = m[1].toLowerCase();
+    if (left.replace(/-/g, '').length >= 2 && !HONORIFICS.has(left)) return true;
+  }
+  return false;
+};
 const REC_CAP = 20;
 /** Platform ceiling — hosts can set any cap up to this, never beyond. */
 export const HARD_VIEWER_CAP = 200;
@@ -813,10 +846,38 @@ export class EventRoom {
     const { name } = (await req.json().catch(() => ({}))) as { name?: string };
     const clean = String(name ?? '').trim().slice(0, 24);
     if (!clean) return json({ error: 'name required' }, 400);
+    if (rsvpNameHasLink(clean)) return json({ error: 'name_not_allowed', message: 'Add your name — links aren’t allowed here.' }, 400);
     const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
     if (!rsvps.includes(clean)) {
+      // A name already on the list costs nothing; only new names count, per sender and per event.
+      if (rsvps.length >= RSVP_CAP) {
+        return json({ error: 'rsvp_full', message: 'This invite’s guest list is full.' }, 409);
+      }
+      const now = Date.now();
+      const busy = (since: number, message: string) =>
+        new Response(JSON.stringify({ error: 'rsvp_busy', message }), {
+          status: 429,
+          headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, Math.ceil((since + RSVP_WINDOW_MS - now) / 1000))) },
+        });
+      const stored = await this.state.storage.get<RsvpWindow>('rsvpWindow');
+      const win = stored && now - stored.at < RSVP_WINDOW_MS ? stored : { at: now, n: 0 };
+      // Per-sender windows still open (at most one entry per new name this hour, so ≤ RSVP_NEW_PER_HOUR).
+      const prior: NonNullable<RsvpWindow['by']> = stored?.by ?? {};
+      const by: NonNullable<RsvpWindow['by']> = {};
+      for (const [k, v] of Object.entries(prior)) if (now - v.at < RSVP_WINDOW_MS) by[k] = v;
+      // The sender, as the edge names it (x-rsvp-client: never a client header — the Worker builds
+      // the room request). Without it (no address seen) only the per-event backstop applies.
+      const client = (req.headers.get('x-rsvp-client') ?? '').slice(0, 80);
+      const mine = client ? (by[client] ?? { at: now, n: 0 }) : null;
+      if (mine && mine.n >= RSVP_NEW_PER_CLIENT_PER_HOUR) {
+        return busy(mine.at, 'That’s a lot of spots saved from here — try again in a little while.');
+      }
+      if (win.n >= RSVP_NEW_PER_HOUR) {
+        return busy(win.at, 'This invite is taking a lot of new names right now — try again in a little while.');
+      }
+      if (client && mine) by[client] = { at: mine.at, n: mine.n + 1 };
       rsvps.push(clean);
-      await this.state.storage.put('rsvps', rsvps.slice(-RSVP_CAP));
+      await this.state.storage.put({ rsvps, rsvpWindow: { at: win.at, n: win.n + 1, by } satisfies RsvpWindow });
       await this.addLog('join', 'RSVP', `“${clean}” saved a spot`);
     }
     return json({ ok: true, rsvpCount: rsvps.length });

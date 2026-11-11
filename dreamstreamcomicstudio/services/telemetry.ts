@@ -11,7 +11,7 @@
 //   reconstructed even before the user logs in.
 
 import { buildApiUrl } from './clientConfig';
-import { post } from './apiClient';
+import { getCachedAuthToken, post } from './apiClient';
 import type { TelemetryEventInput, TelemetrySource } from '../apiTypes';
 
 const SESSION_KEY = 'ds_telemetry_session_id';
@@ -133,15 +133,45 @@ export const flushTelemetry = async (): Promise<void> => {
   }
 };
 
-// On page hide, use sendBeacon so in-flight events survive an unload (fetch would be
-// cancelled). sendBeacon can't attach the auth header, so these land as anonymous —
-// acceptable for last-gasp delivery; the bulk ships via the authenticated interval flush.
+// On page hide the queue must leave before the tab can be frozen or closed. Signed in, it goes
+// as keepalive fetches carrying the bearer token (same origin, so no preflight), in batches the
+// server keeps whole for an account (50) — so a signed-in session's events, info ones such as
+// chat_turn included, are stored as that account's, not refused as anonymous (abuse-ops-3 keeps
+// only warn and above from signed-out senders). sendBeacon cannot set that header: it stays the
+// signed-out path, and the fallback past the browser's keepalive quota (64 KB in flight, shared
+// by every keepalive request of the page).
+const KEEPALIVE_MAX_BYTES = 60_000;
+
 const beaconFlush = () => {
   safe(() => {
-    if (queue.length === 0 || typeof navigator === 'undefined' || !navigator.sendBeacon) return;
+    if (queue.length === 0 || typeof navigator === 'undefined') return;
     const batch = queue.splice(0, MAX_QUEUE);
+    const url = buildApiUrl('/api/telemetry/events');
+    const token = getCachedAuthToken();
+    if (token && typeof fetch === 'function') {
+      let keepaliveBytes = 0;
+      for (let i = 0; i < batch.length; i += MAX_BATCH) {
+        const body = JSON.stringify({ events: batch.slice(i, i + MAX_BATCH) });
+        const size = new Blob([body]).size;
+        if (keepaliveBytes + size <= KEEPALIVE_MAX_BYTES) {
+          keepaliveBytes += size;
+          safe(() => {
+            void fetch(url, {
+              method: 'POST',
+              keepalive: true,
+              headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+              body
+            }).catch(() => undefined);
+          });
+        } else if (navigator.sendBeacon) {
+          safe(() => navigator.sendBeacon(url, new Blob([body], { type: 'application/json' })));
+        }
+      }
+      return;
+    }
+    if (!navigator.sendBeacon) return;
     const blob = new Blob([JSON.stringify({ events: batch })], { type: 'application/json' });
-    navigator.sendBeacon(buildApiUrl('/api/telemetry/events'), blob);
+    navigator.sendBeacon(url, blob);
   });
 };
 

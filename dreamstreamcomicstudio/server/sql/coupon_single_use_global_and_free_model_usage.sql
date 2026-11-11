@@ -203,6 +203,9 @@ begin
 end;
 $$;
 
-revoke all on function public.free_tier_try_consume_model_usage(uuid, text, date, integer) from public;
-grant execute on function public.free_tier_try_consume_model_usage(uuid, text, date, integer) to authenticated;
+-- Server-only: the backend calls it through the service-role client (services/modelAccessPolicy.ts).
+-- It trusts p_user_id, so a client must never be able to call it. This file used to grant
+-- `authenticated` here, which re-opened production's lockdown on a re-run; it now matches
+-- definer_lockdown_billing_2026_11.sql.
+revoke all on function public.free_tier_try_consume_model_usage(uuid, text, date, integer) from public, anon, authenticated;
 grant execute on function public.free_tier_try_consume_model_usage(uuid, text, date, integer) to service_role;

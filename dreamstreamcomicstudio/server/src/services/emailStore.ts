@@ -132,31 +132,50 @@ export const suppress = async (
 };
 
 export interface EmailUsage {
+  /** Every template, sent (or in flight) this UTC day / month. */
   day: number;
   month: number;
+  /** The auth-* templates alone (abuse-ops-4: they have a reserve the rest cannot use). */
+  authDay: number;
+  authMonth: number;
 }
 
-/** Count emails actually SENT in the current UTC day + month (drives the hard cap). */
+/** Templates that count as auth mail for the reserve: every `auth-*` template. */
+export const isAuthTemplate = (template: string): boolean => template.startsWith('auth-');
+
+/**
+ * Count emails sent — or going out now (`queued`: logged, the email Worker not yet answered) — in
+ * the current UTC day + month, in all and for auth mail (drives the hard cap and the auth reserve).
+ * In-flight sends count so that parallel requests cannot all pass the same check; a send that fails
+ * is patched to `failed` and drops out.
+ */
 export const getUsage = async (): Promise<EmailUsage> => {
   const db = adminOrNull();
-  if (!db) return { day: 0, month: 0 };
+  if (!db) return { day: 0, month: 0, authDay: 0, authMonth: 0 };
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
-  const count = async (since: string): Promise<number> => {
+  const count = async (since: string, authOnly: boolean): Promise<number> => {
     try {
-      const { count: c } = await db
+      let query = db
         .from('email_log')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'sent')
+        .in('status', ['queued', 'sent'])
         .gte('created_at', since);
+      if (authOnly) query = query.like('template', 'auth-%');
+      const { count: c } = await query;
       return c ?? 0;
     } catch {
       return 0;
     }
   };
-  const [day, month] = await Promise.all([count(dayStart), count(monthStart)]);
-  return { day, month };
+  const [day, month, authDay, authMonth] = await Promise.all([
+    count(dayStart, false),
+    count(monthStart, false),
+    count(dayStart, true),
+    count(monthStart, true)
+  ]);
+  return { day, month, authDay, authMonth };
 };
 
 // ── Per-recipient auth-email throttle (routes/authEmail.ts) ─────────────────────
@@ -313,8 +332,81 @@ export const upsertSubscriber = async (
   return { outcome: 'new' };
 };
 
-/** Verify a confirm token and flip the row to confirmed. Returns true on success. */
-export const confirmSubscriber = async (email: string, token: string): Promise<boolean> => {
+// ── Newsletter confirm re-send throttle (abuse-ops-11) ──────────────────────────
+// Re-submitting a pending address re-issues its token and mails a fresh confirm link. Without a
+// throttle anyone can make us mail a stranger's inbox on a loop. Fails open (false): a lookup
+// hiccup must not block a real sign-up, and the mailer's caps still stand behind this.
+export const NEWSLETTER_CONFIRM_MIN_INTERVAL_MS = 10 * 60_000;
+export const NEWSLETTER_CONFIRM_MAX_PER_DAY = 3;
+
+/**
+ * True when a confirm email must NOT be re-sent to this pending address now: one went out (or is
+ * going out) under 10 minutes ago, or 3 did in the last 24 hours — both read from email_log
+ * (template newsletter-confirm, status queued or sent), so a confirm the mailer refused or that
+ * failed at the email Worker never blocks a retry. The caller then leaves the row — and its live
+ * token — alone, so the link already in the inbox keeps working. A confirmed or unknown address
+ * is never throttled here (upsertSubscriber answers those).
+ */
+export const newsletterConfirmThrottled = async (email: string, now = Date.now()): Promise<boolean> => {
+  const db = adminOrNull();
+  if (!db) return false;
+  const normalized = normalizeEmail(email);
+  try {
+    const { data: row } = await db
+      .from('waitlist_signups')
+      .select('confirmed')
+      .eq('email', normalized)
+      .eq('kind', 'updates')
+      .limit(1)
+      .maybeSingle();
+    const existing = row as { confirmed?: boolean } | null;
+    if (!existing || existing.confirmed) return false;
+    const { data: sends, error } = await db
+      .from('email_log')
+      .select('created_at')
+      .eq('to_email', normalized)
+      .eq('template', 'newsletter-confirm')
+      .in('status', ['queued', 'sent'])
+      .gte('created_at', new Date(now - 24 * 3_600_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(NEWSLETTER_CONFIRM_MAX_PER_DAY);
+    if (error) return false;
+    const recent = (sends as { created_at?: string }[] | null) ?? [];
+    if (recent.length >= NEWSLETTER_CONFIRM_MAX_PER_DAY) return true;
+    const last = recent[0]?.created_at ? Date.parse(recent[0].created_at) : NaN;
+    return Number.isFinite(last) && now - last < NEWSLETTER_CONFIRM_MIN_INTERVAL_MS;
+  } catch (err) {
+    console.warn('[email] newsletterConfirmThrottled error', (err as Error)?.message);
+    return false;
+  }
+};
+
+/**
+ * Merge newly provided intent (product interests / feedback) onto an existing waitlist row, and
+ * nothing else — what a re-submit records even when its confirm email is throttled. Fields not
+ * sent are left as they are. Best-effort.
+ */
+export const mergeSubscriberIntent = async (email: string, kind: 'updates' | 'access', intent?: SubscriberIntent): Promise<void> => {
+  const db = adminOrNull();
+  const cols = sanitizeIntent(intent);
+  if (!db || !Object.keys(cols).length) return;
+  try {
+    await db.from('waitlist_signups').update(cols).eq('email', normalizeEmail(email)).eq('kind', kind);
+  } catch (err) {
+    console.warn('[email] mergeSubscriberIntent error', (err as Error)?.message);
+  }
+};
+
+/**
+ * What a confirm click did: `'confirmed'` — this request's live token flipped the pending row (the
+ * only outcome that may send the welcome); `'already'` — the row was already confirmed (any `t`
+ * reaches this, so it must never mail anyone) or another click flipped it first; `false` — no such
+ * row, a wrong or expired token, or the flip failed.
+ */
+export type ConfirmOutcome = 'confirmed' | 'already' | false;
+
+/** Verify a confirm token and flip the row to confirmed. */
+export const confirmSubscriber = async (email: string, token: string): Promise<ConfirmOutcome> => {
   const db = adminOrNull();
   if (!db || !token) return false;
   const normalized = normalizeEmail(email);
@@ -327,7 +419,9 @@ export const confirmSubscriber = async (email: string, token: string): Promise<b
     .maybeSingle();
   if (!data) return false;
   const row = data as { id: string; confirm_token: string | null; confirmed: boolean; confirm_sent_at: string | null };
-  if (row.confirmed) return true; // already confirmed — treat as success (idempotent link)
+  // Already confirmed: the link stays idempotent for the person (they land on "confirmed"), but the
+  // token is not checked here, so this outcome sends nothing.
+  if (row.confirmed) return 'already';
   // Constant-time token comparison.
   const a = Buffer.from(row.confirm_token || '');
   const b = Buffer.from(token);
@@ -341,11 +435,19 @@ export const confirmSubscriber = async (email: string, token: string): Promise<b
       return false;
     }
   }
-  await db
+  // Flip only a row that is still pending: two clicks at once (a mail scanner's prefetch and the
+  // person) both pass the token check, and only the one whose update changed the row confirmed it.
+  const { data: flipped, error } = await db
     .from('waitlist_signups')
     .update({ confirmed: true, confirmed_at: new Date().toISOString(), confirm_token: null })
-    .eq('id', row.id);
-  return true;
+    .eq('id', row.id)
+    .eq('confirmed', false)
+    .select('id');
+  if (error) {
+    console.warn('[email] confirmSubscriber update error', error.message);
+    return false; // the token is untouched, so the same link works on a retry
+  }
+  return Array.isArray(flipped) && flipped.length > 0 ? 'confirmed' : 'already';
 };
 
 /** Stamp the waitlist row(s) unsubscribed and add the address to the suppression list. */

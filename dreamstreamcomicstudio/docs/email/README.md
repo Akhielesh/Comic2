@@ -97,6 +97,9 @@ the read-receipt store, and the source of truth for the cost cap. Opt-outs live 
 
 The mailer refuses to send past `EMAIL_MAX_PER_DAY` (default 200) / `EMAIL_MAX_PER_MONTH`
 (default **2,500**, below Cloudflare's free 3,000/mo). Hitting a cap logs the send as
-`rate_limited` and prints a `[email][COST-CAP]` alert; crossing 80% prints a `[email][COST]`
-warning. You **cannot** be billed for overage unless you deliberately raise the monthly cap
+`rate_limited` and prints a `[email][COST-CAP]` alert; crossing 50% and 80% prints one
+`[email][COST]` warning each. Part of each cap is reserved for auth mail
+(`EMAIL_AUTH_RESERVE_PER_DAY` 50 / `_PER_MONTH` 500): newsletter, invite and access-request mail
+stops before it, and mail a signed-out request triggers is capped per IPv4 address / IPv6 /64
+(`EMAIL_ANON_MAX_PER_CLIENT_PER_DAY`, 10). You **cannot** be billed for overage unless you deliberately raise the monthly cap
 above 3,000. Details in [`cloudflare-email-cost-and-limits.md`](./cloudflare-email-cost-and-limits.md).

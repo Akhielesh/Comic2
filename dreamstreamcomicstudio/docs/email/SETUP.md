@@ -92,7 +92,8 @@ The Send Email Hook (§5) brands those too if they're ever turned on.
   backward-compatible: an older Worker ignores `brand` and sends DreamStream branding.
 - Auth mail now counts toward `EMAIL_MAX_PER_DAY` (default 200) and `EMAIL_MAX_PER_MONTH`
   (2,500). When a cap is reached, auth email falls back to Supabase until the next day/month,
-  so keep headroom.
+  so keep headroom. Since 2026-11 the last `EMAIL_AUTH_RESERVE_PER_DAY` (50) /
+  `EMAIL_AUTH_RESERVE_PER_MONTH` (500) of each cap is auth-only: other mail cannot reach it.
 - Smoke test: "Forgot password" on the site → a branded email from `no-reply@dreamstreamstudio.ai`
   arrives; `email_log` has an `auth-recovery` row with status `sent`; the backend log shows
   `[auth-email] recovery → y***@domain sent (recovery)`. Asking again within a minute answers
@@ -168,6 +169,11 @@ The backend runs as the `dreamstream-api` Worker's container (see
 EMAIL_HMAC_SECRET=<the SAME value you put on the worker in step 3>
 EMAIL_MAX_PER_DAY=200
 EMAIL_MAX_PER_MONTH=2500     # keep < 3000 to stay free; raising it past 3000 risks charges
+# Optional (defaults shown): kept for auth-* mail; other templates stop at cap − reserve.
+EMAIL_AUTH_RESERVE_PER_DAY=50
+EMAIL_AUTH_RESERVE_PER_MONTH=500
+# Optional: mail a signed-out request triggers, per IPv4 address / IPv6 /64 per day.
+EMAIL_ANON_MAX_PER_CLIENT_PER_DAY=10
 ```
 
 > `EMAIL_PUBLIC_BASE_URL` is **required for marketing mail** (it builds the working

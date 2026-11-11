@@ -53,10 +53,42 @@ backend enforces its own hard ceiling** before every send (`server/src/services/
 - `EMAIL_MAX_PER_DAY` — default **200**
 
 When a cap is hit the send is **skipped** (logged `status='rate_limited'`) and a
-`[email][COST-CAP]` line is written to the server logs. At ≥80% of the monthly cap a
-`[email][COST]` warning fires. **You cannot incur overage charges unless you deliberately
-raise `EMAIL_MAX_PER_MONTH` above 3,000.** Usage is countable any time from `email_log`
-(`status='sent'`) or via `getEmailUsageStatus()`.
+`[email][COST-CAP]` line is written to the server logs. At 50% and again at 80% of each cap a
+single `[email][COST]` warning fires (once per day / month, not once per send).
+
+**Auth reserve (2026-11, abuse-ops-4).** Part of each cap is kept for auth mail (every `auth-*`
+template: sign-up confirm, password reset, magic link …), so mail a stranger can trigger can never
+use up what sign-in needs:
+
+- `EMAIL_AUTH_RESERVE_PER_DAY` — default **50**; `EMAIL_AUTH_RESERVE_PER_MONTH` — default **500**.
+  Every other template (newsletter, access requests, invites, admin sends) stops at the cap minus
+  the reserve and is logged `rate_limited` with `error='auth_reserve'`. Auth mail may use the
+  whole cap. A reserve is never more than half its cap; `0` turns it off.
+- `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` — default **10**: mail a signed-out `/api/newsletter/subscribe`
+  triggers (newsletter confirm, access-request acknowledgement) per IPv4 address / IPv6 /64 in a
+  rolling day, in memory (`error='anon_sender_cap'`). The welcome after a confirm click is not
+  counted: it goes out only when that click's live token flips a pending address to confirmed,
+  so there is one welcome per confirm email at most, and that confirm email was already counted.
+  A click on an address that is already confirmed (whatever its `t=`) lands on "confirmed" and
+  sends nothing. `0` turns it off.
+- The caps count mail in flight (`status='queued'`) as well as `sent`, and the read-check-log step
+  runs one send at a time per process, so parallel requests at the edge of a cap cannot all pass it.
+  Auth mail has a lane of its own in that step, so a queue of other mail never delays a sign-in,
+  confirm or reset email (one send from each lane can pass at once: the hard cap may be passed by
+  one email per process). Once a cap refuses a lane, later sends in it are refused without reading
+  the counts or waiting (still logged `rate_limited`) until a re-check a minute later, or UTC
+  midnight if sooner.
+- A pending newsletter address is re-sent its confirm link at most once per 10 minutes and 3
+  times a day, both read from `email_log` (`queued` / `sent`), so a confirm that was refused or
+  failed never blocks a retry; otherwise the link already in its inbox stays valid, and a
+  throttled re-submit still records any new product picks or feedback.
+- `getEmailUsageStatus()` (Admin → Email) also reports `authDay` / `authMonth`, `otherDay` /
+  `otherMonth` against `otherMaxPerDay` / `otherMaxPerMonth`, and the effective reserves.
+- Mailer log lines name recipients masked (`a***@example.com`), never in full (abuse-ops-15).
+
+**You cannot incur overage charges unless you deliberately raise `EMAIL_MAX_PER_MONTH` above
+3,000.** Usage is countable any time from `email_log` (`status` `queued` or `sent`) or via
+`getEmailUsageStatus()`.
 
 **Exception — Supabase auth emails.** Once the Send Email Hook is enabled
 (`docs/email/SETUP.md` §5), sign-up / reset / email-change mail goes Supabase →

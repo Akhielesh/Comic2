@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { clientKey } from '../lib/clientKey.js';
 import { getRateLimitStore } from './rateLimitStore.js';
 
 type RateLimitConfig = {
@@ -7,11 +8,12 @@ type RateLimitConfig = {
   windowMs: number;
 };
 
-const resolveRequesterKey = (req: Request) => {
+/** Signed-in callers by account; everyone else by IPv4 address or IPv6 /64 (abuse-ops-8). */
+export const resolveRequesterKey = (req: Request) => {
   if (req.user?.id) {
     return `user:${req.user.id}`;
   }
-  return `ip:${req.ip || 'unknown'}`;
+  return `ip:${clientKey(req.ip) ?? 'unknown'}`;
 };
 
 const clampToPositive = (value: number) => Math.max(0, value);
