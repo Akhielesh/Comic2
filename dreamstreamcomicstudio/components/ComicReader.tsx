@@ -436,19 +436,36 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     return !!panel && textLayout !== 'none' && readerDialogueBlocks(panel).length > 0;
   }, [pages, pageIndex, textLayout]);
 
-  // Preload nearby page images so a flip (forward OR back) never flashes blank.
+  // Preload nearby page images so a flip (forward OR back) never flashes blank. Scroll mode never preloads the
+  // whole comic (reader.md §8.8, RD-7): the lazy <img>s load themselves, and only the next 3 images after the
+  // one in view are warmed (an IntersectionObserver on the scroll list; without one, after the first).
   useEffect(() => {
     const list = pages;
     const PRELOAD_AHEAD = 3;
-    const preload = (url?: string) => { if (url) { const img = new Image(); img.src = url; } };
+    const warmed = new Set<string>();
+    const preload = (url?: string) => { if (url && !warmed.has(url)) { warmed.add(url); const img = new Image(); img.src = url; } };
+    const ahead = (from: number) => { for (let i = from + 1; i < Math.min(from + 1 + PRELOAD_AHEAD, list.length); i++) preload(list[i]?.imageUrl); };
     if (readerMode === 'flip') {
       preload(list[pageIndex - 1]?.imageUrl);
-      for (let i = pageIndex + 1; i < Math.min(pageIndex + 1 + PRELOAD_AHEAD, list.length); i++) {
-        preload(list[i]?.imageUrl);
-      }
-    } else {
-      list.forEach((p) => preload(p.imageUrl));
+      ahead(pageIndex);
+      return;
     }
+    const indexOf = new Map<string, number>();
+    list.forEach((p, i) => { if (p.imageUrl && !indexOf.has(p.imageUrl)) indexOf.set(p.imageUrl, i); });
+    const root = scrollRef.current;
+    if (!root || typeof IntersectionObserver === 'undefined') { ahead(0); return; }
+    // The furthest image in view so far, warmed once per callback: on first paint many lazy images can
+    // intersect at once, and the warm set stays "the next 3", never their union.
+    let maxSeen = -1;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const i = e.isIntersecting ? indexOf.get((e.target as HTMLImageElement).getAttribute('src') || '') : undefined;
+        if (i !== undefined) maxSeen = Math.max(maxSeen, i);
+      }
+      if (maxSeen >= 0) ahead(maxSeen);
+    }, { root });
+    root.querySelectorAll('img').forEach((img) => io.observe(img));
+    return () => io.disconnect();
   }, [pageIndex, readerMode, pages]);
 
   useEffect(() => {

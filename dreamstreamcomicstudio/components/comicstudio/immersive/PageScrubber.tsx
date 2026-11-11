@@ -71,7 +71,12 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
       <div className="relative h-11">
         {/* Ticks: one per view; chapter starts are taller and labelled on hover. */}
         <div className="pointer-events-none absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/20" aria-hidden>
-          <div className="absolute inset-y-0 rounded-full bg-[var(--ds-accent)]" style={rtl ? { right: 0, width: `${pct(shown)}%` } : { left: 0, width: `${pct(shown)}%` }} />
+          {/* The fill: full width, scaled from the reading edge (transform only), in the room's accent. */}
+          <div
+            data-testid="scrubber-fill"
+            className="absolute inset-0 rounded-full bg-[var(--ds-reader-accent)]"
+            style={{ transform: `scaleX(${Math.round(pct(shown) * 100) / 10000})`, transformOrigin: rtl ? 'right' : 'left' }}
+          />
         </div>
         {views.length <= 80 &&
           views.map((_, i) => (
@@ -118,7 +123,7 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
         {/* The visible thumb. */}
         <span
           aria-hidden
-          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.45)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-accent)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-black"
+          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.45)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-reader-hud-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-black"
           style={{ left: `${pos(shown)}%` }}
         />
       </div>

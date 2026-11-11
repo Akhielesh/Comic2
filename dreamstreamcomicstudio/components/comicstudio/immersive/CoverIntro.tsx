@@ -3,8 +3,9 @@
 // a hint invites the first turn. Any input skips straight to reading — a tap or swipe opens the cover
 // with the hardcover turn. Reduced motion: a still composition with a short fade.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { bezierCss, readReaderTokens } from './readerTokens';
 
 export interface CoverIntroProps {
   title: string;
@@ -17,8 +18,6 @@ export interface CoverIntroProps {
   /** Open the book (tap / swipe / key) — the cover turns. */
   onOpen(): void;
 }
-
-const HOUSE: [number, number, number, number] = [0.2, 0.7, 0.2, 1];
 
 /** Scripts whose letters must stay together to shape (Telugu, Devanagari, Arabic, CJK, emoji…). */
 // eslint-disable-next-line no-control-regex
@@ -49,6 +48,11 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
     onOpen();
   };
 
+  // The reader's motion tokens (readerDesigns.css): the rise and the letters use the DS entrance curve
+  // (--ds-ease-enter), the nudge the paper curve. Read once from the computed style; defaults without CSS.
+  const tokens = useMemo(() => readReaderTokens(bookEl), [bookEl]);
+  const enter = [...tokens.introEase] as [number, number, number, number];
+
   useEffect(() => {
     if (!bookEl || typeof bookEl.animate !== 'function') return;
     const anim = reduced
@@ -58,10 +62,10 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
             { opacity: 0, transform: 'perspective(1400px) translateY(24px) rotateX(8deg) scale(0.94)' },
             { opacity: 1, transform: 'perspective(1400px) translateY(0) rotateX(0deg) scale(1)' }
           ],
-          { duration: 700, delay: 120, easing: `cubic-bezier(${HOUSE.join(',')})`, fill: 'backwards' }
+          { duration: tokens.introRise, delay: 120, easing: bezierCss(tokens.introEase), fill: 'backwards' }
         );
     return () => anim.cancel();
-  }, [bookEl, reduced]);
+  }, [bookEl, reduced, tokens]);
 
   useEffect(() => {
     const t = setTimeout(() => setHint(true), reduced ? 300 : 1400);
@@ -77,10 +81,10 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
         { transform: `perspective(1400px) rotateY(${rtl ? 5 : -5}deg)` },
         { transform: 'perspective(1400px) rotateY(0deg)' }
       ],
-      { duration: 900, easing: 'cubic-bezier(0.38,0.02,0.18,1)' }
+      { duration: 900, easing: bezierCss(tokens.easePaper) }
     );
     return () => a.cancel();
-  }, [hint, reduced, bookEl, rtl]);
+  }, [hint, reduced, bookEl, rtl, tokens]);
 
   const units = titleUnits(title);
   // Stagger: 24 ms per letter (Latin), 90 ms per word for scripts revealed word by word.
@@ -101,7 +105,7 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
         type="button"
         data-testid="cover-intro"
         aria-label={`Open ${title || 'the comic'}`}
-        className="absolute inset-0 z-[31] cursor-pointer touch-none bg-transparent outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[var(--ds-accent)]"
+        className="absolute inset-0 z-[31] cursor-pointer touch-none bg-transparent outline-none focus-visible:ring-4 focus-visible:ring-inset focus-visible:ring-[var(--ds-reader-hud-focus)]"
         onPointerDown={(e) => {
           down.current = { x: e.clientX, y: e.clientY };
         }}
@@ -132,7 +136,7 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
                             className="inline-block whitespace-pre"
                             initial={{ opacity: 0, y: '0.35em' }}
                             animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.6 + (u.start + i) * 0.024, duration: 0.32, ease: HOUSE }}
+                            transition={{ delay: 0.6 + (u.start + i) * 0.024, duration: 0.32, ease: enter }}
                           >
                             {ch}
                           </motion.span>
@@ -143,7 +147,7 @@ export const CoverIntro: React.FC<CoverIntroProps> = ({ title, logline, author, 
                         className="inline-block max-w-full [overflow-wrap:anywhere]"
                         initial={{ opacity: 0, y: '0.35em' }}
                         animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.6 + u.start * 0.024, duration: 0.4, ease: HOUSE }}
+                        transition={{ delay: 0.6 + u.start * 0.024, duration: 0.4, ease: enter }}
                       >
                         {u.word}
                       </motion.span>

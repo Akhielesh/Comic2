@@ -25,8 +25,7 @@
  * (Atlas ink/muted on the skin's four base surfaces and every token's skin override stay in
  * atlasSkin.test.ts; this file adds the rest of the surfaces and the accent/status/faint tokens.)
  */
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { escapeClass, listSourceFiles } from '../../scripts/design/atlas-skin-shim.mjs';
@@ -49,7 +48,7 @@ import {
   topLevelSplit,
   withAlpha
 } from './cssTokens';
-import { contrastRatio, separation } from './paletteChecks';
+import { separation } from './paletteChecks';
 
 const rules = parseRules(css);
 const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
@@ -480,7 +479,6 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   };
   const DECORATIVE: Record<string, string> = {
     'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle',
-    'peer-checked:bg-[#D97757]': 'comicstudio/immersive/ReaderSettingsSheet.tsx: a switch track',
     'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'
   };
 
@@ -902,8 +900,8 @@ describe('token contrast — non-text: the focus ring and accent state borders r
   });
 
   it('the reader focus colour is for the paper only: under 3:1 on the reader room, so it is never a ring over the room', () => {
-    // Pinned so the name does not invite using it for every reader ring: controls over the room (HUD, sheets,
-    // end card) draw --ds-focus on their own chrome surface (index.css, docs/design/design-system.md).
+    // Pinned so the name does not invite using it for every reader ring: controls over the room draw
+    // --ds-reader-hud-focus (readerDesigns.css).
     for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
       const r = ratio(token('--ds-reader-focus', ctx), token('--ds-reader-room', ctx));
       expect(r, `${ctx}: --ds-reader-focus on --ds-reader-room = ${r.toFixed(2)}`).toBeLessThan(3);
@@ -1385,47 +1383,78 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
 // ── The reader rooms (RD-A rows; reader.md §4.2 "Rooms" and V2 N1) ──────────────────────────────
 /**
  * The immersive reader's room-side chrome (the HUD, its focus, the progress hairline) sits on the ROOM, not on the
- * page, so it is measured against the room and the HUD glass. Today's Night room is index.css --ds-reader-room;
- * the Day rooms and the per-room focus pair are RD-A's (reader.md §4.2, V2 N1), pinned here from the spec until
- * cs/immersive/readerDesigns.css lands (then these rows read that file). Content tokens: never the spark.
+ * page, so it is measured against the room and the HUD glass. The Night and Day rows read
+ * cs/immersive/readerDesigns.css (RD-A): the reader root block (Night: glass, accent, hud-focus over index.css's
+ * --ds-reader-room) and the `[data-reader-room="day"]` block (Day: room, glass, accent, hud-focus). Each value
+ * resolves inside its reader block first, then index.css. `ink` is the HUD TEXT (ReaderHud `glass`: white on the
+ * Night glass; the reader ink on the Day glass, RD-2), pinned from the spec: it is never readerDesigns.css's
+ * --ds-reader-ink, which is the PAPER ink. The webtoon and clean Day rooms are not in that file yet: spec pins
+ * (reader.md §4.2) until RD-2. Content tokens: never the spark.
  */
-const READER_ROOMS = {
-  night: { room: '#0e0d0c', glass: 'rgba(0,0,0,0.45)', ink: '#ffffff', hudFocus: '#fafafa' },
-  'day (hardcover, issue, manga, zine, picturebook, strip)': { room: '#ebe8e2', glass: 'rgba(255,255,255,0.74)', ink: '#3b3026', hudFocus: '#3b3026' },
-  'day (webtoon)': { room: '#ffffff', glass: 'rgba(255,255,255,0.74)', ink: '#3b3026', hudFocus: '#3b3026' },
-  'day (clean)': { room: '#f4f4f2', glass: 'rgba(255,255,255,0.74)', ink: '#3b3026', hudFocus: '#3b3026' }
-} as const;
+const READER_RULES = parseRules(readFileSync(ROOT + 'components/comicstudio/immersive/readerDesigns.css', 'utf8')).filter((r) => r.parents.length === 0);
+const READER_NIGHT = tokensOf(READER_RULES, (s) => s === '[data-reader-root]');
+const READER_DAY = tokensOf(READER_RULES, (s) => s === '[data-reader-root][data-reader-room="day"]');
+interface ReaderRoom {
+  /** The reader-block tokens a value resolves against before index.css (empty for a spec pin). */
+  scope: Map<string, string>;
+  room: string;
+  glass: string;
+  ink: string;
+  hudFocus: string;
+  accent: string;
+}
+function fileRoom(scope: Map<string, string>, ink: string): ReaderRoom {
+  const read = (name: string): string => {
+    const value = scope.get(name);
+    if (value === undefined) throw new Error(`readerDesigns.css defines no ${name} for this room`);
+    return value;
+  };
+  return { scope, room: scope.get('--ds-reader-room') ?? 'var(--ds-reader-room)', glass: read('--ds-reader-glass'), ink, hudFocus: read('--ds-reader-hud-focus'), accent: read('--ds-reader-accent') };
+}
+const specRoom = (room: string): ReaderRoom => ({ scope: new Map(), room, glass: 'rgba(255,255,255,0.74)', ink: '#3b3026', hudFocus: '#3b3026', accent: '#3b3026' });
+const READER_ROOMS: Record<string, ReaderRoom> = {
+  night: fileRoom(READER_NIGHT, '#ffffff'),
+  'day (hardcover, issue, manga, zine, picturebook, strip)': fileRoom(new Map([...READER_NIGHT, ...READER_DAY]), '#3b3026'),
+  'day (webtoon)': specRoom('#ffffff'),
+  'day (clean)': specRoom('#f4f4f2')
+};
+/** A reader-room value in one context: the room's own reader block first, then index.css. */
+const roomColor = (r: ReaderRoom, value: string, ctx: ContextName): Rgba => resolveColor(value, (n) => r.scope.get(n) ?? lookup(n, ctx));
 
 describe('token contrast — the reader rooms (HUD ink, room-side focus; RD-A)', () => {
-  it('reader rows are spec pins until RD-A lands (when readerDesigns.css exists, read the rooms from it: same assertions)', () => {
-    // A tripwire, not a contrast check: the two "spec pin" rows below compare reader.md §4.2 / V2 N1 constants with
-    // each other, so no code change can fail them. The moment RD-A's file exists this goes red, and READER_ROOMS must
-    // switch to the room, glass, ink and hud-focus values that file defines (tokenContrast wave note 10).
-    expect(existsSync(path.join(ROOT, 'components/comicstudio/immersive/readerDesigns.css'))).toBe(false);
-    expect(existsSync(path.join(ROOT, 'components/comicstudio/immersive/readerTokens.ts'))).toBe(false);
-  });
-
   it('today’s Night room is the index.css reader room, the same in every context (content, not chrome)', () => {
-    for (const ctx of ALL_CONTEXTS) expect(lookup('--ds-reader-room', ctx), ctx).toBe(READER_ROOMS.night.room);
+    for (const ctx of ALL_CONTEXTS) expect(lookup('--ds-reader-room', ctx), ctx).toBe(lookup('--ds-reader-room', 'default light'));
+    // The reader root inherits the room and the paper back from :root (only the dormant Day block sets a room):
+    // the motion comic export reads both from document.documentElement (AV-0).
+    expect(READER_NIGHT.has('--ds-reader-room')).toBe(false);
+    expect(READER_RULES.filter((r) => r.body.includes('--ds-reader-paper-back'))).toEqual([]);
   });
 
-  it('spec pin: HUD ink on the HUD glass is ≥ 4.5:1 in every room', () => {
-    for (const [name, r] of Object.entries(READER_ROOMS)) {
-      const glass = over(resolve(r.glass, 'default light'), hexColor(r.room));
-      expect(ratio(hexColor(r.ink), glass), name).toBeGreaterThanOrEqual(4.5);
+  it('HUD ink on the HUD glass is ≥ 4.5:1 in every room, in every context', () => {
+    for (const ctx of ALL_CONTEXTS) {
+      for (const [name, r] of Object.entries(READER_ROOMS)) {
+        const glass = over(roomColor(r, r.glass, ctx), roomColor(r, r.room, ctx));
+        expect(ratio(roomColor(r, r.ink, ctx), glass), `${ctx}, ${name}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 
-  it('spec pin: the room-side focus (and progress) colour is ≥ 3:1 against the room and against the HUD glass in every room', () => {
-    for (const [name, r] of Object.entries(READER_ROOMS)) {
-      const glass = over(resolve(r.glass, 'default light'), hexColor(r.room));
-      expect(contrastRatio(r.hudFocus, r.room), `${name}: on the room`).toBeGreaterThanOrEqual(3);
-      expect(ratio(hexColor(r.hudFocus), glass), `${name}: on the glass`).toBeGreaterThanOrEqual(3);
+  it('the reading room accent and focus (--ds-reader-accent, --ds-reader-hud-focus) are ≥ 3:1 on the room and the HUD glass, in every room and every context (RD-A N1)', () => {
+    for (const ctx of ALL_CONTEXTS) {
+      for (const [name, r] of Object.entries(READER_ROOMS)) {
+        const bg = roomColor(r, r.room, ctx);
+        const glass = over(roomColor(r, r.glass, ctx), bg);
+        for (const [token, value] of [['--ds-reader-accent', r.accent], ['--ds-reader-hud-focus', r.hudFocus]] as const) {
+          expect(ratio(roomColor(r, value, ctx), bg), `${ctx}, ${name}: ${token} on the room`).toBeGreaterThanOrEqual(3);
+          expect(ratio(roomColor(r, value, ctx), glass), `${ctx}, ${name}: ${token} on the HUD glass`).toBeGreaterThanOrEqual(3);
+        }
+      }
     }
   });
 
   it('why the room needs its own focus pair (V2 N1): the Atlas light accent on the Night room is invisible', () => {
-    expect(ratio(token('--ds-accent', 'atlas light'), hexColor(READER_ROOMS.night.room))).toBeLessThan(1.1);
+    // The app accent the reader used to draw there: 1.02:1 in Atlas light.
+    expect(ratio(token('--ds-accent', 'atlas light'), roomColor(READER_ROOMS.night, READER_ROOMS.night.room, 'atlas light'))).toBeLessThan(1.1);
   });
 
   it('the classic reader’s page flip animates only transform and opacity (RD-0 F7: no per-frame filter repaint)', () => {
@@ -1438,7 +1467,7 @@ describe('token contrast — the reader rooms (HUD ink, room-side focus; RD-A)',
   });
 
   it('no reader token reads the colour layer (the comic page keeps --ds-reader-*; the art supplies the colour)', () => {
-    const reader = [...ROOT_TOKENS].filter(([k]) => k.startsWith('--ds-reader-'));
+    const reader = [...ROOT_TOKENS, ...READER_NIGHT, ...READER_DAY].filter(([k]) => k.startsWith('--ds-reader-'));
     expect(reader.length).toBeGreaterThanOrEqual(4);
     expect(reader.filter(([, v]) => /--ds-(?:spark|hue-|art\b)/.test(v))).toEqual([]);
   });

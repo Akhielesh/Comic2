@@ -761,8 +761,9 @@
   /* The reader's keyboard-focus colour: the reader ink, so a ring on the paper is AA in both themes (the
      paper does not change with the theme): 11:1 on the page back, 10:1 on the endpaper
      (tokenContrast.test.ts). Content-side like the paper: no skin restyles it. Paper only: it is 1.5:1 on
-     --ds-reader-room, so controls over the room (the HUD, sheets, the end card) use --ds-focus on their own
-     chrome surface, never this. */
+     --ds-reader-room, so controls over the room use --ds-reader-hud-focus
+     (components/comicstudio/immersive/readerDesigns.css, ≥ 3:1 on the room and its glass), never this; the
+     End card is a page and uses --ds-reader-focus. */
   --ds-reader-focus: #3b3026;
 }
 @supports not (height: 100dvh) {
@@ -1452,8 +1453,6 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/35:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/40:hover { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/50:hover { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
-[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\] { background-color: var(--ds-accent); }
-[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\].text-white { color: var(--ds-on-accent); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/25 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/30 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }

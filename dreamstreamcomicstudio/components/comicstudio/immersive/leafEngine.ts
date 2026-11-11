@@ -12,6 +12,7 @@ import {
   autoPath,
   AUTO_GRAB,
   COVER_SPRING,
+  cubicBezier,
   LEAF_SPRING,
   paperEase,
   springDone,
@@ -32,6 +33,7 @@ import {
   type Vec
 } from './flipGeometry';
 import type { TurnKind, TurnPlan } from './turnPlan';
+import { READER_TOKEN_DEFAULTS, type ReaderMotionTokens } from './readerTokens';
 
 export interface LeafPart {
   root: HTMLElement | null;
@@ -64,6 +66,8 @@ export interface EngineConfig {
   slotX?: Map<HTMLElement, number>;
   durationMs: number;
   grabY?: number;
+  /** The reader's motion tokens (riffle timing, paper curve), read once per mount; defaults when absent. */
+  tokens?: Pick<ReaderMotionTokens, 'riffleLeaf' | 'riffleStep' | 'easePaper'>;
 }
 
 export type Outcome = 'commit' | 'cancel';
@@ -131,8 +135,17 @@ export class TurnEngine {
   private outcome: Outcome = 'commit';
   private touched = false;
 
+  /** Riffle timing and the paper curve (reader tokens, else the TS defaults). */
+  private riffleLeaf: number;
+  private riffleStep: number;
+  private ease: (u: number) => number;
+
   constructor(private cfg: EngineConfig, private els: EngineEls, private hooks: EngineHooks) {
     const { W, H, plan } = cfg;
+    const t = cfg.tokens;
+    this.riffleLeaf = Math.max(1, t?.riffleLeaf ?? READER_TOKEN_DEFAULTS.riffleLeaf);
+    this.riffleStep = Math.max(0, t?.riffleStep ?? READER_TOKEN_DEFAULTS.riffleStep);
+    this.ease = t?.easePaper && t.easePaper !== READER_TOKEN_DEFAULTS.easePaper ? cubicBezier(...t.easePaper) : paperEase;
     this.frame = leafFrame(cfg.spineX, 0, W, H, plan.mirrored);
     this.grabY = Math.min(0.96 * H, Math.max(0.04 * H, cfg.grabY ?? AUTO_GRAB * H));
     // Start state: flat (forward) or fully turned (reverse).
@@ -338,14 +351,14 @@ export class TurnEngine {
   /** Riffle: total time; single leaf: the configured duration. */
   private totalMs(): number {
     const n = this.cfg.plan.kind === 'riffle' ? Math.max(1, this.els.leaves?.length ?? 1) : 1;
-    return this.cfg.plan.kind === 'riffle' ? 180 + (n - 1) * 70 : this.cfg.durationMs;
+    return this.cfg.plan.kind === 'riffle' ? this.riffleLeaf + (n - 1) * this.riffleStep : this.cfg.durationMs;
   }
 
   private advance(t: number, dt: number): boolean {
     const { W, plan } = this.cfg;
     if (this.phase === 'auto') {
       const u = clamp01((t - this.t0) / Math.max(1, this.totalMs()));
-      const e = paperEase(u);
+      const e = this.ease(u);
       const g = plan.mode === 'forward' ? e : 1 - e;
       if (plan.kind === 'paper') this.pointer = autoPath(W, this.cfg.H, this.grabY, g);
       else this.pointer = { x: W - 2 * W * g, y: this.grabY };
@@ -437,17 +450,17 @@ export class TurnEngine {
     const t = now();
     let lastActive = -1;
     leaves.forEach((leaf, i) => {
-      const local = this.phase === 'auto' ? clamp01((t - this.t0 - i * 70) / 180) : this.phase === 'spring' || this.phase === 'done' ? 1 : 0;
+      const local = this.phase === 'auto' ? clamp01((t - this.t0 - i * this.riffleStep) / this.riffleLeaf) : this.phase === 'spring' || this.phase === 'done' ? 1 : 0;
       if (local > 0) lastActive = i;
-      const e = paperEase(local);
+      const e = this.ease(local);
       const g = plan.mode === 'forward' ? e : 1 - e;
       const p = autoPath(W, H, this.grabY, g);
       this.applyPaper(leaf.front, leaf.back, p, false);
     });
     // One set of shadows follows the newest moving leaf.
     const i = Math.max(0, lastActive);
-    const local = this.phase === 'auto' ? clamp01((t - this.t0 - i * 70) / 180) : 1;
-    const g = plan.mode === 'forward' ? paperEase(local) : 1 - paperEase(local);
+    const local = this.phase === 'auto' ? clamp01((t - this.t0 - i * this.riffleStep) / this.riffleLeaf) : 1;
+    const g = plan.mode === 'forward' ? this.ease(local) : 1 - this.ease(local);
     const fold = computeFold({ W, H, grab: { x: W, y: this.grabY }, pointer: autoPath(W, H, this.grabY, g) });
     if (fold && local < 1) {
       const st = leafStyles(this.frame, fold);
@@ -526,10 +539,18 @@ export class TurnEngine {
   }
 }
 
-/** Duration for an auto turn of a kind (reader.md §14). */
-export const durationFor = (kind: TurnKind, spread: boolean, chained: boolean): number => {
-  const base = kind === 'board' ? 820 : kind === 'slide' ? 420 : kind === 'fade' ? 300 : spread ? 680 : 560;
-  return chained ? Math.round(base * 0.65) : base;
+/**
+ * Duration for an auto turn of a kind (reader.md §5.1): the reader motion tokens (computed once per mount),
+ * else their TS defaults (`TURN_MS`). One source of truth: fade is 280 ms everywhere.
+ */
+export const durationFor = (
+  kind: TurnKind,
+  spread: boolean,
+  chained: boolean,
+  tokens: Pick<ReaderMotionTokens, 'turn' | 'turnSpread' | 'turnBoard' | 'turnSlide' | 'turnFade' | 'chain'> = READER_TOKEN_DEFAULTS
+): number => {
+  const base = kind === 'board' ? tokens.turnBoard : kind === 'slide' ? tokens.turnSlide : kind === 'fade' ? tokens.turnFade : spread ? tokens.turnSpread : tokens.turn;
+  return chained ? Math.round(base * tokens.chain) : base;
 };
 
 // ── Perf stats (QA harness: window.__comicReaderPerf) ─────────────────────────
@@ -541,7 +562,18 @@ export interface TurnPerf {
   fps90: number;
 }
 
-const perfLog: TurnPerf[] = [];
+/** The QA log: the last 20 turns, plus `blankTurns` — turns that ended on a page with nothing decoded (§8.9). */
+export type TurnPerfLog = TurnPerf[] & { blankTurns: number };
+
+const perfLog: TurnPerfLog = Object.assign([] as TurnPerf[], { blankTurns: 0 });
+
+const publishPerf = () => {
+  try {
+    if (typeof window !== 'undefined') (window as Window & { __comicReaderPerf?: TurnPerfLog }).__comicReaderPerf = perfLog;
+  } catch {
+    /* ignore */
+  }
+};
 
 /** Record one turn's frame times (kept to the last 20 turns; read by the P1-QA perf spec). */
 export const recordTurnPerf = (kind: TurnKind, deltas: number[]): TurnPerf | null => {
@@ -551,10 +583,16 @@ export const recordTurnPerf = (kind: TurnKind, deltas: number[]): TurnPerf | nul
   const entry = { kind, frames: deltas.length, p90: Math.round(p90v * 10) / 10, fps90: Math.round((1000 / Math.max(1, p90v)) * 10) / 10 };
   perfLog.push(entry);
   if (perfLog.length > 20) perfLog.shift();
-  try {
-    if (typeof window !== 'undefined') (window as Window & { __comicReaderPerf?: TurnPerf[] }).__comicReaderPerf = perfLog;
-  } catch {
-    /* ignore */
-  }
+  publishPerf();
   return entry;
 };
+
+/** A turn ended on a view whose pages had nothing decoded (no page, no stand-in): counted for QA. */
+export const recordBlankTurn = (): number => {
+  perfLog.blankTurns += 1;
+  publishPerf();
+  return perfLog.blankTurns;
+};
+
+/** Blank turns so far this session (tests, diagnostics). */
+export const blankTurnCount = (): number => perfLog.blankTurns;

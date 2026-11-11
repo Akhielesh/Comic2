@@ -5,9 +5,16 @@
 //   by signed URL, so a re-signed link (relink after expiry) never re-downloads a cached page.
 // - Priorities: the current view loads `now`, its neighbours `next`, a few pages ahead `idle` (skipped
 //   on Save-Data / 2G). At most 3 downloads run at once, highest priority first.
-// - LRU of 10 entries; retained paths (current ±2 views) and paths a mounted page is showing (acquired)
-//   are never evicted — evicting a page still on screen would blank it. Eviction revokes the object
-//   URL and closes any bitmap.
+// - LRU bounded by BLOB BYTES (the compressed files it holds, `blob.size`: 96 MB desktop, 48 MB phones,
+//   24 MB on 2 GB devices; reader.md §8.4 with V1 C7/C8) AND by entries (48 desktop, 16 phones, 12 on 2 GB
+//   devices: at ~0.6 MB a page the entry cap is what bounds a phone). Both come from the device when the
+//   cache is made (`cacheLimitsFor`), so every reader that shares it — the inline one too — runs at the
+//   phone's limits. Retained paths (the reader's window) and paths a mounted page is showing (acquired)
+//   are never evicted — evicting a page still on screen would blank it; a page that lets go of its entry
+//   makes it evictable at once. Eviction revokes the object URL and closes any bitmap.
+// - Stand-ins (reader.md §8.1): a page's ~480 px variant is a separate entry the slots show while the real
+//   source decodes; `isDecoded` answers synchronously, and `holdUntilDecoded` lets a tapped turn wait a
+//   moment (≤ 300 ms) for its pages before turning anyway.
 // - An abort (a preload the reader moved past) only drops a job that hasn't started; a job a mounted page
 //   joined is adopted (its abort signal is dropped), so a page never waits on a cancelled preload.
 // - A 400/403 means the signed link expired: the entry reports `expired` so the host can relink.
@@ -41,6 +48,8 @@ export interface CachedPage {
   attempts?: number;
   /** When the last load failed (ms epoch). */
   failedAt?: number;
+  /** Bytes this entry holds (the fetched blob's size; 0 for a CORS-fallback URL the browser caches). */
+  bytes?: number;
 }
 
 export interface CacheDeps {
@@ -55,6 +64,54 @@ export interface CacheDeps {
 }
 
 const RANK: Record<CachePriority, number> = { now: 0, next: 1, idle: 2 };
+const MB = 1024 * 1024;
+/** Blob-byte budgets (reader.md §8.4, measured on the compressed files — V1 C7/C8). */
+export const CACHE_BYTE_BUDGET = { desktop: 96 * MB, phone: 48 * MB, lowMemory: 24 * MB } as const;
+/** Entry caps per device: at ~0.6 MB a page, the byte budgets alone would let a phone keep ~80 pages. */
+export const CACHE_ENTRY_CAP = { desktop: 48, phone: 16, lowMemory: 12 } as const;
+/** The desktop entry cap (a cache made without device hints). */
+export const DEFAULT_MAX_ENTRIES: number = CACHE_ENTRY_CAP.desktop;
+
+/**
+ * The byte budget for this device: 24 MB at ≤ 2 GB of memory, 48 MB on a coarse pointer or ≤ 4 GB, else
+ * 96 MB. `deviceMemory` is undefined on browsers that do not report it (treated as a desktop).
+ */
+export const byteBudgetFor = (d: { coarse?: boolean; deviceMemory?: number }): number => {
+  const mem = typeof d.deviceMemory === 'number' && d.deviceMemory > 0 ? d.deviceMemory : undefined;
+  if (mem !== undefined && mem <= 2) return CACHE_BYTE_BUDGET.lowMemory;
+  if (d.coarse || (mem !== undefined && mem <= 4)) return CACHE_BYTE_BUDGET.phone;
+  return CACHE_BYTE_BUDGET.desktop;
+};
+
+/** The entry cap for this device (same tiers as byteBudgetFor). */
+export const entryCapFor = (d: { coarse?: boolean; deviceMemory?: number }): number => {
+  const mem = typeof d.deviceMemory === 'number' && d.deviceMemory > 0 ? d.deviceMemory : undefined;
+  if (mem !== undefined && mem <= 2) return CACHE_ENTRY_CAP.lowMemory;
+  if (d.coarse || (mem !== undefined && mem <= 4)) return CACHE_ENTRY_CAP.phone;
+  return CACHE_ENTRY_CAP.desktop;
+};
+
+/** Both limits for a device. */
+export const cacheLimitsFor = (d: { coarse?: boolean; deviceMemory?: number }): { bytes: number; entries: number } => ({ bytes: byteBudgetFor(d), entries: entryCapFor(d) });
+
+/** A coarse (touch) primary pointer, when the browser says (false where it can't). */
+export const coarsePointer = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !!window.matchMedia('(pointer: coarse)')?.matches;
+  } catch {
+    return false;
+  }
+};
+
+/** The device's reported memory (GB), when the browser says. */
+export const deviceMemoryGb = (): number | undefined => {
+  try {
+    const m = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
+    return typeof m === 'number' && m > 0 ? m : undefined;
+  } catch {
+    return undefined;
+  }
+};
 /** Delay before retry n (after failure n); the length caps the attempts (1 load + 2 retries). */
 export const RETRY_DELAYS_MS = [2000, 6000] as const;
 /** After the automatic retries, a fresh request (the reader reopened) may try again this much later. */
@@ -116,13 +173,54 @@ export class PageImageCache {
 
   constructor(
     private deps: CacheDeps = defaultCacheDeps(),
-    private maxEntries = 10,
+    private maxEntries: number = DEFAULT_MAX_ENTRIES,
     private concurrency = 3,
-    private retryDelaysMs: readonly number[] = RETRY_DELAYS_MS
+    private retryDelaysMs: readonly number[] = RETRY_DELAYS_MS,
+    private maxBytes: number = CACHE_BYTE_BUDGET.desktop
   ) {}
 
   get(path: string): CachedPage | undefined {
     return this.entries.get(path);
+  }
+
+  /** Decoded and ready to paint (synchronous: the turn gate and the blank-turn check read it). */
+  isDecoded(path: string | undefined): boolean {
+    return !!path && this.entries.get(path)?.state === 'ready';
+  }
+
+  /** Bytes held by every entry (the LRU's budget measure). */
+  totalBytes(): number {
+    let n = 0;
+    for (const e of this.entries.values()) n += e.bytes ?? 0;
+    return n;
+  }
+
+  /** The blob-byte budget (byteBudgetFor); evicts at once when the new budget is lower. */
+  setByteBudget(bytes: number): void {
+    if (!(bytes > 0) || bytes === this.maxBytes) return;
+    this.maxBytes = bytes;
+    this.evict();
+  }
+
+  byteBudget(): number {
+    return this.maxBytes;
+  }
+
+  /** The entry cap (entryCapFor); evicts at once when the new cap is lower. */
+  setEntryCap(n: number): void {
+    const cap = Math.floor(n);
+    if (!(cap > 0) || cap === this.maxEntries) return;
+    this.maxEntries = cap;
+    this.evict();
+  }
+
+  entryCap(): number {
+    return this.maxEntries;
+  }
+
+  /** Entries held (tests, diagnostics). */
+  size(): number {
+    return this.entries.size;
   }
 
   /** Monotonic counter for useSyncExternalStore. */
@@ -149,7 +247,12 @@ export class PageImageCache {
       done = true;
       const n = (this.inUse.get(path) ?? 1) - 1;
       if (n > 0) this.inUse.set(path, n);
-      else this.inUse.delete(path);
+      else {
+        this.inUse.delete(path);
+        // No longer on screen: if the cache is over its limits, this page can go now (a closed reader's
+        // pages leave as their slots unmount, not on the next load).
+        this.evict();
+      }
     };
   }
 
@@ -230,14 +333,24 @@ export class PageImageCache {
     }
   }
 
-  private evict() {
-    if (this.entries.size <= this.maxEntries) return;
+  private over(bytes: number): boolean {
+    return this.entries.size > this.maxEntries || bytes > this.maxBytes;
+  }
+
+  /**
+   * Least recently used first, while over the entry cap or the byte budget; never retained or in use, and
+   * never `keep` (the entry that just finished: its caller is about to show it).
+   */
+  private evict(keep?: string) {
+    let bytes = this.totalBytes();
+    if (!this.over(bytes)) return;
     for (const path of [...this.lru]) {
-      if (this.entries.size <= this.maxEntries) break;
+      if (!this.over(bytes)) break;
       const e = this.entries.get(path);
-      if (!e || e.state === 'loading' || this.retained.has(path) || this.inUse.has(path)) continue;
+      if (!e || path === keep || e.state === 'loading' || this.retained.has(path) || this.inUse.has(path)) continue;
       this.release(e);
       this.entries.delete(path);
+      bytes -= e.bytes ?? 0;
       this.lru = this.lru.filter((p) => p !== path);
     }
     this.emit();
@@ -270,7 +383,7 @@ export class PageImageCache {
     this.pending.delete(job.path);
     job.resolve(entry);
     this.emit();
-    if (entry.state === 'ready') this.evict();
+    if (entry.state === 'ready') this.evict(job.path);
     return entry;
   }
 
@@ -317,7 +430,7 @@ export class PageImageCache {
         this.finish(job, { state: 'error' });
         return;
       }
-      this.finish(job, { state: 'ready', objectUrl, ...size });
+      this.finish(job, { state: 'ready', objectUrl, bytes: blob.size || 0, ...size });
       this.deps.idle(() => {
         void this.deps.palette(blob).then((palette) => {
           const e = this.entries.get(job.path);
@@ -332,8 +445,22 @@ export class PageImageCache {
   }
 }
 
-/** The shared reader cache. */
-export const pageImageCache = new PageImageCache();
+/**
+ * A cache sized for this device (cacheLimitsFor from the pointer and the reported memory; desktop limits when
+ * the browser says nothing). Never throws.
+ */
+export const pageImageCacheForDevice = (deps: CacheDeps = defaultCacheDeps()): PageImageCache => {
+  let limits: { bytes: number; entries: number } = { bytes: CACHE_BYTE_BUDGET.desktop, entries: DEFAULT_MAX_ENTRIES };
+  try {
+    limits = cacheLimitsFor({ coarse: coarsePointer(), deviceMemory: deviceMemoryGb() });
+  } catch {
+    /* keep the desktop limits */
+  }
+  return new PageImageCache(deps, limits.entries, 3, RETRY_DELAYS_MS, limits.bytes);
+};
+
+/** The shared reader cache (the immersive reader, the inline reader and the share page all use it). */
+export const pageImageCache = pageImageCacheForDevice();
 
 // ── Variants ─────────────────────────────────────────────────────────────────
 
@@ -361,13 +488,81 @@ export const pickVariant = (asset: AssetRef, cssWidth: number, opts: { dpr?: num
   return { path: asset.path };
 };
 
-/** Network hints (Save-Data, slow connections) — preloads stay polite. */
-export const connectionHints = (): { saveData: boolean; slow: boolean } => {
+/** Stand-ins are the smallest stored variant in this band (the 480w the server makes). */
+export const STANDIN_MIN_W = 320;
+export const STANDIN_MAX_W = 640;
+
+/**
+ * A page's low-resolution stand-in (reader.md §8.1): its stored ~480 px variant, when it has one narrower
+ * than the image itself. No variants (old pages) → none: the slot keeps its paper until the page arrives.
+ */
+export const standInVariant = (asset: AssetRef): VariantPick | undefined => {
+  const v = (asset.variants || [])
+    .filter((x) => x && x.path && x.w >= STANDIN_MIN_W && x.w <= STANDIN_MAX_W && (!asset.w || x.w < asset.w))
+    .sort((a, b) => a.w - b.w)[0];
+  return v ? { path: v.path, w: v.w } : undefined;
+};
+
+/**
+ * The turn gate (reader.md §8.2): call `go` once every item has one of its paths decoded, or after `maxMs`,
+ * whichever comes first — a tapped turn never waits longer than that, and never turns onto a page that was
+ * one frame from ready. Each item is its alternatives (the source it will show, then the original). An item
+ * whose load already failed (an entry in `error`, none still loading) is not waited for: it will not decode.
+ * Items that are already settled call `go(false)` synchronously. Returns a cancel (the turn was replaced).
+ */
+export function holdUntilDecoded(
+  cache: Pick<PageImageCache, 'isDecoded' | 'subscribe'> & { get?: PageImageCache['get'] },
+  items: string[][],
+  maxMs: number,
+  go: (waited: boolean) => void,
+  timers: { set: (fn: () => void, ms: number) => unknown; clear: (id: unknown) => void } = {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>)
+  }
+): () => void {
+  const stateOf = (p: string) => cache.get?.(p)?.state;
+  const failed = (alts: string[]) => alts.some((p) => stateOf(p) === 'error') && !alts.some((p) => stateOf(p) === 'loading');
+  const ready = () => items.every((alts) => alts.some((p) => cache.isDecoded(p)) || failed(alts));
+  if (ready()) {
+    go(false);
+    return () => undefined;
+  }
+  let done = false;
+  let unsub: () => void = () => undefined;
+  let timer: unknown;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    unsub();
+    timers.clear(timer);
+    go(true);
+  };
+  unsub = cache.subscribe(() => {
+    if (ready()) finish();
+  });
+  timer = timers.set(finish, Math.max(0, maxMs));
+  return () => {
+    if (done) return;
+    done = true;
+    unsub();
+    timers.clear(timer);
+  };
+}
+
+/**
+ * Network hints — preloads stay polite on Save-Data and slow links, and skip stand-ins on a link the browser
+ * measures as fast (`4g` and ≥ 5 Mbps: a page arrives before it is needed). Browsers that say nothing
+ * (no Network Information API) are neither slow nor fast.
+ */
+export const connectionHints = (): { saveData: boolean; slow: boolean; fast: boolean } => {
   try {
-    const c = (typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined) || undefined;
-    return { saveData: !!c?.saveData, slow: c?.effectiveType === '2g' || c?.effectiveType === 'slow-2g' };
+    const c =
+      (typeof navigator !== 'undefined' ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string; downlink?: number } }).connection : undefined) || undefined;
+    const slow = c?.effectiveType === '2g' || c?.effectiveType === 'slow-2g';
+    const fast = !c?.saveData && c?.effectiveType === '4g' && (typeof c.downlink === 'number' ? c.downlink : 10) >= 5;
+    return { saveData: !!c?.saveData, slow, fast };
   } catch {
-    return { saveData: false, slow: false };
+    return { saveData: false, slow: false, fast: false };
   }
 };
 
