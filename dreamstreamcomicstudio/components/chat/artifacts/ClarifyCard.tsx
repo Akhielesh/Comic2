@@ -3,7 +3,7 @@ import { HelpCircle, Check, Send } from 'lucide-react';
 import type { ClarifyArtifact, ClarifyQuestion } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle } from './kit';
 import type { ArtifactTurn } from './ChatArtifacts';
-import { SettledArtifactLine } from './CalendarEventDraft';
+import { SettledArtifactLine, requestSettleFocus } from './CalendarEventDraft';
 
 // Interactive clarifying-questions card (the "ask, don't guess" widget). The model
 // emits this when a request is ambiguous or multi-faceted instead of dumping a wall of
@@ -138,9 +138,9 @@ export const clarifySettled = (_data: ClarifyArtifact, turn?: ArtifactTurn): boo
 const ClarifySettled: React.FC<{ turn: ArtifactTurn }> = ({ turn }) => {
   if (turn.state?.status === 'sent') {
     const n = turn.state.result?.answered ?? 0;
-    return <SettledArtifactLine type="clarify" tone="success" text={n > 0 ? `You answered ${n} question${n === 1 ? '' : 's'}` : 'You answered'} />;
+    return <SettledArtifactLine focusKey={turn.writeKey} type="clarify" tone="success" text={n > 0 ? `You answered ${n} question${n === 1 ? '' : 's'}` : 'You answered'} />;
   }
-  return <SettledArtifactLine type="clarify" tone="neutral" text="Not answered — you moved on" />;
+  return <SettledArtifactLine focusKey={turn.writeKey} type="clarify" tone="neutral" text="Not answered — you moved on" />;
 };
 
 export const ClarifyCard: React.FC<{ data: ClarifyArtifact; turn?: ArtifactTurn }> = ({ data, turn }) => {
@@ -175,7 +175,9 @@ const ClarifyForm: React.FC<{ data: ClarifyArtifact; turn?: ArtifactTurn }> = ({
       .filter(Boolean);
     if (lines.length === 0) return;
     const message = `Here are my answers:\n${lines.join('\n')}`;
-    // Recorded on the turn first (saved even if the view goes away): the form never comes back.
+    // Recorded on the turn first (saved even if the view goes away): the form never comes back. Its
+    // settled line takes the focus the Send button had (settle §5.8).
+    if (turn) requestSettleFocus(turn.writeKey);
     turn?.settle({ status: 'sent', at: Date.now(), result: { answered: lines.length } });
     // Send as the user's next message so the model continues with the answers in context.
     window.dispatchEvent(new CustomEvent('dreamstream:send', { detail: { text: message } }));

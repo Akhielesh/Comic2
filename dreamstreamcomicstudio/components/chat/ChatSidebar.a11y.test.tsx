@@ -52,6 +52,26 @@ const setup = () => {
 afterEach(() => cleanup());
 
 describe('ChatSidebar keyboard access', () => {
+  it('chat rows are 44 px tall on coarse pointers, and the row button fills the row', () => {
+    const { a } = setup();
+    const row = screen.getByRole('button', { name: new RegExp(`^${a.title}`) });
+    expect(row.className).toMatch(/\bself-stretch\b/);
+    expect(row.parentElement?.className).toMatch(/(^|\s)coarse:min-h-11(\s|$)/);
+  });
+
+  it('Escape in the rename field cancels the rename and marks the key handled (the phone drawer stays)', () => {
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: /options for trip plan/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const field = screen.getByDisplayValue('Trip plan');
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      field.dispatchEvent(ev);
+    });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(screen.queryByDisplayValue('Trip plan')).toBeNull();
+  });
+
   it('every chat row is a button in the tab order; the open chat is marked current', () => {
     const { a, b, c, onSelect } = setup();
     for (const s of [a, b, c]) {

@@ -7,6 +7,7 @@
 // remounted view merges the reply when it lands.
 // Also B5 end to end: a calendar card's outcome is recorded on its turn in IndexedDB, so a reload
 // never offers Confirm again — including a Confirm still in flight when the view went away.
+// Also the phone drawer: Escape closes it, unless a menu (or the rename field) inside it takes the key.
 // Real AIChatPlatform + chatStorage over an in-memory IndexedDB; the network (chat stream, calendar,
 // Supabase) and the heavy chrome are faked.
 import React from 'react';
@@ -74,8 +75,9 @@ vi.mock('../../services/supabase', async () => {
 vi.mock('./ChatConversation', async () => {
   const { ChatArtifacts } = await import('./artifacts/ChatArtifacts');
   return {
-    ChatConversation: (props: { session: ChatSession; busy: boolean; onSend: (t: string, a: never[]) => void; onRenameTitle: (t: string) => void }) => (
+    ChatConversation: (props: { session: ChatSession; busy: boolean; onSend: (t: string, a: never[]) => void; onRenameTitle: (t: string) => void; onToggleSidebar: () => void }) => (
       <div>
+        <button onClick={props.onToggleSidebar}>toggle sidebar</button>
         <p data-testid="state">{props.busy ? 'busy' : 'idle'}</p>
         <ol>
           {props.session.turns.map((t) => (
@@ -98,7 +100,7 @@ afterAll(() => vi.unstubAllGlobals());
 
 import { AIChatPlatform } from './AIChatPlatform';
 import { listChatSessions, setChatSessionUser } from '../../services/chatStorage';
-import { __resetChatStreamsForTests } from '../../services/chatStreams';
+import { __resetChatStreamsForTests, hotSessions } from '../../services/chatStreams';
 import { setLocalOwner } from '../../services/localOwner';
 import { mutateEvent } from '../../services/calendarApi';
 import { sendChatMessageStream } from '../../services/chatApi';
@@ -258,5 +260,96 @@ describe('a calendar card is never offered twice (B5, end to end)', () => {
     await flush();
     expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
     expect(screen.getByText(/Not added — you moved on/)).toBeTruthy();
+  });
+});
+
+describe('a batch calendar card remounted while an earlier view is still adding (CHAT-0 review)', () => {
+  const BATCH = {
+    type: 'calendar_event_draft',
+    data: { action: 'create', connectionId: 'conn-1', canWrite: true, event: { title: 'Flight' }, events: [{ title: 'Flight' }, { title: 'Hotel' }, { title: 'Dinner' }] }
+  };
+
+  it('shows the earlier view’s progress, adds nothing twice, and drops idle copies once no view is up', async () => {
+    const first = await mountChat();
+    await startReply();
+    await act(async () => {
+      net.streams[0].resolve({ text: 'Here is your trip.', artifacts: [BATCH] });
+    });
+    await flush();
+    fireEvent.click(await screen.findByRole('button', { name: /add all 3/i }));
+    await waitFor(() => expect(net.mutate).toHaveLength(1));
+    first.unmount(); // Flight is being written
+    // No view is up: only the chat with a write in flight is still held in memory.
+    expect(hotSessions().map((h) => h.turns.length)).toEqual([2]);
+
+    await act(async () => {
+      net.mutate[0].resolve({ action: 'create', event: {} }); // Flight lands; the old loop moves to Hotel
+    });
+    await flush();
+    expect(net.mutate).toHaveLength(2);
+
+    await mountChat(); // the user comes back while Hotel is being written
+    const progress = screen.getByRole('button', { name: /adding 1\/3/i }) as HTMLButtonElement;
+    expect(progress.disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /add the|add all/i })).toBeNull();
+
+    await act(async () => {
+      net.mutate[1].resolve({ action: 'create', event: {} });
+    });
+    await flush();
+    await act(async () => {
+      net.mutate[2].resolve({ action: 'create', event: {} });
+    });
+    await flush();
+    expect(mutateEvent).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(mutateEvent).mock.calls.map((c) => (c[2] as { title: string }).title)).toEqual(['Flight', 'Hotel', 'Dinner']);
+    expect(screen.queryByRole('button', { name: /add/i })).toBeNull();
+    expect(screen.getByText('Added 3 events to your calendar')).toBeTruthy();
+
+    // Leaving Chat Studio with nothing in flight keeps no chat in memory; IndexedDB has it all.
+    cleanup();
+    expect(hotSessions()).toEqual([]);
+    const s = await stored();
+    expect(Object.values(s.turns[1].artifactState ?? {})).toEqual([expect.objectContaining({ status: 'done' })]);
+  });
+});
+
+describe('the phone drawer and Escape', () => {
+  const drawerOpen = () => screen.queryByTitle('Account, theme & exit') !== null;
+  const escape = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+
+  it('Escape closes the drawer; a menu or the rename field inside it takes Escape first', async () => {
+    expect(window.matchMedia('(min-width: 768px)').matches).toBe(false); // a phone
+    await mountChat();
+    await startReply();
+    await act(async () => {
+      net.streams[0].resolve({ text: 'Monday: gym.', model: 'test/model' });
+    });
+    await flush();
+
+    expect(drawerOpen()).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'toggle sidebar' }));
+    expect(drawerOpen()).toBe(true);
+    escape();
+    expect(drawerOpen()).toBe(false);
+
+    // A row menu inside the drawer: Escape closes the menu only.
+    fireEvent.click(screen.getByRole('button', { name: 'toggle sidebar' }));
+    fireEvent.click(screen.getByRole('button', { name: /options for plan my week/i }));
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeTruthy();
+    escape();
+    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
+    expect(drawerOpen()).toBe(true);
+
+    // The rename field: Escape cancels the rename only.
+    fireEvent.click(screen.getByRole('button', { name: /options for plan my week/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    const field = screen.getByDisplayValue('Plan my week');
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(screen.queryByDisplayValue('Plan my week')).toBeNull();
+    expect(drawerOpen()).toBe(true);
+
+    escape();
+    expect(drawerOpen()).toBe(false);
   });
 });

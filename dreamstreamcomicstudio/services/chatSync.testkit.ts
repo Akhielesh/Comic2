@@ -1,6 +1,6 @@
 // Test kit: an in-memory `chat_sync` table behind a Supabase-shaped client, for chatSync / chatStorage
-// tests. It honours the column list of each select, the `eq` / `in` filters, `order('key')` and
-// `range`, and records every select and upsert, so a test can tell a manifest read (`key, updated_at`)
+// tests. It honours the column list of each select, the `eq` / `in` / `gt` filters, `order('key')`
+// and `range`, and records every select and upsert, so a test can tell a manifest read (`key, updated_at`)
 // from a body read (a select that names `data`). Rows given without `key` / `updated_at` derive them
 // from their data, as chatSync.push writes them. Not imported by app code.
 
@@ -21,6 +21,8 @@ export interface FakeChatSyncCloud {
   upserts: { key: string; user_id: string; kind: string; data: Record<string, unknown>; updated_at?: string }[];
   /** Every select: the column list asked for and how many rows came back. */
   selects: { columns: string; rows: number }[];
+  /** When set, every upsert waits for it before it lands (a slow upload). */
+  upsertGate?: Promise<void>;
 }
 
 export const createFakeChatSyncCloud = (): FakeChatSyncCloud => ({ user: null, rows: [], upserts: [], selects: [] });
@@ -42,12 +44,14 @@ const project = (r: FakeChatSyncRow, columns: string): Record<string, unknown> =
 const query = (cloud: FakeChatSyncCloud, columns: string, opts?: { count?: string }) => {
   const eqs: [string, unknown][] = [];
   let inFilter: [string, unknown[]] | null = null;
+  const gts: [string, string][] = [];
   let ordered = false;
   let range: [number, number] | null = null;
   const run = () => {
     let rows = cloud.rows.filter((r) =>
       eqs.every(([col, v]) => (col === 'key' ? rowKey(r) : (r as unknown as Record<string, unknown>)[col]) === v)
     );
+    for (const [col, v] of gts) rows = rows.filter((r) => String(col === 'key' ? rowKey(r) : (r as unknown as Record<string, unknown>)[col]) > v);
     if (inFilter) {
       const [col, values] = inFilter;
       rows = rows.filter((r) => values.includes(col === 'key' ? rowKey(r) : (r as unknown as Record<string, unknown>)[col]));
@@ -66,6 +70,10 @@ const query = (cloud: FakeChatSyncCloud, columns: string, opts?: { count?: strin
     },
     in(col: string, values: unknown[]) {
       inFilter = [col, values];
+      return builder;
+    },
+    gt(col: string, v: string) {
+      gts.push([col, v]);
       return builder;
     },
     order() {
@@ -93,6 +101,7 @@ export const makeFakeChatSyncSupabase = (cloud: FakeChatSyncCloud) => ({
   from: () => ({
     select: (columns: string, opts?: { count?: string }) => query(cloud, columns, opts),
     upsert: async (row: FakeChatSyncCloud['upserts'][number]) => {
+      if (cloud.upsertGate) await cloud.upsertGate;
       cloud.upserts.push(row);
       cloud.rows = [...cloud.rows.filter((r) => rowKey(r) !== row.key), { ...row }];
       return { error: null };

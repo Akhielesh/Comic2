@@ -40,7 +40,9 @@ import {
   getHotSession,
   hotSessions,
   isStreaming,
+  holdHotSession,
   putHotSession,
+  retainChatView,
   streamingIds,
   subscribeChatStreams
 } from '../../services/chatStreams';
@@ -465,8 +467,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
+    // While this view is mounted chatStreams keeps recent chats hot; once no view is, only the chats
+    // a write may still arrive for (a reply streaming, a calendar write) stay in memory.
+    const release = retainChatView();
     return () => {
       aliveRef.current = false;
+      release();
     };
   }, []);
   const initializedRef = useRef(false);
@@ -855,6 +861,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const updateSession = (id: string, updater: (s: ChatSession) => ChatSession) => {
     if (wasDeletedThisSession(id)) return;
     if (!aliveRef.current && !getHotSession(id)) {
+      // Held hot until saved: a second late change made meanwhile builds on this one.
+      const release = holdHotSession(id);
       void (async () => {
         const stored = await getChatSession(id);
         if (!stored) return;
@@ -863,7 +871,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         if (next === fresh) return;
         putHotSession(next);
         await saveChatSession(next);
-      })().catch(() => {});
+      })()
+        .catch(() => {})
+        .finally(release);
       return;
     }
     const base = latestSession(id);

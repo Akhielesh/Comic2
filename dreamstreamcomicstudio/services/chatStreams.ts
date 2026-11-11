@@ -13,6 +13,10 @@
 //    here and then to IndexedDB, outside any React updater;
 //  - which artifact writes (a calendar Confirm) are in flight, so a remounted card shows "Adding…"
 //    instead of offering the write again.
+// Hot copies are kept only while they can matter: while a chat view is mounted (up to
+// HOT_SESSION_LIMIT idle chats), and after the last view unmounts only for chats with work still in
+// flight (a reply streaming, a calendar write). The rest is dropped then, so leaving Chat Studio does
+// not keep megabytes of chats in memory; a late write on a dropped chat reads it from IndexedDB.
 // Subscribers (useSyncExternalStore) are told about every change. Nothing here touches the network
 // or a timer.
 
@@ -28,6 +32,10 @@ const controllers = new Map<string, AbortController>();
 const hot = new Map<string, ChatSession>();
 const artifactWrites = new Set<string>();
 const listeners = new Set<Listener>();
+/** Chat views mounted now (retainChatView). */
+let views = 0;
+/** Chats with a read-modify-write in flight outside any view (holdHotSession), by count. */
+const holds = new Map<string, number>();
 
 let version = 0;
 let streamingSnapshot: ReadonlySet<string> = new Set();
@@ -98,16 +106,41 @@ export const abortStream = (sessionId: string): void => {
 
 // --- Hot sessions --------------------------------------------------------------------------------
 
+/** True while a write may still arrive for this chat: a reply streaming, an artifact write, a held save. */
+const hasWorkInFlight = (id: string): boolean => {
+  if (controllers.has(id) || holds.has(id)) return true;
+  const prefix = `${id}:`;
+  for (const key of artifactWrites) if (key.startsWith(prefix)) return true;
+  return false;
+};
+
 const trimHot = () => {
+  // No chat view mounted: keep only the chats a write may still arrive for.
+  const limit = views > 0 ? HOT_SESSION_LIMIT : 0;
   let idle = 0;
-  for (const id of hot.keys()) if (!controllers.has(id)) idle += 1;
-  if (idle <= HOT_SESSION_LIMIT) return;
+  for (const id of hot.keys()) if (!hasWorkInFlight(id)) idle += 1;
+  if (idle <= limit) return;
   for (const id of Array.from(hot.keys())) {
-    if (idle <= HOT_SESSION_LIMIT) break;
-    if (controllers.has(id)) continue;
+    if (idle <= limit) break;
+    if (hasWorkInFlight(id)) continue;
     hot.delete(id);
     idle -= 1;
   }
+};
+
+/**
+ * A chat view mounted. Returns its release: when the last view goes, idle hot copies are dropped
+ * (chats with a reply or an artifact write in flight stay until it ends).
+ */
+export const retainChatView = (): (() => void) => {
+  views += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    views = Math.max(0, views - 1);
+    trimHot();
+  };
 };
 
 /** The newest in-memory copy of a chat written this page session, if it is still kept. */
@@ -135,6 +168,24 @@ export const dropHotSession = (id: string): void => {
   emit();
 };
 
+/**
+ * Keep this chat's hot copy while a change to it is saved outside any view (read from IndexedDB,
+ * changed, written back), so a second late change made meanwhile builds on the first instead of on
+ * the stored copy. Returns the release.
+ */
+export const holdHotSession = (id: string): (() => void) => {
+  holds.set(id, (holds.get(id) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (holds.get(id) ?? 1) - 1;
+    if (left > 0) holds.set(id, left);
+    else holds.delete(id);
+    trimHot();
+  };
+};
+
 // --- In-flight artifact writes (calendar Confirm / Add all) --------------------------------------
 
 /** The key of one artifact on one turn: `${sessionId}:${turnId}:${artifactKey}`. */
@@ -149,6 +200,7 @@ export const beginArtifactWrite = (key: string): void => {
 
 export const endArtifactWrite = (key: string): void => {
   if (!artifactWrites.delete(key)) return;
+  trimHot();
   emit();
 };
 
@@ -160,6 +212,8 @@ export const __resetChatStreamsForTests = (): void => {
   hot.clear();
   artifactWrites.clear();
   listeners.clear();
+  views = 0;
+  holds.clear();
   refreshStreaming();
   version = 0;
 };

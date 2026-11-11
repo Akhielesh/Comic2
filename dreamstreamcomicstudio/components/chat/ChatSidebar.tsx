@@ -117,7 +117,11 @@ const SessionRow: React.FC<{
             // (keys P3-K0; Safari reports keyCode 229 with isComposing false).
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter') commitRename();
-            if (e.key === 'Escape') setEditing(false);
+            if (e.key === 'Escape') {
+              // Handled here: the phone drawer around the sidebar stays open (it closes on an unhandled Escape).
+              e.preventDefault();
+              setEditing(false);
+            }
           }}
           className={`flex-1 min-w-0 text-base sm:text-[13px] outline-none bg-transparent font-medium ${INK}`}
         />
@@ -131,7 +135,7 @@ const SessionRow: React.FC<{
     <div
       draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/session', session.id); e.dataTransfer.effectAllowed = 'move'; }}
-      className={`group relative flex items-center gap-1.5 cursor-pointer ${active ? RAIL_ROW_ACTIVE : RAIL_ROW}`}
+      className={`group relative flex items-center gap-1.5 cursor-pointer coarse:min-h-11 ${active ? RAIL_ROW_ACTIVE : RAIL_ROW}`}
       onClick={onSelect}
     >
       {/* The row is a real button (keyboard: Tab to it, Enter/Space to open the chat); the
@@ -140,7 +144,7 @@ const SessionRow: React.FC<{
         type="button"
         onClick={(e) => { e.stopPropagation(); onSelect(); }}
         aria-current={active ? 'true' : undefined}
-        className={`flex flex-1 min-w-0 items-center gap-1.5 rounded-md text-left ${FOCUS_RING}`}
+        className={`flex flex-1 min-w-0 items-center gap-1.5 self-stretch rounded-md text-left ${FOCUS_RING}`}
       >
         {generating && <Loader2 aria-hidden className={`w-3.5 h-3.5 shrink-0 ${ACCENT_TEXT} animate-spin`} />}
         {!generating && session.parentSessionId && <GitBranch aria-hidden className="w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)]" />}
@@ -155,7 +159,6 @@ const SessionRow: React.FC<{
           className={`tap-target p-1 rounded-md ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
           title="Options"
           aria-label={`Options for ${session.title}`}
-         
           aria-expanded={menuOpen}
         >
           <MoreVertical className="w-3.5 h-3.5" />
@@ -319,7 +322,6 @@ const FooterAccount: React.FC<{
         onClick={() => setOpen((v) => !v)}
         className={`w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} text-left`}
         title="Account, theme & exit"
-       
         aria-expanded={open}
       >
         <span className={`w-7 h-7 rounded-full ${ACCENT_BG} text-white flex items-center justify-center text-[11px] font-semibold shrink-0`} aria-hidden>

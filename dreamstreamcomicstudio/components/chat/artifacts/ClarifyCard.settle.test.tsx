@@ -80,6 +80,18 @@ describe('ClarifyCard settles', () => {
     }
   });
 
+  it('Send answers → the answered line takes the focus the Send button had (settle §5.8)', () => {
+    const store = { turn: { artifacts: [{ type: 'clarify', data: clarify }], passed: false } as Stored };
+    const { container } = render(<Harness store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: /spring/i }));
+    const send = screen.getByRole('button', { name: /send answers/i });
+    send.focus();
+    fireEvent.click(send);
+    const line = container.querySelector('[data-settled="clarify"]') as HTMLElement;
+    expect(line?.textContent).toContain('You answered 1 question');
+    expect(document.activeElement).toBe(line);
+  });
+
   it('while the chat is answering, Send waits (the composer would drop it)', () => {
     render(<Harness store={{ turn: { artifacts: [{ type: 'clarify', data: clarify }], passed: false, busy: true } }} />);
     fireEvent.click(screen.getByRole('button', { name: /spring/i }));

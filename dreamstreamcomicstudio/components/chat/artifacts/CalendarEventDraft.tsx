@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { CalendarPlus, Pencil, Trash2, Check, Loader2, MapPin, Users, Clock, ExternalLink, AlertTriangle, CalendarCheck, Dot } from 'lucide-react';
 import type { CalendarEventDraftArtifact } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle } from './kit';
 import { mutateEvent, type CalendarAction } from '../../../services/calendarApi';
-import { beginArtifactWrite, endArtifactWrite } from '../../../services/chatStreams';
+import { beginArtifactWrite, endArtifactWrite, isArtifactWriteInFlight } from '../../../services/chatStreams';
 import type { ChatArtifactState } from '../../../services/chatStorage';
 import type { ArtifactTurn } from './ChatArtifacts';
 import { FOCUS_RING, TONE_TEXT } from '../studioDesign';
@@ -42,9 +42,22 @@ type RowStatus = 'idle' | 'busy' | 'pending' | 'done' | 'error';
 
 // --- Settled: one line, no controls (D3) ----------------------------------------------------------
 
+// Focus on settle (settle §5.8): a card that settles from its own action (Confirm, Send answers)
+// removes the button that had focus. Its settled line then takes focus, so keyboard and screen-reader
+// users keep their place instead of landing on <body>. Asked for by key (the artifact's writeKey) just
+// before the card settles; the line that mounts for that key takes it once. Page memory only.
+const settleFocus = new Set<string>();
+
+/** The next settled line mounted for `key` takes focus (unless focus has moved somewhere else). */
+export const requestSettleFocus = (key: string): void => {
+  settleFocus.add(key);
+};
+
 /**
  * One quiet line for a card the conversation has moved past or whose action finished: what happened,
- * and at most a plain link to where it lives. No buttons, no inputs.
+ * and at most a plain link to where it lives. No buttons, no inputs. The text wraps (never an
+ * ellipsis): a warning such as "may already be in your calendar — check it" must be read whole, on a
+ * 320 px phone too.
  */
 export const SettledArtifactLine: React.FC<{
   type: string;
@@ -52,37 +65,53 @@ export const SettledArtifactLine: React.FC<{
   text: string;
   detail?: string;
   link?: { href: string; label: string };
-}> = ({ type, tone, text, detail, link }) => (
-  <div
-    data-settled={type}
-    role="group"
-    aria-label={detail ? `${text} · ${detail}` : text}
-    aria-live="off"
-    className="my-1 flex min-h-7 coarse:min-h-11 min-w-0 items-center gap-2 text-[13px] text-[var(--ds-ink)]"
-  >
-    {tone === 'success' ? (
-      <Check aria-hidden className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.success}`} />
-    ) : tone === 'warning' ? (
-      <AlertTriangle aria-hidden className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.warning}`} />
-    ) : (
-      <Dot aria-hidden className="h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" />
-    )}
-    <span className={`min-w-0 truncate ${tone === 'neutral' ? 'text-[var(--ds-muted)]' : ''}`}>
-      {text}
-      {detail && <span className="text-[var(--ds-muted)]"> · {detail}</span>}
-    </span>
-    {link && (
-      <a
-        href={link.href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`ml-auto inline-flex shrink-0 items-center gap-1 coarse:min-h-11 coarse:px-2 text-[12px] font-medium text-[var(--ds-muted)] underline-offset-2 hover:text-[var(--ds-ink)] hover:underline ${FOCUS_RING}`}
-      >
-        <ExternalLink aria-hidden className="h-3.5 w-3.5" /> {link.label}
-      </a>
-    )}
-  </div>
-);
+  /** Take focus on mount when this key asked for it (requestSettleFocus). */
+  focusKey?: string;
+}> = ({ type, tone, text, detail, link, focusKey }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focusKey || !settleFocus.delete(focusKey)) return;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    // Only when focus was lost with the button: a user who moved on (the composer) keeps their place.
+    if (active && active !== document.body) return;
+    ref.current?.focus({ preventScroll: true });
+  }, [focusKey]);
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      data-settled={type}
+      role="group"
+      aria-label={detail ? `${text} · ${detail}` : text}
+      aria-live="off"
+      className={`my-1 flex min-h-7 coarse:min-h-11 min-w-0 items-start gap-2 py-1 text-[13px] leading-5 text-[var(--ds-ink)] ${FOCUS_RING}`}
+    >
+      <span className="flex h-5 shrink-0 items-center">
+        {tone === 'success' ? (
+          <Check aria-hidden className={`h-3.5 w-3.5 ${TONE_TEXT.success}`} />
+        ) : tone === 'warning' ? (
+          <AlertTriangle aria-hidden className={`h-3.5 w-3.5 ${TONE_TEXT.warning}`} />
+        ) : (
+          <Dot aria-hidden className="h-3.5 w-3.5 text-[var(--ds-muted)]" />
+        )}
+      </span>
+      <span className={`min-w-0 flex-1 break-words ${tone === 'neutral' ? 'text-[var(--ds-muted)]' : ''}`}>
+        {text}
+        {detail && <span className="text-[var(--ds-muted)]"> · {detail}</span>}
+      </span>
+      {link && (
+        <a
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`-my-1 inline-flex min-h-7 shrink-0 items-center gap-1 coarse:min-h-11 coarse:px-2 text-[12px] font-medium text-[var(--ds-muted)] underline-offset-2 hover:text-[var(--ds-ink)] hover:underline ${FOCUS_RING}`}
+        >
+          <ExternalLink aria-hidden className="h-3.5 w-3.5" /> {link.label}
+        </a>
+      )}
+    </div>
+  );
+};
 
 const isBatch = (data: CalendarEventDraftArtifact): boolean =>
   data.action === 'create' && Array.isArray(data.events) && data.events.length > 1;
@@ -132,6 +161,7 @@ const PENDING_TEXT: Record<CalendarAction, string> = {
 
 const CalendarSettled: React.FC<{ data: CalendarEventDraftArtifact; turn: ArtifactTurn }> = ({ data, turn }) => {
   const st = turn.state;
+  const focusKey = turn.writeKey;
   if (isBatch(data)) {
     const removed = storedRemoved(st);
     const rows = storedRows(data, st).filter((_, i) => !removed.has(i));
@@ -140,20 +170,21 @@ const CalendarSettled: React.FC<{ data: CalendarEventDraftArtifact; turn: Artifa
     const total = rows.length;
     const unsureText = unsure ? `${unsure} may already be in your calendar` : undefined;
     if (st?.status === 'done' || (total > 0 && added === total)) {
-      return <SettledArtifactLine type="calendar_event_draft" tone="success" text={`Added ${added} event${added === 1 ? '' : 's'} to your calendar`} />;
+      return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="success" text={`Added ${added} event${added === 1 ? '' : 's'} to your calendar`} />;
     }
     if (added > 0) {
       const rest = rows.some((r) => r === 'idle' || r === 'error');
-      return <SettledArtifactLine type="calendar_event_draft" tone="success" text={`Added ${added} of ${total} events${rest ? ' — you moved on' : ''}`} detail={unsureText} />;
+      return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="success" text={`Added ${added} of ${total} events${rest ? ' — you moved on' : ''}`} detail={unsureText} />;
     }
-    if (unsure > 0) return <SettledArtifactLine type="calendar_event_draft" tone="warning" text={`${unsure === 1 ? 'An event' : `${unsure} events`} may already be in your calendar — check it before asking again`} />;
-    return <SettledArtifactLine type="calendar_event_draft" tone="neutral" text={PASSED_TEXT.create} />;
+    if (unsure > 0) return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="warning" text={`${unsure === 1 ? 'An event' : `${unsure} events`} may already be in your calendar — check it before asking again`} />;
+    return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="neutral" text={PASSED_TEXT.create} />;
   }
   const title = data.event?.title || undefined;
   if (st?.status === 'done') {
     const link = st.result?.htmlLink;
     return (
       <SettledArtifactLine
+        focusKey={focusKey}
         type="calendar_event_draft"
         tone="success"
         text={DONE_TEXT(data)}
@@ -162,29 +193,49 @@ const CalendarSettled: React.FC<{ data: CalendarEventDraftArtifact; turn: Artifa
       />
     );
   }
-  if (st?.status === 'pending') return <SettledArtifactLine type="calendar_event_draft" tone="warning" text={PENDING_TEXT[data.action] || PENDING_TEXT.create} detail={title} />;
-  return <SettledArtifactLine type="calendar_event_draft" tone="neutral" text={PASSED_TEXT[data.action] || PASSED_TEXT.create} detail={title} />;
+  if (st?.status === 'pending') return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="warning" text={PENDING_TEXT[data.action] || PENDING_TEXT.create} detail={title} />;
+  return <SettledArtifactLine focusKey={focusKey} type="calendar_event_draft" tone="neutral" text={PASSED_TEXT[data.action] || PASSED_TEXT.create} detail={title} />;
 };
 
 // BATCH create: one card listing several events with an "Add all" action. Each row gets
 // its own live status as they're created sequentially; rows can be removed before adding.
 // Every row's outcome is recorded on the turn as it lands (`pending` just before its write), so
 // nothing is ever added twice: a reload restores the rows and offers only the ones still to add.
+//
+// Inside a chat the TURN is the truth whenever this card is not adding rows itself. A view of this
+// chat that has since unmounted may still be adding them (its loop outlives it) and records each row
+// on the turn as it lands; a card mounted meanwhile shows that progress and never offers a row the
+// other loop added, may have added or is adding (CHAT-0 review: the remount double write).
 const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: ArtifactTurn }> = ({ data, turn }) => {
   const events = batchEvents(data);
+  // This card's own run (and, outside a chat, its only record).
   const [statuses, setStatuses] = useState<RowStatus[]>(() => storedRows(data, turn?.state));
-  const [removed, setRemoved] = useState<Set<number>>(() => storedRemoved(turn?.state));
+  const [localRemoved, setRemoved] = useState<Set<number>>(() => storedRemoved(turn?.state));
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const blocked = !data.connectionId ? 'not_connected' : !data.canWrite ? 'read_only' : null;
+  const rowsNow: RowStatus[] = turn && !running ? storedRows(data, turn.state) : statuses;
+  // Removal only grows: rows removed here before a run (not recorded yet) plus the recorded ones.
+  const removed = turn ? new Set([...localRemoved, ...storedRemoved(turn.state)]) : localRemoved;
+  // A write for this card that this card did not start (an earlier view's Add all) is in flight.
+  const elsewhere = !running && !!turn?.writing;
+  const adding = running || elsewhere;
   const shown = events.map((e, i) => ({ e, i })).filter(({ i }) => !removed.has(i));
-  const doneCount = shown.filter(({ i }) => statuses[i] === 'done').length;
-  const failCount = shown.filter(({ i }) => statuses[i] === 'error').length;
-  const unsureCount = shown.filter(({ i }) => statuses[i] === 'pending').length;
+  const doneCount = shown.filter(({ i }) => rowsNow[i] === 'done').length;
+  const failCount = shown.filter(({ i }) => rowsNow[i] === 'error').length;
+  const unsureCount = shown.filter(({ i }) => rowsNow[i] === 'pending').length;
   // Rows that may still be added: never one that is added, or may already be.
-  const toAdd = shown.filter(({ i }) => statuses[i] === 'idle' || statuses[i] === 'error');
-  const started = shown.some(({ i }) => statuses[i] !== 'idle');
+  const toAdd = shown.filter(({ i }) => rowsNow[i] === 'idle' || rowsNow[i] === 'error');
+  const started = shown.some(({ i }) => rowsNow[i] !== 'idle');
 
+  /** One save of every row's state on the turn (`busy` is saved as `pending`: it may land). */
   const record = (rows: RowStatus[], removedRows: Set<number>) => {
     if (!turn) return;
     const persisted = rows.map((r) => (r === 'busy' ? 'pending' : r));
@@ -198,16 +249,24 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
   };
 
   const addAll = async () => {
-    if (!data.connectionId || blocked || running || turn?.writing) return;
+    if (!data.connectionId || blocked || adding) return;
+    // The registry, not this render: a write started a moment ago elsewhere counts too.
+    if (turn && isArtifactWriteInFlight(turn.writeKey)) return;
+    const queue = toAdd;
+    if (!queue.length) return;
     setRunning(true); setError(undefined);
     if (turn) beginArtifactWrite(turn.writeKey);
-    // Local copy: React state lags inside this loop.
-    const rows = [...statuses];
+    // Local copy of what is shown (inside a chat: the turn's record), since React state lags in this loop.
+    const rows = [...rowsNow];
+    const gone = removed;
     try {
-      for (const { e, i } of toAdd) {
-        rows[i] = 'busy';
-        setStatuses([...rows]);
-        record(rows, removed);
+      // N+1 saves for N rows: each save records the row that just landed AND marks the next one
+      // pending just before its write, so a page that dies mid-batch never offers a written row again.
+      rows[queue[0].i] = 'busy';
+      setStatuses([...rows]);
+      record(rows, gone);
+      for (let k = 0; k < queue.length; k++) {
+        const { e, i } = queue[k];
         try {
           await mutateEvent(data.connectionId, 'create', {
             title: e.title,
@@ -222,11 +281,16 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
           rows[i] = 'done';
         } catch (err) {
           rows[i] = 'error';
-          setError((err as Error)?.message || 'Some events couldn’t be added.');
+          if (mounted.current) setError((err as Error)?.message || 'Some events couldn’t be added.');
         }
+        const next = queue[k + 1];
+        if (next) rows[next.i] = 'busy';
         setStatuses([...rows]);
-        record(rows, removed);
+        record(rows, gone);
       }
+      // The card settles from its own action when nothing is left to add: its line takes focus.
+      const live = rows.filter((_, i) => !gone.has(i));
+      if (turn && mounted.current && live.every((r) => r === 'done' || r === 'pending')) requestSettleFocus(turn.writeKey);
     } finally {
       if (turn) endArtifactWrite(turn.writeKey);
       setRunning(false);
@@ -234,21 +298,22 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
   };
 
   const removeRow = (i: number) => {
-    if (running || statuses[i] !== 'idle') return;
+    if (adding || rowsNow[i] !== 'idle') return;
     const next = new Set(removed).add(i);
     setRemoved(next);
-    if (started) record(statuses, next);
+    if (started) record(rowsNow, next);
   };
 
   const header = (
     <>
       <SurfaceTitle>Add {shown.length} event{shown.length === 1 ? '' : 's'}</SurfaceTitle>
-      <SurfaceSubtitle>{data.account || 'Google Calendar'}{started && !running ? ` · ${doneCount} added${failCount ? `, ${failCount} failed` : ''}` : ''}</SurfaceSubtitle>
+      <SurfaceSubtitle>{data.account || 'Google Calendar'}{started && !adding ? ` · ${doneCount} added${failCount ? `, ${failCount} failed` : ''}` : ''}</SurfaceSubtitle>
     </>
   );
 
+  // While another view's Add all runs, its in-flight row is recorded as `pending`: show it working.
   const rowIcon = (s: RowStatus) =>
-    s === 'busy' ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--ds-accent)]" />
+    s === 'busy' || (s === 'pending' && elsewhere) ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--ds-accent)]" />
       : s === 'done' ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
         : s === 'error' ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
           : s === 'pending' ? <Clock className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.warning}`} />
@@ -268,15 +333,15 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
         <ul className="max-h-72 space-y-1 overflow-y-auto [scrollbar-width:thin]">
           {shown.map(({ e, i }) => (
             <li key={i} className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline-soft)] px-2.5 py-1.5">
-              <span className="mt-0.5">{rowIcon(statuses[i])}</span>
+              <span className="mt-0.5">{rowIcon(rowsNow[i])}</span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-medium text-[var(--ds-ink)]">{e.title}</p>
                 <p className="truncate text-[11px] tabular-nums text-[var(--ds-muted)]">
-                  {statuses[i] === 'pending' ? 'May already be in your calendar' : `${fmtWhen(e.start, e.end, e.allDay)}${e.location ? ` · ${e.location}` : ''}`}
+                  {rowsNow[i] === 'pending' && !elsewhere ? 'May already be in your calendar' : `${fmtWhen(e.start, e.end, e.allDay)}${e.location ? ` · ${e.location}` : ''}`}
                 </p>
               </div>
-              {!running && statuses[i] === 'idle' && (
-                <button onClick={() => removeRow(i)} aria-label={`Remove ${e.title}`} className="shrink-0 rounded-md p-1 text-[var(--ds-faint)] hover:bg-[var(--ds-hover)] hover:text-rose-500">
+              {!adding && rowsNow[i] === 'idle' && (
+                <button onClick={() => removeRow(i)} aria-label={`Remove ${e.title}`} className="tap-target shrink-0 rounded-md p-1 text-[var(--ds-faint)] hover:bg-[var(--ds-hover)] hover:text-rose-500">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               )}
@@ -295,21 +360,21 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
           </div>
         )}
         {error && <p className="text-[12px] text-rose-600">{error}</p>}
-        {!running && unsureCount > 0 && (
+        {!adding && unsureCount > 0 && (
           <p className={`text-[12px] ${TONE_TEXT.warning}`}>
             {unsureCount === 1 ? 'One event' : `${unsureCount} events`} may already be in your calendar — they won’t be added again.
           </p>
         )}
 
-        {(toAdd.length > 0 || running) && (
+        {(toAdd.length > 0 || adding) && (
           <div className="flex items-center justify-end gap-2 border-t border-[var(--ds-hairline-soft)] pt-2.5">
             <button
               onClick={addAll}
-              disabled={running || !!blocked || !!turn?.writing}
+              disabled={adding || !!blocked}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent)] px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
             >
-              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarPlus className="h-3.5 w-3.5" />}
-              {running ? `Adding ${doneCount}/${shown.length}…` : started ? `Add the ${toAdd.length} left` : `Add all ${shown.length}`}
+              {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarPlus className="h-3.5 w-3.5" />}
+              {adding ? `Adding ${doneCount}/${shown.length}…` : started ? `Add the ${toAdd.length} left` : `Add all ${shown.length}`}
             </button>
           </div>
         )}
@@ -326,6 +391,14 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
   const [error, setError] = useState<string | undefined>();
   // Outside a chat (the Gallery) there is no turn to record on: the done line is local.
   const [done, setDone] = useState<string | null>(null);
+  const localKey = useId();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const ev = data.event || {};
   const blocked = !data.connectionId ? 'not_connected' : !data.canWrite ? 'read_only' : null;
@@ -359,6 +432,8 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
               };
       const res = await mutateEvent(data.connectionId, data.action, params);
       const htmlLink = res?.event?.htmlLink;
+      // Settled by its own action while on screen: the done line takes the focus the button had.
+      if (mounted.current) requestSettleFocus(turn ? turn.writeKey : localKey);
       if (turn) turn.settle({ status: 'done', at: Date.now(), ...(htmlLink ? { result: { htmlLink } } : {}) });
       else setDone(htmlLink ?? '');
       setStatus('idle');
@@ -375,6 +450,7 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
   if (done !== null) {
     return (
       <SettledArtifactLine
+        focusKey={localKey}
         type="calendar_event_draft"
         tone="success"
         text={DONE_TEXT(data)}

@@ -22,7 +22,7 @@ vi.stubGlobal('indexedDB', idb);
 afterAll(() => vi.unstubAllGlobals());
 
 import { createEmptySession, listChatSessions, saveChatSession, setChatSessionUser, syncFromCloud, type ChatSession } from './chatStorage';
-import { BODY_CHUNK, MANIFEST_PAGE, pullManifest, readSyncBase, syncDecision } from './chatSync';
+import { BODY_CHUNK, MANIFEST_PAGE, pullManifest, pushSession, readSyncBase, removeRemote, syncDecision } from './chatSync';
 import { isBodySelect } from './chatSync.testkit';
 import { setLocalOwner } from './localOwner';
 
@@ -160,10 +160,72 @@ describe('light chat sync: a manifest, then only what changed', () => {
     }
   });
 
+  it('a server cap below MANIFEST_PAGE: every row is still read (pages follow the last key, not a fixed size)', async () => {
+    cloud.rows = Array.from({ length: 1200 }, (_, i) => ({
+      key: `session:${String(i).padStart(5, '0')}`, user_id: A, kind: 'session', data: { id: String(i) }, updated_at: new Date(T0).toISOString()
+    }));
+    cloud.maxRows = 500; // a project that lowered PostgREST max-rows
+    try {
+      const manifest = await pullManifest();
+      expect(manifest?.entries).toHaveLength(1200);
+      expect(new Set(manifest?.entries.map((e) => e.key)).size).toBe(1200);
+      expect(manifestSelects().map((s) => s.rows)).toEqual([500, 500, 500, 200]);
+    } finally {
+      cloud.maxRows = undefined;
+    }
+  });
+
+  it('a capped manifest that never ends is not used (nothing is mistaken for missing)', async () => {
+    cloud.rows = Array.from({ length: 60 }, (_, i) => ({
+      key: `session:${String(i).padStart(5, '0')}`, user_id: A, kind: 'session', data: { id: String(i) }, updated_at: new Date(T0).toISOString()
+    }));
+    cloud.maxRows = 1; // 60 rows, one per answer: past the page limit
+    try {
+      expect(await pullManifest()).toBeNull();
+    } finally {
+      cloud.maxRows = undefined;
+    }
+  });
+
   it('an account under the cap costs exactly one manifest request', async () => {
     remoteWrite({ ...createEmptySession(), title: 'only one' }, T0);
     await pullManifest();
     expect(cloud.selects).toEqual([{ columns: 'key, updated_at', rows: 1 }]);
+  });
+
+  it('saves made while an upload is in flight go up once, newest only; every caller hears when it is sent', async () => {
+    let open!: () => void;
+    cloud.upsertGate = new Promise<void>((r) => { open = r; });
+    const base = { ...createEmptySession(), ownerUserId: A };
+    const v = (n: number) => ({ ...base, title: `v${n}`, updatedAt: T0 + n });
+    const done: string[] = [];
+    const sends = [1, 2, 3, 4].map((n) => pushSession(v(n)).then(() => done.push(`v${n}`)));
+    await flush();
+    expect(cloud.upserts).toEqual([]); // v1 is uploading; v2..v4 wait
+    open();
+    cloud.upsertGate = undefined;
+    await Promise.all(sends);
+    // v1 (already uploading), then only the newest of the saves made meanwhile.
+    expect(cloud.upserts.map((u) => u.data.title)).toEqual(['v1', 'v4']);
+    expect(done.sort()).toEqual(['v1', 'v2', 'v3', 'v4']);
+    expect(readSyncBase(A)[`session:${base.id}`]).toBe(T0 + 4);
+
+    // Later saves start a new upload straight away.
+    await pushSession(v(5));
+    expect(cloud.upserts.map((u) => u.data.title)).toEqual(['v1', 'v4', 'v5']);
+  });
+
+  it('a delete drops a save still waiting to go up, so the row never comes back', async () => {
+    let open!: () => void;
+    cloud.upsertGate = new Promise<void>((r) => { open = r; });
+    const s = { ...createEmptySession(), ownerUserId: A, updatedAt: T0 };
+    const first = pushSession(s);
+    const second = pushSession({ ...s, title: 'edited', updatedAt: T0 + 1 });
+    await removeRemote('session', s.id);
+    open();
+    cloud.upsertGate = undefined;
+    await Promise.all([first, second]);
+    expect(cloud.upserts.map((u) => u.data.title)).toEqual([s.title]); // the edit never went up
   });
 
   it('storage that throws: sync still works (timestamp rule), nothing breaks', async () => {

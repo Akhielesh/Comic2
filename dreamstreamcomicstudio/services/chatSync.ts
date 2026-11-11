@@ -72,8 +72,9 @@ export interface ChatSyncManifestEntry {
   updatedAt: number;
 }
 
-/** Rows per manifest page when the server capped the first answer (PostgREST max-rows). */
+/** PostgREST's default max-rows (Supabase): the cap the manifest usually meets first. */
 export const MANIFEST_PAGE = 1000;
+/** Pages read past a capped first answer before giving up (then nothing is treated as missing). */
 const MANIFEST_MAX_PAGES = 50;
 /** Keys per body request (keeps the `in.(…)` filter well inside URL limits). */
 export const BODY_CHUNK = 50;
@@ -110,8 +111,9 @@ export const pullManifest = async (): Promise<{ userId: string; entries: ChatSyn
     return out;
   };
   // One request in the common case. `count` says whether the server capped the answer (PostgREST
-  // returns at most its max-rows); if it did, read it again in key order, page by page, so no row is
-  // ever mistaken for missing.
+  // returns at most its max-rows, whatever that is set to); if it did, read it again in key order,
+  // each page starting after the last key read (keyset paging: no page size is assumed, and a row
+  // written meanwhile never shifts another out of view), so no row is ever mistaken for missing.
   const first = await supabase.from(TABLE).select('key, updated_at', { count: 'exact' }).eq('user_id', user.id);
   if (first.error) {
     if (isMissingTable(first.error)) available = false;
@@ -122,23 +124,28 @@ export const pullManifest = async (): Promise<{ userId: string; entries: ChatSyn
   if (total <= firstRows.length) return { userId: user.id, entries: toEntries(firstRows) };
 
   const entries: ChatSyncManifestEntry[] = [];
+  let after: string | null = null;
   for (let page = 0; page < MANIFEST_MAX_PAGES; page++) {
-    const from = page * MANIFEST_PAGE;
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select('key, updated_at')
-      .eq('user_id', user.id)
-      .order('key', { ascending: true })
-      .range(from, from + MANIFEST_PAGE - 1);
+    let q = supabase.from(TABLE).select('key, updated_at').eq('user_id', user.id);
+    if (after !== null) q = q.gt('key', after);
+    const { data, error } = await q.order('key', { ascending: true });
     if (error) {
       if (isMissingTable(error)) available = false;
       return null;
     }
     const rows = (data || []) as { key?: unknown; updated_at?: unknown }[];
+    const last = rows.length ? rows[rows.length - 1].key : undefined;
+    // An empty page is the end. (The server orders and filters by its own collation, so the keys are
+    // never compared here; a page ending on the key it started after would only loop.)
+    if (rows.length === 0 || typeof last !== 'string' || last === after) {
+      return { userId: user.id, entries };
+    }
     entries.push(...toEntries(rows));
-    if (rows.length === 0 || from + rows.length >= total) break;
+    after = last;
+    if (entries.length >= total) return { userId: user.id, entries };
   }
-  return { userId: user.id, entries };
+  // Still more after MANIFEST_MAX_PAGES pages: a partial manifest would read the rest as missing.
+  return null;
 };
 
 /**
@@ -242,7 +249,7 @@ const ownerOf = (data: unknown): string | null => {
   return typeof owner === 'string' && owner ? owner.toLowerCase() : null;
 };
 
-const push = async (kind: 'session' | 'project', id: string, data: unknown, updatedAt?: number): Promise<void> => {
+const upsertRow = async (kind: 'session' | 'project', id: string, data: unknown, updatedAt?: number): Promise<void> => {
   if (!available) return;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
@@ -266,10 +273,59 @@ const push = async (kind: 'session' | 'project', id: string, data: unknown, upda
   patchSyncBase(user.id, keyFor(kind, id), at);
 };
 
+// At most one upload per row in flight. A save while one is uploading waits, and only the newest of
+// the saves made meanwhile goes up after it (each upload is the whole body: a chat that is saved
+// several times in a row, e.g. a calendar card recording each event it adds, costs about two
+// uploads instead of one per save). No timer: the next upload starts when the previous one ends.
+type PendingPush = { kind: 'session' | 'project'; id: string; data: unknown; updatedAt?: number; waiters: Array<() => void> };
+const inFlight = new Map<string, Promise<void>>();
+const queued = new Map<string, PendingPush>();
+
+const drain = (key: string): void => {
+  const run = (async () => {
+    for (;;) {
+      const next = queued.get(key);
+      if (!next) break;
+      queued.delete(key);
+      try {
+        await upsertRow(next.kind, next.id, next.data, next.updatedAt);
+      } catch {
+        /* best effort, as before: the next sync moves it */
+      } finally {
+        for (const done of next.waiters) done();
+      }
+    }
+  })();
+  inFlight.set(key, run);
+  void run.finally(() => {
+    if (inFlight.get(key) !== run) return;
+    inFlight.delete(key);
+    // A save that arrived after the loop's last look (before this ran) still goes up.
+    if (queued.has(key)) drain(key);
+  });
+};
+
+const push = (kind: 'session' | 'project', id: string, data: unknown, updatedAt?: number): Promise<void> => {
+  const key = keyFor(kind, id);
+  const prev = queued.get(key);
+  // Resolves once this body, or a newer one that replaced it, has been sent.
+  const sent = new Promise<void>((resolve) => {
+    queued.set(key, { kind, id, data, updatedAt, waiters: [...(prev?.waiters ?? []), resolve] });
+  });
+  if (!inFlight.has(key)) drain(key);
+  return sent;
+};
+
 export const pushSession = (s: ChatSession): Promise<void> => push('session', s.id, s, s.updatedAt);
 export const pushProject = (p: ChatProject): Promise<void> => push('project', p.id, p, p.updatedAt);
 
 export const removeRemote = async (kind: 'session' | 'project', id: string): Promise<void> => {
+  // A save still waiting to go up would bring the row back after the delete.
+  const waiting = queued.get(keyFor(kind, id));
+  if (waiting) {
+    queued.delete(keyFor(kind, id));
+    for (const done of waiting.waiters) done();
+  }
   if (!available) return;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
