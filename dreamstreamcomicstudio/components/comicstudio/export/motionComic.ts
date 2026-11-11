@@ -125,9 +125,16 @@ export const SHOT_MIN_HOLD_MS: Readonly<Record<ShotType, number>> = {
 /** Extra hold for the big panels a page is built around (av.md §5.3 "splash and large add 1 s"). */
 export const SIZE_HOLD_BONUS_MS: Readonly<Partial<Record<PanelSize, number>>> = { splash: 1000, large: 1000 };
 
-/** A panel's minimum hold (ms) from its shot and size; an unknown shot (old or hand-edited docs) gets the medium hold. */
+/** True only for a table's OWN key: an inherited name ('constructor', 'toString') must not read as a shot or size. */
+const ownKey = (table: object, key: unknown): boolean => typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key);
+
+/**
+ * A panel's minimum hold (ms) from its shot and size. An unknown shot (old or hand-edited docs, or an inherited
+ * object name) gets the medium hold and an unknown size no bonus, so a duration is never NaN.
+ */
 export const panelHoldMs = (panel: Pick<Panel, 'shot' | 'size'>): number =>
-  (SHOT_MIN_HOLD_MS[panel.shot] ?? SHOT_MIN_HOLD_MS.medium) + (SIZE_HOLD_BONUS_MS[panel.size] ?? 0);
+  (ownKey(SHOT_MIN_HOLD_MS, panel.shot) ? SHOT_MIN_HOLD_MS[panel.shot] : SHOT_MIN_HOLD_MS.medium) +
+  (ownKey(SIZE_HOLD_BONUS_MS, panel.size) ? (SIZE_HOLD_BONUS_MS[panel.size] ?? 0) : 0);
 
 /**
  * The shot list, in book order (cover → title card → pages → "The End" → back cover → outro).

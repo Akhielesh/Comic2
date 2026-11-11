@@ -1,6 +1,8 @@
 // AV-0 (av.md F10, F9): the motion-comic export end to end on fakes — a fake WebCodecs encoder (mediabunny), fake
 // art and a recording canvas. Each export sends exactly ONE telemetry event (done, failed or cancelled) with counts
-// and enums only, schedules no timer of its own, and paints the frame with the reader-room token.
+// and enums only, schedules no timer of its own, and paints the frame with the reader-room token. One case leaves the
+// telemetry queue real (only apiClient is faked) to prove the whole path to /api: one POST, 8 s after the export, then
+// silence (the container can sleep).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
@@ -9,6 +11,9 @@ import type { UrlFor } from './sequence';
 
 const tel = vi.hoisted(() => ({ captureEvent: vi.fn() }));
 vi.mock('../../../services/telemetry', () => tel);
+// The only network the telemetry queue has; the export path imports nothing else from apiClient.
+const api = vi.hoisted(() => ({ post: vi.fn() }));
+vi.mock('../../../services/apiClient', () => api);
 
 const art = vi.hoisted(() => ({ fail: new Set<string>(), released: 0 }));
 vi.mock('./rasterize', async (orig) => ({
@@ -73,6 +78,7 @@ let canvases: FakeCtx[];
 beforeEach(() => {
   canvases = [];
   tel.captureEvent.mockReset();
+  api.post.mockReset();
   art.fail.clear();
   art.released = 0;
   enc.frames = 0;
@@ -89,6 +95,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   document.documentElement.style.removeProperty('--ds-reader-room');
+  document.documentElement.style.removeProperty('--ds-reader-paper-back');
 });
 
 const onlyEvent = () => {
@@ -159,6 +166,28 @@ describe('motion comic export telemetry: one event per export, no content', () =
     expect(tel.captureEvent.mock.calls.map((c) => c[0].metadata.outro)).toEqual([false, true]);
     expect(tel.captureEvent.mock.calls[1][0].metadata.rtl).toBe(true);
   });
+
+  it('through the real telemetry queue: one POST /api/telemetry/events 8 s after the export, then nothing (fake timers)', async () => {
+    const real = await vi.importActual<typeof import('../../../services/telemetry')>('../../../services/telemetry');
+    tel.captureEvent.mockImplementation(real.captureEvent);
+    api.post.mockResolvedValue({});
+    vi.useFakeTimers();
+    await exportMotionComic(smallDoc(), urlFor, { download: vi.fn(), timeline: { plates: false } });
+    expect(tel.captureEvent).toHaveBeenCalledTimes(1);
+    expect(api.post).not.toHaveBeenCalled(); // the export itself sends nothing
+    vi.advanceTimersByTime(7999);
+    expect(api.post).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    const [path, body] = api.post.mock.calls[0] as [string, { events: { eventType: string }[] }];
+    expect(path).toBe('/api/telemetry/events');
+    expect(body.events.map((e) => e.eventType)).toEqual([MOTION_EXPORT_EVENT]);
+    expectNoContent(body);
+    // Idle afterwards: no periodic flush, no retry, no timer left that could wake the backend.
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('motion comic frames read the design tokens', () => {
@@ -169,5 +198,18 @@ describe('motion comic frames read the design tokens', () => {
     const clears = main.calls.filter((c) => c.name === 'fillRect' && c.args[0] === 0 && c.args[1] === 0 && c.args[2] === 1080 && c.args[3] === 1920);
     expect(clears.length).toBeGreaterThanOrEqual(enc.frames);
     expect(new Set(clears.map((c) => c.state.fillStyle))).toEqual(new Set(['rgb(9, 8, 7)']));
+  });
+
+  it('the outro words are painted with --ds-reader-paper-back', async () => {
+    document.documentElement.style.setProperty('--ds-reader-paper-back', 'rgb(1, 2, 3)');
+    await exportMotionComic(smallDoc(), urlFor, { download: vi.fn(), timeline: { plates: false } });
+    const main = canvases.find((c) => (c.ctx.canvas as unknown as { width: number }).width === 1080)!;
+    const texts = main.calls.filter((c) => c.name === 'fillText');
+    const brand = texts.filter((c) => c.args[0] === 'Made with DreamStream Comic Studio' || c.args[0] === 'dreamstreamstudio.ai');
+    expect(new Set(brand.map((c) => c.args[0]))).toEqual(new Set(['Made with DreamStream Comic Studio', 'dreamstreamstudio.ai']));
+    expect(new Set(brand.map((c) => c.state.fillStyle))).toEqual(new Set(['rgb(1, 2, 3)']));
+    // The title on the end card too: every word the frame drawer writes is paper.
+    expect(texts.some((c) => String(c.args[0]).includes('Saffron'))).toBe(true);
+    expect(new Set(texts.map((c) => c.state.fillStyle))).toEqual(new Set(['rgb(1, 2, 3)']));
   });
 });

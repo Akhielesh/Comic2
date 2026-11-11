@@ -22,10 +22,18 @@ describe('readingOrder (shared)', () => {
     const drawn: Box[] = [
       { x: 0.04, y: 0.52, w: 0.92, h: 0.44 },
       { x: 0.04, y: 0.04, w: 0.44, h: 0.44 },
-      { x: 0.52, y: 0.04 + READING_ROW_TOLERANCE * 0.9, w: 0.44, h: 0.4 }
+      { x: 0.52, y: 0.04 + 0.07, w: 0.44, h: 0.4 } // tops 0.07 apart: one row (absolute, so the tolerance is pinned)
     ];
     expect(readingOrder(drawn, false)).toEqual([1, 2, 0]);
     expect(readingOrder(drawn, true)).toEqual([2, 1, 0]);
+    // Tops 0.09 apart are two rows: the band is 0.08, not wider.
+    const apart: Box[] = [drawn[1], { ...drawn[2], y: 0.04 + 0.09 }];
+    expect(readingOrder(apart, true)).toEqual([0, 1]);
+  });
+
+  it('keeps the row tolerance it had in the reader (moved verbatim from guidedModel.ts)', () => {
+    // Guided View, the transcript and the video all band rows with this one value; changing it re-bands all three.
+    expect(READING_ROW_TOLERANCE).toBe(0.08);
   });
 
   it('is the function Guided View uses (re-exported under its old names)', () => {

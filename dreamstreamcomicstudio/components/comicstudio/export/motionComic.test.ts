@@ -259,6 +259,11 @@ describe('every panel holds at least its shot (AV-0, F5)', () => {
     expect(panelHoldMs({ shot: 'wide', size: 'large' })).toBe(SHOT_MIN_HOLD_MS.wide + 1000);
     // A stored doc with an unknown shot reads as a medium shot, never NaN.
     expect(panelHoldMs({ shot: 'dutch' as Panel['shot'], size: 'medium' })).toBe(SHOT_MIN_HOLD_MS.medium);
+    // Inherited object names are not shots or sizes: a plain lookup would return a function and make the video NaN long.
+    expect(panelHoldMs({ shot: 'constructor' as Panel['shot'], size: 'toString' as Panel['size'] })).toBe(SHOT_MIN_HOLD_MS.medium);
+    expect(panelHoldMs({ shot: 'establishing', size: '__proto__' as Panel['size'] })).toBe(SHOT_MIN_HOLD_MS.establishing);
+    const odd = buildMotionTimeline(onePanel({ shot: 'hasOwnProperty' as Panel['shot'], size: 'valueOf' as Panel['size'], lines: [] }));
+    expect(Number.isFinite(odd.totalMs)).toBe(true);
   });
 
   it('speech is never slowed and the cap still holds: reading time wins when the lines need longer', () => {
@@ -282,10 +287,17 @@ describe('the outro card is switchable (AV-0; owner decision D17)', () => {
 });
 
 describe('design tokens, not literals (AV-0, F9)', () => {
-  it('motionComic.ts spells no colour: no hex and no rgb() literal', () => {
+  it('motionComic.ts spells no colour: no hex, rgb(), hsl() or named colour; every fill and stroke comes from the palette', () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'motionComic.ts'), 'utf8');
     expect(source.match(/#[0-9a-f]{3,8}\b/gi) ?? []).toEqual([]);
     expect(source.match(/rgba?\(\s*\d/gi) ?? []).toEqual([]);
+    expect(source.match(/hsla?\(/gi) ?? []).toEqual([]);
+    // A quoted value ('white', 'black', a template) assigned to a style is a colour spelled in place.
+    expect(source.match(/(?:fill|stroke)Style\s*=\s*['"`]/g) ?? []).toEqual([]);
+    // Every style assignment reads the export's palette (the reader-room tokens), never another constant.
+    const styles = source.match(/(?:fill|stroke)Style\s*=\s*[^;]+;/g) ?? [];
+    expect(styles.length).toBeGreaterThan(0);
+    expect(styles.filter((s) => !/=\s*palette\.\w+;$/.test(s))).toEqual([]);
   });
 
   it('paints with the reader-room tokens, and falls back to the plate palette without a stylesheet', () => {
