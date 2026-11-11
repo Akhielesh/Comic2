@@ -30,7 +30,7 @@ export const MOTION_ANCHORS: readonly MotionAnchor[] = ['reveal', 'panel', 'page
 
 export const ENTER_PRESET_IDS = ['pop', 'bounce', 'slide', 'zoom-punch', 'fade', 'drop', 'spin-in', 'typewriter', 'word-cascade', 'ink-wipe'] as const;
 export const EMPHASIS_PRESET_IDS = ['shake', 'pulse', 'jitter', 'squash-stretch', 'flicker', 'wiggle', 'glow', 'heartbeat'] as const;
-/** The plan counts six exits without naming them: these mirror the entrances (lead to confirm). */
+/** The plan counts six exits without naming them: these mirror the entrances (accepted by the lead in S1). */
 export const EXIT_PRESET_IDS = ['pop-out', 'fade-out', 'slide-out', 'zoom-out', 'drop-out', 'ink-wipe-out'] as const;
 export const LOOP_PRESET_IDS = ['float', 'sway', 'blink', 'rain-fall', 'speed-line-scroll', 'sparkle-twinkle'] as const;
 export const CAMERA_MOVE_IDS = ['still', 'push', 'pull', 'pan-left', 'pan-right', 'shake'] as const;

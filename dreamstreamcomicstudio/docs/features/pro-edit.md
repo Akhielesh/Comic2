@@ -10,6 +10,13 @@ so the contract is **additive and invisible**:
 - no client can write a Pro op or a Pro field (the server sanitizer refuses them until PE-SERVER);
 - no UI: the client parts are stubs that render nothing.
 
+**S1 integration** (on `integ/s1`; nothing visible changes):
+- `studioApi.asCaps` copies `proMotion`, `proStickers` and `readerMotion` when the server sends them as booleans. The
+  client therefore sees the three caps, though no Pro UI reads them yet.
+- The B9 frame engine's split and join leave opaque layers as written (§7).
+- `COMIC_READER_MOTION` follows the lead's rule (§1).
+- The exit preset and ease names are accepted (§7).
+
 Plan: the master plan, Program 2 (§2.1–§2.12). Packages after PE-0: PE-1 (S2) PE-SERVER, PE-COMPOSE, PE-FX,
 PE-MOTION-ENGINE, PE-LETTER, PE-FONTS, PE-SHELL, PE-INSPECT; PE-2 (S3); PE-3 (S4); PE-4 (S5).
 
@@ -26,8 +33,8 @@ done by the editor, no AI cost"); "Pro" is never "paid".
 | `COMIC_PRO_STICKERS` | `caps.proStickers` | `off` | off \| admins \| all | The Stickers tab (after D6, PE-LICENCE and the credits block) |
 | `COMIC_READER_MOTION` | `caps.readerMotion` | `off` | off \| all (`on` = all) | Readers play the creator's motion |
 
-`server/src/comic/access.ts` reads them once per request (`proCapsFromEnv`, `shared/comic/capabilities.ts`); the client
-reads the caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only for motion and stickers;
+`server/src/comic/access.ts` reads them once per request (`proCapsFromEnv`, `shared/comic/capabilities.ts`). The client
+reads only the caps (`asCaps` in `studioApi.ts`, then `proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only for motion and stickers;
 reader motion has no admins stage (readers are not signed in), so a bare `on` (`true`, `1`, `all`, `everyone`) turns it on
 for everyone and `admins` stays off (`readerMotionStage`, lead decision S1). Details and
 rollout criteria: `docs/infrastructure/ENV_MATRIX.md`, "Comic Studio: Pro Edit".
@@ -131,9 +138,12 @@ source scan (TypeScript AST) proves `components/comicstudio/editor/**` (and `com
 
 ## 7. Known limits (PE-0)
 
+- **Accepted by the lead (S1), as named:**
+  - the exit preset names: `EXIT_PRESET_IDS` mirrors the entrances (pop-out, fade-out, slide-out, zoom-out, drop-out,
+    ink-wipe-out);
+  - the ease ids: `ease`, `enter`, `spring`, `linear`, `in`, `out`, `in-out`, `damped`;
+  - the reader-motion rule (§1).
 - **Lead to confirm (invented by PE-0; the plan names none):**
-  - exit preset names: `EXIT_PRESET_IDS` mirrors the entrances (pop-out, fade-out, slide-out, zoom-out, drop-out,
-    ink-wipe-out); ease ids `ease`, `enter`, `spring`, `linear`, `in`, `out`, `in-out`, `damped`;
   - the write bounds in `limits.ts` (`holdMaxMs` 10 s, `paramsPerClip` 8, `paramTextChars` 32, key ranges ±1 / 0..8 /
     ±720°, `paramsPerFx` 16, FX `paramTextChars` 32, `strokeWMax` 0.3, `glowSizeMax` 0.5, `warpAmountMax` 1). The load
     path never applies them (§2), so changing one needs no extra deploy;
@@ -156,7 +166,9 @@ source scan (TypeScript AST) proves `components/comicstudio/editor/**` (and `com
   restoring a Pro-styled line, re-adding a deleted Pro-styled line, and a `letter_style` restore of a base, kind or
   speaker patch with Pro keys. The load, ordinary edits (a merge keeps them) and `named` are safe. Closing it needs the
   server sanitizers (`sanitize/lettering.ts`, `sanitize/panels.ts`, owned by PE-SERVER) to keep stored Pro keys on an
-  inverse, which is a lead decision (wave note). Reachable only after a rollback.
-- **An opaque layer clipped to a panel:** the B9 frame engine's split and join (`editor/frames.ts`) emit `layer {clip}`
-  patches for every layer clipped to the panel, which the server refuses for an opaque one (wave note to the frames
-  owner). `panel_remove`, frame edits and their undo already leave it as written. Reachable only after a rollback.
+  inverse. That is a lead decision: S1 did not apply it, and it is carried to S2 PE-SERVER (wave note 9). Reachable only
+  after a rollback.
+- **An opaque layer clipped to a panel (fixed in S1):** the B9 frame engine's split and join (`editor/frames.ts`) now
+  loop over `knownLayersOf(page)`, as `panel_remove` and frame edits already did. They never emit a `layer {clip}`
+  patch for an opaque layer, which the server would refuse. An opaque layer's lock never refuses the edit (frame edits
+  never move one), and known overlays still follow their panel. Pinned by `shared/comic/editor/frames.test.ts`.

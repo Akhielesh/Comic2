@@ -125,10 +125,10 @@ free software: none adds a model or image call of its own, and nothing here bypa
 
 | Var | Turns on | Default | Cost | Safe to go to `all` when |
 |---|---|---|---|---|
-| `COMIC_LIVE_QUEUE` | `caps.liveAgent.queue`: the visible "Up next" message queue while the director works (A1; client only; queued notes drain as one combined message, D1) | `admins` | — | A1 tests pass, plus one week of admin use with no lost notes |
-| `COMIC_STEER` | `caps.liveAgent.steer`: `POST …/steer` and "Send now" adding a note to the running turn (A2/A4). Off, "Send now" = Stop the director, then send (D2) | `off` | — (a few hundred tokens inside the same turn) | The steer screen passes the safety tests; no stranded steers in the logs |
-| `COMIC_CONFLICT_GUARD` | `caps.liveAgent.conflicts`: the creator's mid-turn edits win and the agent asks with a conflict card; contradiction questions (A3; D3) | `admins` | — | Conflict cards seen and answered without false positives on two-balloon pages |
-| `COMIC_DIALOGUE_FAST` | `caps.dialogueFast`: clear dialogue edits ("make it a whisper") answered with no model call (B3 fast path; D4) | `off` | — (saves a model call) | The phrase corpus passes and the Undo-after-fast-edit rate is low |
+| `COMIC_LIVE_QUEUE` | `caps.liveAgent.queue`: the visible "Up next" message queue while the director works (A1, built in S1; client only; queued notes drain as one combined message, D1; saved per tab in `sessionStorage`, never auto-sent after a reload). The `admins` default means admins see it once S1 ships | `admins` | — | A1 tests pass, plus one week of admin use with no lost notes |
+| `COMIC_STEER` | `caps.liveAgent.steer`: gates `POST /api/comic/projects/:id/steer` (A2, built in S1), which adds a note to the running director turn, and with it "Send now" steering (A1's client already calls it when the cap is on). Off: the route answers **501 `NOT_AVAILABLE` whatever the body** (checked before anything else), and "Send now" = Stop the director, then send (D2). On: refusals are 400 `BAD_REQUEST`, 409 `LIMIT` (> 6000 characters), 409 `NOT_RUNNING`, 409 `BUSY` (3 notes waiting or being screened), 429 `COOLDOWN`, 422 `CONTENT_POLICY`, and each keeps the note (`docs/features/live-agent.md` §3) | `off` | — (the capped safety screen per note, at most 3 at once per session, plus a few hundred tokens inside the same turn) | The steer screen passes the safety tests; no stranded steers in the logs (`comic_steer_unread` stays rare) |
+| `COMIC_CONFLICT_GUARD` | `caps.liveAgent.conflicts`: the conflict guard (A3, built in S1; D3). The creator's mid-turn edits win, the director asks with one conflict card, and "Use the director's" answers it (`resolve_conflict`, refused `NOT_AVAILABLE` while off). It also adds the DECIDED line, the ask-once prompt rule and the four contradiction questions. Off, the director behaves exactly as before. The director's line, balloon and style writers call the guard from wave 2 (B-TOOL). The `admins` default means admins get it once S1 ships | `admins` | — | Conflict cards seen and answered without false positives on two-balloon pages |
+| `COMIC_DIALOGUE_FAST` | `caps.dialogueFast`: clear dialogue edits ("make it a whisper") answered with no model call (B3 fast path; D4). The engine is built (`dialogueFastPath`, B-RESOLVE in S1) but nothing calls it until wave 2 B-TOOL wires `intents.ts`, so the flag changes nothing yet | `off` | — (saves a model call) | The phrase corpus passes and the Undo-after-fast-edit rate is low |
 | `COMIC_PRO_EDITOR_V2` | `caps.proEditorV2`: docked inspector, numeric fields, Layers, rotation, named styles (C-*) | `admins` | — | Layout smoke at 320, 360, 768, 1024 and 1280 px; reader/export parity with rotation |
 
 `dialogue_edit` (a reserved core director tool), the `GROUP_HINTS` fix and the `read_pages` line ids need no flag: they
@@ -140,10 +140,14 @@ Read once per request by `server/src/comic/access.ts` (`studioCapsFor` → `proC
 `shared/comic/capabilities.ts`) into `caps.proMotion`, `caps.proStickers` and `caps.readerMotion`; the client reads the
 caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`), never env. `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
 take the stages above (`off` | `admins` | `all`, same synonyms; a bare `on` means admins only).
-`COMIC_READER_MOTION` is `off` | `all` only (`readerMotionStage`, lead decision S1): a bare `on`, `true` or `1`, and
-`all` / `everyone` (any case), turn it on for **everyone**; `admins` stays `off`, because the public reader serves
-signed-out readers whose admin status cannot be checked; any other value is `off`. Every one defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free
-software: no flag here adds a model or image call. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
+`COMIC_READER_MOTION` is `off` | `all` only (`readerMotionStage`, lead decision S1).
+- A bare `on`, `true` or `1`, and `all` / `everyone` (any case, spaces ignored), turn it on for **everyone**.
+- `admins` stays `off`, because the public reader serves signed-out readers whose admin status cannot be checked.
+- Any other value is `off`.
+
+Every one of these defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free software: no
+flag here adds a model or image call. The client reads the three caps through `studioApi.asCaps` (S1), and no Pro UI
+reads them yet. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
 `PRO_EDIT_OPS_PATCHABLE` is a code constant in `shared/comic/ops.ts`, not env: it lets clients send the `motion` /
 `page_motion` ops and is flipped only after the PE-SERVER sanitizer is deployed. Backend env: a `vars` entry in
 `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`.
@@ -152,7 +156,8 @@ software: no flag here adds a model or image call. The workspace itself stays be
 |---|---|---|---|---|
 | `COMIC_PRO_MOTION` | `caps.proMotion`: the Easy Animate row, the Animate timeline, motion edits in the editor and "Export this page as video" | `off` (then `admins` after S3) | — | Frame-determinism and flash (≤ 3 Hz) tests pass; the phone playback budget is met |
 | `COMIC_PRO_STICKERS` | `caps.proStickers`: the Stickers tab in Assets | `off` | — | D6 approved, the licence gate (PE-LICENCE) merged, the credits block live |
-| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` = everyone, `admins` = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
+| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` / `true` / `1` / `all` / `everyone` = everyone, `admins` = off (signed-out readers cannot be checked), anything else = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
+| *(not an env var)* `PRO_EDIT_OPS_PATCHABLE` | `shared/comic/ops.ts`: a **code constant**, `false`. While false, the `motion` / `page_motion` ops (`PRO_EDIT_OPS`) are not in `CLIENT_PATCHABLE_OPS`, so no client can write motion, and the server sanitizer refuses them | `false` | — | Flipped only by the S2 integration, and only after the PE-SERVER sanitizer is in production and the dangling-motion prune is settled (`docs/features/pro-edit.md` §7). PE-0 itself must be in production one deploy before that |
 
 ## Admin cost centre (optional live Cloudflare usage)
 
