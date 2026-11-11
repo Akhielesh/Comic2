@@ -10,10 +10,12 @@
 //    (helpers/clutterProbe.ts) must report each one exactly, and nothing on a clean page. The ratchet's pure rules
 //    (above fails, below fails, an unlisted scene meets the targets, the updater only lowers) are proven here too.
 // 2. Scenes (@declutter): every scene of the loop (DECLUTTER_SCENES, plus every qa/app/scenes page discovered at
-//    runtime) at 360×740 and 1280×800, light and dark, with the page-level Atlas skin and real motion (still=0, motion
-//    on, entrances settled first: C9 counts what keeps moving). Each scene is judged against the baseline: a listed
-//    scene may neither rise nor fall, an unlisted one meets the rubric targets. The numbers and the labels behind them
-//    go to <QA_ARTIFACTS>/declutter/clutter-report.json (and are attached to the test) for the rubric review.
+//    runtime) at 360×740 and 1280×800, light and dark, and at 320×640 light for C6 and overflow only (the `narrow`
+//    view), with the page-level Atlas skin and real motion (still=0, motion on, entrances settled first: C9 counts
+//    what keeps moving). Each scene is judged against the baseline: a listed scene may neither rise nor fall, an
+//    unlisted one meets the rubric targets. The numbers and the labels behind them go to
+//    <QA_ARTIFACTS>/declutter/clutter-report.json (and are attached to the test) for the rubric review; each view and
+//    theme replaces its own entries there, and a scene that could not be measured is written with its error only.
 //
 // Baselines are lowered by the slot's integration owner only (PROGRAM3 §3.9 step 3): a package that improves a scene
 // writes the new numbers as a wave note.
@@ -29,13 +31,15 @@ import {
   CLUTTER_METRICS,
   CLUTTER_TARGETS,
   DECLUTTER_SCENES,
-  DECLUTTER_THEMES,
+  DECLUTTER_SUFFIXES,
   DECLUTTER_VIEWS,
+  NARROW_METRICS,
   PRIMARY_TOKENS,
   PROBE_SKIP,
   clutterMode,
   judgeScene,
   measureClutter,
+  mergeClutterReport,
   probeClutter,
   readClutterBaseline,
   sceneKey,
@@ -44,9 +48,13 @@ import {
   updateClutterBaseline,
   vanishedKeys,
   vanishedLine,
+  viewCounts,
+  viewDetail,
   withFileLock,
   writeAtomic,
   type ClutterCounts,
+  type ClutterMetric,
+  type ClutterReportEntry,
   type ProbeArgs,
   type ProbeResult
 } from './helpers/clutterProbe';
@@ -64,6 +72,7 @@ const BASE_CSS = `<style>
   @keyframes beat{50%{opacity:.5}}
   .pulse{display:inline-block;width:10px;height:10px;border-radius:5px;background:#3d44e8;animation:beat 2s infinite}
   .once{display:inline-block;width:10px;height:10px;animation:beat 200ms 1}
+  .long{display:inline-block;width:10px;height:10px;animation:beat 10s 1}
   .paused{display:inline-block;width:10px;height:10px;animation:beat 2s infinite paused}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}
 </style>`;
@@ -73,7 +82,7 @@ const probe = (page: Page, over: Partial<ProbeArgs> = {}): Promise<ProbeResult> 
   page.evaluate(probeClutter, { primaryTokens: [...PRIMARY_TOKENS], chrome: false, content: null, skip: PROBE_SKIP, ...over });
 
 /** Every metric 0 except the ones named. */
-const only = (counts: ClutterCounts) => Object.fromEntries(CLUTTER_METRICS.map((m) => [m, counts[m] ?? 0]));
+const only = (counts: ClutterCounts) => Object.fromEntries(CLUTTER_METRICS.map((m) => [m, counts[m] ?? 0])) as Record<ClutterMetric, number>;
 
 test.describe('clutter probe self-test @selftest', () => {
   test.use({ viewport: { width: 800, height: 600 }, reducedMotion: 'no-preference', colorScheme: 'light' });
@@ -123,7 +132,7 @@ test.describe('clutter probe self-test @selftest', () => {
     await page.setContent(
       html(`<main>
         <span class="pulse" aria-hidden="true"></span><span class="pulse"></span>
-        <span class="once"></span><span class="paused"></span>
+        <span class="once"></span><span class="paused"></span><span class="long"></span>
         <div inert><span class="pulse"></span></div>
         <button data-action="read">Read</button><a href="#read" data-action="read">Read full screen</a>
         <button data-action="read" style="display:none">Read (hidden)</button>
@@ -136,6 +145,8 @@ test.describe('clutter probe self-test @selftest', () => {
       </main>`)
     );
     await page.waitForTimeout(400);
+    // `.long` is a finite entrance still running when the probe measures (10 s, one iteration): it is not a live pulse.
+    expect(await page.evaluate(() => document.querySelector('.long')!.getAnimations()[0]?.playState)).toBe('running');
     const { counts, detail } = await probe(page);
     expect(detail.pulses).toEqual(['beat on span.pulse', 'beat on span.pulse']);
     expect(detail.duplicateActions).toEqual(['read ×2']);
@@ -227,6 +238,53 @@ test.describe('clutter probe self-test @selftest', () => {
     expect(readClutterBaseline(file).problems.join('\n')).toMatch(/freeWords is 0/);
     fs.writeFileSync(file, serialiseClutterBaseline(base).replace('"scenes": {', '"scenes": {"bad key": {},'));
     expect(readClutterBaseline(file).problems.join('\n')).toMatch(/"bad key" is not <scene>@/);
+    // Generated, never typed: valid JSON with the same numbers still fails when it is not byte for byte the generated
+    // form (a hand edit), and when its targets are not CLUTTER_TARGETS (the targets changed, the file was not rebuilt).
+    const handEdited = serialiseClutterBaseline(base).replace('"a@phone-light": {', '"a@phone-light":  {');
+    expect(JSON.parse(handEdited)).toEqual(JSON.parse(serialiseClutterBaseline(base)));
+    fs.writeFileSync(file, handEdited);
+    expect(readClutterBaseline(file).problems.join('\n')).toMatch(/hand-edited or has stale targets/);
+    const staleTargets = serialiseClutterBaseline(base).replace(/"targets": \{[^}]*\}/, '"targets": { "primaries": 2 }');
+    expect(staleTargets).not.toBe(serialiseClutterBaseline(base));
+    fs.writeFileSync(file, staleTargets);
+    expect(readClutterBaseline(file).problems.join('\n')).toMatch(/hand-edited or has stale targets/);
+    // Keys name a view × theme the loop measures, and a view's entry holds only the metrics that view ratchets.
+    expect(DECLUTTER_SUFFIXES).toEqual(['phone-light', 'phone-dark', 'desk-light', 'desk-dark', 'narrow-light']);
+    for (const key of ['a@narrow-dark', 'a@tablet-light', '@phone-light', 'A@phone-light']) {
+      fs.writeFileSync(file, serialiseClutterBaseline({ ...base, [key]: { truncatedLabels: 1 } }));
+      expect(readClutterBaseline(file).problems.join('\n'), key).toContain(`"${key}" is not <scene>@<view>-<theme>`);
+    }
+    fs.writeFileSync(file, serialiseClutterBaseline({ ...base, 'a@narrow-light': { truncatedLabels: 2, hOverflow: 14 } }));
+    expect(readClutterBaseline(file).problems).toEqual([]);
+    fs.writeFileSync(file, serialiseClutterBaseline({ ...base, 'a@narrow-light': { primaries: 2, truncatedLabels: 2 } }));
+    expect(readClutterBaseline(file).problems.join('\n')).toMatch(/a@narrow-light lists primaries, which the narrow view does not measure/);
+  });
+
+  test('the 320 px view ratchets only C6 and overflow; a view and theme replaces its own report entries, failed scenes included', () => {
+    const narrow = DECLUTTER_VIEWS.find((v) => v.id === 'narrow')!;
+    expect([narrow.device, narrow.width, narrow.themes, narrow.shots]).toEqual(['smoke-320x640', 320, ['light'], false]);
+    expect(narrow.metrics).toEqual(NARROW_METRICS);
+    const raw = { primaries: 2, maxBoxDepth: 3, truncatedLabels: 1, chromeShare: 40, hOverflow: 12 };
+    expect(viewCounts(raw, NARROW_METRICS)).toEqual(only({ truncatedLabels: 1, hOverflow: 12 }));
+    expect(viewCounts(raw, CLUTTER_METRICS)).toEqual(only(raw));
+    const detail = { controls: 9, primaries: ['Approve'], duplicateActions: ['read ×2'], deepestBoxes: ['a', 'b', 'c'], truncated: ['Mark up'], pulses: ['ping on span'], duplicateNames: { 'change the': 3 }, chromeContent: 'main' };
+    expect(viewDetail(detail, NARROW_METRICS)).toEqual({ controls: 9, primaries: [], duplicateActions: [], deepestBoxes: [], truncated: ['Mark up'], pulses: [], duplicateNames: {}, chromeContent: null });
+    expect(viewDetail(detail, CLUTTER_METRICS)).toEqual(detail);
+    // An unlisted 320 scene is held to the C6 and overflow targets only: its two primaries were never measured.
+    expect(judgeScene('new@narrow-light', viewCounts(raw, NARROW_METRICS), {}).over.map((l) => l.split(':')[0].split('  ')[1])).toEqual(['truncatedLabels', 'hOverflow']);
+
+    const prior = {
+      'a@phone-light': { url: '/a', counts: only({ primaries: 2 }) },
+      'gone@phone-light': { url: '/gone', counts: only({ primaries: 1 }) },
+      'a@desk-light': { url: '/a', counts: only({ primaries: 3 }) }
+    };
+    const merged = mergeClutterReport(prior, { 'a@phone-light': { url: '/a', error: 'QA surface crashed: boom' }, 'b@phone-light': { url: '/b', counts: only({}) } }, 'phone-light');
+    // This run's phone-light entries replace every earlier one: the failed scene keeps no old numbers, the dropped
+    // scene is gone; the desk entry (another test's part) stays.
+    expect(Object.keys(merged)).toEqual(['a@desk-light', 'a@phone-light', 'b@phone-light']);
+    expect(merged['a@phone-light']).toEqual({ url: '/a', error: 'QA surface crashed: boom' });
+    expect(merged['a@desk-light']).toBe(prior['a@desk-light']);
+    expect(mergeClutterReport(undefined, {}, 'desk-dark')).toEqual({});
   });
 
   test('the checked-in baseline is a clean generated file over known scenes', () => {
@@ -244,36 +302,32 @@ test.describe('clutter probe self-test @selftest', () => {
 
 // ── 2. The scenes ───────────────────────────────────────────────────────────
 
-interface SceneReport {
-  url: string;
-  counts: ProbeResult['counts'];
-  detail: ProbeResult['detail'];
-  over: string[];
-  under: string[];
-}
-
 const MODE = clutterMode();
 const reportDir = () => path.join(process.env.QA_ARTIFACTS_RESOLVED || path.resolve('node_modules/.cache/comic-qa'), 'declutter');
 
-/** Merge this test's scenes into clutter-report.json (four tests write it, possibly in parallel). */
-const writeReport = (entries: Record<string, SceneReport>) => {
+/**
+ * Write this test's scenes into clutter-report.json (one test per view × theme writes it, possibly in parallel):
+ * this run's entries of `suffix` replace every earlier one (mergeClutterReport), so no stale number survives.
+ */
+const writeReport = (entries: Record<string, ClutterReportEntry>, suffix: string) => {
   const file = path.join(reportDir(), 'clutter-report.json');
   withFileLock(file, () => {
-    let prior: { scenes?: Record<string, SceneReport> } = {};
+    let prior: { scenes?: Record<string, ClutterReportEntry>; runs?: Record<string, string> } = {};
     try {
       prior = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch {
       prior = {};
     }
-    const scenes = { ...(prior.scenes || {}), ...entries };
-    const sorted = Object.fromEntries(Object.keys(scenes).sort().map((k) => [k, scenes[k]]));
-    writeAtomic(file, `${JSON.stringify({ note: 'declutter probe (docs/design/clean-and-smooth.md): counts per scene@view-theme and the labels behind them', generatedAt: new Date().toISOString(), scenes: sorted }, null, 1)}\n`);
+    const now = new Date().toISOString();
+    const runs = Object.fromEntries(Object.entries({ ...(prior.runs || {}), [suffix]: now }).filter(([k]) => DECLUTTER_SUFFIXES.includes(k)).sort(([a], [b]) => a.localeCompare(b)));
+    const note = 'declutter probe (docs/design/clean-and-smooth.md): counts per scene@view-theme and the labels behind them; "runs" says when each view × theme was last measured, and an entry with "error" was not measured in that run';
+    writeAtomic(file, `${JSON.stringify({ note, generatedAt: now, runs, scenes: mergeClutterReport(prior.scenes, entries, suffix) }, null, 1)}\n`);
   });
   return file;
 };
 
 for (const view of DECLUTTER_VIEWS) {
-  for (const theme of DECLUTTER_THEMES) {
+  for (const theme of view.themes) {
     test.describe(`declutter scenes @declutter (${view.id}, ${theme})`, () => {
       const device = deviceByName(view.device)!;
       test.use({
@@ -296,7 +350,8 @@ for (const view of DECLUTTER_VIEWS) {
         const look = { theme, skin: 'atlas', img: 'svg', still: false } as const;
         const measured: Record<string, ClutterCounts> = {};
         const attempted: string[] = [];
-        const report: Record<string, SceneReport> = {};
+        const report: Record<string, ClutterReportEntry> = {};
+        const sceneUrl = () => page.url().replace(/^https?:\/\/[^/]+/, '');
 
         const measureScene = async (key: string, q: QaQuery, opts: { board?: boolean; chrome?: boolean; content?: string }) => {
           attempted.push(key);
@@ -309,18 +364,23 @@ for (const view of DECLUTTER_VIEWS) {
               await qa.settleAnimations(1500);
               await qa.settle(200);
               await markConversationScroller(page);
-              const { counts, detail } = await measureClutter(page, { chrome: view.phone && !!opts.chrome, content: opts.content ?? null });
+              const probed = await measureClutter(page, { chrome: view.phone && !!opts.chrome, content: opts.content ?? null });
+              // A view ratchets only its own metrics (the 320 px view: C6 and overflow); the rest count as 0.
+              const counts = viewCounts(probed.counts, view.metrics);
+              const detail = viewDetail(probed.detail, view.metrics);
               const verdict = judgeScene(key, counts, baseline);
               measured[key] = counts;
-              const url = page.url().replace(/^https?:\/\/[^/]+/, '');
-              report[key] = { url, counts, detail, ...verdict };
+              report[key] = { url: sceneUrl(), counts, detail, ...verdict };
               const why = `${JSON.stringify(storedCounts(counts))} — ${JSON.stringify(detail)}`;
               // A reset rewrites the entry from this very measurement, so only check and shrink runs judge a rise.
               if (MODE !== 'reset') expect.soft(verdict.over, `${key}: clutter above the baseline or the rubric target (${why})`).toEqual([]);
               if (MODE === 'check') expect.soft(verdict.under, `${key}: clutter below the baseline — lower it so the gain is kept`).toEqual([]);
             } catch (e) {
               const errors = qa.pageErrors.splice(0);
-              expect.soft(`${e instanceof Error ? e.message : String(e)}${errors.length ? ` (page errors: ${errors.join(' | ')})` : ''}`, `${key} opens and is measured`).toBe('');
+              const error = `${e instanceof Error ? e.message : String(e)}${errors.length ? ` (page errors: ${errors.join(' | ')})` : ''}`;
+              // No numbers for a scene this run could not measure: the review sheet says so instead of showing old ones.
+              report[key] = { url: sceneUrl(), error: error.slice(0, 600) };
+              expect.soft(error, `${key} opens and is measured`).toBe('');
             }
           });
         };
@@ -345,7 +405,7 @@ for (const view of DECLUTTER_VIEWS) {
         const drop = vanishedKeys(attempted, baseline, suffix);
         if (MODE === 'check') expect.soft(drop.map(vanishedLine), 'every baseline entry is still a scene').toEqual([]);
 
-        const file = writeReport(report);
+        const file = writeReport(report, suffix);
         await testInfo.attach(`clutter-report-${suffix}.json`, { body: JSON.stringify(report, null, 1), contentType: 'application/json' });
         testInfo.annotations.push({ type: 'clutter-report', description: file });
 

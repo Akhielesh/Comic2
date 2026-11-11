@@ -27,6 +27,9 @@
 //                         harness's still=1 zeroes every duration)
 //   +  hOverflow          px of horizontal page overflow
 //
+// Views (DECLUTTER_VIEWS): 360×740 and 1280×800 in light and dark on every metric, plus 320×640 light on C6 and
+// hOverflow only (NARROW_METRICS), the WCAG reflow width the house rule names.
+//
 // The ratchet (tests/e2e/baselines/declutter.json) works like DS-0's (tests/config/baselines/README.md): a scene the
 // baseline lists may neither rise above nor fall below its entry (lower it so the gain is kept); a scene it does not
 // list is held to the rubric targets (CLUTTER_TARGETS), so a new screen is clean from its first commit.
@@ -76,14 +79,47 @@ export const CLUTTER_TARGETS: Readonly<ClutterCounts> = Object.freeze({
   hOverflow: 0
 });
 
-/** The two shot sizes of the loop (360×740 phone, 1280×800 desk) and the two themes. */
-export const DECLUTTER_VIEWS = [
-  { id: 'phone', device: 'smoke-360x740', width: 360, height: 740, phone: true },
-  { id: 'desk', device: 'smoke-1280x800', width: 1280, height: 800, phone: false }
-] as const;
-export type DeclutterView = (typeof DECLUTTER_VIEWS)[number];
 export const DECLUTTER_THEMES = ['light', 'dark'] as const;
 export type DeclutterTheme = (typeof DECLUTTER_THEMES)[number];
+
+/** What the 320 px view ratchets: C6 and page overflow, the two checks the house rule names at that width. */
+export const NARROW_METRICS = ['truncatedLabels', 'hOverflow'] as const satisfies readonly ClutterMetric[];
+
+/**
+ * The loop's views. The two shot sizes (360×740 phone, 1280×800 desk) are measured in both themes on every metric
+ * and shot for the review sheet. `narrow` is the WCAG reflow width (320×640, the DS-1b `smoke-320x640` device), light
+ * only and not shot: labels that fit at 360 can still be cut at 320 (C6 says "at 320, 360 or 1280"), and the house
+ * rule is no overflow at 320, so it ratchets just those two (NARROW_METRICS).
+ */
+export const DECLUTTER_VIEWS = [
+  { id: 'phone', device: 'smoke-360x740', width: 360, height: 740, phone: true, themes: DECLUTTER_THEMES, metrics: CLUTTER_METRICS, shots: true },
+  { id: 'desk', device: 'smoke-1280x800', width: 1280, height: 800, phone: false, themes: DECLUTTER_THEMES, metrics: CLUTTER_METRICS, shots: true },
+  { id: 'narrow', device: 'smoke-320x640', width: 320, height: 640, phone: true, themes: ['light'], metrics: NARROW_METRICS, shots: false }
+] as const;
+export type DeclutterView = (typeof DECLUTTER_VIEWS)[number];
+
+/** Every `<view>-<theme>` the loop measures (`phone-light`, …, `narrow-light`): the suffix of each baseline key. */
+export const DECLUTTER_SUFFIXES: readonly string[] = DECLUTTER_VIEWS.flatMap((v) => (v.themes as readonly string[]).map((t) => `${v.id}-${t}`));
+
+/** A measurement as a view ratchets it: the view's metrics kept, every other one 0 (not measured counts as 0). */
+export function viewCounts(counts: ClutterCounts, metrics: readonly ClutterMetric[]): Record<ClutterMetric, number> {
+  return Object.fromEntries(CLUTTER_METRICS.map((m) => [m, metrics.includes(m) ? (counts[m] ?? 0) : 0])) as Record<ClutterMetric, number>;
+}
+
+/** The labels behind a view's own metrics only, so the report never lists labels for a number that view does not keep. */
+export function viewDetail(detail: ProbeDetail, metrics: readonly ClutterMetric[]): ProbeDetail {
+  const has = (m: ClutterMetric) => metrics.includes(m);
+  return {
+    controls: detail.controls,
+    primaries: has('primaries') ? detail.primaries : [],
+    duplicateActions: has('duplicateActions') ? detail.duplicateActions : [],
+    deepestBoxes: has('maxBoxDepth') ? detail.deepestBoxes : [],
+    truncated: has('truncatedLabels') ? detail.truncated : [],
+    pulses: has('livePulses') ? detail.pulses : [],
+    duplicateNames: has('duplicateActions') ? detail.duplicateNames : {},
+    chromeContent: has('chromeShare') ? detail.chromeContent : null
+  };
+}
 
 /** The studio's content regions on a phone (the board panel, the message list): what C8 measures chrome against. */
 export const STUDIO_CONTENT = '#board-panel, [data-qa-scroller="conversation"], section[aria-label="Conversation"] .overflow-y-auto';
@@ -557,6 +593,33 @@ export function vanishedKeys(attempted: readonly string[], scenes: Record<string
 /** The failure line for a vanished entry. */
 export const vanishedLine = (key: string): string => `${key}  is in the baseline but no longer a scene — drop its entry (${SHRINK})`;
 
+/** One scene in clutter-report.json: its numbers and the labels behind them, or why this run could not measure it. */
+export interface ClutterReportEntry {
+  url: string;
+  counts?: Record<ClutterMetric, number>;
+  detail?: ProbeDetail;
+  over?: string[];
+  under?: string[];
+  /** The scene did not open or could not be measured in this run: no numbers, so nothing stale is shown as current. */
+  error?: string;
+}
+
+/**
+ * clutter-report.json's scenes after one view × theme run (`suffix`, e.g. `phone-light`): every earlier entry of that
+ * suffix is dropped first, so a scene that failed this time or left the list never keeps an older run's numbers; the
+ * other views' entries stay (each view × theme test writes its own part, possibly in parallel). Keys sorted.
+ */
+export function mergeClutterReport(
+  prior: Record<string, ClutterReportEntry> | null | undefined,
+  entries: Record<string, ClutterReportEntry>,
+  suffix: string
+): Record<string, ClutterReportEntry> {
+  const all: Record<string, ClutterReportEntry> = {};
+  for (const [k, v] of Object.entries(prior ?? {})) if (!k.endsWith(`@${suffix}`)) all[k] = v;
+  Object.assign(all, entries);
+  return Object.fromEntries(Object.keys(all).sort().map((k) => [k, all[k]]));
+}
+
 /**
  * The baseline after one run's measurements. `shrink`: a listed scene's metrics are lowered to the measurement
  * where it is lower (never raised), the `drop` keys (vanishedKeys) are removed, and nothing is added. `reset`:
@@ -629,10 +692,13 @@ export function readClutterBaseline(file = BASELINE_PATH): { scenes: Record<stri
   if (parsed.probe !== 'declutter') problems.push(`declutter.json names probe ${JSON.stringify(parsed.probe)}`);
   const scenes: Record<string, ClutterCounts> = {};
   for (const [key, counts] of Object.entries(parsed.scenes ?? {})) {
-    if (!/^[a-z0-9-]+@(phone|desk)-(light|dark)$/.test(key)) problems.push(`declutter.json: "${key}" is not <scene>@<phone|desk>-<light|dark>`);
+    const at = key.lastIndexOf('@');
+    const view = at > 0 && DECLUTTER_SUFFIXES.includes(key.slice(at + 1)) ? DECLUTTER_VIEWS.find((v) => key.slice(at + 1).startsWith(`${v.id}-`)) : undefined;
+    if (!view || !/^[a-z0-9-]+$/.test(key.slice(0, at))) problems.push(`declutter.json: "${key}" is not <scene>@<view>-<theme> (one of ${DECLUTTER_SUFFIXES.join(', ')})`);
     scenes[key] = {};
     for (const [m, n] of Object.entries(counts ?? {})) {
       if (!(CLUTTER_METRICS as readonly string[]).includes(m)) problems.push(`declutter.json: ${key} has an unknown metric "${m}"`);
+      else if (view && !(view.metrics as readonly string[]).includes(m)) problems.push(`declutter.json: ${key} lists ${m}, which the ${view.id} view does not measure (${view.metrics.join(', ')})`);
       else if (!Number.isInteger(n) || (n as number) <= 0) problems.push(`declutter.json: ${key} ${m} is ${JSON.stringify(n)} (positive integers; drop a zero)`);
       else scenes[key][m as ClutterMetric] = n as number;
     }
@@ -642,7 +708,7 @@ export function readClutterBaseline(file = BASELINE_PATH): { scenes: Record<stri
 }
 
 /**
- * Read-modify-write a JSON file under an exclusive lock (the four view × theme tests may run in parallel workers):
+ * Read-modify-write a JSON file under an exclusive lock (the view × theme tests may run in parallel workers):
  * `<file>.lock` is created with O_EXCL, the new text is written beside and renamed in place.
  */
 export function withFileLock<T>(file: string, body: () => T, timeoutMs = 20_000): T {
