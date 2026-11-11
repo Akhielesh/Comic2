@@ -308,7 +308,9 @@ export const STYLE_PRESETS: StylePreset[] = [
     palette: ['#1a1a1a', '#8c8c88', '#d6d4ce', '#c49a2c'],
     linework: 'Hard straight edges, minimal line, flat shapes',
     avoid: ['organic curves', 'warm cosy lighting', 'busy ornament'],
-    bestFor: ['dystopia', 'thriller', 'literary'],
+    // Not 'thriller': a plain, spy or revenge thriller stays with Noir ink; "brutalist" and the
+    // dystopia words still lead here.
+    bestFor: ['dystopia', 'literary'],
     colorMode: 'limited',
     swatch: 'linear-gradient(135deg,#1a1a1a 0%,#8c8c88 55%,#d6d4ce 100%)',
     tags: { colour: 'limited', medium: 'print' }
@@ -374,7 +376,9 @@ export const STYLE_PRESETS: StylePreset[] = [
     palette: ['#0b0c1a', '#ff2e88', '#00e5ff', '#7b2cbf'],
     linework: 'Sharp digital lines under painted light',
     avoid: ['daylight pastels', 'flat cheerful colours', 'rustic textures'],
-    bestFor: ['sci-fi', 'thriller', 'action', 'crime'],
+    // Not 'thriller'/'crime': plain crime and heist thrillers stay with Noir ink. "Cyberpunk",
+    // "cyber" and "neon" still lead here (sci-fi synonyms and this look's own name words).
+    bestFor: ['sci-fi', 'action'],
     swatch: 'linear-gradient(135deg,#0b0c1a 0%,#7b2cbf 45%,#ff2e88 75%,#00e5ff 100%)',
     tags: { colour: 'full', medium: 'digital-paint' }
   }
@@ -482,19 +486,23 @@ const hasWord = (text: string, word: string): boolean => {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(text);
 };
 
-/** Distinctive words of a preset's own name/id ("noir", "manga", "watercolor", "riso"…). */
+/**
+ * Distinctive words of a preset's own name/id ("noir", "manga", "watercolor", "riso"…). Common
+ * story words in a name are not distinctive: "future" and "poster" ("Retro-future poster") would
+ * hand a sunny look every "dystopian future" brief.
+ */
+const NAME_STOP_WORDS = new Set(['style', 'modern', 'graphic', 'novel', 'cartoon', 'dark', 'colour', 'color', 'future', 'poster']);
 const presetNameWords = (p: StylePreset): string[] =>
-  [...new Set(`${p.id.replace(/-/g, ' ')} ${p.name}`.toLowerCase().split(/[^a-z0-9]+/))].filter(
-    (w) => w.length >= 4 && !['style', 'modern', 'graphic', 'novel', 'cartoon', 'dark', 'colour', 'color'].includes(w)
-  );
+  [...new Set(`${p.id.replace(/-/g, ' ')} ${p.name}`.toLowerCase().split(/[^a-z0-9]+/))].filter((w) => w.length >= 4 && !NAME_STOP_WORDS.has(w));
 
 // "Black and white" in a brief (not "noir": noir is a genre, not a colour request).
 const BW_WORDS_RE = /(?:black[\s-]*(?:and|&|n)[\s-]*white|(?:^|[^\p{L}\p{N}])b\s*[&/]\s*w(?:$|[^\p{L}\p{N}])|monochrom|gr[ae]yscale|ink[\s-]only)/u;
 const HUE_WORDS = 'colou?rs?|red|blue|yellow|green|orange|pink|purple|violet|gold|golden|teal|cyan|magenta|crimson|scarlet|amber';
 // One accent: "one colour", "a splash of red", "spot colour", "colour only where it's needed", "red accents".
+// No bare digit: "chapter 1 red herring" is a story noun, not an accent request.
 const ACCENT_WORDS_RE = new RegExp(
   [
-    `\\b(?:one|single|1|lone|sole)\\s+(?:accent\\s+|spot\\s+|pop\\s+of\\s+)?(?:${HUE_WORDS}|hue|accent)\\b`,
+    `\\b(?:one|single|lone|sole)\\s+(?:accent\\s+|spot\\s+|pop\\s+of\\s+)?(?:${HUE_WORDS}|hue|accent)\\b`,
     '\\b(?:spot|accent|selective)\\s+colou?rs?\\b',
     `\\b(?:splash|pop|touch|hint|dash|flash)(?:es|s)?\\s+of\\s+(?:${HUE_WORDS})\\b`,
     `\\b(?:${HUE_WORDS})\\s+accents?\\b`,
@@ -546,6 +554,8 @@ export const presetFitScore = (p: StylePreset, doc: Pick<ComicDoc, 'brief' | 'fo
   if (p.tags?.colour === 'spot' && briefWantsSpotColour(doc)) s += p.id === INK_ONE_COLOUR_PRESET_ID ? SPOT_LEAD_BONUS : SPOT_BONUS;
   else if (mode === 'bw') s += p.colorMode === 'bw' ? 3 : -2;
   else if (p.colorMode === 'bw') s -= 1;
+  // The spot looks are b/w art too: on a full-colour comic they get the same nudge down.
+  else if (p.tags?.colour === 'spot' && mode !== 'limited') s -= 1;
   if (mode === 'limited' && p.colorMode === 'limited') s += 2;
   return s;
 };

@@ -146,6 +146,8 @@ describe('Ink + one colour', () => {
       [{ genre: 'romance', notes: ['full colour with a splash of red'] }],
       [{ genre: 'crime noir', tone: 'hard-boiled' }],
       [{ genre: 'bowling comedy', notes: ['one colourful cast'] }],
+      // A digit before a hue is a story noun, not an accent request.
+      [{ genre: 'drama', notes: ['chapter 1 red herring'] }, { colorMode: 'bw' }],
       [{}]
     ];
     for (const [b, f] of no) expect(briefWantsSpotColour(docWith(b, f)), JSON.stringify(b)).toBe(false);
@@ -174,11 +176,48 @@ describe('rankPresets: the restored looks and the spot-colour brief', () => {
     expect(['noir-ink', 'manga-screentone']).toContain(rankPresets(docWith({ genre: 'drama' }, { colorMode: 'bw' }))[0]);
     expect(rankPresets(docWith({ genre: 'romance', notes: ['full colour with a splash of red'] }))[0]).not.toBe(INK_ONE_COLOUR_PRESET_ID);
     expect(rankPresets(docWith({ genre: 'crime noir', tone: 'hard-boiled' }))[0]).toBe('noir-ink');
+    // A story noun with a digit is no accent request: a plain b/w brief keeps the b/w looks.
+    expect(rankPresets(docWith({ genre: 'drama', notes: ['chapter 1 red herring'] }, { colorMode: 'bw' }))[0]).toBe('manga-screentone');
+  });
+
+  it('on a full-colour comic the spot-colour looks sit below the colour looks of the same fit', () => {
+    // Half of the free 4-tile card was black and white for a colour drama. The nudge is the b/w
+    // looks' own −1 (the colour mode is often just the default), so a two-tag fit still shows.
+    const spot = [INK_ONE_COLOUR_PRESET_ID, 'mono-wash'];
+    const drama = rankPresets(docWith({ genre: 'drama' }));
+    for (const id of spot) expect(drama.slice(0, 3), id).not.toContain(id);
+    const literary = rankPresets(docWith({ genre: 'literary drama' }));
+    expect(literary.slice(0, 2)).toEqual(['graphic-novel-painterly', 'chalk-pastel']);
+    expect(presetFitScore(getStylePreset(INK_ONE_COLOUR_PRESET_ID)!, docWith({ genre: 'drama' }))).toBe(
+      presetFitScore(getStylePreset('graphic-novel-painterly')!, docWith({ genre: 'drama' })) - 1
+    );
+    // A limited-palette comic is where the spot looks belong: no nudge down there.
+    expect(rankPresets(docWith({ genre: 'drama' }, { colorMode: 'limited' })).slice(0, 2)).toEqual([INK_ONE_COLOUR_PRESET_ID, 'mono-wash']);
+  });
+
+  it('the restored looks do not take over common genres they were not named for', () => {
+    // Plain crime and heist thrillers stay with Noir ink, not Neon cyber.
+    expect(rankPresets(docWith({ genre: 'crime thriller' }))[0]).toBe('noir-ink');
+    expect(rankPresets(docWith({ genre: 'heist thriller' }))[0]).toBe('noir-ink');
+    expect(rankPresets(docWith({ genre: 'heist thriller' }))[0]).not.toBe('cyberpunk');
+    // …and so do plain, spy and revenge thrillers, not the cold Brutalist graphic.
+    for (const genre of ['thriller', 'spy thriller', 'revenge thriller']) expect(rankPresets(docWith({ genre }))[0], genre).toBe('noir-ink');
+    // "future" is a story word, not the name of the sunny Retro-future poster look.
+    const futures: Array<Partial<ComicDoc['brief']>> = [
+      { genre: 'dystopian future' },
+      { genre: 'grim future thriller' },
+      { genre: 'post-apocalyptic future' },
+      { genre: 'sci-fi', tone: 'bleak, oppressive future' }
+    ];
+    for (const b of futures) expect(rankPresets(docWith(b))[0], JSON.stringify(b)).not.toBe('retrofuturism');
   });
 
   it('"mythology / Indian epic" → Indian miniature first', () => {
     expect(rankPresets(docWith({ genre: 'mythology', premise: 'An Indian epic retold in the far future' }))[0]).toBe('indian-miniature');
     expect(rankPresets(docWith({ genre: 'mythology, Indian epic' }))[0]).toBe('indian-miniature');
+    // The epics name the look without the word "Indian" (the synonyms of the `indian` tag).
+    expect(rankPresets(docWith({ genre: 'a Mahabharata retelling' }))[0]).toBe('indian-miniature');
+    expect(rankPresets(docWith({ genre: 'Ramayana in space' }))[0]).toBe('indian-miniature');
   });
 
   it('each restored look leads for the brief that names it', () => {
