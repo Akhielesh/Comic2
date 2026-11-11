@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The refinement loop's screenshots (declutter DC-0; docs/design/clean-and-smooth.md §4, step 1 "Shoot").
+// The refinement loop's screenshots (declutter DC-0; docs/design/clean-and-smooth.md §3.3 and §4 step 2 "Shoot").
 //
 // Shoots every scene of the loop at 360×740 and 1280×800, light and dark, from the OFFLINE QA harness
 // (qa/comic-qa.html on synthetic fixtures: no auth, no backend, no money, no user data), and writes the review sheet
@@ -276,11 +276,13 @@ const main = async () => {
   fs.mkdirSync(path.join(OUT, 'transcript'), { recursive: true });
 
   const server = await startServer(dist);
-  const browser = await pw.chromium.launch(executablePath ? { executablePath } : {});
+  let browser = null;
   const shots = [];
   const transcripts = [];
   const problems = [];
   try {
+    // Inside the try: a browser that fails to launch must not leave the preview server running.
+    browser = await pw.chromium.launch(executablePath ? { executablePath } : {});
     for (const view of views) {
       for (const theme of themes) {
         const context = await browser.newContext({
@@ -380,7 +382,7 @@ const main = async () => {
       }
     }
   } finally {
-    await browser.close();
+    await browser?.close().catch(() => undefined);
     server.kill();
   }
 
