@@ -48,7 +48,8 @@
 import type { Balloon, Box, KeepOut, Line, LineKind, Page, SpeakerMark } from '../doc.js';
 import { PANEL_LIMITS } from '../panelRules.js';
 import { estimateTextHeight, estimateWidthForText, normalizeLetteringText } from '../textLayout.js';
-import type { BubbleShape } from './style.js';
+import { PRO_SHAPE_BLEED } from './shapes.js';
+import type { BubbleShape, ProBubbleShape } from './style.js';
 
 /** Panel inner padding and minimum gap between outlines (page fractions). */
 const PAD = 0.012;
@@ -230,7 +231,8 @@ export const SHAPE_BLEED: Record<BubbleShape, { x: number; y: number }> = {
 };
 
 export function outlineBounds(b: { x: number; y: number; w: number; h: number }, kind: LineKind, shape: BubbleShape): Box {
-  const bleed = SHAPE_BLEED[shape] ?? OUTLINE_BLEED_XY[kind] ?? { x: 0, y: 0 };
+  // A drawn Pro shape (PE-LETTER; collisions C-21) has its own bleed beside the base table until the unions fold (B-4).
+  const bleed = SHAPE_BLEED[shape] ?? PRO_SHAPE_BLEED[shape as unknown as ProBubbleShape] ?? OUTLINE_BLEED_XY[kind] ?? { x: 0, y: 0 };
   const dx = b.w * bleed.x;
   const dy = b.h * bleed.y;
   return { x: b.x - dx, y: b.y - dy, w: b.w + 2 * dx, h: b.h + 2 * dy };

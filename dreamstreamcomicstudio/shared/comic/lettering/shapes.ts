@@ -18,7 +18,7 @@
 // `extras` fill with EXTRA_SHADE[shape] applied to the fill colour (ribbon fishtails sit in shadow).
 
 import type { Box, LineKind } from '../doc.js';
-import type { BorderStyle, BubbleShape, TailStyle } from './style.js';
+import type { AnyBubbleShape, BorderStyle, BubbleShape, ProBubbleShape, TailStyle } from './style.js';
 
 export interface Circle {
   cx: number;
@@ -352,13 +352,13 @@ const lightningTail = (w: number, h: number, tip: Pt, widthScale: number): strin
   return polygonPath([...left, { x: tip.x, y: tip.y }, ...right]);
 };
 
-const SPIKY: ReadonlySet<BubbleShape> = new Set<BubbleShape>(['burst', 'explosion', 'jagged']);
+const SPIKY: ReadonlySet<AnyBubbleShape> = new Set<AnyBubbleShape>(['burst', 'explosion', 'jagged']);
 
-/** 'auto' tails: thought → bubbles, shout → straight, electronic → lightning, otherwise curved. */
-export function resolveTailStyle(tail: TailStyle, kind: LineKind | undefined, shape: BubbleShape): Exclude<TailStyle, 'auto'> {
+/** 'auto' tails: thought → bubbles, shout → straight, electronic and radio → lightning, otherwise curved. */
+export function resolveTailStyle(tail: TailStyle, kind: LineKind | undefined, shape: AnyBubbleShape): Exclude<TailStyle, 'auto'> {
   if (tail !== 'auto') return tail;
   if (kind === 'thought' || (!kind && shape === 'cloud')) return 'bubbles';
-  if (shape === 'electronic') return 'lightning';
+  if (shape === 'electronic' || shape === 'radio') return 'lightning';
   if (kind === 'shout' || (!kind && SPIKY.has(shape))) return 'straight';
   return 'curved';
 }
@@ -519,6 +519,149 @@ const electronicPoints = (w: number, h: number, inset: TextInset): Pt[] => {
   return out;
 };
 
+// ── Pro bodies (PE-LETTER; master plan §2.3 "Bubble shapes") ─────────────────
+//
+// Six procedural outlines, M L C Q A Z only (so the same string is an SVG path and a canvas Path2D), deterministic per
+// seed, each enclosing the text block like the classic ones (shapes.pro.test.ts checks every one over three boxes).
+
+/** Radio / broadcast voice: a regular zig-zag (triangle wave ±a, a = 0.06·min(w,h)) on a superellipse. */
+const radioPoints = (w: number, h: number, inset: TextInset): Pt[] => {
+  const amp = Math.max(1.5, Math.min(w, h) * 0.06);
+  const scale = dipAllowance(w, h, fitOutlineScale(w, h, 3, { x: 1.06, y: 1.14 }, inset), amp);
+  let count = Math.round(clampN(perimeter(w * scale.x, h * scale.y) / Math.max(7, amp * 2.6), 20, 72));
+  count += count % 2;
+  const base = ring(w, h, 3, count, scale);
+  const cx = w / 2;
+  const cy = h / 2;
+  return base.map((p, i) => radial(p, cx, cy, i % 2 === 0 ? amp : -amp));
+};
+
+/** Monster: a lumpy, seeded blob with three to five drips hanging from its lower edge (smoothed, so drips are round). */
+const monsterPath = (w: number, h: number, seed: number, inset: TextInset): string => {
+  const rand = rng(seed ^ 0x6d2b79f5);
+  const lump = Math.max(1.5, Math.min(w, h) * 0.07);
+  const scale = fitOutlineScale(w, h, 2.2, { x: 1.08, y: 1.18 }, inset);
+  const count = Math.round(clampN(perimeter(w * scale.x, h * scale.y) / 16, 18, 40));
+  const base = ring(w, h, 2.2, count, scale, rand() * ((2 * Math.PI) / count));
+  const cx = w / 2;
+  const cy = h / 2;
+  // Drips: a few lower-edge points (y below the centre, not at the far sides) pulled straight down.
+  const lower = base.map((p, i) => ({ p, i })).filter(({ p }) => p.y > cy + (h * scale.y) / 4 && Math.abs(p.x - cx) < (w * scale.x) / 2.6);
+  const drips = new Map<number, number>();
+  const want = Math.min(lower.length, 3 + Math.floor(rand() * 3));
+  for (let k = 0; k < want; k += 1) {
+    const pick = lower[Math.floor((k + rand() * 0.8) * (lower.length / Math.max(1, want)))];
+    if (pick && !drips.has(pick.i)) drips.set(pick.i, Math.min(h * 0.45, Math.max(4, Math.min(w, h) * (0.18 + rand() * 0.22))));
+  }
+  const pts: Pt[] = [];
+  base.forEach((p, i) => {
+    const q = radial(p, cx, cy, lump * rand());
+    const drip = drips.get(i);
+    if (drip === undefined) {
+      pts.push(q);
+      return;
+    }
+    const half = Math.max(1.5, lump * 0.6);
+    pts.push({ x: q.x + half, y: q.y }, { x: q.x, y: q.y + drip }, { x: q.x - half, y: q.y });
+  });
+  return smoothClosedPath(pts);
+};
+
+/** Wavy ring r(θ) = r₀(1 + a·sin(kθ + φ)) at `grow` × the fitted scale (telepathic body and its outer ripple). */
+const rippleRing = (w: number, h: number, seed: number, inset: TextInset, a: number, period: number, grow: number): string => {
+  const s0 = fitOutlineScale(w, h, 2, { x: 1.08, y: 1.18 }, inset);
+  const rx = ((w / 2) * s0.x * grow) / (1 - a);
+  const ry = ((h / 2) * s0.y * grow) / (1 - a);
+  const k = Math.max(8, Math.round(perimeter(2 * rx, 2 * ry) / period));
+  const phi = rng(seed ^ 0x1b873593)() * Math.PI * 2;
+  const pts: Pt[] = [];
+  for (let i = 0; i < 96; i += 1) {
+    const t = (2 * Math.PI * i) / 96;
+    const f = 1 + a * Math.sin(k * t + phi);
+    pts.push({ x: w / 2 + rx * Math.cos(t) * f, y: h / 2 + ry * Math.sin(t) * f });
+  }
+  return smoothClosedPath(pts);
+};
+
+/** Telepathic: a fine ripple outline plus a second ripple ring outside it (stroked over the art like a psychic wave). */
+const telepathicParts = (w: number, h: number, seed: number, inset: TextInset) => {
+  const body = rippleRing(w, h, seed, inset, 0.022, 12, 1);
+  const outer = rippleRing(w, h, seed ^ 0x85ebca6b, inset, 0.03, 15, 1.16);
+  return { body, inner: outer, extent: pointBounds(outer) };
+};
+
+/** Icicle: the text box with rounded top corners and seeded icicles hanging from its bottom edge. */
+const iciclePath = (w: number, h: number, seed: number, inset: TextInset): string => {
+  const rand = rng(seed ^ 0x27d4eb2f);
+  // Never so round that a text corner leaves the outline (the rounded_rect rule).
+  const r = Math.max(0, Math.min(Math.min(w, h) * 0.18, 10, Math.max(0, inset.x) + Math.max(0, inset.y)));
+  const count = Math.max(3, Math.round(w / Math.max(10, Math.min(w, h) * 0.32)));
+  const step = w / count;
+  let d = `M${fmt(r)} 0L${fmt(w - r)} 0Q${fmt(w)} 0 ${fmt(w)} ${fmt(r)}L${fmt(w)} ${fmt(h)}`;
+  for (let i = 0; i < count; i += 1) {
+    const x0 = w - i * step;
+    const len = Math.min(h * 0.6, Math.max(3, step * (0.55 + rand() * 0.9)));
+    d += `L${fmt(x0 - step * (0.35 + rand() * 0.3))} ${fmt(h + len)}L${fmt(x0 - step)} ${fmt(h)}`;
+  }
+  return `${d}L0 ${fmt(r)}Q0 0 ${fmt(r)} 0Z`;
+};
+
+/** The classic heart curve (x = 16 sin³t, y = −(13 cos t − 5 cos 2t − 2 cos 3t − cos 4t)), y down. */
+const HEART: Pt[] = Array.from({ length: 48 }, (_v, i) => {
+  const t = (2 * Math.PI * i) / 48;
+  return { x: 16 * Math.sin(t) ** 3, y: -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) };
+});
+/** The heart's widest band (the text sits there), in curve units. */
+const HEART_TEXT_Y = -4;
+
+/** Heart: the curve scaled (grown 4 % at a time) until the text block's edge (corners and the dip between the lobes
+ *  included: 16 points round it) sits inside it. */
+const heartPoints = (w: number, h: number, inset: TextInset): Pt[] => {
+  const x0 = inset.x;
+  const x1 = w - inset.x;
+  const y0 = inset.y;
+  const y1 = h - inset.y;
+  const corners: Pt[] = [];
+  for (let k = 0; k < 4; k += 1) {
+    const f = k / 4;
+    corners.push({ x: x0 + (x1 - x0) * f, y: y0 }, { x: x1, y: y0 + (y1 - y0) * f }, { x: x1 - (x1 - x0) * f, y: y1 }, { x: x0, y: y1 - (y1 - y0) * f });
+  }
+  let sx = (w / 2 / 16) * 1.12;
+  let sy = (h / 2 / 9) * 1.12;
+  const at = (fx: number, fy: number) => HEART.map((p) => ({ x: w / 2 + p.x * fx, y: h / 2 + (p.y - HEART_TEXT_Y) * fy }));
+  let pts = at(sx, sy);
+  for (let k = 0; k < 40 && !corners.every((c) => insidePolygon(pts, c)); k += 1) {
+    sx *= 1.04;
+    sy *= 1.04;
+    pts = at(sx, sy);
+  }
+  return pts;
+};
+
+/** Sticky note: the text box with its reading-end bottom corner folded (cut corner + the crease, stroked as `inner`). */
+const stickyParts = (w: number, h: number, inset: TextInset, rtl: boolean) => {
+  const f = Math.max(0, Math.min(Math.min(w, h) * 0.24, Math.max(0, inset.x) + Math.max(0, inset.y)));
+  if (rtl) {
+    const body = polygonPath([{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: f, y: h }, { x: 0, y: h - f }]);
+    return { body, inner: `M0 ${fmt(h - f)}L${fmt(f)} ${fmt(h - f)}L${fmt(f)} ${fmt(h)}` };
+  }
+  const body = polygonPath([{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h - f }, { x: w - f, y: h }, { x: 0, y: h }]);
+  return { body, inner: `M${fmt(w)} ${fmt(h - f)}L${fmt(w - f)} ${fmt(h - f)}L${fmt(w - f)} ${fmt(h)}` };
+};
+
+/**
+ * Per-axis bleed of the Pro shapes over typical balloons (the fallback estimate place.ts uses where no real geometry
+ * is at hand; shapes.pro.test.ts checks the real outline stays within it, like SHAPE_BLEED for the base shapes).
+ */
+export const PRO_SHAPE_BLEED: Record<ProBubbleShape, { x: number; y: number }> = {
+  radio: { x: 0.2, y: 0.32 },
+  monster: { x: 0.24, y: 0.85 },
+  telepathic: { x: 0.36, y: 0.46 },
+  icicle: { x: 0, y: 0.6 },
+  heart: { x: 0.6, y: 1.6 },
+  sticky: { x: 0, y: 0 }
+};
+
 // ── Path utilities (bounds, transforms, point-in-outline) ────────────────────
 
 const TOKEN_RE = /[MLCQAZ]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi;
@@ -619,7 +762,7 @@ export function shadeColor(color: string, amount: number): string {
  * double-border `inner` outline; the explosion's inner burst shows unless it is 'none'.
  */
 export function bubbleGeometry(
-  shape: BubbleShape,
+  shape: AnyBubbleShape,
   w: number,
   h: number,
   opts: {
@@ -701,6 +844,34 @@ export function bubbleGeometry(
       poly = electronicPoints(W, H, inset);
       body = polygonPath(poly);
       break;
+    // Pro shapes (PE-LETTER).
+    case 'radio':
+      poly = radioPoints(W, H, inset);
+      body = polygonPath(poly);
+      break;
+    case 'monster':
+      body = monsterPath(W, H, seed, inset);
+      break;
+    case 'telepathic': {
+      const t = telepathicParts(W, H, seed, inset);
+      body = t.body;
+      inner = t.inner;
+      extent = t.extent;
+      break;
+    }
+    case 'icicle':
+      body = iciclePath(W, H, seed, inset);
+      break;
+    case 'heart':
+      poly = heartPoints(W, H, inset);
+      body = smoothClosedPath(poly);
+      break;
+    case 'sticky': {
+      const st = stickyParts(W, H, inset, !!opts.rtl);
+      body = st.body;
+      inner = st.inner;
+      break;
+    }
     default:
       body = speechBodyPath(W, H, inset);
   }

@@ -16,6 +16,7 @@
 
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
+import { EDITOR_LIMITS, PRO_LETTER_LIMITS } from '../limits.js';
 import { panelBoxesFor } from '../pageGeometry.js';
 import { composeAspect, pageSpaceQc, type ComposePageShape } from '../panelize/space.js';
 import { PUBLIC_QC_CHECKED_AT } from '../publication.js';
@@ -31,10 +32,11 @@ import {
   KIND_FONT_SCALE,
   LETTER_METRICS,
   resolveLetterStyle,
-  type BubbleShape,
+  type AnyBubbleShape,
   type FontId,
   type LetterStyle,
-  type TextCase
+  type TextCase,
+  type WarpStyle
 } from './style.js';
 
 export type Measure = (text: string, font: string) => number; // width in page units (W = 1000)
@@ -170,10 +172,17 @@ export const storedFrozen = (page: Pick<Page, 'render'>): boolean => {
   return !!qc && qc.checkedAt === PUBLIC_QC_CHECKED_AT && !Array.isArray(qc.keepOut) && !Array.isArray(qc.heads);
 };
 
-/** Elliptical outlines fill π/4 of their box; boxy ones all of it (density.ts needMeter uses outlineFill too). */
-const BOXY_SHAPES: ReadonlySet<BubbleShape> = new Set<BubbleShape>(['rect', 'rounded_rect', 'notched', 'scroll', 'ribbon', 'electronic', 'none']);
+/** Elliptical outlines fill π/4 of their box; boxy ones all of it (density.ts needMeter uses outlineFill too). The Pro
+ *  sticky note and icicle box are boxy; radio, monster, telepathic and heart are round. */
+const BOXY_SHAPES: ReadonlySet<AnyBubbleShape> = new Set<AnyBubbleShape>(['rect', 'rounded_rect', 'notched', 'scroll', 'ribbon', 'electronic', 'none', 'sticky', 'icicle']);
 /** Share of its outline box a balloon of this shape fills (coverage). */
-export const outlineFill = (shape: BubbleShape): number => (BOXY_SHAPES.has(shape) ? 1 : Math.PI / 4);
+export const outlineFill = (shape: AnyBubbleShape): number => (BOXY_SHAPES.has(shape) ? 1 : Math.PI / 4);
+
+/** Scripts whose editions may be warped (master plan §2.4: Latin, which letters Cyrillic here too, and CJK). Per-glyph
+ *  warp would break the shaping of Indic and Arabic-script text, so those editions draw unwarped (WARP_SCRIPT_NOTE). */
+export const WARP_SCRIPTS: readonly ScriptId[] = ['Latn', 'Jpan', 'Kore', 'Hans'];
+/** Warp can be offered for an edition in this language (the inspector shows WARP_SCRIPT_NOTE otherwise). */
+export const warpAvailableFor = (lang: string | undefined): boolean => WARP_SCRIPTS.includes(scriptOf(lang).id);
 
 /**
  * Placement options that keep a SAVED placement under the doc's coverage cap (the planner, tidy, the server's
@@ -304,7 +313,19 @@ interface LineSetup {
   measureAt: (s: string, px: number) => number;
   /** Glyph-level layout allowed (letter spacing / SFX effects never split complex-script shaping). */
   glyphs: boolean;
+  /** Per-glyph warp to draw (Pro; null: none, too small, or a script warp is not offered for). */
+  warp: { style: Exclude<WarpStyle, 'none'>; amount: number } | null;
 }
+
+/** The warp a line draws: its style's warp at the drawing's bound (the load keeps any finite stored amount), only for
+ *  WARP_SCRIPTS editions; null when there is nothing to bend. */
+const warpFor = (style: LetterStyle, spec: ScriptSpec): LineSetup['warp'] => {
+  const kind = style.warp;
+  if (!kind || kind === 'none' || !WARP_SCRIPTS.includes(spec.id)) return null;
+  const max = PRO_LETTER_LIMITS.warpAmountMax;
+  const amount = typeof style.warpAmount === 'number' && Number.isFinite(style.warpAmount) ? Math.min(max, Math.max(-max, style.warpAmount)) : 0;
+  return Math.abs(amount) >= 0.02 ? { style: kind, amount } : null;
+};
 
 const lineSetup = (doc: ComicDoc, line: Line, measure: Measure): LineSetup => {
   const lang = line.lang || doc.format?.language || 'en';
@@ -345,7 +366,8 @@ const lineSetup = (doc: ComicDoc, line: Line, measure: Measure): LineSetup => {
     stroke: r2(PLAN_W * LETTER_METRICS.strokeScale * style.borderWidth),
     fontAt,
     measureAt,
-    glyphs: spec.allowLetterSpacing
+    glyphs: spec.allowLetterSpacing,
+    warp: warpFor(style, spec)
   };
 };
 
@@ -477,6 +499,67 @@ const geometryFor = (setup: LineSetup, w: number, h: number, tip: { x: number; y
     borderStyle: setup.style.borderStyle
   });
 
+// ── Rotation and minimum height (Balloon.rot, Balloon.minH; K2b fields, drawn since PE-LETTER) ──────────────────
+
+/** A stored balloon's rotation, ±EDITOR_LIMITS.balloonRot (0 when absent: the balloon draws exactly as before). */
+const rotOf = (b: Balloon | undefined): number => {
+  const v = b?.rot;
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0;
+  return Math.round(clampV(v, -EDITOR_LIMITS.balloonRot, EDITOR_LIMITS.balloonRot) * 100) / 100;
+};
+/** A stored balloon's minimum outline height (page-height fraction, ≤ EDITOR_LIMITS.minHMax; 0 when absent). */
+const minHOf = (b: Balloon | undefined): number => {
+  const v = b?.minH;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(EDITOR_LIMITS.minHMax, v) : 0;
+};
+
+/** A point turned `deg` degrees about (cx, cy) (SVG rotate: clockwise on screen for positive degrees). */
+const rotateAbout = (p: { x: number; y: number }, deg: number, cx: number, cy: number): { x: number; y: number } => {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = p.x - cx;
+  const dy = p.y - cy;
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+};
+
+/** The axis-aligned box around `b` turned `deg` degrees about (cx, cy) (same units). */
+const rotatedBox = (b: Box, deg: number, cx: number, cy: number): Box => {
+  const pts = [
+    rotateAbout({ x: b.x, y: b.y }, deg, cx, cy),
+    rotateAbout({ x: b.x + b.w, y: b.y }, deg, cx, cy),
+    rotateAbout({ x: b.x, y: b.y + b.h }, deg, cx, cy),
+    rotateAbout({ x: b.x + b.w, y: b.y + b.h }, deg, cx, cy)
+  ];
+  const x0 = Math.min(...pts.map((q) => q.x));
+  const y0 = Math.min(...pts.map((q) => q.y));
+  return { x: x0, y: y0, w: Math.max(...pts.map((q) => q.x)) - x0, h: Math.max(...pts.map((q) => q.y)) - y0 };
+};
+
+/**
+ * The text-box height whose outline is at least `minOutline` tall (plan units): the box grows (a secant search over the
+ * shape's real bounds, three steps at most) and the text is centred in it. `h` itself when the outline is tall enough.
+ */
+const grownHeight = (setup: LineSetup, w: number, h: number, minOutline: number): number => {
+  const g0 = geometryFor(setup, w, h, null).bounds.h;
+  if (!(minOutline > g0 + 0.01)) return h;
+  let lo = h;
+  let glo = g0;
+  let hi = h + (minOutline - g0);
+  for (let i = 0; i < 3; i += 1) {
+    const ghi = geometryFor(setup, w, hi, null).bounds.h;
+    if (ghi >= minOutline - 0.01 && ghi - minOutline < 0.5) break;
+    const slope = (ghi - glo) / (hi - lo);
+    const next = hi + (minOutline - ghi) / (Number.isFinite(slope) && slope > 0.05 ? slope : 1);
+    lo = hi;
+    glo = ghi;
+    hi = Math.max(h, next);
+  }
+  // Never shorter than the outline asked for: one last top-up by the remaining gap.
+  const gap = minOutline - geometryFor(setup, w, hi, null).bounds.h;
+  return r2(gap > 0 ? hi + gap : hi);
+};
+
 /**
  * Dense pages: when the page cannot hold every software-placed balloon at full size without overlaps,
  * the renderer letters those balloons smaller (a letterer's point-size drop) in these steps; the last one
@@ -491,9 +574,15 @@ const densify = (setup: LineSetup, scale: number): LineSetup => (scale >= 1 ? se
  * plansFor() for placeBalloons from the real plan metrics: the text-box height and the outline bounds
  * (relative to the text box) of `line` at width `w`, as page fractions.
  */
-export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure, densityScale = 1): (line: Line, w: number) => SizedLine {
+export function letteringSizer(doc: ComicDoc, page: Page, aspect: number, measure: Measure = estimateMeasure, densityScale = 1): (line: Line, w: number) => SizedLine {
   const H = PLAN_W / (Number.isFinite(aspect) && aspect > 0 ? aspect : 2 / 3);
   const setups = new Map<string, { setup: LineSetup; sized: Map<number, SizedLine> }>();
+  /** Stored minimum heights by line (a re-placed balloon keeps the height its owner gave it). */
+  const minHs = new Map<string, number>();
+  for (const b of page?.balloons || []) {
+    const m = minHOf(b);
+    if (m && b && typeof b.lineId === 'string' && !minHs.has(b.lineId)) minHs.set(b.lineId, m);
+  }
   const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
   return (line, w) => {
     let entry = setups.get(line.id);
@@ -505,7 +594,9 @@ export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measu
     const hit = entry.sized.get(w);
     if (hit) return hit;
     const setup = entry.setup;
-    const t = layoutText(setup, measure, { x: 0, y: 0, w, pinned: true }, whole, H);
+    const t0 = layoutText(setup, measure, { x: 0, y: 0, w, pinned: true }, whole, H);
+    const minH = minHs.get(line.id);
+    const t = minH ? { ...t0, h: grownHeight(setup, t0.w, t0.h, minH * H) } : t0;
     const g = geometryFor(setup, t.w, t.h, null);
     // `tail`: the placement keeps tails out of other balloons; a tail-less style needs no room for one.
     const tail = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape) !== 'none' && setup.style.shape !== 'none';
@@ -527,10 +618,13 @@ const runsFor = (setup: LineSetup, lines: string[], box: { x: number; y: number;
   const LH = fontSize * lineHeight;
   const anchorX = style.align === 'left' ? box.x + pad.x : style.align === 'right' ? box.x + box.w - pad.x : box.x + box.w / 2;
   const sfx = setup.line.kind === 'sfx';
-  const effect = sfx ? style.sfxEffect : undefined;
-  const arched = effect === 'arched' && Math.abs(style.arc) >= 0.05;
-  const pop = effect === 'pop';
-  const perGlyph = setup.glyphs && (style.letterSpacing !== 0 || arched || pop);
+  const effect = sfx ? (style.sfxEffect as string) : undefined;
+  // A Pro warp bends every kind of line and takes the place of the SFX arch / pop; wobble jitters SFX glyphs.
+  const warp = setup.glyphs ? setup.warp : null;
+  const arched = !warp && effect === 'arched' && Math.abs(style.arc) >= 0.05;
+  const pop = !warp && effect === 'pop';
+  const wobble = !warp && effect === 'wobble';
+  const perGlyph = setup.glyphs && (style.letterSpacing !== 0 || arched || pop || !!warp || wobble);
   return lines.map((text, i) => {
     const y = r2(box.y + pad.y + i * LH + LH / 2 + 0.35 * fontSize);
     const run: GlyphRun = { text, x: r2(anchorX), y };
@@ -567,9 +661,97 @@ const runsFor = (setup: LineSetup, lines: string[], box: { x: number; y: number;
       run.rotates = rotates;
     }
     if (pop) run.scales = gs.map((_g, k) => r2(gs.length > 1 ? 0.85 + (0.3 * k) / (gs.length - 1) : 1));
+    if (warp) warpRun(run, warp, xs, adv, start, total, y, fontSize, i);
+    else if (wobble) wobbleRun(run, setup.line.id, gs.length, y, fontSize, i);
     return run;
   });
 };
+
+/**
+ * Bend one glyph run (Pro warp, per glyph; deterministic). `u` is a glyph centre's place along the line (−1 … 1):
+ *   arc   the line on a circle arc (the SFX arch, any kind of line; amount = curvature);
+ *   bulge glyphs grow toward the middle (amount < 0: shrink), scaled about the text's middle height;
+ *   wave  baselines on a sine (1.5 periods), each glyph turned along it;
+ *   rise  baselines climbing from the reading start (amount < 0: falling), glyphs turned with the slope;
+ *   flag  a wave whose swing grows from the start of the line to its end, like cloth from a pole.
+ */
+function warpRun(run: GlyphRun, warp: NonNullable<LineSetup['warp']>, xs: number[], adv: number[], start: number, total: number, y: number, fs: number, _line: number): void {
+  const a = warp.amount;
+  const n = xs.length;
+  if (!n || !(total > 0)) return;
+  const centre = (k: number) => xs[k] + adv[k] / 2;
+  const u = (k: number) => (2 * (centre(k) - start)) / total - 1;
+  const deg = (rad: number) => r2((rad * 180) / Math.PI);
+  if (warp.style === 'arc') {
+    const sign = a > 0 ? 1 : -1;
+    const R = total / (Math.abs(a) * Math.PI);
+    const mid = start + total / 2;
+    const ys: number[] = [];
+    const rotates: number[] = [];
+    const archedXs: number[] = [];
+    for (let k = 0; k < n; k += 1) {
+      const phi = (centre(k) - mid) / R;
+      archedXs.push(r2(mid + R * Math.sin(phi) - (adv[k] / 2) * Math.cos(phi)));
+      ys.push(r2(y + sign * R * (1 - Math.cos(phi))));
+      rotates.push(deg(sign * phi));
+    }
+    run.xs = archedXs;
+    run.ys = ys;
+    run.rotates = rotates;
+    return;
+  }
+  if (warp.style === 'bulge') {
+    const scales: number[] = [];
+    const ys: number[] = [];
+    for (let k = 0; k < n; k += 1) {
+      const s = Math.max(0.3, 1 + 0.45 * a * Math.cos((Math.PI * u(k)) / 2));
+      scales.push(r2(s));
+      ys.push(r2(y + 0.35 * fs * (s - 1)));
+    }
+    run.scales = scales;
+    run.ys = ys;
+    return;
+  }
+  if (warp.style === 'rise') {
+    const lift = 0.45 * fs * a;
+    const slope = (2 * lift) / total;
+    run.ys = xs.map((_x, k) => r2(y - lift * u(k)));
+    run.rotates = xs.map(() => deg(-Math.atan(slope)));
+    return;
+  }
+  // wave and flag
+  const period = Math.max(total / 1.5, fs * 2.5);
+  const amp = 0.3 * fs * a;
+  const ys: number[] = [];
+  const rotates: number[] = [];
+  for (let k = 0; k < n; k += 1) {
+    const t = (2 * Math.PI * (centre(k) - start)) / period;
+    const grow = warp.style === 'flag' ? (u(k) + 1) / 2 : 1;
+    ys.push(r2(y + amp * grow * Math.sin(t)));
+    // d/dx of the baseline (flag: the growth's own slope included).
+    const dy = amp * (grow * Math.cos(t) * ((2 * Math.PI) / period) + (warp.style === 'flag' ? Math.sin(t) / total : 0));
+    rotates.push(deg(Math.atan(dy)));
+  }
+  run.ys = ys;
+  run.rotates = rotates;
+}
+
+/** SFX 'wobble' (Pro): each glyph nudged up or down and turned a little, seeded by the line id (same every draw). */
+function wobbleRun(run: GlyphRun, lineId: string, n: number, y: number, fs: number, line: number): void {
+  let h = hashSeed(`${lineId || 'sfx'}#${line}`);
+  const next = () => {
+    h = (Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
+    return h / 4294967296;
+  };
+  const ys: number[] = [];
+  const rotates: number[] = [];
+  for (let k = 0; k < n; k += 1) {
+    ys.push(r2(y + (next() - 0.5) * 0.16 * fs));
+    rotates.push(r2((next() - 0.5) * 16));
+  }
+  run.ys = ys;
+  run.rotates = rotates;
+}
 
 // ── planLettering ────────────────────────────────────────────────────────────
 
@@ -975,6 +1157,9 @@ function planAtDensity(
     h: number;
     t: ReturnType<typeof layoutText>;
     g0: BubbleGeometry;
+    /** Balloon.rot (0: none); `ob` the outline box relative to the text box as drawn (rotated: the turned outline's box). */
+    rot: number;
+    ob: Box;
     /** Absolute tail tip (plan units) or null; `tipFollows` when it is the default one derived from the box. */
     tip: { x: number; y: number } | null;
     tipFollows: boolean;
@@ -1016,18 +1201,24 @@ function planAtDensity(
     let x = growLeft ? (b.x + b.w) * PLAN_W - t.w : b.x * PLAN_W;
     let y = b.y * H;
     const w = t.w;
-    const h = t.h;
+    // Balloon.minH (the height handle) is the outline's minimum height: the text box grows, its text centred.
+    const own = stored.get(line.id);
+    const minH = minHOf(own);
+    const h = minH ? grownHeight(setup, w, t.h, minH * H) : t.h;
+    const rot = rotOf(own);
 
-    // Render-time page fit on the real outline (stored values untouched).
+    // Render-time page fit on the real outline (stored values untouched); a rotated balloon on its turned outline.
     const g0Key = `${line.id}|${setup.baseSize}|${r2(w)}|${r2(h)}`;
     let g0 = shapes.get(g0Key);
     if (!g0) shapes.set(g0Key, (g0 = geometryFor(setup, w, h, null)));
+    const spin = rot ? (typeof setup.style.rotate === 'number' ? setup.style.rotate : 0) + rot : 0;
+    const ob = spin ? rotatedBox(g0.bounds, spin, w / 2, h / 2) : g0.bounds;
     const ox = (lo: number, size: number, start: number, span: number) =>
       size > span - 2 * lo ? start + (span - size) / 2 : clampV(start, lo, span - lo - size);
-    const outlineX = ox(mx, g0.bounds.w, x + g0.bounds.x, PLAN_W);
-    const outlineY = ox(my, g0.bounds.h, y + g0.bounds.y, H);
-    x = outlineX - g0.bounds.x;
-    y = outlineY - g0.bounds.y;
+    const outlineX = ox(mx, ob.w, x + ob.x, PLAN_W);
+    const outlineY = ox(my, ob.h, y + ob.y, H);
+    x = outlineX - ob.x;
+    y = outlineY - ob.y;
 
     // Tail tip (absolute): the stored one, else the default below the box for spoken kinds.
     const tailStyle = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape);
@@ -1040,7 +1231,7 @@ function planAtDensity(
         tipFollows = true;
       }
     }
-    return { line, panelIndex, panelN, order, setup, b, fallback, movable: !pinned, x, y, w, h, t, g0, tip, tipFollows, again };
+    return { line, panelIndex, panelN, order, setup, b, fallback, movable: !pinned, x, y, w, h, t, g0, rot, ob, tip, tipFollows, again };
   };
   items.forEach((it, order) => {
     const p = preOf(it, order, true);
@@ -1060,7 +1251,7 @@ function planAtDensity(
   for (const id of [...widened]) {
     const i = pre.findIndex((p) => p.line.id === id);
     const p = pre[i];
-    const outline = (q: Pre) => ({ x: q.x + q.g0.bounds.x, y: q.y + q.g0.bounds.y, w: q.g0.bounds.w, h: q.g0.bounds.h });
+    const outline = (q: Pre) => ({ x: q.x + q.ob.x, y: q.y + q.ob.y, w: q.ob.w, h: q.ob.h });
     const hits = (o: Box) => pre.filter((q) => q.line.id !== id && !q.movable && boxesOverlap(o, outline(q))).length;
     const wide = hits(outline(p));
     if (!wide) continue;
@@ -1118,7 +1309,7 @@ function planAtDensity(
   }
   const settled = settleBalloons(
     pre.map((p): SettleItem => {
-      const outline = { x: p.x + p.g0.bounds.x, y: p.y + p.g0.bounds.y, w: p.g0.bounds.w, h: p.g0.bounds.h };
+      const outline = { x: p.x + p.ob.x, y: p.y + p.ob.y, w: p.ob.w, h: p.ob.h };
       // A default tail follows the box: its reach is part of the outline instead of a fixed tip.
       const foot = p.tip && p.tipFollows ? balloonFootprint(outline, p.tip) : outline;
       const item: SettleItem = {
@@ -1214,7 +1405,7 @@ function planAtDensity(
   // another outline (linked balloons touch by design; two balloons the owner fixed are the owner's call).
   let overText = 0;
   {
-    const outlineOf = (q: Pre): Box => ({ x: q.x + q.g0.bounds.x, y: q.y + q.g0.bounds.y, w: q.g0.bounds.w, h: q.g0.bounds.h });
+    const outlineOf = (q: Pre): Box => ({ x: q.x + q.ob.x, y: q.y + q.ob.y, w: q.ob.w, h: q.ob.h });
     const textOf = (q: Pre): Box => ({ x: q.x, y: q.y, w: q.w, h: q.h });
     for (const p of pre) {
       const op = outlineOf(p);
@@ -1234,10 +1425,18 @@ function planAtDensity(
   const build = (): LetterPlan[] => {
     const plans: (LetterPlan & { order: number })[] = [];
     for (const p of pre) {
-      const { line, setup, b, x, y, w, h, t, tip } = p;
-      const geometry = geometryFor(setup, w, h, tip ? { x: r2(tip.x - x), y: r2(tip.y - y) } : null);
+      const { line, setup, b, x, y, w, h, t, tip, rot } = p;
+      const styleRotate = typeof setup.style.rotate === 'number' ? setup.style.rotate : 0;
+      // Balloon.rot turns the body and the text together about the text box's centre; the tail tip stays on its point
+      // (stored or default), so the tail is drawn toward the tip turned back into the balloon's own frame.
+      const rotate = rot ? r2(styleRotate + rot) : styleRotate;
+      let tipLocal = tip ? { x: r2(tip.x - x), y: r2(tip.y - y) } : null;
+      if (tip && rot) {
+        const q = rotateAbout(tip, -rotate, r2(x + w / 2), r2(y + h / 2));
+        tipLocal = { x: r2(q.x - x), y: r2(q.y - y) };
+      }
+      const geometry = geometryFor(setup, w, h, tipLocal);
 
-      const rotate = typeof setup.style.rotate === 'number' ? setup.style.rotate : 0;
       const skewX = line.kind === 'sfx' && setup.style.sfxEffect === 'skewed' ? -12 : setup.synthItalic ? -10 : 0;
       const outline = { x: x + geometry.bounds.x, y: y + geometry.bounds.y, w: geometry.bounds.w, h: geometry.bounds.h };
       const eps = 0.5;
@@ -1261,7 +1460,7 @@ function planAtDensity(
         fontSize: t.fontSize,
         lineHeight: r4(setup.lineHeight),
         pad: { x: r2(setup.pad.x), y: r2(setup.pad.y) },
-        runs: runsFor(setup, t.lines, { x, y, w }, t.fontSize),
+        runs: runsFor(setup, t.lines, { x, y: h > t.h ? y + (h - t.h) / 2 : y, w }, t.fontSize),
         geometry,
         stroke: setup.stroke,
         z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : p.order,
