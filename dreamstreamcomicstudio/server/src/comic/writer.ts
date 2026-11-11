@@ -42,7 +42,7 @@ import {
   textUnitFor
 } from '../../../shared/comic/panelRules.js';
 import { ALWAYS_RULE, RATING_RULES, effectiveRating, isKidsAudience, isLittleKidsAudience, softenAction, type ContentRating } from '../../../shared/comic/safety.js';
-import { STYLE_PRESETS, type StylePreset } from '../../../shared/comic/stylePresets.js';
+import { STYLE_PRESETS, briefWantsSpotColour, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { extractBalancedJson } from '../ai/jsonCoerce.js';
 import { effectiveLayout, harmonizePanelSizes, layoutPanelCount, parseLayout, synthesizeLayout } from './prompts.js';
@@ -1638,18 +1638,29 @@ const similarity = (a: string, b: string): number => {
   return inter / (A.size + B.size - inter);
 };
 
-/** Presets ranked by fit to the story (kind, genre/tone/audience tags, color mode). */
+/** A bestFor tag as a whole word or phrase: 'Indiana' never scores the 'indian' tag. */
+const storyHasTag = (story: string, tag: string): boolean => {
+  const escaped = tag.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(story);
+};
+
+/**
+ * Presets ranked by fit to the story (kind, genre/tone/audience tags, color mode). The spot looks
+ * are b/w art: they lead a b/w-plus-accent brief and sit below the colour looks on a colour comic.
+ */
 export const rankStylePresets = (doc: ComicDoc): StylePreset[] => {
   const story = [doc.brief.genre, doc.brief.tone, doc.brief.audience, doc.brief.premise, doc.brief.logline, ...(doc.brief.notes || [])]
     .map(clean)
     .join(' ')
     .toLowerCase();
+  const spot = briefWantsSpotColour(doc);
   const score = (p: StylePreset) => {
     let s = 0;
     if (p.kind && p.kind === doc.format.kind) s += 3;
-    for (const tag of p.bestFor) if (story.includes(tag.toLowerCase())) s += 2;
-    if (doc.format.colorMode === 'bw') s += p.colorMode === 'bw' ? 3 : -4;
-    else if (p.colorMode === 'bw') s -= 2;
+    for (const tag of p.bestFor) if (storyHasTag(story, tag)) s += 2;
+    if (p.tags.colour === 'spot' && spot) s += 10;
+    else if (doc.format.colorMode === 'bw') s += p.colorMode === 'bw' ? 3 : -4;
+    else if (p.colorMode === 'bw' || (p.tags.colour === 'spot' && doc.format.colorMode !== 'limited')) s -= 2;
     if (doc.format.colorMode === 'limited' && p.colorMode === 'limited') s += 2;
     return s;
   };

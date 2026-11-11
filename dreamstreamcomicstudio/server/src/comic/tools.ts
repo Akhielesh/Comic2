@@ -991,7 +991,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'set_style',
       'free',
-      `Set the art style: presetId (${STYLE_PRESETS.map((p) => p.id).join(', ')}), OR a custom name + spec (medium, linework, color, shading). lock:true locks it. attachmentRefs = style reference images.`,
+      'Set the art style: presetId (one of the enum), OR a custom name + spec (medium, linework, color, shading). lock:true locks it. attachmentRefs = style reference images.',
       schema({
         presetId: S('Preset id.', { enum: STYLE_PRESETS.map((p) => p.id) }),
         name: S('Custom style name (2–4 words).'),

@@ -28,17 +28,29 @@ exports[`PresetThumb > honours an explicit width; the noir scene snapshot 1`] = 
 
 exports[`PresetThumb > renders a distinct, NaN-free scene for all 12 presets over the gradient swatch 1`] = `
 {
+  "brutalist": "49620c3d",
   "cartoon-strip": "e48f234a",
+  "chalk-pastel": "1a8a092f",
   "cozy-anime": "4cfac6be",
+  "cyberpunk": "d7eb0e61",
   "dark-fantasy": "1328fa60",
+  "dieselpunk": "63ae9586",
   "graphic-novel-painterly": "20dd821b",
+  "indian-miniature": "4c21a4a3",
   "indie-risograph": "83a2a687",
+  "ink-one-colour": "a34d468a",
+  "ink-wash": "9485ec31",
   "ligne-claire": "d3d25519",
   "manga-screentone": "6becb8ea",
   "modern-heroic": "19e908d2",
+  "mono-wash": "9e6a45b2",
+  "mythic-icon": "1c28f086",
   "noir-ink": "d2ceee9b",
   "retro-pop": "bc6afabf",
+  "retrofuturism": "0ad76fec",
+  "surreal-dream": "d8184421",
   "watercolor-storybook": "5bbbdb71",
   "webtoon-cel": "0e9f3928",
+  "woodcut": "b65d9453",
 }
 `;

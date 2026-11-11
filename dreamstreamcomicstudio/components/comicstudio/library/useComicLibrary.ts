@@ -19,6 +19,8 @@ import {
   libraryEmptyIds,
   sanitizeLibraryLqip,
   sanitizeLibraryProvenance,
+  styleAnchorId,
+  styleCastId,
   stylePreviewId,
   type LibraryAssetPublic,
   type LibraryIndex,
@@ -33,6 +35,10 @@ export interface ComicLibrary {
   byKind(kind: LibraryKind, filter?: { theme?: 'light' | 'dark'; presetId?: string; genre?: string }): LibraryAssetPublic[];
   /** style.<presetId> */
   preview(presetId: string): LibraryAssetPublic | undefined;
+  /** style.<presetId>.cast: the shared character bust in that style (for the Styles card cross-fade). */
+  cast(presetId: string): LibraryAssetPublic | undefined;
+  /** anchor.<presetId>: the content-neutral style swatch. */
+  anchor(presetId: string): LibraryAssetPublic | undefined;
   /** dark → light fallback */
   empty(variant: string, theme: 'light' | 'dark'): LibraryAssetPublic | undefined;
 }
@@ -211,6 +217,8 @@ export function libraryApi(s: Snapshot): ComicLibrary {
           (!filter?.genre || a.genre === filter.genre)
       ),
     preview: (presetId) => s.byId.get(stylePreviewId(presetId)),
+    cast: (presetId) => s.byId.get(styleCastId(presetId)),
+    anchor: (presetId) => s.byId.get(styleAnchorId(presetId)),
     empty: (variant, theme) => {
       for (const id of libraryEmptyIds(variant, theme)) {
         const a = s.byId.get(id);

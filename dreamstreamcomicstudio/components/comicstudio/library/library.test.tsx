@@ -108,6 +108,17 @@ describe('useComicLibrary', () => {
     expect(sanitizeIndex('nope')).toBeUndefined();
     expect(libraryApi({ status: 'idle', byId: new Map() }).get('x')).toBeUndefined();
   });
+
+  it('cast and anchor look up the style.<id>.cast bust and the anchor.<id> swatch of one preset', () => {
+    const cast = asset('style.noir-ink.cast', { presetId: 'noir-ink' });
+    const anchor = asset('anchor.noir-ink', { presetId: 'noir-ink' });
+    const lib = libraryApi({ status: 'ready', byId: new Map([cast, anchor, asset('style.noir-ink')].map((a) => [a.id, a])) });
+    expect(lib.cast('noir-ink')).toBe(cast);
+    expect(lib.anchor('noir-ink')).toBe(anchor);
+    expect(lib.preview('noir-ink')?.id).toBe('style.noir-ink');
+    expect(lib.cast('cozy-anime')).toBeUndefined();
+    expect(lib.anchor('cozy-anime')).toBeUndefined();
+  });
 });
 
 describe('LibraryImage', () => {

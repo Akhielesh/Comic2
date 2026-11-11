@@ -47,6 +47,8 @@ export const clampLibraryBudget = (usd: unknown): number =>
 
 /** "anchor.<id>": optional content-neutral style swatch (phase 2, built only on request). */
 export const styleAnchorId = (presetId: string): string => `anchor.${presetId}`;
+/** "style.<id>.cast": the shared original character as a bust in a preset's style (kind style_preview, its own id). */
+export const styleCastId = (presetId: string): string => `style.${presetId}.cast`;
 /** Assets one admin `step` call may advance (contract §14.1: n ≤ 3). */
 export const LIBRARY_STEP_MAX = 3;
 /** A `generating`/`analyzing` row untouched for this long belongs to a dead step and is reset. */
