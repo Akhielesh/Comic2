@@ -15,26 +15,14 @@ const cloud = vi.hoisted(() => ({
   /** chat_sync rows on the server. */
   rows: [] as { user_id: string; kind: string; data: Record<string, unknown> }[],
   upserts: [] as { key: string; user_id: string; kind: string; data: Record<string, unknown> }[],
+  selects: [] as { columns: string; rows: number }[],
 }));
 
-vi.mock('./supabase', () => ({
-  supabase: {
-    auth: { getUser: vi.fn(async () => ({ data: { user: cloud.user ? { id: cloud.user } : null } })) },
-    from: vi.fn(() => ({
-      select: () => ({
-        eq: async (_col: string, uid: string) => ({
-          data: cloud.rows.filter((r) => r.user_id === uid).map((r) => ({ kind: r.kind, data: r.data })),
-          error: null,
-        }),
-      }),
-      upsert: async (row: (typeof cloud.upserts)[number]) => {
-        cloud.upserts.push(row);
-        return { error: null };
-      },
-      delete: () => ({ eq: () => ({ eq: async () => ({ error: null }) }) }),
-    })),
-  },
-}));
+// An in-memory chat_sync table (manifest + body reads, upserts) — chatSync.testkit.ts.
+vi.mock('./supabase', async () => {
+  const { makeFakeChatSyncSupabase } = await import('./chatSync.testkit');
+  return { supabase: makeFakeChatSyncSupabase(cloud) };
+});
 
 const idb = createFakeIndexedDb();
 vi.stubGlobal('indexedDB', idb);

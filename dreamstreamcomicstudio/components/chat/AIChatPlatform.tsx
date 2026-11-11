@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Code2, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { initTheme } from '../../services/theme';
@@ -31,6 +31,21 @@ import {
   type ConnectedDataAction
 } from './connectorPrivacy';
 import { API_KEYS_HREF } from '../usage/links';
+import { ArtifactTurnsContext, type ArtifactTurnRef, type ArtifactTurnsValue } from './artifacts/ChatArtifacts';
+import {
+  abortStream,
+  beginStream,
+  dropHotSession,
+  endStream,
+  getHotSession,
+  hotSessions,
+  isStreaming,
+  holdHotSession,
+  putHotSession,
+  retainChatView,
+  streamingIds,
+  subscribeChatStreams
+} from '../../services/chatStreams';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -135,6 +150,9 @@ import {
   deleteChatSession,
   deriveSessionTitle,
   getChatMemory,
+  getChatSession,
+  isChatSessionVisible,
+  shownVariantIndex,
   getLastActiveChatSessionId,
   isChatMemoryConnected,
   isChatOwnedBy,
@@ -147,6 +165,7 @@ import {
   setLastActiveChatSessionId,
   syncFromCloud,
   wasDeletedThisSession,
+  type ChatArtifactState,
   type ChatAttachment,
   type ChatProject,
   type ChatSession,
@@ -439,6 +458,27 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     return () => document.documentElement.classList.remove('dark');
   }, []);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  // The newest session list, readable synchronously (CHAT-0, bug B4). Every change to the list goes
+  // through commitSessions, which computes from this ref — never inside a React updater — so a save
+  // computed from it also runs after this view unmounts (a reply finishing in the background).
+  const sessionsRef = useRef<ChatSession[]>([]);
+  // False once this view unmounted: a late write then reads its base from IndexedDB, never from the
+  // stale list this view held.
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    // While this view is mounted chatStreams keeps recent chats hot; once no view is, only the chats
+    // a write may still arrive for (a reply streaming, a calendar write) stay in memory.
+    const release = retainChatView();
+    return () => {
+      aliveRef.current = false;
+      release();
+    };
+  }, []);
+  const initializedRef = useRef(false);
+  // The rows exactly as loaded at mount: a background cloud sync may replace these (it decided which
+  // side changed); a row this view changed since keeps the newer copy.
+  const loadedRowsRef = useRef<WeakSet<ChatSession>>(new WeakSet());
   const [projectsList, setProjectsList] = useState<ChatProject[]>([]);
   const [projectModal, setProjectModal] = useState<{ editing: ChatProject | null } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -465,8 +505,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
   // Per-session generation state, so several chats can stream at the same time and a
   // busy chat never blocks (or gets stopped by) another. `busyIds` = sessions whose
-  // answer is currently generating.
-  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // answer is currently generating — kept in services/chatStreams (module scope), so a view mounted
+  // while a reply from an earlier view is still streaming shows it busy and cannot send over it.
+  const busyIds = useSyncExternalStore(subscribeChatStreams, streamingIds, streamingIds);
   // Sidebar starts open on desktop, closed on phones so the conversation owns the
   // whole screen (on mobile it opens as an overlay drawer, not an inline column).
   const [sidebarOpen, setSidebarOpen] = useState(
@@ -489,19 +530,37 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
   );
-  // One AbortController per in-flight session, so stopping one chat doesn't cancel another.
-  const abortMap = useRef<Map<string, AbortController>>(new Map());
   // Bumped when a generation ends, so the header usage meter re-reads usage left once, shortly
   // after something may have been spent (event-driven — never a timer).
   const [usageRefreshKey, setUsageRefreshKey] = useState(0);
-  const markBusy = (id: string, on: boolean) => {
-    setBusyIds((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+  const noteGeneration = (on: boolean) => {
     if (!on) setUsageRefreshKey((k) => k + 1);
+  };
+
+  /**
+   * Apply a change to the session list, computed from the newest list (sessionsRef), and mirror every
+   * changed row that chatStreams keeps hot, so a view mounted later — or a reply finishing after this
+   * one unmounted — starts from what this view shows.
+   */
+  const commitSessions = (fn: (prev: ChatSession[]) => ChatSession[]) => {
+    const prev = sessionsRef.current;
+    const next = fn(prev);
+    if (next === prev) return;
+    sessionsRef.current = next;
+    setSessions(next);
+    const before = new Map(prev.map((s) => [s.id, s] as const));
+    for (const s of next) {
+      if (before.get(s.id) !== s && getHotSession(s.id)) putHotSession(s, { notify: false });
+    }
+  };
+
+  /** The newest copy of a chat: the hot copy (always, while it streams) or this view's, by time. */
+  const latestSession = (id: string): ChatSession | undefined => {
+    const hot = getHotSession(id);
+    const mine = sessionsRef.current.find((s) => s.id === id);
+    if (!hot) return mine;
+    if (!mine || isStreaming(id)) return hot;
+    return (hot.updatedAt || 0) >= (mine.updatedAt || 0) ? hot : mine;
   };
 
   useEffect(() => {
@@ -528,6 +587,20 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       document.body.style.overflow = prevOverflow;
     };
   }, [overlayOpen]);
+
+  // Escape closes the phone drawer — unless a menu inside it (which marks the key handled) or a
+  // dialog over it takes the key first.
+  const drawerOpen = sidebarOpen && !isDesktop;
+  const dialogOpen = showModelPicker || Boolean(projectModal) || Boolean(settingsTab) || paletteOpen;
+  useEffect(() => {
+    if (!drawerOpen || dialogOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerOpen, dialogOpen]);
 
   useEffect(() => onMcpServersChanged(() => setMcpServers(listAllMcpServers())), []);
 
@@ -602,11 +675,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
     (async () => {
       try {
-        const [stored, storedProjects] = await Promise.all([
+        const [loaded, storedProjects] = await Promise.all([
           settleWithin(listChatSessions(), 4000, [] as ChatSession[]),
           settleWithin(listChatProjects(), 4000, [] as ChatProject[])
         ]);
         if (!active) return;
+        // A reply an earlier view started may still be streaming (or just finished): its newest copy
+        // is in chatStreams, not yet (or only just) in IndexedDB. Start from it.
+        const stored = withHotCopies(loaded);
+        loadedRowsRef.current = new WeakSet(stored);
         setMemory(getChatMemory(user?.id));
         setCustomAgents(listCustomAgents(user?.id));
         setProjectsList(storedProjects);
@@ -619,10 +696,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             source: pending.source
           });
           void saveChatSession(session).catch(() => {});
-          setSessions([session, ...stored]);
+          commitSessions(() => [session, ...stored]);
           setActiveId(session.id);
         } else if (stored.length > 0) {
-          setSessions(stored);
+          commitSessions(() => stored);
           // Reopen the chat the user was last in (reload/tab-discard continuity);
           // fall back to the most recent session only when that one no longer exists.
           const lastId = getLastActiveChatSessionId();
@@ -634,18 +711,21 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           // and push it to every other device before sync even ran; an untouched
           // placeholder gets saved on the first real message (updateSession) instead.
           const session = createEmptySession();
-          setSessions([session]);
+          commitSessions(() => [session]);
           setActiveId(session.id);
         }
       } catch {
         // Last resort: never strand the user on the spinner — open a fresh local chat.
         if (active) {
           const session = createEmptySession();
-          setSessions([session]);
+          commitSessions(() => [session]);
           setActiveId(session.id);
         }
       } finally {
-        if (active) setInitialized(true);
+        if (active) {
+          initializedRef.current = true;
+          setInitialized(true);
+        }
       }
 
       // Background cloud sync (no-op when signed out / table missing): merge remote
@@ -660,17 +740,23 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         if (!active) return;
         const merged = mergedRaw?.filter((s) => !wasDeletedThisSession(s.id)) ?? null;
         if (merged && merged.length > 0) {
-          setSessions((prev) => {
+          commitSessions((prev) => {
             // Never regress what the user can see: keep the in-memory copy when it is at
             // least as new (covers a chat that is streaming right now), keep local-only
             // sessions the user actually USED, and add everything new from the cloud.
             // Untouched placeholders (zero turns) are dropped the moment real history
             // arrives — the invariant-repair effect below moves the user into it.
+            // A row this view never touched takes the synced copy as is: the sync decided which
+            // side changed, and an edit from a device whose clock runs behind carries an OLDER
+            // time (CHAT-0, nav V.3-a).
             const prevById = new Map(prev.map((s) => [s.id, s] as const));
             const mergedIds = new Set(merged.map((s) => s.id));
             const reconciled = merged.map((remote) => {
               const local = prevById.get(remote.id);
-              return local && local.updatedAt >= remote.updatedAt ? local : remote;
+              if (!local) return remote;
+              if (isStreaming(local.id)) return local;
+              if (loadedRowsRef.current.has(local)) return remote;
+              return local.updatedAt >= remote.updatedAt ? local : remote;
             });
             const localOnly = prev.filter((s) => !mergedIds.has(s.id) && s.turns.length > 0);
             return [...localOnly, ...reconciled];
@@ -702,6 +788,33 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Whether the CURRENTLY VIEWED chat is generating (drives the composer/stop UI).
   // Other chats may still be generating in the background.
   const busy = activeId ? busyIds.has(activeId) : false;
+
+  // What each acting artifact (calendar write, clarify answers) knows about its turn: whether the
+  // conversation moved on past it, and its recorded outcome (CHAT-0, settle §6). Looked up by the
+  // turn's own artifacts array, the one ChatMessageView renders.
+  const artifactTurns = useMemo<ArtifactTurnsValue>(() => {
+    const byArtifacts = new Map<unknown, ArtifactTurnRef>();
+    if (activeSession) {
+      let lastUser = -1;
+      activeSession.turns.forEach((t, i) => {
+        if (t.role === 'user') lastUser = i;
+      });
+      activeSession.turns.forEach((t, i) => {
+        if (t.role !== 'assistant' || !t.artifacts || t.artifacts.length === 0) return;
+        byArtifacts.set(t.artifacts, {
+          sessionId: activeSession.id,
+          turnId: t.id,
+          passed: i < lastUser,
+          busy,
+          variant: shownVariantIndex(t),
+          artifactState: t.artifactState,
+          settle: (key, state) => settleArtifact(activeSession.id, t.id, key, state)
+        });
+      });
+    }
+    return { turnFor: (artifacts) => byArtifacts.get(artifacts) ?? null };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession, busy]);
   // Latest active id, readable from inside async generation closures (which capture a
   // stale activeId) so a background chat doesn't hijack the shared side panel.
   const activeIdRef = useRef(activeId);
@@ -738,14 +851,85 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const features = useMemo(() => deriveModelFeatures(resolvedModel), [resolvedModel]);
   const suggestModels = useMemo(() => Array.from(catalog.values()), [catalog]);
 
+  /**
+   * Change one chat and save it (CHAT-0, bug B4). The new copy is computed from the newest copy
+   * (latestSession) and saved OUTSIDE any React updater: an updater never runs once this view has
+   * unmounted, which is how a reply that finished in the background used to be lost. The copy is also
+   * kept hot in chatStreams, so a view mounted meanwhile merges it instead of saving a stale copy
+   * over it. After this view unmounted, a chat it no longer holds hot is changed from IndexedDB.
+   */
   const updateSession = (id: string, updater: (s: ChatSession) => ChatSession) => {
-    setSessions((prev) => {
-      const next = prev.map((s) => (s.id === id ? updater(s) : s));
-      const changed = next.find((s) => s.id === id);
-      if (changed) void saveChatSession(changed);
-      return next;
-    });
+    if (wasDeletedThisSession(id)) return;
+    if (!aliveRef.current && !getHotSession(id)) {
+      // Held hot until saved: a second late change made meanwhile builds on this one.
+      const release = holdHotSession(id);
+      void (async () => {
+        const stored = await getChatSession(id);
+        if (!stored) return;
+        const fresh = getHotSession(id) ?? stored; // a newer copy may have landed meanwhile
+        const next = updater(fresh);
+        if (next === fresh) return;
+        putHotSession(next);
+        await saveChatSession(next);
+      })()
+        .catch(() => {})
+        .finally(release);
+      return;
+    }
+    const base = latestSession(id);
+    if (!base) return;
+    const next = updater(base);
+    if (next === base) return;
+    commitSessions((prev) => (prev.some((s) => s.id === id) ? prev.map((s) => (s.id === id ? next : s)) : prev));
+    // Other views hear about it only when this one is gone (one chat view is mounted at a time).
+    putHotSession(next, { notify: !aliveRef.current });
+    void saveChatSession(next);
   };
+
+  /** This view's list with every newer hot copy merged in (and hot chats it lacks added). */
+  const withHotCopies = (list: ChatSession[]): ChatSession[] => {
+    let changed = false;
+    const ids = new Set(list.map((s) => s.id));
+    const out = list.map((s) => {
+      const hot = getHotSession(s.id);
+      if (!hot || hot === s) return s;
+      if (isStreaming(s.id) || (hot.updatedAt || 0) >= (s.updatedAt || 0)) {
+        changed = true;
+        return hot;
+      }
+      return s;
+    });
+    const missing = hotSessions().filter(
+      (h) => !ids.has(h.id) && h.turns.length > 0 && !wasDeletedThisSession(h.id) && isChatSessionVisible(h)
+    );
+    if (missing.length) changed = true;
+    return changed ? [...missing.reverse(), ...out] : list;
+  };
+
+  // Another view (one that has unmounted, with a reply still streaming) changed a chat: show it.
+  useEffect(
+    () =>
+      subscribeChatStreams(() => {
+        if (!initializedRef.current) return; // the load merges hot copies itself
+        commitSessions(withHotCopies);
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  /** Record (or clear) the outcome of an acting artifact on its turn — CHAT-0, settle §6. */
+  const settleArtifact = (sessionId: string, turnId: string, key: string, state: ChatArtifactState | null) =>
+    updateSession(sessionId, (s) => ({
+      ...s,
+      turns: s.turns.map((t) => {
+        if (t.id !== turnId) return t;
+        const next = { ...(t.artifactState || {}) };
+        if (state) next[key] = state;
+        else delete next[key];
+        return { ...t, artifactState: Object.keys(next).length ? next : undefined };
+      }),
+      updatedAt: Date.now()
+    }));
 
   const handleNew = () => {
     // BUG FIX: "New chat" used to mint AND persist a fresh empty session on every click,
@@ -760,7 +944,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const blank =
       activeSession && activeSession.turns.length === 0
         ? activeSession
-        : sessions.find((s) => s.turns.length === 0);
+        : sessionsRef.current.find((s) => s.turns.length === 0);
     if (blank) {
       setActiveId(blank.id);
       setView('chat');
@@ -784,7 +968,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           }
         : {}
     );
-    setSessions((prev) => [base, ...prev]);
+    commitSessions((prev) => [base, ...prev]);
     setActiveId(base.id);
     setView('chat');
   };
@@ -803,19 +987,18 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   const handleDelete = (id: string) => {
     // Stop any in-flight generation for the chat being removed.
-    abortMap.current.get(id)?.abort();
-    abortMap.current.delete(id);
-    markBusy(id, false);
+    abortStream(id);
     void deleteChatSession(id);
-    const next = sessions.filter((s) => s.id !== id);
+    dropHotSession(id);
+    const next = sessionsRef.current.filter((s) => s.id !== id);
     if (next.length === 0) {
       const fresh = createEmptySession();
       void saveChatSession(fresh);
-      setSessions([fresh]);
+      commitSessions(() => [fresh]);
       setActiveId(fresh.id);
       return;
     }
-    setSessions(next);
+    commitSessions(() => next);
     if (activeId === id) setActiveId(next[0].id);
   };
 
@@ -860,7 +1043,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     void deleteChatProject(projectId);
     setProjectsList((prev) => prev.filter((p) => p.id !== projectId));
     // Reflect the unfiling locally (storage does the same).
-    setSessions((prev) => prev.map((s) => (s.projectId === projectId ? { ...s, projectId: null } : s)));
+    commitSessions((prev) => prev.map((s) => (s.projectId === projectId ? { ...s, projectId: null } : s)));
   };
 
   const handleSelectModel = (model: CatalogModel) => {
@@ -905,9 +1088,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   const handleBranch = (turnId: string, chooseNewModel: boolean) => {
     if (!activeSession) return;
-    const branched = branchSession(activeSession, turnId);
+    const branched = branchSession(latestSession(activeSession.id) ?? activeSession, turnId);
     void saveChatSession(branched);
-    setSessions((prev) => [branched, ...prev]);
+    commitSessions((prev) => [branched, ...prev]);
     setActiveId(branched.id);
     // "Branch + new model" opens the picker on the freshly-branched session.
     if (chooseNewModel) setShowModelPicker(true);
@@ -918,9 +1101,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   const handleStop = () => {
     if (!activeId) return;
-    abortMap.current.get(activeId)?.abort();
-    abortMap.current.delete(activeId);
-    markBusy(activeId, false);
+    abortStream(activeId);
   };
 
   // Resolve which model/source/tools to use for a message. In Auto mode the app
@@ -1022,12 +1203,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // Bind to the TARGET session (captured at send time), not whatever chat happens to
     // be active when an async tick resolves — so switching/creating chats mid-stream
     // never crosses settings or output between conversations.
-    const session = sessions.find((s) => s.id === sessionId);
+    const session = latestSession(sessionId);
     if (!session) return;
 
-    markBusy(sessionId, true);
+    // Busy and abortable from module scope: the reply keeps streaming (and is saved) if this view
+    // unmounts, and a view mounted meanwhile sees the chat busy (services/chatStreams).
     const controller = new AbortController();
-    abortMap.current.set(sessionId, controller);
+    putHotSession(session, { notify: false });
+    beginStream(sessionId, controller);
     // Per-turn timing for observability (the chat_turn telemetry event below).
     const turnStartedAt = Date.now();
     // The answer text on screen so far (a refusal after some of it streamed is not a notice).
@@ -1039,8 +1222,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       if (meta.connectorPrivacy === true) metaConnectorPrivacy = true;
     };
 
-    const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
-      setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
+    // Live updates (deltas, traces) without a save: the final updateSession saves the whole turn.
+    const setSessionState = (updater: (s: ChatSession) => ChatSession) => {
+      const base = latestSession(sessionId);
+      if (!base) return;
+      const next = updater(base);
+      commitSessions((prev) => prev.map((s) => (s.id === sessionId ? next : s)));
+      putHotSession(next, { notify: !aliveRef.current });
+    };
 
     // Reuse the existing assistant turn (regenerate) or append a fresh placeholder.
     const aiTurnId = regenerateTurnId || crypto.randomUUID();
@@ -1298,8 +1487,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         updatedAt: Date.now()
       }));
     } finally {
-      if (abortMap.current.get(sessionId) === controller) abortMap.current.delete(sessionId);
-      markBusy(sessionId, false);
+      endStream(sessionId, controller);
+      noteGeneration(false);
     }
   };
 
@@ -1310,9 +1499,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const sessionId = activeSession.id;
     // `busy` is React state and flips a tick late, so a mobile double-tap (touchend +
     // click) can fire two sends before it updates — which is how a chat ends up with two
-    // identical user turns. `abortMap` is set synchronously when a generation starts, so
-    // it's the reliable guard against a duplicate in-flight send for this chat.
-    if (abortMap.current.has(sessionId)) return;
+    // identical user turns. The stream registry is set synchronously when a generation starts
+    // (and outlives this view), so it's the reliable guard against a duplicate in-flight send.
+    if (isStreaming(sessionId)) return;
+    // The newest turns, not this render's: a card may have just recorded its outcome on its turn
+    // (the clarify card records "sent" and then posts its answers in the same tick).
+    const current = latestSession(sessionId) ?? activeSession;
     const { reqModel, reqSource, reqTools } = resolveRequest(text, overrideModel);
 
     const userTurn: ChatTurn = {
@@ -1322,12 +1514,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       attachments: attachments.length ? attachments : undefined,
       createdAt: Date.now()
     };
-    const isFirst = activeSession.turns.length === 0;
-    const baseTurns = [...activeSession.turns, userTurn];
+    const isFirst = current.turns.length === 0;
+    const baseTurns = [...current.turns, userTurn];
 
     updateSession(sessionId, (s) => ({
       ...s,
-      turns: baseTurns,
+      turns: [...s.turns, userTurn],
       title: isFirst && text ? deriveSessionTitle(text) : s.title,
       titleAuto: isFirst && text ? true : s.titleAuto,
       updatedAt: Date.now()
@@ -1365,8 +1557,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
   // prior answer(s) as selectable versions.
   const handleRegenerate = async (turnId: string, overrideModel?: CatalogModel) => {
-    if (!activeSession || busy) return;
-    const turns = activeSession.turns;
+    if (!activeSession || busy || isStreaming(activeSession.id)) return;
+    const turns = (latestSession(activeSession.id) ?? activeSession).turns;
     const idx = turns.findIndex((t) => t.id === turnId);
     if (idx < 0 || turns[idx].role !== 'assistant') return;
 
@@ -1458,10 +1650,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Edit a user message and resend: replace its text, drop everything after it, and
   // generate a fresh answer.
   const handleEditUserMessage = async (turnId: string, newText: string) => {
-    if (!activeSession || busy) return;
+    if (!activeSession || busy || isStreaming(activeSession.id)) return;
     const text = newText.trim();
     if (!text) return;
-    const turns = activeSession.turns;
+    const turns = (latestSession(activeSession.id) ?? activeSession).turns;
     const idx = turns.findIndex((t) => t.id === turnId);
     if (idx < 0 || turns[idx].role !== 'user') return;
 
@@ -1621,6 +1813,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       })()}
 
       {resolvedView === 'chat' && activeSession ? (
+      <ArtifactTurnsContext.Provider value={artifactTurns}>
       <ChatConversation
         session={activeSession}
         features={features}
@@ -1659,6 +1852,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         // tablets, the pill on desktop; nothing for admins / exempt accounts / an unavailable backend.
         headerAccessory={<UsageMeter compact={!isDesktop} refreshKey={usageRefreshKey} />}
       />
+      </ArtifactTurnsContext.Provider>
       ) : (
       <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
         {/* Slim header for the non-chat views — keeps the sidebar toggle reachable.

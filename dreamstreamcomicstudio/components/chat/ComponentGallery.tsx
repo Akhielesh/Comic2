@@ -68,7 +68,7 @@ import { GameCard } from './artifacts/GameCard';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
 import type { ClarifyArtifact } from '../../apiTypes';
-import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import { renderArtifactNode, type ArtifactTurn } from './artifacts/ChatArtifacts';
 import type {
   DashboardArtifact, LearningPathArtifact, ItineraryArtifact,
   TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact,
@@ -1446,6 +1446,18 @@ const calendarBatchDraftDemo: CalendarEventDraftArtifact = {
   ]
 };
 
+// Settled states of the cards that act for the user (CHAT-0, lead decision D3): once the action is
+// done, or the conversation has moved on, a card is one quiet line with no controls. A demo turn
+// stands in for the chat turn the card would sit on (it records nothing).
+const demoTurn = (over: Partial<ArtifactTurn>): ArtifactTurn => ({
+  passed: true,
+  busy: false,
+  writing: false,
+  settle: () => {},
+  writeKey: 'gallery-demo',
+  ...over
+});
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
@@ -1465,6 +1477,12 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Calendar agenda (agenda · week · month views · click-to-detail · create/RSVP/edit)', type: 'calendar_agenda', category: 'News & knowledge', node: <CalendarAgenda data={calendarAgendaDemo} /> },
   { title: 'Calendar event draft (AI-prepared action · confirm to create/edit/delete/RSVP)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} /> },
   { title: 'Calendar batch draft (AI parsed an itinerary · review/remove · Add all)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} /> },
+  { title: 'Calendar draft · settled: added (recorded on the turn · never offered again after a reload)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} turn={demoTurn({ passed: false, state: { status: 'done', at: 0, result: { htmlLink: 'https://calendar.google.com/' } } })} /> },
+  { title: 'Calendar draft · settled: the chat moved on (one line, no controls)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} turn={demoTurn({})} /> },
+  { title: 'Calendar draft · settled: the answer never came back (may already be added)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} turn={demoTurn({ passed: false, state: { status: 'pending', at: 0 } })} /> },
+  { title: 'Calendar batch · part-added, restored after a reload (only the rest can be added)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} turn={demoTurn({ passed: false, state: { status: 'pending', at: 0, result: { rows: ['done', 'done', 'idle', 'error'] } } })} /> },
+  { title: 'Calendar batch · still adding from an earlier view (its progress shows; no second Add all)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} turn={demoTurn({ passed: false, writing: true, state: { status: 'pending', at: 0, result: { rows: ['done', 'pending', 'idle', 'idle'] } } })} /> },
+  { title: 'Calendar batch · settled: the chat moved on after 3 of 4', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} turn={demoTurn({ state: { status: 'pending', at: 0, result: { rows: ['done', 'done', 'done', 'idle'] } } })} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
   { title: 'Trip map (day-colored legs · flight arcs · sequential draw)', type: 'map', category: 'World & media', node: <MapArtifactCard data={tripMapDemo} /> },
@@ -1502,6 +1520,8 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Packing list (check-off · saved progress · tips)', type: 'packing_list', category: 'Travel & life', node: <PackingListCard data={packingDemo} /> },
   { title: 'Trip countdown (live D/H/M/S · weather strip · prep list)', type: 'trip_countdown', category: 'Travel & life', node: <TripCountdown data={tripCountdownDemo} /> },
   { title: 'Clarifying questions (single · multi · text → auto-sent)', type: 'clarify', category: 'Travel & life', node: <ClarifyCard data={clarifyDemo} /> },
+  { title: 'Clarifying questions · settled: answered (never re-sent)', type: 'clarify', category: 'Travel & life', node: <ClarifyCard data={clarifyDemo} turn={demoTurn({ state: { status: 'sent', at: 0, result: { answered: 3 } } })} /> },
+  { title: 'Clarifying questions · settled: the chat moved on', type: 'clarify', category: 'Travel & life', node: <ClarifyCard data={clarifyDemo} turn={demoTurn({})} /> },
   { title: 'Goal tracker (/goal · milestones · saved progress)', type: 'goal_tracker', category: 'Travel & life', node: <GoalTracker data={goalDemo} /> },
   { title: 'Code review (/code-review · verdict · findings · fixes)', type: 'code_review', category: 'Agents & code', node: <CodeReviewCard data={codeReviewDemo} /> },
   { title: 'Live monitor (/loop · auto-refreshing wrapped widget)', type: 'live_monitor', category: 'Agents & code', node: <LiveMonitorCard data={liveMonitorDemo} renderEmbedded={renderArtifactNode} /> },

@@ -19,7 +19,7 @@
 
 import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact, CapabilityNotice } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
-import { pullAll, pushSession, pushProject, removeRemote } from './chatSync';
+import { pullBodies, pullManifest, pushSession, pushProject, readSyncBase, removeRemote, syncDecision, writeSyncBase } from './chatSync';
 import { getLocalOwner, getUnownedDataOwner } from './localOwner';
 
 const DB_NAME = 'dreamstream_chat';
@@ -92,6 +92,42 @@ export interface ChatTurnNotice {
   kind: 'standard-model' | 'budget';
 }
 
+/**
+ * What became of an artifact that ACTS for the user (a calendar write, the clarify answers): kept on
+ * its turn so a reload, a second tab or another device never offers the action again (CHAT-0, settle
+ * §6). Small by design: an outcome, never a copy of the artifact's data.
+ */
+export interface ChatArtifactState {
+  /**
+   * 'pending' — the write was sent and its answer never came back here (the page went away
+   * mid-request); shown as "may already be in your calendar", never offered again.
+   * 'done' — the action finished. 'sent' — answers were sent as the next message.
+   */
+  status: 'pending' | 'done' | 'sent';
+  /** When the status was recorded (ms epoch). */
+  at: number;
+  result?: {
+    /** The written event's page (calendar create/update). */
+    htmlLink?: string;
+    /**
+     * Batch create: each listed row's outcome, by its index in the card's original list ('pending':
+     * its write was sent and may have landed — never sent again).
+     */
+    rows?: Array<'idle' | 'pending' | 'done' | 'error'>;
+    /** Batch create: rows the user removed before adding (indexes in the original list). */
+    removed?: number[];
+    /** Clarify: how many questions were answered. */
+    answered?: number;
+  };
+}
+
+/** The `artifactState` key of artifact `artifactIndex` in the turn's answer version `variantIndex`. */
+export const artifactStateKey = (variantIndex: number, artifactIndex: number): string => `${variantIndex}:${artifactIndex}`;
+
+/** The answer version a turn shows (its artifacts are that version's). */
+export const shownVariantIndex = (turn: Pick<ChatTurn, 'activeVariant' | 'variants'>): number =>
+  typeof turn.activeVariant === 'number' ? turn.activeVariant : Math.max(0, (turn.variants?.length ?? 0) - 1);
+
 export interface ChatTurn {
   id: string;
   role: ChatRole;
@@ -133,6 +169,11 @@ export interface ChatTurn {
   connectorData?: boolean;
   /** Set on a calm notice turn instead of an answer (never together with `error`). */
   notice?: ChatTurnNotice;
+  /**
+   * Outcomes of this turn's acting artifacts, keyed by `artifactStateKey(version, index)`, so a
+   * regenerated answer's cards start fresh while flipping back shows the old version's outcome.
+   */
+  artifactState?: Record<string, ChatArtifactState>;
 }
 
 export interface ChatSession {
@@ -276,6 +317,9 @@ const withResolvedOwner = <T extends Owned>(row: T): T => {
 /** Shown to this tab's account (or the device's owner; signed out on an unowned device: only rows nobody owns). */
 const isVisible = (row: Owned): boolean => rowOwner(row) === currentUser();
 
+/** True when this tab may show the chat (it is the tab's account's, as listChatSessions decides). */
+export const isChatSessionVisible = (session: Pick<ChatSession, 'ownerUserId'>): boolean => isVisible(session);
+
 /**
  * Tag a row on save: it keeps the owner it was loaded with (rows handed out carry it — a late
  * save after an account switch stays with the old account); a new row belongs to this tab's
@@ -411,13 +455,18 @@ export const deleteChatProject = async (id: string): Promise<void> => {
 };
 
 /**
- * Two-way last-write-wins sync with Supabase (no-op until the chat_sync table exists
- * or while signed out). Call on startup before listing.
+ * Two-way sync with Supabase (no-op until the chat_sync table exists or while signed out). Call on
+ * startup, in the background, after listing.
+ *
+ * Light (CHAT-0, nav V.3-a): one manifest request (`key, updated_at`), then bodies only for the rows
+ * this device lacks or that changed remotely, and uploads only for rows that changed here — a mount
+ * with nothing new moves no bodies either way. Which side changed is judged against the sync base
+ * (chatSync `syncDecision`), so an edit from a device whose clock runs behind still arrives.
  */
 export const syncFromCloud = async (): Promise<void> => {
-  const remote = await pullAll();
-  if (!remote) return;
-  const owner = remote.userId.toLowerCase();
+  const manifest = await pullManifest();
+  if (!manifest) return;
+  const owner = manifest.userId.toLowerCase();
   // This device's chat data belongs to whoever owns it now (services/localOwner). If that
   // isn't the signed-in user (mid-switch, another tab's session), touch nothing.
   if (getLocalOwner() !== owner) return;
@@ -430,55 +479,81 @@ export const syncFromCloud = async (): Promise<void> => {
   }
   const rawS = new Map(allSessions.map((s) => [s.id, s]));
   const rawP = new Map(allProjects.map((p) => [p.id, p]));
-  const mineS = allSessions.filter((s) => rowOwner(s) === owner);
-  const mineP = allProjects.filter((p) => rowOwner(p) === owner);
-
-  // Remote → local: write newer remote rows into IndexedDB (without re-pushing), tagged as
-  // this account's. Rows deleted during this browsing session are never re-inserted, even if
-  // the pull snapshot predates the delete — otherwise a just-deleted chat resurrects
-  // everywhere. A local row with the same id that belongs to another account is left alone.
-  // An untagged row nobody claimed (from before ownership tags) is replaced by this account's
-  // cloud copy: the cloud proves the chat is this account's, and it already holds the content.
   const unclaimed = (row: Owned) => rowOwner(row) === null;
-  for (const rs of remote.sessions) {
-    if (deletedThisSession.has(rs.id)) continue;
-    const l = rawS.get(rs.id);
-    if (l && unclaimed(l)) {
-      const row: ChatSession = { ...rs, ownerUserId: owner };
-      try { await runTransaction('readwrite', (store) => store.put(row)); } catch { /* ignore */ }
+  const base = readSyncBase(owner);
+  const nextBase: Record<string, number> = {};
+
+  // Decide per remote row: pull its body, push the local copy, or nothing.
+  const toPull: string[] = [];
+  const pushS = new Set<string>();
+  const pushP = new Set<string>();
+  const remoteAt = new Map<string, number>();
+  for (const entry of manifest.entries) {
+    remoteAt.set(entry.key, entry.updatedAt);
+    // Rows deleted during this browsing session are never re-inserted (or pushed), even if the
+    // manifest predates the delete — otherwise a just-deleted chat resurrects everywhere.
+    if (deletedThisSession.has(entry.id)) continue;
+    const local: Owned & { updatedAt?: number } | undefined = entry.kind === 'session' ? rawS.get(entry.id) : rawP.get(entry.id);
+    // A local row with the same id that belongs to another account is left alone.
+    if (local && !unclaimed(local) && rowOwner(local) !== owner) continue;
+    // Missing here, or an untagged row nobody claimed (from before ownership tags): the cloud copy
+    // proves the chat is this account's, and it already holds the content — take it.
+    if (!local || unclaimed(local)) {
+      toPull.push(entry.key);
       continue;
     }
-    if (l && rowOwner(l) !== owner) continue;
-    if (!l || (rs.updatedAt || 0) > (l.updatedAt || 0)) {
-      const row: ChatSession = { ...rs, ownerUserId: owner };
-      try { await runTransaction('readwrite', (store) => store.put(row)); } catch { /* ignore */ }
-    }
+    const decision = syncDecision(local.updatedAt || 0, entry.updatedAt, base[entry.key]);
+    if (decision === 'same') nextBase[entry.key] = entry.updatedAt;
+    else if (decision === 'pull') toPull.push(entry.key);
+    else if (entry.kind === 'session') pushS.add(entry.id);
+    else pushP.add(entry.id);
   }
-  for (const rp of remote.projects) {
-    if (deletedThisSession.has(rp.id)) continue;
-    const l = rawP.get(rp.id);
-    if (l && unclaimed(l)) {
-      const row: ChatProject = { ...rp, ownerUserId: owner };
-      try { await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE); } catch { /* ignore */ }
-      continue;
+
+  // Remote → local: write the changed rows into IndexedDB (without re-pushing), tagged as this
+  // account's. If the bodies can't be fetched, nothing is pulled this time and the rows decided
+  // "pull" are left exactly as they are (never pushed over the newer remote copy).
+  const bodies = toPull.length ? await pullBodies(manifest.userId, toPull) : null;
+  if (bodies) {
+    for (const rs of bodies.sessions) {
+      if (!rs || typeof rs.id !== 'string' || deletedThisSession.has(rs.id)) continue;
+      const key = `session:${rs.id}`;
+      const at = bodies.updatedAt.get(key) ?? remoteAt.get(key) ?? rs.updatedAt ?? 0;
+      // The row's time is the cloud's, so the next manifest reads it as already in step.
+      const row: ChatSession = { ...rs, updatedAt: at || rs.updatedAt || 0, ownerUserId: owner };
+      try {
+        await runTransaction('readwrite', (store) => store.put(row));
+        nextBase[key] = at;
+      } catch {
+        /* ignore */
+      }
     }
-    if (l && rowOwner(l) !== owner) continue;
-    if (!l || (rp.updatedAt || 0) > (l.updatedAt || 0)) {
-      const row: ChatProject = { ...rp, ownerUserId: owner };
-      try { await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE); } catch { /* ignore */ }
+    for (const rp of bodies.projects) {
+      if (!rp || typeof rp.id !== 'string' || deletedThisSession.has(rp.id)) continue;
+      const key = `project:${rp.id}`;
+      const at = bodies.updatedAt.get(key) ?? remoteAt.get(key) ?? rp.updatedAt ?? 0;
+      const row: ChatProject = { ...rp, updatedAt: at || rp.updatedAt || 0, ownerUserId: owner };
+      try {
+        await runTransaction('readwrite', (store) => store.put(row), PROJECTS_STORE);
+        nextBase[key] = at;
+      } catch {
+        /* ignore */
+      }
     }
   }
 
-  // Local → remote: push this account's newer rows up — never another account's.
-  const remoteS = new Map(remote.sessions.map((s) => [s.id, s]));
-  const remoteP = new Map(remote.projects.map((p) => [p.id, p]));
-  for (const ls of mineS) {
-    const r = remoteS.get(ls.id);
-    if (!r || (ls.updatedAt || 0) > (r.updatedAt || 0)) void pushSession(normalizeSession(withResolvedOwner(ls))).catch(() => {});
+  // Record what this sync settled; keep what the base knew about everything else (a failed pull, a
+  // push that landed meanwhile — chatSync records each push as it lands).
+  writeSyncBase(owner, { ...readSyncBase(owner), ...nextBase });
+
+  // Local → remote: this account's rows that changed here, or that the cloud does not have — never
+  // another account's, never an unclaimed one.
+  for (const ls of allSessions) {
+    if (rowOwner(ls) !== owner || deletedThisSession.has(ls.id)) continue;
+    if (pushS.has(ls.id) || !remoteAt.has(`session:${ls.id}`)) void pushSession(normalizeSession(withResolvedOwner(ls))).catch(() => {});
   }
-  for (const lp of mineP) {
-    const r = remoteP.get(lp.id);
-    if (!r || (lp.updatedAt || 0) > (r.updatedAt || 0)) void pushProject(withResolvedOwner(lp)).catch(() => {});
+  for (const lp of allProjects) {
+    if (rowOwner(lp) !== owner || deletedThisSession.has(lp.id)) continue;
+    if (pushP.has(lp.id) || !remoteAt.has(`project:${lp.id}`)) void pushProject(withResolvedOwner(lp)).catch(() => {});
   }
 };
 
