@@ -15,6 +15,7 @@ import * as directions from './directions';
 import * as anchors from './anchors';
 import * as editor from './editor/index';
 import * as dialogue from './dialogue/index';
+import * as readingOrderMod from './readingOrder';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** Every module index.ts re-exports, in order (`export * from './x.js'` → './x'). */
@@ -158,6 +159,31 @@ describe('shared/comic barrel — the B-RESOLVE dialogue namespace', () => {
   it('re-exports its types unchanged', () => {
     expectTypeOf<comic.dialogue.DialogueIntent>().toEqualTypeOf<dialogue.DialogueIntent>();
     expectTypeOf<typeof comic.dialogue.compileIntent>().toEqualTypeOf<typeof dialogue.compileIntent>();
+  });
+});
+
+// Program 3 (AV-0 wave note 8): readingOrder.ts joins the barrel as a flat `export *`. Its three names are new to the
+// barrel; lettering/place.ts's ROW_TOLERANCE is not in it, and the shared constant is READING_ROW_TOLERANCE on purpose.
+describe('shared/comic barrel — the AV-0 reading order', () => {
+  it('lists readingOrder', () => {
+    expect(barrelModules()).toContain('./readingOrder');
+  });
+
+  it('re-exports every runtime export of readingOrder.ts, identical', () => {
+    const barrel = comic as unknown as Record<string, unknown>;
+    const names = Object.keys(readingOrderMod);
+    expect(names.sort()).toEqual(['READING_ROW_TOLERANCE', 'panelReadingOrder', 'readingOrder']);
+    for (const name of names) expect(barrel[name], name).toBe((readingOrderMod as Record<string, unknown>)[name]);
+    expect(comic.READING_ROW_TOLERANCE).toBe(0.08);
+    // Two side-by-side panels read left→right, or right→left in a right-to-left book.
+    const row = [{ x: 0.5, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0.5, h: 0.5 }];
+    expect(comic.readingOrder(row, false)).toEqual([1, 0]);
+    expect(comic.readingOrder(row, true)).toEqual([0, 1]);
+  });
+
+  it('re-exports their signatures unchanged', () => {
+    expectTypeOf<typeof comic.readingOrder>().toEqualTypeOf<typeof readingOrderMod.readingOrder>();
+    expectTypeOf<typeof comic.panelReadingOrder>().toEqualTypeOf<typeof readingOrderMod.panelReadingOrder>();
   });
 });
 

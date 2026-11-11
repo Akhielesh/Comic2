@@ -36,6 +36,9 @@ export * from './panelize/space.js';
 export * from './continuity.js';
 export * from './directions.js';
 export * from './anchors.js';
+// Program 3 (AV-0): the visual reading order of a page's panels, one rule for the reader, the motion-comic export and
+// Video mode's shot list (its shared row constant is READING_ROW_TOLERANCE, so lettering's ROW_TOLERANCE never clashes).
+export * from './readingOrder.js';
 // Ship 2 (B9): the pro editor's engine, under one namespace (comic.editor.*) so its many helpers never shadow a name
 export * as editor from './editor/index.js';
 // Live agent wave 1 (B-RESOLVE): dialogue understanding as one namespace (comic.dialogue.*); its Resolution, inventory and
