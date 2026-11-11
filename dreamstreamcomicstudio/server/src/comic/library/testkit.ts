@@ -173,7 +173,12 @@ export function testLibrary(opts: { images?: FakeLibraryImages; llm?: FakeLibrar
       manifest: opts.manifest || TEST_MANIFEST,
       onPublishedChange: () => {
         t.published += 1;
-      }
+      },
+      // A pass-through admin spend guard and call ledger (ST-A wave note 10), so every runner test exercises the guarded
+      // path production always wires: the model-test key by name, no app cap, and a limited key with room (no warning,
+      // no refusal). TEST_KEYS carries an OpenRouter key, so spendKeys keeps it. Tests that probe the guard replace it.
+      spend: { key: () => 'modeltest', monthlyCapUsd: () => Number.POSITIVE_INFINITY, keyBudget: async () => ({ limitUsd: 1000, remainingUsd: 1000, limitReset: 'monthly', usageMonthlyUsd: 0, budget: null, checkedAt: 0 }) },
+      calls: { record: () => undefined }
     }
   };
   return t;

@@ -177,10 +177,14 @@ describe('admin console API', () => {
     expect(t.repo.assets.get('1:style.test-one')!.published).toBeNull();
   });
 
-  it('no platform key → 503 with an honest message', async () => {
+  it('no admin spend key → 503 with an honest message', async () => {
+    // testLibrary wires the admin spend guard production always wires (ST-A wave note 10), so the refusal is the
+    // production one: it names the key and its env var (never a value) and says nothing was spent.
     t = testLibrary({ keys: null });
     const res = await post('/api/comic/admin/library/runs', { confirm: true });
     expect(res.status).toBe(503);
-    expect((await res.json()).error.message).toMatch(/platform image key/);
+    const message: string = (await res.json()).error.message;
+    expect(message).toMatch(/model-test key \(DREAMSTREAMSTUDIO_MODELTEST\) isn't set/);
+    expect(message).toMatch(/nothing was spent/);
   });
 });
