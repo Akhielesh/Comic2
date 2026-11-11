@@ -173,15 +173,67 @@ describe('third-party code in the pages', () => {
 describe("the classic wizard's PDF tools (PF-1: loaded on demand, not with every page)", () => {
   const PINS = Object.values(LEGACY_PDF_SCRIPTS);
   const IS_LEGACY_PDF = /\/(jspdf|html2canvas)\//i;
+  const LOADER = 'services/legacyPdfLoader.ts';
+
+  /** The jsPDF / html2canvas `<script src>` tags a page carries (index.html: none once DS-2 applies PF-1's note). */
+  const legacyTagsIn = (html: string) =>
+    [...new JSDOM(html).window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')!).filter((src) => IS_LEGACY_PDF.test(src));
+
+  /**
+   * A direct read of the UMD globals, which works only while index.html carries the tags (after PF-1 it
+   * throws on export): `declare const jspdf`, `declare global { interface Window { jspdf … } }`, and
+   * `window.jspdf` / `(window as any).jspdf` / `globalThis.html2canvas` / `self['jspdf']`.
+   */
+  const GLOBAL_READ =
+    /\bdeclare\s+(?:const|let|var)\s+(?:jspdf|html2canvas)\b|\binterface\s+Window\b[^}]*\b(?:jspdf|html2canvas)\b|\b(?:window|globalThis|self)\b[^;\n]*?(?:\.|\[\s*['"`])(?:jspdf|html2canvas)\b/;
+
+  /** Call sites another package moves onto the loader (wave notes). An entry that no longer matches must go. */
+  const PENDING: Readonly<Record<string, string>> = {
+    'components/modals/ProjectInfoModal.tsx': 'DS-3 wave note (PF-1): buildPdfBlob awaits loadJsPdf()',
+  };
+
+  /** Everything the client bundle can import: the source dirs, the root modules and the ambient .d.ts files. */
+  const CLIENT_ROOTS = ['components', 'services', 'hooks', 'lib', 'contexts', 'live', 'shared', 'qa', 'App.tsx', 'index.tsx', 'types.ts', 'apiTypes.ts', 'vite-env.d.ts'];
+  const clientFiles = (() => {
+    let cached: string[] | null = null;
+    return () => {
+      if (cached) return cached;
+      const files: string[] = [];
+      const walk = (rel: string) => {
+        const abs = path.join(ROOT, rel);
+        if (!existsSync(abs)) return;
+        if (statSync(abs).isDirectory()) {
+          for (const name of readdirSync(abs)) if (name !== 'node_modules') walk(path.join(rel, name));
+        } else if (/\.(?:[cm]?[jt]s|[jt]sx)$/.test(rel) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(rel)) files.push(rel.split(path.sep).join('/'));
+      };
+      CLIENT_ROOTS.forEach(walk);
+      return (cached = files);
+    };
+  })();
+  const directReaders = () => clientFiles().filter((f) => f !== LOADER && GLOBAL_READ.test(app(f)));
+
+  /**
+   * The window-globals rule for one index.html. While the page still carries the tags, a PENDING caller may
+   * read the globals until its wave note lands. Once the tags are gone nothing defines the globals, so every
+   * direct reader would throw on export: PENDING no longer excuses it (index.html's note without the
+   * ProjectInfoModal note goes red here, not in a user's hands). A PENDING entry whose note landed must go.
+   */
+  function globalsRule(indexHtml: string, readers: readonly string[], pending: Readonly<Record<string, string>> = PENDING) {
+    const tagsLeft = legacyTagsIn(indexHtml).length > 0;
+    return {
+      tagsLeft,
+      offenders: tagsLeft ? readers.filter((f) => !pending[f]) : [...readers],
+      stalePending: Object.keys(pending).filter((f) => !readers.includes(f)),
+    };
+  }
 
   // Reads the SOURCE index.html: Vite copies external <script src> and <link> tags into dist/index.html
   // untouched (its only HTML transform, vite.config.ts dsSkinEverywherePlugin, strips one attribute), so
   // what holds here holds for the built page. Green once DS-2 applies PF-1's index.html wave note.
   it('index.html loads neither script, and warms no connection to cdnjs for them', () => {
-    const doc = new JSDOM(app('index.html')).window.document;
-    const legacy = [...doc.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')!).filter((src) => IS_LEGACY_PDF.test(src));
-    expect(legacy, 'move these to services/legacyPdfLoader.ts (deferred classic scripts hold the module entry back)').toEqual([]);
-    const warmed = [...doc.querySelectorAll('link[rel~="preconnect"], link[rel~="dns-prefetch"]')]
+    const html = app('index.html');
+    expect(legacyTagsIn(html), 'move these to services/legacyPdfLoader.ts (deferred classic scripts hold the module entry back)').toEqual([]);
+    const warmed = [...new JSDOM(html).window.document.querySelectorAll('link[rel~="preconnect"], link[rel~="dns-prefetch"]')]
       .map((l) => l.getAttribute('href') ?? '')
       .filter((href) => /cdnjs\.cloudflare\.com/i.test(href));
     expect(warmed).toEqual([]);
@@ -217,27 +269,75 @@ describe("the classic wizard's PDF tools (PF-1: loaded on demand, not with every
     }
   });
 
+  it('the direct-read pattern catches every way of reaching the globals, and none of the loader calls', () => {
+    const reads = [
+      'declare const jspdf: any;',
+      'declare let html2canvas: any',
+      'declare global {\n  interface Window {\n    jspdf: any;\n  }\n}',
+      'interface Window { html2canvas?: (el: HTMLElement) => Promise<HTMLCanvasElement> }',
+      'const jspdf = (window as any).jspdf;',
+      'const pdf = new window.jspdf.jsPDF();',
+      'globalThis.html2canvas(el);',
+      'const { jsPDF } = self.jspdf;',
+      "const h = window['html2canvas'];",
+    ];
+    for (const code of reads) expect(GLOBAL_READ.test(code), code).toBe(true);
+    const calls = [
+      "import { legacyPdfErrorMessage, loadJsPdf } from '../../services/legacyPdfLoader';",
+      'const { jsPDF, html2canvas } = await loadLegacyPdf();',
+      'const canvas = await html2canvas(element, { scale: 2 });',
+      'const [html2canvas, jsPDF] = await Promise.all([loadHtml2Canvas(), loadJsPdf()]);',
+      "window.addEventListener('resize', onResize); const canvas = await html2canvas(el);",
+      '// jsPDF + html2canvas load on demand (services/legacyPdfLoader.ts).',
+      "if (isLegacyPdfReady('jspdf')) sizePdf();",
+    ];
+    for (const code of calls) expect(GLOBAL_READ.test(code), code).toBe(false);
+  });
+
   it('nothing reads the window globals directly: every caller awaits services/legacyPdfLoader.ts', () => {
-    // A direct read works only while index.html still carries the tags; after PF-1 it throws on export.
-    const GLOBAL_READ = /\bdeclare\s+(?:const|let|var)\s+(?:jspdf|html2canvas)\b|\bwindow\b[^;\n]*?\.(?:jspdf|html2canvas)\b/;
-    /** Call sites another package moves onto the loader (wave notes). An entry that no longer matches must go. */
-    const PENDING: Record<string, string> = {
-      'components/modals/ProjectInfoModal.tsx': 'DS-3 wave note (PF-1): buildPdfBlob awaits loadJsPdf()',
-    };
-    const roots = ['components', 'services', 'hooks', 'lib', 'App.tsx', 'index.tsx'];
-    const files: string[] = [];
-    const walk = (rel: string) => {
-      const abs = path.join(ROOT, rel);
-      if (!existsSync(abs)) return;
-      if (statSync(abs).isDirectory()) {
-        for (const name of readdirSync(abs)) if (name !== 'node_modules') walk(path.join(rel, name));
-      } else if (/\.(tsx?|jsx?)$/.test(rel) && !/\.(test|spec)\.[tj]sx?$/.test(rel)) files.push(rel.split(path.sep).join('/'));
-    };
-    roots.forEach(walk);
-    expect(files).toContain('services/legacyPdfLoader.ts');
-    const readers = files.filter((f) => f !== 'services/legacyPdfLoader.ts' && GLOBAL_READ.test(app(f)));
-    expect(readers.filter((f) => !PENDING[f]), 'await loadJsPdf() / loadHtml2Canvas() / loadLegacyPdf() instead').toEqual([]);
-    for (const f of Object.keys(PENDING)) expect(readers, `${f} is on the loader now: remove it from PENDING`).toContain(f);
+    const files = clientFiles();
+    expect(files).toContain(LOADER);
+    // The ambient declarations and every client root are walked (a `declare global` hides in a .d.ts).
+    expect(files).toContain('vite-env.d.ts');
+    for (const dir of CLIENT_ROOTS.filter((r) => !/\.[jt]sx?$/.test(r) && existsSync(path.join(ROOT, r)))) {
+      expect(files.some((f) => f.startsWith(`${dir}/`)), `${dir}/ is walked`).toBe(true);
+    }
+    const { tagsLeft, offenders, stalePending } = globalsRule(app('index.html'), directReaders());
+    if (tagsLeft) {
+      expect(offenders, 'await loadJsPdf() / loadHtml2Canvas() / loadLegacyPdf() instead').toEqual([]);
+    } else {
+      expect(offenders, 'index.html no longer provides window.jspdf/html2canvas, so these exports would throw: apply the DS-3 wave note in the same integration').toEqual([]);
+    }
+    expect(stalePending, 'these are on the loader now: remove them from PENDING').toEqual([]);
+  });
+
+  it("the rule goes red when index.html loses the tags but a PENDING caller still reads the globals (one wave note without the other)", () => {
+    const legacy = 'components/legacy/Exporter.tsx';
+    const pending = { [legacy]: 'wave note' };
+    const withTags = `<!doctype html><html><head>${PINS.map((p) => `<script defer src="${p.src}" integrity="${p.integrity}" crossorigin="anonymous"></script>`).join('')}</head><body></body></html>`;
+    const noted = '<!doctype html><html><head><script type="module" src="/index.tsx"></script></head><body></body></html>';
+    expect(legacyTagsIn(withTags)).toHaveLength(2);
+    expect(legacyTagsIn(noted)).toEqual([]);
+
+    // Tags still on the page: the PENDING caller is excused until its note lands.
+    expect(globalsRule(withTags, [legacy], pending)).toEqual({ tagsLeft: true, offenders: [], stalePending: [] });
+    // The index.html note alone: the caller's export would throw, and PENDING no longer covers it.
+    expect(globalsRule(noted, [legacy], pending)).toEqual({ tagsLeft: false, offenders: [legacy], stalePending: [] });
+    // Both notes: the caller is on the loader, and its PENDING entry must go.
+    expect(globalsRule(noted, [], pending)).toEqual({ tagsLeft: false, offenders: [], stalePending: [legacy] });
+    expect(globalsRule(noted, [], {})).toEqual({ tagsLeft: false, offenders: [], stalePending: [] });
+  });
+
+  it('every loader caller shows the calm copy, and the modal\'s automatic size refresh never fetches the tools', () => {
+    const users = clientFiles().filter((f) => f !== LOADER && /from\s+['"][^'"]*\/legacyPdfLoader['"]/.test(app(f)));
+    expect(users).toEqual(expect.arrayContaining(['components/steps/ReferenceBuilder.tsx', 'components/steps/ReviewExport.tsx']));
+    for (const f of users) expect(app(f), `${f}: show legacyPdfErrorMessage(e) when an export fails`).toMatch(/\blegacyPdfErrorMessage\(/);
+    // ProjectInfoModal refreshes its file sizes on a 1.2 s timer when it opens with stale sizes. Once it is on
+    // the loader (DS-3 wave note), that refresh sizes the PDF only when the tools are already loaded.
+    const modal = 'components/modals/ProjectInfoModal.tsx';
+    if (users.includes(modal)) {
+      expect(app(modal), `${modal}: gate the automatic size refresh on isLegacyPdfReady('jspdf')`).toMatch(/\bisLegacyPdfReady\(\s*['"]jspdf['"]\s*\)/);
+    }
   });
 });
 

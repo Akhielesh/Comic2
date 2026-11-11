@@ -109,6 +109,31 @@ describe('ReferenceBuilder card downloads on the on-demand loader', () => {
     expect(loadJsPdfMock).toHaveBeenCalledTimes(1);
     expect(html2canvasMock).toHaveBeenCalledWith(document.getElementById('card-c1'), expect.objectContaining({ scale: 2 }));
     expect(jsPdfInstances[0].args).toEqual(['p', 'mm', 'a5']);
+    // The busy state clears after a successful download too, not only after a failure.
+    await waitFor(() => expect(cardButton('c1', /^PDF$/)).toBeEnabled());
+    expect(cardButton('c2', /^Img$/)).toBeEnabled();
+  });
+
+  it('while the tools load, the pressed card button is aria-busy and every export waits, without the spinner widening the cell', async () => {
+    let release!: (fn: unknown) => void;
+    loadHtml2CanvasMock.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    renderBoard();
+    await screen.findByDisplayValue('SALTY CAT');
+    fireEvent.click(cardButton('c1', /^PDF$/));
+    await waitFor(() => expect(cardButton('c1', /^PDF$/)).toHaveAttribute('aria-busy', 'true'));
+    const busy = cardButton('c1', /^PDF$/);
+    expect(busy).toBeDisabled();
+    // Same 14 px icon as at rest: the legacy Button's 24 px spinner would push "PDF" over its neighbour at 320 px.
+    expect(busy.querySelector('.animate-spin')).toBeNull();
+    expect(busy.querySelector('span > svg')).not.toBeNull();
+    expect(cardButton('c1', /^Img$/)).toHaveAttribute('aria-busy', 'false');
+    expect(cardButton('c1', /^Img$/)).toBeDisabled();
+    expect(cardButton('c2', /^PDF$/)).toBeDisabled();
+
+    release(html2canvasMock);
+    await waitFor(() => expect(jsPdfInstances[0]?.save).toHaveBeenCalledWith('SALTY_CAT_card.pdf'));
+    await waitFor(() => expect(cardButton('c1', /^PDF$/)).toBeEnabled());
+    expect(cardButton('c1', /^PDF$/)).toHaveAttribute('aria-busy', 'false');
   });
 
   it('a card PNG needs html2canvas only: jsPDF is never fetched', async () => {
@@ -131,6 +156,9 @@ describe('ReferenceBuilder card downloads on the on-demand loader', () => {
     expect(loadLegacyPdfMock).toHaveBeenCalledTimes(1);
     expect(html2canvasMock).toHaveBeenCalledTimes(2);
     expect(jsPdfInstances[0].addPage).toHaveBeenCalledTimes(1);
+    // The busy state clears: the collection button and every card button work again.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Download 2/ })).toBeEnabled());
+    expect(cardButton('c1', /^PDF$/)).toBeEnabled();
   });
 
   it('a failed load is a calm status line above the board, and nothing is downloaded', async () => {

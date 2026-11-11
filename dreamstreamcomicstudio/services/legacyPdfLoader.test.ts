@@ -11,6 +11,7 @@ import {
   LEGACY_PDF_SCRIPTS,
   LEGACY_PDF_SCRIPT_ATTR,
   LegacyPdfLoadError,
+  isLegacyPdfReady,
   legacyPdfErrorMessage,
   loadHtml2Canvas,
   loadJsPdf,
@@ -183,6 +184,8 @@ describe('legacy PDF loader: failures are calm and retryable', () => {
     expect(error).toBeInstanceOf(LegacyPdfLoadError);
     expect(error.kind).toBe('missing');
     expect(error.message).toBe(LEGACY_PDF_MESSAGES.missing);
+    // The empty tag is dropped like a failed one, so a retry injects a fresh tag.
+    expect(tags('jspdf')).toHaveLength(0);
   });
 
   it('every message is a calm sentence for a person: no stack, no "Error", no codes', () => {
@@ -192,5 +195,39 @@ describe('legacy PDF loader: failures are calm and retryable', () => {
     }
     expect(legacyPdfErrorMessage(new LegacyPdfLoadError('timeout', 'jspdf'))).toBe(LEGACY_PDF_MESSAGES.timeout);
     expect(legacyPdfErrorMessage(new TypeError('canvas is tainted'))).toBe(LEGACY_PDF_EXPORT_FAILED);
+  });
+});
+
+describe('legacy PDF loader: isLegacyPdfReady (for work nobody clicked)', () => {
+  it('reports what is already on window and never injects or loads anything itself', async () => {
+    expect(isLegacyPdfReady('jspdf')).toBe(false);
+    expect(isLegacyPdfReady('html2canvas')).toBe(false);
+    expect(tags()).toHaveLength(0);
+
+    // A namespace without the constructor is not ready (it would throw on `new`).
+    win().jspdf = {};
+    expect(isLegacyPdfReady('jspdf')).toBe(false);
+    delete win().jspdf;
+
+    const pending = loadJsPdf();
+    expect(isLegacyPdfReady('jspdf')).toBe(false);
+    arrive('jspdf');
+    await pending;
+    expect(isLegacyPdfReady('jspdf')).toBe(true);
+    expect(isLegacyPdfReady('html2canvas')).toBe(false);
+    expect(tags()).toHaveLength(1);
+  });
+
+  it('is false after a failed load, and true for libraries an old tag already defined', async () => {
+    const failed = loadHtml2Canvas().catch((e: unknown) => e);
+    tags('html2canvas')[0].dispatchEvent(new Event('error'));
+    await failed;
+    expect(isLegacyPdfReady('html2canvas')).toBe(false);
+
+    win().jspdf = { jsPDF: FakeJsPdf };
+    win().html2canvas = fakeHtml2Canvas;
+    expect(isLegacyPdfReady('jspdf')).toBe(true);
+    expect(isLegacyPdfReady('html2canvas')).toBe(true);
+    expect(tags()).toHaveLength(0);
   });
 });

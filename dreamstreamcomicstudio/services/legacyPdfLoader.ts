@@ -54,7 +54,7 @@ export const LEGACY_PDF_SCRIPTS: Readonly<Record<LegacyPdfLib, LegacyPdfScript>>
 /** How long one script may take before the export gives up calmly (generous for a slow phone link). */
 export const LEGACY_PDF_LOAD_TIMEOUT_MS = 20_000;
 
-/** Marks the tags this loader adds (and lets it find its own in-flight tag). */
+/** Marks the tags this loader adds (tests and debugging select them by it). */
 export const LEGACY_PDF_SCRIPT_ATTR = 'data-legacy-pdf';
 
 /** The slice of jsPDF the legacy call sites use. */
@@ -123,6 +123,16 @@ function present(lib: LegacyPdfLib): LegacyJsPdf | LegacyHtml2Canvas | null {
   const g = globals();
   if (lib === 'jspdf') return typeof g.jspdf?.jsPDF === 'function' ? g.jspdf.jsPDF : null;
   return typeof g.html2canvas === 'function' ? g.html2canvas : null;
+}
+
+/**
+ * True when the library is already on window (an export loaded it, or an old tag did), so using it
+ * fetches nothing. For work nobody clicked, such as ProjectInfoModal's automatic size refresh: it
+ * sizes the PDF only when this is true, and never injects a third-party script on its own.
+ */
+export function isLegacyPdfReady(lib: LegacyPdfLib): boolean {
+  if (typeof window === 'undefined') return false;
+  return present(lib) !== null;
 }
 
 const inFlight = new Map<LegacyPdfLib, Promise<void>>();

@@ -630,10 +630,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             </label>
           </div>
 
+          {/* Img/PDF show busy with aria-busy + disabled, not the Button spinner: its 24 px icon would widen
+              these ~75 px cells at 320 px while the PDF tools load. */}
           <div className="grid grid-cols-3 gap-2 mt-auto">
             <Button size="sm" variant="secondary" onClick={() => generateEntityImage(type, entity.id)} icon={<Wand2 size={14} />}>Gen</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} disabled={exportingKey !== null} isLoading={exportingKey === `card-${entity.id}:image`} icon={<ImageIcon size={14} />}>Img</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} disabled={exportingKey !== null} isLoading={exportingKey === `card-${entity.id}:pdf`} icon={<Download size={14} />}>PDF</Button>
+            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:image`} icon={<ImageIcon size={14} />}>Img</Button>
+            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:pdf`} icon={<Download size={14} />}>PDF</Button>
 
             {type === 'characters' && (
               <Button size="sm" variant="secondary" onClick={() => handleSaveToLibrary(entity)} icon={<UploadCloud size={14} />}>Save</Button>
