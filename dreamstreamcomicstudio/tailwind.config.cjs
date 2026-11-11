@@ -15,6 +15,10 @@ const DS_COLOURS = [
   'ring', 'focus', 'control-border', 'control-border-hover', 'overlay-edge', 'overlay-hover', 'scrim',
   'skeleton', 'skeleton-glint', 'segment-pill', 'segment-track', 'status-error-edge', 'status-error-tint', 'toast-edge',
   'chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5', 'grid-dot', 'spot-ink',
+  // The colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer; tests/config/sparkGuard.test.ts
+  // holds every spark fill, `bg-ds-spark` included, to its allowlist).
+  'spark', 'spark-hover', 'on-spark', 'spark-text', 'spark-soft', 'spark-glow',
+  'hue-1', 'hue-2', 'hue-3', 'hue-4', 'hue-5', 'art',
   'reader-room', 'reader-paper-back', 'reader-endpaper', 'reader-focus'
 ];
 const dsColours = Object.fromEntries(DS_COLOURS.map((name) => [name, withOpacity(`--ds-${name}`)]));

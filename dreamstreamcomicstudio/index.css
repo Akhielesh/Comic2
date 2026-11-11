@@ -23,17 +23,19 @@
 }
 
 /* The NEW page swings in from the turning edge and settles flat — reads as a real
-   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction). */
+   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction).
+   Transform and opacity only (reader RD-0 F7): the old filter: brightness() stops repainted the page every
+   frame; the opacity ramp already carries the "lands from the dark" feel. */
 @keyframes pageFlipNext {
-  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 @keyframes pageFlipPrev {
-  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 .animate-fade-in {
@@ -246,15 +248,26 @@
 @keyframes hiwBounceArrow { 0%,100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
 @keyframes hiwDotTravel { 0% { offset-distance: 0%; } 100% { offset-distance: 100%; } }
 
-/* The How It Works headline accent: the info / danger / warning hues by default (the old brand blue, red and
-   yellow, now tokens; bridge D4), the heading's own ink under the skin (below), where hue never decorates.
-   Known limit with the kill switch off (no skin) in dark: the default dark hues (#60a5fa, #f87171, #fbbf24)
-   paint on this page, which stays light, at 2.5 / 2.8 / 1.6:1 on white (docs/design/atlas-skin.md). */
+/* The How It Works headline accent: the info / danger / warning tokens by default (the old brand blue, red and
+   yellow, now tokens; bridge D4; info is a neutral grey since the colour layer, so the sweep runs grey → red →
+   amber), the heading's own ink under the skin (below), where hue never decorates. */
 .hiw-gradient-text {
   background-image: linear-gradient(100deg, var(--ds-info), var(--ds-danger), var(--ds-warning), var(--ds-info));
   background-size: 300% 300%;
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: hiwGradientPan 8s ease infinite;
+}
+/* How It Works stays a light page in dark, so with the kill switch off (no skin) its headline would paint the
+   default DARK stops (#e5e5e5, #f87171, #fbbf24: 1.3 / 2.8 / 1.6:1 on white; the neutral info made the first
+   stop worse than the old blue's 2.5). Pin the light :root values of the three stops on the words, as the
+   legacy-bubble pin below does for its markdown: 7.8 / 4.8 / 3.2:1 on white (tokenContrast.test.ts keeps them
+   equal to :root and ≥ 3:1). Spelled on the root's theme class (the whole document is dark, this page is not);
+   it sets token values only, so the paint rule above still reads tokens (atlasSkin bridge D4). Under the skin the
+   gradient is off and the words take the heading's ink. */
+:root.dark .hiw-gradient-text {
+  --ds-info: #525252;
+  --ds-danger: #dc2626;
+  --ds-warning: #d97706;
 }
 .hiw-flow-dash { stroke-dasharray: 10 14; animation: hiwFlowDash 18s linear infinite; }
 .hiw-pulse-ring { animation: hiwPulseRing 2.4s ease-out infinite; }
@@ -320,8 +333,9 @@
 .message-body h2:first-child,
 .message-body h3:first-child { margin-top: 0; }
 
-/* Links read the readable info ink (bridge D4): blue ≥ 4.5:1 in both default themes (the old blue-600 /
-   blue-400 hexes), near-ink under the skin; always underlined, so the link never rests on hue alone. */
+/* Links read the readable info ink (bridge D4): a neutral grey ≥ 4.5:1 in both default themes since the colour
+   layer (it was the blue-700 / blue-300 pair), near-ink under the skin; always bold and underlined, so a link is
+   never told by colour alone. */
 .message-body a {
   color: var(--ds-info-text);
   font-weight: 700;
@@ -457,8 +471,11 @@
   --ds-warning-text: #a84e0a;                /* amber-700 nudged darker: ≥ 4.5:1 on hover and tint rows */
   --ds-danger: #dc2626;
   --ds-danger-text: #b91c1c;
-  --ds-info: #2563eb;
-  --ds-info-text: #1d4ed8;
+  /* Info is neutral (colour layer "Ink & Spark", decision D7): the old blue (#2563eb / #1d4ed8) sat ΔE 6.4 from
+     the spark under normal vision and 3.7 under deuteranopia, so an info chip read as a creation cue. Grey, as
+     under Atlas; info always carries its word or icon. tokenContrast.test.ts "colour layer" gates the gap. */
+  --ds-info: #525252;
+  --ds-info-text: #404040;
   --ds-ring: #c2643f;                        /* focus ring: the accent hover, ≥ 3:1 (non-text) on paper, glass and wells (the old 45 % tint was 1.6:1) */
   --ds-font-sans: Inter, sans-serif;         /* = tailwind `font-sans` */
   --ds-font-display: Inter, sans-serif;      /* headings inherit the body face today */
@@ -529,6 +546,25 @@
   --ds-spot-ink: var(--ds-ink);
   --ds-radius-hero: 28px;
   --ds-radius-feature: 16px;
+  /* Colour layer "Ink & Spark" (a DreamStream extension, not from Atlas; docs/design/design-system.md § Colour
+     layer). Black ink on white paper, and colour as a SPOT with one meaning each: the spark marks creation (the
+     one "start making" fill per view, what is being drawn now, a selection on the art) and is never on a price or a
+     control that spends; hues 1–5 tell series and tags apart (fixed order, a legend always); --ds-art is a comic's
+     own colour around it (components set it inline). The values are the same with and without the skin, like the
+     chart steps; the var()-derived ones are restated in every block. tokenContrast.test.ts ("colour layer") and
+     huePalette.test.ts prove them in all six contexts; sparkGuard.test.ts keeps the spark rare. */
+  --ds-spark: #3d44e8;                                                  /* oklch(0.50 0.24 272) ultramarine */
+  --ds-spark-hover: #3438cc;
+  --ds-on-spark: #ffffff;                                               /* the label on a spark fill: 6.58:1, 8.13 on the hover */
+  --ds-spark-text: #3d44e8;                                             /* spark as text or an icon beside text: ≥ 5.04:1 */
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas));   /* selected / making tint */
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 24%, transparent);       /* shadows and sweeps only, never under text */
+  --ds-hue-1: #3d44e8;                                                  /* categorical, fixed order: ultramarine (the spark family) */
+  --ds-hue-2: #d13d91;                                                  /* magenta */
+  --ds-hue-3: #db6b04;                                                  /* orange (deepened: clears 3:1 on the paper) */
+  --ds-hue-4: #079a94;                                                  /* teal */
+  --ds-hue-5: #9548cc;                                                  /* violet */
+  --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
 }
 .dark {
   --ds-canvas: #262624;
@@ -556,8 +592,8 @@
   --ds-warning-text: #fbbf24;
   --ds-danger: #f87171;
   --ds-danger-text: #fca5a5;       /* red-300: ≥ 4.5:1 on dark glass, its tint and a highlighted menu row on a raised sheet (wave 8; #fb8b8b was 4.15 there) */
-  --ds-info: #60a5fa;
-  --ds-info-text: #93c5fd;
+  --ds-info: #e5e5e5;               /* neutral, as Atlas dark (#a3a3a3 sat ΔE 14.5 from the dark spark: under the 15 floor) */
+  --ds-info-text: #e5e5e5;
   --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
   --ds-scrim: rgba(0,0,0,0.60);
@@ -567,6 +603,19 @@
   --ds-chart-3: #8a8a8a;
   --ds-chart-4: #5e5e5e;
   --ds-chart-5: #3d3d3d;
+  /* Colour layer (see :root): the dark spark is a light ultramarine under an ink label. */
+  --ds-spark: #8b9bfe;                                                  /* oklch(0.72 0.145 275) */
+  --ds-spark-hover: #a3b2fe;
+  --ds-on-spark: #0a0a0a;                                               /* ink on the light ultramarine: 7.75:1, 9.76 on the hover */
+  --ds-spark-text: #abb9fe;
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas));
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 30%, transparent);
+  --ds-hue-1: #5568fd;                                                  /* one step lighter than the report's #5265f9: 3.06:1 on the default dark card (2.93) */
+  --ds-hue-2: #d84497;
+  --ds-hue-3: #df6e07;
+  --ds-hue-4: #04a19b;
+  --ds-hue-5: #a155da;
+  --ds-art: var(--ds-well-strong);
 }
 .dark { color-scheme: dark; }
 /* Legacy-kit form controls keep the light scheme in dark. Since bridge D5 dark applies on every page, so the
@@ -588,7 +637,7 @@
   --ds-hairline: rgba(0,0,0,0.10);
   --ds-well: rgba(0,0,0,0.03);
   --ds-well-strong: rgba(0,0,0,0.04);
-  --ds-info-text: #1d4ed8;
+  --ds-info-text: #404040;
 }
 /* A `.dark` subtree inside a light page (a dark demo panel, a preview): the tokens :root derives with var()
    computed there with the LIGHT sources and inherit as fixed colours, so a nested panel kept the light
@@ -1024,6 +1073,20 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-spot-ink: var(--ds-ink);                                        /* --atlas-spot-ink */
   --ds-radius-hero: 28px;
   --ds-radius-feature: 16px;
+  /* Colour layer (a DreamStream extension; Atlas has no spark, hue or art names): the same values as :root,
+     restated so the var()-derived ones follow this block's canvas and well. */
+  --ds-spark: #3d44e8;                                                  /* oklch(0.50 0.24 272) ultramarine */
+  --ds-spark-hover: #3438cc;
+  --ds-on-spark: #ffffff;                                               /* the label on a spark fill: 6.58:1, 8.13 on the hover */
+  --ds-spark-text: #3d44e8;                                             /* spark as text or an icon beside text: ≥ 5.04:1 */
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas));   /* selected / making tint */
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 24%, transparent);       /* shadows and sweeps only, never under text */
+  --ds-hue-1: #3d44e8;                                                  /* categorical, fixed order: ultramarine (the spark family) */
+  --ds-hue-2: #d13d91;                                                  /* magenta */
+  --ds-hue-3: #db6b04;                                                  /* orange (deepened: clears 3:1 on the paper) */
+  --ds-hue-4: #079a94;                                                  /* teal */
+  --ds-hue-5: #9548cc;                                                  /* violet */
+  --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
 }
 
 /* ---- Tokens, dark (Atlas .dark: the same system inverted — #0a0a0a paper, #fafafa ink) ---- */
@@ -1087,6 +1150,19 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-chart-3: #8a8a8a;
   --ds-chart-4: #5e5e5e;
   --ds-chart-5: #3d3d3d;
+  /* Colour layer (see :root), restated for the skin's dark canvas and well. */
+  --ds-spark: #8b9bfe;                                                  /* oklch(0.72 0.145 275) */
+  --ds-spark-hover: #a3b2fe;
+  --ds-on-spark: #0a0a0a;                                               /* ink on the light ultramarine: 7.75:1, 9.76 on the hover */
+  --ds-spark-text: #abb9fe;
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas));
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 30%, transparent);
+  --ds-hue-1: #5568fd;                                                  /* one step lighter than the report's #5265f9: 3.06:1 on the default dark card (2.93) */
+  --ds-hue-2: #d84497;
+  --ds-hue-3: #df6e07;
+  --ds-hue-4: #04a19b;
+  --ds-hue-5: #a155da;
+  --ds-art: var(--ds-well-strong);
 }
 
 /* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast

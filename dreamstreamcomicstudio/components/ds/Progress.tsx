@@ -6,12 +6,19 @@
  * the slow entrance time (instant under reduced motion). Forced colours (Atlas): the track is outlined in
  * the text colour and the bar drawn in the system highlight, since both fills are painted over there.
  * Name it with `label` (or aria-labelledby).
+ *
+ * `tone="making"` (the colour layer "Ink & Spark"): the bar in the spark, for the studio drawing right now. It is
+ * not a status, so StatusState stays exactly Atlas's; say what is being made beside it (or in valueText).
  */
 import React from 'react';
 import { cn } from '../../lib/utils';
 import { STATUS_DOT, type StatusState } from './recipes';
 
 export type ProgressSize = 'sm' | 'default';
+/** What the bar means: a status (its dot colour), or `making` (the spark: the studio is drawing it now). */
+export type ProgressTone = StatusState | 'making';
+/** The bar while the studio is drawing (the spark; never a status, never a price). */
+export const PROGRESS_MAKING = 'bg-[var(--ds-spark)]';
 
 export const PROGRESS_TRACK =
   'relative w-full overflow-hidden rounded-full bg-[color:color-mix(in_srgb,var(--ds-accent)_15%,transparent)] forced-colors:border forced-colors:border-[CanvasText]';
@@ -27,8 +34,8 @@ export interface ProgressProps extends Omit<React.HTMLAttributes<HTMLDivElement>
   label?: string;
   /** The spoken value (aria-valuetext), e.g. "3 of 12 pages". */
   valueText?: string;
-  /** Colour the bar by what it means (a status dot colour); the accent by default. */
-  tone?: StatusState;
+  /** Colour the bar by what it means (a status dot colour, or `making` for the spark); the accent by default. */
+  tone?: ProgressTone;
   size?: ProgressSize;
 }
 
@@ -51,7 +58,7 @@ export function Progress({ value, max = 100, label, valueText, tone, size = 'def
     >
       <div
         data-slot="progress-bar"
-        className={cn(PROGRESS_BAR, tone ? STATUS_DOT[tone] : 'bg-[var(--ds-accent)]', !determinate && 'w-1/3 motion-safe:animate-pulse')}
+        className={cn(PROGRESS_BAR, tone === 'making' ? PROGRESS_MAKING : tone ? STATUS_DOT[tone] : 'bg-[var(--ds-accent)]', !determinate && 'w-1/3 motion-safe:animate-pulse')}
         style={determinate ? { width: `${pct}%` } : undefined}
       />
     </div>

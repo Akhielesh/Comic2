@@ -3,6 +3,8 @@
  * exactly as `index.css` declares them under `[data-ds-skin="atlas"]` (light), `.dark[data-ds-skin="atlas"]` (dark)
  * and `@media (prefers-contrast: more)` (high contrast). Values are CSS as written, `var()`, `color-mix()` and
  * `oklch()` included.
+ * The colour layer "Ink & Spark" (`--ds-spark*`, `--ds-hue-1…5`, `--ds-art`) is a DreamStream extension, not from Atlas:
+ * the same values in both skins (docs/design/design-system.md § Colour layer).
  *
  * Design tokens only. `src/brand/brand.test.ts` re-reads `index.css` and fails on any drift, so a skin port changes
  * `index.css` and this file together.
@@ -116,6 +118,18 @@ export const ATLAS_SKIN: SkinTokens = {
     '--ds-spot-ink': 'var(--ds-ink)',
     '--ds-radius-hero': '28px',
     '--ds-radius-feature': '16px',
+    '--ds-spark': '#3d44e8',
+    '--ds-spark-hover': '#3438cc',
+    '--ds-on-spark': '#ffffff',
+    '--ds-spark-text': '#3d44e8',
+    '--ds-spark-soft': 'color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas))',
+    '--ds-spark-glow': 'color-mix(in srgb, var(--ds-spark) 24%, transparent)',
+    '--ds-hue-1': '#3d44e8',
+    '--ds-hue-2': '#d13d91',
+    '--ds-hue-3': '#db6b04',
+    '--ds-hue-4': '#079a94',
+    '--ds-hue-5': '#9548cc',
+    '--ds-art': 'var(--ds-well-strong)',
   },
   dark: {
     '--ds-canvas': '#0a0a0a',
@@ -170,6 +184,18 @@ export const ATLAS_SKIN: SkinTokens = {
     '--ds-chart-3': '#8a8a8a',
     '--ds-chart-4': '#5e5e5e',
     '--ds-chart-5': '#3d3d3d',
+    '--ds-spark': '#8b9bfe',
+    '--ds-spark-hover': '#a3b2fe',
+    '--ds-on-spark': '#0a0a0a',
+    '--ds-spark-text': '#abb9fe',
+    '--ds-spark-soft': 'color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas))',
+    '--ds-spark-glow': 'color-mix(in srgb, var(--ds-spark) 30%, transparent)',
+    '--ds-hue-1': '#5568fd',
+    '--ds-hue-2': '#d84497',
+    '--ds-hue-3': '#df6e07',
+    '--ds-hue-4': '#04a19b',
+    '--ds-hue-5': '#a155da',
+    '--ds-art': 'var(--ds-well-strong)',
   },
   highContrast: {
     light: {

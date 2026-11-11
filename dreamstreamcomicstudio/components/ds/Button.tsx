@@ -11,6 +11,12 @@
  * button), 44 px tall under a coarse pointer (square for `icon`), the ink focus outline, press feedback
  * (motion-safe), `aria-invalid` in the danger mark. `loading` keeps the button focused (aria-disabled,
  * not disabled), says so (aria-busy and a spinner) and ignores presses.
+ *
+ * One DreamStream variant beside Atlas's six (the colour layer "Ink & Spark", docs/design/design-system.md):
+ * `create`, the spark fill, named by meaning. It is the ONE "start making" action in a view (New comic, Start a
+ * comic, composer Send, Share when ready), never a control that spends or shows a price (those stay `default`,
+ * the ink primary), and never two in a view: tests/config/sparkGuard.test.ts holds every use to its allowlist
+ * and fails on a price inside or beside it; the layout smoke counts `[data-variant="create"]` per viewport.
  */
 import React from 'react';
 import { Loader2 } from 'lucide-react';
@@ -25,13 +31,17 @@ import {
   FOCUS_RING,
   ON_ACCENT_TEXT,
   RADIUS_CONTROL,
-  SHADOW_SOFT
+  SHADOW_SOFT,
+  SPARK_FILL
 } from './recipes';
 
-export type ButtonVariant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
+export type ButtonVariant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link' | 'create';
 export type ButtonSize = 'sm' | 'default' | 'lg' | 'icon';
 
+/** Atlas's six variants, 1:1. */
 export const BUTTON_VARIANTS: readonly ButtonVariant[] = ['default', 'destructive', 'outline', 'secondary', 'ghost', 'link'];
+/** The DreamStream extensions beside them (not from Atlas): `create`, the spark fill. */
+export const BUTTON_EXTENSION_VARIANTS: readonly ButtonVariant[] = ['create'];
 export const BUTTON_SIZES: readonly ButtonSize[] = ['sm', 'default', 'lg', 'icon'];
 
 /** Shape, type, motion and states shared by every variant (the focus outline is appended after the merge). */
@@ -44,7 +54,8 @@ export const BUTTON_VARIANT: Record<ButtonVariant, string> = {
     'border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] hover:border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)] hover:bg-[var(--ds-hover)]',
   secondary: 'border-transparent bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]',
   ghost: 'border-transparent bg-transparent hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
-  link: `border-transparent ${ACCENT_TEXT} underline-offset-4 hover:underline`
+  link: `border-transparent ${ACCENT_TEXT} underline-offset-4 hover:underline`,
+  create: `border-transparent ${SPARK_FILL} ${SHADOW_SOFT}`
 };
 
 export const BUTTON_SIZE: Record<ButtonSize, string> = {
@@ -63,6 +74,10 @@ export function buttonClasses({ variant = 'default', size = 'default', className
 }
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  /**
+   * `create` is the spark: one per view, only to start making something, never with a price in or beside its
+   * label and never on a control that spends (sparkGuard.test.ts).
+   */
   variant?: ButtonVariant;
   size?: ButtonSize;
   /** Busy: a spinner and aria-busy; presses are ignored and focus stays (aria-disabled, not disabled). */
