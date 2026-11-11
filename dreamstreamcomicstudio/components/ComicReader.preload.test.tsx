@@ -90,6 +90,38 @@ describe("classic reader preloading", () => {
     expect(lazy.length).toBe(PANELS);
   });
 
+  it("scroll mode in a browser (IntersectionObserver): the 3 images after the furthest one in view, never every visible one's", () => {
+    // jsdom has no IntersectionObserver: a stub that records what is observed and lets the test say what is in view.
+    const observers: { cb: IntersectionObserverCallback; targets: Element[] }[] = [];
+    class StubIO {
+      targets: Element[] = [];
+      cb: IntersectionObserverCallback;
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe(el: Element) {
+        this.targets.push(el);
+      }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", StubIO);
+    mount();
+    expect(preloads).toEqual([]); // nothing warmed before anything is in view
+    const io = observers[observers.length - 1];
+    expect(io.targets.length).toBeGreaterThanOrEqual(PANELS);
+    // First paint: panels 1–5 intersect at once (short lazy images before they load).
+    const inView = io.targets.filter((el) => /\/panel-[1-5]\.png$/.test(el.getAttribute("src") || ""));
+    expect(inView).toHaveLength(5);
+    io.cb(inView.map((target) => ({ target, isIntersecting: true }) as unknown as IntersectionObserverEntry), io as unknown as IntersectionObserver);
+    expect(preloads.length).toBeLessThanOrEqual(4);
+    expect(preloads).toEqual(["https://cdn.test/panel-6.png", "https://cdn.test/panel-7.png", "https://cdn.test/panel-8.png"]);
+  });
+
   it("flip mode keeps its window: the page before and the 3 after", () => {
     mount();
     preloads = [];

@@ -454,11 +454,15 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     list.forEach((p, i) => { if (p.imageUrl && !indexOf.has(p.imageUrl)) indexOf.set(p.imageUrl, i); });
     const root = scrollRef.current;
     if (!root || typeof IntersectionObserver === 'undefined') { ahead(0); return; }
+    // The furthest image in view so far, warmed once per callback: on first paint many lazy images can
+    // intersect at once, and the warm set stays "the next 3", never their union.
+    let maxSeen = -1;
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const i = e.isIntersecting ? indexOf.get((e.target as HTMLImageElement).getAttribute('src') || '') : undefined;
-        if (i !== undefined) ahead(i);
+        if (i !== undefined) maxSeen = Math.max(maxSeen, i);
       }
+      if (maxSeen >= 0) ahead(maxSeen);
     }, { root });
     root.querySelectorAll('img').forEach((img) => io.observe(img));
     return () => io.disconnect();
