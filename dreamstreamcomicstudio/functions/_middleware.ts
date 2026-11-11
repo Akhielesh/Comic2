@@ -72,6 +72,11 @@ interface PagesContext {
  *   - Everything else (the comic / chat app): CSP Report-Only. Chat artifacts run in srcdoc
  *     iframes, which inherit the page's CSP, so `/` can't be enforced until the artifact
  *     runner moves to its own sandbox origin (ADR 0006 D6.5). The reports are the inventory.
+ *     Only the framing part is enforced (web-surface-3 / N7, clickjacking): MAIN_ENFORCED_CSP
+ *     (`frame-ancestors 'self'; object-src 'none'` — neither touches what a srcdoc frame may run)
+ *     plus X-Frame-Options SAMEORIGIN for browsers that predate frame-ancestors. A route that sets
+ *     its own enforced CSP keeps it and decides its own framing (/c/<slug>/embed may be framed
+ *     anywhere), so no XFO is added there.
  */
 
 /**
@@ -278,6 +283,15 @@ export function mainCsp(input: PolicyInput): string {
   ]);
 }
 
+/**
+ * The part of the main app's policy that is enforced from day one: it cannot be framed by another
+ * site, and no plugin content. The rest of mainCsp stays Report-Only (see the top of this section).
+ */
+export const MAIN_ENFORCED_CSP = serialize([
+  ['frame-ancestors', ["'self'"]],
+  ['object-src', ["'none'"]],
+]);
+
 export type PageKind = 'live' | 'main';
 
 /** Stream Studio is every page on its own host, and /live, /live/, /live.html on the apex. */
@@ -308,8 +322,10 @@ export function documentSecurityHeaders(kind: PageKind, input: PolicyInput & { e
     // frame-ancestors 'none' for browsers that predate it — and it holds during Report-Only.
     headers['X-Frame-Options'] = 'DENY';
   } else {
+    headers['Content-Security-Policy'] = MAIN_ENFORCED_CSP;
     headers['Content-Security-Policy-Report-Only'] = mainCsp(input);
     headers['Permissions-Policy'] = MAIN_PERMISSIONS_POLICY;
+    headers['X-Frame-Options'] = 'SAMEORIGIN';
   }
   return headers;
 }
@@ -333,11 +349,14 @@ function isDocument(res: Response, pathname: string): boolean {
 
 /**
  * Put the security headers on a response on its way out. A Content-Security-Policy a route
- * set for itself is kept (it knows its page better); every other header is ours.
+ * set for itself is kept (it knows its page better); every other header is ours — except that
+ * on a main-app page with its own enforced CSP the route also owns its framing, so our
+ * X-Frame-Options SAMEORIGIN is not added (it would block /c/<slug>/embed in older browsers).
  */
 export function withSecurityHeaders(res: Response, url: URL, opts: { env?: SecurityEnv; enforceLive?: boolean } = {}): Response {
+  const kind = pageKindFor(url);
   const headers = isDocument(res, url.pathname)
-    ? documentSecurityHeaders(pageKindFor(url), { origin: url.origin, env: opts.env, enforceLive: opts.enforceLive })
+    ? documentSecurityHeaders(kind, { origin: url.origin, env: opts.env, enforceLive: opts.enforceLive })
     : baseSecurityHeaders(url.origin);
   let out: Response;
   try {
@@ -345,8 +364,10 @@ export function withSecurityHeaders(res: Response, url: URL, opts: { env?: Secur
   } catch {
     return res; // an exotic response we can't rebuild: pass it on untouched rather than fail the page
   }
+  const routeFraming = kind === 'main' && out.headers.has('content-security-policy');
   for (const [name, value] of Object.entries(headers)) {
     if (/^content-security-policy/i.test(name) && out.headers.has(name)) continue;
+    if (routeFraming && /^x-frame-options$/i.test(name)) continue;
     out.headers.set(name, value);
   }
   return out;
@@ -405,14 +426,20 @@ function isSignInLandingPath(pathname: string): boolean {
   return pathname.replace(/\/+$/, '') === '/auth/callback' || isLegacyLivePath(pathname);
 }
 
+/** A policy's frame-ancestors directive (its name and sources, up to the next `;`). */
+const FRAME_ANCESTORS_DIRECTIVE = /(^|;)(\s*)frame-ancestors(\s[^;]*)?(?=;|$)/i;
+
 /**
  * `res` never shown in a frame: X-Frame-Options DENY, and frame-ancestors 'none' in its enforced
- * CSP — added to a policy that's already there (never replacing it), or as the whole policy.
+ * CSP — merged into a policy that's already there (the rest of it kept; a frame-ancestors it had,
+ * such as the main app's 'self', becomes 'none'), or as the whole policy.
  */
 function blockFraming(res: Response): Response {
   const csp = res.headers.get('content-security-policy');
   if (!csp) return withHeaders(res, FRAME_BLOCK);
-  const policy = /(^|;)\s*frame-ancestors\s/i.test(csp) ? csp : `${csp.replace(/;\s*$/, '')}; frame-ancestors 'none'`;
+  const policy = FRAME_ANCESTORS_DIRECTIVE.test(csp)
+    ? csp.replace(FRAME_ANCESTORS_DIRECTIVE, "$1$2frame-ancestors 'none'")
+    : `${csp.replace(/;\s*$/, '')}; frame-ancestors 'none'`;
   return withHeaders(res, { 'x-frame-options': 'DENY', 'content-security-policy': policy });
 }
 

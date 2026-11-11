@@ -1,0 +1,41 @@
+# Request-surface hardening (security plan PR-1, 2026-11-05)
+
+What the backend now refuses or bounds on its public request surface, and the deploy steps it needs.
+Companion to `SECURITY_FINDINGS.md`; finding ids are the security plan's.
+
+| Id | Where | What changed |
+|---|---|---|
+| web-surface-1 | `server/src/lib/mcpRequestServers.ts`, `routes/chat.ts` `prepareChat` | A chat request's `mcpServers` entries are rebuilt from `{id ≤ 64, name ≤ 80, url, headers ≤ 8 × ≤ 4096}`; `trusted` is dropped, only strict-safe https URLs are kept (`isSafeMcpUrl`, no `allowInternal`), at most 10. No request or saved entry replaces an operator server (`STUDIO_*_MCP_URL`) by reusing its URL, so the operator's id (`nango` → `mcp_nango_*`, a connector for the privacy gate), headers and trust stay. The merge runs after the free-turn and connector-tool decisions and before `connectorPrivacy`, which sees every MCP tool name. The tool-side check (`ai/tools/mcpClient.ts`, trust only operator URLs) is the DreamStream session's. |
+| abuse-ops-1 (f), abuse-ops-6 | `server/src/middleware/publicDataLimits.ts`, `chatPublicRouter` | After `optionalAuth`, per account or per IPv4 / IPv6 /64 (`server/src/lib/clientKey.ts`): `GET /api/chat/unfurl` 60/min; `GET /api/chat/read-url` 20/min anonymous and 60/min signed in (the news list, which only the signed-in chat, dashboards and gallery show, prefetches an article on hover and focus); `POST /api/chat/tool-refresh` 30/min anonymous and 120/min signed in, plus a daily window of 300 anonymous and 10,000 signed in. The numbers follow the client's cadence: Dashboards re-runs every data tile of the open board at once, on open and every 5 min (12 calls/h per tile), with no tile cap, and a live monitor runs as often as every 30 s (120/h). So the signed-in minute window holds a 40-tile board plus monitors refreshed in the same minute, and 10,000 a day sits above a 10-tile board plus two 30 s monitors left open all day (8,640); tests drive a 10-tile and a 40-tile board plus a monitor for 8 h through the limiter. Read-url passes `allowJina` explicitly: only a signed-in caller may fall back to the budgeted Jina reader (unchanged from readArticle's account-context default). `find_places` and `video_search` refreshes (paid platform keys) need a signed-in caller (401 `SIGN_IN_REQUIRED`). The client (`services/chatApi.ts`) no longer caches a failed unfurl or reader request, so a refused hover prefetch is retried on click. The fetchers' own caps and provider budgets are the DreamStream session's. |
+| abuse-ops-2 | `server/src/services/sqlRunner.ts`, `sqlWorker.ts` | `/api/learn/sql` runs in a fresh worker thread per call: 2 s deadline then `terminate()`, SQLite `hard_heap_limit` 32 MiB, `max_page_count` 16 MiB, `temp_store=MEMORY`, V8 heap 64 MiB, an RSS watchdog (64 MiB growth), ≤ 500 rows kept (all counted), cells ≤ 10 KB, results ≤ 1 MB, empty env. 1 run at a time (the container is 1/4 vCPU, and each run takes CPU from the main event loop), ≤ 8 queued, then "busy"; an account holds at most one of those places ("still running"). `POST /api/learn/sql` also has its own per-account limit, 15/min and 1,000/day (`routes/learn.ts`), on top of the shared `text` limiter. `randomblob`/`zeroblob`/`load_extension` calls, `ATTACH`/`DETACH`/`VACUUM` statements and the size pragmas are refused up front, matched on SQLite's own tokens (string literals, comments, quoted data and columns such as "Robot Vacuum" or `page_size` are not refused; a U+FEFF where a token starts is space, as SQLite reads it, so it hides nothing). `printf`/`format` gets a fast-path check only: when its first argument is a bare string literal, a width or precision of `*` or 1000+ is refused. That literal is read one conversion at a time, as SQLite reads it, so a literal percent such as `%l%` or `%5l%` cannot pair up with the next `%`. A width or precision counts from its first non-zero digit (`0` is the zero-pad flag), so `%0100d` runs and `%01000d` is refused. A format that is not a bare literal (in parentheses, `printf(('%.*c'), …)`, a column, or built with `\|\|`) is not checked; the worker's `hard_heap_limit` is what bounds its widths (the run ends with `out of memory`). The same holds for every up-front refusal: the worker's limits hold without it, it only fails faster. A run costs about 0.1 s of CPU and wall time even for `SELECT 1` (a fresh isolate plus sql.js); reusing a warm worker for runs that end cleanly is left for later. |
+| abuse-ops-9 | — | abuse-ops-9 shipped in production as BK-0. This PR does not change `/api/keys` or `/api/models/verify`. |
+| abuse-ops-12 | `data-egress/src/index.ts` | The relay fails closed: no `EGRESS_SHARED_SECRET` → 503 for every request (logged once per isolate); the `x-egress-key` header is compared in constant time (SHA-256 of both). The backend logs `egress_secret_missing` once when `DATA_EGRESS_SECRET` is unset. |
+| web-surface-3 / N7 | `functions/_middleware.ts` | Main-app pages get an enforced `Content-Security-Policy: frame-ancestors 'self'; object-src 'none'` and `X-Frame-Options: SAMEORIGIN`; the rest of the main policy stays Report-Only. A route with its own enforced CSP (`/c/*`) keeps its framing and gets no XFO (`/c/<slug>/embed` stays embeddable). The sign-in landing page's frame block turns an existing `frame-ancestors` into `'none'`. Stream Studio's policy and `ENFORCE_LIVE` are unchanged. |
+
+## Deploy order
+
+1. **Owner step O4 before this PR is merged: the merge IS the data-egress deploy.**
+   `.github/workflows/deploy-data-egress.yml` deploys the worker on every push to `Dreamstrream-v1`
+   that touches `data-egress/**`, so merging deploys the fail-closed worker straight away. Before
+   merging, generate a random 32-byte value and set it in three places:
+   - the backend's `DATA_EGRESS_SECRET` (D1 `backend_env` or a Worker secret);
+   - the `dreamstream-data-egress` Worker's `EGRESS_SHARED_SECRET` (`wrangler secret put EGRESS_SHARED_SECRET`);
+   - the `EGRESS_SHARED_SECRET` secret of the `production-deploy` GitHub Environment, which the
+     deploy probe sends as `x-egress-key`.
+   The probe then checks that a request without the key gets 403 and that a keyed one returns Yahoo
+   JSON. A 503 ("Relay not configured") or a refused key fails the job. Merging before the worker
+   secret is set turns every relayed market-data fetch into a 503 until both sides are set.
+2. Before the Pages deploy, check `csp_reports` for `frame-ancestors` reports from other origins
+   (none are expected: nothing in the repo frames `/` from another site).
+3. After each deploy, check the Workers and Container logs (`egress_secret_missing`,
+   `[data-egress] EGRESS_SHARED_SECRET is not set`, 429s on `chat_*` and `learn_sql*` scopes).
+
+## Open, outside this PR
+
+- **MCP response bodies.** Dev now caps them (`9559f5a7`, `server/src/ai/tools/mcpClient.ts` `rpc`):
+  a JSON-RPC response is read through `readTextCapped` up to `MCP_MAX_RESPONSE_BYTES` (8 MB after
+  decompression) and fails as "too large" past it; an error body is read only to 16 KB. What is left:
+  a chat body may name up to 10 request-supplied servers, discovered in parallel by `buildMcpTools` in
+  `prepareChat` before the usage reservation, so one request can still hold up to 10 × 8 MB of
+  `initialize` / `tools/list` bodies at once. A smaller cap for those two methods is the DreamStream
+  session's call (the file is theirs).
