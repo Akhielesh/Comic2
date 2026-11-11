@@ -25,7 +25,8 @@
  * (Atlas ink/muted on the skin's four base surfaces and every token's skin override stay in
  * atlasSkin.test.ts; this file adds the rest of the surfaces and the accent/status/faint tokens.)
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { escapeClass, listSourceFiles } from '../../scripts/design/atlas-skin-shim.mjs';
@@ -706,10 +707,12 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
 
   it('every text constant reads a token this matrix measures', () => {
     // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas. --ds-spark
-    // as TEXT is MAKING_DOT only: the LiveDot paints currentColor, a mark, measured ≥ 3:1 in the colour layer block.
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', '--ds-spark', ...TONES.map((t) => `--ds-${t}-text`)]);
+    // is gated as a mark (≥ 3:1), not as text, so it is NOT a measured text token: words in the spark use SPARK_TEXT
+    // (--ds-spark-text, ≥ 4.5:1). Its one text-[…] spelling is MAKING_DOT, skipped by name below.
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`)]);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
+      if (name === 'MAKING_DOT') continue; // a mark: currentColor of LiveDot, gated ≥ 3:1 in the colour-layer describe
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
       for (const v of values) for (const t of textTokens(v)) expect(measured.has(t), `${name} uses ${t}`).toBe(true);
     }
@@ -1325,6 +1328,29 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
     }
   });
 
+  it('How It Works (a light page in dark): with the kill switch off in default dark, every headline gradient stop is ≥ 3:1 on white (the light stops are pinned)', () => {
+    const paint = rules.filter((r) => r.parents.length === 0 && r.selector === '.hiw-gradient-text');
+    expect(paint).toHaveLength(1);
+    const stops = [...paint[0].body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1]);
+    expect(stops).toEqual(['--ds-info', '--ds-danger', '--ds-warning', '--ds-info']);
+    const pinSelector = (s: string) => /\.dark\b[^,]*\s\.hiw-gradient-text$/.test(s);
+    expect(rules.filter((r) => pinSelector(r.selector)).map((r) => r.selector)).toEqual([':root.dark .hiw-gradient-text']);
+    const pinned = tokensOf(rules, pinSelector);
+    const white = hexColor('#ffffff');
+    const under: string[] = [];
+    for (const stop of new Set(stops)) {
+      // The words see the pin when there is one, else the default dark token.
+      const value = pinned.get(stop);
+      expect(value, `${stop} is pinned`).toBeDefined();
+      expect(value, `${stop} pins the light :root value`).toBe(lookup(stop, 'default light'));
+      const r = ratio(resolve(value ?? lookup(stop, 'default dark'), 'default dark'), white);
+      if (r < 3) under.push(`${stop} ${value} = ${r.toFixed(2)}`);
+    }
+    expect(under).toEqual([]);
+    // Without the pin the words would read the dark stops: the neutral info is 1.3:1 on white (the old blue was 2.5).
+    expect(ratio(token('--ds-info', 'default dark'), white)).toBeLessThan(1.5);
+  });
+
   it('the spark stays out of the ink system: focus, ring, accent, charts, status and reader tokens read no layer token', () => {
     const leaks: string[] = [];
     for (const [blockName, block] of Object.entries({ ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE })) {
@@ -1371,18 +1397,26 @@ const READER_ROOMS = {
 } as const;
 
 describe('token contrast — the reader rooms (HUD ink, room-side focus; RD-A)', () => {
+  it('reader rows are spec pins until RD-A lands (when readerDesigns.css exists, read the rooms from it: same assertions)', () => {
+    // A tripwire, not a contrast check: the two "spec pin" rows below compare reader.md §4.2 / V2 N1 constants with
+    // each other, so no code change can fail them. The moment RD-A's file exists this goes red, and READER_ROOMS must
+    // switch to the room, glass, ink and hud-focus values that file defines (tokenContrast wave note 10).
+    expect(existsSync(path.join(ROOT, 'components/comicstudio/immersive/readerDesigns.css'))).toBe(false);
+    expect(existsSync(path.join(ROOT, 'components/comicstudio/immersive/readerTokens.ts'))).toBe(false);
+  });
+
   it('today’s Night room is the index.css reader room, the same in every context (content, not chrome)', () => {
     for (const ctx of ALL_CONTEXTS) expect(lookup('--ds-reader-room', ctx), ctx).toBe(READER_ROOMS.night.room);
   });
 
-  it('HUD ink on the HUD glass is ≥ 4.5:1 in every room', () => {
+  it('spec pin: HUD ink on the HUD glass is ≥ 4.5:1 in every room', () => {
     for (const [name, r] of Object.entries(READER_ROOMS)) {
       const glass = over(resolve(r.glass, 'default light'), hexColor(r.room));
       expect(ratio(hexColor(r.ink), glass), name).toBeGreaterThanOrEqual(4.5);
     }
   });
 
-  it('the room-side focus (and progress) colour is ≥ 3:1 against the room and against the HUD glass in every room', () => {
+  it('spec pin: the room-side focus (and progress) colour is ≥ 3:1 against the room and against the HUD glass in every room', () => {
     for (const [name, r] of Object.entries(READER_ROOMS)) {
       const glass = over(resolve(r.glass, 'default light'), hexColor(r.room));
       expect(contrastRatio(r.hudFocus, r.room), `${name}: on the room`).toBeGreaterThanOrEqual(3);

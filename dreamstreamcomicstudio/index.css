@@ -250,14 +250,24 @@
 
 /* The How It Works headline accent: the info / danger / warning tokens by default (the old brand blue, red and
    yellow, now tokens; bridge D4; info is a neutral grey since the colour layer, so the sweep runs grey → red →
-   amber), the heading's own ink under the skin (below), where hue never decorates.
-   Known limit with the kill switch off (no skin) in dark: the default dark values (#e5e5e5, #f87171, #fbbf24)
-   paint on this page, which stays light, at 1.3 / 2.8 / 1.6:1 on white (docs/design/atlas-skin.md). */
+   amber), the heading's own ink under the skin (below), where hue never decorates. */
 .hiw-gradient-text {
   background-image: linear-gradient(100deg, var(--ds-info), var(--ds-danger), var(--ds-warning), var(--ds-info));
   background-size: 300% 300%;
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: hiwGradientPan 8s ease infinite;
+}
+/* How It Works stays a light page in dark, so with the kill switch off (no skin) its headline would paint the
+   default DARK stops (#e5e5e5, #f87171, #fbbf24: 1.3 / 2.8 / 1.6:1 on white; the neutral info made the first
+   stop worse than the old blue's 2.5). Pin the light :root values of the three stops on the words, as the
+   legacy-bubble pin below does for its markdown: 7.8 / 4.8 / 3.2:1 on white (tokenContrast.test.ts keeps them
+   equal to :root and ≥ 3:1). Spelled on the root's theme class (the whole document is dark, this page is not);
+   it sets token values only, so the paint rule above still reads tokens (atlasSkin bridge D4). Under the skin the
+   gradient is off and the words take the heading's ink. */
+:root.dark .hiw-gradient-text {
+  --ds-info: #525252;
+  --ds-danger: #dc2626;
+  --ds-warning: #d97706;
 }
 .hiw-flow-dash { stroke-dasharray: 10 14; animation: hiwFlowDash 18s linear infinite; }
 .hiw-pulse-ring { animation: hiwPulseRing 2.4s ease-out infinite; }

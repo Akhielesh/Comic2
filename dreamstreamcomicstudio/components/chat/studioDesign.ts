@@ -513,7 +513,11 @@ export const MAKING_DOT = 'text-[var(--ds-spark)]';
 export const MAKING_SWEEP = 'ds-making-sweep';
 /** A "Drawing page 3 of 6…" label: the shimmer-text loop with a spark glint (plain muted text under reduced motion). */
 export const MAKING_TEXT = 'ds-shimmer-text [--ds-shimmer-glint:var(--ds-spark-text)]';
-/** Comic Ben-Day dots in the spark behind hero art and empty states only (static; styles/ds-motion.css). */
+/**
+ * Comic Ben-Day dots in the spark behind hero art and empty states only (static; styles/ds-motion.css). Put it on the
+ * hero or empty-state container itself: the dots and their edge fade sit on its ::before layer, behind its content,
+ * so the art and the call to action stay fully opaque and a nested grid backdrop keeps its own dots.
+ */
 export const BENDAY = 'ds-benday';
 /** A cover or tile before its image decodes: the comic's own tint (--ds-art), the neutral well by default. */
 export const ART_PLACEHOLDER = 'bg-[var(--ds-art)]';
@@ -524,9 +528,17 @@ export const HUE_DOT = ['bg-[var(--ds-hue-1)]', 'bg-[var(--ds-hue-2)]', 'bg-[var
 /** The same slots for SVG chart marks (inline-SVG kit charts): fills and strokes. */
 export const HUE_FILL = ['fill-[var(--ds-hue-1)]', 'fill-[var(--ds-hue-2)]', 'fill-[var(--ds-hue-3)]', 'fill-[var(--ds-hue-4)]', 'fill-[var(--ds-hue-5)]'] as const;
 export const HUE_STROKE = ['stroke-[var(--ds-hue-1)]', 'stroke-[var(--ds-hue-2)]', 'stroke-[var(--ds-hue-3)]', 'stroke-[var(--ds-hue-4)]', 'stroke-[var(--ds-hue-5)]'] as const;
-/** The categorical slot for the n-th series (0-based), or null past the fifth: fold the rest into "Other" (a chart step). */
-export const hueSlot = (index: number): 1 | 2 | 3 | 4 | 5 | null =>
-  Number.isInteger(index) && index >= 0 && index < 5 ? ((index + 1) as 1 | 2 | 3 | 4 | 5) : null;
+/**
+ * The index into HUE_DOT / HUE_FILL / HUE_STROKE for the n-th series (0-based, the same as the arrays), or null past
+ * the fifth: fold the rest into "Other" (a chart step). `HUE_DOT[hueIndex(i)]` reads slot i + 1.
+ */
+export const hueIndex = (i: number): 0 | 1 | 2 | 3 | 4 | null => (Number.isInteger(i) && i >= 0 && i < 5 ? (i as 0 | 1 | 2 | 3 | 4) : null);
+/** The n-th series' (0-based) hue class for a tag dot or legend swatch, an SVG fill or a stroke, or null past five ("Other"). */
+export const hueClass = (kind: 'dot' | 'fill' | 'stroke', i: number): string | null => {
+  const at = hueIndex(i);
+  if (at === null) return null;
+  return (kind === 'dot' ? HUE_DOT : kind === 'fill' ? HUE_FILL : HUE_STROKE)[at];
+};
 
 // ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)

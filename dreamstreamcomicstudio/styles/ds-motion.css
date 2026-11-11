@@ -51,7 +51,8 @@
  *                            popovers out of it
  *     .ds-grid-backdrop      a faint dot grid (--ds-grid-dot) fading toward the edges
  *     .ds-benday             comic Ben-Day dots in the spark (a staggered dot screen at 22 %), fading toward the
- *                            edges: behind landing hero art and empty states only. Static; studioDesign BENDAY
+ *                            edges: behind landing hero art and empty states only. On the host's own ::before
+ *                            layer behind its content (the content never fades). Static; studioDesign BENDAY
  *   Type
  *     .ds-overline           the small uppercase label (11 px, 600, 0.12em, muted); studioDesign OVERLINE
  *                            is the utility spelling of the same thing
@@ -415,12 +416,26 @@
 
 /* Ben-Day dots (the colour layer): the grid backdrop's idea in the comic's own print screen. Two dot lattices
    offset by half a pitch make the staggered screen of a printed tint; the dot is the spark at 22 %, so the
-   pattern stays a quiet texture (never under text: hero art and empty-state illustrations only). Static. */
+   pattern stays a quiet texture (never under text: hero art and empty-state illustrations only). Static.
+   The dots and their edge fade live on the host's own ::before layer behind its content, so a hero or an
+   empty state can carry the class itself: its art and its call to action stay fully opaque (a mask on the host
+   would fade them too), and the dot colour is spelled on that layer (no --ds-grid-dot override on the host), so
+   a nested .ds-grid-backdrop keeps its ink dots. The host is positioned and isolated (its own stacking context, so the layer never slips behind
+   the page); a Tailwind position utility on the same element still wins (utilities come later). */
 .ds-benday {
-  --ds-grid-dot: color-mix(in srgb, var(--ds-spark) 22%, transparent);
+  position: relative;
+  isolation: isolate;
+}
+
+.ds-benday::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background-image:
-    radial-gradient(circle, var(--ds-grid-dot) 1.6px, transparent 2px),
-    radial-gradient(circle, var(--ds-grid-dot) 1.6px, transparent 2px);
+    radial-gradient(circle, color-mix(in srgb, var(--ds-spark) 22%, transparent) 1.6px, transparent 2px),
+    radial-gradient(circle, color-mix(in srgb, var(--ds-spark) 22%, transparent) 1.6px, transparent 2px);
   background-size: 12px 12px;
   background-position: 0 0, 6px 6px;
   mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, #000 30%, transparent 75%);
