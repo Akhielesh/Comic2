@@ -402,7 +402,9 @@
 [data-inview="false"] .ds-shimmer-text,
 .ds-shimmer-text[data-inview="false"],
 [data-inview="false"] .ds-making-sweep::after,
-.ds-making-sweep[data-inview="false"]::after {
+.ds-making-sweep[data-inview="false"]::after,
+[data-inview="false"] .ds-progress-indeterminate::after,
+.ds-progress-indeterminate[data-inview="false"]::after {
   animation-play-state: paused;
 }
 

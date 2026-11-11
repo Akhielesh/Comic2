@@ -89,10 +89,11 @@ describe('styles/ds-motion.css', () => {
     expect(reveal?.body).toMatch(/animation-range:\s*entry 0% entry min\(200px,\s*100%\);/);
   });
 
-  it('the live dot, caret, marquee, skeleton and shimmer-text pause while their host is off screen', () => {
+  it('the live dot, caret, marquee, skeleton, shimmer-text and indeterminate bar pause while their host is off screen', () => {
     const pause = rules.find((r) => /animation-play-state: paused/.test(r.body) && r.selector.includes('[data-inview="false"]'));
     const selectors = pause ? topLevelSplit(pause.selector).map((s) => s.trim()) : [];
-    for (const s of ['[data-inview="false"] .ds-marquee-track', '[data-inview="false"] .ds-live-dot::after', '.ds-live-dot[data-inview="false"]::after', '[data-inview="false"] .ds-caret', '[data-inview="false"] .ds-skeleton', '[data-inview="false"] .ds-shimmer-text']) {
+    // The progress bar pauses on its own data-inview too (renderTile's DrawingBar carries no arbitrary class for it: PF-2 #3).
+    for (const s of ['[data-inview="false"] .ds-marquee-track', '[data-inview="false"] .ds-live-dot::after', '.ds-live-dot[data-inview="false"]::after', '[data-inview="false"] .ds-caret', '[data-inview="false"] .ds-skeleton', '[data-inview="false"] .ds-shimmer-text', '[data-inview="false"] .ds-progress-indeterminate::after', '.ds-progress-indeterminate[data-inview="false"]::after']) {
       expect(selectors, s).toContain(s);
     }
   });

@@ -204,7 +204,8 @@ describe('StyleChoiceCard', () => {
     const studio = renderCard(card);
     expect(screen.getByText('Drawing 1 of 3…')).toBeInTheDocument();
     expect(screen.getByAltText('Inky noir')).toHaveAttribute('src', 'https://cdn.test/u/x/p/opt_a.webp');
-    expect(screen.getByText('Drawing…')).toBeInTheDocument();
+    // The fixture's board began drawing long before the test clock: it reads stuck, not "Drawing…" (PF-2).
+    expect(screen.getByText('Still drawing')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use the Inky noir style' }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'pick_style', optionId: 'opt_a' });
   });
