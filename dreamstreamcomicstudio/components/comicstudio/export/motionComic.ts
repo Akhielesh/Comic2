@@ -4,7 +4,15 @@
 // plates as title cards (title page, "The End", back cover), and for every drawn page shows the whole
 // page for a beat and glides panel to panel (using the vision pass's measured panel boxes when
 // available), popping each balloon in at reading speed, with a slow Ken Burns push on every shot, and
-// ends on a "Made with DreamStream" card. Everything runs in the browser at no cost.
+// ends on a "Made with DreamStream" card (switchable: `outro`). Everything runs in the browser at no cost.
+//
+// AV-0 (av.md §7, F4/F5/F9/F10): panels play in the page's VISUAL reading order — the same rule as the
+// reader's Guided View (shared/comic/readingOrder.ts), so a right-to-left book plays right to left and a
+// drawing whose panels came out in another arrangement plays as drawn. Each panel holds at least its shot
+// type's minimum (an establishing shot 3.5 s, a splash +1 s), so a silent panel is a beat, not a blink;
+// the reading clock still decides when the lines need longer. Colours are the reader-room tokens (the
+// same in both themes and every skin), never literals. Each export sends ONE telemetry event — counts,
+// timings and enums only, never a title, a line or a file name.
 //
 // Lettering is the shared engine's LetterPlans drawn by canvasDraw.ts (the board's own drawing), after
 // the exact faces loaded; the title card wraps with the script-aware wrapper (textLayout) and sets
@@ -14,15 +22,18 @@
 // WebCodecs fall back to recording the canvas in real time with MediaRecorder. The timeline and camera
 // math are pure (unit-tested); only the exporter touches the DOM.
 
-import type { Box, ComicDoc, Page } from '../../../shared/comic/doc';
+import type { TelemetryEventInput } from '../../../apiTypes';
+import type { Box, ComicDoc, Page, Panel, PanelSize, ShotType } from '../../../shared/comic/doc';
 import { bookSequence } from '../../../shared/comic/book';
+import { panelReadingOrder } from '../../../shared/comic/readingOrder';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { dirOf, sameLanguage } from '../../../shared/comic/languages';
 import { planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { wrapLines } from '../../../shared/comic/textLayout';
 import { downloadBlob } from '../../../services/download';
+import { captureEvent } from '../../../services/telemetry';
 import { panelBoxesFor } from '../board/pageLayout';
-import { plateLayout, type PlateKind } from '../timeline/plates';
+import { PLATE_COLORS, plateLayout, type PlateKind } from '../timeline/plates';
 import { defaultLayerFactory, drawLetteringOnPage, drawSvgNodes } from './canvasDraw';
 import { coverTitleNodes } from './coverTitle';
 import { CANCELLED, ExportError } from './errors';
@@ -75,6 +86,17 @@ export interface TimelineOptions {
   outroMs?: number;
   /** Include the book's plates as title cards (default true). */
   plates?: boolean;
+  /**
+   * End on the "Made with DreamStream" card (default true). Owner decision D17: on for free users, off for
+   * people on their own key, always switchable — the caller decides; the exporter only obeys.
+   */
+  outro?: boolean;
+  /**
+   * Hold each panel at least its shot type's minimum (SHOT_MIN_HOLD_MS, +SIZE_HOLD_BONUS_MS for splash and large
+   * panels; default true). false = today's flat `minPanelMs` floor only (the PE goldens' "equals today except
+   * panel order" reading).
+   */
+  shotHolds?: boolean;
 }
 
 const FULL: Box = { x: 0, y: 0, w: 1, h: 1 };
@@ -84,15 +106,50 @@ const words = (text: string) => (text.match(/\S+/g) || []).length;
 export const readMs = (text: string, wpm = 210): number => Math.max(650, Math.round((words(text) * 60_000) / wpm));
 
 /**
+ * The least time a panel stays on screen, by its planned shot (av.md §5.3). A wide or establishing shot needs time
+ * to be looked at even with nothing to read; an insert or an extreme close-up is a quick beat. Reading time still
+ * wins when the lines need longer, and `maxPanelMs` still caps every panel.
+ */
+export const SHOT_MIN_HOLD_MS: Readonly<Record<ShotType, number>> = {
+  establishing: 3500,
+  wide: 3000,
+  full: 2600,
+  medium: 2200,
+  close_up: 2200,
+  extreme_close_up: 1800,
+  over_shoulder: 2200,
+  insert: 1800,
+  pov: 2200
+};
+
+/** Extra hold for the big panels a page is built around (av.md §5.3 "splash and large add 1 s"). */
+export const SIZE_HOLD_BONUS_MS: Readonly<Partial<Record<PanelSize, number>>> = { splash: 1000, large: 1000 };
+
+/** True only for a table's OWN key: an inherited name ('constructor', 'toString') must not read as a shot or size. */
+const ownKey = (table: object, key: unknown): boolean => typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key);
+
+/**
+ * A panel's minimum hold (ms) from its shot and size. An unknown shot (old or hand-edited docs, or an inherited
+ * object name) gets the medium hold and an unknown size no bonus, so a duration is never NaN.
+ */
+export const panelHoldMs = (panel: Pick<Panel, 'shot' | 'size'>): number =>
+  (ownKey(SHOT_MIN_HOLD_MS, panel.shot) ? SHOT_MIN_HOLD_MS[panel.shot] : SHOT_MIN_HOLD_MS.medium) +
+  (ownKey(SIZE_HOLD_BONUS_MS, panel.size) ? (SIZE_HOLD_BONUS_MS[panel.size] ?? 0) : 0);
+
+/**
  * The shot list, in book order (cover → title card → pages → "The End" → back cover → outro).
- * Overlay-lettered pages reveal their balloons panel by panel; in-art pages (text is part of the
- * drawing) simply hold each panel long enough to read. Withheld (safety-blocked) art never appears.
+ * Panels play in the page's visual reading order (right to left for an RTL book), the order Guided View
+ * reads them in. Overlay-lettered pages reveal their balloons panel by panel; in-art pages (text is part
+ * of the drawing) simply hold each panel long enough to read. Every panel holds at least its shot's
+ * minimum. Withheld (safety-blocked) art never appears.
  */
 export function buildMotionTimeline(doc: ComicDoc, opts: TimelineOptions = {}): MotionTimeline {
   const minPanel = opts.minPanelMs ?? 1800;
   const maxPanel = opts.maxPanelMs ?? 7500;
   const wpm = opts.wordsPerMinute ?? 210;
   const overview = opts.pageOverviewMs ?? 1300;
+  const shotHolds = opts.shotHolds !== false;
+  const rtl = doc.format.readingDirection === 'rtl';
   const shots: MotionShot[] = [];
   let t = 0;
   const push = (shot: Omit<MotionShot, 'startMs'>) => {
@@ -116,8 +173,10 @@ export function buildMotionTimeline(doc: ComicDoc, opts: TimelineOptions = {}): 
     push({ kind: 'page', pageId: page.id, box: FULL, durationMs: overview, reveals: [], carried: [] });
     const boxes = panelBoxesFor(doc, page);
     const carried: string[] = [];
-    page.panels.forEach((panel, i) => {
-      const box = boxes[i] || FULL;
+    for (const i of panelReadingOrder(boxes, page.panels.length, rtl)) {
+      const panel = page.panels[i];
+      const b = boxes[i];
+      const box = b && b.w > 0 && b.h > 0 ? b : FULL;
       const lines = panel.lines.filter((l) => l.text.trim());
       let at = 450; // let the camera settle first
       const reveals = overlay
@@ -128,13 +187,14 @@ export function buildMotionTimeline(doc: ComicDoc, opts: TimelineOptions = {}): 
           })
         : [];
       const reading = lines.reduce((ms, l) => ms + readMs(l.text, wpm), 0);
-      const durationMs = Math.min(maxPanel, Math.max(minPanel, 450 + reading + 500));
+      const floor = shotHolds ? Math.max(minPanel, panelHoldMs(panel)) : minPanel;
+      const durationMs = Math.min(maxPanel, Math.max(floor, 450 + reading + 500));
       push({ kind: 'panel', pageId: page.id, panelN: panel.n, box, durationMs, reveals, carried: [...carried] });
       carried.push(...reveals.map((r) => r.lineId));
-    });
+    }
   }
 
-  push({ kind: 'outro', box: FULL, durationMs: opts.outroMs ?? 2200, reveals: [], carried: [] });
+  if (opts.outro !== false) push({ kind: 'outro', box: FULL, durationMs: opts.outroMs ?? 2200, reveals: [], carried: [] });
   return { shots, totalMs: t };
 }
 
@@ -242,8 +302,76 @@ export interface MotionExportResult {
 
 export const MOTION_FPS = 30;
 
-const BG = '#0f0e0c';
-const ACCENT = '#D97757';
+/** The video's two colours: the room behind the art (and every fade) and the paper of the outro's words. */
+export interface MotionPalette {
+  room: string;
+  paper: string;
+}
+
+/**
+ * The design tokens the video is painted with: the reader-room tokens, which index.css keeps identical in both
+ * themes and which no skin restyles (page content, not chrome), so one comic exports the same video for everyone.
+ */
+export const MOTION_COLOR_TOKENS = { room: '--ds-reader-room', paper: '--ds-reader-paper-back' } as const;
+
+/** A `--ds-*` token's value on the document root ('' when there is no document or no stylesheet). */
+export const readCssToken = (name: string): string => {
+  try {
+    if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return '';
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * The palette for one export, read once (frames stay a pure function of time). Without the app's stylesheet (a
+ * test, a bare page) it falls back to the plate palette the title cards are already drawn in.
+ */
+export const motionPalette = (read: (name: string) => string = readCssToken): MotionPalette => ({
+  room: read(MOTION_COLOR_TOKENS.room) || PLATE_COLORS.ink,
+  paper: read(MOTION_COLOR_TOKENS.paper) || PLATE_COLORS.paper
+});
+
+// ── Telemetry (F10): one event per export, never content ────────────────────
+
+export const MOTION_EXPORT_EVENT = 'motion_comic_export';
+
+export type MotionExportOutcome = 'done' | 'failed' | 'cancelled';
+
+/** Where an export got to (a failure's stage says what broke without quoting its message). */
+export type MotionExportStage = 'setup' | 'loading' | 'fonts' | 'encoding' | 'saving' | 'done';
+
+/** Everything the event carries: counts, timings, booleans and fixed enums. No title, line, name, URL or language. */
+export interface MotionExportStats {
+  aspect: MotionAspect;
+  stage: MotionExportStage;
+  engine?: MotionExportResult['engine'];
+  /** Length of the video (ms). */
+  videoMs: number;
+  pages: number;
+  panels: number;
+  /** Pages whose art could not be loaded (count only). */
+  skipped: number;
+  rtl: boolean;
+  overlay: boolean;
+  /** A translated edition was exported. */
+  edition: boolean;
+  outro: boolean;
+  /** A lettering face fell back. */
+  fontFallback: boolean;
+}
+
+/** The telemetry event for one export (pure; `exportMotionComic` sends exactly one, whatever the outcome). */
+export const motionExportEvent = (outcome: MotionExportOutcome, stats: MotionExportStats, elapsedMs: number): TelemetryEventInput => ({
+  eventType: MOTION_EXPORT_EVENT,
+  severity: outcome === 'failed' ? 'warn' : 'info',
+  source: 'comic_studio',
+  message: `Motion comic export ${outcome}`,
+  metadata: { outcome, ...stats, elapsedMs: Math.max(0, Math.round(elapsedMs)) }
+});
+
+const nowMs = (): number => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
 
 /**
  * Draw `text` centred, wrapped to `maxW` with the script-aware wrapper (graphemes, kinsoku, never a
@@ -258,6 +386,35 @@ export const centeredText = (ctx: CanvasRenderingContext2D, text: string, lang: 
 };
 
 export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: MotionExportOptions = {}): Promise<MotionExportResult> {
+  const startedAt = nowMs();
+  const stats: MotionExportStats = {
+    aspect: opts.aspect || '9:16',
+    stage: 'setup',
+    videoMs: 0,
+    pages: 0,
+    panels: 0,
+    skipped: 0,
+    rtl: doc.format?.readingDirection === 'rtl',
+    overlay: doc.format?.lettering === 'overlay',
+    edition: Boolean(opts.lang && !sameLanguage(opts.lang, doc.format?.language || 'en')),
+    outro: opts.timeline?.outro !== false,
+    fontFallback: false
+  };
+  let outcome: MotionExportOutcome = 'failed';
+  try {
+    const result = await renderMotionComic(doc, urlFor, opts, stats);
+    outcome = 'done';
+    return result;
+  } catch (err) {
+    if (opts.signal?.aborted || (err instanceof ExportError && err.message === CANCELLED)) outcome = 'cancelled';
+    throw err;
+  } finally {
+    // Exactly one event per export, sent through the batched telemetry queue (no request of its own).
+    captureEvent(motionExportEvent(outcome, stats, nowMs() - startedAt));
+  }
+}
+
+async function renderMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: MotionExportOptions, stats: MotionExportStats): Promise<MotionExportResult> {
   if (typeof document === 'undefined') throw new ExportError('Video export runs in the browser.');
   const book = localizedFor(doc, opts.lang);
   const size = MOTION_SIZES[opts.aspect || '9:16'];
@@ -273,6 +430,7 @@ export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: Mot
   const planned = buildMotionTimeline(book, opts.timeline);
   const pageShots = planned.shots.filter((s) => s.kind === 'page');
   if (!pageShots.length) throw new ExportError('Nothing to animate yet — draw at least one page first.');
+  stats.stage = 'loading';
 
   // Load art up front (bounded by the comic's size; pages are reused across shots).
   const skipped: string[] = [];
@@ -304,20 +462,30 @@ export async function exportMotionComic(doc: ComicDoc, urlFor: UrlFor, opts: Mot
     }
     // Drop the shots whose art didn't arrive (the back cover keeps its placeholder vignette).
     const timeline = keepShots(planned, (s) => (s.kind === 'cover' ? images.has('cover') : s.kind === 'page' || s.kind === 'panel' ? images.has(s.pageId || '') : true));
-    if (!timeline.shots.some((s) => s.kind === 'page')) {
+    stats.skipped = skipped.length;
+    stats.pages = timeline.shots.filter((s) => s.kind === 'page').length;
+    stats.panels = timeline.shots.filter((s) => s.kind === 'panel').length;
+    stats.videoMs = timeline.totalMs;
+    if (!stats.pages) {
       throw new ExportError(`Couldn’t load any pages for the video.${skipped.length ? ` ${skipped.join('; ')}.` : ''}`);
     }
+    stats.stage = 'fonts';
     const title = book.cover.title || book.brief.title || 'Untitled comic';
     const face = titleFaceFor(lang);
     const fonts = await prepareExportFonts([book], { extra: [{ id: face.id, weight: face.weight, text: title }] });
-    const drawFrame = createFrameDrawer(book, timeline, images, ctx, size, fonts.measure);
+    stats.fontFallback = Boolean(fonts.notice);
+    const drawFrame = createFrameDrawer(book, timeline, images, ctx, size, fonts.measure, motionPalette());
     const suffix = opts.lang && !sameLanguage(opts.lang, doc.format?.language || 'en') ? opts.lang : undefined;
     const stem = `${exportFileStem(book, suffix)}-motion-${(opts.aspect || '9:16').replace(':', 'x')}`;
 
+    stats.stage = 'encoding';
     const encoded = (await encodeWithWebCodecs(canvas, drawFrame, timeline.totalMs, opts)) || (await recordRealtime(canvas, drawFrame, timeline.totalMs, opts));
+    stats.engine = encoded.engine;
     if (!encoded.blob.size) throw new ExportError('The video came out empty. Try again.');
+    stats.stage = 'saving';
     const fileName = `${stem}.${encoded.ext}`;
     (opts.download || downloadBlob)(encoded.blob, fileName);
+    stats.stage = 'done';
     opts.onProgress?.({ done: timeline.totalMs, total: timeline.totalMs, label: 'Done' });
     return { fileName, durationMs: timeline.totalMs, mimeType: encoded.blob.type, skipped, engine: encoded.engine, ...(fonts.notice ? { notice: fonts.notice } : {}) };
   } finally {
@@ -345,9 +513,19 @@ function createFrameDrawer(
   images: Map<string, LoadedImage>,
   ctx: CanvasRenderingContext2D,
   size: { width: number; height: number },
-  measure: Measure
+  measure: Measure,
+  palette: MotionPalette
 ): (ms: number) => void {
   const lang = doc.format.language || 'en';
+  /** The room colour over the whole frame at `alpha` (fades in from the room). */
+  const veil = (alpha: number) => {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, alpha);
+    ctx.fillStyle = palette.room;
+    ctx.fillRect(0, 0, size.width, size.height);
+    ctx.restore();
+  };
   // Plans per page (planned once at the art's own aspect; frames only filter what is revealed).
   const plansByPage = new Map<string, LetterPlan[]>();
   const plansFor = (page: Page, art: LoadedImage): LetterPlan[] => {
@@ -425,7 +603,7 @@ function createFrameDrawer(
   const face = titleFaceFor(lang);
 
   return (ms: number) => {
-    ctx.fillStyle = BG;
+    ctx.fillStyle = palette.room;
     ctx.fillRect(0, 0, size.width, size.height);
     const i = timeline.shots.findIndex((s) => ms >= s.startMs && ms < s.startMs + s.durationMs);
     const index = i === -1 ? timeline.shots.length - 1 : i;
@@ -434,16 +612,17 @@ function createFrameDrawer(
     const progress = local / shot.durationMs;
 
     if (shot.kind === 'outro') {
-      ctx.fillStyle = '#f4f1ea';
+      ctx.fillStyle = palette.paper;
       ctx.font = face.font(Math.round(size.width * 0.07));
       const end = centeredText(ctx, doc.cover.title || doc.brief.title || 'Untitled comic', lang, size.width / 2, size.height * 0.42, size.width * 0.84, size.width * 0.08);
       if ('direction' in ctx) (ctx as CanvasRenderingContext2D & { direction: CanvasDirection }).direction = 'ltr';
-      ctx.fillStyle = ACCENT;
       ctx.font = `600 ${Math.round(size.width * 0.032)}px Inter, system-ui, sans-serif`;
       ctx.fillText('Made with DreamStream Comic Studio', size.width / 2, end + size.width * 0.05);
-      ctx.fillStyle = 'rgba(244,241,234,0.6)';
+      ctx.save();
+      ctx.globalAlpha = 0.6;
       ctx.font = `500 ${Math.round(size.width * 0.026)}px Inter, system-ui, sans-serif`;
       ctx.fillText('dreamstreamstudio.ai', size.width / 2, end + size.width * 0.1);
+      ctx.restore();
       return;
     }
 
@@ -455,10 +634,7 @@ function createFrameDrawer(
       const w = plate.width * s;
       const h = plate.height * s;
       ctx.drawImage(plate, (size.width - w) / 2, (size.height - h) / 2, w, h);
-      if (local < 350) {
-        ctx.fillStyle = `rgba(15,14,12,${1 - local / 350})`;
-        ctx.fillRect(0, 0, size.width, size.height);
-      }
+      if (local < 350) veil(1 - local / 350);
       return;
     }
 
@@ -480,10 +656,7 @@ function createFrameDrawer(
     ctx.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, size.width, size.height);
 
     // Fade in when the image changes (page turn / cover → page 1).
-    if (!prevRect && local < 350) {
-      ctx.fillStyle = `rgba(15,14,12,${1 - local / 350})`;
-      ctx.fillRect(0, 0, size.width, size.height);
-    }
+    if (!prevRect && local < 350) veil(1 - local / 350);
   };
 }
 

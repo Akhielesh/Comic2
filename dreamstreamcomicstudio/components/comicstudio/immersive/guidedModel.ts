@@ -3,11 +3,16 @@
 // Panel boxes come from panelBoxesFor (measured qc.panelBoxes when they match the panel count, else the
 // blueprint estimate), so guided reading is free: no AI call, no new data. Stops follow the page's
 // VISUAL reading order (row bands, right-to-left within a row for manga), which also corrects a
-// drawing whose panels came out in a different arrangement than planned.
+// drawing whose panels came out in a different arrangement than planned. The order itself lives in
+// shared/comic/readingOrder.ts (AV-0), so the motion-comic export and Video mode walk panels exactly
+// as Guided View does; it is re-exported here under its old names.
 
 import type { Box, ComicDoc } from '../../../shared/comic/doc';
 import { panelAtPoint, panelBoxesFor } from '../../../shared/comic/pageGeometry';
+import { readingOrder } from '../../../shared/comic/readingOrder';
 import type { ReaderItem } from '../reader/readerModel';
+
+export { readingOrder, READING_ROW_TOLERANCE as ROW_TOLERANCE } from '../../../shared/comic/readingOrder';
 
 export interface GuidedStop {
   itemIndex: number;
@@ -35,28 +40,10 @@ export interface Camera {
 }
 
 export const FULL_BOX: Box = { x: 0, y: 0, w: 1, h: 1 };
-/** Row-band tolerance as a fraction of the page height. */
-export const ROW_TOLERANCE = 0.08;
 export const GUIDED_MAX_ZOOM = 4;
 export const GUIDED_PAD = 0.05;
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-
-/**
- * Visual reading order of panel boxes: rows by their top edge (a tall panel beside two stacked ones
- * belongs to the first row), left→right within a row for LTR, right→left for RTL.
- */
-export const readingOrder = (boxes: Box[], rtl: boolean): number[] => {
-  const idx = boxes.map((_, i) => i).filter((i) => boxes[i] && boxes[i].w > 0 && boxes[i].h > 0);
-  idx.sort((a, b) => boxes[a].y - boxes[b].y || boxes[a].x - boxes[b].x);
-  const rows: number[][] = [];
-  for (const i of idx) {
-    const row = rows[rows.length - 1];
-    if (row && Math.abs(boxes[i].y - boxes[row[0]].y) <= ROW_TOLERANCE) row.push(i);
-    else rows.push([i]);
-  }
-  return rows.flatMap((row) => row.sort((a, b) => (rtl ? boxes[b].x + boxes[b].w - (boxes[a].x + boxes[a].w) : boxes[a].x - boxes[b].x)));
-};
 
 /** Stops for one reader item: optional whole-page overview, then panels in reading order. */
 export const guidedStops = (doc: ComicDoc, item: ReaderItem | undefined, itemIndex: number, opts: { overview: boolean }): GuidedStop[] => {

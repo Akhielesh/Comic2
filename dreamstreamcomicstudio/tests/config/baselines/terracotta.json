@@ -2,7 +2,7 @@
   "guard": "terracotta",
   "test": "tests/config/terracottaGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts lowers it (see README.md).",
-  "totals": { "#c2643f": 3, "#d97757": 373 },
+  "totals": { "#c2643f": 3, "#d97757": 372 },
   "files": {
     "components/ApiConfiguration.tsx": { "#d97757": 2 },
     "components/ComicReader.tsx": { "#d97757": 2 },
@@ -76,7 +76,6 @@
     "components/comicstudio/conversation/cards/renderTile.tsx": { "#d97757": 3 },
     "components/comicstudio/conversation/panels/StylePanel.tsx": { "#d97757": 8 },
     "components/comicstudio/conversation/ui.tsx": { "#d97757": 7 },
-    "components/comicstudio/export/motionComic.ts": { "#d97757": 1 },
     "components/comicstudio/export/printView.ts": { "#d97757": 1 },
     "components/comicstudio/i18n/GlossaryDrawer.tsx": { "#d97757": 5 },
     "components/comicstudio/i18n/LanguageSwitch.tsx": { "#d97757": 2 },
