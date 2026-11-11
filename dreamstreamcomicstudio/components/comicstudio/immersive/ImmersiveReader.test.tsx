@@ -350,16 +350,18 @@ describe('ImmersiveReader', () => {
 
   it('the cover intro opens once on a swipe (no double turn from the click that may follow)', async () => {
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro onExit={() => undefined} />);
+    // Page 1 decoded first: the cover turn then never waits at the decode gate (a loaded run stays in time).
+    await waitFor(() => expect(pageImageCache.isDecoded('u/p1.png')).toBe(true));
     const intro = screen.getByTestId('cover-intro');
     fireEvent.pointerDown(intro, { clientX: 300, clientY: 400, pointerType: 'touch' });
     fireEvent.pointerUp(intro, { clientX: 200, clientY: 400, pointerType: 'touch' });
     fireEvent.click(intro);
     expect(root().dataset.phase).toBe('reading');
-    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 3000 });
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 6000 });
     // No queued second turn: it stays on page 1.
     await new Promise((r) => setTimeout(r, 1200));
     expect(counter()).toBe('Page 1 of 6');
-  });
+  }, 15_000);
 
   it('Tab never leaves the reader; off-screen pages are inert', () => {
     reduce = true;

@@ -199,6 +199,29 @@ describe('N1 · every focus ring and progress fill in the reader files resolves 
     expect(fails).toEqual([]);
   });
 
+  it('the fit:width scroller ring (inset, so it lies on the page — the page is the stage width) is two-tone: ≥ 3:1 on white paper, using its offset band as the neighbour', () => {
+    const WHITE = resolveColor('#ffffff');
+    let rings = 0;
+    for (const file of ['BookStage.tsx']) {
+      const src = readFileSync(path.join(DIR, file), 'utf8');
+      for (const cls of src.match(/["'][^"'\n]*ring-inset[^"'\n]*["']/g) ?? []) {
+        rings += 1;
+        const ring = /focus-visible:ring-\[var\((--[\w-]+)\)\]/.exec(cls)?.[1];
+        const offset = /ring-offset-\[var\((--[\w-]+)\)\]/.exec(cls)?.[1];
+        expect(ring, `${file}: an inset ring names its colour`).toBeTruthy();
+        expect(offset, `${file}: an inset ring carries a ring-offset band (it lies on the page)`).toBeTruthy();
+        expect(/ring-offset-[1-9]/.test(cls), `${file}: the offset band has a width`).toBe(true);
+        for (const [ctx, chain] of Object.entries(CONTEXTS)) {
+          const band = colour(chain, offset!);
+          expect(ratio(colour(chain, ring!), band), `${file} ${ring} beside ${offset} in ${ctx}`).toBeGreaterThanOrEqual(3);
+          expect(ratio(band, WHITE), `${file} ${offset} on white paper in ${ctx}`).toBeGreaterThanOrEqual(3);
+          expect(ratio(band, colour(chain, '--ds-reader-paper-back')), `${file} ${offset} on the reader paper in ${ctx}`).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+    expect(rings, 'BookStage draws the fit:width scroller ring inset').toBeGreaterThan(0);
+  });
+
   it('the End card (a page): its focus ring is ≥ 3:1 on the paper in every Atlas context', () => {
     const src = readFileSync(path.join(DIR, 'EndCard.tsx'), 'utf8');
     const vars = [...new Set([...src.matchAll(/focus-visible:ring-\[var\((--[\w-]+)\)\]/g)].map((m) => m[1]))];
@@ -209,6 +232,17 @@ describe('N1 · every focus ring and progress fill in the reader files resolves 
         expect(r, `EndCard ${v} on the paper in ${ctx}`).toBeGreaterThanOrEqual(3);
       }
     }
+  });
+
+  it('no literal colour hides behind a token: no var(--…, #… / rgba(…)) fallback in the reader files, and a slot paints no white (paper only)', () => {
+    const OWNED = ['flipPhysics.ts', 'leafEngine.ts', 'GuidedCamera.tsx', 'BookStage.tsx', 'ReaderSlot.tsx', 'pageImageCache.ts', 'ImmersiveReader.tsx', 'ReaderHud.tsx', 'CoverIntro.tsx', 'PageScrubber.tsx', 'ReaderSettingsSheet.tsx', 'EndCard.tsx'];
+    const fallbacks: string[] = [];
+    for (const file of OWNED) {
+      const src = readFileSync(path.join(DIR, file), 'utf8');
+      for (const m of src.matchAll(/var\(--[\w-]+,\s*(?:#[0-9a-f]{3,8}|rgba?\()/gi)) fallbacks.push(`${file}: ${m[0]}`);
+    }
+    expect(fallbacks).toEqual([]);
+    expect(readFileSync(path.join(DIR, 'ReaderSlot.tsx'), 'utf8')).not.toMatch(/\bbg-white\b/);
   });
 
   it('no reader file spells a hue for the sheet toggle (the terracotta switch track is gone); the knob reads on the track', () => {

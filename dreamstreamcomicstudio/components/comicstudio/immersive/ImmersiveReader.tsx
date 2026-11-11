@@ -31,12 +31,12 @@ import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
 import { EndCard } from './EndCard';
 import { guidedStops, stopAtPoint, type GuidedStop } from './guidedModel';
-import { byteBudgetFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
+import { cacheLimitsFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
 import { panelTranscript, pageTranscript } from './pageTranscript';
 import { closePaperSound, primePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
 import { bookGeometry, bookViews, decideLayout, firstItemOfView, letterbox, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
-import { slotImageSource, slotStandIn } from './ReaderSlot';
+import { paperTone, slotImageSource, slotStandIn } from './ReaderSlot';
 import './readerDesigns.css';
 import { initialReaderState, readerReducer, escapeTarget, type MachineCtx, type ReaderEvent, type ReaderState } from './readerMachine';
 import {
@@ -113,11 +113,13 @@ export interface PreloadAsk {
  * +4…+5 only their stand-ins at `idle`. Save-Data or a 2G link: stand-ins for +1…+2 only, nothing else.
  * Spreads count both pages of a view. The mounted views (current ±1) also ask for themselves; asking twice
  * is free (the cache is keyed by path), and the higher priority wins. `standIns: false` (the scrolling
- * column, which loads its own pages ahead and shows no stand-ins) asks for pages only.
+ * column, which loads its own pages ahead and shows no stand-ins) asks for pages only. `fast` (a measured
+ * fast link, connectionHints): no stand-ins at all — the pages themselves arrive in time, and a page that has
+ * not by the time it is on screen fetches its own stand-in then (PROGRAM3: stand-ins on slow links only).
  */
-export const preloadPlan = (views: BookView[], view: number, dir: 1 | -1, polite: boolean, opts: { standIns?: boolean } = {}): PreloadAsk[] => {
+export const preloadPlan = (views: BookView[], view: number, dir: 1 | -1, polite: boolean, opts: { standIns?: boolean; fast?: boolean } = {}): PreloadAsk[] => {
   const out: PreloadAsk[] = [];
-  const standIns = opts.standIns !== false;
+  const standIns = opts.standIns !== false && !(opts.fast && !polite);
   const add = (offset: number, kind: PreloadAsk['kind'], prio: CachePriority) => {
     if (kind === 'standIn' && !standIns) return;
     for (const item of views[view + offset * dir]?.items ?? []) out.push({ item, kind, prio });
@@ -148,6 +150,28 @@ export const retainedPaths = (views: BookView[], view: number, coarse: boolean, 
     .flatMap((v) => v.items)
     .flatMap((i) => [sourceOf(i)?.path, standInOf(i)?.path])
     .filter((p): p is string => !!p);
+};
+
+/** A cached palette for an asset (its original or any variant the cache holds). */
+const paletteOfAsset = (a: AssetRef | undefined): Palette | null => {
+  if (!a) return null;
+  for (const p of [a.path, ...(a.variants || []).map((v) => v.path)]) {
+    const e = pageImageCache.get(p);
+    if (e?.palette) return e.palette;
+  }
+  return null;
+};
+
+/**
+ * The palette nearest the current view (reader.md §8.1, the toned paper): the view itself, then −1, +1, −2, +2
+ * (both pages of a spread averaged), or null when none of them has been decoded yet.
+ */
+export const nearestPalette = (views: BookView[], view: number, paletteOf: (item: number) => Palette | null | undefined): Palette | null => {
+  for (const off of [0, -1, 1, -2, 2]) {
+    const p = averagePalette((views[view + off]?.items ?? []).map(paletteOf));
+    if (p) return p;
+  }
+  return null;
 };
 
 const HUD_IDLE_MS = 2500;
@@ -393,6 +417,14 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     return averagePalette(ps);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eff.ambient, low.lowPower, views, view, items, pageImageCache.snapshot()]);
+  // A page with no picture yet (an old page: no stand-in variant) stands on the paper toned by the nearest
+  // page whose palette is cached (reader.md §8.1) — never white. Follows the ambient switch, not low power
+  // (a flat colour costs nothing to paint).
+  const standInPaper = useMemo(
+    () => (eff.ambient ? paperTone(nearestPalette(views, view, (i) => paletteOfAsset(items[i]?.asset))) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [eff.ambient, views, view, items, pageImageCache.snapshot()]
+  );
   // iPhone browsers have no element full screen: the reading room fills the viewport, and says once, honestly, what
   // does go edge-to-edge (the mobile-reading hotfix's note, shown as this reader's own toast).
   const onFullscreenFallback = useCallback(() => {
@@ -744,8 +776,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
 
   // ── Slot image options ────────────────────────────────────────────────────
   const img = useMemo(
-    () => ({ urlFor, dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, saveData: ff.saveData || net.saveData }),
-    [urlFor, ff.saveData, net.saveData]
+    () => ({ urlFor, dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, saveData: ff.saveData || net.saveData, fast: net.fast }),
+    [urlFor, ff.saveData, net.saveData, net.fast]
   );
   // The page box the stage draws (same geometry as BookStage / the webtoon column), so preloads and
   // the retained set name the exact file (variant) each page will show.
@@ -771,25 +803,41 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     },
     [items, img, sourceOf]
   );
-  // The cache's byte budget follows the device (96 MB desktop, 48 MB phones, 24 MB on 2 GB devices).
-  useEffect(() => pageImageCache.setByteBudget(byteBudgetFor({ coarse: ff.coarse, deviceMemory: deviceMemoryGb() })), [ff.coarse]);
+  // The cache's limits follow the device (blob bytes 96 MB desktop, 48 MB phones, 24 MB on 2 GB devices; entries
+  // 48 / 16 / 12). When the reader closes, its window lets go and the cache trims back to them (each page's
+  // entry leaves as its slot unmounts) — a phone does not carry the whole comic for the rest of the session.
+  const limits = useMemo(() => cacheLimitsFor({ coarse: ff.coarse, deviceMemory: deviceMemoryGb() }), [ff.coarse]);
+  useEffect(() => {
+    pageImageCache.setByteBudget(limits.bytes);
+    pageImageCache.setEntryCap(limits.entries);
+    return () => {
+      pageImageCache.setEntryCap(limits.entries);
+      pageImageCache.retain([]);
+    };
+  }, [limits]);
   // Reading direction of travel: preloads lean the way you are turning (back through the book → behind you).
   const travel = useRef<{ view: number; dir: 1 | -1 }>({ view, dir: 1 });
   if (travel.current.view !== view) travel.current = { view, dir: view > travel.current.view ? 1 : -1 };
   const dir = travel.current.dir;
   // Direction-aware preloading (never a withheld page: it has no source and no stand-in).
   useEffect(() => {
-    pageImageCache.retain(retainedPaths(views, view, ff.coarse, sourceOf, standInOf));
+    const keep = retainedPaths(views, view, ff.coarse, sourceOf, standInOf);
     const polite = net.saveData || net.slow || ff.saveData;
-    const controller = new AbortController();
-    for (const ask of preloadPlan(views, view, dir, polite, { standIns: state.layout !== 'scroll' })) {
+    const loads: { path: string; url: string; prio: CachePriority }[] = [];
+    for (const ask of preloadPlan(views, view, dir, polite, { standIns: state.layout !== 'scroll', fast: net.fast })) {
       const src = ask.kind === 'target' ? sourceOf(ask.item) : standInOf(ask.item);
       // A stand-in is only worth its bytes while the page itself is not decoded.
       if (ask.kind === 'standIn' && pageImageCache.isDecoded(sourceOf(ask.item)?.path)) continue;
-      if (src?.url) void pageImageCache.ensure(src.path, src.url, ask.prio, ask.prio === 'idle' ? controller.signal : undefined);
+      if (src?.url) loads.push({ path: src.path, url: src.url, prio: ask.prio });
     }
+    // The entry cap never drops below what this view keeps warm (a touch tablet's spreads: ±1 views of two
+    // pages plus their preloads), so a preload is never evicted before it is shown.
+    pageImageCache.setEntryCap(Math.max(limits.entries, new Set([...keep, ...loads.map((l) => l.path)]).size));
+    pageImageCache.retain(keep);
+    const controller = new AbortController();
+    for (const l of loads) void pageImageCache.ensure(l.path, l.url, l.prio, l.prio === 'idle' ? controller.signal : undefined);
     return () => controller.abort();
-  }, [view, views, dir, sourceOf, standInOf, net.saveData, net.slow, ff.saveData, ff.coarse, state.layout]);
+  }, [view, views, dir, sourceOf, standInOf, net.saveData, net.slow, net.fast, ff.saveData, ff.coarse, state.layout, limits]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const title = localized.cover.title || localized.brief.title || 'Untitled comic';
@@ -928,6 +976,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               onImageError={props.onImageError}
               onExpired={props.onImageError}
               warmViews={resume ? [resume.view] : undefined}
+              paperTone={standInPaper}
             />
           </div>
         )}

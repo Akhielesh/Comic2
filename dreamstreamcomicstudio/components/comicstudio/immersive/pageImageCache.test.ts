@@ -5,8 +5,13 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import {
   byteBudgetFor,
   CACHE_BYTE_BUDGET,
+  CACHE_ENTRY_CAP,
+  cacheLimitsFor,
+  connectionHints,
+  entryCapFor,
   holdUntilDecoded,
   PageImageCache,
+  pageImageCacheForDevice,
   pickVariant,
   standInVariant,
   useCachedImage,
@@ -341,6 +346,98 @@ describe('PageImageCache · byte budget (blob bytes, not a count)', () => {
   });
 });
 
+describe('PageImageCache · device limits (V1 C7/C8: blob bytes are small, so phones are bounded by entries)', () => {
+  const realMatchMedia = window.matchMedia;
+  const coarse = (on: boolean) => {
+    window.matchMedia = ((q: string) => ({ matches: on && q.includes('pointer: coarse'), media: q, addEventListener: () => undefined, removeEventListener: () => undefined })) as unknown as typeof window.matchMedia;
+  };
+
+  it('the entry cap follows the device like the byte budget: 12 at ≤ 2 GB, 16 on phones or ≤ 4 GB, else 48', () => {
+    expect(entryCapFor({ deviceMemory: 2 })).toBe(12);
+    expect(entryCapFor({ coarse: true })).toBe(16);
+    expect(entryCapFor({ deviceMemory: 4 })).toBe(16);
+    expect(entryCapFor({ coarse: true, deviceMemory: 1 })).toBe(12);
+    expect(entryCapFor({ deviceMemory: 8 })).toBe(48);
+    expect(entryCapFor({})).toBe(48);
+    expect(cacheLimitsFor({ coarse: true })).toEqual({ bytes: CACHE_BYTE_BUDGET.phone, entries: CACHE_ENTRY_CAP.phone });
+  });
+
+  it('a cache made on a phone (coarse pointer) holds 20 × 0.6 MB pages to its 16-entry cap, never touching pages on screen', async () => {
+    coarse(true);
+    try {
+      const c = pageImageCacheForDevice(sizedDeps(() => 0.6));
+      expect(c.entryCap()).toBe(16);
+      expect(c.byteBudget()).toBe(CACHE_BYTE_BUDGET.phone);
+      const shown = [c.acquire('p0'), c.acquire('p1')];
+      for (let i = 0; i < 20; i += 1) await c.ensure(`p${i}`, `U${i}`, 'now');
+      // 12 MB is far under 48 MB: the cap is what bounds it (it kept all 20 before).
+      expect(c.size()).toBe(16);
+      expect(c.get('p0')?.state).toBe('ready');
+      expect(c.get('p1')?.state).toBe('ready');
+      for (let i = 2; i < 6; i += 1) expect(c.get(`p${i}`), `p${i}`).toBeUndefined();
+      expect(c.get('p19')?.state).toBe('ready');
+      shown.forEach((r) => r());
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
+  it('a desktop cache keeps the desktop limits; a browser without matchMedia does too', () => {
+    coarse(false);
+    try {
+      expect(pageImageCacheForDevice(deps()).entryCap()).toBe(48);
+      window.matchMedia = undefined as unknown as typeof window.matchMedia;
+      expect(pageImageCacheForDevice(deps()).entryCap()).toBe(48);
+      expect(pageImageCacheForDevice(deps()).byteBudget()).toBe(CACHE_BYTE_BUDGET.desktop);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
+  it('a lower entry cap evicts at once, least recently used first, never what is retained', async () => {
+    const c = new PageImageCache(sizedDeps(() => 0.1));
+    for (let i = 0; i < 10; i += 1) await c.ensure(`p${i}`, `U${i}`, 'now');
+    c.retain(['p0']);
+    c.setEntryCap(4);
+    expect(c.size()).toBe(4);
+    expect(c.get('p0')?.state).toBe('ready');
+    expect(['p7', 'p8', 'p9'].every((p) => c.get(p)?.state === 'ready')).toBe(true);
+  });
+
+  it('a page that lets go of its entry while the cache is over its limits lets it go at once (a closed reader trims back)', async () => {
+    const c = new PageImageCache(sizedDeps(() => 0.1), 2);
+    const releases = ['a', 'b', 'c', 'd'].map((p) => c.acquire(p));
+    for (const p of ['a', 'b', 'c', 'd']) await c.ensure(p, p.toUpperCase(), 'now');
+    expect(c.size()).toBe(4); // all on screen: over the cap, nothing may go
+    c.retain([]);
+    releases.forEach((r) => r());
+    expect(c.size()).toBeLessThanOrEqual(2);
+    expect(c.get('d')?.state).toBe('ready');
+  });
+});
+
+describe('connectionHints', () => {
+  const withConnection = (conn: unknown, fn: () => void) => {
+    const had = Object.getOwnPropertyDescriptor(navigator, 'connection');
+    Object.defineProperty(navigator, 'connection', { value: conn, configurable: true });
+    try {
+      fn();
+    } finally {
+      if (had) Object.defineProperty(navigator, 'connection', had);
+      else delete (navigator as unknown as { connection?: unknown }).connection;
+    }
+  };
+  it('fast = a 4g link at ≥ 5 Mbps (or no downlink said); slow = 2g; unknown = neither', () => {
+    withConnection({ effectiveType: '4g', downlink: 10 }, () => expect(connectionHints()).toEqual({ saveData: false, slow: false, fast: true }));
+    withConnection({ effectiveType: '4g' }, () => expect(connectionHints().fast).toBe(true));
+    withConnection({ effectiveType: '4g', downlink: 1.6 }, () => expect(connectionHints().fast).toBe(false));
+    withConnection({ effectiveType: '3g', downlink: 8 }, () => expect(connectionHints().fast).toBe(false));
+    withConnection({ effectiveType: '4g', downlink: 10, saveData: true }, () => expect(connectionHints()).toEqual({ saveData: true, slow: false, fast: false }));
+    withConnection({ effectiveType: '2g' }, () => expect(connectionHints()).toEqual({ saveData: false, slow: true, fast: false }));
+    withConnection(undefined, () => expect(connectionHints()).toEqual({ saveData: false, slow: false, fast: false }));
+  });
+});
+
 describe('PageImageCache · isDecoded', () => {
   it('is true only once a path is decoded and ready (synchronous)', async () => {
     let open!: () => void;
@@ -369,9 +466,16 @@ describe('stand-ins', () => {
 describe('holdUntilDecoded (the turn gate)', () => {
   const fakeCache = () => {
     const ready = new Set<string>();
+    const failed = new Set<string>();
     const subs = new Set<() => void>();
     return {
       ready,
+      failed,
+      get: (p: string) => (ready.has(p) ? ({ state: 'ready' } as never) : failed.has(p) ? ({ state: 'error' } as never) : undefined),
+      fail(p: string) {
+        failed.add(p);
+        for (const fn of [...subs]) fn();
+      },
       isDecoded: (p: string | undefined) => !!p && ready.has(p),
       subscribe: (fn: () => void) => {
         subs.add(fn);
@@ -414,6 +518,29 @@ describe('holdUntilDecoded (the turn gate)', () => {
       expect(late).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
       expect(late).toHaveBeenCalledWith(true);
+      expect(c.subs.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never waits for a page whose load already failed (it will not decode): at once, or the moment it fails', () => {
+    vi.useFakeTimers();
+    try {
+      const c = fakeCache();
+      c.failed.add('broken');
+      const go = vi.fn();
+      holdUntilDecoded(c, [['broken']], 300, go);
+      expect(go).toHaveBeenCalledWith(false);
+
+      const later = vi.fn();
+      holdUntilDecoded(c, [['ok'], ['flaky', 'flaky-orig']], 300, later);
+      c.decode('ok');
+      expect(later).not.toHaveBeenCalled();
+      c.fail('flaky');
+      expect(later).toHaveBeenCalledWith(true);
+      vi.advanceTimersByTime(50);
+      expect(later).toHaveBeenCalledTimes(1);
       expect(c.subs.size).toBe(0);
     } finally {
       vi.useRealTimers();

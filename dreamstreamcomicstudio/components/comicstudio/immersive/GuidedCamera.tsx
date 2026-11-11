@@ -190,7 +190,7 @@ export const Spotlight = React.forwardRef<HTMLDivElement, { reduced: boolean }>(
         key={side}
         data-shutter={side}
         className="absolute inset-0"
-        style={{ transformOrigin: '0 0', transform: PARKED[side], background: 'var(--ds-reader-spot-fill, rgba(10, 9, 8, 0.78))' }}
+        style={{ transformOrigin: '0 0', transform: PARKED[side], background: 'var(--ds-reader-spot-fill)' }}
       />
     ))}
   </div>

@@ -13,6 +13,7 @@ import { isWithheld, type ReaderItem } from '../reader/readerModel';
 import { BAND_REACH } from './flipGeometry';
 import { letterbox, type SlotContent, type SlotSide } from './readerLayout';
 import { pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
+import type { Palette } from './ambient';
 
 export const CURL_GRADIENT =
   'linear-gradient(to right, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.10) 3%, rgba(255,255,255,0.16) 7%, rgba(0,0,0,0.06) 14%, rgba(0,0,0,0) 32%)';
@@ -36,6 +37,11 @@ export interface SlotImage {
   saveData: boolean;
   /** Use the full image (guided zoom > 1.6). */
   original: boolean;
+  /**
+   * The link is measured fast (connectionHints): a page that is not on screen yet never fetches its stand-in
+   * (its page arrives first); one on screen (`now`) still does while its page is not decoded.
+   */
+  fast?: boolean;
 }
 
 /**
@@ -67,8 +73,8 @@ export const slotStandIn = (item: ReaderItem, img: Pick<SlotImage, 'urlFor'>, so
  * The page image for an item, through the shared cache (variant-aware, decoded before it shows). A slot
  * shows the first decoded of (reader.md §8.1): the source it wants → the original, if already cached →
  * the fit-width variant, if already cached (guided zoom asks for the original; never blank meanwhile) →
- * the stand-in, which is fetched only while none of those is ready. `standIn` says the stand-in is what
- * shows (the page cross-fades when the real image lands).
+ * the stand-in, which is fetched only while none of those is ready (on a fast link, only once the page is on
+ * screen). `standIn` says the stand-in is what shows (the page cross-fades when the real image lands).
  */
 export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img: SlotImage, prio: CachePriority) => {
   const withheld = !!item && isWithheld(item);
@@ -83,7 +89,8 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset.path ? fit.path : undefined, undefined, prio);
   const sharp = cached.src || fallback.src || fitImage.src;
   const standIn = item && !withheld && !sharp ? slotStandIn(item, img, path) : undefined;
-  const low = useCachedImage(standIn?.path, standIn?.url, prio);
+  // A cached stand-in always shows; a fast link fetches one only for the page on screen.
+  const low = useCachedImage(standIn?.path, img.fast && prio !== 'now' ? undefined : standIn?.url, prio);
   const showStandIn = !sharp && !!low.src;
   return {
     src: sharp || low.src,
@@ -110,10 +117,27 @@ export const useStandInSwap = (src: string | undefined, standIn: boolean, reduce
     last.current = { src, standIn };
     if (reduced || !prev.standIn || standIn || !src || !prev.src || prev.src === src) return;
     setUnder(prev.src);
+  }, [src, standIn, reduced, ms]);
+  // The underlay leaves once the fade is over. Its own effect, keyed on the underlay: a source that changes
+  // again inside the window (stand-in → cached fit variant → original in a guided close-up) never strands it.
+  React.useEffect(() => {
+    if (!under) return;
     const t = setTimeout(() => setUnder(undefined), ms + 40);
     return () => clearTimeout(t);
-  }, [src, standIn, reduced, ms]);
+  }, [under, ms]);
   return under;
+};
+
+/**
+ * The paper a page with no picture yet stands on (reader.md §8.1: "the paper colour plus the cached ambient
+ * palette tone, never white"): the reader's paper with a faint wash of a neighbouring page's dominant colour
+ * (a plain layer over the paper token — no colour-mix, so every browser paints it), or the plain paper.
+ */
+export const PAPER_TONE_ALPHA = 0.14;
+export const paperTone = (p?: Palette | null): string => {
+  if (!p || p.neutral) return 'var(--ds-reader-paper-back)';
+  const c = `rgba(${p.dominant.r}, ${p.dominant.g}, ${p.dominant.b}, ${PAPER_TONE_ALPHA})`;
+  return `linear-gradient(${c}, ${c}), var(--ds-reader-paper-back)`;
 };
 
 /** Fade the page's own image inside `box` in over `ms` (WAAPI: opacity only, nothing per frame from React). */
@@ -150,9 +174,14 @@ export interface SlotContentProps {
   reduced?: boolean;
   /** The stand-in → page cross-fade (ms; the reader's --ds-reader-standin-swap). */
   swapMs?: number;
+  /**
+   * What a page with no picture yet shows (no stand-in variant — old pages — or nothing decoded): `paperTone`
+   * of a neighbouring page's palette. Defaults to the plain paper; never white.
+   */
+  tone?: string;
 }
 
-const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, item, width, height, contentAspect, img, prio, paper, letteringAriaHidden, visibleLineIds, onImageError, onExpired, reduced, swapMs = 120 }) => {
+const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, item, width, height, contentAspect, img, prio, paper, letteringAriaHidden, visibleLineIds, onImageError, onExpired, reduced, swapMs = 120, tone }) => {
   const box = letterbox(width, height, contentAspect);
   const image = useSlotImage(item, box.w, img, prio);
   React.useEffect(() => {
@@ -164,6 +193,8 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
   React.useLayoutEffect(() => {
     if (under) fadeInImage(artRef.current, swapMs);
   }, [under, swapMs]);
+  // Nothing to show yet (an old page with no stand-in, still loading): the toned paper, never white.
+  const bare = !image.src && !image.withheld ? tone ?? 'var(--ds-reader-paper-back)' : undefined;
   const veil = (child: React.ReactNode) => (
     <SafetyVeil asset={item.asset} rating={PLATFORM_CEILING}>
       {child}
@@ -178,7 +209,7 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
     >
       {under && (
         // The stand-in the page is fading in over (the page's own background is see-through meanwhile).
-        <div aria-hidden className="absolute inset-0 bg-white" data-testid="standin-under">
+        <div aria-hidden className="absolute inset-0 bg-[var(--ds-reader-paper-back)]" data-testid="standin-under">
           <img src={under} alt="" draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" />
         </div>
       )}
@@ -196,11 +227,11 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 visibleLineIds={visibleLineIds}
                 paper={paper}
                 onImageError={onImageError}
-                style={under ? { width: '100%', height: '100%', background: 'transparent' } : { width: '100%', height: '100%' }}
+                style={under ? { width: '100%', height: '100%', background: 'transparent' } : bare ? { width: '100%', height: '100%', background: bare } : { width: '100%', height: '100%' }}
               />
             )
           : veil(
-              <div className={under ? 'relative h-full w-full' : 'relative h-full w-full bg-white'}>
+              <div className={under ? 'relative h-full w-full' : 'relative h-full w-full bg-[var(--ds-reader-paper-back)]'} style={bare ? { background: bare } : undefined} data-testid="reader-cover">
                 {image.src ? (
                   <img src={image.src} alt={`Cover of ${doc.brief.title}`} draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" onError={onImageError} />
                 ) : (
