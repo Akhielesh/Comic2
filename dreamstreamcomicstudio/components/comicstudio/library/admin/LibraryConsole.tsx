@@ -143,19 +143,32 @@ const keyChip = (manifest: LibraryManifestView): { text: string; tone: string } 
 
 const clock = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-/** "This month $3.10 of $20.00 · OpenRouter limit $35.00, $31.90 left (checked Nov 5, 10:02)". */
+/**
+ * "This month $3.10 of $20.00 · OpenRouter limit $35.00, $31.90 left (checked Nov 5, 10:02)". A key with no limit
+ * of its own but a workspace or member budget that blocks first names the budget, not a limit it doesn't have.
+ */
 const billingLine = (b: LibraryBillingView): string[] => {
   const parts = [typeof b.monthSpentUsd === 'number' ? `This month ${usd(b.monthSpentUsd)} of ${usd(b.monthCapUsd)}` : `Monthly cap ${usd(b.monthCapUsd)} (this month's spend couldn't be read)`];
   if (typeof b.checkedAt === 'number') {
+    const noLimit = b.limitUsd === null || b.limitUsd === undefined;
+    const left = typeof b.remainingUsd === 'number' ? b.remainingUsd : null;
     parts.push(
-      b.limitUsd === null && (b.remainingUsd === null || b.remainingUsd === undefined)
+      noLimit && left === null
         ? `No OpenRouter limit on the key (checked ${clock(b.checkedAt)})`
-        : `OpenRouter limit ${b.limitUsd === null || b.limitUsd === undefined ? 'none' : usd(b.limitUsd)}, ${usd(b.remainingUsd ?? 0)} left (checked ${clock(b.checkedAt)})`
+        : noLimit
+          ? `OpenRouter budget: ${usd(left ?? 0)} left (checked ${clock(b.checkedAt)})`
+          : `OpenRouter limit ${usd(b.limitUsd as number)}, ${usd(left ?? 0)} left (checked ${clock(b.checkedAt)})`
     );
   } else if (b.key) {
     parts.push('OpenRouter limit: checked when a build starts');
   }
   return parts;
+};
+
+/** A start's pass-with-a-warning (an unlimited key: only the app cap applies), from servers that send one. */
+const startWarning = (out: unknown): string | null => {
+  const w = (out as { warning?: unknown } | null | undefined)?.warning;
+  return typeof w === 'string' && w.trim() ? w.trim().slice(0, 400) : null;
 };
 
 /** Cancellable wait (the drive loop stops at once on Pause or unmount). */
@@ -273,7 +286,9 @@ export const LibraryConsole: React.FC = () => {
             if (!mounted.current || gen !== driveGen.current) return;
             // Bad input, auth, missing key/tables: stop and say why. Network blips: back off and resume.
             if ((status >= 400 && status < 500 && status !== 408 && status !== 429) || status === 503 || failures >= 5) {
-              setNotice({ tone: 'warn', text: `${errText(err)} The build is paused; Resume continues where it stopped.` });
+              // 409: the build can't continue as it is (the server now spends on another key); its message says to
+              // cancel and start again, so don't also promise that Resume continues it.
+              setNotice({ tone: 'warn', text: status === 409 ? errText(err) : `${errText(err)} The build is paused; Resume continues where it stopped.` });
               break;
             }
             await wait(Math.min(30_000, 3000 * failures), stop);
@@ -298,7 +313,8 @@ export const LibraryConsole: React.FC = () => {
       if (!mounted.current) return;
       setConfirming(false);
       setQuote(out.quote);
-      setNotice({ tone: 'ok', text: out.message });
+      // A pass with a warning is shown as a warning (the message already ends with it), never as a green check.
+      setNotice({ tone: startWarning(out) ? 'warn' : 'ok', text: out.message });
       if (out.run) {
         setRun(out.run);
         setSelected(new Set());
@@ -333,7 +349,8 @@ export const LibraryConsole: React.FC = () => {
     try {
       const out = await fn();
       if (!mounted.current) return;
-      setNotice({ tone: 'ok', text: ok });
+      const warning = startWarning(out);
+      setNotice(warning ? { tone: 'warn', text: `${ok} ${warning}` } : { tone: 'ok', text: ok });
       const started = out as { run?: LibraryRunView | null; message?: string } | undefined;
       if (started && 'run' in (started as object) && started.run) {
         setRun(started.run);
@@ -481,6 +498,7 @@ export const LibraryConsole: React.FC = () => {
       {notice && (
         <div
           role="status"
+          data-tone={notice.tone}
           className={cx(
             'flex items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] [overflow-wrap:anywhere]',
             notice.tone === 'ok' ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/35 bg-amber-500/10'
@@ -796,7 +814,7 @@ const AssetDrawer: React.FC<{
       )}
       <div className="mt-3 space-y-2">
         <label className="block text-[12px] text-[var(--ds-muted)]">
-          Art-director note (optional, for Regenerate or Reject)
+          Art-director note (optional; a Regenerate note becomes part of the published prompt)
           <textarea
             value={note}
             maxLength={300}
