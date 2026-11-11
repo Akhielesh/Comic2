@@ -13,8 +13,12 @@
 //                                             numbers, and the rubric checks only eyes can judge (C2, C4, C5, C10)
 //
 //   node scripts/design/declutter-shots.mjs [--wave s2] [--out <dir>] [--previous <dir of the last wave>]
-//        [--no-build | --dist <built QA folder>] [--only studio-chat,reader] [--view phone|desk] [--theme light|dark]
-//        [--no-app] [--no-transcript] [--frames 30] [--report <clutter-report.json>]
+//        [--no-build | --dist <built QA folder>] [--only studio-chat,app-recipes,transcript] [--view phone|desk|narrow]
+//        [--theme light|dark] [--no-app] [--no-transcript] [--frames 30] [--report <clutter-report.json>]
+//
+// --only takes scene ids (DECLUTTER_SCENES), `app-<id>` and `transcript`; an unknown value stops the run. --view
+// defaults to the two shot sizes (phone, desk); `narrow` (320×640, light) is measured by the ratchet and shot only
+// when asked for.
 //
 // Default <out>: <QA_ARTIFACTS>/declutter/<wave> (QA_ARTIFACTS defaults to node_modules/.cache/comic-qa): the shots
 // are CI artifacts, never committed. Default <wave>: the short commit.
@@ -57,6 +61,30 @@ export const transcriptOffsets = (scrollHeight, clientHeight, max = 30) => {
   return out.slice(0, Math.max(1, max));
 };
 
+/**
+ * What one run shoots. `only` (the --only values): DECLUTTER_SCENES ids, `app-<id>` (an app scene; known only once the
+ * app index opens) and `transcript`; empty means everything. `app` / `transcript` false: --no-app / --no-transcript.
+ * Throws on an unknown value or when nothing is left to shoot, so a typo never yields an empty sheet.
+ */
+export const planOnly = (only, sceneIds, { app = true, transcript = true } = {}) => {
+  const ids = [...sceneIds];
+  if (!only.length) return { scenes: ids, app, appIds: null, transcript };
+  const unknown = only.filter((o) => !ids.includes(o) && o !== 'transcript' && !/^app-[a-z0-9][a-z0-9-]*$/.test(o));
+  if (unknown.length) throw new Error(`--only: no scene ${unknown.join(', ')} (one of ${ids.join(', ')}, app-<id>, transcript)`);
+  const appIds = only.filter((o) => o.startsWith('app-')).map((o) => o.slice(4));
+  const plan = { scenes: ids.filter((id) => only.includes(id)), app: app && appIds.length > 0, appIds, transcript: transcript && only.includes('transcript') };
+  if (!plan.scenes.length && !plan.app && !plan.transcript) throw new Error(`--only ${only.join(',')}: nothing left to shoot (--no-app / --no-transcript)`);
+  return plan;
+};
+
+/** The views and themes to shoot: the shot sizes by default (`shots`), or the one --view names; --theme narrows. */
+export const planViews = (views, { view = null, theme = null } = {}) => {
+  const picked = views.filter((v) => (view ? v.id === view : v.shots)).map((v) => ({ view: v, themes: v.themes.filter((t) => !theme || t === theme) }));
+  if (!picked.length) throw new Error(`--view is one of ${views.map((v) => v.id).join('|')}`);
+  if (picked.every((p) => !p.themes.length)) throw new Error(`--theme ${theme}: the ${picked.map((p) => p.view.id).join('/')} view is measured in ${[...new Set(picked.flatMap((p) => p.view.themes))].join('|')}`);
+  return picked.filter((p) => p.themes.length);
+};
+
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** The rubric checks only a reviewer's eyes can judge on these shots (clean-and-smooth.md §2). */
@@ -79,13 +107,14 @@ export const reviewRows = ({ shots, report = {}, previous = null, baseline = {},
     const changes = metrics
       .filter((m) => now && was && (now[m] ?? 0) !== (was[m] ?? 0))
       .map((m) => ({ metric: m, before: was[m] ?? 0, now: now[m] ?? 0 }));
-    return { ...s, counts: now, detail: report[s.key]?.detail ?? null, baseline: baseline[s.key] ?? null, previousFile: before?.file ?? null, changes };
+    return { ...s, counts: now, detail: report[s.key]?.detail ?? null, reportError: now ? null : (report[s.key]?.error ?? null), baseline: baseline[s.key] ?? null, previousFile: before?.file ?? null, changes };
   });
 
 /** The review sheet: plain HTML, no network, images by relative path (opens from disk or a CI artifact). */
-export const renderIndexHtml = ({ wave, commit, rows, previousDir = null, outDir, metrics = [], transcripts = [], hints = {} }) => {
+export const renderIndexHtml = ({ wave, commit, rows, previousDir = null, outDir, metrics = [], transcripts = [], hints = {}, reportRuns = null }) => {
   const rel = (file, dir) => escapeHtml(path.relative(outDir, path.join(dir, file)).split(path.sep).join('/'));
   const cell = (r) => {
+    if (!r.counts && r.reportError) return `<p class="err">No numbers: the ratchet could not measure this scene in its last run (${escapeHtml(r.reportError)}).</p>`;
     if (!r.counts) return '<p class="muted">No numbers: run the ratchet first (tests/e2e/declutter.spec.ts writes clutter-report.json).</p>';
     const items = metrics
       .filter((m) => (r.counts[m] ?? 0) > 0 || (r.baseline?.[m] ?? 0) > 0)
@@ -128,6 +157,7 @@ export const renderIndexHtml = ({ wave, commit, rows, previousDir = null, outDir
 <h1>Clean and smooth — wave ${escapeHtml(wave)}${commit ? ` <small class="muted">(${escapeHtml(commit)})</small>` : ''}</h1>
 <p>Read each shot against the previous wave's (left). The probe's numbers are on the right; the checks below need eyes.
 File each finding as <b>screen · element · file:line · check · before → after</b>, to the owner of that file in the next slot.</p>
+${reportRuns && Object.keys(reportRuns).length ? `<p class="muted">Numbers from clutter-report.json, measured ${Object.entries(reportRuns).map(([k, at]) => `${escapeHtml(k)} ${escapeHtml(at)}`).join(' · ')}.</p>` : ''}
 <ul class="checks">${EYE_CHECKS.map(([id, name, ask]) => `<li><b>${id} ${escapeHtml(name)}.</b> ${escapeHtml(ask)}</li>`).join('')}</ul>
 <table><thead><tr><th>Scene</th><th>Previous wave</th><th>This wave</th><th>Numbers</th></tr></thead><tbody>
 ${rows.map(row).join('\n')}
@@ -251,7 +281,7 @@ const markTranscript = (page) =>
 
 const main = async () => {
   const probe = await importTs('tests/e2e/helpers/clutterProbe.ts');
-  const { DECLUTTER_SCENES, DECLUTTER_VIEWS, DECLUTTER_THEMES, CLUTTER_METRICS, declutterUrl, sceneKey, readClutterBaseline, clutterHint } = probe;
+  const { DECLUTTER_SCENES, DECLUTTER_VIEWS, CLUTTER_METRICS, declutterUrl, sceneKey, readClutterBaseline, clutterHint } = probe;
 
   const commit = git('rev-parse', '--short', 'HEAD');
   const wave = opt('--wave', commit || new Date().toISOString().slice(0, 10));
@@ -259,12 +289,10 @@ const main = async () => {
   const previousDir = opt('--previous', null) ? path.resolve(APP, opt('--previous')) : null;
   const reportFile = path.resolve(APP, opt('--report', path.join(QA_ARTIFACTS, 'declutter', 'clutter-report.json')));
   const maxFrames = Math.max(1, Number(opt('--frames', 30)) || 30);
-  const only = opt('--only', '').split(',').filter(Boolean);
-  const views = DECLUTTER_VIEWS.filter((v) => !opt('--view') || opt('--view') === v.id);
-  const themes = DECLUTTER_THEMES.filter((t) => !opt('--theme') || opt('--theme') === t);
-  const scenes = DECLUTTER_SCENES.filter((s) => !only.length || only.includes(s.id));
-  if (!views.length || !themes.length) throw new Error(`--view is phone|desk and --theme is light|dark`);
-  if (only.length && !scenes.length && !only.some((o) => o.startsWith('app-'))) throw new Error(`--only matched no scene (${DECLUTTER_SCENES.map((s) => s.id).join(', ')}, app-<id>)`);
+  const only = opt('--only', '').split(',').map((o) => o.trim()).filter(Boolean);
+  const plan = planOnly(only, DECLUTTER_SCENES.map((s) => s.id), { app: !has('--no-app'), transcript: !has('--no-transcript') });
+  const views = planViews(DECLUTTER_VIEWS, { view: opt('--view', null), theme: opt('--theme', null) });
+  const scenes = DECLUTTER_SCENES.filter((s) => plan.scenes.includes(s.id));
 
   let dist = opt('--dist', null) ? path.resolve(APP, opt('--dist')) : path.join(QA_ARTIFACTS, 'declutter', 'dist-qa');
   if (!opt('--dist', null) && !has('--no-build')) buildQa(dist);
@@ -283,7 +311,7 @@ const main = async () => {
   try {
     // Inside the try: a browser that fails to launch must not leave the preview server running.
     browser = await pw.chromium.launch(executablePath ? { executablePath } : {});
-    for (const view of views) {
+    for (const { view, themes } of views) {
       for (const theme of themes) {
         const context = await browser.newContext({
           baseURL: BASE,
@@ -340,21 +368,23 @@ const main = async () => {
 
         for (const scene of scenes) await shoot(sceneKey(scene.id, view.id, theme), scene.q, scene.note, scene.phoneBoard);
 
-        if (!has('--no-app')) {
+        if (plan.app) {
           try {
             await openScene(page, declutterUrl({ surface: 'app' }, theme, { still: '1' }));
             const appScenes = await page.evaluate(() => window.__QA_APP_SCENES__ || []);
             for (const { id, title } of appScenes) {
-              if (only.length && !only.includes(`app-${id}`)) continue;
+              if (plan.appIds && !plan.appIds.includes(id)) continue;
               await shoot(sceneKey(`app-${id}`, view.id, theme), { surface: 'app', scene: id }, title || 'app scene', false);
             }
+            const missing = (plan.appIds ?? []).filter((id) => !appScenes.some((a) => a.id === id));
+            if (missing.length) problems.push(`--only: no app scene ${missing.map((id) => `app-${id}`).join(', ')} (${view.id}-${theme}; the index has ${appScenes.map((a) => `app-${a.id}`).join(', ') || 'none'})`);
           } catch (e) {
             problems.push(`app scene index (${view.id}-${theme}): ${e?.message || e}`);
           }
         }
 
         // The Director transcript of heist-12p, screen by screen, oldest first (C7: past is small).
-        if (!has('--no-transcript') && (!only.length || only.includes('transcript'))) {
+        if (plan.transcript) {
           const key = `transcript@${view.id}-${theme}`;
           try {
             await openScene(page, declutterUrl({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' }, theme, { still: '1' }));
@@ -386,7 +416,8 @@ const main = async () => {
     server.kill();
   }
 
-  const report = readJson(reportFile)?.scenes ?? {};
+  const reportJson = readJson(reportFile);
+  const report = reportJson?.scenes ?? {};
   const previous = previousDir ? readJson(path.join(previousDir, 'index.json')) : null;
   if (previousDir && !previous) log(`! --previous ${previousDir} has no index.json: the sheet shows this wave alone`);
   const { scenes: baseline } = readClutterBaseline();
@@ -403,7 +434,7 @@ const main = async () => {
     transcripts
   };
   fs.writeFileSync(path.join(OUT, 'index.json'), `${JSON.stringify(manifest, null, 1)}\n`);
-  fs.writeFileSync(path.join(OUT, 'index.html'), renderIndexHtml({ wave, commit, rows, previousDir, outDir: OUT, metrics: CLUTTER_METRICS, transcripts, hints }));
+  fs.writeFileSync(path.join(OUT, 'index.html'), renderIndexHtml({ wave, commit, rows, previousDir, outDir: OUT, metrics: CLUTTER_METRICS, transcripts, hints, reportRuns: reportJson?.runs ?? null }));
   log(`\n${shots.filter((s) => s.file).length} shot(s), ${transcripts.reduce((n, t) => n + t.files.length, 0)} transcript screen(s) in ${OUT}`);
   log(`  review sheet: ${path.join(OUT, 'index.html')}`);
   if (!manifest.report) log(`! no ratchet report at ${reportFile}: run tests/e2e/declutter.spec.ts first for the numbers`);

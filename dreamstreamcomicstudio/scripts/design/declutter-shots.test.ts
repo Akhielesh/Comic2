@@ -3,7 +3,8 @@
 // preview`, Chromium) is exercised by the integration owner's loop; docs/design/clean-and-smooth.md §4.
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EYE_CHECKS, renderIndexHtml, reviewRows, shotName, transcriptName, transcriptOffsets } from './declutter-shots.mjs';
+import { DECLUTTER_SCENES, DECLUTTER_VIEWS } from '../../tests/e2e/helpers/clutterProbe';
+import { EYE_CHECKS, planOnly, planViews, renderIndexHtml, reviewRows, shotName, transcriptName, transcriptOffsets } from './declutter-shots.mjs';
 
 const METRICS = ['primaries', 'maxBoxDepth', 'truncatedLabels', 'usagePhrases'];
 
@@ -30,6 +31,36 @@ describe('declutter-shots — names and the transcript walk', () => {
     expect(offsets[offsets.length - 1]).toBe(99_500);
     expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
     expect(transcriptOffsets(100_000, 500, 1)).toEqual([99_500]);
+  });
+});
+
+describe('declutter-shots — what a run shoots (--only, --view, --theme)', () => {
+  const ids = DECLUTTER_SCENES.map((s) => s.id);
+
+  it('--only transcript shoots the transcript alone (the docs offer it as a target)', () => {
+    expect(planOnly(['transcript'], ids)).toEqual({ scenes: [], app: false, appIds: [], transcript: true });
+  });
+
+  it('--only mixes scene ids, app-<id> and transcript; empty means everything', () => {
+    expect(planOnly(['reader', 'app-recipes', 'studio-chat'], ids)).toEqual({ scenes: ['studio-chat', 'reader'], app: true, appIds: ['recipes'], transcript: false });
+    expect(planOnly([], ids)).toEqual({ scenes: ids, app: true, appIds: null, transcript: true });
+    expect(planOnly([], ids, { app: false, transcript: false })).toEqual({ scenes: ids, app: false, appIds: null, transcript: false });
+  });
+
+  it('an unknown --only value, or nothing left to shoot, stops the run before anything is built', () => {
+    expect(() => planOnly(['studio-chat', 'studio-chatt'], ids)).toThrow(/--only: no scene studio-chatt \(one of studio-chat, .*app-<id>, transcript\)/);
+    expect(() => planOnly(['app-'], ids)).toThrow(/no scene app-/);
+    expect(() => planOnly(['transcript'], ids, { transcript: false })).toThrow(/nothing left to shoot/);
+    expect(() => planOnly(['app-recipes'], ids, { app: false })).toThrow(/nothing left to shoot/);
+  });
+
+  it('shoots the two shot sizes by default; the 320 px view only when asked, in light', () => {
+    const pick = (o: { view?: string | null; theme?: string | null }) => planViews(DECLUTTER_VIEWS, o).map((p: { view: { id: string }; themes: string[] }) => `${p.view.id}:${p.themes.join('+')}`);
+    expect(pick({})).toEqual(['phone:light+dark', 'desk:light+dark']);
+    expect(pick({ theme: 'dark' })).toEqual(['phone:dark', 'desk:dark']);
+    expect(pick({ view: 'narrow' })).toEqual(['narrow:light']);
+    expect(() => pick({ view: 'narrow', theme: 'dark' })).toThrow(/narrow view is measured in light/);
+    expect(() => pick({ view: 'tablet' })).toThrow(/--view is one of phone\|desk\|narrow/);
   });
 });
 
@@ -100,5 +131,17 @@ describe('declutter-shots — the review sheet', () => {
   it('says so when the ratchet has not run (no clutter-report.json yet)', () => {
     const rows = reviewRows({ shots: [shots[0]], report: {}, metrics: METRICS });
     expect(renderIndexHtml({ wave: 's2', commit: null, rows, outDir: '/qa', metrics: METRICS })).toContain('No numbers: run the ratchet first');
+  });
+
+  it('a scene the ratchet could not measure shows its error and no numbers, never an older run\u2019s', () => {
+    const failed = { 'studio-chat@desk-light': { url: '/qa/comic-qa.html?surface=studio', error: 'QA surface crashed: <boom>' } };
+    const rows = reviewRows({ shots: [shots[0]], report: failed, previous, baseline, metrics: METRICS });
+    expect(rows[0]).toMatchObject({ counts: null, reportError: 'QA surface crashed: <boom>', changes: [] });
+    const html = renderIndexHtml({ wave: 's2', commit: null, rows, outDir: '/qa', metrics: METRICS, reportRuns: { 'desk-light': '2026-11-11T10:00:00.000Z' } });
+    expect(html).toContain('No numbers: the ratchet could not measure this scene in its last run (QA surface crashed: &lt;boom&gt;)');
+    expect(html).not.toContain('<code>primaries</code>');
+    expect(html).toContain('measured desk-light 2026-11-11T10:00:00.000Z');
+    // A measured scene carries no error.
+    expect(reviewRows({ shots: [shots[0]], report, metrics: METRICS })[0].reportError).toBeNull();
   });
 });

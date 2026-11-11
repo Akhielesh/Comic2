@@ -34,7 +34,7 @@ or a test against that. This page is the rule, and the tests below enforce it.
 | C3 | **No box in a box** | Bordered rounded surfaces nest at most one level (depth ≤ 2). Inner sections use a divider or a well fill. | Probe `maxBoxDepth` (target 2), `nestedBoxes` (ratchet) |
 | C4 | **One number, one definition** | A count appears once per view, with the same definition and unit everywhere. | Review, plus unit tests on the shared helper |
 | C5 | **Say it once** | No sentence or meaning twice in one card. A price once per spend action. "Free" only beside something that costs. | Probe `usagePhrases`, `freeWords` (ratchet), plus review |
-| C6 | **Labels fit** | No control label is truncated at 320, 360 or 1280 px. User content, such as a comic's title, may truncate. | Probe `truncatedLabels` (target 0) |
+| C6 | **Labels fit** | No control label is truncated at 320, 360 or 1280 px. User content, such as a comic's title, may truncate. | Probe `truncatedLabels` (target 0) at 320 (light), 360 and 1280 |
 | C7 | **Past is small** | What the conversation moved past is one line. Repeated images collapse. | Probe `transcriptScreens` (ratchet), plus the settled-card tests |
 | C8 | **Chrome budget** | On a phone, chrome is at most 25 % of the viewport height in studio and reader scenes. | Probe `chromeShare` (target 25) |
 | C9 | **Calm motion** | One live pulse per view. Every animation stops under reduced motion. Nothing moves the user (no auto tab switch, no scroll yank). | Probe `livePulses` (target 1, motion on), plus the pulse guard |
@@ -56,7 +56,10 @@ production PR (PROGRAM3 §3.9).
   `share`, `history`, `media`, `quality` and `mode` (Easy/Pro). Add new ids in kebab case. DC-1 adds them to
   today's duplicated controls.
 - **Mark user content.** Put `data-user-content` on text the user wrote or named, such as a title or a character
-  name. It may truncate; a control's own label may not.
+  name. It may truncate; a control's own label may not. No control carries the attribute yet, so today every cut
+  label counts. The first candidates are the character name on the cast card's button
+  (`conversation/cards/CastCard.tsx:104`) and a saved style's name on its pick button
+  (`library/StylePresetsCard.tsx:109`). The studio title is an `<input>`, which the probe does not treat as a label.
 - **One live state.** A live state uses `LiveDot` (`components/ds`), or a static label such as "Drawing…". A raw
   `animate-pulse` / `ping` / `bounce` needs `motion-safe:` or `motion-reduce:animate-none` in the same class list,
   and the pulse guard counts it either way (§3.2).
@@ -83,7 +86,7 @@ What each metric counts, per scene:
 | `truncatedLabels` | Controls in the viewport whose own label text is cut (ellipsis, line clamp, hidden overflow on the control or a box inside it) | Screen-reader-only text and user content are skipped. |
 | `chromeShare` | Phones, studio and reader scenes: the % of the viewport height that is not the content region | The content region is the scene's selector, else the tallest scroller, else `<main>`. Fixed and sticky bars over it count as chrome. |
 | `livePulses` | Elements in the viewport with an infinite animation running, spinners included | Measured with motion **on** and `still=0`, after entrances settle. The DS-1b smoke covers the reduced-motion half for app scenes. |
-| `hOverflow` | Pixels of horizontal page overflow | |
+| `hOverflow` | Pixels of horizontal page overflow | Measured at 320 px as well, where the house rule is no overflow. |
 | `usagePhrases`, `freeWords` | "a little of your usage" and the word "Free" in the whole document | Counted over the whole document because the transcript scrolls. |
 | `transcriptScreens` | The Director transcript's height, in screens of its own scroller | The `heist-12p` fixture is the ratchet. |
 
@@ -98,8 +101,18 @@ the rubric needs:
 - the breakdown, timeline and model-picker kits;
 - every `qa/app/scenes` page, discovered at runtime as `app-<id>`.
 
-Each scene runs at **360×740 and 1280×800, light and dark**, with the page-level Atlas skin. Library, Settings and
-Chat need auth, so they join when an authenticated harness scene exists (DS-R6, DS-4).
+Each scene runs at **360×740 and 1280×800, light and dark**, with the page-level Atlas skin. It also runs at
+**320×640, light only** (the `narrow` view, the DS-1b `smoke-320x640` device). That run ratchets just two metrics,
+`truncatedLabels` and `hOverflow`: a label that fits at 360 can still be cut at 320, and the house rule is no overflow
+at 320. Its baseline entries hold only those two. Library, Settings and Chat need auth, so they join when an
+authenticated harness scene exists (DS-R6, DS-4).
+
+The report, `<QA_ARTIFACTS>/declutter/clutter-report.json`, holds one run per view and theme:
+
+- each run replaces all of its own entries, so a scene that was removed, or failed this time, never keeps an older
+  run's numbers;
+- a scene that could not be measured is written with its `error` and no counts;
+- `runs` records when each view and theme was last measured.
 
 The self-test seeds every kind of clutter on synthetic pages. On the fixture page, the probe must report exactly
 two primaries, one depth-3 box and one clipped label, and nothing else. A clean page must report nothing. Dropping
@@ -145,9 +158,15 @@ artifact. Shots are never committed.
 ```sh
 node scripts/design/declutter-shots.mjs --wave s2 --previous <QA_ARTIFACTS>/declutter/s1
 # --no-build | --dist <built QA folder>   reuse a QA build
-# --only studio-chat,reader,transcript    a few scenes; --view phone|desk; --theme light|dark
+# --only studio-chat,app-recipes,transcript
+#                                         scene ids, app-<id> and transcript; an unknown value stops the run
+# --view phone|desk|narrow                default: phone and desk (narrow, 320 px light, only when named)
+# --theme light|dark
 # --frames 30                             transcript screens per view (default 30)
 ```
+
+A scene the ratchet could not measure shows its error on the sheet, never an older run's numbers. The sheet also says
+when each view and theme was last measured.
 
 It builds the QA entry into `<QA_ARTIFACTS>/declutter/dist-qa`, so the layout smoke's own bundle is untouched. It
 serves the build with `vite preview` on `QA_PORT` (default 4182) and refuses every request that is not
@@ -196,7 +215,10 @@ A C1 or C6 failure on a core screen blocks the production PR. Everything else is
   its first commit**. Nested-box counts, the C5 phrases and transcript length have no absolute target; they only
   ratchet once a scene is listed.
 - An entry whose scene no longer exists fails until it is dropped.
-- Both files are **generated, never typed.** A hand edit fails the file check.
+- A key must name a view and theme the loop measures (`phone-light`, `phone-dark`, `desk-light`, `desk-dark`,
+  `narrow-light`), and an entry may list only the metrics its view ratchets.
+- Both files are **generated, never typed.** A hand edit fails the file check, and so does a `declutter.json` whose
+  `targets` line no longer matches the probe's targets.
 
 **A package that improves a scene** does not commit the baseline. It writes the new numbers in its wave note: the
 scene key, then the counts from `clutter-report.json`.
@@ -219,28 +241,35 @@ measured entries from the tree:
 UPDATE_BASELINES=reset npx playwright test -c tests/e2e/playwright.config.ts --project=declutter --grep "<view> <theme>"
 ```
 
+`<view> <theme>` is one of `phone light`, `phone dark`, `desk light`, `desk dark` or `narrow light`.
+
 The diff shows every rise, and the PR says why each one is right. The reviewer reads that diff line by line.
 
 ## 6. Today's numbers (S2 baseline, light and dark are equal)
 
-Phone (360×740) / desk (1280×800). These are the numbers each later package moves.
+Phone (360×740) / desk (1280×800); the truncated column adds 320×640 (light) first. These are the numbers each
+later package moves.
 
-| Scene | Primaries | Box depth | Truncated | Phone chrome % | Live pulses | Usage phrase | "Free" |
+| Scene | Primaries | Box depth | Truncated (320 / 360 / 1280) | Phone chrome % | Live pulses | Usage phrase | "Free" |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| studio, open gate | 0 / **2** | 2 / 2 | 0 / 1 | **36** | 2 / 3 | 19 / 33 | 9 / 14 |
-| studio, busy | 1 / **3** | 2 / 2 | 1 / 1 | **36** | 2 / 3 | 18 / 32 | 7 / 12 |
-| studio, Pages tab | **2** / **2** | 2 / 2 | 2 / 1 | **36** | 1 / 3 | 8 / 33 | 1 / 14 |
-| studio, Read tab | **2** / **2** | 1 / 2 | 1 / 0 | **30** | 1 / 1 | 1 / 20 | 0 / 9 |
-| studio, Cast tab | **2** / **2** | 2 / 2 | 2 / 2 | **36** | 1 / 5 | 8 / 27 | 0 / 13 |
-| studio, empty | 0 / 0 | 2 / 2 | 0 / 0 | **30** | 0 / 0 | 0 / 0 | 0 / 1 |
-| breakdown kit | 0 / 1 | **3** / **3** | 0 / 0 | — | 0 / 0 | 51 / 51 | 8 / 8 |
-| model picker kit | 0 / 0 | **3** / **3** | 0 / 0 | — | 0 / 0 | 2 / 2 | 1 / 1 |
-| immersive reader | 0 / 0 | 0 / 0 | 0 / 0 | 0 | 0 / 0 | 0 / 0 | 0 / 0 |
-| public reader | 0 / 0 | 0 / 0 | 0 / 0 | 8 | 0 / 0 | 0 / 0 | 0 / 0 |
+| studio, open gate | 0 / **2** | 2 / 2 | 0 / 0 / 1 | **36** | 2 / 3 | 19 / 33 | 9 / 14 |
+| studio, busy | 1 / **3** | 2 / 2 | 1 / 1 / 1 | **36** | 2 / 3 | 18 / 32 | 7 / 12 |
+| studio, Pages tab | **2** / **2** | 2 / 2 | 2 / 2 / 1 | **36** | 1 / 3 | 8 / 33 | 1 / 14 |
+| studio, Read tab | **2** / **2** | 1 / 2 | 1 / 1 / 0 | **30** | 1 / 1 | 1 / 20 | 0 / 9 |
+| studio, Cast tab | **2** / **2** | 2 / 2 | 2 / 2 / 2 | **36** | 1 / 5 | 8 / 27 | 0 / 13 |
+| studio, empty | 0 / 0 | 2 / 2 | 0 / 0 / 0 | **30** | 0 / 0 | 0 / 0 | 0 / 1 |
+| page editor (Easy, Pro) | 0 / **2** | 2 / 2 | **2** / 0 / 2 | — | 2 / 5 | 19 / 35 | 9 / 15 |
+| breakdown kit | 0 / 1 | **3** / **3** | 0 / 0 / 0 | — | 0 / 0 | 51 / 51 | 8 / 8 |
+| model picker kit | 0 / 0 | **3** / **3** | 0 / 0 / 0 | — | 0 / 0 | 2 / 2 | 1 / 1 |
+| immersive reader | 0 / 0 | 0 / 0 | 0 / 0 / 0 | 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| public reader | 0 / 0 | 0 / 0 | 0 / 0 / 0 | 8 | 0 / 0 | 0 / 0 | 0 / 0 |
 
 The two desk primaries in the studio are "Approve" and "Render remaining 4" (the busy studio adds "Stop"). The
-truncated desk label is "Compact" in the Pages tab's card-size control (`board/PagesTab.tsx:522`). The full list, with every scene and the labels behind each
-number, is `tests/e2e/baselines/declutter.json` and the run's `clutter-report.json`.
+truncated desk label is "Compact" in the Pages tab's card-size control (`board/PagesTab.tsx:522`). On phones, the
+render gate's "Draw the remaining pages · uses a little of your usage" is cut on every board tab. At 320 px, the page
+editor's toolbar also cuts "Mark up" and "Lettering" (`mobile/editor/EditorToolbar.tsx:239`, `:252`), which fit at
+360. No scene overflows horizontally at 320 px. The full list, with every scene and the labels behind each number, is
+`tests/e2e/baselines/declutter.json` and the run's `clutter-report.json`.
 
 **What moves these numbers next:**
 
@@ -255,6 +284,10 @@ number, is `tests/e2e/baselines/declutter.json` and the run's `clutter-report.js
 
 - A primary drawn without the primary tokens (a hand-rolled fill) is not counted. Build controls from the
   primitives.
+- At 320 px only C6 and horizontal overflow are measured, in light. Primaries, boxes, chrome share and pulses are
+  measured at 360 and 1280.
+- Text inside `<input>`, `<textarea>` and `<select>` is not a label to the probe, so a cut title in a text field or
+  a cut `<option>` is not counted.
 - C2 counts only controls that carry `data-action`. Until DC-1 adds the ids, the duplicate-name groups in the
   report are the reviewer's lead.
 - C4 (one number, one definition) and C10 (same role, same control) are review-only. C4 also has unit tests on the
