@@ -10,8 +10,9 @@
 //   • AgentThinking          — the "composing the next card" indicator (looping dots).
 //   • ImageDevelop           — an AI render "develops" in once it has loaded and decoded
 //     (components/ds/useImageReveal): over-bright and a touch large → crisp, with a one-shot
-//     sheen sweep, on the compositor (opacity/transform; a blur only on small art, fine
-//     pointers and capable devices). On-theme for a generative-image product.
+//     sheen sweep, on the compositor (opacity and transform only, never a filter). Only fresh
+//     art that has just arrived develops: never a picture already in memory, never a box with
+//     no picture in it. On-theme for a generative-image product.
 //   • SelectPop              — style/cover tile selection: spring lift, accent ring draw,
 //     check-mark pop (enter/exit via AnimatePresence).
 //   • CountUp                — cost/number ticks up (the `$0.42` chip), rAF-tweened.
@@ -21,12 +22,10 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, type Variants } from 'framer-motion';
 import { springSnappy, springSoft, STAGGER_STEP, usePrefersReducedMotion } from './motion';
 import {
-  allowFilterEffects,
   canPlayEntrances,
   motionEase,
   motionMs,
   playEntrance,
-  readRevealEnvironment,
   revealTokenFallbacks,
   useImageReveal,
 } from '../../ds/useImageReveal';
@@ -139,25 +138,24 @@ export interface ImageDevelopProps {
 }
 
 /**
- * The develop's two keyframes. Opacity and a 3 % settle (transform) always, both on the compositor; a blur
- * only when `filter` (allowFilterEffects: a fine pointer, a capable device, art at most 640 px wide), since a
- * filter repaints the whole picture every frame.
+ * The develop's two keyframes: opacity and a 3 % settle (transform), both on the compositor, and never a
+ * filter (the owner asked for transform and opacity only; a filter repaints the whole picture every frame).
+ * Any filter effect added later must pass `allowFilterEffects` (components/ds/useImageReveal).
  */
-export const developKeyframes = (filter: boolean): Keyframe[] =>
-  filter
-    ? [
-        { opacity: 0, transform: 'scale(1.03)', filter: 'blur(10px)' },
-        { opacity: 1, transform: 'none', filter: 'blur(0px)' },
-      ]
-    : [
-        { opacity: 0, transform: 'scale(1.03)' },
-        { opacity: 1, transform: 'none' },
-      ];
+export const developKeyframes = (): Keyframe[] => [
+  { opacity: 0, transform: 'scale(1.03)' },
+  { opacity: 1, transform: 'none' },
+];
 
-/** The over-exposed start (what `brightness(1.35)` used to do): light over the art, fading out by opacity alone. */
-const DEVELOP_LIGHT = 'rgb(255 255 255)';
+/**
+ * The over-exposed start (what `brightness(1.35)` used to do): light over the art, fading out by opacity
+ * alone; then one sheen sweep, moved by transform. Both colours are skin tokens (`--ds-develop-light`,
+ * `--ds-develop-sheen`), with the light-skin values as fallbacks until the skin defines them; a dark skin
+ * can soften the light (an alpha in the token) so a noir page does not start milky.
+ */
+const DEVELOP_LIGHT = 'var(--ds-develop-light, rgb(255 255 255))';
 const DEVELOP_LIGHT_OPACITY = 0.35;
-const DEVELOP_SHEEN = 'linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, transparent 70%)';
+const DEVELOP_SHEEN = 'linear-gradient(105deg, transparent 30%, var(--ds-develop-sheen, rgba(255,255,255,0.18)) 50%, transparent 70%)';
 const HIDDEN: React.CSSProperties = { opacity: 0 };
 
 /** One picture, whatever its signature: a re-signed url for the same file must not hide and develop it again. */
@@ -168,9 +166,12 @@ const pictureKey = (src?: string) => (src ? src.split(/[?#]/)[0] : '');
  * token surface holds its box (never an animation over nothing); then the picture resolves from over-exposed
  * and slightly large to crisp, with one sheen sweep, on the motion tokens (`--ds-motion-enter-slow` for the
  * develop, `--ds-motion-slow` after `--ds-motion-fast` for the sheen). Opacity and transform only, on the Web
- * Animations API (the compositor); the blur is added only where allowFilterEffects says it is cheap. Under
- * reduced motion the picture still waits for its decode, then simply appears. `active={false}` (history, not a
- * fresh render) shows the image at once with no gate.
+ * Animations API (the compositor), and never a filter. Under reduced motion the picture still waits for its
+ * decode, then simply appears. A picture the browser already holds (a remount, a second surface on the same
+ * url) swaps in with no develop, and a box with no `<img>` (a tint block before the url arrives) never
+ * develops: only art that has just arrived does. `active={false}` (history, not a fresh render) shows the
+ * image at once with no gate. A develop cut short (`active` drops, a new picture, reduced motion turning on)
+ * cancels its animations, so nothing keeps moving over art that is meant to be still.
  */
 export const ImageDevelop: React.FC<ImageDevelopProps> = ({
   src,
@@ -192,16 +193,17 @@ export const ImageDevelop: React.FC<ImageDevelopProps> = ({
   const [canAnimate] = useState(canPlayEntrances);
   const [developedKey, setDevelopedKey] = useState<string | null>(null);
   const waiting = active && !reveal.shown;
-  const developing = active && !reveal.reduced && canAnimate && reveal.phase === 'revealed' && developedKey !== key;
+  // Only art that has just arrived develops: not a picture already in memory, not a box with no picture.
+  const developing =
+    active && !reveal.reduced && !reveal.fromCache && !reveal.empty && canAnimate && reveal.phase === 'revealed' && developedKey !== key;
   const box = reveal.element;
 
   useLayoutEffect(() => {
     if (!developing) return;
-    const env = readRevealEnvironment(box);
     const duration = motionMs(box, '--ds-motion-enter-slow', revealTokenFallbacks['--ds-motion-enter-slow']);
     const easing = motionEase(box, '--ds-ease-enter', revealTokenFallbacks['--ds-ease-enter']);
     const animations = [
-      playEntrance(layerRef.current, developKeyframes(allowFilterEffects(env)), { duration, easing, fill: 'backwards' }),
+      playEntrance(layerRef.current, developKeyframes(), { duration, easing, fill: 'backwards' }),
       playEntrance(lightRef.current, [{ opacity: DEVELOP_LIGHT_OPACITY }, { opacity: 0 }], { duration, easing, fill: 'both' }),
       playEntrance(sheenRef.current, [{ transform: 'translateX(-130%)' }, { transform: 'translateX(130%)' }], {
         duration: motionMs(box, '--ds-motion-slow', revealTokenFallbacks['--ds-motion-slow']),
@@ -245,8 +247,8 @@ export const ImageDevelop: React.FC<ImageDevelopProps> = ({
       </div>
       {developing && (
         <>
-          <div ref={lightRef} aria-hidden className="pointer-events-none absolute inset-0" style={{ opacity: 0, background: DEVELOP_LIGHT }} />
-          <div ref={sheenRef} aria-hidden className="pointer-events-none absolute inset-0" style={{ transform: 'translateX(130%)', background: DEVELOP_SHEEN }} />
+          <div ref={lightRef} aria-hidden data-develop-light="" className="pointer-events-none absolute inset-0" style={{ opacity: 0, backgroundColor: DEVELOP_LIGHT }} />
+          <div ref={sheenRef} aria-hidden data-develop-sheen="" className="pointer-events-none absolute inset-0" style={{ transform: 'translateX(130%)', backgroundImage: DEVELOP_SHEEN }} />
         </>
       )}
     </div>

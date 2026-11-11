@@ -1,8 +1,9 @@
 /**
  * useImageReveal (Program 3 MO-1, styles.md §7.3 M1): the art is shown only once it has loaded AND decoded; a
  * cached picture shows in the same frame with no entrance; an error hands over to the caller; a new key starts
- * over and ignores the old decode; a decode that never settles cannot strand the art; and the entrance helpers
- * keep filters off coarse pointers, low-power devices and wide art.
+ * over and ignores the old decode; a decode that never settles cannot strand the art; a box with no picture is
+ * flagged empty (no entrance over nothing); and the entrance helpers keep any filter off coarse pointers,
+ * low-power devices and wide art.
  */
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -108,10 +109,32 @@ describe('useImageReveal: the decode gate', () => {
     expect(last.phase).toBe('revealed');
   });
 
-  it('reveals at once when the container holds no <img> (nothing to wait for)', () => {
+  it('reveals at once when the container holds no <img> (nothing to wait for), flagged empty', () => {
     render(<Probe empty />);
     expect(last.phase).toBe('revealed');
     expect(last.fromCache).toBe(false);
+    expect(last.empty).toBe(true);
+  });
+
+  it('a picture that arrives is never flagged empty (nor one in memory)', async () => {
+    const d = deferred();
+    const { unmount } = render(<Probe decode={() => d.promise} />);
+    expect(last.empty).toBe(false);
+    act(() => {
+      fireEvent.load(screen.getByAltText('art'));
+    });
+    await act(async () => {
+      d.resolve();
+      await d.promise;
+    });
+    expect(last.phase).toBe('revealed');
+    expect(last.empty).toBe(false);
+    unmount();
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(640);
+    render(<Probe />);
+    expect(last.fromCache).toBe(true);
+    expect(last.empty).toBe(false);
   });
 
   it('a browser without decode() reveals on load', () => {
@@ -207,6 +230,7 @@ describe('useImageReveal: the decode gate', () => {
     expect(last.phase).toBe('revealed');
     expect(last.shown).toBe(true);
     expect(last.fromCache).toBe(false);
+    expect(last.empty).toBe(false);
   });
 
   it('reports the OS reduced-motion setting', () => {

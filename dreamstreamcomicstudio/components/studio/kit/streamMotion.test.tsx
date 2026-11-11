@@ -93,8 +93,9 @@ describe('reduced motion degrades to static', () => {
 // ---- ImageDevelop: decode-gated develop (Program 3 MO-1, bug B13) -------------------------------------
 // The develop used to start on mount (framer-motion, 0.9 s), whatever the <img> was doing, so a page that took
 // longer than that to arrive finished its develop invisible and then popped in. Now nothing moves until the
-// image has loaded and decoded; the motion is opacity and transform on the Web Animations API, with a blur only
-// on small art, fine pointers and capable devices; reduced motion swaps the picture in with no animation.
+// image has loaded and decoded; the motion is opacity and transform on the Web Animations API, never a filter;
+// reduced motion swaps the picture in with no animation; a picture already in memory and a box with no picture
+// never develop; a develop cut short cancels its animations.
 
 interface PlayedAnimation {
   el: Element;
@@ -247,29 +248,92 @@ describe('ImageDevelop waits for the art, then develops on the compositor', () =
   const filterIn = (anims: PlayedAnimation[]) => anims.some((a) => a.keyframes.some((k) => 'filter' in k));
   const props = (anims: PlayedAnimation[]) => new Set(anims.flatMap((a) => a.keyframes.flatMap((k) => Object.keys(k).filter((p) => p !== 'offset' && p !== 'easing'))));
 
-  it('a blur only on small art with a fine pointer on a capable device', async () => {
-    const anims = await developFrames({ width: 320 });
-    expect(filterIn(anims)).toBe(true);
-    expect([...props(anims)].sort()).toEqual(['filter', 'opacity', 'transform']);
-  });
-
-  it('no filter on a coarse pointer: opacity and transform only', async () => {
-    const anims = await developFrames({ coarse: true, width: 320 });
-    expect(anims.length).toBeGreaterThan(0);
+  // The owner asked for transform and opacity only: no environment (not even small art on a fine pointer and
+  // a capable desktop, where a blur would be cheapest) gets a filter, and coarse pointers, low power and wide
+  // art (the row's rule) are covered by construction.
+  it.each([
+    ['small art, a fine pointer, a capable device', { width: 320 }],
+    ['a coarse pointer', { coarse: true, width: 320 }],
+    ['low power (Save-Data)', { saveData: true, width: 320 }],
+    ['art wider than 640 px', { width: 900 }],
+  ] as const)('never a filter: opacity and transform only (%s)', async (_label, env) => {
+    const anims = await developFrames(env);
+    expect(anims).toHaveLength(3);
     expect(filterIn(anims)).toBe(false);
     expect([...props(anims)].sort()).toEqual(['opacity', 'transform']);
   });
 
-  it('no filter in low power (Save-Data)', async () => {
-    const anims = await developFrames({ saveData: true, width: 320 });
-    expect(anims.length).toBeGreaterThan(0);
-    expect(filterIn(anims)).toBe(false);
+  it('a picture already in memory swaps in with no develop (fromCache: a remount, a second surface)', () => {
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(640);
+    const { container } = render(<ImageDevelop src="https://cdn.test/page.png" alt="page one" />);
+    const img = screen.getByAltText('page one');
+    expect(box(container)).toHaveAttribute('data-develop', 'revealed');
+    expect(layerOf(img).style.opacity).toBe('');
+    expect(played).toEqual([]);
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+    expect(box(container).querySelectorAll('[aria-hidden]')).toHaveLength(0);
   });
 
-  it('no filter on art wider than 640 px', async () => {
-    const anims = await developFrames({ width: 900 });
-    expect(anims.length).toBeGreaterThan(0);
-    expect(filterIn(anims)).toBe(false);
+  it('a box with no <img> (a tint block before the url arrives) never develops; the art develops once it arrives', async () => {
+    const tint = <div data-testid="tint" className="h-16 w-16" />;
+    const { container, rerender } = render(
+      <ImageDevelop className="h-16 w-16">
+        {tint}
+      </ImageDevelop>,
+    );
+    expect(played).toEqual([]);
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+    expect(layerOf(screen.getByTestId('tint')).style.opacity).toBe('');
+    expect(box(container).querySelectorAll('[aria-hidden]')).toHaveLength(0);
+
+    // The cast card's shape: the same ImageDevelop gets its url later.
+    rerender(
+      <ImageDevelop src="https://cdn.test/cast.png" alt="cast" className="h-16 w-16">
+        {tint}
+      </ImageDevelop>,
+    );
+    const img = screen.getByAltText('cast');
+    expect(box(container)).toHaveAttribute('data-develop', 'loading');
+    expect(played).toEqual([]);
+    await loadAndDecode(img);
+    expect(played).toHaveLength(3);
+    expect(played.some((a) => a.el === layerOf(img))).toBe(true);
+  });
+
+  it('a develop cut short (active drops) cancels every animation and drops its layers', async () => {
+    const { container, rerender } = render(<ImageDevelop src="https://cdn.test/page.png" alt="page one" />);
+    await loadAndDecode(screen.getByAltText('page one'));
+    expect(played).toHaveLength(3);
+    expect(container.querySelector('[data-develop-light]')).not.toBeNull();
+    expect(container.querySelector('[data-develop-sheen]')).not.toBeNull();
+    rerender(<ImageDevelop src="https://cdn.test/page.png" alt="page one" active={false} />);
+    for (const a of played) expect(a.cancel).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-develop-light]')).toBeNull();
+    expect(container.querySelector('[data-develop-sheen]')).toBeNull();
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+    expect(layerOf(screen.getByAltText('page one')).style.opacity).toBe('');
+  });
+
+  it('a new picture mid-develop cancels the old develop and waits for the new art', async () => {
+    const { container, rerender } = render(<ImageDevelop src="https://cdn.test/one.png" alt="page" />);
+    await loadAndDecode(screen.getByAltText('page'));
+    const first = [...played];
+    expect(first).toHaveLength(3);
+    rerender(<ImageDevelop src="https://cdn.test/two.png" alt="page" />);
+    for (const a of first) expect(a.cancel).toHaveBeenCalledTimes(1);
+    expect(box(container)).toHaveAttribute('data-develop', 'loading');
+    expect(container.querySelector('[data-develop-light]')).toBeNull();
+    expect(played).toHaveLength(3);
+  });
+
+  it('the light and the sheen read skin tokens, with the light-skin values as fallbacks', async () => {
+    const { container } = render(<ImageDevelop src="https://cdn.test/page.png" alt="page one" />);
+    await loadAndDecode(screen.getByAltText('page one'));
+    const light = container.querySelector('[data-develop-light]') as HTMLElement;
+    const sheen = container.querySelector('[data-develop-sheen]') as HTMLElement;
+    expect(light.getAttribute('style')).toContain('var(--ds-develop-light, rgb(255 255 255))');
+    expect(sheen.getAttribute('style')).toContain('var(--ds-develop-sheen, rgba(255,255,255,0.18))');
   });
 
   it('the img defaults to loading="lazy" and decoding="async"; loading, decoding, srcSet and sizes pass through', () => {

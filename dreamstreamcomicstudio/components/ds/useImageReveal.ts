@@ -8,7 +8,10 @@
  *
  * The hook only tracks that moment. `ref` takes the `<img>` itself, or an element that contains one (the first
  * `<img>` inside is watched, so a component that is handed its picture as children still waits for it); with
- * no `<img>` there is nothing to wait for and it reveals at once. Phases: `loading` (no bytes yet) → `decoding`
+ * no `<img>` there is nothing to wait for: it reveals at once, flagged `empty`, and no art has arrived, so no
+ * entrance plays over a placeholder. The `<img>` is looked up when the element or the key changes: a picture
+ * that appears later under the same key is not watched, so key the component by its url (the board does).
+ * Phases: `loading` (no bytes yet) → `decoding`
  * (`load` fired, `decode()` pending) → `revealed`; or `error`, when the caller's own error path takes over.
  * An image the browser already holds (complete with pixels when it mounts) is revealed in the same frame and
  * flagged `fromCache`, so a list that scrolls back into view does not replay its entrances. A `decode()` that
@@ -18,8 +21,9 @@
  * Entrances are the caller's, played with the helpers below on the Web Animations API, which runs opacity and
  * transform on the compositor: no React render per frame and no layout. They read the --ds-motion-* tokens
  * from the element's computed style. Under reduced motion (`reduced`) the art still waits for its decode and
- * then swaps in with no entrance. Filter effects (a develop blur) are allowed only where they are cheap:
- * `allowFilterEffects` refuses coarse pointers, low-power devices and art wider than 640 px.
+ * then swaps in with no entrance. No entrance animates a filter today (the owner asked for transform and
+ * opacity only); `allowFilterEffects` is the gate any future filter effect must pass: it refuses coarse
+ * pointers, low-power devices and art wider than 640 px.
  *
  * Nothing here fetches and nothing here polls: the one timer is the decode fallback, armed after `load` and
  * cleared on reveal or unmount.
@@ -58,6 +62,8 @@ export interface ImageReveal {
   shown: boolean;
   /** Revealed because the art was already in memory when it mounted: swap it in without an entrance. */
   fromCache: boolean;
+  /** Revealed because the element held no `<img>`: no art has arrived, so there is no entrance to play. */
+  empty: boolean;
   /** The OS asks for reduced motion: wait for the decode, then swap in without an entrance. */
   reduced: boolean;
 }
@@ -76,7 +82,10 @@ interface RevealState {
   key: string;
   phase: ImageRevealPhase;
   fromCache: boolean;
+  empty: boolean;
 }
+
+const startState = (key: string): RevealState => ({ key, phase: 'loading', fromCache: false, empty: false });
 
 /**
  * Gate a picture's entrance on its arrival. `key` names the picture (its url, or an id@rev): a new key starts
@@ -87,24 +96,24 @@ export function useImageReveal(key: string | null | undefined, options: ImageRev
   const reduced = useReducedMotion();
   const id = key ?? '';
   const [element, setElement] = useState<Element | null>(null);
-  const [state, setState] = useState<RevealState>({ key: id, phase: 'loading', fromCache: false });
+  const [state, setState] = useState<RevealState>(() => startState(id));
   // The decode function is read when the image loads, never a reason to start over.
   const decodeRef = useRef(decode);
   decodeRef.current = decode;
 
   useIsoLayoutEffect(() => {
     if (!enabled) return;
-    setState((s) => (s.key === id ? s : { key: id, phase: 'loading', fromCache: false }));
+    setState((s) => (s.key === id ? s : startState(id)));
     if (!element) return;
     let live = true;
     let started = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const set = (phase: ImageRevealPhase, fromCache = false) => {
-      if (live) setState({ key: id, phase, fromCache });
+    const set = (phase: ImageRevealPhase, fromCache = false, empty = false) => {
+      if (live) setState({ key: id, phase, fromCache, empty });
     };
     const img = findImage(element);
     if (!img) {
-      set('revealed');
+      set('revealed', false, true);
       return () => {
         live = false;
       };
@@ -156,7 +165,7 @@ export function useImageReveal(key: string | null | undefined, options: ImageRev
     };
   }, [enabled, element, id, decodeTimeoutMs]);
 
-  const current = state.key === id ? state : { key: id, phase: 'loading' as const, fromCache: false };
+  const current = state.key === id ? state : startState(id);
   const phase: ImageRevealPhase = enabled ? current.phase : 'revealed';
   return {
     ref: setElement,
@@ -164,6 +173,7 @@ export function useImageReveal(key: string | null | undefined, options: ImageRev
     phase,
     shown: phase === 'revealed' || phase === 'error',
     fromCache: enabled && current.fromCache,
+    empty: enabled && current.empty,
     reduced
   };
 }
