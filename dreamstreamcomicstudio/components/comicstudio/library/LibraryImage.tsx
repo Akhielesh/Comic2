@@ -8,7 +8,10 @@
 // entrance has finished the fallback is unmounted, freeing its SVG filters (styles.md §7.3 M12). No
 // layout shift: the row's w/h are set, the box is the caller's (and it keeps its size once the
 // fallback is gone). On error, or when the asset isn't published, only the fallback renders.
-// Light-only art is gently dimmed in dark mode.
+// An asset with an LQIP (asset.lqip: a ~300-byte blurred WebP, already sanitized by useComicLibrary;
+// P3-ST2) paints it over the fallback and behind the picture until the picture is in, so the box
+// shows the real colours from the first frame. It is a static background, never a CSS filter or an
+// animation, and it leaves with the fallback. Light-only art is gently dimmed in dark mode.
 
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -89,6 +92,7 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
     .filter(Boolean)
     .join(', ');
   const settled = revealed && settledKey === key;
+  const dim = asset.theme === 'light' && 'dark:brightness-90 dark:contrast-95';
   return (
     <span className="relative block h-full w-full" data-library-image={asset.id} data-reveal={reveal.phase}>
       {/* The image carries the alt text, so the fallback underneath is decoration (never read twice). */}
@@ -96,6 +100,14 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
         <span className="block h-full w-full" aria-hidden="true">
           {fallback}
         </span>
+      )}
+      {!settled && asset.lqip && (
+        <span
+          aria-hidden="true"
+          data-library-lqip=""
+          className={cx('pointer-events-none absolute inset-0 bg-cover bg-center', dim)}
+          style={{ backgroundImage: `url("${asset.lqip}")` }}
+        />
       )}
       <img
         ref={setImg}
@@ -113,7 +125,7 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
           'absolute inset-0 h-full w-full',
           !/\bobject-/.test(className || '') && 'object-cover',
           className,
-          asset.theme === 'light' && 'dark:brightness-90 dark:contrast-95',
+          dim,
           reveal.shown ? 'opacity-100' : 'opacity-0'
         )}
       />

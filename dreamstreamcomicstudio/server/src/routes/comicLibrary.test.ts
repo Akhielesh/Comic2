@@ -97,7 +97,7 @@ describe('public index', () => {
     const res = await fetch(url);
     const body = await res.json();
     expect(body.assets.map((a: { id: string }) => a.id)).toEqual(['style.test-one']);
-    expect(JSON.stringify(body)).not.toMatch(/prompt|Test scene/);
+    expect(JSON.stringify(body)).not.toMatch(/runId|adminId|costUsd|cost_usd|final_prompt/); expect(body.assets[0].provenance).toMatchObject({ model: 'nano-banana-2.1', seed: null, seedSupported: false, prompt: expect.stringMatching(/^Test scene one/) });
     const etag = res.headers.get('etag')!;
     expect(etag).toMatch(/^"\w+"$/);
     expect((await fetch(url, { headers: { 'if-none-match': etag } })).status).toBe(304);

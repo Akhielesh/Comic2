@@ -5,16 +5,25 @@
 // five minutes so navigation is instant, and revalidated once in the background when stale.
 // Never on a timer, never throws: any failure is status 'unavailable' and every consumer keeps
 // rendering its procedural art (the same path as "nothing published yet").
+//
+// The index is data, never trusted (Program 3 ST-A): sanitizeIndex rebuilds every asset from an allow-list of
+// known fields, so an unknown key (a run id, an admin id, a cost) never reaches a component or the session cache,
+// the provenance goes through the shared allow-list (exact prompt ≤ 6000 chars or none at all) and the LQIP must
+// be a small WebP data URL.
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   LIBRARY_ID_RE,
+  LIBRARY_KINDS,
   LIBRARY_MANIFEST_VERSION,
   libraryEmptyIds,
+  sanitizeLibraryLqip,
+  sanitizeLibraryProvenance,
   stylePreviewId,
   type LibraryAssetPublic,
   type LibraryIndex,
-  type LibraryKind
+  type LibraryKind,
+  type LibraryTheme
 } from '../../../shared/comic/library';
 import { buildApiUrl } from '../../../services/clientConfig';
 
@@ -44,27 +53,56 @@ interface Snapshot {
 const HTTPS_URL = /^(?:https:\/\/|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/)[^\s"'<>]+$/i;
 const safeUrl = (u: unknown): string | undefined => (typeof u === 'string' && HTTPS_URL.test(u) && u.length < 2048 ? u : undefined);
 
-/** Keep only well-formed assets with https URLs (the index is data, never trusted markup). */
+const KINDS: ReadonlySet<string> = new Set(LIBRARY_KINDS);
+const THEMES: ReadonlySet<string> = new Set(['any', 'light', 'dark']);
+const ASPECT_RE = /^\d{1,2}:\d{1,2}$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+const text = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v ? v.slice(0, max) : undefined);
+
+/**
+ * Keep only well-formed assets with https URLs, rebuilt field by field from LibraryAssetPublic's own keys (the
+ * index is data, never trusted markup): unknown keys are dropped, oversized or malformed fields too.
+ */
 export function sanitizeIndex(raw: unknown): LibraryIndex | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Partial<LibraryIndex>;
   if (!Array.isArray(o.assets)) return undefined;
   const assets: LibraryAssetPublic[] = [];
-  for (const a of o.assets.slice(0, 500)) {
+  for (const item of o.assets.slice(0, 500)) {
+    const a = item as Partial<Record<keyof LibraryAssetPublic, unknown>> | null;
     if (!a || typeof a !== 'object' || typeof a.id !== 'string' || !LIBRARY_ID_RE.test(a.id)) continue;
+    if (typeof a.kind !== 'string' || !KINDS.has(a.kind)) continue;
     const url = safeUrl(a.url);
     if (!url) continue;
     const w = Number(a.w);
     const h = Number(a.h);
+    const rev = Number(a.rev);
+    const thumbs = (a.thumbs && typeof a.thumbs === 'object' ? a.thumbs : {}) as Record<string, unknown>;
+    const t320 = safeUrl(thumbs[320]);
+    const t640 = safeUrl(thumbs[640]);
+    const presetId = typeof a.presetId === 'string' && SLUG_RE.test(a.presetId) ? a.presetId : undefined;
+    const genre = typeof a.genre === 'string' && SLUG_RE.test(a.genre) ? a.genre : undefined;
+    const caption = text(a.caption, 300);
+    const provenance = sanitizeLibraryProvenance(a.provenance);
+    const lqip = sanitizeLibraryLqip(a.lqip);
     assets.push({
-      ...a,
-      url,
+      id: a.id,
+      kind: a.kind as LibraryKind,
+      ...(presetId ? { presetId } : {}),
+      ...(genre ? { genre } : {}),
+      theme: (typeof a.theme === 'string' && THEMES.has(a.theme) ? a.theme : 'any') as LibraryTheme,
+      aspect: (typeof a.aspect === 'string' && ASPECT_RE.test(a.aspect) ? a.aspect : '1:1') as LibraryAssetPublic['aspect'],
       w: Number.isFinite(w) && w > 0 ? w : 0,
       h: Number.isFinite(h) && h > 0 ? h : 0,
-      thumbs: { ...(safeUrl(a.thumbs?.[320]) ? { 320: safeUrl(a.thumbs?.[320]) } : {}), ...(safeUrl(a.thumbs?.[640]) ? { 640: safeUrl(a.thumbs?.[640]) } : {}) },
+      url,
+      thumbs: { ...(t320 ? { 320: t320 } : {}), ...(t640 ? { 640: t640 } : {}) },
       alt: typeof a.alt === 'string' ? a.alt.slice(0, 200) : '',
-      tags: Array.isArray(a.tags) ? a.tags.filter((t) => typeof t === 'string').slice(0, 16) : [],
-      palette: Array.isArray(a.palette) ? a.palette.filter((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)).slice(0, 8) : []
+      ...(caption ? { caption } : {}),
+      tags: Array.isArray(a.tags) ? a.tags.filter((t): t is string => typeof t === 'string').map((t) => t.slice(0, 40)).slice(0, 16) : [],
+      palette: Array.isArray(a.palette) ? a.palette.filter((c): c is string => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)).slice(0, 8) : [],
+      rev: Number.isInteger(rev) && rev >= 0 ? rev : 0,
+      ...(provenance ? { provenance } : {}),
+      ...(lqip ? { lqip } : {})
     });
   }
   return { manifestVersion: Number(o.manifestVersion) || LIBRARY_MANIFEST_VERSION, generatedAt: Number(o.generatedAt) || 0, assets };

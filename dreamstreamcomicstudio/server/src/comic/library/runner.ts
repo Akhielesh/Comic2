@@ -13,6 +13,14 @@
 // attempt whose estimate would take the run over its budget ($5 default, $25 hard max).
 // Generation happens ONLY here, behind requireAdmin; the director and the studio never call it.
 // Every image is generated fresh from the manifest: no user's image is ever read or reused.
+//
+// Admin spend (Program 3 ST-A): production builds run on the model-test key (adminSpendKeys, OpenRouter only;
+// unset → nothing can be built), and `startRun` — only startRun, on the admin's click — enforces the app's
+// monthly cap and checks the key's own OpenRouter limit first (keyBudget.ts); a run is only ever stepped on the key
+// it was started (and checked) on. Every attempt writes one comic_image_calls row under the admin's user_id (kind
+// 'library', kept out of users' model stats; 'blocked' when it never reached the provider), and every published
+// image carries its provenance (the exact prompt, model, route, check), which the public index publishes through
+// an allow-list: never a cost, a run id, an admin id or a key.
 
 import { randomUUID } from 'node:crypto';
 import { hashString } from '../../../../shared/comic/doc.js';
@@ -23,15 +31,21 @@ import {
   LIBRARY_MANIFEST_VERSION,
   LIBRARY_MAX_RETRIES,
   LIBRARY_STEP_MAX,
+  LIBRARY_PROMPT_MAX,
   LIBRARY_STUCK_MS,
   clampLibraryBudget,
+  sanitizeLibraryLqip,
+  sanitizeLibraryProvenance,
+  type AdminSpendKey,
   type LibraryAssetPublic,
+  type LibraryBillingView,
   type LibraryBuildRequest,
   type LibraryCandidateView,
   type LibraryEntryView,
   type LibraryIndex,
   type LibraryKind,
   type LibraryManifestView,
+  type LibraryProvenance,
   type LibraryQuote,
   type LibraryRunSummary,
   type LibraryRunView,
@@ -39,6 +53,8 @@ import {
 } from '../../../../shared/comic/library.js';
 import { QC_USD_PER_PAGE, getImageModel, imagePriceUsd, libraryAssetCostUsd } from '../../../../shared/comic/models.js';
 import { getStylePreset } from '../../../../shared/comic/stylePresets.js';
+import { imageFailureInfo } from '../imageClient.js';
+import { isRoutePausedError } from '../models/health.js';
 import { isLibraryPath } from '../storagePaths.js';
 import { measureImage } from '../imageMeasure.js';
 import { logger } from '../../lib/logger.js';
@@ -47,7 +63,9 @@ import { ISSUE_LABEL, analyzeLibraryAsset, mergeLibraryScore, type LibraryAnalys
 import { LIBRARY_MANIFEST, minScoreOf, promptHash, selectEntries, type LibraryManifestEntry } from './manifest.js';
 import { encodeLibraryImage, webpDataUrl } from './post.js';
 import { REWRITE_USD, editPrompt, planRefine, plannedTextUsd, rewritePrompt, strategyOf, type NextAttempt } from './refine.js';
-import { isTableMissing, type LibraryAssetRow, type LibraryCandidate, type LibraryRepo, type LibraryRunRequest, type LibraryRunRow } from './repo.js';
+import { isTableMissing, type LibraryAssetRow, type LibraryCandidate, type LibraryRepo, type LibraryRunPreflight, type LibraryRunRequest, type LibraryRunRow } from './repo.js';
+import { adminSpendKeyLabel, adminSpendKeyMissing, type LibraryCallLedger } from './adminSpend.js';
+import { judgeKeyBudget, judgeMonthlyCap, utcMonthStartIso, type KeyBudgetCheck } from './keyBudget.js';
 
 /** A step holds the run this long (≥ the slowest image timeout + analysis); released at the end. */
 export const LIBRARY_LEASE_MS = 6 * 60_000;
@@ -66,10 +84,23 @@ export interface LibraryStorage {
   publicUrl(path: string): string;
 }
 
+/**
+ * The admin spend guard (Program 3 ST-A). Production always wires it (createDefaultLibraryDeps in index.ts); unit
+ * tests that predate it leave it out and keep the wave-1 behaviour.
+ */
+export interface LibrarySpendGuard {
+  /** Which key `keys()` returns: the model-test key, or the platform key via COMIC_ADMIN_SPEND_KEY=platform. A name. */
+  key: () => AdminSpendKey;
+  /** COMIC_LIBRARY_MONTHLY_CAP_USD (default $20): startRun refuses a build that could pass it. */
+  monthlyCapUsd: () => number;
+  /** One GET {OpenRouter}/key with the admin spend key. Called ONLY by startRun, after an admin's click. */
+  keyBudget: KeyBudgetCheck;
+}
+
 export interface LibraryDeps {
   repo: LibraryRepo;
   storage: LibraryStorage;
-  /** The PLATFORM's keys (never a user's); null when the server has none. */
+  /** The admin spend key (adminSpendKeys in production: the model-test key, OpenRouter only); null when unset. */
   keys: () => StudioKeys | null;
   images: (keys: StudioKeys) => ImageGenerator;
   llm: (keys: StudioKeys) => LlmClient;
@@ -80,6 +111,13 @@ export interface LibraryDeps {
   audit?: (input: { actorId?: string | null; action: string; targetType?: string; targetId?: string; detail?: Record<string, unknown> }) => Promise<void>;
   /** Published set changed (invalidate the public index cache). */
   onPublishedChange?: () => void;
+  /** Monthly cap + provider preflight (P3-ST1). */
+  spend?: LibrarySpendGuard;
+  /**
+   * One comic_image_calls row per attempt (P3-ST2; kind 'library', the admin's user_id): 'ok' / 'failed' when it
+   * reached the provider, 'blocked' when the circuit breaker or a free cancel stopped it first.
+   */
+  calls?: LibraryCallLedger;
 }
 
 const versionOf = (deps: LibraryDeps) => deps.version ?? LIBRARY_MANIFEST_VERSION;
@@ -309,26 +347,93 @@ export async function getRunView(deps: LibraryDeps, runId: string): Promise<Libr
   return loadRunView(deps, run);
 }
 
+/**
+ * The console's billing line: which key, this month's spend against the app cap, and the provider limit as the
+ * last build start saw it. Reads the database only: it never calls OpenRouter (the preflight runs only in startRun).
+ */
+async function billingView(deps: LibraryDeps, guard: LibrarySpendGuard, lastRun: LibraryRunRow | undefined, tableReady: boolean): Promise<LibraryBillingView> {
+  let monthSpentUsd: number | undefined;
+  if (tableReady) {
+    try {
+      monthSpentUsd = await deps.repo.monthSpentUsd(utcMonthStartIso(deps.now()));
+    } catch (err) {
+      logger.warn('comic_library_month_spend_unreadable', { message: (err as Error)?.message });
+    }
+  }
+  const pf = lastRun?.request?.preflight;
+  const left = pf ? [pf.remainingUsd, pf.budgetRemainingUsd].filter((n): n is number => typeof n === 'number') : [];
+  return {
+    key: spendKeys(deps) ? guard.key() : null,
+    ...(monthSpentUsd !== undefined ? { monthSpentUsd } : {}),
+    monthCapUsd: guard.monthlyCapUsd(),
+    ...(pf ? { limitUsd: pf.limitUsd, remainingUsd: left.length ? Math.min(...left) : null, checkedAt: pf.checkedAt } : {})
+  };
+}
+
 export async function manifestView(deps: LibraryDeps): Promise<LibraryManifestView> {
   const { rows, tableReady } = await loadRows(deps, { tolerateMissing: true });
   let activeRun: LibraryRunView | undefined;
   let lastRun: LibraryRunSummary | undefined;
+  let lastRow: LibraryRunRow | undefined;
   if (tableReady) {
     const active = await deps.repo.activeRun(versionOf(deps));
     if (active) activeRun = runView(active, rows);
     const recent = await deps.repo.listRuns(versionOf(deps), 1);
-    if (recent[0]) lastRun = runSummary(recent[0]);
+    if (recent[0]) {
+      lastRow = recent[0];
+      lastRun = runSummary(recent[0]);
+    }
   }
+  const billing = deps.spend ? await billingView(deps, deps.spend, lastRow, tableReady) : undefined;
   return {
     manifestVersion: versionOf(deps),
     bucket: deps.bucket,
-    platformKey: !!deps.keys(),
+    platformKey: !!spendKeys(deps),
+    ...(billing ? { billing } : {}),
     tableReady,
     entries: manifestOf(deps).map((e) => entryView(deps, e, rows.get(e.id))),
     ...(activeRun ? { activeRun } : {}),
     ...(lastRun ? { lastRun } : {})
   };
 }
+
+// ── Provenance (P3-ST2) ──────────────────────────────────────────────────────
+
+/**
+ * How a candidate was made, as the published snapshot keeps it. Undefined for candidates drawn before ST-A (no
+ * exact prompt was kept): no provenance rather than a guess. `attempts` counts the candidates its run drew for
+ * this asset up to it (refines included).
+ */
+export function provenanceOf(entry: Pick<LibraryManifestEntry, 'model' | 'resolution' | 'aspect'>, c: LibraryCandidate, candidates: readonly LibraryCandidate[]): LibraryProvenance | undefined {
+  if (!c.prompt || !c.promptHash) return undefined;
+  const spec = getImageModel(entry.model);
+  const attempts = c.runId ? Math.max(1, candidates.filter((x) => x.runId === c.runId && x.rev <= c.rev).length) : 1;
+  return sanitizeLibraryProvenance({
+    model: entry.model,
+    ...(spec ? { modelLabel: spec.label, nickname: spec.nickname, factsAsOf: spec.factsAsOf } : {}),
+    ...(c.providerModel ? { providerModel: c.providerModel } : {}),
+    ...(c.modelVersion ? { modelVersion: c.modelVersion } : {}),
+    route: c.route ?? 'openrouter',
+    key: c.key ?? 'platform',
+    prompt: c.prompt,
+    promptHash: c.promptHash,
+    seed: null,
+    // The registry says which models take no seed (`unsupported`); the library never sends one.
+    seedSupported: !!spec && !(spec.unsupported || []).includes('seed'),
+    resolution: entry.resolution,
+    aspect: entry.aspect,
+    score: c.score,
+    ...(c.checkerModel ? { checkerModel: c.checkerModel } : {}),
+    attempts,
+    strategy: c.strategy,
+    generatedAt: c.at
+  });
+}
+
+const withProvenance = (raw: unknown): { provenance?: LibraryProvenance } => {
+  const provenance = sanitizeLibraryProvenance(raw);
+  return provenance ? { provenance } : {};
+};
 
 // ── Public index ─────────────────────────────────────────────────────────────
 
@@ -364,7 +469,10 @@ export async function publicIndex(deps: LibraryDeps): Promise<{ index: LibraryIn
       ...(p.caption ? { caption: p.caption } : {}),
       tags: p.tags || [],
       palette: p.palette || [],
-      rev: p.rev
+      rev: p.rev,
+      // Allow-listed again here (defence in depth): only LibraryProvenance's own fields ever leave the server.
+      ...withProvenance(p.provenance),
+      ...(sanitizeLibraryLqip(p.lqip) ? { lqip: p.lqip as string } : {})
     });
   }
   const index: LibraryIndex = { manifestVersion: versionOf(deps), generatedAt, assets };
@@ -373,11 +481,51 @@ export async function publicIndex(deps: LibraryDeps): Promise<{ index: LibraryIn
 
 // ── Runs ─────────────────────────────────────────────────────────────────────
 
-const requireKeys = (deps: LibraryDeps): StudioKeys => {
+/**
+ * The keys a build may spend on. Under the spend guard that is the admin spend key's OpenRouter entry ONLY: a
+ * Gemini key is dropped even if one is handed in, so admin spend can never land on the platform Gemini key.
+ */
+const spendKeys = (deps: LibraryDeps): StudioKeys | null => {
   const keys = deps.keys();
-  if (!keys) throw new StudioError('NOT_AVAILABLE', "The platform image key isn't configured on the server.", { status: 503 });
+  if (!keys) return null;
+  if (!deps.spend) return keys;
+  return keys.openrouter?.key ? { openrouter: { key: keys.openrouter.key, byok: false } } : null;
+};
+
+const requireKeys = (deps: LibraryDeps): StudioKeys => {
+  const keys = spendKeys(deps);
+  if (!keys) {
+    // Fail closed: no admin spend key, no build (the platform key is used only when COMIC_ADMIN_SPEND_KEY=platform).
+    const message = deps.spend
+      ? `${adminSpendKeyMissing(deps.spend.key())} Nothing can be built, and nothing was spent.`
+      : "The platform image key isn't configured on the server.";
+    throw new StudioError('NOT_AVAILABLE', message, { status: 503 });
+  }
   return keys;
 };
+
+/**
+ * The hard caps, checked when a build starts (only here: an admin's Build or Regenerate click). First the app's
+ * monthly cap (database only), then ONE provider check of the key's own limit. Either refusal spends nothing.
+ */
+async function checkSpend(deps: LibraryDeps, guard: LibrarySpendGuard, keys: StudioKeys, budgetUsd: number): Promise<{ preflight: LibraryRunPreflight; warning?: string }> {
+  // A running build answers 409 anyway; say so before asking OpenRouter anything.
+  if (await deps.repo.activeRun(versionOf(deps))) throw new StudioError('CONFLICT', 'A library build is already running. Resume or cancel it first.', { status: 409 });
+  const now = deps.now();
+  const capUsd = guard.monthlyCapUsd();
+  const month = judgeMonthlyCap(await deps.repo.monthSpentUsd(utcMonthStartIso(now)), budgetUsd, capUsd, now);
+  if (!month.ok) throw new StudioError('BUDGET_EXCEEDED', month.message || 'This build would pass the monthly library cap. Nothing was spent.', { status: 409 });
+  const label = guard.key();
+  const key = keys.openrouter?.key;
+  if (!key) throw new StudioError('NOT_AVAILABLE', `${adminSpendKeyMissing(label)} Nothing can be built, and nothing was spent.`, { status: 503 });
+  const budget = await guard.keyBudget(key, label);
+  const verdict = judgeKeyBudget(budget, budgetUsd, label, capUsd);
+  if (!verdict.ok) throw new StudioError('BUDGET_EXCEEDED', verdict.message || "The key's OpenRouter limit can't cover this build. Nothing was spent.", { status: 409 });
+  return {
+    preflight: { limitUsd: budget.limitUsd, remainingUsd: budget.remainingUsd, budgetRemainingUsd: budget.budget?.remainingUsd ?? null, checkedAt: budget.checkedAt },
+    ...(verdict.warning ? { warning: verdict.warning } : {})
+  };
+}
 
 const freshRow = (deps: LibraryDeps, e: LibraryManifestEntry, existing: LibraryAssetRow | undefined, runId: string): LibraryAssetRow => {
   const now = iso(deps.now());
@@ -426,19 +574,25 @@ export interface StartRunResult {
   run: LibraryRunView | null;
   quote: LibraryQuote;
   message: string;
+  /**
+   * A pass the admin should still act on (the key has no OpenRouter limit, so only the app cap applies). It is
+   * also the last sentence of `message`, so an older console still shows it; a newer one shows it as a warning.
+   */
+  warning?: string;
 }
 
 /**
  * Create a run (the admin's explicit "Build library" / "Regenerate" click). It spends nothing:
- * the console then drives it with `step`. 409 while another run is running; 503 without a
- * platform key or before the tables exist.
+ * the console then drives it with `step`. 409 while another run is running, or when the run's budget
+ * could pass the monthly cap or the key's OpenRouter limit (checked here, once, and nowhere else);
+ * 503 without the admin spend key, when OpenRouter can't confirm the limit, or before the tables exist.
  */
 export async function startRun(
   deps: LibraryDeps,
   req: LibraryBuildRequest & { note?: string },
   adminId: string
 ): Promise<StartRunResult> {
-  requireKeys(deps);
+  const keys = requireKeys(deps);
   const note = cleanNote(req.note);
   const plan = await planQuote(deps, req, { tolerateMissing: false });
   if (!plan.todo.length) {
@@ -450,6 +604,8 @@ export async function startRun(
         : 'Nothing selected to build.'
     };
   }
+  const budgetUsd = clampLibraryBudget(req.budgetUsd ?? LIBRARY_BUDGET_DEFAULT_USD);
+  const checked = deps.spend ? await checkSpend(deps, deps.spend, keys, budgetUsd) : undefined;
   const now = deps.now();
   const request: LibraryRunRequest = {
     ...(req.ids?.length ? { ids: req.ids.slice(0, 200) } : {}),
@@ -457,14 +613,16 @@ export async function startRun(
     ...(req.force ? { force: true } : {}),
     ...(req.includeOptional ? { includeOptional: true } : {}),
     maxRetries: clampRetries(req.maxRetries),
-    ...(note ? { note } : {})
+    ...(note ? { note } : {}),
+    ...(deps.spend ? { key: deps.spend.key() } : {}),
+    ...(checked ? { preflight: checked.preflight } : {})
   };
   const run: LibraryRunRow = {
     id: randomUUID(),
     manifest_version: versionOf(deps),
     started_by: adminId,
     status: 'running',
-    budget_usd: clampLibraryBudget(req.budgetUsd ?? LIBRARY_BUDGET_DEFAULT_USD),
+    budget_usd: budgetUsd,
     spent_usd: 0,
     request,
     quote: plan.quote,
@@ -484,12 +642,31 @@ export async function startRun(
     await deps.repo.updateRun(run.id, { status: 'failed', error: "The build couldn't be prepared. Nothing was spent; try again.", finished_at: iso(deps.now()) });
     throw err;
   }
-  await deps.audit?.({ actorId: adminId, action: 'comic.library.run_start', targetType: 'library_runs', targetId: run.id, detail: { assets: run.asset_ids.length, budgetUsd: run.budget_usd, quoteUsd: plan.quote.usd, note: !!note } });
+  await deps.audit?.({
+    actorId: adminId,
+    action: 'comic.library.run_start',
+    targetType: 'library_runs',
+    targetId: run.id,
+    detail: {
+      assets: run.asset_ids.length,
+      budgetUsd: run.budget_usd,
+      quoteUsd: plan.quote.usd,
+      note: !!note,
+      ...(request.key ? { key: request.key } : {}),
+      ...(checked ? { limitRemainingUsd: checked.preflight.remainingUsd, budgetRemainingUsd: checked.preflight.budgetRemainingUsd } : {})
+    }
+  });
   const view = await loadRunView(deps, run);
   return {
     run: view,
     quote: plan.quote,
-    message: `Build ready: ${run.asset_ids.length} image${run.asset_ids.length === 1 ? '' : 's'}, about ${fmtUsd(plan.quote.usd)} (at most ${fmtUsd(Math.min(plan.quote.worstCaseUsd, run.budget_usd))} with refines, budget ${fmtUsd(run.budget_usd)}).`
+    ...(checked?.warning ? { warning: checked.warning } : {}),
+    message: [
+      `Build ready: ${run.asset_ids.length} image${run.asset_ids.length === 1 ? '' : 's'}, about ${fmtUsd(plan.quote.usd)} (at most ${fmtUsd(Math.min(plan.quote.worstCaseUsd, run.budget_usd))} with refines, budget ${fmtUsd(run.budget_usd)}).`,
+      checked?.warning ?? ''
+    ]
+      .filter(Boolean)
+      .join(' ')
   };
 }
 
@@ -529,9 +706,19 @@ export const bestCandidate = (row: Pick<LibraryAssetRow, 'prompt_hash'>, candida
     .filter((c) => c.hash === row.prompt_hash && c.runId === runId)
     .reduce<LibraryCandidate | undefined>((best, c) => (!best || c.score >= best.score ? c : best), undefined);
 
-/** Row fields that point at a candidate (+ the published snapshot when it passes). */
-const settlePatch = (deps: LibraryDeps, entry: LibraryManifestEntry, row: LibraryAssetRow, best: LibraryCandidate, publish: boolean, reviewer?: string): Partial<LibraryAssetRow> => {
+/** Row fields that point at a candidate (+ the published snapshot, with its provenance, when it passes). */
+const settlePatch = (
+  deps: LibraryDeps,
+  entry: LibraryManifestEntry,
+  row: LibraryAssetRow,
+  best: LibraryCandidate,
+  publish: boolean,
+  candidates: readonly LibraryCandidate[],
+  reviewer?: string
+): Partial<LibraryAssetRow> => {
   const now = deps.now();
+  const provenance = publish ? provenanceOf(entry, best, candidates) : undefined;
+  const lqip = sanitizeLibraryLqip(best.lqip);
   return {
     rev: best.rev,
     path: best.path,
@@ -557,7 +744,9 @@ const settlePatch = (deps: LibraryDeps, entry: LibraryManifestEntry, row: Librar
             ...(best.caption ? { caption: best.caption } : {}),
             tags: unionTags(entry.tags, best.tags),
             palette: best.palette || [],
-            at: now
+            at: now,
+            ...(provenance ? { provenance } : {}),
+            ...(lqip ? { lqip } : {})
           },
           published_at: iso(now),
           ...(reviewer ? { reviewed_by: reviewer } : {})
@@ -583,7 +772,7 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
       return { id: entry.id, spent, status: 'failed', note: error || 'failed' };
     }
     const publish = best.score >= minScoreOf(entry);
-    await update({ ...settlePatch(deps, entry, row, best, publish), candidates, error: publish ? null : error });
+    await update({ ...settlePatch(deps, entry, row, best, publish, candidates), candidates, error: publish ? null : error });
     if (publish) deps.onPublishedChange?.();
     return { id: entry.id, spent, status: publish ? 'published' : 'needs_review', score: best.score, note: publish ? `published (${best.score.toFixed(2)})` : 'needs your review' };
   };
@@ -617,8 +806,12 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
     references = [];
   }
 
-  // 2. Generate.
+  // 2. Generate. Every attempt becomes one comic_image_calls row (the admin's user_id, kind 'library', billed 0):
+  // 'ok' / 'failed' when it reached the provider, 'blocked' when it was stopped before any call. Admin test
+  // traffic is on the record, and out of users' model stats.
   let result: ImageResult;
+  const startedAt = deps.now();
+  const callBase = { userId: adminId, modelId: spec.id, ...(spec.routes.openrouter ? { providerModel: spec.routes.openrouter } : {}), res: entry.resolution, aspect: entry.aspect, refs: references.length };
   try {
     result = await deps.images(keys)({ spec, resolution: entry.resolution, aspect: entry.aspect, prompt, references });
   } catch (err) {
@@ -628,6 +821,27 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
     if (cost > 0) {
       spent += cost;
       await deps.repo.recordCost({ userId: adminId, stage: 'library_image', provider: 'platform', model: spec.id, costUsd: cost, metadata: { ...meta, failed: e.code || 'error', abandoned: !!e.abandoned } });
+    }
+    // NO_IMAGE_KEY / BILLING_DENIED stop before any provider call: nothing to record. A circuit-breaker refusal
+    // (the route is paused) or a cancel with nothing spent made no provider call either: that is a 'blocked' row
+    // (the jobs.ts convention), never a 'failed' provider call in the admin audit.
+    if (!(err instanceof StudioError && (err.code === 'NO_IMAGE_KEY' || err.code === 'BILLING_DENIED'))) {
+      const paused = isRoutePausedError(err);
+      const cancelledFree = err instanceof StudioError && err.code === 'CANCELLED' && !(typeof e.spentUsd === 'number' && e.spentUsd > 0) && !e.abandoned;
+      if (paused || cancelledFree) {
+        deps.calls?.record({ ...callBase, outcome: 'blocked', errorCode: paused ? 'ROUTE_PAUSED' : 'CANCELLED', providerCostUsd: null });
+      } else {
+        const info = imageFailureInfo(err);
+        deps.calls?.record({
+          ...callBase,
+          ...(info?.providerName ? { providerName: info.providerName } : {}),
+          outcome: 'failed',
+          ...(typeof info?.status === 'number' && info.status > 0 ? { httpStatus: info.status } : {}),
+          errorCode: err instanceof StudioError ? err.code : 'PROVIDER_ERROR',
+          providerCostUsd: typeof e.spentUsd === 'number' && e.spentUsd >= 0 ? e.spentUsd : null,
+          latencyMs: Math.max(0, deps.now() - startedAt)
+        });
+      }
     }
     const message = err instanceof StudioError ? err.userMessage : 'The image request failed.';
     if (err instanceof StudioError && (err.code === 'NO_IMAGE_KEY' || err.code === 'BILLING_DENIED')) {
@@ -648,6 +862,15 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
     return settle(row.candidates, message);
   }
   const imageCost = typeof result.costUsd === 'number' && result.costUsd > 0 ? result.costUsd : imagePriceUsd(spec, entry.resolution);
+  deps.calls?.record({
+    ...callBase,
+    ...(result.model ? { providerModel: result.model } : {}),
+    ...(result.providerName ? { providerName: result.providerName } : {}),
+    outcome: 'ok',
+    providerCostUsd: typeof result.costUsd === 'number' && result.costUsd >= 0 ? result.costUsd : null,
+    latencyMs: typeof result.latencyMs === 'number' ? Math.max(0, Math.round(result.latencyMs)) : Math.max(0, deps.now() - startedAt),
+    ...(result.modelVersion ? { modelVersion: result.modelVersion } : {})
+  });
   spent += imageCost;
   await deps.repo.recordCost({ userId: adminId, stage: 'library_image', provider: result.route || 'platform', model: result.model || spec.id, costUsd: imageCost, metadata: { ...meta, strategy: next.strategy } });
 
@@ -693,7 +916,16 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
       ...(analysis.report?.tags?.length ? { tags: analysis.report.tags.filter((t) => !LIBRARY_IP_BLOCKLIST.test(t)).slice(0, 12) } : {}),
       palette: measure.palette,
       ...(analysis.report?.textFound?.length ? { textFound: analysis.report.textFound.slice(0, 12) } : {}),
-      costUsd: round4(spent)
+      costUsd: round4(spent),
+      // Provenance (P3-ST2): the exact prompt sent and what drew and checked it. Never the key, only its name.
+      // A prompt past the cap is kept out rather than cut (a cut prompt is no longer the exact one).
+      ...(prompt.length <= LIBRARY_PROMPT_MAX ? { prompt, promptHash: hashString(prompt) } : {}),
+      ...(result.model || spec.routes.openrouter ? { providerModel: result.model || spec.routes.openrouter } : {}),
+      ...(result.modelVersion ? { modelVersion: result.modelVersion.slice(0, 160) } : {}),
+      ...(analysis.model ? { checkerModel: analysis.model.slice(0, 160) } : {}),
+      key: deps.spend?.key() ?? 'platform',
+      route: result.route === 'gemini' ? 'gemini' : 'openrouter',
+      ...(enc.lqip ? { lqip: enc.lqip } : {})
     };
     const candidates = [...row.candidates, candidate].slice(-MAX_CANDIDATES);
     const analysisDoc = {
@@ -762,6 +994,15 @@ export async function stepRun(deps: LibraryDeps, runId: string, nRaw: unknown, a
   if (run.status !== 'running') {
     const view = await loadRunView(deps, run);
     return { ...view, message: `This build is ${run.status.replace('_', ' ')}.`, waitMs: 0 };
+  }
+  // A run spends only on the key it was started (and preflighted) on: if COMIC_ADMIN_SPEND_KEY flipped since, stop
+  // before drawing anything rather than carry on against a limit nobody checked.
+  if (deps.spend && run.request.key && run.request.key !== deps.spend.key()) {
+    throw new StudioError(
+      'CONFLICT',
+      `This build started on the ${adminSpendKeyLabel(run.request.key)}; the server now spends on the ${adminSpendKeyLabel(deps.spend.key())}. Cancel it and start a new build. Nothing more was spent.`,
+      { status: 409 }
+    );
   }
   const keys = requireKeys(deps);
   const now = deps.now();
@@ -915,7 +1156,7 @@ export async function publishAsset(deps: LibraryDeps, id: string, revRaw: unknow
   const rev = revRaw === undefined || revRaw === null ? row.rev : Number(revRaw);
   const cand = Number.isInteger(rev) ? row.candidates.find((c) => c.rev === rev) : undefined;
   if (!cand) throw new StudioError('NOT_FOUND', 'That candidate no longer exists.', { status: 404 });
-  const patch = { ...settlePatch(deps, entry, row, cand, true, adminId), error: null };
+  const patch = { ...settlePatch(deps, entry, row, cand, true, row.candidates, adminId), error: null };
   await deps.repo.updateAsset(versionOf(deps), id, patch);
   deps.onPublishedChange?.();
   await deps.audit?.({ actorId: adminId, action: 'comic.library.publish', targetType: 'library_assets', targetId: id, detail: { rev: cand.rev, score: cand.score } });
@@ -950,6 +1191,15 @@ export async function rejectAsset(
   return entryView(deps, entry, { ...row, ...patch } as LibraryAssetRow);
 }
 
+/** The smallest default budget a one-asset regenerate gets (room for its refines, whatever the model). */
+const REGENERATE_BUDGET_MIN_USD = 0.5;
+
+/** A one-asset build's default budget: its worst case with refines, at least $0.50, at most the build default. */
+export const regenerateBudgetUsd = async (deps: LibraryDeps, req: LibraryBuildRequest): Promise<number> => {
+  const plan = await planQuote(deps, req);
+  return clampLibraryBudget(Math.min(LIBRARY_BUDGET_DEFAULT_USD, Math.max(plan.quote.worstCaseUsd, REGENERATE_BUDGET_MIN_USD)));
+};
+
 /** A one-asset run (force) with an optional art-director note; the console then steps it. */
 export async function regenerateAsset(
   deps: LibraryDeps,
@@ -959,18 +1209,11 @@ export async function regenerateAsset(
 ): Promise<StartRunResult> {
   if (!LIBRARY_ID_RE.test(id) || !entryOf(deps, id)) throw new StudioError('NOT_FOUND', 'That asset is not in the library manifest.', { status: 404 });
   const note = cleanNote(body.note);
-  return startRun(
-    deps,
-    {
-      ids: [id],
-      force: true,
-      includeOptional: true,
-      budgetUsd: typeof body.budgetUsd === 'number' ? body.budgetUsd : undefined,
-      maxRetries: clampRetries(body.maxRetries),
-      ...(note ? { note } : {})
-    },
-    adminId
-  );
+  const req: LibraryBuildRequest = { ids: [id], force: true, includeOptional: true, maxRetries: clampRetries(body.maxRetries) };
+  // No budget sent (the asset drawer has no budget field): budget this one asset's worst case (≥ $0.50), not the
+  // build default, so a one-image redraw near the monthly cap isn't refused with advice the drawer can't follow.
+  const budgetUsd = typeof body.budgetUsd === 'number' ? body.budgetUsd : await regenerateBudgetUsd(deps, req);
+  return startRun(deps, { ...req, budgetUsd, ...(note ? { note } : {}) }, adminId);
 }
 
 /** Delete stored candidates no row points at (current, published). Refused while a build runs. */

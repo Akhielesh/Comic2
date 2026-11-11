@@ -200,6 +200,57 @@ describe('LibraryImage: decode-gated reveal', () => {
     expect(screen.getByTestId('procedural')).toBeInTheDocument();
   });
 
+  it('an LQIP is painted behind the picture until it is in, then leaves with the fallback (ST-A #4)', async () => {
+    const lqip = 'data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAADwAgCdASoUABQAPu1ur1IppiQiqAgBMB2JaQAAPaaKAAD+zhQgAA==';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ ...INDEX, assets: [{ ...ASSET, lqip }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    );
+    installAnimate();
+    installDecode();
+    const { container } = renderImage();
+    const img = await screen.findByRole('img');
+    const preview = () => container.querySelector('[data-library-lqip]') as HTMLElement | null;
+    // Loading: the preview sits over the procedural fallback and under the picture, decoration only.
+    expect(preview()).not.toBeNull();
+    expect(preview()!.style.backgroundImage).toContain(lqip);
+    expect(preview()).toHaveAttribute('aria-hidden', 'true');
+    expect(preview()!.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('procedural').compareDocumentPosition(preview()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    act(() => {
+      fireEvent.load(img);
+    });
+    expect(preview()).not.toBeNull();
+    await decodeNow();
+    // Still under the fading picture; gone (with the fallback) once the entrance has finished.
+    expect(preview()).not.toBeNull();
+    await finishAll();
+    expect(preview()).toBeNull();
+    expect(screen.queryByTestId('procedural')).toBeNull();
+  });
+
+  it('no LQIP, no preview layer', async () => {
+    const { container } = renderImage();
+    await screen.findByRole('img');
+    expect(container.querySelector('[data-library-lqip]')).toBeNull();
+  });
+
+  it('an error drops the LQIP with the picture: the fallback alone', async () => {
+    const lqip = 'data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAADwAgCdASoUABQAPu1ur1IppiQiqAgBMB2JaQAAPaaKAAD+zhQgAA==';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ ...INDEX, assets: [{ ...ASSET, lqip }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    );
+    const { container } = renderImage();
+    const img = await screen.findByRole('img');
+    expect(container.querySelector('[data-library-lqip]')).not.toBeNull();
+    act(() => {
+      fireEvent.error(img);
+    });
+    expect(container.querySelector('[data-library-lqip]')).toBeNull();
+    expect(screen.getByTestId('procedural')).toBeInTheDocument();
+  });
+
   it('keeps its five props', () => {
     const props: Required<LibraryImageProps> = { id: 'style.noir-ink', sizes: '1px', fallback: null, className: '', alt: '' };
     expect(Object.keys(props).sort()).toEqual(['alt', 'className', 'fallback', 'id', 'sizes']);

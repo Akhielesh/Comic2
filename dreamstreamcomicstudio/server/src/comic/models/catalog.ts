@@ -18,6 +18,7 @@
 import type { ComicDoc, Resolution } from '../../../../shared/comic/doc.js';
 import type { StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { IMAGE_MODELS, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
+import { isAdminSpendCallKind } from '../../../../shared/comic/library.js';
 import { lockedModelId, modelFit, redrawResolution, type FitReason, type PriceBook } from '../../../../shared/comic/modelLock.js';
 import type {
   CatalogEndpoint,
@@ -708,6 +709,12 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
   };
 
   const CALLS_WINDOW_MS = CALLS_LOOKBACK_DAYS * DAY_MS;
+  /**
+   * Admin spend (library builds 'library', Model Lab 'lab_*'; Program 3 ST-A) is recorded in comic_image_calls under
+   * the admin's user_id but is never part of a user-facing model stat: not the admin's own "your calls", not the
+   * platform aggregate (the RPC groups by kind, so those groups drop out whole).
+   */
+  const userFacing = <T extends { kind: string }>(rows: T[]): T[] => rows.filter((r) => !isAdminSpendCallKind(r.kind));
   const loadCalls = async (userId: string | undefined, opts: { last24h: boolean }) => {
     const empty = { yours: [] as ImageCallRow[], platform: [] as PlatformStatRow[], platform24h: [] as PlatformStatRow[] };
     if (!calls) return empty;
@@ -717,7 +724,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       platformStatsFor(CALLS_WINDOW_MS).catch((err) => (logger.warn('comic_image_calls_stats_failed', { message: (err as Error)?.message }), [] as PlatformStatRow[])),
       opts.last24h ? platformStatsFor(DAY_MS).catch(() => [] as PlatformStatRow[]) : Promise.resolve([] as PlatformStatRow[])
     ]);
-    return { yours, platform, platform24h };
+    return { yours: userFacing(yours), platform: userFacing(platform), platform24h: userFacing(platform24h) };
   };
 
   interface Loaded {
