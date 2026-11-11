@@ -13,12 +13,17 @@
 //     `frameSources` (contract §13.4) and never shows the full original while that small file is still
 //     being signed; the <img> is lazy and decodes off the main thread. Only art stored before variants
 //     existed falls back to the original, marked `data-heavy-img` for the QA image budget. A blocked
-//     image is never requested: the tile says it was withheld.
+//     image is never requested: the tile says it was withheld. A small file the signer gave up on
+//     (`isUnsignable`) reads "Preview unavailable" instead of loading forever.
 //   • progress — a drawing tile says how long it has been drawing against the model's usual time
-//     ("12s · usually ~20s") and which model draws it, with an indeterminate bar until the usual time
-//     and "taking longer than usual" after it. One shared one-second clock serves every drawing tile;
-//     it never fetches, skips hidden tabs and stops when nothing draws. No prices here (governed users
-//     never see dollars).
+//     ("12s · usually ~20s") and which model draws it, with an indeterminate bar until it reads "taking
+//     longer than usual" — at the board's own threshold (SLOW_FACTOR × the usual time), so the chat and the
+//     board never disagree about one render. Far past it (isStuck) the tile stops: "Still drawing", a
+//     still dot, no shimmer, and a free "Check again" (the open studio's refresh, on a tap only). One shared
+//     one-second clock serves every drawing tile; it never fetches, skips hidden tabs and stops when
+//     nothing draws. Only the page's first drawing tile carries the live ping and the sweeping bar (one live
+//     pulse per view, declutter C9); the others keep a still dot. No prices here (governed users never see
+//     dollars).
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, CircleAlert, RotateCcw } from 'lucide-react';
@@ -39,10 +44,10 @@ import { canServeToOwner } from '../../../../shared/comic/safety';
 import { ImageDevelop } from '../../../studio/kit/streamMotion';
 import { LiveDot } from '../../../ds/LiveDot';
 import { useInViewPause } from '../../../ds/useInViewPause';
-import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import { THUMB_MAX_W, frameSources, variantCssWidth, type FrameSources } from '../../board/ImageFrame';
 import { formatElapsed, jobModel } from '../../board/boardModel';
-import { isStuck } from '../../board/ui';
+import { isStuck, studioRefresh } from '../../board/ui';
 import type { StudioController } from '../../types';
 import { cx } from '../ui';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
@@ -129,18 +134,44 @@ const thumbVariantOf = (asset: AssetRef): { path: string; w?: number } | undefin
   return pick.path !== asset.path && !!pick.w && pick.w <= THUMB_MAX_W ? pick : undefined;
 };
 
+/** A tile's sources; `unavailable` = its small file exists but the signer gave up on it (no URL will come). */
+export type TileSources = FrameSources & { unavailable?: boolean };
+
+/** Whether the signer gave up on a stored path for good (useStudio `isUnsignable`: never stored, broken, out of attempts). */
+export type IsUnsignable = (path: string) => boolean;
+
+/**
+ * The controller's `isUnsignable`, when it has one. Read by name so the cards pick it up the moment useStudio
+ * exposes it (PF-2 wave note); until then a tile whose small file can't be signed keeps its loading shimmer.
+ */
+export const unsignableOf = (studio: object | null | undefined): IsUnsignable | undefined => {
+  const f = studio ? (studio as { isUnsignable?: unknown }).isUnsignable : undefined;
+  return typeof f === 'function' ? (path: string) => !!(f as IsUnsignable).call(studio, path) : undefined;
+};
+
 /**
  * Sources for one stored image in a chat card: the ≤ 480w variant through the board's `frameSources` (the
  * same signer request, so no extra signing round trip), lazy-loadable with `srcSet`/`sizes`. A tile NEVER
  * shows the full original when a small variant exists: while that variant is still being signed the
- * controller would hand back the original (it never fetches both), so the tile waits for the small file.
+ * controller would hand back the original (it never fetches both), so the tile waits for the small file —
+ * and when the signer has given up on that file (`isUnsignable`), the tile is `unavailable` (a calm, still
+ * "Preview unavailable") rather than waiting forever or pulling the original into a 64 px tile.
  * Art stored before variants existed has only its original: that one is returned, marked `heavy`.
  * Blocked images get nothing (no URL is ever signed for them).
  */
-export const tileSources = (urlFor: StudioController['urlFor'], asset: AssetRef | null | undefined, sizes: string = TILE_SIZES): FrameSources => {
+export const tileSources = (
+  urlFor: StudioController['urlFor'],
+  asset: AssetRef | null | undefined,
+  sizes: string = TILE_SIZES,
+  isUnsignable?: IsUnsignable
+): TileSources => {
   if (!asset?.path || !canServeToOwner(asset)) return { heavy: false };
+  const thumb = thumbVariantOf(asset);
+  // First: a broken small file keeps its last (dead) URL in the signer's table, so its srcSet would still be
+  // built, and the browser never falls back from a failed srcset candidate to `src`. Nothing is signed for it.
+  if (thumb && isUnsignable?.(thumb.path)) return { heavy: false, unavailable: true };
   const s = frameSources(urlFor, asset, { maxW: THUMB_MAX_W, sizes });
-  if (s.srcSet || s.heavy || !thumbVariantOf(asset)) return s;
+  if (s.srcSet || s.heavy || !thumb) return s;
   return { heavy: false };
 };
 
@@ -148,6 +179,15 @@ export const tileSources = (urlFor: StudioController['urlFor'], asset: AssetRef 
 
 /** Tick of the shared tile clock. */
 export const TILE_CLOCK_MS = 1000;
+
+/**
+ * "Taking longer than usual" starts past this many times the model's usual time — the board's RenderOverlay
+ * threshold (`typicalSec * 2500` ms in board/ui.tsx), so one render never reads "slow" in the chat while the
+ * board still reads "(usually ~20s)". `usual` is the model's typical time, so half of normal renders run past
+ * 1×: calling those slow would cry wolf. (Wave note: board/ui exports one SLOW_FACTOR beside STUCK_FACTOR and
+ * both files import it; renderTile.test pins the two against each other until then.)
+ */
+export const SLOW_FACTOR = 2.5;
 
 const tileClock = (() => {
   const listeners = new Set<() => void>();
@@ -168,33 +208,53 @@ const tileClock = (() => {
           timer = null;
         }
       };
+    },
+    /** The longest-running subscriber (a Set keeps insertion order): the one tile that carries the live pulse. */
+    lead(): (() => void) | undefined {
+      for (const fn of listeners) return fn;
+      return undefined;
     }
   };
 })();
 
 /**
+ * The shared clock plus whether THIS tile leads it. Exactly one ticking tile on the page leads (the first one
+ * that started drawing); when it finishes, the next one takes over on the next tick. Never touches the network.
+ */
+const useTileClockLead = (active: boolean): { now: number; lead: boolean } => {
+  const [now, setNow] = useState(() => Date.now());
+  const [lead, setLead] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    // Each tick re-reads who leads, so when the leading tile finishes the next one takes the pulse.
+    const fn = () => {
+      setNow(Date.now());
+      setLead(tileClock.lead() === fn);
+    };
+    const off = tileClock.subscribe(fn);
+    fn();
+    return off;
+  }, [active]);
+  return { now, lead: active && lead };
+};
+
+/**
  * Wall clock for drawing tiles: ONE interval for every tile on the page (never one per tile), running only
  * while at least one tile is `active`. It only re-renders the tiles that read it and never touches the network.
  */
-export const useTileClock = (active: boolean): number => {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    return tileClock.subscribe(() => setNow(Date.now()));
-  }, [active]);
-  return now;
-};
+export const useTileClock = (active: boolean): number => useTileClockLead(active).now;
 
 export interface TileProgress {
   /** "12s"; absent when the start time is unknown or the render is far past its usual time. */
   elapsed?: string;
-  /** "usually ~20s" until the usual time, then "taking longer than usual" (and "much longer than usual" when stuck). */
+  /** "usually ~20s", then "taking longer than usual" past SLOW_FACTOR × that, and "much longer than usual" when stuck. */
   hint?: string;
-  /** Show the indeterminate bar (only until the usual time). */
+  /** Show the indeterminate bar (until "taking longer than usual"). */
   bar: boolean;
   /** The clock should keep ticking. */
   ticking: boolean;
+  /** Far past the usual time (board `isStuck`): the clock stops and the tile offers "Check again". */
+  stuck?: boolean;
 }
 
 /** What a busy tile says about time. Pure: `since` is when the status began (render.updatedAt). */
@@ -203,9 +263,9 @@ export const tileProgress = (status: RenderState['status'], since: number | unde
   const typical = typicalSec && typicalSec > 0 ? typicalSec : undefined;
   if (!since) return { hint: typical ? `usually ~${typical}s` : undefined, bar: true, ticking: false };
   const elapsedMs = Math.max(0, now - since);
-  // A clock that reads "378d" helps nobody: far past the usual time it stops (the board offers "Check again").
-  if (isStuck(elapsedMs, typical)) return { hint: 'much longer than usual', bar: false, ticking: false };
-  const slow = !!typical && elapsedMs > typical * 1000;
+  // A clock that reads "378d" helps nobody: far past the usual time it stops and offers a free "Check again".
+  if (isStuck(elapsedMs, typical)) return { hint: 'much longer than usual', bar: false, ticking: false, stuck: true };
+  const slow = !!typical && elapsedMs > typical * 1000 * SLOW_FACTOR;
   return {
     elapsed: formatElapsed(elapsedMs),
     hint: slow ? 'taking longer than usual' : typical ? `usually ~${typical}s` : undefined,
@@ -265,6 +325,15 @@ export interface RenderThumbProps {
   model?: string;
   /** The model's usual seconds per image. */
   typicalSec?: number;
+  /**
+   * The live ping and sweeping bar while drawing. By default only the page's first drawing tile carries them
+   * (one live pulse per view); `false` keeps this tile still, `true` forces them.
+   */
+  live?: boolean;
+  /** "Check again" on a tile stuck far past its usual time. Default: the open studio's refresh (board/ui `studioRefresh`). */
+  onRecheck?: () => void;
+  /** The stored image exists but its small file can't be signed (see `tileSources`): a still "Preview unavailable". */
+  unavailable?: boolean;
 }
 
 /** The image (or its status placeholder) for one render target. */
@@ -287,7 +356,10 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
   sizes,
   heavy,
   model,
-  typicalSec
+  typicalSec,
+  live,
+  onRecheck,
+  unavailable
 }) => {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
@@ -300,8 +372,15 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
   // Drawing time: one shared clock while this tile draws (stopped when it is done or far past its usual time).
   const since = render?.updatedAt;
   const ticking = now === undefined && status === 'rendering' && !!since;
-  const clock = useTileClock(ticking && tileProgress(status, since, Date.now(), typicalSec).ticking);
-  const progress = busy ? tileProgress(status, since, now ?? clock, typicalSec) : null;
+  const clock = useTileClockLead(ticking && tileProgress(status, since, Date.now(), typicalSec).ticking);
+  const progress = busy ? tileProgress(status, since, now ?? clock.now, typicalSec) : null;
+  // Far past its usual time the tile holds still and says so; a tap re-checks (free, never on a timer).
+  const stuck = !!progress?.stuck;
+  const recheck = stuck ? onRecheck ?? studioRefresh() : undefined;
+  // One live pulse per view: the ping and the sweep belong to the page's first drawing tile only.
+  const pulsing = status === 'rendering' && !stuck && (live ?? clock.lead);
+  // The small file can't be signed (never stored or broken): say so, still, instead of a shimmer that never ends.
+  const noPreview = !!unavailable && !blocked && !!render?.asset?.path && !url && (status === 'ready' || status === 'stale');
   const iconOnly = compact ?? aspectValue(aspect) >= 1;
   const frame = cx(
     'relative w-full overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)]',
@@ -370,6 +449,15 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         Withheld
       </div>
     );
+  } else if (noPreview) {
+    body = (
+      <div role="img" aria-label={`${label}: preview unavailable here`} data-preview="unavailable" className="grid h-full w-full place-items-center bg-[var(--ds-well-strong)] p-1 text-center text-[10.5px] leading-snug text-[var(--ds-muted)]">
+        Preview unavailable
+      </div>
+    );
+  } else if (stuck) {
+    // Still: the UI itself says this render is stuck, so nothing on the tile pretends it is moving.
+    body = <div data-stuck="" className="h-full w-full bg-[var(--ds-well-strong)]" aria-hidden />;
   } else if (busy || (hasImage && !url)) {
     body = <div className="studio-shimmer h-full w-full" aria-hidden />;
   } else {
@@ -382,16 +470,17 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         {body}
         {busy && (
           <span className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1 rounded-full bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10px] font-medium text-[var(--ds-ink)] shadow-sm">
-            {/* The live ping holds still off screen and under reduced motion (ds-live-dot); a queued tile's dot is still. */}
-            {status === 'rendering' ? (
+            {/* The live ping holds still off screen and under reduced motion (ds-live-dot). Only the page's first
+                drawing tile pings; the others, a queued tile and a stuck one keep a still dot. */}
+            {pulsing ? (
               <LiveDot className="h-1.5 w-1.5 shrink-0 text-[var(--ds-accent)]" />
             ) : (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" aria-hidden />
+              <span data-still-dot="" className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" aria-hidden />
             )}
-            <span className="min-w-0 truncate">{status === 'queued' ? 'Queued' : 'Drawing…'}</span>
+            <span className="min-w-0 truncate">{status === 'queued' ? 'Queued' : stuck ? 'Still drawing' : 'Drawing…'}</span>
           </span>
         )}
-        {progress?.bar && <DrawingBar />}
+        {progress?.bar && pulsing && <DrawingBar />}
         {/* One top-left row, so "Out of date" and a quality warning never sit on top of each other. */}
         {!busy && ((stale && hasImage) || (status === 'ready' && render?.error)) && (
           <span className="absolute left-1.5 top-1.5 flex max-w-[calc(100%-0.75rem)] flex-wrap items-center gap-1">
@@ -416,6 +505,20 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
           {(progress?.elapsed || progress?.hint) && <span className="block tabular-nums">{[progress?.elapsed, progress?.hint].filter(Boolean).join(' · ')}</span>}
           {model && <span className="block">{model}</span>}
         </span>
+      )}
+      {stuck && recheck && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            recheck();
+          }}
+          aria-label={`Check again: ${label}`}
+          // A real 44 px box on touch, like the board's own "Check again".
+          className={`tap-target mt-0.5 inline-flex items-center rounded-full text-[10.5px] font-semibold text-[var(--ds-accent)] hover:underline coarse:min-h-[44px] coarse:px-2 ${FOCUS_RING}`}
+        >
+          Check again
+        </button>
       )}
       {failed && (
         // Wraps instead of truncating: in a 90 px style tile "failed 16:52" must stay readable
@@ -458,7 +561,8 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
     </>
   );
 
-  return onOpen && hasImage && url ? (
+  // The whole tile opens the image — except while it holds its own control (Check again): no button in a button.
+  return onOpen && ((hasImage && url) || noPreview) && !(stuck && recheck) ? (
     <button type="button" onClick={onOpen} className={cx('block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40', className)} aria-label={`Open ${label}`}>
       {content}
     </button>

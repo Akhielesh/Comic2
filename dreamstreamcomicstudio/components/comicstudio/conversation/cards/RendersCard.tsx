@@ -9,7 +9,8 @@
 // re-quotes instead of overspending.
 //
 // Tiles load the ≤ 480w variant (lazy), never the full original (perf F2), and a drawing tile shows its
-// time against the model's usual time and the model's name (styles M4) — see renderTile.tsx.
+// time against the model's usual time and the model's name (styles M4); one stuck far past it offers a free
+// "Check again", and only the page's first drawing tile pings (one live pulse per view) — see renderTile.tsx.
 
 import React from 'react';
 import { ImageIcon, RotateCcw } from 'lucide-react';
@@ -20,7 +21,7 @@ import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
 import { failureFacts, failureReason, formatFailedAt } from './failure';
-import { RenderThumb, describeTarget, tileSources } from './renderTile';
+import { RenderThumb, describeTarget, tileSources, unsignableOf } from './renderTile';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
 type RendersCardData = Extract<Card, { type: 'renders' }>;
@@ -126,6 +127,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
   const failed = live.filter((i) => i.render?.status === 'failed');
   const onlySheets = live.length > 0 && live.every((i) => i.target.kind === 'sheet' || i.target.kind === 'place');
   const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
+  const isUnsignable = unsignableOf(studio);
 
   const open = (target: RenderTarget) => {
     switch (target.kind) {
@@ -175,7 +177,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
               const quoted = retryAllFailed(doc, [{ target, render }], studio.byok).actions;
               return quoted.length ? quoted : meta!.retry ? [meta!.retry] : [];
             };
-            const src = tileSources(studio.urlFor, render?.asset, onlySheets ? '(max-width: 640px) 50vw, 300px' : undefined);
+            const src = tileSources(studio.urlFor, render?.asset, onlySheets ? '(max-width: 640px) 50vw, 300px' : undefined, isUnsignable);
             return (
               <RenderThumb
                 key={key}
@@ -187,6 +189,7 @@ export const RendersCard: React.FC<{ card: RendersCardData; studio: ComicStudioC
                 srcSet={src.srcSet}
                 sizes={src.sizes}
                 heavy={src.heavy}
+                unavailable={src.unavailable}
                 model={meta!.model}
                 typicalSec={meta!.typicalSec}
                 onOpen={open(target)}

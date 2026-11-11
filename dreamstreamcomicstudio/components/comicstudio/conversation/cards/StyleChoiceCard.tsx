@@ -12,7 +12,7 @@ import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
 import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
-import { RenderThumb, tileModel, tileSources } from './renderTile';
+import { RenderThumb, tileModel, tileSources, unsignableOf } from './renderTile';
 import { failureSummary, retryAllFailed } from './RendersCard';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
@@ -46,6 +46,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
     .map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }));
   const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
   const drawnBy = tileModel(doc, 'style_option');
+  const isUnsignable = unsignableOf(studio);
 
   const status = locked
     ? `Locked: ${doc.style.name || 'style'}`
@@ -65,7 +66,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
           {options.map((o) => {
             const ready = o.render.status === 'ready' && !!o.render.asset;
             const selected = locked === o.id;
-            const src = tileSources(studio.urlFor, o.render.asset, '(max-width: 640px) 33vw, 200px');
+            const src = tileSources(studio.urlFor, o.render.asset, '(max-width: 640px) 33vw, 200px', isUnsignable);
             const thumb = (
               <RenderThumb
                 render={o.render}
@@ -75,6 +76,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 srcSet={src.srcSet}
                 sizes={src.sizes}
                 heavy={src.heavy}
+                unavailable={src.unavailable}
                 model={drawnBy.model}
                 typicalSec={drawnBy.typicalSec}
                 selected={selected}

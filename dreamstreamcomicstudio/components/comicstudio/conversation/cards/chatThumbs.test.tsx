@@ -4,7 +4,9 @@
 // (perf.md F2, measured on production storage 2026-11-05). The byte table below uses those measured sizes
 // (originals 215–468 KB; 480w variants ≈ 34 KB), and the jsdom DOM stands in for what the browser fetches:
 // one request per <img> — its srcset candidate when it has one, else its src. The CDP version of this budget
-// runs on the QA harness (tests/e2e/chat.images.spec.ts).
+// runs on the QA harness (tests/e2e/studio.chat.images.spec.ts; the `studio.` prefix is what DEVICE_SPECS runs).
+// That spec opens the harness's heist-12p chat (10 images), not this 14-object shape: an f8312c86-shaped QA
+// fixture belongs to the harness owner (PF-2 wave note). Until it lands, this file holds the 14-object half.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
