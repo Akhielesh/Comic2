@@ -13,6 +13,7 @@ are not scanned. The scan lives in `tests/config/classLists.ts` (`SCANNED_ROOTS`
 | `statusInkGuard.test.ts` | `statusInk.json` | each raw hue text class, `stacked-inks`, `white-on-light-fill`. Comic Studio is skipped: exact pins cover it. |
 | `overlineGuard.test.ts` | `overline.json` | `hand-rolled-eyebrow`, `LABEL-import`. Comic Studio is skipped: exact pins cover it. |
 | `dialogTitle.test.ts` | `dialogTitle.json` | `unclassified-modal`. Comic Studio is skipped: its classification covers it. |
+| `pulseGuard.test.ts` | `pulse.json` | each raw `animate-pulse` / `animate-ping` / `animate-bounce`, plus `unguarded` (no `motion-safe:` and no `motion-reduce:animate-none` in its class list). `components/ds/**` is skipped; `animate-spin` is exempt. |
 
 What each guard reads:
 

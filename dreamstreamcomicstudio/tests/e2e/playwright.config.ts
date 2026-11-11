@@ -138,7 +138,10 @@ const config: PlaywrightTestConfig = {
     ...APP_SMOKE_DEVICES.map((d) => projectFor(d, d.look?.skin || d.look?.theme ? { testMatch: SMOKE_SPECS } : { testMatch: /layout\.smoke\.spec\.ts$/, grep: /@app\b/ })),
     // Detector + allowlist self-tests (synthetic pages; proves every assertion can actually fail), and the app
     // harness's own probes (tests/e2e/app-harness.selftest.spec.ts).
-    { name: 'harness-selftest', testMatch: /(harness|app-harness)\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
+    { name: 'harness-selftest', testMatch: /(harness|app-harness)\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
+    // The clutter ratchet (declutter DC-0; docs/design/clean-and-smooth.md): the probe self-test and every scene at
+    // 320, 360 and 1280 px. The spec sets its own viewports, themes and motion.
+    { name: 'declutter', testMatch: /declutter\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],
   webServer: process.env.QA_BASE_URL
     ? undefined
