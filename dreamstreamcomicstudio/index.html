@@ -33,16 +33,9 @@
          doesn't widen the window before styles/fonts arrive. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
-    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <!-- PDF Generation Libraries (export-only; deferred so a slow/blocked CDN can't
-         stall first paint — they're not needed until the user exports a PDF).
-         Pinned by Subresource Integrity (the SHA-512 cdnjs publishes for these exact
-         files): if the CDN ever served different bytes, the browser refuses to run them.
-         tests/edge/supplyChain.test.ts keeps every external script pinned. -->
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <!-- jsPDF + html2canvas (the classic wizard's PDF export) are not page scripts: services/legacyPdfLoader.ts
+         injects the same SRI-pinned cdnjs files when someone exports (PF-1). -->
 <style>
   body {
     background-color: #3B82F6;

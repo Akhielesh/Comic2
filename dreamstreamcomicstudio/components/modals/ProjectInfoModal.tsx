@@ -11,6 +11,7 @@ import { assignImageTags, collectStateImageEntries } from '../../services/imageT
 import { MasterGalleryModal, MasterGalleryItem } from './MasterGalleryModal';
 import { downloadBlob } from '../../services/download';
 import { isStudioV4Project } from '../../services/studioDeepLink';
+import { isLegacyPdfReady, legacyPdfErrorMessage, loadJsPdf } from '../../services/legacyPdfLoader';
 
 interface ProjectInfoModalProps {
   project: Project;
@@ -499,13 +500,12 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   };
 
   const buildPdfBlob = async (dataOverride?: Awaited<ReturnType<typeof exportProject>> | null) => {
-    const jspdf = (window as any).jspdf;
-    if (!jspdf?.jsPDF) throw new Error('jsPDF not loaded');
+    const jsPDF = await loadJsPdf();
     const ratioValue = parseRatio(project.state.customAspectRatioEnabled && project.state.customAspectRatio
       ? project.state.customAspectRatio
       : project.state.styleAspectRatio) || 1;
     const orientation = ratioValue < 1 ? 'p' : 'l';
-    const pdf = new jspdf.jsPDF(orientation, 'mm', 'a4');
+    const pdf = new jsPDF(orientation, 'mm', 'a4');
 
     const images: string[] = [];
     const cover = getCoverImageUrl(dataOverride);
@@ -657,7 +657,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       downloadBlob(blob, `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}_comic.pdf`);
     } catch (e) {
       console.warn('PDF export failed in ProjectInfoModal.', e);
-      setExportNotice('PDF export failed. Please retry after refreshing project assets.');
+      setExportNotice(legacyPdfErrorMessage(e));
     } finally {
       setIsBuildingPdf(false);
     }
@@ -719,15 +719,17 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     }
   };
 
-  const handleRefreshSizes = async () => {
+  const handleRefreshSizes = async (options: { auto?: boolean } = {}) => {
+    // The automatic refresh never fetches the PDF tools: it sizes the PDF only once an export loaded them.
+    const sizePdf = !options.auto || isLegacyPdfReady('jspdf');
     try {
       setExportNotice(null);
-      setIsBuildingPdf(true);
+      setIsBuildingPdf(sizePdf);
       setIsBuildingZip(true);
       setSizeStatus('updating');
       const data = await ensureExportData();
-      const [pdfBlob, zipResult] = await Promise.all([buildPdfBlob(data), buildProjectZip(data)]);
-      setPdfSize(pdfBlob.size);
+      const [pdfBlob, zipResult] = await Promise.all([sizePdf ? buildPdfBlob(data) : Promise.resolve(null), buildProjectZip(data)]);
+      if (pdfBlob) setPdfSize(pdfBlob.size);
       setZipSize(zipResult.blob.size);
       setSizeUpdatedAt(Date.now());
       setSizeSourceUpdatedAt(project.updatedAt);
@@ -785,7 +787,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     if (sizeStatus !== 'stale' || didAutoRefreshSizeForSnapshot) return;
     setDidAutoRefreshSizeForSnapshot(true);
     const handle = setTimeout(() => {
-      void handleRefreshSizes();
+      void handleRefreshSizes({ auto: true });
     }, 1200);
     return () => clearTimeout(handle);
   }, [sizeStatus, project.updatedAt, didAutoRefreshSizeForSnapshot]);
@@ -967,7 +969,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                   <Button size="sm" onClick={handleDownloadPdf} icon={<Download className="w-4 h-4" />} disabled={!hasExport || isBuildingPdf}>Download PDF</Button>
                   <Button size="sm" variant="secondary" onClick={handleDownloadHtml} icon={<Download className="w-4 h-4" />} disabled={!hasExport}>Download HTML</Button>
                   <Button size="sm" variant="secondary" onClick={handleDownloadZip} icon={<Download className="w-4 h-4" />} disabled={!hasExport || isBuildingZip}>Download ZIP</Button>
-                  <Button size="sm" variant="outline" onClick={handleRefreshSizes} icon={<RefreshCw className="w-4 h-4" />} disabled={!hasExport}>Update Sizes</Button>
+                  <Button size="sm" variant="outline" onClick={() => void handleRefreshSizes()} icon={<RefreshCw className="w-4 h-4" />} disabled={!hasExport}>Update Sizes</Button>
                   {sizeStatus === 'latest' && (
                     <span className="text-xs font-bold text-slate-500 self-center">Latest</span>
                   )}
