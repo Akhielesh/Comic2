@@ -10,7 +10,8 @@ import { StudioError, type ImageResult, type StudioKeys } from '../types.js';
 import { adminSpendKeys } from '../keys.js';
 import { adminSpendKeyMissing, adminSpendMode, createLibraryCallLedger, libraryImageCallRecord, libraryMonthlyCapUsd, type LibraryImageCall } from './adminSpend.js';
 import { judgeKeyBudget, type ProviderKeyBudget } from './keyBudget.js';
-import { manifestView, planQuote, provenanceOf, publicIndex, startRun, stepRun, getRunView, type LibrarySpendGuard } from './runner.js';
+import { manifestView, planQuote, provenanceOf, publicIndex, regenerateAsset, startRun, stepRun, getRunView, type LibrarySpendGuard } from './runner.js';
+import { routePausedError } from '../models/health.js';
 import { fakeLibraryImages, fakeLibraryLlm, testLibrary, TEST_MANIFEST, type TestLibrary } from './testkit.js';
 
 const ADMIN = '00000000-0000-4000-8000-000000000001';
@@ -194,10 +195,41 @@ describe('startRun: monthly cap and the provider preflight (only here)', () => {
     expect(t.repo.assets.size).toBe(0);
   });
 
-  it('an unlimited key is not refused but the start message says only the app cap applies', async () => {
+  it('an unlimited key is not refused; the start says only the app cap applies, as its own warning field too', async () => {
     const t = guarded({ provider: budget({ limitUsd: null, remainingUsd: null }) });
     const out = await startRun(t.deps, { ids: ['style.test-one'] }, ADMIN);
+    expect(out.run).not.toBeNull();
+    expect(out.warning).toBe("The model-test key has no OpenRouter limit, so only the app's $20.00 monthly cap applies. Set a monthly limit on the key in OpenRouter.");
+    // Still the last sentence of the message, so an older console shows it too.
     expect(out.message).toMatch(/model-test key has no OpenRouter limit, so only the app's \$20\.00 monthly cap applies/);
+    // A limited key with room: no warning field at all.
+    const limited = guarded();
+    expect((await startRun(limited.deps, { ids: ['style.test-one'] }, ADMIN)).warning).toBeUndefined();
+  });
+
+  it('a build already running is refused before OpenRouter is asked anything', async () => {
+    const t = guarded();
+    const out = await startRun(t.deps, { ids: ['style.test-one'] }, ADMIN);
+    expect(out.run).not.toBeNull();
+    expect(t.checks).toHaveLength(1);
+    await expect(startRun(t.deps, { ids: ['style.test-two'] }, ADMIN)).rejects.toMatchObject({ code: 'CONFLICT', status: 409, userMessage: expect.stringMatching(/already running/) });
+    await expect(regenerateAsset(t.deps, 'style.test-three', {}, ADMIN)).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    expect(t.checks).toHaveLength(1);
+    expect(t.repo.runs.size).toBe(1);
+  });
+
+  it('Regenerate without a budget (the asset drawer sends none) budgets the one asset, so it still runs near the cap', async () => {
+    const t = guarded({ cap: 20 });
+    t.clock.now = Date.parse('2026-11-20T10:00:00Z');
+    t.repo.runs.set('r-nov', { id: 'r-nov', manifest_version: 1, started_by: ADMIN, status: 'completed', budget_usd: 25, spent_usd: 17, request: { maxRetries: 2 }, quote: {}, asset_ids: [], counts: {}, lease_until: null, steps: 1, error: null, started_at: '2026-11-03T10:00:00.000Z', updated_at: '2026-11-03T10:00:00.000Z', finished_at: '2026-11-03T10:00:00.000Z' });
+    const out = await regenerateAsset(t.deps, 'style.test-one', {}, ADMIN);
+    expect(out.run).not.toBeNull();
+    // One 1K image's worst case with refines is about $0.11: the floor of $0.50 applies, not the $5 build default.
+    expect(t.repo.runs.get(out.run!.id)!.budget_usd).toBe(0.5);
+    expect(t.checks).toHaveLength(1);
+    await drain(t, out.run!.id);
+    // An explicit budget is still honoured (and still capped).
+    await expect(regenerateAsset(t.deps, 'style.test-two', { budgetUsd: 5 }, ADMIN)).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED', status: 409 });
   });
 });
 
@@ -224,6 +256,33 @@ describe('fail closed without the key; OpenRouter only', () => {
   });
 });
 
+describe('a run spends only on the key it was started on', () => {
+  it('COMIC_ADMIN_SPEND_KEY flipped mid-run: the next step refuses with 409 and draws nothing; flipping back resumes', async () => {
+    const env: Record<string, string | undefined> = { DREAMSTREAMSTUDIO_MODELTEST: MODELTEST, DREAMSTREAMSTUDIO_ALL: ALL };
+    const t = guarded({ env });
+    const out = await startRun(t.deps, { ids: ['style.test-one'] }, ADMIN);
+    env.COMIC_ADMIN_SPEND_KEY = 'platform';
+    await expect(stepRun(t.deps, out.run!.id, 3, ADMIN)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      status: 409,
+      userMessage: 'This build started on the model-test key; the server now spends on the platform OpenRouter key. Cancel it and start a new build. Nothing more was spent.'
+    });
+    expect(t.images.calls).toHaveLength(0);
+    expect(t.keysSeen).toEqual([]);
+    expect(t.repo.runs.get(out.run!.id)!.spent_usd).toBe(0);
+    // And the other way round: a build checked on the platform key never continues on the model-test key.
+    env.COMIC_ADMIN_SPEND_KEY = '';
+    const v = await drain(t, out.run!.id);
+    expect(v.status).toBe('completed');
+    expect(t.keysSeen.every((k) => k.openrouter?.key === MODELTEST)).toBe(true);
+    const p = guarded({ env: { ...env, COMIC_ADMIN_SPEND_KEY: 'platform' } });
+    const run2 = await startRun(p.deps, { ids: ['style.test-two'] }, ADMIN);
+    p.deps = { ...p.deps, spend: { ...p.deps.spend!, key: () => 'modeltest' } };
+    await expect(stepRun(p.deps, run2.run!.id, 3, ADMIN)).rejects.toMatchObject({ code: 'CONFLICT', userMessage: expect.stringMatching(/^This build started on the platform OpenRouter key; the server now spends on the model-test key\./) });
+    expect(p.images.calls).toHaveLength(0);
+  });
+});
+
 describe('ledger: one comic_image_calls row per attempt, under the admin', () => {
   it('each attempt (refines included) writes a row with the admin user_id, kind library, billed 0', async () => {
     // First draw scores 0.6 (refine), the second passes.
@@ -247,6 +306,25 @@ describe('ledger: one comic_image_calls row per attempt, under the admin', () =>
     const run2 = await startRun(denied.deps, { ids: ['style.test-one'] }, ADMIN);
     await stepRun(denied.deps, run2.run!.id, 1, ADMIN);
     expect(denied.calls).toEqual([]);
+  });
+
+  it('a circuit-breaker refusal (no provider call) is a blocked row, never a failed provider call', async () => {
+    const t = guarded({ images: fakeLibraryImages(() => routePausedError({ route: 'openrouter', model: 'm' })) });
+    const out = await startRun(t.deps, { ids: ['style.test-one'], maxRetries: 0 }, ADMIN);
+    await drain(t, out.run!.id);
+    expect(t.calls).toEqual([{ userId: ADMIN, modelId: 'nano-banana-2.1', providerModel: expect.any(String), res: '1K', aspect: '1:1', refs: 0, outcome: 'blocked', errorCode: 'ROUTE_PAUSED', providerCostUsd: null }]);
+    expect(libraryImageCallRecord(t.calls[0])).toMatchObject({ userId: ADMIN, kind: 'library', outcome: 'blocked', errorCode: 'ROUTE_PAUSED', billedUsd: 0 });
+  });
+
+  it('a cancel with nothing spent is blocked; a cancel after a paid answer is a failed row with its cost', async () => {
+    const free = guarded({ images: fakeLibraryImages(() => new StudioError('CANCELLED', 'Cancelled.', { status: 499 })) });
+    const run1 = await startRun(free.deps, { ids: ['style.test-one'], maxRetries: 0 }, ADMIN);
+    await drain(free, run1.run!.id);
+    expect(free.calls).toEqual([expect.objectContaining({ outcome: 'blocked', errorCode: 'CANCELLED', providerCostUsd: null })]);
+    const paid = guarded({ images: fakeLibraryImages(() => Object.assign(new StudioError('CANCELLED', 'Cancelled.', { status: 499 }), { spentUsd: 0.0336 })) });
+    const run2 = await startRun(paid.deps, { ids: ['style.test-one'], maxRetries: 0 }, ADMIN);
+    await drain(paid, run2.run!.id);
+    expect(paid.calls).toEqual([expect.objectContaining({ outcome: 'failed', errorCode: 'CANCELLED', providerCostUsd: 0.0336 })]);
   });
 
   it('the production ledger writes through the recorder with the model_usage_monthly bump turned off', () => {
@@ -355,6 +433,17 @@ describe('no timer and no fetch at import or idle (the preflight runs only insid
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ data: { limit: 35, limit_remaining: 30, limit_reset: 'monthly', usage_monthly: 5, effective_budget: null } }), { status: 200 }));
     vi.stubGlobal('fetch', fetchSpy);
     vi.resetModules();
+    // adminSpend.ts first, on its own (it imports billing.ts as a type only), so a timer it set would show here.
+    const t0 = vi.getTimerCount();
+    await import('./adminSpend.js');
+    expect(vi.getTimerCount()).toBe(t0);
+    // keys.ts and keyBudget.ts add nothing on top of their own imports (config, the keys middleware, adminSpend).
+    await import('../../config.js');
+    await import('../../middleware/keys.js');
+    const t1 = vi.getTimerCount();
+    await import('../keys.js');
+    await import('./keyBudget.js');
+    expect(vi.getTimerCount()).toBe(t1);
     // billing.ts's existing usage flushers (unref'd, silent when idle) are not ST-A's: count from after them.
     await import('../billing.js');
     const baseline = vi.getTimerCount();

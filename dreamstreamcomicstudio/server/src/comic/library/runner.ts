@@ -16,10 +16,11 @@
 //
 // Admin spend (Program 3 ST-A): production builds run on the model-test key (adminSpendKeys, OpenRouter only;
 // unset → nothing can be built), and `startRun` — only startRun, on the admin's click — enforces the app's
-// monthly cap and checks the key's own OpenRouter limit first (keyBudget.ts). Every attempt that reached the
-// provider writes one comic_image_calls row under the admin's user_id (kind 'library', kept out of users' model
-// stats), and every published image carries its provenance (the exact prompt, model, route, check), which the
-// public index publishes through an allow-list: never a cost, a run id, an admin id or a key.
+// monthly cap and checks the key's own OpenRouter limit first (keyBudget.ts); a run is only ever stepped on the key
+// it was started (and checked) on. Every attempt writes one comic_image_calls row under the admin's user_id (kind
+// 'library', kept out of users' model stats; 'blocked' when it never reached the provider), and every published
+// image carries its provenance (the exact prompt, model, route, check), which the public index publishes through
+// an allow-list: never a cost, a run id, an admin id or a key.
 
 import { randomUUID } from 'node:crypto';
 import { hashString } from '../../../../shared/comic/doc.js';
@@ -53,6 +54,7 @@ import {
 import { QC_USD_PER_PAGE, getImageModel, imagePriceUsd, libraryAssetCostUsd } from '../../../../shared/comic/models.js';
 import { getStylePreset } from '../../../../shared/comic/stylePresets.js';
 import { imageFailureInfo } from '../imageClient.js';
+import { isRoutePausedError } from '../models/health.js';
 import { isLibraryPath } from '../storagePaths.js';
 import { measureImage } from '../imageMeasure.js';
 import { logger } from '../../lib/logger.js';
@@ -62,7 +64,7 @@ import { LIBRARY_MANIFEST, minScoreOf, promptHash, selectEntries, type LibraryMa
 import { encodeLibraryImage, webpDataUrl } from './post.js';
 import { REWRITE_USD, editPrompt, planRefine, plannedTextUsd, rewritePrompt, strategyOf, type NextAttempt } from './refine.js';
 import { isTableMissing, type LibraryAssetRow, type LibraryCandidate, type LibraryRepo, type LibraryRunPreflight, type LibraryRunRequest, type LibraryRunRow } from './repo.js';
-import { adminSpendKeyMissing, type LibraryCallLedger } from './adminSpend.js';
+import { adminSpendKeyLabel, adminSpendKeyMissing, type LibraryCallLedger } from './adminSpend.js';
 import { judgeKeyBudget, judgeMonthlyCap, utcMonthStartIso, type KeyBudgetCheck } from './keyBudget.js';
 
 /** A step holds the run this long (≥ the slowest image timeout + analysis); released at the end. */
@@ -111,7 +113,10 @@ export interface LibraryDeps {
   onPublishedChange?: () => void;
   /** Monthly cap + provider preflight (P3-ST1). */
   spend?: LibrarySpendGuard;
-  /** One comic_image_calls row per attempt that reached the provider (P3-ST2; kind 'library', the admin's user_id). */
+  /**
+   * One comic_image_calls row per attempt (P3-ST2; kind 'library', the admin's user_id): 'ok' / 'failed' when it
+   * reached the provider, 'blocked' when the circuit breaker or a free cancel stopped it first.
+   */
   calls?: LibraryCallLedger;
 }
 
@@ -569,6 +574,11 @@ export interface StartRunResult {
   run: LibraryRunView | null;
   quote: LibraryQuote;
   message: string;
+  /**
+   * A pass the admin should still act on (the key has no OpenRouter limit, so only the app cap applies). It is
+   * also the last sentence of `message`, so an older console still shows it; a newer one shows it as a warning.
+   */
+  warning?: string;
 }
 
 /**
@@ -650,6 +660,7 @@ export async function startRun(
   return {
     run: view,
     quote: plan.quote,
+    ...(checked?.warning ? { warning: checked.warning } : {}),
     message: [
       `Build ready: ${run.asset_ids.length} image${run.asset_ids.length === 1 ? '' : 's'}, about ${fmtUsd(plan.quote.usd)} (at most ${fmtUsd(Math.min(plan.quote.worstCaseUsd, run.budget_usd))} with refines, budget ${fmtUsd(run.budget_usd)}).`,
       checked?.warning ?? ''
@@ -795,8 +806,9 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
     references = [];
   }
 
-  // 2. Generate. Every attempt that reached the provider becomes one comic_image_calls row (the admin's user_id,
-  // kind 'library', billed 0): admin test traffic is on the record, and out of users' model stats.
+  // 2. Generate. Every attempt becomes one comic_image_calls row (the admin's user_id, kind 'library', billed 0):
+  // 'ok' / 'failed' when it reached the provider, 'blocked' when it was stopped before any call. Admin test
+  // traffic is on the record, and out of users' model stats.
   let result: ImageResult;
   const startedAt = deps.now();
   const callBase = { userId: adminId, modelId: spec.id, ...(spec.routes.openrouter ? { providerModel: spec.routes.openrouter } : {}), res: entry.resolution, aspect: entry.aspect, refs: references.length };
@@ -810,18 +822,26 @@ async function attemptOne(deps: LibraryDeps, run: LibraryRunRow, row: LibraryAss
       spent += cost;
       await deps.repo.recordCost({ userId: adminId, stage: 'library_image', provider: 'platform', model: spec.id, costUsd: cost, metadata: { ...meta, failed: e.code || 'error', abandoned: !!e.abandoned } });
     }
-    // NO_IMAGE_KEY / BILLING_DENIED stop before any provider call: nothing to record.
+    // NO_IMAGE_KEY / BILLING_DENIED stop before any provider call: nothing to record. A circuit-breaker refusal
+    // (the route is paused) or a cancel with nothing spent made no provider call either: that is a 'blocked' row
+    // (the jobs.ts convention), never a 'failed' provider call in the admin audit.
     if (!(err instanceof StudioError && (err.code === 'NO_IMAGE_KEY' || err.code === 'BILLING_DENIED'))) {
-      const info = imageFailureInfo(err);
-      deps.calls?.record({
-        ...callBase,
-        ...(info?.providerName ? { providerName: info.providerName } : {}),
-        outcome: 'failed',
-        ...(typeof info?.status === 'number' && info.status > 0 ? { httpStatus: info.status } : {}),
-        errorCode: err instanceof StudioError ? err.code : 'PROVIDER_ERROR',
-        providerCostUsd: typeof e.spentUsd === 'number' && e.spentUsd >= 0 ? e.spentUsd : null,
-        latencyMs: Math.max(0, deps.now() - startedAt)
-      });
+      const paused = isRoutePausedError(err);
+      const cancelledFree = err instanceof StudioError && err.code === 'CANCELLED' && !(typeof e.spentUsd === 'number' && e.spentUsd > 0) && !e.abandoned;
+      if (paused || cancelledFree) {
+        deps.calls?.record({ ...callBase, outcome: 'blocked', errorCode: paused ? 'ROUTE_PAUSED' : 'CANCELLED', providerCostUsd: null });
+      } else {
+        const info = imageFailureInfo(err);
+        deps.calls?.record({
+          ...callBase,
+          ...(info?.providerName ? { providerName: info.providerName } : {}),
+          outcome: 'failed',
+          ...(typeof info?.status === 'number' && info.status > 0 ? { httpStatus: info.status } : {}),
+          errorCode: err instanceof StudioError ? err.code : 'PROVIDER_ERROR',
+          providerCostUsd: typeof e.spentUsd === 'number' && e.spentUsd >= 0 ? e.spentUsd : null,
+          latencyMs: Math.max(0, deps.now() - startedAt)
+        });
+      }
     }
     const message = err instanceof StudioError ? err.userMessage : 'The image request failed.';
     if (err instanceof StudioError && (err.code === 'NO_IMAGE_KEY' || err.code === 'BILLING_DENIED')) {
@@ -974,6 +994,15 @@ export async function stepRun(deps: LibraryDeps, runId: string, nRaw: unknown, a
   if (run.status !== 'running') {
     const view = await loadRunView(deps, run);
     return { ...view, message: `This build is ${run.status.replace('_', ' ')}.`, waitMs: 0 };
+  }
+  // A run spends only on the key it was started (and preflighted) on: if COMIC_ADMIN_SPEND_KEY flipped since, stop
+  // before drawing anything rather than carry on against a limit nobody checked.
+  if (deps.spend && run.request.key && run.request.key !== deps.spend.key()) {
+    throw new StudioError(
+      'CONFLICT',
+      `This build started on the ${adminSpendKeyLabel(run.request.key)}; the server now spends on the ${adminSpendKeyLabel(deps.spend.key())}. Cancel it and start a new build. Nothing more was spent.`,
+      { status: 409 }
+    );
   }
   const keys = requireKeys(deps);
   const now = deps.now();
@@ -1162,6 +1191,15 @@ export async function rejectAsset(
   return entryView(deps, entry, { ...row, ...patch } as LibraryAssetRow);
 }
 
+/** The smallest default budget a one-asset regenerate gets (room for its refines, whatever the model). */
+const REGENERATE_BUDGET_MIN_USD = 0.5;
+
+/** A one-asset build's default budget: its worst case with refines, at least $0.50, at most the build default. */
+export const regenerateBudgetUsd = async (deps: LibraryDeps, req: LibraryBuildRequest): Promise<number> => {
+  const plan = await planQuote(deps, req);
+  return clampLibraryBudget(Math.min(LIBRARY_BUDGET_DEFAULT_USD, Math.max(plan.quote.worstCaseUsd, REGENERATE_BUDGET_MIN_USD)));
+};
+
 /** A one-asset run (force) with an optional art-director note; the console then steps it. */
 export async function regenerateAsset(
   deps: LibraryDeps,
@@ -1171,18 +1209,11 @@ export async function regenerateAsset(
 ): Promise<StartRunResult> {
   if (!LIBRARY_ID_RE.test(id) || !entryOf(deps, id)) throw new StudioError('NOT_FOUND', 'That asset is not in the library manifest.', { status: 404 });
   const note = cleanNote(body.note);
-  return startRun(
-    deps,
-    {
-      ids: [id],
-      force: true,
-      includeOptional: true,
-      budgetUsd: typeof body.budgetUsd === 'number' ? body.budgetUsd : undefined,
-      maxRetries: clampRetries(body.maxRetries),
-      ...(note ? { note } : {})
-    },
-    adminId
-  );
+  const req: LibraryBuildRequest = { ids: [id], force: true, includeOptional: true, maxRetries: clampRetries(body.maxRetries) };
+  // No budget sent (the asset drawer has no budget field): budget this one asset's worst case (≥ $0.50), not the
+  // build default, so a one-image redraw near the monthly cap isn't refused with advice the drawer can't follow.
+  const budgetUsd = typeof body.budgetUsd === 'number' ? body.budgetUsd : await regenerateBudgetUsd(deps, req);
+  return startRun(deps, { ...req, budgetUsd, ...(note ? { note } : {}) }, adminId);
 }
 
 /** Delete stored candidates no row points at (current, published). Refused while a build runs. */

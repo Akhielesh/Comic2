@@ -18,7 +18,7 @@ import type { AdminSpendKey } from '../../../../shared/comic/library.js';
 import { StudioError } from '../types.js';
 import { adminSpendKeyEnvName, adminSpendKeyLabel } from './adminSpend.js';
 
-/** The preflight's own deadline (a request-scoped timer, cleared when it answers). */
+/** The preflight's own deadline for the whole answer, body included (a request-scoped timer, cleared when it settles). */
 export const KEY_BUDGET_TIMEOUT_MS = 8000;
 
 /** The provider-side limit of the admin spend key at one moment. Amounts in USD. */
@@ -78,35 +78,39 @@ export function createOpenRouterKeyBudget(opts: { fetch?: typeof fetch; baseUrl?
     const doFetch = opts.fetch ?? (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined);
     if (!doFetch) throw new StudioError('NOT_AVAILABLE', `This server can't reach OpenRouter to check the ${words}'s limit. ${nothingSpent}`, { status: 503 });
     const ctrl = new AbortController();
+    // One deadline for the whole answer — headers AND body — so a stalled body fails closed after the timeout
+    // instead of holding the admin's Build request open. Cleared on every path before this returns.
     const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? KEY_BUDGET_TIMEOUT_MS);
     (timer as { unref?: () => void }).unref?.();
-    let res: Response;
     try {
-      res = await doFetch(`${(opts.baseUrl ?? OPENROUTER_BASE_URL).replace(/\/+$/, '')}/key`, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
-        signal: ctrl.signal
-      });
-    } catch {
-      throw new StudioError('NOT_AVAILABLE', `OpenRouter didn't answer the check on the ${words}'s limit. ${nothingSpent} Try again in a minute.`, { status: 503, retryable: true });
+      let res: Response;
+      try {
+        res = await doFetch(`${(opts.baseUrl ?? OPENROUTER_BASE_URL).replace(/\/+$/, '')}/key`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+          signal: ctrl.signal
+        });
+      } catch {
+        throw new StudioError('NOT_AVAILABLE', `OpenRouter didn't answer the check on the ${words}'s limit. ${nothingSpent} Try again in a minute.`, { status: 503, retryable: true });
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new StudioError('NOT_AVAILABLE', `OpenRouter didn't accept the ${words} (HTTP ${res.status}). Check ${adminSpendKeyEnvName(label)} on the server. ${nothingSpent}`, { status: 503 });
+      }
+      if (!res.ok) {
+        throw new StudioError('NOT_AVAILABLE', `OpenRouter couldn't report the ${words}'s limit (HTTP ${res.status}). ${nothingSpent} Try again in a minute.`, { status: 503, retryable: true });
+      }
+      let body: unknown;
+      try {
+        body = await res.json(); // still under the deadline: an abort here is "couldn't be read" below
+      } catch {
+        body = null;
+      }
+      const budget = parseKeyBudget(body, (opts.now ?? Date.now)());
+      if (!budget) throw new StudioError('NOT_AVAILABLE', `OpenRouter's answer about the ${words}'s limit couldn't be read. ${nothingSpent}`, { status: 503 });
+      return budget;
     } finally {
       clearTimeout(timer);
     }
-    if (res.status === 401 || res.status === 403) {
-      throw new StudioError('NOT_AVAILABLE', `OpenRouter didn't accept the ${words} (HTTP ${res.status}). Check ${adminSpendKeyEnvName(label)} on the server. ${nothingSpent}`, { status: 503 });
-    }
-    if (!res.ok) {
-      throw new StudioError('NOT_AVAILABLE', `OpenRouter couldn't report the ${words}'s limit (HTTP ${res.status}). ${nothingSpent} Try again in a minute.`, { status: 503, retryable: true });
-    }
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = null;
-    }
-    const budget = parseKeyBudget(body, (opts.now ?? Date.now)());
-    if (!budget) throw new StudioError('NOT_AVAILABLE', `OpenRouter's answer about the ${words}'s limit couldn't be read. ${nothingSpent}`, { status: 503 });
-    return budget;
   };
 }
 

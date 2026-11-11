@@ -69,7 +69,12 @@ export const adminSpendKeyMissing = (key: AdminSpendKey = adminSpendMode()): str
 
 // ── Ledger: one comic_image_calls row per library attempt ────────────────────────────────────────
 
-/** One library image attempt that reached the provider, as comic_image_calls stores it. */
+/**
+ * One library image attempt, as comic_image_calls stores it: 'ok' / 'failed' when it reached the provider,
+ * 'blocked' when it was stopped before any provider call (the circuit breaker refused the route, or the attempt
+ * was cancelled with nothing spent) — the jobs.ts convention, so the admin audit never counts a refusal as a
+ * failed provider call.
+ */
 export interface LibraryImageCall {
   /** The admin who clicked Build (comic_image_calls.user_id is NOT NULL, FK auth.users). */
   userId: string;
@@ -80,7 +85,7 @@ export interface LibraryImageCall {
   res: Resolution;
   aspect: string;
   refs: number;
-  outcome: 'ok' | 'failed';
+  outcome: 'ok' | 'failed' | 'blocked';
   httpStatus?: number;
   errorCode?: string;
   /** Provider-reported cost; null = not reported. */

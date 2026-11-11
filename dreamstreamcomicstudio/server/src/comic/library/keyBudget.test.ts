@@ -1,8 +1,8 @@
 // @vitest-environment node
 // The provider-side cap check (P3-ST1; OpenRouter GET /api/v1/key, documented shape read 2026-11-05) and the app's
 // monthly cap. Fail closed everywhere: an answer that can't be read refuses; refusals never carry the key.
-import { describe, expect, it } from 'vitest';
-import { createOpenRouterKeyBudget, judgeKeyBudget, judgeMonthlyCap, parseKeyBudget, utcMonthStartIso } from './keyBudget.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { KEY_BUDGET_TIMEOUT_MS, createOpenRouterKeyBudget, judgeKeyBudget, judgeMonthlyCap, parseKeyBudget, utcMonthStartIso } from './keyBudget.js';
 
 const KEY = 'sk-or-v1-keybudget-FAKE-7f7f';
 const NOW = Date.parse('2026-11-05T10:00:00Z');
@@ -40,6 +40,10 @@ describe('parseKeyBudget (the documented /key body)', () => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('createOpenRouterKeyBudget', () => {
   it('one GET {base}/key with the key as a Bearer header', async () => {
     const seen: Array<{ url: string; init?: RequestInit }> = [];
@@ -70,6 +74,31 @@ describe('createOpenRouterKeyBudget', () => {
       expect(JSON.stringify(err)).not.toContain(KEY);
       expect(err!.message).not.toContain(KEY);
     }
+  });
+
+  it('the deadline covers the body too: headers that arrive but a body that stalls fail closed after the timeout', async () => {
+    vi.useFakeTimers();
+    // Headers arrive at once; the body never does — until the request is aborted (what real fetch does).
+    const stalled = (async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: () =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error(`aborted ${KEY}`), { name: 'AbortError' })));
+        })
+    })) as unknown as typeof fetch;
+    let settled: { status?: number; userMessage?: string } | 'pending' = 'pending';
+    void createOpenRouterKeyBudget({ fetch: stalled })(KEY).then(
+      () => (settled = {}),
+      (e: { status: number; userMessage: string }) => (settled = e)
+    );
+    await vi.advanceTimersByTimeAsync(KEY_BUDGET_TIMEOUT_MS - 1);
+    expect(settled).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).not.toBe('pending');
+    expect(settled).toMatchObject({ status: 503, userMessage: expect.stringMatching(/couldn't be read\. No build was started and nothing was spent/) });
+    expect(JSON.stringify(settled)).not.toContain(KEY);
+    expect(vi.getTimerCount()).toBe(0); // the deadline is cleared once it settles
   });
 
   it('names the platform key on the escape hatch', async () => {
