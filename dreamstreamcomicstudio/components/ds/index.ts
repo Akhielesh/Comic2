@@ -44,4 +44,5 @@ export { LiveDot, type LiveDotProps } from './LiveDot';
 export { CountUp, COUNT_UP_MS, type CountUpProps } from './CountUp';
 export { Collapse, COLLAPSE_BASE, COLLAPSE_CLOSED, COLLAPSE_OPEN, COLLAPSE_SETTLE_MS, type CollapseProps } from './Collapse';
 export { usePresence, PRESENCE_EXIT_MS } from './usePresence';
+export { useImageReveal, decodeImage, allowFilterEffects, canPlayEntrances, isCoarsePointer, isLowPowerDevice, motionEase, motionMs, parseMotionMs, playEntrance, readRevealEnvironment, revealTokenFallbacks, REVEAL_DECODE_TIMEOUT_MS, REVEAL_FILTER_MAX_WIDTH_PX, type DecodeImage, type ImageReveal, type ImageRevealOptions, type ImageRevealPhase, type RevealEnvironment } from './useImageReveal';
 export { useReducedMotion, prefersReducedMotion } from './useReducedMotion';

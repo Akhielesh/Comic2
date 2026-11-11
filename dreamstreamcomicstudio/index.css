@@ -565,6 +565,11 @@
   --ds-hue-4: #079a94;                                                  /* teal */
   --ds-hue-5: #9548cc;                                                  /* violet */
   --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
+     picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
+     because every colour token has one: tests/config/dsColours.test.ts). */
+  --ds-develop-light: rgb(255 255 255);
+  --ds-develop-sheen: rgba(255,255,255,0.18);
 }
 .dark {
   --ds-canvas: #262624;
@@ -616,6 +621,9 @@
   --ds-hue-4: #04a19b;
   --ds-hue-5: #a155da;
   --ds-art: var(--ds-well-strong);
+  /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
+  --ds-develop-light: rgb(255 255 255 / 0.55);
+  --ds-develop-sheen: rgba(255,255,255,0.15);
 }
 .dark { color-scheme: dark; }
 /* Legacy-kit form controls keep the light scheme in dark. Since bridge D5 dark applies on every page, so the
@@ -1088,6 +1096,11 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-hue-4: #079a94;                                                  /* teal */
   --ds-hue-5: #9548cc;                                                  /* violet */
   --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
+     picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
+     because every colour token has one: tests/config/dsColours.test.ts). */
+  --ds-develop-light: rgb(255 255 255);
+  --ds-develop-sheen: rgba(255,255,255,0.18);
 }
 
 /* ---- Tokens, dark (Atlas .dark: the same system inverted — #0a0a0a paper, #fafafa ink) ---- */
@@ -1164,6 +1177,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-hue-4: #04a19b;
   --ds-hue-5: #a155da;
   --ds-art: var(--ds-well-strong);
+  /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
+  --ds-develop-light: rgb(255 255 255 / 0.55);
+  --ds-develop-sheen: rgba(255,255,255,0.15);
 }
 
 /* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast

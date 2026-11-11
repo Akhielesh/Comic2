@@ -8,16 +8,27 @@
 //   • StreamList / StreamItem — cards arrive in the conversation column with a blur-up,
 //     spring rise and stagger, then settle with layout animation as later cards push in.
 //   • AgentThinking          — the "composing the next card" indicator (looping dots).
-//   • ImageDevelop           — an AI render "develops" in: blur + over-bright → resolve,
-//     with a one-shot sheen sweep. On-theme for a generative-image product.
+//   • ImageDevelop           — an AI render "develops" in once it has loaded and decoded
+//     (components/ds/useImageReveal): over-bright and a touch large → crisp, with a one-shot
+//     sheen sweep, on the compositor (opacity and transform only, never a filter). Only fresh
+//     art that has just arrived develops: never a picture already in memory, never a box with
+//     no picture in it. On-theme for a generative-image product.
 //   • SelectPop              — style/cover tile selection: spring lift, accent ring draw,
 //     check-mark pop (enter/exit via AnimatePresence).
 //   • CountUp                — cost/number ticks up (the `$0.42` chip), rAF-tweened.
 //   • PanelGrid / PanelPop   — page panels pop in one-by-one as they render.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, type Variants } from 'framer-motion';
 import { springSnappy, springSoft, STAGGER_STEP, usePrefersReducedMotion } from './motion';
+import {
+  canPlayEntrances,
+  motionEase,
+  motionMs,
+  playEntrance,
+  revealTokenFallbacks,
+  useImageReveal,
+} from '../../ds/useImageReveal';
 
 // ---- Variants -------------------------------------------------------------------------
 
@@ -111,11 +122,57 @@ export interface ImageDevelopProps {
   rounded?: string;
   /** Play the develop-in (default true). Set false to render the resolved image statically. */
   active?: boolean;
-  /** Placeholder content when there is no `src` yet (e.g. a tinted block). */
+  /**
+   * Placeholder content when there is no `src` yet (e.g. a tinted block). A picture handed over here as an
+   * `<img>` (the board passes its own) is waited for exactly like `src`.
+   */
   children?: React.ReactNode;
+  /** `<img loading>` for `src`: lazy by default; eager only for the art the user is waiting on (the newest card). */
+  loading?: 'lazy' | 'eager';
+  /** `<img decoding>` for `src`: async by default, so decoding stays off the main thread. */
+  decoding?: 'async' | 'sync' | 'auto';
+  /** `<img srcset>` for `src`: lets a small tile fetch a small variant. */
+  srcSet?: string;
+  /** `<img sizes>` for `src`, read with `srcSet`. */
+  sizes?: string;
 }
 
-/** An AI render that "develops" in — blur + over-bright resolving to crisp, with a sheen sweep. */
+/**
+ * The develop's two keyframes: opacity and a 3 % settle (transform), both on the compositor, and never a
+ * filter (the owner asked for transform and opacity only; a filter repaints the whole picture every frame).
+ * Any filter effect added later must pass `allowFilterEffects` (components/ds/useImageReveal).
+ */
+export const developKeyframes = (): Keyframe[] => [
+  { opacity: 0, transform: 'scale(1.03)' },
+  { opacity: 1, transform: 'none' },
+];
+
+/**
+ * The over-exposed start (what `brightness(1.35)` used to do): light over the art, fading out by opacity
+ * alone; then one sheen sweep, moved by transform. Both colours are skin tokens (`--ds-develop-light`,
+ * `--ds-develop-sheen`; index.css, light and dark), with the light values as inline fallbacks; dark softens
+ * the light (an alpha in the token) so a noir page does not start milky.
+ */
+const DEVELOP_LIGHT = 'var(--ds-develop-light, rgb(255 255 255))';
+const DEVELOP_LIGHT_OPACITY = 0.35;
+const DEVELOP_SHEEN = 'linear-gradient(105deg, transparent 30%, var(--ds-develop-sheen, rgba(255,255,255,0.18)) 50%, transparent 70%)';
+const HIDDEN: React.CSSProperties = { opacity: 0 };
+
+/** One picture, whatever its signature: a re-signed url for the same file must not hide and develop it again. */
+const pictureKey = (src?: string) => (src ? src.split(/[?#]/)[0] : '');
+
+/**
+ * An AI render that "develops" in once it has arrived. Until the image has loaded and decoded, a calm static
+ * token surface holds its box (never an animation over nothing); then the picture resolves from over-exposed
+ * and slightly large to crisp, with one sheen sweep, on the motion tokens (`--ds-motion-enter-slow` for the
+ * develop, `--ds-motion-slow` after `--ds-motion-fast` for the sheen). Opacity and transform only, on the Web
+ * Animations API (the compositor), and never a filter. Under reduced motion the picture still waits for its
+ * decode, then simply appears. A picture the browser already holds (a remount, a second surface on the same
+ * url) swaps in with no develop, and a box with no `<img>` (a tint block before the url arrives) never
+ * develops: only art that has just arrived does. `active={false}` (history, not a fresh render) shows the
+ * image at once with no gate. A develop cut short (`active` drops, a new picture, reduced motion turning on)
+ * cancels its animations, so nothing keeps moving over art that is meant to be still.
+ */
 export const ImageDevelop: React.FC<ImageDevelopProps> = ({
   src,
   alt = '',
@@ -123,28 +180,78 @@ export const ImageDevelop: React.FC<ImageDevelopProps> = ({
   rounded = 'rounded-xl',
   active = true,
   children,
+  loading = 'lazy',
+  decoding = 'async',
+  srcSet,
+  sizes,
 }) => {
-  const reduced = usePrefersReducedMotion();
-  const play = active && !reduced;
+  const key = pictureKey(src);
+  const reveal = useImageReveal(key, { enabled: active });
+  const layerRef = useRef<HTMLDivElement>(null);
+  const lightRef = useRef<HTMLDivElement>(null);
+  const sheenRef = useRef<HTMLDivElement>(null);
+  const [canAnimate] = useState(canPlayEntrances);
+  const [developedKey, setDevelopedKey] = useState<string | null>(null);
+  const waiting = active && !reveal.shown;
+  // Only art that has just arrived develops: not a picture already in memory, not a box with no picture.
+  const developing =
+    active && !reveal.reduced && !reveal.fromCache && !reveal.empty && canAnimate && reveal.phase === 'revealed' && developedKey !== key;
+  const box = reveal.element;
+
+  useLayoutEffect(() => {
+    if (!developing) return;
+    const duration = motionMs(box, '--ds-motion-enter-slow', revealTokenFallbacks['--ds-motion-enter-slow']);
+    const easing = motionEase(box, '--ds-ease-enter', revealTokenFallbacks['--ds-ease-enter']);
+    const animations = [
+      playEntrance(layerRef.current, developKeyframes(), { duration, easing, fill: 'backwards' }),
+      playEntrance(lightRef.current, [{ opacity: DEVELOP_LIGHT_OPACITY }, { opacity: 0 }], { duration, easing, fill: 'both' }),
+      playEntrance(sheenRef.current, [{ transform: 'translateX(-130%)' }, { transform: 'translateX(130%)' }], {
+        duration: motionMs(box, '--ds-motion-slow', revealTokenFallbacks['--ds-motion-slow']),
+        delay: motionMs(box, '--ds-motion-fast', revealTokenFallbacks['--ds-motion-fast']),
+        easing: 'ease-in-out',
+        fill: 'both',
+      }),
+    ].filter((a): a is Animation => !!a);
+    let live = true;
+    const finish = () => {
+      if (live) setDevelopedKey(key);
+    };
+    if (!animations.length) {
+      finish();
+      return;
+    }
+    Promise.all(animations.map((a) => a.finished)).then(finish, finish);
+    return () => {
+      live = false;
+      for (const a of animations) a.cancel();
+    };
+  }, [developing, key, box]);
+
   return (
-    <motion.div
-      className={`relative overflow-hidden ${rounded} ${className ?? ''}`}
-      initial={play ? { opacity: 0, scale: 1.05, filter: 'blur(14px) brightness(1.35)' } : false}
-      animate={{ opacity: 1, scale: 1, filter: 'blur(0px) brightness(1)' }}
-      transition={{ duration: 0.9, ease: [0.2, 0.7, 0.2, 1] }}
-    >
-      {src ? <img src={src} alt={alt} className={`h-full w-full object-cover ${rounded}`} /> : children}
-      {play && (
-        <motion.div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          initial={{ x: '-130%' }}
-          animate={{ x: '130%' }}
-          transition={{ duration: 1.1, ease: 'easeInOut', delay: 0.15 }}
-          style={{ background: 'linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, transparent 70%)' }}
-        />
+    <div ref={reveal.ref} className={`relative overflow-hidden ${rounded} ${className ?? ''}`} data-develop={active ? reveal.phase : undefined}>
+      {(waiting || developing) && <div aria-hidden data-develop-placeholder="" className="absolute inset-0 bg-[var(--ds-skeleton)]" />}
+      <div ref={layerRef} className="relative h-full w-full" style={waiting ? HIDDEN : undefined}>
+        {src ? (
+          <img
+            src={src}
+            srcSet={srcSet}
+            sizes={sizes}
+            alt={alt}
+            loading={loading}
+            decoding={decoding}
+            className={`h-full w-full object-cover ${rounded}`}
+          />
+        ) : (
+          children
+        )}
+      </div>
+      {developing && (
+        <>
+          <div ref={lightRef} aria-hidden data-develop-light="" className="pointer-events-none absolute inset-0" style={{ opacity: 0, backgroundColor: DEVELOP_LIGHT }} />
+          <div ref={sheenRef} aria-hidden data-develop-sheen="" className="pointer-events-none absolute inset-0" style={{ transform: 'translateX(130%)', backgroundImage: DEVELOP_SHEEN }} />
+        </>
       )}
-    </motion.div>
+    </div>
   );
 };
 

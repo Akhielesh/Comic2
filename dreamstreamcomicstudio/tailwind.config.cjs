@@ -19,6 +19,8 @@ const DS_COLOURS = [
   // holds every spark fill, `bg-ds-spark` included, to its allowlist).
   'spark', 'spark-hover', 'on-spark', 'spark-text', 'spark-soft', 'spark-glow',
   'hue-1', 'hue-2', 'hue-3', 'hue-4', 'hue-5', 'art',
+  // The art develop (MO-1): read by inline styles in ImageDevelop; listed because every colour token is.
+  'develop-light', 'develop-sheen',
   'reader-room', 'reader-paper-back', 'reader-endpaper', 'reader-focus'
 ];
 const dsColours = Object.fromEntries(DS_COLOURS.map((name) => [name, withOpacity(`--ds-${name}`)]));

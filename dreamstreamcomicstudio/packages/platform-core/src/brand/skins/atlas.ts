@@ -130,6 +130,8 @@ export const ATLAS_SKIN: SkinTokens = {
     '--ds-hue-4': '#079a94',
     '--ds-hue-5': '#9548cc',
     '--ds-art': 'var(--ds-well-strong)',
+    '--ds-develop-light': 'rgb(255 255 255)',
+    '--ds-develop-sheen': 'rgba(255,255,255,0.18)',
   },
   dark: {
     '--ds-canvas': '#0a0a0a',
@@ -196,6 +198,8 @@ export const ATLAS_SKIN: SkinTokens = {
     '--ds-hue-4': '#04a19b',
     '--ds-hue-5': '#a155da',
     '--ds-art': 'var(--ds-well-strong)',
+    '--ds-develop-light': 'rgb(255 255 255 / 0.55)',
+    '--ds-develop-sheen': 'rgba(255,255,255,0.15)',
   },
   highContrast: {
     light: {
