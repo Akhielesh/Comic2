@@ -8,8 +8,9 @@
 //
 // Rubric checks it measures (clean-and-smooth.md §2):
 //   C1 primaries          visible, enabled controls in the viewport filled with a primary token (--ds-accent,
-//                         --ds-accent-fill), resolved AT the control so a scoped skin is honoured. A selected tab or
-//                         pressed segment is state, not an action, and is not counted.
+//                         --ds-accent-fill, and CL-0's --ds-spark create fill once it exists), resolved AT the control
+//                         so a scoped skin is honoured. A selected tab or pressed segment is state, not an action, and
+//                         is not counted. A token the page does not define matches nothing.
 //   C2 duplicateActions   `data-action` values carried by more than one visible control in the viewport (extra copies)
 //   C3 nestedBoxes /      bordered (all four sides) rounded (≥ 6 px) surfaces in the viewport that sit inside another
 //      maxBoxDepth        one, and the deepest stack. Controls, art (comic pages, balloons) and user content are skipped.
@@ -457,8 +458,11 @@ export function probeClutter(args: ProbeArgs): ProbeResult {
   };
 }
 
-/** The primary fills C1 recognises (CL-0's spark fill joins this list when it lands). */
-export const PRIMARY_TOKENS: readonly string[] = ['--ds-accent', '--ds-accent-fill'];
+/**
+ * The primary fills C1 recognises: the accent (Button `default`) and CL-0's spark (`create`, SPARK_FILL). Until CL-0
+ * lands `--ds-spark` is undefined and matches nothing; after it, a spark CTA beside an accent primary is two primaries.
+ */
+export const PRIMARY_TOKENS: readonly string[] = ['--ds-accent', '--ds-accent-fill', '--ds-spark'];
 
 /** Never a box and never a label: comic art, lettering and user content. */
 export const PROBE_SKIP = '[data-testid="comic-page"], [data-testid="balloon"], [data-testid="balloon-hit"], .ds-lettering-balloon, [data-user-content]';

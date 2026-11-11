@@ -56,6 +56,7 @@ import {
 const BASE_CSS = `<style>
   *{box-sizing:border-box} body{margin:0;font:16px/1.4 sans-serif} button,a{font:inherit}
   :root{--ds-accent:#3d44e8;--ds-accent-fill:var(--ds-accent)}
+  .spark{background:var(--ds-spark);color:#fff;border:0;height:44px;padding:0 12px}
   .primary{background:var(--ds-accent-fill);color:#fff;border:0;height:44px;padding:0 12px;display:inline-flex;align-items:center}
   .box{border:1px solid #c9c9c9;border-radius:8px;padding:8px;margin:4px}
   .square{border:1px solid #c9c9c9;border-radius:0;padding:8px}
@@ -158,6 +159,23 @@ test.describe('clutter probe self-test @selftest', () => {
     await page.setContent(html(`<header style="height:60px">Back · Title</header><main style="height:540px">the page</main>`));
     const fit = await probe(page, { chrome: true });
     expect([fit.counts.chromeShare, fit.detail.chromeContent]).toEqual([10, 'main']);
+  });
+
+  test("CL-0's spark fill is a primary once the token exists; an undefined token matches nothing", async ({ page }) => {
+    await page.setContent(html(`<main><button class="spark">Make my comic</button><button class="primary">Approve</button></main>`));
+    // No --ds-spark on the page (today's tree): an unset var() leaves the button transparent, so only Approve counts.
+    expect((await probe(page)).detail.primaries).toEqual(['Approve']);
+    await page.addStyleTag({ content: ':root{--ds-spark:#3d44e8}' });
+    expect((await probe(page)).detail.primaries).toEqual(['Make my comic', 'Approve']);
+    // Tokens are resolved AT the control: inside a scope that redefines them (a scoped skin), the scope's fill is the
+    // primary and the page-level colour is not.
+    await page.setContent(
+      html(`<main><div style="--ds-accent:#e77412;--ds-accent-fill:#e77412;--ds-spark:#e77412">
+        <button style="background:#3d44e8;color:#fff;border:0;height:44px">Same blue, another scope</button>
+        <button class="primary">Scoped primary</button>
+      </div></main>`)
+    );
+    expect((await probe(page)).detail.primaries).toEqual(['Scoped primary']);
   });
 
   test('a clean page: one primary, one card with a divider, nothing else', async ({ page }) => {
