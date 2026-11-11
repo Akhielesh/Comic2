@@ -33,6 +33,11 @@ studio caps (`studioCapsFor` → `liveCapsFromEnv`, `shared/comic/capabilities.t
 - An older server sends no `liveAgent` caps, which reads as off.
 - With A1 and A3 built, the `admins` defaults mean admins get the queue and the guard as soon as this ships. Set
   `off` to keep either one dark.
+- **What admins see on the first S1 deploy** (non-admins see neither): Up next (A1), and A3's director prompt changes in
+  every turn: the DECIDED line, the ask-once rule (`CONFLICT_PROMPT_LINE`) and the four contradiction questions, so the
+  director can ask Keep/Change questions it never asked before. Conflict cards cannot appear yet: no writer calls
+  `guardUserEdits` until B-TOOL. To ship S1 with the director prompt unchanged, set `COMIC_CONFLICT_GUARD=off` (and
+  `COMIC_LIVE_QUEUE=off` for nothing but DS-R0 visible) in the backend env for that deploy: an env change, not code.
 - None of this spends: no part makes a model or image call of its own, and nothing bypasses the spend gate. The one
   exception is the steer screen, which is the capped safety classifier a chat message also gets.
 
@@ -149,15 +154,25 @@ slice, the logic in `useStudio.ts`, and the UI in `conversation/QueuedMessages.t
 - `'sent'`: the stream started.
 - `'queued'` / `'held'`: the note went to Up next.
 - `'refused'`: nothing was sent or queued, and the composer keeps the draft.
-- With the queue off, a send while a turn is in flight is `'refused'` and nothing else changes.
+- With the queue off, a send while a turn is in flight is `'refused'`: nothing is sent or queued, and an info notice
+  says why (`BUSY_REFUSED_COPY`: "The director is still working on your last message, so this one is waiting in the
+  message box. Send it when it finishes.").
 - Three board call sites hand a refused text back to the message box with `keepRefusedInComposer`
-  (`conversation/composerBus.ts`): the page editor's Ask AI, and "Write page N" in Pages and in the timeline.
+  (`conversation/composerBus.ts`): the page editor's Ask AI, and "Write page N" in Pages and in the timeline. These
+  are the only senders that reach the refusal: the composer's own Send is disabled while the director works. Before
+  S1 those words were dropped without a word; on a phone the studio now switches to the chat, and the notice says
+  why.
 
 **The drain (D1).** When the reply lands, the notes go as ONE message: `(Sent while you were working:) 1. … 2. …`.
-- A batch is split only by differing focus, or where it would pass the caps (60,000 characters or 12 photos per
-  message).
-- A single note at full size, requeued after BUSY, drains without the prefix.
-- A note holds at most 59,969 characters (`QUEUE_NOTE_MAX_CHARS`), so the prefixed message still fits.
+- A batch is split only by differing focus, or where it would pass a cap:
+  - two or more notes join only up to 6,000 characters (`QUEUE_PASTE_CHARS`, the same number as
+    `STEER_LIMITS.noteChars`). That is the server's pasted-script threshold (`LONG_MESSAGE_CHARS`): it saves any
+    longer message as the comic's source script, replacing the one there, and the chat keeps only a stub;
+  - 12 photos per message.
+- A single note whose prefixed text would pass 6,000 characters (a deliberate long paste, or a full message requeued
+  after BUSY) drains without the prefix, exactly as it would outside the queue: the saved script is the creator's own
+  words.
+- A note holds at most 59,969 characters (`QUEUE_NOTE_MAX_CHARS`), inside the server's 60,000-character message cap.
 
 **Holds.** Every hold shows a line; none is silent (`holdLine`).
 
@@ -196,6 +211,10 @@ back in its box.
     as a message, when the turn ends, and the director is not stopped. BUSY and LIMIT say why;
   - `COOLDOWN` shows the message and keeps the note in its place;
   - `CONTENT_POLICY` keeps the note with the reason.
+- While its steer call is open, the drain leaves that note out (`steeringRef` in `useStudio`). The turn can end before
+  the call answers (the server pushed the note during the final answer), and the note must not also go as a new
+  message. The answer decides: 200 removes it from Up next; `NOT_RUNNING`, `BUSY` or `LIMIT` send it once, as the next
+  message; after `COOLDOWN` or `CONTENT_POLICY` it drains like any other note once the turn is free.
 - `NOT_AVAILABLE` and any other failure fall back to D2 with a calm notice: "Couldn’t add it to this step, so the
   director stops and it goes next.".
 - Steering off, or a note with photos: D2, which means Stop the director, then send.
@@ -212,7 +231,11 @@ and an action chip waits for the turn lock.
 **Controller members:** `queue`, `editQueued`, `moveQueued`, `removeQueued`, `sendNow` and `queueSteers`.
 - `queueSteers` is true when the queue is on, `caps.liveAgent.steer` is on and a steer call exists. `useStudio`
   defaults that call to `studioApi.steerStudio`.
-- The QA harness has a `queued` state (`testing/qaController.ts`) for screenshots of Up next.
+- The QA harness has a `queued` state (`testing/qaController.ts`) for screenshots of Up next, and a `conflict` state:
+  a two-item conflict card (a balloon both sides changed, and a panel description too big to keep, "…and 2 more") on
+  the last reply, with the conflict guard on (`qaConflictCard`). S1 measured it, with `share=live` and
+  `share=live-public` (the Share sheet's link-first block), at 320 and 360 px with touch, reduced motion on and off: no
+  horizontal overflow, every button and link at least 44 × 44 px, no request left the harness.
 
 ## 5. Conflict cards and the contradiction questions (A3; `COMIC_CONFLICT_GUARD`)
 

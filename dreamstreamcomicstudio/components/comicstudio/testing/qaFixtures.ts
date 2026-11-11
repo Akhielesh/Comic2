@@ -32,6 +32,8 @@ import {
   type Card,
   type Character,
   type ComicDoc,
+  type ConflictCard,
+  type ConflictItem,
   type Gate,
   type ComicKind,
   type Line,
@@ -42,6 +44,7 @@ import {
 } from '../../../shared/comic/doc';
 import { checkPagePlan, heldBackOf, splitHeldBack } from '../../../shared/comic/pagePlanCheck';
 import { pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan';
+import type { PublicationMirror, PublicationOwnerView } from '../../../shared/comic/publication';
 
 export const QA_NOW = 1_760_000_000_000;
 export const QA_PROJECT_ID = 'proj_qa';
@@ -689,4 +692,107 @@ export const qaImagePaths = (doc: ComicDoc): string[] => {
   doc.pages.forEach((p) => addRender(p.render));
   addRender(doc.cover.render);
   return [...out];
+};
+
+// ── Scene layers (qaController `share=live…`, `state=conflict`) ──────────────
+
+/** The QA publication's link slug (17 alphanumerics, SLUG_RE). */
+export const QA_PUBLICATION_SLUG = 'QaLiveLink0000001';
+
+/**
+ * `share=live` / `share=live-public`: the comic is published — Link only (unlisted) or Library + link (public) — so the
+ * studio's Share sheet opens on its link-first block (the link card, the QR, and "See it in the Library" when listed).
+ * `doc.publication` is the server-written mirror; `qaPublicationView` is what the sheet reads.
+ */
+export const withQaPublication = (doc: ComicDoc, visibility: 'unlisted' | 'public'): ComicDoc => {
+  const publication: PublicationMirror = {
+    visibility,
+    status: 'live',
+    slug: QA_PUBLICATION_SLUG,
+    publishedRev: doc.rev,
+    publishedAt: QA_NOW - 3_600_000,
+    languages: [doc.format.language || 'en']
+  };
+  return { ...doc, publication };
+};
+
+/**
+ * The owner view of that publication (GET …/publication), offline: the link is on this origin (nothing leaves the
+ * harness), the preview card has no picture to fetch, and the readiness says every drawn page is publishable.
+ */
+export const qaPublicationView = (doc: ComicDoc, visibility: 'unlisted' | 'public', origin: string): PublicationOwnerView => {
+  const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
+  const lang = doc.format.language || 'en';
+  return {
+    visibility,
+    status: 'live',
+    slug: QA_PUBLICATION_SLUG,
+    url: `${origin.replace(/\/+$/, '')}/c/${QA_PUBLICATION_SLUG}`,
+    languages: [lang],
+    defaultLang: lang,
+    allowDownload: true,
+    allowEmbed: true,
+    showCreator: false,
+    publishedRev: doc.rev,
+    docRev: doc.rev,
+    behind: false,
+    publishedAt: QA_NOW - 3_600_000,
+    firstPublishedAt: QA_NOW - 86_400_000,
+    readiness: {
+      ok: true,
+      drawnPages: drawn,
+      plannedPages: doc.pages.length,
+      missing: [],
+      stalePages: [],
+      safety: { status: 'cleared', blockedPages: [], reasons: [] },
+      languages: [{ lang, publishable: true, blocking: [] }]
+    },
+    stats: { views: 128, uniques7d: 41, completes7d: 17, byChannel7d: { whatsapp: 22, direct: 12, x: 7 }, daily: [{ day: '2026-10-29', views: 51 }, { day: '2026-10-30', views: 77 }] },
+    rating: 'PG-13',
+    card: { title: doc.brief.title, description: doc.brief.logline || '' }
+  };
+};
+
+/**
+ * `state=conflict` (agent-editor plan §3 A3, D3): the last reply carries a two-item conflict card — a balloon both sides
+ * changed (with a held-back edit "Use the director's" can apply) and a panel description whose edit was too big to keep
+ * — plus "…and 2 more", so the card's widest layout can be measured. Synthetic words only.
+ */
+export const qaConflictCard = (doc: ComicDoc): ConflictCard | null => {
+  const page = doc.pages.find((p) => p.panels.some((panel) => panel.lines.length > 0)) ?? null;
+  const panel = page?.panels.find((p) => p.lines.length > 0);
+  const line = panel?.lines[0];
+  if (!page || !panel || !line) return null;
+  const items: ConflictItem[] = [
+    {
+      id: 'cf_qa_line',
+      where: { pageId: page.id, panelId: panel.id, lineId: line.id, label: `page ${page.n} · panel ${panel.n} · line 1` },
+      mine: line.text || 'We go now, before the market wakes up.',
+      theirs: 'Now. Before the whole market wakes up and every stallholder on Spice Lane sees us running.',
+      proposed: [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch: { text: 'Now. Before the whole market wakes up and every stallholder on Spice Lane sees us running.' } }]
+    },
+    {
+      id: 'cf_qa_panel',
+      where: { pageId: page.id, panelId: panel.id, label: `page ${page.n} · panel ${panel.n}` },
+      mine: panel.action || 'Maya ducks under the awning.',
+      theirs: 'Wide shot from the rooftops: Maya ducks under a saffron-coloured awning as the pigeons scatter over the lane.',
+      proposed: [],
+      tooBig: true
+    }
+  ];
+  return { type: 'conflict', id: 'card_qa_conflict', items, more: 2 };
+};
+
+/** The doc with that card on a new last reply (unchanged when the fixture has no lettered panel). */
+export const withQaConflict = (doc: ComicDoc): ComicDoc => {
+  const card = qaConflictCard(doc);
+  if (!card) return doc;
+  const msg: Msg = {
+    id: 'm_qa_conflict',
+    role: 'assistant',
+    text: 'I redrew the rooftop beat, but you changed two of the same things while I worked. Yours stay unless you pick mine:',
+    at: QA_NOW,
+    cards: [card]
+  };
+  return { ...doc, conversation: [...doc.conversation, msg] };
 };

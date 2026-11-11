@@ -221,6 +221,13 @@ export const STEER_GOES_NEXT_COPY = {
   LIMIT: 'That note is long, so it goes as its own message once the director finishes.'
 } as const;
 
+/**
+ * Up next off and a message is in flight: a send from the board, the timeline or the lettering inspector is refused,
+ * and keepRefusedInComposer moves its words to the message box (the composer's own Send is disabled while busy). This
+ * says why the words moved there instead of going.
+ */
+export const BUSY_REFUSED_COPY = 'The director is still working on your last message, so this one is waiting in the message box. Send it when it finishes.';
+
 /** Don't auto-switch the board tab within this long of the user picking one. */
 export const MANUAL_TAB_HOLD_MS = 20_000;
 /** Debounce for signing paths the stream hasn't delivered URLs for yet. */
@@ -405,6 +412,12 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const queueReadyRef = useRef<string | null>(null);
   /** The next Stop is "Send now"'s (D2): it must not hold the rest of the queue. */
   const stopForSendNowRef = useRef(false);
+  /**
+   * Queued notes "Send now" is steering into the running turn, until the steer call answers. The drain leaves them
+   * out: the server may already have put a note in that turn's inbox when the turn ends first, and the note must not
+   * also go as a new message.
+   */
+  const steeringRef = useRef(new Set<string>());
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
@@ -960,8 +973,12 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       const message: OutgoingMessage = { text: clean, files, inbox, ...(targets ? { targets } : {}), ...(focus ? { focus } : {}), ...(card ? { card } : {}) };
 
       if (!liveQueueOn(capsRef.current)) {
-        // Queue off: one turn at a time, as before — but say so ('refused'), so the composer keeps the draft.
-        if (messageInFlightRef.current) return 'refused';
+        // Queue off: one turn at a time, as before — but say so ('refused'), so the composer keeps the draft, and tell
+        // the creator why the words went to the message box instead.
+        if (messageInFlightRef.current) {
+          say({ kind: 'info', text: BUSY_REFUSED_COPY });
+          return 'refused';
+        }
         void startMessage(message);
         return 'sent';
       }
@@ -1507,6 +1524,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const hasBase = !!state.base;
   /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
   const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
+  /** Bumped when a steer call answers, so the drain looks again at a note it left out while that call was open. */
+  const [steerSettled, bumpSteerSettled] = useReducer((n: number) => n + 1, 0);
 
   // Drain: the turn is free and nothing holds the queue → the first batch goes as ONE message (D1). "Send anyway"
   // passes a question, a gate or a failed message once (its words go back to the message box); "Send now" (D2, after
@@ -1519,15 +1538,19 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       if (q.held) dispatch({ type: 'queue_clear' });
       return;
     }
-    const express = q.express ? q.notes.find((n) => n.id === q.express) : undefined;
+    // A note whose steer call is still open waits for its answer: 200 means the server took it into the turn (it leaves
+    // Up next); NOT_RUNNING, BUSY or LIMIT put it first (queue_express). Either answer runs this effect again.
+    const ready = q.notes.filter((n) => !steeringRef.current.has(n.id));
+    if (!ready.length) return;
+    const express = q.express ? ready.find((n) => n.id === q.express) : undefined;
     if (express) {
       sendQueued([express]);
       return;
     }
     const hold = holdReason({ doc: stateRef.current.doc, held: q.held, failed: stateRef.current.pendingMessage?.status === 'failed' });
     if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
-    sendQueued(batchesForDrain(q.notes)[0] ?? []);
-  }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued]);
+    sendQueued(batchesForDrain(ready)[0] ?? []);
+  }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued, steerSettled]);
 
   // BUSY from another tab or device: try again a few times, spaced out (bounded — never an idle timer), then wait
   // for "Try again".
@@ -1583,6 +1606,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           return 'queued';
         }
         const generation = generationRef.current;
+        // Until the call answers, the drain leaves this note out (the turn may end before the answer arrives).
+        steeringRef.current.add(id);
         try {
           await steer(projectRef.current, { text: note.text, ...(note.focus ? { focus: note.focus } : {}) });
           if (generation === generationRef.current) dispatch({ type: 'queue_remove', id });
@@ -1617,6 +1642,11 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
             void cancel();
           }
           return 'queued';
+        } finally {
+          // Answered (after the dispatches above): the drain may take the note again. The bump re-runs it even when
+          // the answer changed nothing in Up next (COOLDOWN, a content refusal) and the turn already ended.
+          steeringRef.current.delete(id);
+          if (mountedRef.current) bumpSteerSettled();
         }
       }
       dispatch({ type: 'queue_express', id });

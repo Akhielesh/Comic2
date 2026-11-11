@@ -8,7 +8,7 @@ import type { Card } from '../../shared/comic/doc';
 import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
 import { makeSampleDoc } from './conversation/testing/fixtures';
 import { QUEUE_PREFIX, QUEUE_STORAGE_PREFIX } from './messageQueue';
-import { COMPOSE_EVENT, type ComposeRequest } from './conversation/composerBus';
+import { COMPOSE_EVENT, keepRefusedInComposer, type ComposeRequest } from './conversation/composerBus';
 
 const api = vi.hoisted(() => ({
   loadStudioProject: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock('./studioApi', async (importOriginal) => {
 });
 
 import { StudioApiError } from './studioApi';
-import { STEER_GOES_NEXT_COPY, useStudio, type UseStudioDeps } from './useStudio';
+import { BUSY_REFUSED_COPY, STEER_GOES_NEXT_COPY, useStudio, type UseStudioDeps } from './useStudio';
 import { STEER_LIMITS } from '../../shared/comic/events';
 
 interface FakeStream {
@@ -116,9 +116,10 @@ describe('send() while the director works', () => {
     expect(messages()).toHaveLength(1);
   });
 
-  it("with the queue off it is 'refused' and nothing else changes (no queue, no second request)", async () => {
+  it("with the queue off it is 'refused' (no queue, no second request) and a notice says why the words wait", async () => {
     const { result } = await setup(null);
     act(() => void result.current.send('draw the rooftop'));
+    expect(result.current.notice ?? null).toBeNull();
     let outcome: unknown;
     await act(async () => {
       outcome = await result.current.send('and make it rain');
@@ -127,7 +128,30 @@ describe('send() while the director works', () => {
     expect(result.current.queue).toBeUndefined();
     expect(result.current.sendNow).toBeUndefined();
     expect(messages()).toHaveLength(1);
-    expect(result.current.notice ?? null).toBeNull();
+    // Before, a board or inspector send moved to the message box with no word why.
+    expect(result.current.notice).toMatchObject({
+      kind: 'info',
+      text: 'The director is still working on your last message, so this one is waiting in the message box. Send it when it finishes.'
+    });
+    expect(result.current.notice?.text).toBe(BUSY_REFUSED_COPY);
+  });
+
+  it('a board send refused while busy (queue off) lands in the message box with that notice: keepRefusedInComposer', async () => {
+    const { result } = await setup(null);
+    act(() => void result.current.send('draw the rooftop'));
+    const composed: ComposeRequest[] = [];
+    const onCompose = (e: Event) => composed.push((e as CustomEvent<ComposeRequest>).detail);
+    window.addEventListener(COMPOSE_EVENT, onCompose);
+    try {
+      await act(async () => {
+        await keepRefusedInComposer(result.current.send('Write page 2'), 'Write page 2');
+      });
+    } finally {
+      window.removeEventListener(COMPOSE_EVENT, onCompose);
+    }
+    expect(composed).toEqual([{ text: 'Write page 2', append: true }]);
+    expect(result.current.notice?.text).toBe(BUSY_REFUSED_COPY);
+    expect(messages()).toHaveLength(1);
   });
 
   it('notes that cannot wait (inline files, a card answer, a full queue) are refused with visible words', async () => {
@@ -531,6 +555,90 @@ describe('Send now', () => {
     // "Send now" goes even past the new reply's question.
     await waitFor(() => expect(messages()).toHaveLength(2));
     expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} make it rain`);
+  });
+
+  describe('a steer call still open when the turn ends (the server may already have the note)', () => {
+    /** A steer call that answers only when the test says so. */
+    const openSteer = () => {
+      const answer: { ok?: (v: { ok: true; msgId: string }) => void; refuse?: (e: unknown) => void } = {};
+      const steerStudio = vi.fn(
+        () =>
+          new Promise<{ ok: true; msgId: string }>((resolve, reject) => {
+            answer.ok = resolve;
+            answer.refuse = reject;
+          })
+      );
+      return { steerStudio, answer };
+    };
+    const settle = () => act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    /** "go" runs, "make it rain" waits in Up next and Send now steers it; then the turn ends before the answer. */
+    const steerThenTurnEnds = async (steerStudio: NonNullable<UseStudioDeps['steerStudio']>) => {
+      const hook = await setup(STEER_ON, { steerStudio });
+      const { result } = hook;
+      act(() => void result.current.send('go'));
+      const s1 = lastStream();
+      await act(async () => void (await result.current.send('make it rain')));
+      const id = result.current.queue![0].id;
+      let pending!: Promise<unknown>;
+      act(() => {
+        pending = result.current.sendNow!(id);
+      });
+      expect(steerStudio).toHaveBeenCalledTimes(1);
+      reply(s1, 'Done.');
+      await settle();
+      expect(result.current.messageBusy).toBe(false);
+      // The drain left the note out: it is neither sent again nor gone while its steer call is open.
+      expect(messages().map(textOf)).toEqual(['go']);
+      expect(result.current.queue?.map((n) => n.text)).toEqual(['make it rain']);
+      return { ...hook, pending };
+    };
+
+    it('the server took it (200): the note is committed once, as the steered message, never also as a new turn', async () => {
+      const { steerStudio, answer } = openSteer();
+      const { result, pending } = await steerThenTurnEnds(steerStudio);
+      let outcome: unknown;
+      await act(async () => {
+        answer.ok!({ ok: true, msgId: 'msg_steer' });
+        outcome = await pending;
+      });
+      expect(outcome).toBe('sent');
+      expect(result.current.queue).toEqual([]);
+      await settle();
+      expect(messages().map(textOf)).toEqual(['go']);
+    });
+
+    it('NOT_RUNNING after the turn ended: the note goes exactly once, as the next message', async () => {
+      const { steerStudio, answer } = openSteer();
+      const { result, pending } = await steerThenTurnEnds(steerStudio);
+      let outcome: unknown;
+      await act(async () => {
+        answer.refuse!(new StudioApiError('conflict', 'Nothing is running.', { status: 409, code: 'NOT_RUNNING' }));
+        outcome = await pending;
+      });
+      expect(outcome).toBe('queued');
+      await waitFor(() => expect(messages()).toHaveLength(2));
+      expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} make it rain`);
+      reply(lastStream(), 'Raining.');
+      await settle();
+      expect(messages().map(textOf)).toEqual(['go', `${QUEUE_PREFIX} make it rain`]);
+      expect(result.current.queue).toEqual([]);
+    });
+
+    it('COOLDOWN after the turn ended: the note does not sit in Up next — it drains once the answer is in', async () => {
+      const { steerStudio, answer } = openSteer();
+      const { result, pending } = await steerThenTurnEnds(steerStudio);
+      let outcome: unknown;
+      await act(async () => {
+        answer.refuse!(new StudioApiError('cooldown', 'Give it a few seconds, then try again.', { status: 429, code: 'COOLDOWN' }));
+        outcome = await pending;
+      });
+      expect(outcome).toBe('refused');
+      await waitFor(() => expect(messages()).toHaveLength(2));
+      expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} make it rain`);
+      await settle();
+      expect(messages()).toHaveLength(2);
+      expect(result.current.queue).toEqual([]);
+    });
   });
 
   it('Send now on one restored note sends only that note: the rest stay held after its reply (never auto-sent)', async () => {

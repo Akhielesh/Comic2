@@ -2,7 +2,8 @@
 //
 // While the director works, notes the creator types are queued instead of dropped. When the reply lands, the queue
 // drains as ONE combined message ("(Sent while you were working:) 1. … 2. …"), split only where the focus differs (a
-// different page or selection) or a size cap would be crossed, in order. The queue holds instead of draining while
+// different page or selection) or a size cap would be crossed (6,000 characters for joined notes, the server's
+// pasted-script threshold), in order. The queue holds instead of draining while
 // the last reply asks something (an unanswered options or conflict card), while a spend gate is open, after Stop,
 // while a `plan_pages` action holds the turn lock, after a reload (never auto-sent), after the server said BUSY
 // (another tab or device), and while the creator's last message failed before the server took it (the drain must
@@ -12,7 +13,7 @@
 // The queue is saved per project in sessionStorage. Every read and write sits in try/catch: a private window or a
 // full quota only loses the reload convenience, never the notes on screen.
 
-import type { AttachmentTarget, StudioFocus } from '../../shared/comic/events';
+import { STEER_LIMITS, type AttachmentTarget, type StudioFocus } from '../../shared/comic/events';
 import { CAST_KINDS, type ComicDoc, type Msg } from '../../shared/comic/doc';
 
 export const QUEUE_LIMITS = {
@@ -33,8 +34,9 @@ export const QUEUE_RETRY_MS: readonly number[] = [8_000, 20_000, 45_000];
 export const QUEUE_PREFIX = '(Sent while you were working:)';
 
 /**
- * Characters one note may hold: a single note drains as `${QUEUE_PREFIX} ${text}`, which must still fit the server's
- * message cap (QUEUE_LIMITS.chars), or the drained message would be refused and "Try again" could never fix it.
+ * Characters one note may hold: within the server's message cap (QUEUE_LIMITS.chars) with room for the prefix, so a
+ * drained message is never refused for its length and "Try again" can always fix it. (A note this long drains as
+ * typed, without the prefix: see combinedText.)
  */
 export const QUEUE_NOTE_MAX_CHARS = QUEUE_LIMITS.chars - QUEUE_PREFIX.length - 1;
 
@@ -141,9 +143,17 @@ export const withoutQueuePrefix = (text: string): string => (text.startsWith(QUE
 const unprefixed = withoutQueuePrefix;
 
 /**
- * The text a batch drains as: one note keeps its words after the prefix; several are numbered (D1). A single note that
- * is already as long as a message may be (one sent straight from the composer that met BUSY) goes without the prefix
- * rather than past the server's cap.
+ * The server saves any message longer than this as the comic's source script (a pasted script: routes/comic.ts
+ * LONG_MESSAGE_CHARS, the same number as STEER_LIMITS.noteChars). A drained message that joins notes must stay at or
+ * under it, or two ordinary notes would replace the source script; a single note past it goes exactly as typed.
+ */
+export const QUEUE_PASTE_CHARS = STEER_LIMITS.noteChars;
+
+/**
+ * The text a batch drains as: one note keeps its words after the prefix; several are numbered (D1). A single note
+ * whose prefixed text would pass QUEUE_PASTE_CHARS (a deliberate long paste, or a full message sent straight from the
+ * composer that met BUSY) goes without the prefix, exactly as it would outside the queue: the server then saves the
+ * creator's own words as the source script, never the queue's prefix, and never past the server's cap.
  */
 export const combinedText = (batch: readonly QueuedNote[]): string => {
   const texts = batch.map((n) => unprefixed(clean(n.text)));
@@ -151,14 +161,15 @@ export const combinedText = (batch: readonly QueuedNote[]): string => {
   if (texts.length === 1) {
     if (!texts[0]) return '';
     const prefixed = `${QUEUE_PREFIX} ${texts[0]}`;
-    return prefixed.length <= QUEUE_LIMITS.chars ? prefixed : texts[0];
+    return prefixed.length <= QUEUE_PASTE_CHARS ? prefixed : texts[0];
   }
   return [QUEUE_PREFIX, ...texts.map((t, i) => `${i + 1}. ${t || '(photos)'}`)].join('\n');
 };
 
 /**
  * The queue as the messages it drains into, in order: consecutive notes with the same focus share one message; a
- * different focus starts a new one (D1), and so does a message that would pass the server's text or photo cap.
+ * different focus starts a new one (D1), and so does a message that would pass the server's text or photo cap. Two or
+ * more notes never join past QUEUE_PASTE_CHARS: the server would save that message as the source script.
  */
 export const batchesForDrain = (notes: readonly QueuedNote[]): QueuedNote[][] => {
   const batches: QueuedNote[][] = [];
@@ -167,7 +178,9 @@ export const batchesForDrain = (notes: readonly QueuedNote[]): QueuedNote[][] =>
   const fits = (batch: QueuedNote[], note: QueuedNote) => {
     const next = [...batch, note];
     const photos = next.reduce((n, x) => n + (x.inboxPaths?.length ?? 0), 0);
-    return combinedText(next).length <= QUEUE_LIMITS.chars && photos <= QUEUE_LIMITS.inboxPaths;
+    // Only asked with a batch already started, so `next` joins two or more notes: it stays at or under the
+    // pasted-script threshold (well under the server's QUEUE_LIMITS.chars cap too).
+    return combinedText(next).length <= QUEUE_PASTE_CHARS && photos <= QUEUE_LIMITS.inboxPaths;
   };
   for (const note of notes) {
     const k = focusKey(note.focus);

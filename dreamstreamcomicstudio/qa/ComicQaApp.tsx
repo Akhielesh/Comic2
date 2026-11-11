@@ -8,8 +8,10 @@
 //   /qa/comic-qa.html?surface=studio|board|editor|reader|classic-reader|public|kit
 //                    &kit=breakdown|refs|refs-drawer|timeline|art     (surface=kit; qa/KitScenes.tsx)
 //                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
-//                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
+//                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…|queued|conflict
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
+//                    &share=live|live-public  (a published comic, Link only / Library + link: the studio's Share sheet
+//                                   opens on its link-first block; the link is on this origin, the preview has no picture)
 //                    &history=1    (Comic History on: caps.history, and the studio surface answers History offline
 //                                   from the fake HistoryApi over the synthetic 'v5' history fixture; absent: unchanged)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];

@@ -11,11 +11,22 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { mapAssetRefs, variantFor, type AssetRef, type ClientAction, type ComicDoc, type NextStep, type RenderTarget, type StudioTab } from '../../../shared/comic/doc';
 import { applyOps, type DocOp, type StudioAction } from '../../../shared/comic/ops';
 import { DEFAULT_CAPS, steerOn, type StudioCaps, type StudioMode } from '../../../shared/comic/capabilities';
+import type { PublicationOwnerView } from '../../../shared/comic/publication';
 import type { ComicStudioController } from '../useStudio';
 import type { ActivityItem, PatchOptions, ReaderRequest, SendOptions, SendOutcome, StudioNotice, StudioSelection } from '../types';
 import { add as addNote, edit as editNote, move as moveNote, moveTo as moveNoteTo, remove as removeNote, type QueuedNote } from '../messageQueue';
 import { requestOpenModelPicker } from '../models/openPicker';
-import { QA_FIXTURES, QA_NOW, isQaFixture, makeQaDoc, parseQaImagePath, type QaFixtureName } from './qaFixtures';
+import {
+  QA_FIXTURES,
+  QA_NOW,
+  isQaFixture,
+  makeQaDoc,
+  parseQaImagePath,
+  qaPublicationView,
+  withQaConflict,
+  withQaPublication,
+  type QaFixtureName
+} from './qaFixtures';
 
 // ── Query parameters ─────────────────────────────────────────────────────────
 
@@ -26,8 +37,9 @@ export type QaSurface = (typeof QA_SURFACES)[number];
 /**
  * `queued` (agent-editor plan §3 A1): the director is working and Up next holds QA_QUEUE_NOTES, with every queue member
  * live (edit, move, remove, Send now), so the harness can screenshot Up next, its chip and its sheet.
+ * `conflict` (§3 A3): the last reply carries a two-item conflict card (qaConflictCard) with the conflict guard on.
  */
-export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy', 'queued'] as const;
+export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy', 'queued', 'conflict'] as const;
 export type QaState = (typeof QA_STATES)[number];
 
 export type QaImageMode = 'png' | 'svg';
@@ -52,8 +64,13 @@ export interface QaParams {
   kit: string | null;
   /** The author's allowDownload toggle for readers and the public payload (`download=0` turns it off). */
   allowDownload: boolean;
-  /** `share=1`: the reader gets a share link (endCard.shareUrl), as on a published comic. */
+  /** `share=1` (or a `share=live…` below): the reader gets a share link (endCard.shareUrl), as on a published comic. */
   share: boolean;
+  /**
+   * `share=live` (Link only) / `share=live-public` (Library + link): the comic is published, so the studio's Share sheet
+   * opens on its link-first block (withQaPublication, qaPublicationView). null: private.
+   */
+  live: 'unlisted' | 'public' | null;
   /** `history=1`: Comic History on (caps.history), answered offline by the fake HistoryApi (qa/ComicQaApp.tsx). */
   history: boolean;
 }
@@ -83,7 +100,8 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     still: q.get('still') === '1',
     kit: /^[a-z][a-z-]{0,31}$/.test(q.get('kit') || '') ? q.get('kit') : null,
     allowDownload: q.get('download') !== '0',
-    share: q.get('share') === '1',
+    share: ['1', 'live', 'live-public'].includes(q.get('share') || ''),
+    live: q.get('share') === 'live' ? 'unlisted' : q.get('share') === 'live-public' ? 'public' : null,
     history: q.get('history') === '1'
   };
 };
@@ -239,12 +257,22 @@ export interface QaSceneInit {
   mode?: StudioMode;
   caps?: Partial<StudioCaps>;
   img?: QaImageMode;
+  /** The comic is published this way (`share=live…`): the controller's `publication` is its owner view. */
+  live?: 'unlisted' | 'public';
 }
 
 /** The scene a URL describes (fixture doc + tab/page/state), shared by every surface. */
 export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
-  const doc = p.state === 'loading' || p.state === 'load-error' ? null : makeQaDoc(p.fixture, { rtl: p.rtl });
+  let doc = p.state === 'loading' || p.state === 'load-error' ? null : makeQaDoc(p.fixture, { rtl: p.rtl });
+  if (doc && p.live) doc = withQaPublication(doc, p.live);
+  if (doc && p.state === 'conflict') doc = withQaConflict(doc);
   const pageId = p.page && doc ? doc.pages.find((pg) => pg.n === p.page)?.id ?? null : null;
+  // `history=1` turns Comic History on; `state=conflict` turns the conflict guard on (the card's buttons, not its
+  // "switched off" note). Absent both, the scene names no caps: DEFAULT_CAPS, as before.
+  const caps: Partial<StudioCaps> = {
+    ...(p.history ? { history: true } : {}),
+    ...(p.state === 'conflict' ? { liveAgent: { ...(DEFAULT_CAPS.liveAgent ?? { queue: false, steer: false }), conflicts: true } } : {})
+  };
   return {
     doc,
     tab: p.tab,
@@ -252,8 +280,8 @@ export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
     state: p.state,
     mode: p.mode,
     img: p.img,
-    // `history=1` turns Comic History on; absent, the caps stay DEFAULT_CAPS (History off, as before).
-    ...(p.history ? { caps: { history: true } } : {})
+    ...(Object.keys(caps).length ? { caps } : {}),
+    ...(doc && p.live ? { live: p.live } : {})
   };
 };
 
@@ -312,6 +340,10 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const urlFor = useMemo(() => makeQaUrlFor(() => docRef.current, init.img || 'svg'), [init.img]);
+  // `share=live…`: the owner view the Share sheet reads, its link on this origin (nothing leaves the harness).
+  const [publication] = useState<PublicationOwnerView | null>(() =>
+    init.live && init.doc ? qaPublicationView(init.doc, init.live, typeof window !== 'undefined' ? window.location.origin : 'http://localhost') : null
+  );
 
   const patch = useCallback(async (ops: DocOp[], opts?: PatchOptions) => {
     recordQaOp('patch', { ops, opts });
@@ -517,7 +549,7 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
       opts?.onProgress?.(1);
       return {};
     },
-    publication: null,
+    publication,
     refreshPublication: async () => recordQaOp('publication'),
     notice,
     clearNotice: () => setNotice(null),

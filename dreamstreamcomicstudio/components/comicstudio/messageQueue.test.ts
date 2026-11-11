@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ComicDoc, Msg } from '../../shared/comic/doc';
+import { STEER_LIMITS } from '../../shared/comic/events';
 import { makeSampleDoc } from './conversation/testing/fixtures';
 import {
   add,
@@ -18,6 +19,7 @@ import {
   openQuestion,
   QUEUE_LIMITS,
   QUEUE_NOTE_MAX_CHARS,
+  QUEUE_PASTE_CHARS,
   QUEUE_PREFIX,
   QUEUE_STORAGE_PREFIX,
   readStoredQueue,
@@ -126,10 +128,10 @@ describe('batchesForDrain and the combined message (D1)', () => {
     expect(focusKey(undefined)).toBe('');
   });
 
-  it('a drained message never passes the server cap: a full note fits with its prefix, a full message goes without it', () => {
+  it('a drained message never passes the server cap: a full note and a full message both go as typed', () => {
     const full = note('a', 'x'.repeat(QUEUE_NOTE_MAX_CHARS));
-    expect(drainRequest([full]).text).toBe(`${QUEUE_PREFIX} ${full.text}`);
-    expect(drainRequest([full]).text).toHaveLength(QUEUE_LIMITS.chars);
+    expect(drainRequest([full]).text).toBe(full.text);
+    expect(drainRequest([full]).text.length).toBeLessThanOrEqual(QUEUE_LIMITS.chars);
     // A 60,000-character message sent straight from the composer that met BUSY comes back as a note (requeue is never
     // capped): it drains without the prefix rather than past the cap the server refuses.
     const message = note('b', 'y'.repeat(QUEUE_LIMITS.chars));
@@ -139,8 +141,42 @@ describe('batchesForDrain and the combined message (D1)', () => {
     expect(sanitizeNote({ id: 'n', text: 'z'.repeat(QUEUE_LIMITS.chars), at: 1 })?.text).toHaveLength(QUEUE_NOTE_MAX_CHARS);
   });
 
+  it(`two ordinary notes never join past the pasted-script threshold (${STEER_LIMITS.noteChars} characters): two messages, each under it`, () => {
+    // The server saves a message longer than STEER_LIMITS.noteChars as the comic's source script (routes/comic.ts
+    // LONG_MESSAGE_CHARS): one combined message of two 3,100-character notes would replace the script.
+    expect(QUEUE_PASTE_CHARS).toBe(STEER_LIMITS.noteChars);
+    const a = note('a', 'a'.repeat(3100));
+    const b = note('b', 'b'.repeat(3100));
+    const batches = batchesForDrain([a, b]);
+    expect(batches.map(ids)).toEqual([['a'], ['b']]);
+    for (const batch of batches) {
+      const text = drainRequest(batch).text;
+      expect(text.length).toBeLessThanOrEqual(STEER_LIMITS.noteChars);
+      expect(text.startsWith(QUEUE_PREFIX)).toBe(true);
+    }
+    // Right at the threshold they still join: the server keeps a message of exactly STEER_LIMITS.noteChars as a message.
+    const room = STEER_LIMITS.noteChars - combinedText([note('x', 'x'), note('y', 'y')]).length + 2;
+    const left = note('l', 'l'.repeat(Math.floor(room / 2)));
+    const right = note('r', 'r'.repeat(room - Math.floor(room / 2)));
+    expect(combinedText([left, right])).toHaveLength(STEER_LIMITS.noteChars);
+    expect(batchesForDrain([left, right]).map(ids)).toEqual([['l', 'r']]);
+    expect(batchesForDrain([left, right, note('s', 's')]).map(ids)).toEqual([['l', 'r'], ['s']]);
+  });
+
+  it('one long pasted note drains as typed, without the queue prefix, so the saved source script is the creator’s own words', () => {
+    const script = `INT. STATION - NIGHT\n${'x'.repeat(7000)}`;
+    const text = combinedText([note('a', script)]);
+    expect(text).toBe(script);
+    expect(text.startsWith(QUEUE_PREFIX)).toBe(false);
+    expect(drainRequest([note('a', script)]).text).toBe(script);
+    // A note that fits under the threshold with its prefix keeps it.
+    const short = 'y'.repeat(STEER_LIMITS.noteChars - QUEUE_PREFIX.length - 1);
+    expect(combinedText([note('b', short)])).toBe(`${QUEUE_PREFIX} ${short}`);
+    expect(combinedText([note('b', `${short}y`)])).toBe(`${short}y`);
+  });
+
   it('splits where one message would pass the text or photo cap', () => {
-    const big = 'x'.repeat(Math.floor(QUEUE_LIMITS.chars / 2));
+    const big = 'x'.repeat(3100);
     expect(batchesForDrain([note('a', big), note('b', big), note('c', 'small')]).map(ids)).toEqual([['a'], ['b', 'c']]);
     const photos = (n: number, from: number) => Array.from({ length: n }, (_, i) => `u/x/inbox/${from + i}.webp`);
     const notes = [note('a', 'these', { inboxPaths: photos(8, 0) }), note('b', 'and these', { inboxPaths: photos(8, 8) })];
