@@ -46,6 +46,20 @@
 /theme-boot.js
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
+# The private voice model's engine (the ONNX runtime, services/dictation/ortRuntime.ts), built into
+# /ort/<onnxruntime-web version>/ by vite.config.ts. Versioned path → cache forever; same-origin only.
+# These requests go through functions/_middleware.ts (public/_routes.json does not exclude /ort/*), which
+# turns a missing file into a 404 instead of the SPA's index.html and sets these same headers itself.
+/ort/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+
+/ort/*.mjs
+  Content-Type: text/javascript; charset=utf-8
+
+/ort/*.wasm
+  Content-Type: application/wasm
+
 # On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
 /models/*
   Cache-Control: public, max-age=31536000, immutable

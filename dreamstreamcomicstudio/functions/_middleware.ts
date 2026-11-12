@@ -28,8 +28,12 @@
  * preview head with canonical /c/<slug> (the anon RPC only answers for public publications,
  * so an id can never reveal an unlisted slug). Everything else passes through untouched.
  *
- * public/_routes.json keeps this function off static assets, so it only runs for page loads.
- * Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
+ * The private voice model's engine, `/ort/<version>/<file>` (services/dictation/ortRuntime.ts), is served through
+ * here too: every client gets the file (no agent gate), with its content type and immutable caching, and a missing
+ * one is a plain 404, never the SPA's index.html with a 200 (which poisoned the model cache in F11).
+ *
+ * public/_routes.json keeps this function off every other static asset, so it runs for page loads and the voice
+ * engine. Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
  */
 import { detectAgent } from '../api-proxy/src/agent-gate';
 import { injectHead, PROXIED_HOSTS, publicOrigin, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
@@ -45,6 +49,7 @@ import {
   toStreamUrl,
 } from '../shared/streamHost';
 import { CSP_REPORT_GROUP, CSP_REPORT_PATH, type CspReportEnv } from './csp-report';
+import { ORT_CACHE_CONTROL, ORT_RESOURCE_POLICY, isOrtRuntimePath, ortContentType, parseOrtRuntimePath } from '../services/dictation/ortRuntime';
 
 /** The Pages asset server (`context.env.ASSETS`). */
 interface AssetFetcher {
@@ -452,6 +457,36 @@ async function serveLiveApp(request: Request, url: URL, env: PagesContext['env']
   });
 }
 
+/** The answer for anything under /ort/ that is not one of the voice engine's files: plain text, never kept. */
+const runtimeNotFound = (): Response =>
+  new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
+
+/** The statuses the asset server answers a real file with (a full body, a range, a revalidation). */
+const RUNTIME_FILE_STATUSES = new Set([200, 206, 304]);
+
+/**
+ * `/ort/<version>/<file>`, the voice engine: the asset server's file, with the runtime's headers set here (Cloudflare
+ * need not apply public/_headers to a response that passed through this Function, so this sets the same values).
+ * Pages answers a missing file with the SPA's index.html and a 200, which transformers.js would keep in its cache
+ * as the engine (the F11 failure), so an HTML answer, or any other non-file answer, becomes a 404. So does a path
+ * under /ort/ that is not one of the four files, without asking the asset server.
+ */
+export async function serveOrtRuntime(url: URL, next: () => Promise<Response>): Promise<Response> {
+  const hit = parseOrtRuntimePath(url.pathname);
+  if (!hit) return runtimeNotFound();
+  const res = await next();
+  const type = res.headers.get('content-type') || '';
+  if (!RUNTIME_FILE_STATUSES.has(res.status) || /^\s*text\/html\b/i.test(type)) {
+    await res.body?.cancel().catch(() => undefined);
+    return runtimeNotFound();
+  }
+  const headers = new Headers(res.headers);
+  if (res.status !== 304) headers.set('content-type', ortContentType(hit.file));
+  headers.set('cache-control', ORT_CACHE_CONTROL);
+  headers.set('cross-origin-resource-policy', ORT_RESOURCE_POLICY);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 export interface MiddlewareOptions {
   /** STREAM_HOST_ON — a parameter so tests can run both sides of the switch. */
   streamHostOn: boolean;
@@ -479,6 +514,10 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
       return moved(`${CANONICAL_ORIGIN}${url.pathname}${url.search}`);
     }
     if (STREAM_ALIASES.has(host)) return moved(`${STREAM_ORIGIN}${url.pathname}${url.search}`);
+
+    // The voice engine is a file for every client, automated browsers included (never the agent gate), and a
+    // missing one is a 404, never the SPA's page.
+    if (isOrtRuntimePath(url.pathname)) return secured(serveOrtRuntime(url, next));
 
     const onStreamHost = isStreamHost(host);
     if (isPage && isLegacyLivePath(url.pathname)) {

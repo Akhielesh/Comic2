@@ -70,8 +70,9 @@ const ENGINE_OPTIONS: { id: DictationEngine; label: string; hint: (mb: number) =
   {
     id: 'whisper',
     label: 'Private, on this device',
-    // Both hosts the first use contacts: the weights from Hugging Face, the ONNX runtime from jsDelivr (whisperEngine.test).
-    hint: (mb) => `Your voice stays on this device. The first use downloads the voice model once from Hugging Face and jsDelivr (up to about ${mb} MB), then it works offline.`,
+    // What the first use downloads, and from where: the weights from Hugging Face (the only third-party host), the
+    // voice engine from our own site (whisperEngine.ts pinOwnRuntime; whisperEngine.test).
+    hint: (mb) => `Your voice stays on this device. The first use downloads the voice model once from Hugging Face, and the voice engine from DreamStream (up to about ${mb} MB in all), then it works offline.`,
     icon: <ShieldCheck className="h-3.5 w-3.5" />,
     available: () => true
   },

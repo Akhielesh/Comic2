@@ -11,7 +11,12 @@
 //    with index.html, which broke every load); it goes to Hugging Face, which the harness blocks, so the load
 //    fails and the error says the microphone stayed off — and getUserMedia was never called;
 //  - browser dictation (a fake SpeechRecognition): the words heard show in the bar, text typed during the take is
-//    kept, Done puts the words in at the cursor, nothing is sent, and a second take starts with an empty bar.
+//    kept, Done puts the words in at the cursor, nothing is sent, and a second take starts with an empty bar;
+//  - the voice engine (the ONNX runtime, code that runs in our origin) is fetched from our own site only, in the build
+//    transformers.js picks for this browser, as JavaScript and WebAssembly (never the SPA's HTML), and during the take
+//    nothing goes to any host but ours and Hugging Face's: here Hugging Face is answered by this spec with a stand-in
+//    config and stand-in model bytes (route.fulfill, `?hf=route`), so nothing real downloads and the load then fails
+//    calmly, with the mic still off.
 //
 // The named file matches the device projects (playwright.config.ts DEVICE_SPECS). desktop-1440 loops the widths
 // 320, 390, 768 and 1280 with setViewportSize; the touch projects run once at their own size.
@@ -263,5 +268,104 @@ test.describe('Comic Studio dictation: every voice box opens on screen', () => {
     const asked = (await qa.ops()).filter((op) => op.kind === 'net' && /^https:\/\/huggingface\.co\//.test(String((op.payload as { blocked?: string })?.blocked)));
     expect(asked.length, 'the weights are asked of Hugging Face (refused here)').toBeGreaterThan(0);
     expect(await page.evaluate(() => (window as any).__voice.gum), 'getUserMedia was never called').toBe(0);
+  });
+
+  test('the voice engine comes from our own site only, and nothing but Hugging Face (answered here) is asked', async ({ page, qa, device }) => {
+    await installFakes(page, 'whisper');
+    if (device.name === 'desktop-1440') await page.setViewportSize({ width: 1280, height: 900 });
+    await qa.open({ surface: 'studio', fixture: 'lake-1p', img: 'svg', hf: 'route' });
+    await qa.toChat();
+    const mic = page.getByRole('button', { name: 'Start voice dictation' }).first();
+    await expect(mic, 'the composer mic is on the page').toBeVisible();
+    const own = new URL(page.url());
+
+    // Hugging Face, answered here: a stand-in config, a few bytes for each model file, 404 for the rest (the
+    // tokenizer). No real weights download; the engine is still asked for, because the model's sessions are made.
+    const hfAsked: string[] = [];
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-expose-headers': '*' };
+    const STAND_IN_CONFIG = {
+      model_type: 'whisper',
+      architectures: ['WhisperForConditionalGeneration'],
+      is_encoder_decoder: true,
+      d_model: 64,
+      encoder_layers: 1,
+      decoder_layers: 1,
+      encoder_attention_heads: 1,
+      decoder_attention_heads: 1,
+      num_mel_bins: 80,
+      vocab_size: 100,
+      max_source_positions: 1500,
+      max_target_positions: 448
+    };
+    await page.route(/^https:\/\/([a-z0-9-]+\.)*(huggingface\.co|hf\.co)\//i, async (route) => {
+      const req = route.request();
+      hfAsked.push(req.url());
+      if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      const file = new URL(req.url()).pathname;
+      if (file.endsWith('/config.json')) return route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify(STAND_IN_CONFIG) });
+      if (file.endsWith('.onnx')) return route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/octet-stream' }, body: Buffer.alloc(64) });
+      return route.fulfill({ status: 404, headers: cors, body: 'not here' });
+    });
+
+    // Every request the page makes from the tap on (fetches, module imports, the .wasm), and what the QA page refused.
+    const seen: string[] = [];
+    page.on('request', (r) => seen.push(r.url()));
+    await qa.clearOps();
+    const isEngine = (u: string, ext: 'mjs' | 'wasm') => /\/ort-wasm-[^/]*$/.test(new URL(u).pathname) && u.endsWith(`.${ext}`);
+    const mjsResponse = page.waitForResponse((r) => isEngine(r.url(), 'mjs'), { timeout: 60_000 });
+    const wasmResponse = page.waitForResponse((r) => isEngine(r.url(), 'wasm'), { timeout: 60_000 });
+    await mic.click();
+
+    // The engine is asked for (from wherever this build points it), then: never jsDelivr or any other CDN.
+    const engineSeen = () => seen.some((u) => /\/ort-wasm-[^/]*\.(?:mjs|wasm)$/.test(new URL(u).pathname));
+    await expect.poll(engineSeen, { timeout: 60_000, message: 'the page asks for the voice engine' }).toBe(true);
+    const refusedNow = (await qa.ops()).filter((op) => op.kind === 'net' && (op.payload as { blocked?: string })?.blocked).map((op) => String((op.payload as { blocked: string }).blocked));
+    expect([...seen.filter((u) => /jsdelivr/i.test(u)), ...refusedNow.filter((u) => /jsdelivr/i.test(u))], 'the engine is never fetched from cdn.jsdelivr.net').toEqual([]);
+
+    // transformers.js's own choice for this browser (its isSafari test), which must be what loads.
+    const apple = await page.evaluate(() => {
+      const ua = navigator.userAgent;
+      return (navigator.vendor || '').includes('Apple') && !/CriOS|FxiOS|EdgiOS|OPiOS|mercury|brave/i.test(ua) && !ua.includes('Chrome') && !ua.includes('Android');
+    });
+    const stem = apple ? 'ort-wasm-simd-threaded' : 'ort-wasm-simd-threaded.asyncify';
+
+    const mjs = await mjsResponse;
+    const mjsUrl = new URL(mjs.url());
+    expect(mjsUrl.origin, 'the engine is asked of our own origin').toBe(own.origin);
+    expect(mjsUrl.pathname).toMatch(new RegExp(`^/ort/[0-9][^/]*/${stem.replace(/\./g, '\\.')}\\.mjs$`));
+    expect(mjs.status()).toBe(200);
+    expect(mjs.headers()['content-type'], 'served as JavaScript').toMatch(/^text\/javascript\b/);
+    const code = await mjs.text();
+    expect(code.trimStart().slice(0, 1), 'JavaScript, never the SPA page').not.toBe('<');
+    expect(code).toMatch(/export default/);
+
+    const wasm = await wasmResponse;
+    const wasmUrl = new URL(wasm.url());
+    expect(wasmUrl.origin).toBe(own.origin);
+    expect(wasmUrl.pathname).toBe(mjsUrl.pathname.replace(/\.mjs$/, '.wasm'));
+    expect(wasm.status()).toBe(200);
+    expect(wasm.headers()['content-type']).toBe('application/wasm');
+    // The page's own copy is too large for the inspector to keep; ask for the same URL again from the test.
+    const again = await page.request.get(wasm.url());
+    expect(again.headers()['content-type']).toBe('application/wasm');
+    expect([...(await again.body()).subarray(0, 4)], 'a WebAssembly binary').toEqual([0, 0x61, 0x73, 0x6d]);
+
+    // The stand-in model cannot load: the calm error, and the microphone never opened.
+    const alert = page.locator('[data-voice-error="model-download"]').first();
+    await expect(alert).toBeVisible({ timeout: 30_000 });
+    expect(await page.evaluate(() => (window as any).__voice.gum), 'getUserMedia was never called').toBe(0);
+
+    // No host but ours and Hugging Face's, from the network's view and the QA page's (what it refused).
+    const isAllowed = (host: string) => host === own.hostname || ['huggingface.co', 'hf.co'].some((h) => host === h || host.endsWith(`.${h}`));
+    const hosts = [...new Set(seen.map((u) => new URL(u)).filter((u) => /^https?:$/.test(u.protocol)).map((u) => u.hostname))];
+    expect(hosts.filter((h) => !isAllowed(h)), 'no request to any other host').toEqual([]);
+    expect(seen.filter((u) => /jsdelivr/i.test(u)), 'nothing from cdn.jsdelivr.net').toEqual([]);
+    const refused = (await qa.ops())
+      .filter((op) => op.kind === 'net' && (op.payload as { blocked?: string })?.blocked)
+      .map((op) => String((op.payload as { blocked: string }).blocked));
+    expect(refused, 'the page tried no other host either (jsDelivr included)').toEqual([]);
+    expect(hfAsked.some((u) => u.endsWith('/config.json')), 'the weights are asked of Hugging Face').toBe(true);
+    expect(hfAsked.some((u) => u.endsWith('.onnx')), 'the model files too (stand-ins)').toBe(true);
+    expect(seen.some((u) => new URL(u).pathname.startsWith('/models/')), 'never our own /models/').toBe(false);
   });
 });

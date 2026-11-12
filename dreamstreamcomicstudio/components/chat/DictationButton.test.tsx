@@ -139,11 +139,12 @@ describe('DictationButton: true copy and design tokens', () => {
     expect(mic.getAttribute('title')).not.toMatch(/on-device/);
   });
 
-  it('the settings give the true one-time download and name both hosts it comes from (the model from Hugging Face, its runtime from jsDelivr)', () => {
+  it('the settings give the true one-time download and where it comes from: the model from Hugging Face, the engine from DreamStream', () => {
     render(<DictationButton onFinal={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Dictation settings' }));
     const group = screen.getByRole('group', { name: 'Dictation settings' });
-    expect(group).toHaveTextContent(/from Hugging Face and jsDelivr \(up to about \d+ MB\)/);
+    expect(group).toHaveTextContent(/the voice model once from Hugging Face, and the voice engine from DreamStream \(up to about \d+ MB in all\)/);
+    expect(group).not.toHaveTextContent(/jsDelivr/i); // the engine is never fetched from a third-party CDN (whisperEngine.test)
     expect(group).not.toHaveTextContent(/~\s*(40|80|250) MB/);
     expect(group).toHaveTextContent(/Your browser may send your voice to its speech service/);
   });

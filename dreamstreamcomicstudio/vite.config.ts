@@ -1,9 +1,22 @@
 import fs from 'fs';
+import { createRequire } from 'module';
 import path from 'path';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { defineConfig, loadEnv, searchForWorkspaceRoot, type Plugin, type Rollup } from 'vite';
 import react from '@vitejs/plugin-react';
 import { browserModulesReport } from './scripts/licence-check.mjs';
 import { webNotices } from './scripts/notices.mjs';
+import {
+  ORT_CACHE_CONTROL,
+  ORT_RESOURCE_POLICY,
+  ORT_RUNTIME_DIR,
+  ORT_RUNTIME_FILES,
+  ORT_VERSION_RE,
+  PAGES_FILE_LIMIT_BYTES,
+  isOrtRuntimePath,
+  ortContentType,
+  parseOrtRuntimePath
+} from './services/dictation/ortRuntime';
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
 // (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
@@ -104,6 +117,107 @@ export function dsSkinEverywherePlugin(value: string | undefined): Plugin {
   };
 }
 
+/** The onnxruntime-web that @huggingface/transformers itself imports: its dist folder, version, and the version it pins. */
+export interface OrtRuntimeSource {
+  /** `<package>/dist`, where the ort-wasm-* files live. */
+  dir: string;
+  version: string;
+  /** transformers.js's own `dependencies['onnxruntime-web']` (an exact pin). */
+  pinned: string;
+}
+
+/**
+ * Resolve onnxruntime-web the way transformers.js does: from transformers.js's own folder, so a nested copy
+ * (`@huggingface/transformers/node_modules/onnxruntime-web`, what the lockfile installs while the app depends on
+ * another version for the sound model) wins over the top-level one. Throws if either package is missing.
+ */
+export function resolveOrtRuntime(root: string = __dirname): OrtRuntimeSource {
+  const fromApp = createRequire(path.join(root, 'package.json'));
+  const transformersEntry = fromApp.resolve('@huggingface/transformers');
+  const ortEntry = createRequire(transformersEntry).resolve('onnxruntime-web/webgpu');
+  const dir = path.dirname(ortEntry);
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8')) as { name?: string; version?: string; dependencies?: Record<string, string> };
+  const ortPkg = read(path.join(dir, '..', 'package.json'));
+  const transformersPkg = read(path.join(path.dirname(transformersEntry), '..', 'package.json'));
+  if (ortPkg.name !== 'onnxruntime-web' || !ortPkg.version) throw new Error(`ortRuntime: ${dir} is not onnxruntime-web's dist folder`);
+  return { dir, version: ortPkg.version, pinned: transformersPkg.dependencies?.['onnxruntime-web'] ?? '' };
+}
+
+/** The build-time constant whisperEngine.ts reads (vite-env.d.ts declares it). */
+export const ORT_VERSION_DEFINE = '__ORT_WEB_VERSION__';
+
+/**
+ * The private voice model's ONNX runtime, served from our own site (services/dictation/ortRuntime.ts).
+ *
+ *  - Defines `__ORT_WEB_VERSION__` as the version of the onnxruntime-web transformers.js resolves, so the path the
+ *    page asks for and the folder the build writes can never drift.
+ *  - Build: copies exactly ORT_RUNTIME_FILES from that package into `<outDir>/ort/<version>/` (never into git),
+ *    and stops the build if one is missing, is 25 MiB or more (the Pages per-file limit), or the installed version
+ *    is not the one transformers.js pins.
+ *  - Dev and preview: answer `/ort/*` themselves, as functions/_middleware.ts does in production: the four files
+ *    with their content types and immutable caching, a plain 404 for anything else (never the SPA's index.html).
+ */
+export function ortRuntime(options: { root?: string } = {}): Plugin {
+  const source = resolveOrtRuntime(options.root ?? __dirname);
+  const { dir, version } = source;
+  let base = '/';
+  let outDir = path.resolve(options.root ?? __dirname, 'dist');
+
+  const notFound = (res: ServerResponse) => {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end('Not found');
+  };
+  /** Connect middleware for `/ort/*`, reading the files from `folder()`. */
+  const serve = (folder: () => string) => (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    let pathname = (req.url ?? '').split('?')[0];
+    if (base !== '/' && pathname.startsWith(base)) pathname = `/${pathname.slice(base.length)}`;
+    if (!isOrtRuntimePath(pathname)) return next();
+    const hit = parseOrtRuntimePath(pathname);
+    const file = hit && hit.version === version ? path.join(folder(), hit.file) : null;
+    if (!hit || !file || !fs.existsSync(file)) return notFound(res);
+    res.statusCode = 200;
+    res.setHeader('Content-Type', ortContentType(hit.file));
+    res.setHeader('Cache-Control', ORT_CACHE_CONTROL);
+    res.setHeader('Cross-Origin-Resource-Policy', ORT_RESOURCE_POLICY);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Length', String(fs.statSync(file).size));
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(file).pipe(res);
+  };
+
+  return {
+    name: 'ort-runtime',
+    config: () => ({ define: { [ORT_VERSION_DEFINE]: JSON.stringify(version) } }),
+    configResolved(config) {
+      base = config.base || '/';
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    buildStart() {
+      if (!ORT_VERSION_RE.test(version)) this.error(`ortRuntime: onnxruntime-web version "${version}" cannot be a path segment`);
+      if (source.pinned !== version) {
+        this.error(`ortRuntime: @huggingface/transformers pins onnxruntime-web ${source.pinned || '(none)'} but resolves ${version} (${dir}); reinstall node_modules`);
+      }
+    },
+    generateBundle() {
+      for (const name of ORT_RUNTIME_FILES) {
+        const src = path.join(dir, name);
+        if (!fs.existsSync(src)) this.error(`ortRuntime: ${src} is missing`);
+        const size = fs.statSync(src).size;
+        if (size >= PAGES_FILE_LIMIT_BYTES) this.error(`ortRuntime: ${name} is ${size} bytes, over the Cloudflare Pages limit of ${PAGES_FILE_LIMIT_BYTES}`);
+        this.emitFile({ type: 'asset', fileName: `${ORT_RUNTIME_DIR}/${version}/${name}`, originalFileName: src, source: fs.readFileSync(src) });
+      }
+    },
+    configureServer(server) {
+      server.middlewares.use(serve(() => dir));
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(serve(() => path.join(outDir, ORT_RUNTIME_DIR, version)));
+    }
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const licence = licenceModules();
@@ -127,7 +241,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR])],
+    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR]), ortRuntime()],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
     // count as browser code for the licence gate too.
     worker: { format: 'es', plugins: () => [licence.worker()] },
