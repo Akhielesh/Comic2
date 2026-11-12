@@ -247,3 +247,77 @@ describe("PE-LETTER's opt-in, wired (collisions B-3): accepted with the switch o
     expect(drop.back.letterStyle).toEqual(doc.letterStyle);
   });
 });
+
+describe("the `line` op's saved-style link (PE-SERVER wave note 3, PE-LETTER wave note 19)", () => {
+  /** A `line` op patching ln_1_2 (it stores styleId st_villain), the way NamedStyles' lineLinkOp sends it. */
+  const link = (styleId: unknown, id = 'ln_1_2', panelId = 'pn_1_2') => ({ op: 'line', pageId: 'pg_1', panelId, id, patch: { styleId } });
+  const patchOf = (ops: DocOp[]) => (ops.find((o) => o.op === 'line') as Extract<DocOp, { op: 'line' }>).patch as Record<string, unknown>;
+
+  it('on: a styleId naming a saved style links the line', () => {
+    const doc = stored();
+    const ops = sanitize(doc, [link('st_radio')]);
+    expect(patchOf(ops)).toEqual({ styleId: 'st_radio' });
+    expect(line(applyOps(doc, ops)).styleId).toBe('st_radio');
+    // A line with no link yet (ln_1_1) links the same way.
+    expect(line(applyOps(doc, sanitize(doc, [link('st_villain', 'ln_1_1', 'pn_1_1')])), 'ln_1_1').styleId).toBe('st_villain');
+  });
+
+  it('on: an unknown id is dropped and the rest of the edit applies; the line keeps its own link', () => {
+    const doc = stored();
+    for (const bad of ['st_ghost', '__proto__', 42, { id: 'st_radio' }]) {
+      const ops = sanitize(doc, [{ ...link(bad), patch: { styleId: bad, text: 'Still here' } }]);
+      expect(patchOf(ops), JSON.stringify(bad)).toEqual({ text: 'Still here' });
+      expect(line(applyOps(doc, ops)).styleId).toBe('st_villain');
+    }
+  });
+
+  it("on: null unlinks; the line's own id re-asserts even once its saved style is gone (an undo after the delete)", () => {
+    const doc = stored();
+    const unlinked = applyOps(doc, sanitize(doc, [link(null)]));
+    expect(line(unlinked).styleId).toBeUndefined();
+    // Nothing to unlink on ln_1_1: dropped, not refused.
+    expect(patchOf(sanitize(doc, [link(null, 'ln_1_1', 'pn_1_1')]))).toEqual({});
+    const orphan = normalizeDoc({ ...doc, letterStyle: { ...doc.letterStyle!, named: { st_radio: NAMED.st_radio } } });
+    expect(line(orphan).styleId).toBe('st_villain');
+    expect(patchOf(sanitize(orphan, [link('st_villain')]))).toEqual({ styleId: 'st_villain' });
+  });
+
+  it('on: "Save as style…" saves and links in one batch, and its undo unlinks and deletes the style', () => {
+    const doc = stored();
+    const save = undoRoundTrip(doc, [
+      { op: 'letter_style', patch: { named: { st_hero: { name: 'Hero', patch: { italic: true, textColor: '#0000ff' } } } } },
+      link('st_hero', 'ln_1_1', 'pn_1_1')
+    ]);
+    expect(line(save.after, 'ln_1_1').styleId).toBe('st_hero');
+    expect(save.after.letterStyle?.named?.st_hero?.name).toBe('Hero');
+    expect(line(save.back, 'ln_1_1').styleId).toBeUndefined();
+    expect(save.back.letterStyle).toEqual(doc.letterStyle);
+    // A style the same batch deletes cannot be linked.
+    expect(patchOf(sanitize(doc, [{ op: 'letter_style', patch: { named: { st_radio: null } } }, link('st_radio', 'ln_1_1', 'pn_1_1')]))).toEqual({});
+  });
+
+  it('on: deleting a saved style (fold, unlink, delete) undoes in one batch: the style comes back and the line relinks', () => {
+    const doc = stored();
+    const del = undoRoundTrip(doc, [
+      { op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], mode: 'replace', patch: { ...line(doc).style, italic: true } },
+      link(null),
+      { op: 'letter_style', patch: { named: { st_villain: null } } }
+    ]);
+    expect(line(del.after).styleId).toBeUndefined();
+    expect(Object.keys(del.after.letterStyle?.named ?? {})).toEqual(['st_radio']);
+    expect(line(del.back).styleId).toBe('st_villain');
+    expect(del.back.letterStyle).toEqual(doc.letterStyle);
+  });
+
+  it('off: every styleId is dropped as before, never refusing the batch, and the stored link stays', () => {
+    sw.on = false;
+    const doc = stored();
+    for (const v of ['st_radio', 'st_villain', 'st_ghost', null]) {
+      const ops = sanitize(doc, [{ ...link(v), patch: { styleId: v, text: 'Hello' } }]);
+      expect(patchOf(ops), String(v)).toEqual({ text: 'Hello' });
+      expect(line(applyOps(doc, ops)).styleId).toBe('st_villain');
+    }
+    // A save-and-link batch with the switch off: the named patch has nothing valid in it, so the batch is refused.
+    rejects(() => sanitize(doc, [{ op: 'letter_style', patch: { named: { st_hero: { name: 'Hero', patch: {} } } } }, link('st_hero')]), 400, /nothing valid/);
+  });
+});

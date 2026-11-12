@@ -100,7 +100,7 @@ import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHeal
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
-import { mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
+import { DEFAULT_LETTERING, mergeNamedStyles, mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { CONSISTENCY_LIMITS, DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
 import {
@@ -189,7 +189,7 @@ import {
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
 import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelName } from './sanitize/models.js';
-import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
+import { LINE_STYLE_MAX_BYTES, lineStyleIdOf } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { sanitizeDirection } from './sanitize/consistency.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
@@ -5005,6 +5005,10 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   // The doc as the batch builds it, for feature ops that need an earlier op of the same batch: Undo of a
   // removed edition re-creates it and then restores its lines (contract §6), which must find it existing.
   let working = doc;
+  // The saved lettering styles as the batch builds them, for a `line {styleId}` (Pro Edit, C-9): "Save as style…" saves
+  // a style and links the line in one batch, and the undo of a delete saves it again before relinking. letter_style
+  // itself stays off `working` (PE-SERVER wave note 7: its re-assert compares against the stored look).
+  let named = doc.letterStyle?.named;
   // Line ids per panel as the batch moves, creates and deletes them (seeded from the doc on first touch):
   // several `line_move`s into one panel must not push it past DOC_LIMITS.linesPerPanel — the session's
   // limit pass counts `line` creates only.
@@ -5209,6 +5213,13 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
             // The line's own lettering style rides a create (⌘D, Undo of a delete) and merges on an update, as in
             // line_style merge mode; null clears it. Dropping it here made every such line lose its look on save.
             style: (v) => (v === null ? null : lineStylePatch(v, existing?.style)),
+            // A saved style link (Pro field, C-9; PE-SERVER wave note 3): with PRO_EDIT_OPS_PATCHABLE on, an id naming a
+            // saved style (this batch's saves included) or re-asserting the line's own is kept and null unlinks; any
+            // other id, and every styleId while the switch is off, is dropped as before (the merge keeps the stored one).
+            styleId: (v) => {
+              const kept = lineStyleIdOf({ letterStyle: { ...(working.letterStyle ?? DEFAULT_LETTERING), named } }, v, existing?.styleId);
+              return kept === undefined ? DROP : kept === null ? CLEAR : kept;
+            },
             noTranslate: (v) => (typeof v === 'boolean' ? v : undefined)
           },
           'line'
@@ -5325,6 +5336,7 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         if (!sanitizer) throw badRequest(`“${kind}” can't be changed directly.`);
         const clean = sanitizer.sanitize(working, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc));
         out.push(clean);
+        if (clean.op === 'letter_style' && clean.patch && clean.patch.named) named = mergeNamedStyles(named, clean.patch.named);
         if (clean.op === 'edition' && clean.patch !== null) working = applyOp(working, clean);
         // Ship 2: later ops of the batch see the panels, overlays and scenes it has built (an undo re-adds a panel, then
         // its balloons, translations and clipped overlays; a scene is created, then a page's continuity names it).
