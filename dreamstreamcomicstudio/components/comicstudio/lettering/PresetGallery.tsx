@@ -12,6 +12,7 @@ import { letteringNodes, planOutline } from './svgMarkup';
 import { svgNodeToReact } from './LetteringSvg';
 import { useLetteringFontsReady } from './useLetteringFontsReady';
 import { cx } from '../board/ui';
+import { proFieldsWritable, proLooks } from '../editor/inspector/proGate';
 
 const PREVIEW_ASPECT = 1.6;
 const H = 1000 / PREVIEW_ASPECT;
@@ -78,17 +79,21 @@ export const PlansPreview: React.FC<{ plans: LetterPlan[]; height?: number; clas
   );
 };
 
-const usePresetPlans = (lang: string, measure: Measure) =>
+const usePresetPlans = (lang: string, measure: Measure, ids: readonly LetteringPresetId[]) =>
   useMemo(() => {
     const out = new Map<LetteringPresetId, LetterPlan[]>();
-    for (const id of LETTERING_PRESET_IDS) {
+    for (const id of ids) {
       const { doc, page } = previewDoc(id, { lang });
       out.set(id, planLettering(doc, page, PREVIEW_ASPECT, measure));
     }
     return out;
-  }, [lang, measure]);
+  }, [lang, measure, ids]);
 
-const ALL_PRESET_FONTS = (lang: string) => [...new Set(LETTERING_PRESET_IDS.flatMap((id) => fontsForDoc(previewDoc(id, { lang }).doc)))];
+const ALL_PRESET_FONTS = (lang: string, ids: readonly LetteringPresetId[] = LETTERING_PRESET_IDS) => [...new Set(ids.flatMap((id) => fontsForDoc(previewDoc(id, { lang }).doc)))];
+
+/** A look's name and blurb: a base look, else a Pro look (PE-LETTER's 16; a Pro id is a Pro field). */
+const lookOf = (id: LetteringPresetId, pro: readonly { id: string; name: string; blurb: string }[]): { name: string; blurb: string } =>
+  LETTERING_PRESETS[id] ?? pro.find((p) => p.id === id) ?? { name: String(id), blurb: '' };
 
 export interface PresetGalleryProps {
   value: LetteringPresetId;
@@ -96,22 +101,27 @@ export interface PresetGalleryProps {
   variant?: 'chips' | 'grid';
   /** Lettering language (previews use its script faces). */
   lang?: string;
+  /** Pro Edit: also offer the Pro looks (8 → 24) — only while Pro fields are writable. */
+  pro?: boolean;
 }
 
-export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, variant = 'grid', lang = 'en' }) => {
-  const fonts = useMemo(() => ALL_PRESET_FONTS(lang), [lang]);
+export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, variant = 'grid', lang = 'en', pro }) => {
+  const withPro = !!pro && proFieldsWritable();
+  const looks = useMemo(() => (withPro ? proLooks() : []), [withPro]);
+  const ids = useMemo<readonly LetteringPresetId[]>(() => [...LETTERING_PRESET_IDS, ...(looks.map((l) => l.id) as unknown as LetteringPresetId[])], [looks]);
+  const fonts = useMemo(() => ALL_PRESET_FONTS(lang, ids), [lang, ids]);
   const { measure } = useLetteringFontsReady(fonts, { weights: [400, 500, 600, 700, 800] });
-  const plans = usePresetPlans(lang, measure);
+  const plans = usePresetPlans(lang, measure, ids);
   if (variant === 'chips') {
     return (
       <div role="radiogroup" aria-label="Lettering style" className="-mx-1 flex gap-1.5 overflow-x-auto overscroll-x-contain px-1 pb-1 [scrollbar-width:thin]">
-        {LETTERING_PRESET_IDS.map((id) => (
+        {ids.map((id) => (
           <button
             key={id}
             type="button"
             role="radio"
             aria-checked={value === id}
-            title={LETTERING_PRESETS[id].blurb}
+            title={lookOf(id, looks).blurb}
             onClick={() => onChange(id)}
             className={cx(
               'flex min-h-[44px] shrink-0 flex-col items-center gap-0.5 rounded-xl border px-1.5 py-1 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
@@ -121,7 +131,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
             <span className="grid h-9 place-items-center rounded-md bg-[var(--ds-reader-paper-back)] px-1">
               <PlansPreview plans={plans.get(id) || []} height={32} />
             </span>
-            <span className="max-w-[5.5rem] truncate text-[10.5px] font-medium text-[var(--ds-ink)]">{LETTERING_PRESETS[id].name}</span>
+            <span className="max-w-[5.5rem] truncate text-[10.5px] font-medium text-[var(--ds-ink)]">{lookOf(id, looks).name}</span>
           </button>
         ))}
       </div>
@@ -131,7 +141,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
     // Columns follow the CONTAINER, not the window: a 320 px side sheet on a landscape phone gets one
     // column (two squeezed each blurb to ~46 px and cut its words), a wide aside or tab gets two.
     <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-2">
-      {LETTERING_PRESET_IDS.map((id) => (
+      {ids.map((id) => (
         <button
           key={id}
           type="button"
@@ -148,10 +158,10 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1 text-[12.5px] font-semibold text-[var(--ds-ink)]">
-              <span className="truncate">{LETTERING_PRESETS[id].name}</span>
+              <span className="truncate">{lookOf(id, looks).name}</span>
               {value === id && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
             </span>
-            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{LETTERING_PRESETS[id].blurb}</span>
+            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{lookOf(id, looks).blurb}</span>
           </span>
         </button>
       ))}

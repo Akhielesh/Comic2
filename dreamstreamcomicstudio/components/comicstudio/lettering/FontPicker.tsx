@@ -8,6 +8,8 @@ import { FONT_REGISTRY, fontCoversLanguage, fontFamilyStack, resolveLetteringFon
 import type { FontId, LatinFontId } from '../../../shared/comic/lettering/style';
 import { languageSpec } from '../../../shared/comic/languages';
 import { ensureFonts } from './fontLoader';
+import * as proFontsModule from '../../../shared/comic/lettering/proFonts';
+import { proFieldsWritable, proFontIds } from '../editor/inspector/proGate';
 import { cx } from '../board/ui';
 import { RADIUS_PILL } from '../../chat/studioDesign';
 
@@ -32,7 +34,13 @@ export const LATIN_FONTS: LatinFontId[] = [
 /** The Easy view's friendly six. */
 export const EASY_FONTS: LatinFontId[] = ['comic-neue', 'andika', 'patrick-hand', 'shantell-sans', 'atkinson', 'bangers'];
 
-const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? id;
+const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? String(id).split('-').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+
+/** A Pro face's role line (PE-FONTS's PRO_FONT_ROLES, read by name so the picker builds before it lands). */
+const proRoleOf = (id: string): string | undefined => {
+  const roles = (proFontsModule as unknown as Record<string, unknown>)['PRO_FONT_ROLES'] as Record<string, string> | undefined;
+  return roles && Object.prototype.hasOwnProperty.call(roles, id) ? roles[id] : undefined;
+};
 
 /**
  * The Easy chips for a lettering language: the friendly six for Latin-script languages; otherwise every
@@ -54,9 +62,12 @@ export interface FontPickerProps {
   /** Easy chips instead of the full list. */
   simple?: boolean;
   label?: string;
+  /** Pro Edit: list the Pro faces (PRO_FONT_IDS) after the base ones — only while Pro fields are writable (a Pro
+   *  font is a Pro field). Each face still loads only when the list opens. */
+  pro?: boolean;
 }
 
-export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, simple, label = 'Font' }) => {
+export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, simple, label = 'Font', pro }) => {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -76,8 +87,10 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   // Script faces the comic's language can use (non-Latin languages only).
   const options: FontId[] = useMemo(() => {
     const extra = spec && spec.script !== 'Latn' ? [...new Set([spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx])].filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
-    return [...extra, ...LATIN_FONTS];
-  }, [spec]);
+    const proFaces = pro && proFieldsWritable() ? (proFontIds() as readonly string[] as readonly FontId[]).filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
+    return [...extra, ...LATIN_FONTS, ...proFaces];
+  }, [spec, pro]);
+  const proSet = useMemo(() => new Set<string>(proFontIds()), []);
   const shown = simple ? easyFontsFor(lang) : options;
 
   // Load the faces for the previews when the list is visible (free; files are cached).
@@ -206,12 +219,12 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
                     {labelOf(f)}
                   </span>
                   <span className="block truncate text-[11px] text-[var(--ds-muted)]">
-                    {(ROLE as Record<string, string>)[f] ?? 'Script face'}
+                    {(ROLE as Record<string, string>)[f] ?? (proSet.has(f) ? proRoleOf(f) ?? 'Pro face' : 'Script face')}
                     {n ? ` · ${n}` : ''}
                   </span>
                 </span>
                 <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-1.5 py-px text-[9.5px] font-medium tabular-nums text-[var(--ds-muted)]" title="Font licence">
-                  {meta.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
+                  {meta?.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
                 </span>
                 {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
               </li>
