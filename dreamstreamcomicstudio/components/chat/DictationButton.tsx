@@ -237,7 +237,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
               </button>
               <button
                 type="button"
-                onClick={stop}
+                onClick={() => stop()}
                 className={`${RECORD_BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}
                 title="Finish and insert text"
                 aria-label="Finish and insert text"
