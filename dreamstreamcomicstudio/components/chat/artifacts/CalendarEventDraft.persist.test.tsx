@@ -329,6 +329,19 @@ describe('the settled line', () => {
     expect(line.querySelectorAll('.truncate')).toHaveLength(0);
   });
 
+  it('a batch row’s when · where line wraps to two lines instead of cutting the place off (CHAT-0 #8)', () => {
+    const located: CalendarEventDraftArtifact = {
+      ...batch,
+      events: [{ title: 'Dinner', start: '2026-11-07T19:00:00Z', end: '2026-11-07T21:00:00Z', location: 'The Long Table, 14 Harbour Street, Fort Kochi' }, { title: 'Hotel' }]
+    };
+    mount({ turn: { artifacts: [{ type: 'calendar_event_draft', data: located }], passed: false } });
+    const line = screen.getByText(/The Long Table, 14 Harbour Street, Fort Kochi/);
+    expect(line.textContent).toMatch(/ · The Long Table/);
+    expect(line.className).toMatch(/\bline-clamp-2\b/);
+    expect(line.className).toMatch(/\bbreak-words\b/);
+    expect(line.className).not.toMatch(/\btruncate\b/);
+  });
+
   it('the batch Remove button has a 44 px coarse hit area (tap-target)', () => {
     mount({ turn: { artifacts: [{ type: 'calendar_event_draft', data: batch }], passed: false } });
     for (const b of screen.getAllByRole('button', { name: /^remove /i })) expect(b.className).toMatch(/\btap-target\b/);

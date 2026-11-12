@@ -336,7 +336,8 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
               <span className="mt-0.5">{rowIcon(rowsNow[i])}</span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-medium text-[var(--ds-ink)]">{e.title}</p>
-                <p className="truncate text-[11px] tabular-nums text-[var(--ds-muted)]">
+                {/* When · where wraps to two lines (CHAT-0 #8): at 320 px a one-line cut lost the place. */}
+                <p className="line-clamp-2 break-words text-[11px] tabular-nums text-[var(--ds-muted)]">
                   {rowsNow[i] === 'pending' && !elsewhere ? 'May already be in your calendar' : `${fmtWhen(e.start, e.end, e.allDay)}${e.location ? ` · ${e.location}` : ''}`}
                 </p>
               </div>
