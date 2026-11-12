@@ -65,12 +65,20 @@ const PRO_ONLY: ProOnly[] = [
  * The first-load ceiling per HTML entry: the gzip -9 bytes of its module scripts, modulepreloads and their static imports
  * (what every visitor pays before first paint, the public share reader and the comics landing included). S2b grew the
  * site entry from 279,251 B (99b870c4) to 303,837 B (the S2b integration): tailwind-merge and 17 components/ds modules
- * moved onto the critical path (App.tsx's cn and DS primitives, DS-3's eager AuthPage, DS-2's StaticSiteHeader). No lead
- * decision accepts that yet (D17 covers only PE-SHELL's Easy route; this is D17b, docs/features/pro-edit.md §8), so the
- * ceiling holds today's number plus ~2 KB for zlib and build noise: nothing grows it unseen. A cut lowers it here; a
- * reviewed rise raises it with the lead's decision named beside it.
+ * moved onto the critical path (App.tsx's cn and DS primitives, DS-3's eager AuthPage, DS-2's StaticSiteHeader).
+ *
+ * Lead decision D17b (the S2b release; docs/features/pro-edit.md §8): that growth is ACCEPTED for this release with the
+ * ceiling pinned; the cut (AuthPage and the Toast host lazy, a clsx-only `cx` in eager chrome) is a later performance
+ * package. Taking production's three releases into S2b then raised the site entry from 303,837 B to 308,786 B (+4,949 B),
+ * measured on a production build of the merged tree: about three quarters is the slim-reads release's save guards and
+ * card projection in hooks/useProjectManager.ts and services/db.ts, the rest is the comics host's own header
+ * (ComicsHeader and its routing, which App draws on sign-in, Privacy, Terms and the Library) and the public-page recipes;
+ * the token waitlist form gives some back. All of it already ships on production. The ceiling rises by exactly that
+ * measured amount (306,000 + 4,949, rounded up to 310,950), so it still holds the measured number plus the same ~2 KB
+ * for zlib and build noise: nothing grows it unseen. live.html is unchanged (314,239 B measured). A cut lowers the
+ * ceiling here; a reviewed rise raises it with the lead's decision named beside it.
  */
-const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 306_000, 'live.html': 316_500 };
+const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 310_950, 'live.html': 316_500 };
 
 /** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
 const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;

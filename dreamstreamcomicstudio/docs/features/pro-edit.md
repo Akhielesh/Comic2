@@ -260,10 +260,17 @@ pinned by `board/PageEditor.flagOff.test.tsx`).
   - eager first load (the entry's static closure, 3 files): 278,505 → 301,800 B gz, **+23.3 KB** (+77.8 KB min). It is
     not PE-SHELL's: tailwind-merge (in the lazy DictationButton chunk at 99b870c4) and 17 `components/ds` modules moved
     onto the critical path through `App.tsx` (`cn`, Button, EmptyState, ErrorState, LoadingState, ToastHost), DS-3's
-    eager AuthPage and DS-2's StaticSiteHeader. D17 does not cover it; it is **for the lead as D17b** (accept and pin,
-    or cut: AuthPage lazy, ToastHost and Toast through a dynamic import, AppLoader on plain classes, clsx-only `cx` in
-    eager chrome). The S2b integration pinned a ceiling at today's number (`tests/config/platformChunks.test.ts`), so
-    nothing grows it unseen in the meantime;
+    eager AuthPage and DS-2's StaticSiteHeader. D17 does not cover it. **Lead decision D17b (the S2b release):** the
+    growth is accepted for this release with the ceiling pinned (`tests/config/platformChunks.test.ts`), so nothing
+    grows it unseen; the cut (AuthPage lazy, ToastHost and Toast through a dynamic import, AppLoader on plain classes,
+    clsx-only `cx` in eager chrome) is scheduled as a later performance package;
+  - merging production's three releases into S2b (the Comics home, the slim database reads, the share-page
+    permissions): the eager first load went from 303,837 to 308,786 B gz, **+4.9 KB**, on a production build of the
+    merged tree. By rendered code: `hooks/useProjectManager.ts` about +14 KB and `services/db.ts` about +9 KB (the
+    card projection, the full-state load on open and the save guards), `ComicsHeader` with its routing and lockup
+    about +8 KB (App draws it on the comics host's sign-in, Privacy, Terms and Library), `App.tsx` +2 KB, the
+    public-page recipes in `studioDesign.ts` +2 KB, and the token `WaitlistForm` −4 KB. All of it already ships on
+    production. The ceiling rose by the measured amount only, 306,000 → 310,950 B;
   - the ComicStudio chunk: 160,381 → 152,941 B gz, **−7.4 KB** (studioDesign moved into the eager chunks);
   - the ComicStudio route beyond the first load: 702,517 → 736,218 B gz, **+33.7 KB**, 62 → 72 files. Of the 82.6 KB of
     new rendered modules on the route, `editor/*` is 13.5 KB, compose 17.1 KB, `panelize/compose` 13.0 KB and settle
