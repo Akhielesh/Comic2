@@ -1173,25 +1173,28 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       signingRef.current.add(p);
       signAttemptsRef.current.set(p, (signAttemptsRef.current.get(p) || 0) + 1);
     });
+    /** A path was given up on in this round (isUnsignable turns true for it). */
+    let gaveUp = false;
     try {
       const signed = await signStudioUrls(projectRef.current, paths);
       if (generation !== generationRef.current) return;
       guarded(generation)({ type: 'urls_merge', urls: signed, now: Date.now() });
       Object.keys(signed).forEach((p) => signAttemptsRef.current.delete(p));
-      let declined = false;
       paths.forEach((p) => {
         if (signed[p] || unsignableRef.current.has(p)) return;
         unsignableRef.current.add(p);
-        declined = true;
+        gaveUp = true;
       });
-      if (declined && mountedRef.current) bumpUnsignable();
     } catch {
       /* the placeholder stays; the next render or image error asks again (bounded) */
-      // The last allowed try failed: that path is given up on (isUnsignable), so its readers render again.
-      if (generation === generationRef.current && mountedRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS)) bumpUnsignable();
+      // The last allowed try failed: that path is given up on now.
+      gaveUp = generation === generationRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS);
     } finally {
       paths.forEach((p) => signingRef.current.delete(p));
     }
+    // Renew isUnsignable's identity so the panes reading it render again: a failed try dispatches nothing else. After
+    // the in-flight marks are gone, so that render reads true.
+    if (gaveUp && mountedRef.current) bumpUnsignable();
   }, [guarded]);
 
   const requestSign = useCallback(
@@ -1268,11 +1271,14 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
   /**
    * The signer gave up on this path (PF-2 #7): the server declined it, MAX_SIGN_ATTEMPTS signing tries failed, or the
-   * image kept failing to load — the same test urlFor uses to skip a variant. Cards show "Preview unavailable" instead
-   * of waiting forever. Its identity changes when a path is given up on, so the panes reading it render again.
+   * image kept failing to load — urlFor's test for skipping a variant, except that the last allowed try still in flight
+   * is not given up on yet (it may come back signed: the tile keeps its shimmer, never flickers "Preview unavailable").
+   * Cards show "Preview unavailable" instead of waiting forever. Refs only: no request. Its identity changes when a
+   * path is given up on, so the panes reading it render again.
    */
   const isUnsignable = useCallback(
-    (path: string): boolean => unsignableRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS,
+    (path: string): boolean =>
+      unsignableRef.current.has(path) || (!signingRef.current.has(path) && (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the refs are read live; the count only renews the identity
     [unsignableSeq]
   );

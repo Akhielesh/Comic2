@@ -165,6 +165,9 @@ until B-TOOL ships it.
 - **Cleared** by that activity's `end` (whichever stream delivers it), by its stream's `done` or `error`, by the stream
   closing without one (a dropped connection), and by Stop (`cancel_start`, before the streams close). A project switch
   starts empty.
+- **Not set while Stop winds down.** A start that arrives after Stop and before the server sees the cancel (about one
+  round trip) names no place, so the editor outline never shows while the activity line says "Stopping…". An end still
+  removes its entry. Once Stop is over (`cancel_end`), new starts set it again.
 - **Many streams.** Every open stream receives every session event, so one start can arrive twice. An entry lives until
   every stream that delivered its start has finished. A second message refused BUSY (another tab) also saw the start;
   its error does not clear the running turn's presence. A stream that never saw the start never clears it.
@@ -175,17 +178,18 @@ until B-TOOL ships it.
 (`types.ts`). `label` is the step's label and `at` is when it started. It adds no timer and no fetch; a fake-timer test
 pins that.
 
-**The words (`conversation/ActivityLine.tsx`).** `presencePlace(doc, presence)` gives "page 2 · 1 balloon", "page 2" or
-"3 balloons". The page comes from the page id, or else from the page that holds the first known balloon. A page the doc
-does not have yet is left out, never guessed. The words sit beside the line the place came from, matched by label. They
-never sit beside a newer job's line ("Drawing page 3…"); in that case they show on their own row under "+N". They are
-muted, visible text only, so the phone View button's name still starts with what it shows. While Stop winds down, no
-place is named.
+**The words (`studioReducer.ts`, shown by `conversation/ActivityLine.tsx`).** `presencePlace(doc, presence)` is pure and
+sits beside the slice, so the board imports it without a conversation component (`ActivityLine.tsx` re-exports it).
+It gives "page 2 · 1 balloon", "page 2" or "3 balloons". The page comes from the page id, or else from the page that
+holds the first known balloon. A page the doc does not have yet is left out, never guessed. The words sit beside the
+line the place came from, matched by label. They never sit beside a newer job's line ("Drawing page 3…"); in that case
+they show on their own row under "+N". They are muted, visible text only, so the phone View button's name still starts
+with what it shows. While Stop winds down, no place is named.
 
 **For the editor (PE-SHELL, PE-INSPECT).** Read `studio.presence` (optional on the type: absent or null means nobody is
 anywhere). Outline the balloons in `lineIds` on the page you show. `pageId` may be absent, and the line ids alone
-identify the balloons. Reuse `presencePlace` for words. Never treat it as a lock: the creator can still edit the
-balloon, and the conflict guard (§5) settles a collision.
+identify the balloons. Reuse `presencePlace` from `studioReducer.ts` for words. Never treat it as a lock: the creator
+can still edit the balloon, and the conflict guard (§5) settles a collision.
 
 ### 3.2 "Send now" with steering on: the path as built (A4 check)
 
@@ -199,8 +203,9 @@ S1 built the client half of steering; A4 checked it against A2's refusal table (
 - A4 added two cases that were not yet covered. A note with photos stops the director instead of steering, because a
   steer carries text only. A `plan_pages` run is neither steered nor stopped; the note goes the moment the plan is in.
 - **One fix (`QueuedMessages.tsx`).** After a refusal that keeps the director working, the note's button read
-  "Stopping, then sending…" while nothing stopped. It now reads "Goes next, after this step". "Stopping, then
-  sending…" shows only while a Stop is really under way.
+  "Stopping, then sending…" while nothing stopped. It now reads "Goes next, after this step". During a `plan_pages`
+  run (the turn is locked, no message in flight) it reads "Goes once the plan is in", as its tooltip says, not
+  "Sending next…" for the whole plan. "Stopping, then sending…" shows only while a Stop is really under way.
 
 ## 4. Up next: the message queue (A1; `COMIC_LIVE_QUEUE`)
 
@@ -383,8 +388,11 @@ conflict card per turn.
 - **An entry outlives a stream only while another stream that delivered it is still open.** This follows the activity
   lines. The cost is rare: an action stream open beside a turn whose tool failed without an end keeps the place until
   that stream ends, as its activity line already does.
-- **`StudioController.isUnsignable` is optional,** like every member added after the contract froze, so the existing
-  fakes keep compiling. The live controller and `makeFakeStudio` both have it.
+- **`StudioController.isUnsignable` (S2a PF-2 #7, landed on integ/s2a as a required member).** A4 keeps integ/s2a's
+  member, its fixtures and its test, and adds two things in `useStudio.ts`: its identity renews whenever a path is given
+  up on (the server declines it, the last allowed try fails, or the image keeps failing to load), so a tile re-renders
+  out of its shimmer; and the last allowed try still in flight is not given up on yet, so a tile never flashes
+  "Preview unavailable" before a late signature arrives.
 
 ## 7. What each package fills in
 

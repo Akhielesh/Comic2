@@ -169,6 +169,14 @@ describe('QueuedMessages', () => {
     expect(screen.getByRole('button', { name: 'Sending next…' })).toBeDisabled();
   });
 
+  it('Send now during a plan_pages run says the note goes once the plan is in, never "Sending next…"', () => {
+    // The turn is locked by plan_pages (no director message in flight): Send now neither steers nor stops; the note
+    // waits first in line until the plan lands, which can take a while.
+    renderAt(queueStudio({ queueSendingNow: 'n1', messageBusy: false, turnLocked: true }));
+    expect(screen.getByRole('button', { name: 'Goes once the plan is in' })).toBeDisabled();
+    expect(screen.queryByText(/Sending next|Stopping/)).toBeNull();
+  });
+
   it("Send now's tooltip says what it will really do: steer, stop first, wait for the plan, or send", () => {
     const titleWith = (over: Partial<ComicStudioController>, list: QueuedNote[] = notes) => {
       const { unmount } = renderAt(queueStudio({ queue: list, ...over }));

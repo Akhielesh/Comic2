@@ -98,8 +98,15 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
   const stopping = studio.queueSendingNow === note.id;
   // What the button says while this note waits to go first. The director stops for it only when Stop is really under
   // way (steering off, or a steer that fell back to D2); a steer refused NOT_RUNNING / BUSY / LIMIT keeps it working
-  // and the note simply goes when this step ends — never "Stopping" while nothing stops.
-  const waitingWords = studio.messageBusy ? (studio.cancelling ? 'Stopping, then sending…' : 'Goes next, after this step') : 'Sending next…';
+  // and the note simply goes when this step ends — never "Stopping" while nothing stops. A plan_pages run is never
+  // stopped: the note goes once the plan is in (as the tooltip says), which can take a while — not "Sending next…".
+  const waitingWords = studio.messageBusy
+    ? studio.cancelling
+      ? 'Stopping, then sending…'
+      : 'Goes next, after this step'
+    : studio.turnLocked
+      ? 'Goes once the plan is in'
+      : 'Sending next…';
   // Up next would refuse it (it must still fit one message once drained): the editor stays open and says so.
   const tooLong = draft.trim().length > QUEUE_NOTE_MAX_CHARS;
 

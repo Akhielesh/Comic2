@@ -14,10 +14,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Square } from 'lucide-react';
-import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ActivityItem, StudioPresence } from '../types';
 import type { ComicStudioController } from '../useStudio';
-import { activeActivities } from '../studioReducer';
+import { activeActivities, presencePlace } from '../studioReducer';
 import { useCostFormat } from './cost';
 import { cx, plural } from './ui';
 import { RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
@@ -54,24 +53,8 @@ const COST_BADGE: Record<ActivityCost, { text: string; title: string; cls: strin
   }
 };
 
-/**
- * Where the director is working, in words: "page 2 · 1 balloon", "page 2", "3 balloons". The page comes from the
- * presence's page id, else from the page that holds its first known balloon (a page the doc does not have yet is left
- * out rather than guessed). Null when there is nothing to say. Pure.
- */
-export const presencePlace = (doc: Pick<ComicDoc, 'pages'> | null | undefined, presence: Pick<StudioPresence, 'pageId' | 'lineIds'> | null | undefined): string | null => {
-  if (!presence) return null;
-  const lineIds = Array.isArray(presence.lineIds) ? presence.lineIds : [];
-  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
-  let page = presence.pageId ? pages.find((p) => p.id === presence.pageId) : undefined;
-  if (!page && lineIds.length) {
-    const ids = new Set(lineIds);
-    page = pages.find((p) => p.panels?.some((panel) => panel.lines?.some((line) => ids.has(line.id))));
-  }
-  const n = lineIds.length;
-  const parts = [page && typeof page.n === 'number' ? `page ${page.n}` : null, n ? `${n} ${n === 1 ? 'balloon' : 'balloons'}` : null].filter(Boolean);
-  return parts.length ? parts.join(' · ') : null;
-};
+/** Where the director is working, in words (pure; it lives beside the presence slice in studioReducer.ts). */
+export { presencePlace };
 
 /** The live line presence belongs to: the newest one with its label (presence carries the label of its start). */
 const presenceLineId = (active: ActivityItem[], presence: StudioPresence | null | undefined): string | undefined => {

@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { STEER_LIMITS, type ActivityWhere, type StudioEvent } from '../../shared/comic/events';
 import { makeSampleDoc } from './conversation/testing/fixtures';
-import { initialStudioState, MAX_PRESENCE, presenceOf, presenceWhere, studioReducer, type StudioReducerAction, type StudioState } from './studioReducer';
+import { initialStudioState, MAX_PRESENCE, presenceOf, presencePlace, presenceWhere, studioReducer, type StudioReducerAction, type StudioState } from './studioReducer';
+import { presencePlace as activityLinePresencePlace } from './conversation/ActivityLine';
 
 const NOW = 1_760_000_000_000;
 const run = (state: StudioState, ...actions: StudioReducerAction[]) => actions.reduce(studioReducer, state);
@@ -85,6 +86,31 @@ describe('presence from activity.where', () => {
     expect(presenceOf(s)).toBeNull();
   });
 
+  it('a start an older action stream delivered first stays while the director turn that also delivered it runs', () => {
+    // Listeners fire in the order the streams opened, so an action stream opened before the turn (a render) receives
+    // the director's start first. That render finishing must not clear the place the director is still editing.
+    let s = open(open(loaded(), 'a1', 'action'), 'm1');
+    s = run(s, start('act_1', 'Moving a balloon', BALLOON, 'a1'), start('act_1', 'Moving a balloon', BALLOON, 'm1'));
+    s = run(s, done('a1'), { type: 'stream_end', streamId: 'a1', now: NOW });
+    expect(presenceOf(s)?.pageId).toBe('pg_2');
+    s = run(s, end('act_1', 'Moving a balloon', 'm1'));
+    expect(presenceOf(s)).toBeNull();
+  });
+
+  it('a step that starts while Stop winds down names no place (the server has not seen the cancel yet)', () => {
+    let s = run(open(loaded()), start('act_1', 'Moving a balloon', BALLOON), { type: 'cancel_start' });
+    expect(presenceOf(s)).toBeNull();
+    s = run(s, start('act_2', 'Restyling balloons', { pageId: 'pg_1', lineIds: ['pg_1_l1'] }));
+    expect(presenceOf(s)).toBeNull();
+    // The activity line still lists it (it hides the place words while cancelling); its end changes nothing.
+    expect(s.activity.map((a) => a.label)).toContain('Restyling balloons');
+    s = run(s, end('act_2', 'Restyling balloons'));
+    expect(presenceOf(s)).toBeNull();
+    // Once Stop is over, a new step names its place again.
+    s = run(s, { type: 'cancel_end' }, start('act_3', 'Moving a balloon', BALLOON));
+    expect(presenceOf(s)?.pageId).toBe('pg_2');
+  });
+
   it('a stream that never saw the start does not clear it', () => {
     let s = run(open(loaded(), 'm1'), start('act_1', 'Moving a balloon', BALLOON, 'm1'));
     s = open(s, 'a1', 'action');
@@ -128,6 +154,13 @@ describe('presenceWhere (the bounds)', () => {
     expect(w?.lineIds[0]).toBe('ln_0');
   });
 
+  it('counts a balloon named twice once', () => {
+    expect(presenceWhere({ lineIds: ['ln_1', 'ln_1', 'ln_2'] })).toEqual({ lineIds: ['ln_1', 'ln_2'] });
+    const s = run(open(loaded()), start('act_1', 'Moving a balloon', { pageId: 'pg_2', lineIds: ['pg_2_l1', 'pg_2_l1'] }));
+    expect(presenceOf(s)?.lineIds).toEqual(['pg_2_l1']);
+    expect(presencePlace(makeSampleDoc(), presenceOf(s))).toBe('page 2 · 1 balloon');
+  });
+
   it('drops what is not an id and names nothing for an empty or malformed where', () => {
     expect(presenceWhere({ pageId: 7, lineIds: ['ok', '', 3, null, 'x'.repeat(200)] })).toEqual({ lineIds: ['ok'] });
     expect(presenceWhere({ pageId: 'pg_1' })).toEqual({ pageId: 'pg_1', lineIds: [] });
@@ -141,5 +174,15 @@ describe('presenceWhere (the bounds)', () => {
     const lineIds = Array.from({ length: 40 }, (_, i) => `ln_${i}`);
     const s = run(open(loaded()), start('act_1', 'Restyling balloons', { pageId: 'pg_1', lineIds }));
     expect(presenceOf(s)?.lineIds).toEqual(lineIds.slice(0, STEER_LIMITS.whereLines));
+  });
+});
+
+describe('presencePlace (the words, pure, beside the slice)', () => {
+  it('lives in studioReducer for the board and the activity line alike (ActivityLine re-exports the same function)', () => {
+    const doc = makeSampleDoc();
+    expect(presencePlace(doc, { pageId: 'pg_2', lineIds: ['pg_2_l1'] })).toBe('page 2 · 1 balloon');
+    expect(presencePlace(doc, { pageId: 'pg_2', lineIds: [] })).toBe('page 2');
+    expect(presencePlace(doc, null)).toBeNull();
+    expect(activityLinePresencePlace).toBe(presencePlace);
   });
 });

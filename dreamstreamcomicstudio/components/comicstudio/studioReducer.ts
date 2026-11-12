@@ -210,6 +210,26 @@ export const presenceOf = (state: Pick<StudioState, 'presence'>): StudioPresence
   return list && list.length ? list[list.length - 1].presence : null;
 };
 
+/**
+ * Where the director is working, in words: "page 2 · 1 balloon", "page 2", "3 balloons". The page comes from the
+ * presence's page id, else from the page that holds its first known balloon (a page the doc does not have yet is left
+ * out rather than guessed). Null when there is nothing to say. Pure: the activity line (conversation/ActivityLine.tsx)
+ * and the editor's outline and Layers badge (board/) share it.
+ */
+export const presencePlace = (doc: Pick<ComicDoc, 'pages'> | null | undefined, presence: Pick<StudioPresence, 'pageId' | 'lineIds'> | null | undefined): string | null => {
+  if (!presence) return null;
+  const lineIds = Array.isArray(presence.lineIds) ? presence.lineIds : [];
+  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
+  let page = presence.pageId ? pages.find((p) => p.id === presence.pageId) : undefined;
+  if (!page && lineIds.length) {
+    const ids = new Set(lineIds);
+    page = pages.find((p) => p.panels?.some((panel) => panel.lines?.some((line) => ids.has(line.id))));
+  }
+  const n = lineIds.length;
+  const parts = [page && typeof page.n === 'number' ? `page ${page.n}` : null, n ? `${n} ${n === 1 ? 'balloon' : 'balloons'}` : null].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+};
+
 export interface OptimisticPatch {
   id: string;
   ops: DocOp[];
@@ -713,7 +733,14 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return { ...state, drafts: { ...state.drafts, [event.msgId]: (state.drafts[event.msgId] || '') + event.text } };
     }
     case 'activity':
-      return event.id ? withPresence({ ...state, activity: upsertActivity(state.activity, event, now) }, presenceOnActivity(state.presence, streamId, event, now)) : state;
+      return event.id
+        ? withPresence(
+            { ...state, activity: upsertActivity(state.activity, event, now) },
+            // While Stop winds down a start names no place (the server has not seen the cancel yet): presence stays
+            // cleared, as the activity line says nothing about a place then. An end still removes its entry.
+            state.cancelling && event.phase === 'start' ? state.presence : presenceOnActivity(state.presence, streamId, event, now)
+          )
+        : state;
     case 'urls':
       return { ...state, urls: mergeUrls(state.urls, event.urls, now) };
     case 'error': {

@@ -38,8 +38,8 @@ const idleDoc = () => {
   return { ...doc, style: { ...doc.style, options: doc.style.options.map((o) => ({ ...o, render: { ...o.render, status: 'ready' as const } })) } };
 };
 
-const setup = async () => {
-  api.loadStudioProject.mockResolvedValue({ doc: idleDoc(), urls: {}, caps: DEFAULT_CAPS });
+const setup = async (urls: Record<string, string> = {}) => {
+  api.loadStudioProject.mockResolvedValue({ doc: idleDoc(), urls, caps: DEFAULT_CAPS });
   let renders = 0;
   const hook = renderHook(
     ({ id }) => {
@@ -166,29 +166,97 @@ describe('StudioController.isUnsignable (PF-2 #7)', () => {
     await tryOnce();
     await tryOnce();
     expect(api.signStudioUrls).toHaveBeenCalledTimes(2);
-    expect(result.current.isUnsignable?.(PATH)).toBe(false);
+    expect(result.current.isUnsignable(PATH)).toBe(false);
     const rendered = renders();
     await tryOnce();
     expect(api.signStudioUrls).toHaveBeenCalledTimes(3);
     // The third failure gives the path up: the controller says so and renders again (a failed try dispatches nothing
     // else, so without the bump a tile would keep its shimmer until something unrelated re-rendered).
     expect(renders()).toBeGreaterThan(rendered);
-    expect(result.current.isUnsignable?.(PATH)).toBe(true);
+    expect(result.current.isUnsignable(PATH)).toBe(true);
     // Given up for good (until reload): no fourth try.
     await tryOnce();
     expect(api.signStudioUrls).toHaveBeenCalledTimes(3);
-    expect(result.current.isUnsignable?.('u/x/p/other.webp')).toBe(false);
+    expect(result.current.isUnsignable('u/x/p/other.webp')).toBe(false);
   });
 
-  it('a path the server declines to sign is unsignable at once', async () => {
+  it('a path the server declines to sign is unsignable at once — and the panes reading it render again', async () => {
     const { result } = await setup();
     vi.useFakeTimers();
     api.signStudioUrls.mockResolvedValue({});
     act(() => void result.current.urlFor(PATH));
-    expect(result.current.isUnsignable?.(PATH)).toBe(false);
+    expect(result.current.isUnsignable(PATH)).toBe(false);
+    const before = result.current.isUnsignable;
     await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
     expect(api.signStudioUrls).toHaveBeenCalledTimes(1);
-    expect(result.current.isUnsignable?.(PATH)).toBe(true);
+    expect(result.current.isUnsignable(PATH)).toBe(true);
+    // A new identity, so a memoised tile reading it renders "Preview unavailable" instead of keeping its shimmer.
+    expect(result.current.isUnsignable).not.toBe(before);
+  });
+
+  describe('the last allowed try, still in flight', () => {
+    /** Two failed tries, then a third whose answer the test holds. */
+    const thirdTryHeld = async () => {
+      const ctx = await setup();
+      vi.useFakeTimers();
+      const offline = new StudioApiError('network', 'Offline.');
+      let settle: { resolve: (v: Record<string, string>) => void; reject: (e: unknown) => void } | null = null;
+      api.signStudioUrls
+        .mockRejectedValueOnce(offline)
+        .mockRejectedValueOnce(offline)
+        .mockImplementationOnce(() => new Promise<Record<string, string>>((resolve, reject) => (settle = { resolve, reject })));
+      for (let i = 0; i < 3; i += 1) {
+        act(() => void ctx.result.current.urlFor(PATH));
+        await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
+      }
+      expect(api.signStudioUrls).toHaveBeenCalledTimes(3);
+      return { ...ctx, settle: () => settle! };
+    };
+
+    it('is not given up on while it is in flight, and is once it fails', async () => {
+      const { result, settle } = await thirdTryHeld();
+      // It may still come back signed: the tile keeps its shimmer, it does not flash "Preview unavailable".
+      expect(result.current.isUnsignable(PATH)).toBe(false);
+      const before = result.current.isUnsignable;
+      await act(async () => settle().reject(new StudioApiError('network', 'Offline.')));
+      expect(result.current.isUnsignable(PATH)).toBe(true);
+      expect(result.current.isUnsignable).not.toBe(before);
+    });
+
+    it('is not given up on when it comes back signed', async () => {
+      const { result, settle } = await thirdTryHeld();
+      expect(result.current.isUnsignable(PATH)).toBe(false);
+      await act(async () => settle().resolve({ [PATH]: 'https://cdn.test/late.webp' }));
+      expect(result.current.isUnsignable(PATH)).toBe(false);
+      expect(result.current.urlFor(PATH)).toBe('https://cdn.test/late.webp');
+    });
+  });
+
+  it('a file that keeps failing to load is given up on once, and the panes render again exactly then', async () => {
+    const SIGNED = 'https://cdn.test/signed.webp';
+    const MAX_SIGN_ATTEMPTS = 3; // useStudio.ts
+    const { result } = await setup({ [PATH]: SIGNED });
+    vi.useFakeTimers();
+    api.signStudioUrls.mockResolvedValue({ [PATH]: SIGNED });
+    expect(result.current.urlFor(PATH)).toBe(SIGNED);
+    const img = document.createElement('img');
+    img.src = SIGNED;
+    document.body.appendChild(img);
+    const seen = new Set([result.current.isUnsignable]);
+    try {
+      for (let i = 1; i <= MAX_SIGN_ATTEMPTS + 2; i += 1) {
+        act(() => void img.dispatchEvent(new Event('error')));
+        seen.add(result.current.isUnsignable);
+        // Up to MAX_SIGN_ATTEMPTS failures it is an expired link (re-signed); one more and the file is broken.
+        expect(result.current.isUnsignable(PATH)).toBe(i > MAX_SIGN_ATTEMPTS);
+        expect(seen.size).toBe(i > MAX_SIGN_ATTEMPTS ? 2 : 1);
+      }
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
+      expect(result.current.isUnsignable(PATH)).toBe(true);
+      expect(seen.add(result.current.isUnsignable).size).toBe(2);
+    } finally {
+      img.remove();
+    }
   });
 
   it('a signed path is not', async () => {
@@ -198,10 +266,10 @@ describe('StudioController.isUnsignable (PF-2 #7)', () => {
     act(() => void result.current.urlFor(PATH));
     await act(async () => void (await vi.advanceTimersByTimeAsync(1_000)));
     expect(result.current.urlFor(PATH)).toBe('https://cdn.test/signed.webp');
-    expect(result.current.isUnsignable?.(PATH)).toBe(false);
+    expect(result.current.isUnsignable(PATH)).toBe(false);
   });
 
   it('the fake studio has it too (never given up on)', () => {
-    expect(makeFakeStudio().isUnsignable?.(PATH)).toBe(false);
+    expect(makeFakeStudio().isUnsignable(PATH)).toBe(false);
   });
 });

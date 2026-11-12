@@ -521,6 +521,8 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
     error,
     clearError: () => setError(null),
     urlFor,
+    // The QA signer never gives up on a fixture path (every one is served by the harness).
+    isUnsignable: () => false,
     send,
     act,
     patch,
