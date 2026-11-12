@@ -203,13 +203,13 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
       ) : (
         <>
           <Button variant="ghost" size="sm" onClick={onSignIn} className="hidden sm:inline-flex">
-            Sign In
+            Sign in
           </Button>
           {/* New signups are invite-only — collect interest instead of opening registration.
               Compact label on phones so the header never overflows a ~360px viewport. */}
           <Button size="sm" onClick={onRequestAccess ?? onSignIn}>
             <Mail aria-hidden="true" />
-            <span className="hidden sm:inline">Request Access</span>
+            <span className="hidden sm:inline">Request access</span>
             <span className="sm:hidden">Join</span>
           </Button>
         </>
@@ -250,7 +250,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
             ))}
             {!isAuthenticated && (
               <button type="button" onClick={go(onSignIn)} className={`${MENU_ROW} ${FOCUS_RING}`}>
-                Sign In
+                Sign in
               </button>
             )}
           </nav>

@@ -180,7 +180,7 @@ describe('the phone menu toggle', () => {
       'Model Catalog',
       'Open Stream Studio',
       'Browse Models',
-      'Sign In'
+      'Sign in'
     ]);
     for (const row of within(menu).getAllByRole('button')) expectClasses(row, DENSITY.coarse);
     fireEvent.click(within(menu).getByRole('button', { name: 'Library' }));
@@ -210,6 +210,15 @@ describe('the home announcement', () => {
   });
 });
 
+describe('signed out', () => {
+  it('says "Sign in" and "Request access" in sentence case, as the comics landing and the sign-in card do', () => {
+    render(<StaticSiteHeader {...props()} />);
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Request access/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Sign In|Request Access/)).toBeNull();
+  });
+});
+
 describe('signed in', () => {
   it('shows the bell and the profile as real buttons', async () => {
     auth.user = { id: 'u1', email: 'reader@example.com' };
@@ -218,7 +227,7 @@ describe('signed in', () => {
     expect(await screen.findByRole('button', { name: 'Notifications' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Your profile and settings' }));
     expect(p.onOpenProfile).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: /Request Access/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Request access/i })).toBeNull();
   });
 });
 
