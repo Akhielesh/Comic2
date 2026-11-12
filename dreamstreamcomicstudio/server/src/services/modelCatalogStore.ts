@@ -11,15 +11,38 @@
 // Everything degrades gracefully: if Supabase storage isn't configured, persist is a no-op
 // and load returns [] (the live path still works for keyed callers).
 
+import { createHash } from 'node:crypto';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 const TABLE = 'model_catalog_cache';
 
+/**
+ * An unchanged list is not upserted again within this window (EGRESS-DB E4): the hourly refresh and every keyed
+ * catalog request re-wrote thousands of identical rows (the largest database-time item).
+ */
+export const PERSIST_UNCHANGED_WINDOW_MS = 6 * 60 * 60_000;
+const lastPersisted = new Map<string, { hash: string; at: number }>();
+
+/** What a persisted row must keep current: each model's id, pricing, context length and modalities. */
+export const catalogContentHash = (models: AnnotatedModel[]): string => {
+  const rows = models
+    .filter((m) => m && m.id)
+    .map((m) => [m.id, m.pricing ?? null, m.contextLength ?? null, m.inputModalities ?? [], m.outputModalities ?? []] as const)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+};
+
+/** Forget what this process persisted (tests). */
+export const resetPersistMemo = (): void => lastPersisted.clear();
+
 /** Upsert the public metadata of a source's models. Fire-and-forget; never throws. */
 export const persistHarvestedModels = async (source: string, models: AnnotatedModel[]): Promise<void> => {
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return;
   if (!models.length) return;
+  const hash = catalogContentHash(models);
+  const previous = lastPersisted.get(source);
+  if (previous && previous.hash === hash && Date.now() - previous.at < PERSIST_UNCHANGED_WINDOW_MS) return;
   try {
     const admin = getSupabaseAdmin();
     const seenAt = new Date().toISOString();
@@ -35,6 +58,7 @@ export const persistHarvestedModels = async (source: string, models: AnnotatedMo
       }));
     const { error } = await admin.from(TABLE).upsert(rows, { onConflict: 'source,model_id' });
     if (error) console.warn('[catalog-cache] persist failed:', error.message);
+    else lastPersisted.set(source, { hash, at: Date.now() });
   } catch (err) {
     console.warn('[catalog-cache] persist threw:', (err as Error)?.message);
   }

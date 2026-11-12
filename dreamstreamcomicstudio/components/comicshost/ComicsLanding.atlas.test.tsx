@@ -1,15 +1,30 @@
 // @vitest-environment jsdom
-// The comics landing on Atlas (DS-3, redesign M3; CL-3 for the call to action): tokens only, the OVERLINE
-// eyebrow, the hero balloon stroked in the spark, the Library link visible at every width, one hero call to
-// action (the page's one create fill), and the sticky header that frosts only once the page scrolls under it.
+// The comics landing in the Atlas public composition (docs/design/design-system.md, Landing row): tokens only (the
+// comic art aside), the display eyebrows, the Library in the header and its menu, the one-line lockup, one hero call
+// to action per state, the app's own sticky header, the steps rail, and nothing fetched on render.
 import React from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FOCUS_RING, OVERLINE, STICKY_HEADER } from '../chat/studioDesign';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DISPLAY_HERO, DISPLAY_SECTION, FONT_DISPLAY, OVERLINE, OVERLINE_DISPLAY } from '../chat/studioDesign';
 import { ComicsLanding } from './ComicsLanding';
+
+let frames: FrameRequestCallback[] = [];
+const flushFrames = () =>
+  act(() => {
+    const run = frames;
+    frames = [];
+    for (const cb of run) cb(0);
+  });
+
+beforeEach(() => {
+  frames = [];
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => frames.push(cb));
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+});
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
 });
 
@@ -22,51 +37,89 @@ const handlers = () => ({
   onOpenTerms: vi.fn()
 });
 const classes = (el: Element) => (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+const hasAll = (el: Element, recipe: string) => recipe.split(/\s+/).every((c) => classes(el).includes(c));
+
+/** The landing's own markup, without the comic art it draws (the palette there is art content). */
+const ownMarkup = (container: HTMLElement): HTMLElement => {
+  const own = container.cloneNode(true) as HTMLElement;
+  for (const el of own.querySelectorAll('[data-comic-art]')) el.remove();
+  return own;
+};
+
+/** Give every element a scroll width and a client width (jsdom lays nothing out). */
+const stubWidths = (scrollWidth: number, clientWidth: number) => {
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get: () => scrollWidth });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => clientWidth });
+};
+const unstubWidths = () => {
+  delete (HTMLElement.prototype as { scrollWidth?: unknown }).scrollWidth;
+  delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+};
 
 describe('ComicsLanding on Atlas', () => {
-  it('spells no hue: no terracotta, no hex, no comic chrome, the ink focus ring', () => {
+  it('(a) spells no hue: no hex or rgba in any class, no terracotta, no comic chrome outside the art', () => {
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const markup = container.innerHTML;
-    // The landing's own markup, without the drawings it borrows: EmptyArt (its spot is CL-3's wave note) and the
-    // brand mark (ComicsMark keeps the logo's terracotta until StudioMark replaces it).
-    const own = container.cloneNode(true) as HTMLElement;
-    for (const el of own.querySelectorAll('[data-empty-art], header svg:first-of-type')) el.remove();
-    expect(own.innerHTML).not.toMatch(/#d97757|#c2643f/i);
-    for (const el of container.querySelectorAll('[class]')) expect(el.getAttribute('class'), el.tagName).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
-    expect(markup).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|text-white/);
-    for (const b of screen.getAllByRole('button')) for (const cls of FOCUS_RING.split(' ')) expect(classes(b)).toContain(cls);
+    const own = ownMarkup(container);
+    expect(own.innerHTML).not.toMatch(/#d97757|#c2603f|#c2643f|#fdfbf7/i);
+    expect(own.innerHTML).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    for (const el of own.querySelectorAll('[class]')) expect(el.getAttribute('class'), el.tagName).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
+    expect(own.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|text-white/);
+    // The art is really there: six looks in the band, two pages in the proof, one in the reader room.
+    expect(container.querySelectorAll('[data-comic-art]')).toHaveLength(9);
   });
 
-  it('the eyebrows are the OVERLINE recipe and the hero balloon is stroked in the spark (a style stroke: SVG attributes do not resolve var())', () => {
+  it('(b) section eyebrows are OVERLINE_DISPLAY; the Beta chip and the footer heads are OVERLINE', () => {
     render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const eyebrow = within(screen.getByRole('main')).getByText('Comic Studio');
-    for (const cls of OVERLINE.split(' ')) expect(classes(eyebrow)).toContain(cls);
-    const balloon = screen.getByTestId('comics-hero-balloon');
-    expect(balloon.querySelector('path')).not.toHaveAttribute('stroke');
-    expect((balloon.querySelector('path') as SVGPathElement).style.stroke).toBe('var(--ds-spark)');
-    expect(classes(balloon)).toContain('text-[var(--ds-ink)]');
+    for (const text of ['How it works', 'Read and share']) {
+      const eyebrow = within(screen.getByRole('main')).getAllByText(text).find((el) => el.tagName === 'P') as HTMLElement;
+      expect(classes(eyebrow), text).toContain(OVERLINE_DISPLAY);
+    }
+    expect(classes(document.getElementById('comics-looks')!)).toContain(OVERLINE_DISPLAY);
+    expect(hasAll(within(screen.getByRole('banner')).getByText('Beta'), OVERLINE)).toBe(true);
+    const footer = screen.getByRole('contentinfo');
+    for (const head of ['Comic Studio', 'Legal']) expect(hasAll(within(footer).getByText(head), OVERLINE), head).toBe(true);
   });
 
-  it('the Library link is in the header at every width (never hidden on phones)', () => {
-    for (const signedIn of [false, true]) {
-      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
-      const library = within(screen.getByRole('banner')).getByRole('button', { name: 'Library' });
-      expect(classes(library).some((c) => c === 'hidden' || /:hidden$/.test(c))).toBe(false);
-      unmount();
+  it('the h1 and the section titles take the public display recipes (Space Grotesk, the Atlas scale)', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(hasAll(h1, DISPLAY_HERO)).toBe(true);
+    for (const id of ['comics-how', 'comics-read', 'comics-access']) {
+      const h2 = document.getElementById(id)!;
+      expect(h2.tagName).toBe('H2');
+      expect(hasAll(h2, DISPLAY_SECTION), id).toBe(true);
+      expect(classes(h2), id).toContain(FONT_DISPLAY);
+      expect(h2).toHaveAttribute('tabindex', '-1');
     }
   });
 
-  it('below the medium screen the header mark stands alone; the name stays for screen readers (named screens only)', () => {
-    render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const wordmark = within(screen.getByRole('banner')).getByTestId('comics-wordmark');
-    expect(wordmark).toHaveTextContent('DreamStreamComic Studio');
-    // sr-only below 600 px, shown from `medium:` up. Never a min-[…]/max-[…] variant: this config's raw screens
-    // disable those, so such a class compiles to no CSS at all (the old max-width 359 px sr-only variant did nothing).
-    expect(classes(wordmark)).toEqual(expect.arrayContaining(['sr-only', 'medium:not-sr-only']));
-    expect(classes(wordmark).filter((c) => /(?:^|:)!?(?:min|max)-\[[^\]]*\]:/.test(c))).toEqual([]);
+  it('(c) the Library is in the header nav and in the opened menu', () => {
+    const h = handlers();
+    render(<ComicsLanding signedIn={false} {...h} />);
+    const banner = screen.getByRole('banner');
+    const nav = within(banner).getByRole('navigation', { name: 'Comic Studio' });
+    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['How it works', 'Looks', 'Library']);
+    fireEvent.click(within(banner).getByRole('button', { name: 'Menu' }));
+    const menu = banner.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+    expect(menu).not.toHaveAttribute('hidden');
+    fireEvent.click(within(menu).getByRole('button', { name: 'Library' }));
+    expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
+    expect(menu).toHaveAttribute('hidden');
   });
 
-  it('one hero call to action per state, and it starts the right thing', () => {
+  it('(d) the lockup reads "Comic Studio" on one line at every width, never screen-reader-only', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const lockup = screen.getByRole('button', { name: 'Comic Studio, home' });
+    const comic = within(lockup).getByText('Comic');
+    const studio = within(lockup).getByText('Studio');
+    for (const el of [comic, studio]) {
+      expect(classes(el)).not.toContain('sr-only');
+      expect(classes(el)).not.toContain('hidden');
+    }
+    expect(lockup.querySelector('[data-slot="comics-mark"]')).not.toBeNull();
+  });
+
+  it('(e) one hero call to action per state: the spark to start signed out, the ink primary to open the comics signed in', () => {
     const h = handlers();
     const { unmount } = render(<ComicsLanding signedIn={false} {...h} />);
     expect(screen.getAllByTestId('comics-hero-cta')).toHaveLength(1);
@@ -76,28 +129,150 @@ describe('ComicsLanding on Atlas', () => {
     unmount();
     render(<ComicsLanding signedIn {...h} />);
     expect(screen.getAllByTestId('comics-hero-cta')).toHaveLength(1);
-    expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', 'create');
+    expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', 'default');
     fireEvent.click(screen.getByTestId('comics-hero-cta'));
     expect(h.onOpenComics).toHaveBeenCalledTimes(1);
   });
 
-  it('the header is the sticky Atlas header; its glass frosts only once the page scrolls under it', () => {
+  it('(f) the header is the app header (AppHeader): plain at rest, frosted once the page scrolls under it', () => {
     render(<ComicsLanding signedIn={false} {...handlers()} />);
     const header = screen.getByRole('banner');
-    for (const cls of STICKY_HEADER.split(' ')) expect(classes(header)).toContain(cls);
+    expect(header).toHaveAttribute('data-slot', 'app-header');
+    flushFrames();
     expect(header).toHaveAttribute('data-scrolled', 'false');
     Object.defineProperty(window, 'scrollY', { configurable: true, value: 120 });
-    fireEvent.scroll(window);
+    window.dispatchEvent(new Event('scroll'));
+    flushFrames();
     expect(header).toHaveAttribute('data-scrolled', 'true');
   });
 
-  it('the step numbers are ink counts, not accent chips', () => {
-    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const steps = container.querySelectorAll('ol > li > span[aria-hidden]');
+  it('(g) the steps rail: four steps on an ink rule, numbered 01–04', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const steps = [...document.querySelectorAll('#how-it-works ol > li')];
     expect(steps).toHaveLength(4);
-    for (const s of steps) {
-      expect(classes(s)).toContain('text-[var(--ds-ink)]');
-      expect(s.getAttribute('class')).not.toMatch(/accent/);
+    steps.forEach((li, i) => {
+      expect(classes(li)).toEqual(expect.arrayContaining(['border-t', 'border-[var(--ds-ink)]']));
+      expect(li.querySelector('p[aria-hidden]')).toHaveTextContent(`0${i + 1}`);
+      expect(li.querySelector('h3')).not.toBeNull();
+    });
+    expect(within(screen.getByRole('main')).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual([
+      'Tell it the idea',
+      'Agree the plan',
+      'Lock the look',
+      'Polish and share',
+      'Characters that stay themselves',
+      'Lettering you control',
+      'Easy or Pro'
+    ]);
+    // Never the untrue promise: small image runs can start without a gate.
+    expect(document.body.textContent).not.toMatch(/nothing is drawn until/i);
+  });
+
+  it('(h) fetches nothing on render: no fetch, no XMLHttpRequest, no timer-driven request', () => {
+    const fetchSpy = vi.fn(() => Promise.reject(new Error('no network in this test')));
+    vi.stubGlobal('fetch', fetchSpy);
+    const open = vi.spyOn(XMLHttpRequest.prototype, 'open');
+    try {
+      render(<ComicsLanding signedIn={false} {...handlers()} />);
+      render(<ComicsLanding signedIn {...handlers()} />);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
     }
+  });
+
+  it('the section links scroll to their section and move focus to its heading (behaviour follows reduced motion)', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    try {
+      render(<ComicsLanding signedIn={false} {...handlers()} />);
+      fireEvent.click(within(screen.getByRole('navigation', { name: 'Comic Studio' })).getByRole('button', { name: 'Looks' }));
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+      expect(document.activeElement).toBe(document.getElementById('comics-looks'));
+      fireEvent.click(within(screen.getByRole('contentinfo')).getByRole('button', { name: 'How it works' }));
+      expect(document.activeElement).toBe(document.getElementById('comics-how'));
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('landmarks: one banner, one main, one contentinfo; the looks scroller is a labelled region', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    expect(screen.getAllByRole('banner')).toHaveLength(1);
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
+    const looks = screen.getByRole('region', { name: 'Six looks' });
+    expect(within(looks).getAllByRole('listitem').map((li) => li.querySelector('figcaption')?.textContent)).toEqual([
+      'Ligne claire',
+      'Manga',
+      'Noir ink',
+      'Storybook watercolor',
+      'Indie riso',
+      'Retro pop'
+    ]);
+  });
+
+  it('the looks band is a tab stop only while it scrolls: measured on mount and again on resize', () => {
+    try {
+      stubWidths(1136, 1216); // 1280 px: the six pages fit
+      render(<ComicsLanding signedIn={false} {...handlers()} />);
+      const looks = screen.getByRole('region', { name: 'Six looks' });
+      expect(looks).not.toHaveAttribute('tabindex');
+      stubWidths(1136, 390); // a phone: the band scrolls inside its region
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(looks).toHaveAttribute('tabindex', '0');
+    } finally {
+      unstubWidths();
+    }
+  });
+
+  it('one fill in the first view: the banner and the hero hold exactly one filled control, signed out and signed in', () => {
+    for (const signedIn of [false, true]) {
+      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const hero = screen.getByRole('heading', { level: 1 }).closest('section') as HTMLElement;
+      const filled = [screen.getByRole('banner'), hero].flatMap((root) => [...root.querySelectorAll('[data-variant="default"],[data-variant="create"]')]);
+      expect(filled, `signedIn=${signedIn}`).toHaveLength(1);
+      expect(filled[0]).toBe(screen.getByTestId('comics-hero-cta'));
+      unmount();
+    }
+  });
+
+  it('the proof is the studio as drawn: ink-and-screentone pages, the plan’s Look from the data, initials, the composer', () => {
+    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const preview = screen.getByTestId('studio-preview');
+    const pages = [...preview.querySelectorAll('[data-comic-art]')];
+    expect(pages).toHaveLength(2);
+    for (const page of pages) expect(page).toHaveAttribute('data-specimen-look', 'manga-screentone');
+    expect(within(preview).getByText('Manga · locked')).toBeInTheDocument();
+    expect(preview.textContent).not.toMatch(/Ligne claire/);
+    // The cast chips carry the character's initial, as the studio's cast avatars do.
+    for (const name of ['Mira', 'Biscuit']) {
+      const chip = within(preview).getByText(name).closest('[data-slot="chip"]') as HTMLElement;
+      // The initial sits in the chip's icon slot (a flex item beside the name, never stacked above it).
+      expect(chip.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+      expect(chip.firstElementChild).toHaveTextContent(name[0]);
+    }
+    // The composer still, with the studio's own placeholder, and no control inside the replica.
+    const composer = preview.querySelector('[data-slot="preview-composer"]') as HTMLElement;
+    expect(composer).toHaveTextContent('Reply, or describe a change…');
+    expect(preview.querySelectorAll('button, a, input, textarea')).toHaveLength(0);
+    // The six looks band keeps its colour looks, Ligne claire first.
+    expect(container.querySelector('#looks [data-comic-art]')).toHaveAttribute('data-specimen-look', 'ligne-claire');
+  });
+
+  it('the feature titles hold two lines from lg, so the three bodies start level', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const titles = ['Characters that stay themselves', 'Lettering you control', 'Easy or Pro'].map((t) => screen.getByRole('heading', { level: 3, name: t }));
+    for (const h3 of titles) expect(classes(h3), h3.textContent!).toContain('lg:min-h-14');
+  });
+
+  it('the phone footer puts its two link lists side by side (the brand spans both) and goes to three columns from md', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const grid = screen.getByRole('navigation', { name: 'Comic Studio links' }).parentElement as HTMLElement;
+    expect(classes(grid)).toEqual(expect.arrayContaining(['grid', 'grid-cols-2', 'md:grid-cols-[1.4fr_1fr_1fr]']));
+    expect(classes(grid.firstElementChild!)).toEqual(expect.arrayContaining(['col-span-2', 'md:col-span-1']));
   });
 });

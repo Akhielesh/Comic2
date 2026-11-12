@@ -13,7 +13,6 @@ import { Field } from './ds/Field';
 import { IconButton } from './ds/IconButton';
 import { Input } from './ds/Input';
 import { Segmented } from './ds/Segmented';
-import { ComicsMark } from './comicshost/ComicsMark';
 import {
     ACCENT_FILL,
     CHIP,
@@ -339,10 +338,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     };
     const showPasswordLabel = showPassword ? 'Hide password' : 'Show password';
     const heading = AUTH_HEADINGS[mode];
+    // On the comics host the page sits under ComicsHeader (the --header-h row), which already carries the product's
+    // lockup: the card centres in the space below it (so it is never pushed under the fold) and draws no second brand.
+    const comicsHost = isComicsHost();
 
     return (
-        <main className="flex min-h-[100dvh] min-w-0 flex-col items-center justify-center bg-[var(--ds-canvas)] px-4 py-10 text-[var(--ds-ink)]">
-            <AuthBrand />
+        <main
+            className={`flex ${comicsHost ? 'min-h-[calc(100dvh-var(--header-h))]' : 'min-h-[100dvh]'} min-w-0 flex-col items-center justify-center bg-[var(--ds-canvas)] px-4 py-10 text-[var(--ds-ink)]`}
+        >
+            {comicsHost ? null : <AuthBrand />}
 
             <div className={`w-full max-w-md overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] ${SHADOW_SOFT}`}>
                 {/* On the reset and sign-in-link steps "Sign in" is already the checked radio, so the Segmented sends no
@@ -387,7 +391,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             <WaitlistForm
                                 kind="access"
                                 source="auth-request-access"
-                                variant="atlas"
                                 buttonLabel="Request access"
                                 onSignIn={chooseSignIn}
                             />
@@ -639,27 +642,20 @@ const textLink = `${RADIUS_CONTROL} text-[var(--ds-ink)] underline underline-off
 const quietAction = `inline-flex items-center ${RADIUS_CONTROL} text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] hover:underline ${DENSITY.coarse} ${FOCUS_RING}`;
 
 /**
- * The product above the card: Comic Studio's own mark on the comics host, the DreamStream lockup elsewhere.
- * Ink and paper only (no comic chrome: the art belongs to the comics, not to the sign-in form).
+ * The product above the card on the main site: the DreamStream lockup. (On the comics host ComicsHeader carries
+ * Comic Studio's lockup right above the page, so the card draws none.) Ink and paper only: no comic chrome.
  */
-const AuthBrand: React.FC = () => {
-    const comics = isComicsHost();
-    return (
-        <div className="mb-8 flex min-w-0 items-center gap-3" data-testid="auth-brand">
-            {comics ? (
-                <ComicsMark size={44} className="shrink-0" />
-            ) : (
-                <span
-                    aria-hidden
-                    className={`flex size-11 shrink-0 items-center justify-center ${RADIUS_CONTROL} ${ACCENT_FILL} ${ON_ACCENT_TEXT} text-xl font-semibold ${FONT_DISPLAY}`}
-                >
-                    D
-                </span>
-            )}
-            <span className="flex min-w-0 flex-col gap-0.5">
-                <span className={`truncate text-[length:var(--ds-text-xl)] leading-7 ${HEADING}`}>{comics ? 'Comic Studio' : 'DreamStream'}</span>
-                <span className={OVERLINE}>{comics ? 'DreamStream' : 'Studio access'}</span>
-            </span>
-        </div>
-    );
-};
+const AuthBrand: React.FC = () => (
+    <div className="mb-8 flex min-w-0 items-center gap-3" data-testid="auth-brand">
+        <span
+            aria-hidden
+            className={`flex size-11 shrink-0 items-center justify-center ${RADIUS_CONTROL} ${ACCENT_FILL} ${ON_ACCENT_TEXT} text-xl font-semibold ${FONT_DISPLAY}`}
+        >
+            D
+        </span>
+        <span className="flex min-w-0 flex-col gap-0.5">
+            <span className={`truncate text-[length:var(--ds-text-xl)] leading-7 ${HEADING}`}>DreamStream</span>
+            <span className={OVERLINE}>Studio access</span>
+        </span>
+    </div>
+);

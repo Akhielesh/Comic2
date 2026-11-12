@@ -16,7 +16,7 @@ vi.mock('../services/supabase', () => ({
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('./WaitlistForm', () => ({ WaitlistForm: ({ variant }: { variant?: string }) => <div data-testid="waitlist" data-variant={variant} /> }));
+vi.mock('./WaitlistForm', () => ({ WaitlistForm: () => <div data-testid="waitlist" /> }));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
 
 import { AuthPage } from './AuthPage';
@@ -126,13 +126,41 @@ describe('AuthPage on Atlas', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
     fireEvent.click(screen.getByRole('radio', { name: 'Request access' }));
     expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
-    // The access request is the waitlist form on the DS primitives, not the legacy home page's comic form.
-    expect(screen.getByTestId('waitlist')).toHaveAttribute('data-variant', 'atlas');
-    // "Already have an account? Sign in" is a button, so the inline-link exception does not cover it: 44 px square
-    // under a coarse pointer, like the other small steps on the card.
+    expect(screen.getByTestId('waitlist')).toBeInTheDocument();
+    // "Already have an account? Sign in" is a 44 x 44 target under a coarse pointer (the layout smoke's hit-target rule).
     const signIn = screen.getByRole('button', { name: 'Sign in' });
     for (const cls of DENSITY.coarseSquare.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
     fireEvent.click(signIn);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+  });
+
+  it('reads its mode once, at mount: App keys it per request, so a header "Request access" on the open page switches the form', () => {
+    const h = { onLoginSuccess: vi.fn(), onOpenPrivacy: vi.fn(), onOpenTerms: vi.fn() };
+    const { rerender } = render(<AuthPage key="auth-1" initialMode="signin" {...h} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+    // The same key keeps the mounted form (the mode prop alone changes nothing): why App bumps the key.
+    rerender(<AuthPage key="auth-1" initialMode="request-access" {...h} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+    rerender(<AuthPage key="auth-2" initialMode="request-access" {...h} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
+    expect(screen.getByTestId('waitlist')).toBeInTheDocument();
+    rerender(<AuthPage key="auth-3" initialMode="signin" {...h} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+  });
+
+  it('under the comics header: no second brand above the card, and the page fills the space below the header row', () => {
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, hostname: 'comics.dreamstreamstudio.ai' } });
+    try {
+      render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+      expect(screen.queryByTestId('auth-brand')).toBeNull();
+      expect(screen.getByRole('main').className.split(/\s+/)).toContain('min-h-[calc(100dvh-var(--header-h))]');
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+    cleanup();
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    expect(screen.getByTestId('auth-brand')).toHaveTextContent('DreamStream');
+    expect(screen.getByRole('main').className.split(/\s+/)).toContain('min-h-[100dvh]');
   });
 });

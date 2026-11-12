@@ -31,3 +31,36 @@ export const shouldBootToDashboard = (location: { pathname: string; search: stri
   if (/(^|&)(access_token|refresh_token|token_hash|error_description)=/.test(hash)) return false;
   return true;
 };
+
+/** Views the comics host draws in its own chrome for a signed-out visitor (the landing, for everyone). */
+export const COMICS_CHROME_VIEWS: ReadonlySet<string> = new Set(['home', 'auth', 'privacy', 'terms', 'gallery']);
+
+/** Which view the comics header is drawn over (it hides "Sign in" on the sign-in page, marks the Library). */
+export type ComicsHeaderCurrent = 'auth' | 'gallery' | 'other';
+
+export interface ComicsChrome {
+  /** The comics host draws this view's chrome: the suite header steps aside (App's StaticSiteHeader). */
+  owns: boolean;
+  /** App renders ComicsHeader above the view (the landing renders its own). */
+  header: boolean;
+  /** The floating widgets (Feedback pill, assistant launcher) may show; never over the comics host's own views. */
+  widgets: boolean;
+  /** What ComicsHeader is drawn over, when App renders it. */
+  current: ComicsHeaderCurrent;
+}
+
+/**
+ * The comics host's chrome for one view, as App.tsx renders it. The landing is always the comics host's own; the
+ * sign-in, Privacy, Terms and Library views are too for a signed-out visitor, so the journey from the landing stays
+ * in one product. A signed-in visitor keeps the app header everywhere else (its account menu and notifications),
+ * and off the comics host nothing changes. Pure, so every rule is unit-tested without rendering App.
+ */
+export const comicsChromeFor = (view: string, { active, signedIn }: { active: boolean; signedIn: boolean }): ComicsChrome => {
+  const owns = active && (view === 'home' || (!signedIn && COMICS_CHROME_VIEWS.has(view)));
+  return {
+    owns,
+    header: owns && view !== 'home',
+    widgets: !owns,
+    current: view === 'auth' ? 'auth' : view === 'gallery' ? 'gallery' : 'other'
+  };
+};

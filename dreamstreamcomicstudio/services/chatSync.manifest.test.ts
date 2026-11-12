@@ -4,6 +4,9 @@
 // the heaviest account) every time. Which side changed is judged against the per-device sync base,
 // so an edit written by a device whose clock runs behind still arrives (chat_sync.updated_at is the
 // writer's clock). Real chatStorage + chatSync over an in-memory IndexedDB and chat_sync table.
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeIndexedDb } from '../tests/fakeIndexedDb';
 import type { FakeChatSyncCloud } from './chatSync.testkit';
@@ -313,5 +316,44 @@ describe('the account boundary: every read is the signed-in account’s, and the
     const local = await byTitle();
     expect(local[bRow.id]).toBe('B’s chat');
     expect(local[aRow.id]).toBeUndefined();
+  });
+});
+
+// EGRESS-DB E6: the full pull (`pullAll`, every chat body of the account: 6.3 MB for the heaviest one) is gone.
+// No client code reads chat_sync bodies (`data`) except a keyed read (`.in('key', …)`) of the rows that changed.
+describe('no full chat pull is left in the client', () => {
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const sources = (dir: string): string[] =>
+    readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = path.join(dir, entry.name);
+      if (entry.isDirectory()) return entry.name === 'node_modules' ? [] : sources(rel);
+      return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.|testkit/.test(entry.name) ? [rel] : [];
+    });
+  /** Every `.from(<chat_sync>)…;` statement of a file (TABLE is chat_sync in chatSync.ts). */
+  const chatSyncStatements = (text: string, tableExpr: RegExp): string[] => {
+    const out: string[] = [];
+    for (const match of text.matchAll(tableExpr)) {
+      const end = text.indexOf(';', match.index);
+      out.push(text.slice(match.index, end < 0 ? undefined : end));
+    }
+    return out;
+  };
+
+  it('chatSync.ts reads `data` only by key, and exports no full pull', async () => {
+    const text = readFileSync(path.join(ROOT, 'services/chatSync.ts'), 'utf8');
+    const statements = chatSyncStatements(text, /\.from\(TABLE\)/g);
+    expect(statements.length).toBeGreaterThan(0);
+    const bodyReads = statements.filter((s) => /\.select\(\s*'[^']*\bdata\b/.test(s));
+    expect(bodyReads.length).toBeGreaterThan(0);
+    for (const read of bodyReads) expect(read, read).toMatch(/\.in\(\s*'key'/);
+    expect(Object.keys(await import('./chatSync'))).not.toContain('pullAll');
+  });
+
+  it('no other client file reads the chat_sync table', () => {
+    const files = ['services', 'components', 'hooks', 'contexts', 'lib', 'App.tsx'].flatMap((d) =>
+      statSync(path.join(ROOT, d), { throwIfNoEntry: false })?.isDirectory() ? sources(d) : d.endsWith('.tsx') ? [d] : []
+    );
+    const offenders = files.filter((file) => file !== path.join('services', 'chatSync.ts') && /\.from\(\s*['"`]chat_sync['"`]\s*\)/.test(readFileSync(path.join(ROOT, file), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

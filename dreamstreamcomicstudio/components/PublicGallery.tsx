@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
-import { Loader2, Heart, Eye, Search, BookOpen, User, Star, Baby } from 'lucide-react';
+import { Heart, Eye, Search, BookOpen, User, Star, Baby, Check } from 'lucide-react';
 import { Project } from '../types';
-import { getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
+import { GALLERY_CARD_SELECT, GALLERY_PAGE_SIZE, galleryCardStateOf, getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { isStudioV4Project } from '../services/studioDeepLink';
@@ -10,6 +10,30 @@ import { SLUG_RE, SHARE_PATH } from '../shared/comic/publication';
 import { isContentRating, type ContentRating } from '../shared/comic/safety';
 import { RatingBadge } from './comicstudio/safety/RatingBadge';
 import { SmartImage } from './common/SmartImage';
+import { cn } from '../lib/utils';
+import {
+    CANVAS_BG,
+    DENSITY,
+    DISPLAY_SECTION,
+    FIELD_EMBEDDED,
+    FIELD_GROUP,
+    FOCUS_RING,
+    LIFT,
+    MUTED,
+    PUBLIC_BODY,
+    RADIUS_CONTROL,
+    RADIUS_PANEL,
+    RADIUS_ROUND
+} from './chat/studioDesign';
+import { HEADER_INNER } from './ds/AppHeader';
+import { Button } from './ds/Button';
+import { CARD_TITLE } from './ds/Card';
+import { EmptyState } from './ds/EmptyState';
+import { Segmented } from './ds/Segmented';
+import { Skeleton } from './ds/Skeleton';
+
+/** The cover grid: two covers a row on a phone, three from md, four from lg. */
+const GRID = 'mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:gap-x-6 md:grid-cols-3 lg:grid-cols-4';
 
 /** The public bucket that holds published (pub/<key>/…) comic copies. */
 const PUBLIC_COMIC_BUCKET = 'comic-assets';
@@ -62,7 +86,8 @@ const coverCandidates = (project: Project): string[] => {
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
-    onBack: () => void;
+    /** Kept for its callers; the page has no Back button (the header's lockup goes home). */
+    onBack?: () => void;
     onRequireAuth?: () => void;
 }
 
@@ -90,7 +115,7 @@ const fallbackUsernameFromId = (userId?: string): string => {
     return `user-${userId.slice(0, 8)}`;
 };
 
-export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBack, onRequireAuth }) => {
+export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onRequireAuth }) => {
     const { user } = useAuth();
     const [projects, setProjects] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
@@ -149,28 +174,28 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     const fetchComics = async () => {
         setLoading(true);
         try {
-            let query = supabase
+            // Cards only (EGRESS-DB E3): the columns and state keys a card reads, never a comic's whole state,
+            // and a comic held by moderation is never shipped (the row filter below stays as a second check).
+            const cards = (order: 'likes_count' | 'created_at') => supabase
                 .from('projects')
-                .select('*')
-                .eq('is_public', true);
+                .select(GALLERY_CARD_SELECT)
+                .eq('is_public', true)
+                .not('is_forced_private', 'is', true)
+                .order(order, { ascending: false })
+                .range(0, GALLERY_PAGE_SIZE - 1);
 
-            if (filter === 'trending') query = query.order('likes_count', { ascending: false });
-            else query = query.order('created_at', { ascending: false });
-
-            let { data, error } = await query;
+            let { data, error } = await cards(filter === 'trending' ? 'likes_count' : 'created_at');
             if (error && filter === 'trending') {
                 // Schema fallback when likes_count is unavailable
-                const fallback = await supabase
-                    .from('projects')
-                    .select('*')
-                    .eq('is_public', true)
-                    .order('created_at', { ascending: false });
+                const fallback = await cards('created_at');
                 data = fallback.data;
                 error = fallback.error;
             }
             if (error) throw error;
 
-            const rows = (data || []).filter((p: any) =>
+            const rows = ((data || []) as unknown as Record<string, unknown>[])
+                .map((row) => (row && typeof row === 'object' ? { ...row, state: galleryCardStateOf(row) } : row))
+                .filter((p: any) =>
                 p &&
                 typeof p.id === 'string' &&
                 typeof p.name === 'string' &&
@@ -260,91 +285,124 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
             (project.authorName || '').toLowerCase().includes(search.toLowerCase()))
     );
 
+    // The like toggle: the optimistic count, then the server's answer (unchanged behaviour; only the markup moved).
+    const toggleLike = async (project: PublicProject) => {
+        if (!user || likeBusy[project.id]) return;
+        setLikeBusy((prev) => ({ ...prev, [project.id]: true }));
+        const currentLiked = !!project.isLiked;
+        setProjects((prev) => prev.map((p) => {
+            if (p.id !== project.id) return p;
+            return {
+                ...p,
+                isLiked: !currentLiked,
+                likesCount: Math.max(0, (p.likesCount || 0) + (currentLiked ? -1 : 1))
+            };
+        }));
+
+        try {
+            const result = await toggleProjectLike(project.id, project.userId);
+            setProjects((prev) => prev.map((p) => {
+                if (p.id !== project.id) return p;
+                if (p.isLiked === result.liked) return p;
+                return {
+                    ...p,
+                    isLiked: result.liked,
+                    likesCount: Math.max(0, (p.likesCount || 0) + (result.liked ? 1 : -1))
+                };
+            }));
+        } finally {
+            setLikeBusy((prev) => ({ ...prev, [project.id]: false }));
+        }
+    };
+
+    // On the Atlas tokens, as the comics landing above it: the display title, the search / sort / kids filter row,
+    // a calm sign-in note, then a grid of covers with their title, creator and counts under the art (ink only: the
+    // art is the colour). The header's lockup goes home, so the page carries no Back button of its own.
     return (
-        <div className="min-h-screen bg-slate-50 font-sans pb-20">
-            <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
-                <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <button onClick={onBack} className="text-xs font-bold text-slate-500 hover:text-black mb-2">
-                            Back Home
-                        </button>
-                        <h1 className="font-display text-3xl text-black">Library</h1>
-                        <p className="text-sm font-comic text-slate-500">Browse public comics from creators.</p>
+        <div className={cn(CANVAS_BG, 'min-h-screen pb-20 font-sans text-[var(--ds-ink)]')}>
+            <div className={cn(HEADER_INNER, 'pt-10 sm:pt-14')}>
+                <div className="flex min-w-0 flex-col gap-6 border-b border-[var(--ds-hairline)] pb-8 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="min-w-0">
+                        <h1 className={cn(DISPLAY_SECTION, 'text-[var(--ds-ink)]')}>Library</h1>
+                        <p className={cn(PUBLIC_BODY, 'mt-3 max-w-xl')}>Browse public comics from creators.</p>
                     </div>
 
-                    <div className="flex-1 md:max-w-lg relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                        <input
-                            type="text"
-                            placeholder="Search comics, authors..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 border-2 border-slate-200 rounded-full focus:border-black focus:outline-none font-comic text-sm"
-                        />
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => setFilter('trending')}
-                            className={`px-4 py-2 rounded-full text-xs font-bold uppercase border-2 transition-all ${filter === 'trending' ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-black'}`}
-                        >
-                            Trending
-                        </button>
-                        <button
-                            onClick={() => setFilter('recent')}
-                            className={`px-4 py-2 rounded-full text-xs font-bold uppercase border-2 transition-all ${filter === 'recent' ? 'bg-black text-white border-black' : 'bg-white text-slate-500 border-slate-200 hover:border-black'}`}
-                        >
-                            Recent
-                        </button>
-                        <button
-                            type="button"
-                            aria-pressed={kidsOnly}
-                            onClick={() => setKidsOnly((v) => !v)}
-                            title="Only comics rated G or PG by the publish check"
-                            className={`inline-flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-full border px-4 py-2 text-xs font-semibold transition-colors coarse:min-h-[44px] ${kidsOnly ? 'border-[#D97757] bg-[#D97757]/10 text-slate-900' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-400'}`}
-                        >
-                            <Baby size={14} aria-hidden /> Kids-friendly (G/PG)
-                        </button>
+                    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
+                        <label className={cn(FIELD_GROUP, DENSITY.coarse, 'h-10 min-w-0 px-3 sm:w-72 sm:flex-none')}>
+                            <Search aria-hidden className={cn('size-4 shrink-0', MUTED)} />
+                            <span className="sr-only">Search comics or creators</span>
+                            <input
+                                type="search"
+                                placeholder="Search comics or creators"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className={cn(FIELD_EMBEDDED, 'h-full text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)]')}
+                            />
+                        </label>
+                        <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2">
+                            <Segmented<'trending' | 'recent'>
+                                // A set width: each half holds its whole word ("Trending" never truncates beside "Recent").
+                                className="w-48 shrink-0"
+                                label="Sort the Library"
+                                value={filter}
+                                onChange={setFilter}
+                                options={[
+                                    { value: 'trending', label: 'Trending' },
+                                    { value: 'recent', label: 'Recent' }
+                                ]}
+                            />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                aria-pressed={kidsOnly}
+                                onClick={() => setKidsOnly((v) => !v)}
+                                title="Only comics rated G or PG by the publish check"
+                                className="aria-pressed:border-[var(--ds-ink)] aria-pressed:bg-[var(--ds-well)]"
+                            >
+                                {kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)
+                            </Button>
+                        </div>
                     </div>
                 </div>
 
                 {!user && (
-                    <div className="mb-6 border-2 border-black rounded-xl bg-white p-4 flex flex-wrap items-center gap-3 justify-between">
-                        <p className="text-sm font-bold text-slate-700">Reading is free — no account needed. Log in to like, comment, and share.</p>
-                        <button
-                            type="button"
-                            onClick={onRequireAuth}
-                            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow hover:bg-yellow-300"
-                        >
-                            Log In
-                        </button>
+                    <div className={cn(RADIUS_PANEL, 'mt-6 flex flex-wrap items-center justify-between gap-3 border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-4 py-3')}>
+                        <p className={cn('m-0 text-[length:var(--ds-text-base)] leading-6', MUTED)}>Reading is free — no account needed. Sign in to like, comment and share.</p>
+                        <Button type="button" size="sm" variant="outline" className={RADIUS_ROUND} onClick={onRequireAuth}>
+                            Sign in
+                        </Button>
                     </div>
                 )}
 
                 {loading ? (
-                    <div className="flex justify-center py-20">
-                        <Loader2 className="w-10 h-10 animate-spin text-slate-300" />
+                    <div role="status" aria-label="Loading the Library" className={GRID}>
+                        {Array.from({ length: 8 }, (_, i) => (
+                            <div key={i} className="min-w-0">
+                                <Skeleton className={cn('aspect-[2/3] w-full', RADIUS_PANEL)} />
+                                <Skeleton shape="text" className="mt-3 w-3/4" />
+                                <Skeleton shape="text" className="mt-2 w-1/2" />
+                            </div>
+                        ))}
                     </div>
                 ) : filteredProjects.length === 0 ? (
-                    <div className="text-center py-20">
-                        <div className="inline-block p-6 bg-white rounded-full mb-4 border-4 border-slate-100">
-                            <BookOpen size={48} className="text-slate-300" />
-                        </div>
-                        <h2 className="text-2xl font-display text-slate-400">{kidsOnly ? 'No kids-friendly comics yet.' : 'No comics found.'}</h2>
-                        <p className="text-slate-500 font-comic mt-2">
-                            {kidsOnly ? 'Only comics rated G or PG show here. Turn the filter off to see everything.' : 'Be the first to publish one!'}
-                        </p>
-                    </div>
+                    <EmptyState
+                        as="h2"
+                        className="mt-8"
+                        icon={<BookOpen aria-hidden />}
+                        title={kidsOnly ? 'No kids-friendly comics yet.' : 'No comics found.'}
+                        description={kidsOnly ? 'Only comics rated G or PG show here. Turn the filter off to see everything.' : 'Be the first to publish one!'}
+                    />
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <ul className={GRID}>
                         {filteredProjects.map((project) => {
                             const covers = coverCandidates(project);
                             // Published v4 comics open their read-only share link (/c/<slug>) as a real
                             // page load: it serves the boot card, the preview head and its own CSP.
                             const slug = shareSlugOf(project);
+                            const coverClass = cn('block', RADIUS_PANEL, FOCUS_RING);
                             const coverArea = (children: React.ReactNode) =>
                                 slug ? (
-                                    <a href={SHARE_PATH(slug)} aria-label={`Read ${project.name}`} className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]">
+                                    <a href={SHARE_PATH(slug)} aria-label={`Read ${project.name}`} className={coverClass}>
                                         {children}
                                     </a>
                                 ) : (
@@ -357,103 +415,81 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                             onReadComic(project.id);
                                         }}
                                         aria-label={`Read ${project.name}`}
-                                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]"
+                                        className={coverClass}
                                     >
                                         {children}
                                     </a>
                                 );
+                            const likeLabel = user ? (project.isLiked ? 'Unlike comic' : 'Like comic') : 'Sign in to like comics';
 
                             return (
-                                <div
-                                    key={project.id}
-                                    data-testid="gallery-card"
-                                    data-share-slug={slug}
-                                    className="bg-white rounded-xl border-2 border-slate-200 overflow-hidden hover:border-black hover:shadow-comic hover:-translate-y-1 transition-all group"
-                                >
+                                <li key={project.id} data-testid="gallery-card" data-share-slug={slug} className="min-w-0">
                                     {coverArea(
-                                    /* Cover Aspect Ratio 2:3 */
-                                    <div className="aspect-[2/3] bg-slate-100 relative overflow-hidden">
-                                        <SmartImage
-                                            src={covers[0]}
-                                            fallbackSources={covers.slice(1)}
-                                            alt={project.name}
-                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                                            containerClassName="w-full h-full"
-                                            fallbackIcon={<BookOpen size={40} className="text-slate-300" />}
-                                        />
-
-                                        {/* Overlay info */}
-                                        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/80 to-transparent p-4 text-white pt-10">
-                                            <h3 className="font-display text-lg leading-tight mb-1">{project.name}</h3>
-                                            <div className="flex items-center gap-1 text-xs font-mono text-white/70">
-                                                <User size={10} /> {project.authorName || 'Unknown creator'}
-                                            </div>
-                                            <div className="text-[10px] font-mono text-white/60 mt-1">
-                                                Published {new Date(project.publishedAt || project.createdAt).toLocaleDateString()}
-                                            </div>
+                                        /* Cover, 2:3 */
+                                        <div className={cn(RADIUS_PANEL, LIFT, 'relative aspect-[2/3] overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
+                                            <SmartImage
+                                                src={covers[0]}
+                                                fallbackSources={covers.slice(1)}
+                                                alt={project.name}
+                                                className="h-full w-full object-cover"
+                                                containerClassName="w-full h-full"
+                                                fallbackIcon={<BookOpen aria-hidden className={cn('size-10', MUTED)} />}
+                                            />
+                                            {project.contentRating && (
+                                                <div className="absolute left-2 top-2">
+                                                    <RatingBadge rating={project.contentRating} onArt />
+                                                </div>
+                                            )}
                                         </div>
-                                        {project.contentRating && (
-                                            <div className="absolute left-2 top-2">
-                                                <RatingBadge rating={project.contentRating} />
-                                            </div>
-                                        )}
-                                    </div>
                                     )}
 
-                                    {/* Meta Bar */}
-                                    <div className="p-3 flex items-center justify-between border-t-2 border-slate-100 bg-white text-xs font-bold text-slate-500">
-                                        <div className="flex items-center gap-3">
+                                    <div className="mt-3 min-w-0">
+                                        <h3 className={cn(CARD_TITLE, 'line-clamp-2 text-[var(--ds-ink)] [overflow-wrap:anywhere]')}>{project.name}</h3>
+                                        <p className={cn('m-0 mt-1 flex min-w-0 items-center gap-1 text-[length:var(--ds-text-sm)] leading-5', MUTED)}>
+                                            <User aria-hidden className="size-3 shrink-0" />
+                                            <span className="truncate">{project.authorName || 'Unknown creator'}</span>
+                                        </p>
+                                        <p className={cn('m-0 text-[length:var(--ds-text-xs)] leading-4', MUTED)}>
+                                            Published {new Date(project.publishedAt || project.createdAt).toLocaleDateString()}
+                                        </p>
+                                        <div className={cn('mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 text-[length:var(--ds-text-sm)] tabular-nums', MUTED)}>
                                             <button
-                                                onClick={async (e) => {
+                                                type="button"
+                                                onClick={(e) => {
                                                     e.stopPropagation();
-                                                    if (!user || likeBusy[project.id]) return;
-                                                    setLikeBusy((prev) => ({ ...prev, [project.id]: true }));
-                                                    const currentLiked = !!project.isLiked;
-                                                    setProjects((prev) => prev.map((p) => {
-                                                        if (p.id !== project.id) return p;
-                                                        return {
-                                                            ...p,
-                                                            isLiked: !currentLiked,
-                                                            likesCount: Math.max(0, (p.likesCount || 0) + (currentLiked ? -1 : 1))
-                                                        };
-                                                    }));
-
-                                                    try {
-                                                        const result = await toggleProjectLike(project.id, project.userId);
-                                                        setProjects((prev) => prev.map((p) => {
-                                                            if (p.id !== project.id) return p;
-                                                            if (p.isLiked === result.liked) return p;
-                                                            return {
-                                                                ...p,
-                                                                isLiked: result.liked,
-                                                                likesCount: Math.max(0, (p.likesCount || 0) + (result.liked ? 1 : -1))
-                                                            };
-                                                        }));
-                                                    } finally {
-                                                        setLikeBusy((prev) => ({ ...prev, [project.id]: false }));
-                                                    }
+                                                    void toggleLike(project);
                                                 }}
-                                                className={`flex items-center gap-1 transition-colors z-10 relative ${user ? 'group-hover/btn:text-red-500' : 'opacity-50 cursor-not-allowed'} ${project.isLiked ? 'text-red-500' : 'hover:text-red-500'}`}
+                                                aria-pressed={user ? !!project.isLiked : undefined}
+                                                aria-label={`${likeLabel}, ${project.likesCount || 0} likes`}
+                                                title={likeLabel}
                                                 disabled={!user || !!likeBusy[project.id]}
-                                                title={user ? (project.isLiked ? 'Unlike comic' : 'Like comic') : 'Log in to like comics'}
+                                                className={cn(
+                                                    '-ml-1 inline-flex items-center gap-1 px-1 py-1 transition-colors duration-[var(--ds-motion-fast)] hover:text-[var(--ds-ink)] disabled:cursor-not-allowed disabled:opacity-50',
+                                                    RADIUS_CONTROL,
+                                                    DENSITY.coarseSquare,
+                                                    FOCUS_RING,
+                                                    project.isLiked && 'text-[var(--ds-ink)]'
+                                                )}
                                             >
-                                                <Heart size={14} className={project.isLiked ? 'fill-current' : ''} /> {project.likesCount || 0}
+                                                <Heart aria-hidden className={cn('size-3.5', project.isLiked && 'fill-current')} /> {project.likesCount || 0}
                                             </button>
-                                            <div className="flex items-center gap-1 text-slate-400">
-                                                <Eye size={14} /> {project.viewsCount || 0}
-                                            </div>
+                                            <span className="inline-flex items-center gap-1">
+                                                <Eye aria-hidden className="size-3.5" />
+                                                <span className="sr-only">Views:</span> {project.viewsCount || 0}
+                                            </span>
+                                            {project.average_rating !== undefined && project.average_rating > 0 && (
+                                                <span className="inline-flex items-center gap-1">
+                                                    <Star aria-hidden className="size-3.5" fill="currentColor" />
+                                                    <span className="sr-only">Average rating:</span>
+                                                    <span className="text-[var(--ds-ink)]">{project.average_rating.toFixed(1)}</span>
+                                                </span>
+                                            )}
                                         </div>
-                                        {project.average_rating !== undefined && project.average_rating > 0 && (
-                                            <div className="flex items-center gap-1 font-bold text-brand-yellow drop-shadow-sm">
-                                                <Star size={14} fill="currentColor" />
-                                                <span className="text-black">{project.average_rating.toFixed(1)}</span>
-                                            </div>
-                                        )}
                                     </div>
-                                </div>
+                                </li>
                             );
                         })}
-                    </div>
+                    </ul>
                 )}
             </div>
         </div>

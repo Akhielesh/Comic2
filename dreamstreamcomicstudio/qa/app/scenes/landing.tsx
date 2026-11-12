@@ -1,6 +1,6 @@
-// QA scene `landing` (DS-3; the scene contract is in qa/app/index.tsx): the comics host's front page as a
-// signed-out visitor first sees it — Atlas chrome (paper and ink) with the procedural comic art as the hero,
-// the Library link at every width and the one hero call to action. The page brings its own <main>. Every
+// QA scene `landing` (the scene contract is in qa/app/index.tsx): the comics host’s front page as a
+// signed-out visitor first sees it — the Atlas public composition in paper and ink, the studio replica and the
+// procedural comic pages, and the one spark call to action ("Start creating"). The page brings its own <main>. Every
 // handler is a no-op: nothing here navigates, reaches the network or spends.
 
 import React from 'react';

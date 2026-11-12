@@ -546,6 +546,11 @@
   --ds-spot-ink: var(--ds-ink);
   --ds-radius-hero: 28px;
   --ds-radius-feature: 16px;
+  /* The public pages (the comics landing; Atlas app/page.tsx): the pill radius every public pill and call to
+     action takes (Atlas rounded-full; the same in every skin, unlike --ds-radius-chip, 8 px under Atlas), and the
+     product-proof frame's drop (Atlas's hero demo shadow). */
+  --ds-radius-pill: 9999px;
+  --ds-shadow-hero: 0 24px 60px -28px rgb(0 0 0 / 0.35);
   /* Colour layer "Ink & Spark" (a DreamStream extension, not from Atlas; docs/design/design-system.md § Colour
      layer). Black ink on white paper, and colour as a SPOT with one meaning each: the spark marks creation (the
      one "start making" fill per view, what is being drawn now, a selection on the art) and is never on a price or a
@@ -601,6 +606,7 @@
   --ds-info-text: #e5e5e5;
   --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
+  --ds-shadow-hero: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 60px -28px rgb(0 0 0 / 0.8); /* a light rim, then the deep drop */
   --ds-scrim: rgba(0,0,0,0.60);
   --ds-on-danger: #1a1915;         /* ink on the light red #f87171: 6.4:1 (white was 2.8:1) */
   --ds-chart-1: #fafafa;
@@ -742,6 +748,12 @@
   --ds-text-xl: 1.25rem;
   --ds-text-2xl: 1.5rem;
   --ds-text-3xl: 1.875rem;
+  /* The public type steps (the comics landing; Atlas text-[15px], text-4xl / 5xl / 7xl): public body copy and large
+     call-to-action labels, the phone h1 and tablet section h2, the tablet h1 and desktop section h2, the desktop h1. */
+  --ds-text-md: 0.9375rem;
+  --ds-text-4xl: 2.25rem;
+  --ds-text-5xl: 3rem;
+  --ds-text-7xl: 4.5rem;
   /* DS-1a: the stacking ladder (studioDesign Z). Screens never spell a z-index; they take a layer.
      stage = the base of the canvas / page content (its own layers stack 1–30 inside it); chrome and the
      sticky header 40; the full-screen page editor 70 and reader 80; a sheet's scrim 85 and the sheet 86
@@ -1052,6 +1064,10 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-text-xl: 1.25rem;                /* --text-xl (wave 8: Tailwind's 20 px) */
   --ds-text-2xl: 1.5rem;                /* --text-2xl */
   --ds-text-3xl: 1.875rem;              /* --text-3xl */
+  --ds-text-md: 0.9375rem;              /* text-[15px]: public body and large CTA labels */
+  --ds-text-4xl: 2.25rem;               /* --text-4xl */
+  --ds-text-5xl: 3rem;                  /* --text-5xl */
+  --ds-text-7xl: 4.5rem;                /* --text-7xl */
   /* DS-1a. Motion: Atlas's --motion-enter-quick (an alias of the 280 ms entrance, restated so it follows
      this block), --motion-enter (420 ms) and --motion-stagger-step. The danger label: white on Atlas's
      red in both themes. Atlas has no z or density tokens: the ladder and the row heights are restated
@@ -1084,6 +1100,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-spot-ink: var(--ds-ink);                                        /* --atlas-spot-ink */
   --ds-radius-hero: 28px;
   --ds-radius-feature: 16px;
+  --ds-radius-pill: 9999px;                                            /* rounded-full */
+  --ds-shadow-hero: 0 24px 60px -28px rgb(0 0 0 / 0.35);               /* the hero demo frame */
   /* Colour layer (a DreamStream extension; Atlas has no spark, hue or art names): the same values as :root,
      restated so the var()-derived ones follow this block's canvas and well. */
   --ds-spark: #3d44e8;                                                  /* oklch(0.50 0.24 272) ultramarine */
@@ -1141,6 +1159,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.4);
   --ds-shadow-panel: 0 16px 36px -16px rgb(0 0 0 / 0.7);
   --ds-shadow-lift: 0 22px 44px -18px rgb(0 0 0 / 0.8);
+  --ds-shadow-hero: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 60px -28px rgb(0 0 0 / 0.8); /* a light rim, then the deep drop */
   /* Wave 5: a 10 %-black shadow vanishes on black, so overlays get a lighter edge, a 1 px light catch
      along the top and a deeper shadow (Atlas dark --shadow-lg); the danger MARK is the brighter red
      (dots and edges; the deep red stays for fills); skeletons lift with ink; the segmented pill is the

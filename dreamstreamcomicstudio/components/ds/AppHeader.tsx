@@ -29,6 +29,13 @@ export const HEADER_REGION = {
 } as const;
 export type HeaderRegion = keyof typeof HEADER_REGION;
 
+/**
+ * The header owns its ink: a ghost button or an icon in it (neither sets a colour of its own) reads on the header's
+ * own paper (HEADER_GLASS) in both themes, whatever the page under it sets — or does not (the body's colour is the
+ * light theme's ink, so an un-inked header drew black on black in dark).
+ */
+export const HEADER_INK = 'text-[var(--ds-ink)]';
+
 /** The header's centred column: the page width and the §5.1 gutters. */
 export const HEADER_INNER = 'mx-auto w-full max-w-7xl px-4 medium:px-6 xl:px-8';
 
@@ -82,7 +89,7 @@ export const AppHeader = React.forwardRef<HTMLElement, AppHeaderProps>(function 
   const pastTop = useScrolledPast(4, scrolled === undefined);
   const frosted = scrolled ?? pastTop;
   return (
-    <header {...rest} ref={ref} data-slot="app-header" data-scrolled={frosted ? 'true' : 'false'} className={cn(STICKY_HEADER, className)}>
+    <header {...rest} ref={ref} data-slot="app-header" data-scrolled={frosted ? 'true' : 'false'} className={cn(STICKY_HEADER, HEADER_INK, className)}>
       <div aria-hidden="true" data-slot="app-header-glass" className={HEADER_GLASS} />
       {banner}
       <div className={cn(HEADER_INNER, innerClassName)}>
@@ -121,7 +128,7 @@ export interface AppHeaderSkeletonProps {
  */
 export function AppHeaderSkeleton({ label = 'Loading…', navItems = 4, actionItems = 2, className, innerClassName }: AppHeaderSkeletonProps) {
   return (
-    <header data-slot="app-header-skeleton" data-scrolled="false" aria-busy="true" className={cn(STICKY_HEADER, className)}>
+    <header data-slot="app-header-skeleton" data-scrolled="false" aria-busy="true" className={cn(STICKY_HEADER, HEADER_INK, className)}>
       <div aria-hidden="true" data-slot="app-header-glass" className={HEADER_GLASS} />
       <span className="sr-only">{label}</span>
       <div className={cn(HEADER_INNER, innerClassName)}>

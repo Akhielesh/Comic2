@@ -64,7 +64,7 @@ describe('StaticSiteHeader on Atlas chrome', () => {
     const home = screen.getByRole('button', { name: 'DreamStream Studio, home' });
     expect(home.querySelector('img')).toHaveAttribute('src', BRAND_MARK_SRC);
     expect(home.querySelector('img')).toHaveAttribute('alt', '');
-    // The visible words stay inside the name once "Studio" shows (from 380 px): axe label-content-name-mismatch.
+    // The visible words stay inside the name once "Studio" shows (from 600 px, the `medium` screen): axe label-content-name-mismatch.
     expect(home.textContent).toBe('DreamStream Studio');
     expect(home.getAttribute('aria-label')).toContain(home.textContent!);
     fireEvent.click(home);

@@ -38,7 +38,7 @@ export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';
 
 // Shell (DS-2; redesign plan §11.3 M1c)
-export { AppHeader, AppHeaderSkeleton, HEADER_GRID, HEADER_INNER, HEADER_REGION, useScrolledPast, type AppHeaderProps, type AppHeaderSkeletonProps, type HeaderRegion } from './AppHeader';
+export { AppHeader, AppHeaderSkeleton, HEADER_GRID, HEADER_INK, HEADER_INNER, HEADER_REGION, useScrolledPast, type AppHeaderProps, type AppHeaderSkeletonProps, type HeaderRegion } from './AppHeader';
 export { TabBar, TabItemButton, navItemName, NAV_MOTION, TAB_BADGE, TAB_BAR, TAB_BAR_ROW, TAB_DOT, TAB_DOT_PLACE, TAB_HINT, TAB_HINT_MS, TAB_ITEM, TAB_ITEM_CURRENT, TAB_ITEM_DISABLED, TAB_ITEM_IDLE, TAB_ITEM_ORIENTATION, TAB_PILL, TAB_PILL_CURRENT, TAB_PILL_IDLE, type TabBarItem, type TabBarProps, type TabDot, type TabItemButtonProps } from './TabBar';
 export { NavRail, NAV_RAIL, NAV_RAIL_DIVIDER, type NavRailBack, type NavRailProps } from './NavRail';
 

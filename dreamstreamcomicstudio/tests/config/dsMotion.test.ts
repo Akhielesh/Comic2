@@ -115,11 +115,16 @@ describe('styles/ds-motion.css', () => {
     expect(shimmer).toContain('-webkit-text-fill-color: currentColor');
     expect(reducedBody('.ds-lift')).toContain('transition: none');
     expect(reducedBody('.ds-lift:hover')).toContain('transform: none');
+    // The edge fades are scroll-linked, but document.getAnimations() still lists them (the layout smoke's
+    // reduced-motion rule): under reduced motion they stop and the scroller shows its content with no mask.
+    for (const s of ['.ds-fade-edge-x', '.ds-fade-edge-y']) {
+      expect(reducedBody(s), s).toContain('animation: none');
+      expect(reducedBody(s), s).toContain('mask-image: none');
+    }
     // Every class that animates or transitions outside the block is covered inside it.
     const moving = rules.filter((r) => !r.parents.includes(REDUCE) && !r.parents.some((p) => p.startsWith('@keyframes')) && /(?:^|;\s*)(?:animation|transition)\s*:/.test(r.body))
       
-      .flatMap((r) => topLevelSplit(r.selector).map((s) => s.trim()))
-      .filter((s) => !/fade-edge/.test(s)); // the edge fades are a scroll-linked mask, not motion
+      .flatMap((r) => topLevelSplit(r.selector).map((s) => s.trim()));
     const covered = new Set(reduced.flatMap((r) => topLevelSplit(r.selector).map((s) => s.trim())));
     expect(moving.filter((s) => !covered.has(s) && !covered.has(s.replace(/:hover$/, '')))).toEqual([]);
   });

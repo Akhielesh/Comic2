@@ -132,7 +132,7 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
  */
 const twRequire = createRequire(import.meta.url);
 /** Hand-written classes in index.css or styles/ds-motion.css (no Tailwind utility behind them). */
-export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'ds-rise-in', 'ds-scale-in', 'ds-fade-in', 'ds-making-sweep', 'ds-benday', 'ds-shimmer-text'];
+export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'ds-rise-in', 'ds-scale-in', 'ds-fade-in', 'ds-making-sweep', 'ds-benday', 'ds-shimmer-text', 'ds-overline-display'];
 /** A named group or peer (`group/checkbox`) only anchors `group-…/checkbox:` variants; it has no CSS of its own. */
 const NAMED_MARKER = /^(?:group|peer)\/[\w-]+$/;
 

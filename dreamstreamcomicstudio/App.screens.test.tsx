@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('./services/liveLink', () => ({ openLiveApp: vi.fn(async () => undefined) }));
 
 import { AppLoader, LEGACY_PAPER_VIEWS, ProductGateScreen, SystemErrorScreen, appRootClass, appRootSurface } from './App';
-import { CANVAS_BG } from './components/chat/studioDesign';
+import { CANVAS_BG, INK } from './components/chat/studioDesign';
 import { openLiveApp } from './services/liveLink';
 
 /** Every class on every element under `root`. */
@@ -90,7 +90,7 @@ describe('the root page under the views', () => {
 });
 
 describe('the root div', () => {
-  const classes = (view: string, gated: boolean) => appRootClass(view, gated).split(/\s+/);
+  const classes = (view: string, gated: boolean, comicsChrome = false) => appRootClass(view, gated, comicsChrome).split(/\s+/);
 
   it('is the positioned full-height page on the canvas, or the legacy light page for a legacy view', () => {
     expect(classes('home', false)).toEqual(expect.arrayContaining(['relative', 'min-h-screen', 'font-sans', ...CANVAS_BG.split(/\s+/)]));
@@ -105,10 +105,22 @@ describe('the root div', () => {
     }
   });
 
-  it('App renders its root div with appRootClass, gated on the product gate', () => {
+  it('the comics host’s own views sit on the canvas and the root owns their ink (never the body’s light ink in dark)', () => {
+    for (const view of ['home', 'auth', 'privacy', 'terms', 'gallery']) {
+      expect(classes(view, false, true), view).toEqual(expect.arrayContaining([...CANVAS_BG.split(/\s+/), ...INK.split(/\s+/)]));
+      expect(classes(view, false, true), view).not.toContain('bg-slate-50');
+      // Off the comics host (or signed in, where only the landing is comics chrome) the root sets no ink of its own.
+      expect(classes(view, false, false), view).not.toEqual(expect.arrayContaining(INK.split(/\s+/)));
+    }
+  });
+
+  it('App renders its root div with appRootClass, gated on the product gate, inked on the comics host’s own views', () => {
     const src = readFileSync(path.join(__dirname, 'App.tsx'), 'utf8');
     const root = src.split('\n').filter((l) => l.includes('data-slot="app-root"'));
     expect(root).toHaveLength(1);
-    expect(root[0]).toContain('className={appRootClass(effectiveView, Boolean(gatedProductLabel))}');
+    expect(root[0]).toContain('className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome)}');
+    // comicsChrome is hostRouting's rule (unit-tested there), read once for the header, the widgets and the root.
+    expect(src).toContain('const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });');
+    expect(src).toContain('const comicsChrome = chrome.owns;');
   });
 });

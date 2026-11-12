@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-// The waitlist form on an Atlas surface (the sign-in card's "Request access", qa scene `auth-access`): the same form
-// and submit as the legacy home page's, built from the DS primitives. No comic chrome reaches the DOM (the layout
-// smoke's legacy-kit check), the product chips are 44 px toggles under a coarse pointer, and the outcomes are the
-// card's calm status callouts.
+// The waitlist form on an Atlas surface (the sign-in card's "Request access", qa scene `auth-access`). S2b built this
+// as a separate `variant="atlas"` path; the Comics home release then put the WHOLE form on the page tokens (no variant
+// left to choose), so these checks now hold the same promises on the one form every caller gets: no comic chrome
+// reaches the DOM (the layout smoke's legacy-kit check), the note and the submit are DS primitives, the product chips
+// are 44 px toggles under a coarse pointer, and the outcomes are calm status callouts that clear when the email is
+// edited. WaitlistForm.test.tsx (the Comics home release's own file) covers the submit payload once more.
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,13 +23,17 @@ const LEGACY = /border-black|shadow-comic|font-comic|(?<![\w-])font-display|bran
 beforeEach(() => waitlist.submitWaitlistEmail.mockReset());
 afterEach(cleanup);
 
-const fill = (email: string) => fireEvent.change(screen.getByLabelText(/^Email/), { target: { value: email } });
+const emailField = () => screen.getByRole('textbox', { name: 'Email address' });
+const fill = (email: string) => fireEvent.change(emailField(), { target: { value: email } });
 
-describe('WaitlistForm variant="atlas"', () => {
-  it('renders the DS field, chips and button with no comic chrome, every chip a 44 px toggle under a coarse pointer', () => {
-    const { container } = render(<WaitlistForm kind="access" variant="atlas" buttonLabel="Request access" />);
+describe('WaitlistForm on an Atlas surface (the sign-in card’s "Request access")', () => {
+  it('renders the token field, the DS note and button with no comic chrome, every chip a 44 px toggle under a coarse pointer', () => {
+    const { container } = render(<WaitlistForm kind="access" buttonLabel="Request access" />);
     expect(container.innerHTML).not.toMatch(LEGACY);
-    expect(screen.getByLabelText(/^Email/)).toHaveAttribute('data-slot', 'input');
+    // The email is a real, required, named email field inside the token field group (44 px tall under a coarse pointer).
+    expect(emailField()).toHaveAttribute('type', 'email');
+    expect(emailField()).toBeRequired();
+    for (const cls of DENSITY.coarse.split(' ')) expect(emailField().closest('label')!.className.split(/\s+/)).toContain(cls);
     expect(screen.getByLabelText(/Anything you'd want to see/)).toHaveAttribute('data-slot', 'textarea');
     const submit = screen.getByRole('button', { name: 'Request access' });
     expect(submit).toHaveAttribute('data-slot', 'button');
@@ -44,7 +50,7 @@ describe('WaitlistForm variant="atlas"', () => {
   it('submits the email, the chosen products and the note, then shows the outcome as a status callout', async () => {
     waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, message: 'You’re on the list.' });
     const onJoined = vi.fn();
-    render(<WaitlistForm kind="access" source="auth-request-access" variant="atlas" buttonLabel="Request access" onJoined={onJoined} />);
+    render(<WaitlistForm kind="access" source="auth-request-access" buttonLabel="Request access" onJoined={onJoined} />);
     fill('Reader@Example.com');
     fireEvent.click(screen.getByRole('button', { name: 'Comic Studio' }));
     expect(screen.getByRole('button', { name: 'Comic Studio' })).toHaveAttribute('aria-pressed', 'true');
@@ -61,11 +67,14 @@ describe('WaitlistForm variant="atlas"', () => {
   it('an existing account is pointed at sign-in, an error is an alert with its words, and editing the email clears it', async () => {
     const onSignIn = vi.fn();
     waitlist.submitWaitlistEmail.mockResolvedValueOnce({ ok: false, status: 'account-exists', message: 'You already have an account.' });
-    render(<WaitlistForm kind="access" variant="atlas" buttonLabel="Request access" onSignIn={onSignIn} />);
+    render(<WaitlistForm kind="access" buttonLabel="Request access" onSignIn={onSignIn} />);
     fill('member@example.com');
     fireEvent.click(screen.getByRole('button', { name: 'Request access' }));
     expect(await screen.findByText('You already have an account.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    // The way to sign-in is a 44 px target under a coarse pointer, like the other small steps on the card.
+    const signIn = screen.getByRole('button', { name: 'Sign in' });
+    for (const cls of DENSITY.coarse.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
+    fireEvent.click(signIn);
     expect(onSignIn).toHaveBeenCalledTimes(1);
 
     waitlist.submitWaitlistEmail.mockResolvedValueOnce({ ok: false, message: 'We couldn’t save that just now — please try again.' });
@@ -76,9 +85,10 @@ describe('WaitlistForm variant="atlas"', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('the legacy look stays for the home page (variant light is unchanged)', () => {
+  it('the main site’s "Stay updated" form takes the same token look (the Comics home release: no legacy comic form is left)', () => {
     const { container } = render(<WaitlistForm kind="updates" buttonLabel="Keep me posted" />);
-    expect(container.innerHTML).toMatch(/brand-yellow/);
-    expect(screen.getByLabelText('Email address')).toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(LEGACY);
+    expect(emailField()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep me posted' })).toHaveAttribute('data-slot', 'button');
   });
 });

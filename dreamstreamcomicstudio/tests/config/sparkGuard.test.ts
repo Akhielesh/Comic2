@@ -55,8 +55,8 @@ const TEST_FILE = 'tests/config/sparkGuard.test.ts';
  */
 export const ALLOWLIST: Record<string, { uses: Array<{ token: string; line: string }>; reason: string }> = {
   'components/comicshost/ComicsLanding.tsx': {
-    uses: [{ token: 'SPARK_FILL', line: 'const heroButton = `${BUTTON_SHAPE} ${SPARK_FILL} ${FOCUS_RING}`;' }],
-    reason: 'the landing hero "Sign in to your studio" / "Open my comics": the one start-making CTA on the comics front page (CL-3); the header and closing buttons stay the ink primary'
+    uses: [{ token: 'variant=create', line: "variant={signedIn ? 'default' : 'create'}" }],
+    reason: 'the comics landing hero’s Start creating — the one creation call to action on the signed-out landing (design-system.md, Landing row)'
   }
 };
 

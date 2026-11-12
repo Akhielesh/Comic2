@@ -2,11 +2,10 @@
   "guard": "terracotta",
   "test": "tests/config/terracottaGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts lowers it (see README.md).",
-  "totals": { "#c2643f": 3, "#d97757": 365 },
+  "totals": { "#c2643f": 3, "#d97757": 361 },
   "files": {
     "components/ApiConfiguration.tsx": { "#d97757": 2 },
     "components/ComicReader.tsx": { "#d97757": 2 },
-    "components/PublicGallery.tsx": { "#d97757": 4 },
     "components/PublicProfile.tsx": { "#d97757": 1 },
     "components/QuickFinder.tsx": { "#d97757": 2 },
     "components/TokenAvailabilityPill.tsx": { "#d97757": 3 },
