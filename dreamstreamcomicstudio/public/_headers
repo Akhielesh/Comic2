@@ -36,6 +36,10 @@
 /icons/*
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 
+# The apex favicon (also from scripts/gen-icons.mjs): same policy as the other icons.
+/favicon.ico
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 # Baby-monitor alert service worker: always revalidate so fixes reach phones.
 /live-sw.js
   Cache-Control: no-cache

@@ -92,6 +92,15 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Changed
+- **New DreamStream marks and app icons (2026-11-05):** DreamStream, Comic Studio and Stream
+  Studio have new black-and-white marks built like Atlas's: one rounded tile, one cut, one
+  point. DreamStream is a **D**, Comic Studio a **grin**, Stream Studio **on air**. They show up
+  first on app icons and browser tabs, and in the headers with the next update. Installed
+  apps get the new icons (Stream Studio now has proper PNG and Android "maskable" icons instead
+  of a single SVG, and a white splash), browser tabs finally show a DreamStream favicon (light
+  and dark), and the comics site shows its own. The marks are shared components
+  (`components/brand`) that the next header and loading-screen updates will use; they move a
+  little on hover and hold still if you've asked your device to reduce motion.
 - **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
   shows one screen — sign in or create your DreamStream account, the same one as Comic Studio
   and Chat Studio — instead of the whole studio. Nothing sits behind it: no dashboard, events,

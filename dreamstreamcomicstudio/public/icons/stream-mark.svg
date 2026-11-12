@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Stream Studio">
+  <title>Stream Studio</title>
+  <!-- Stream Studio, "On air": the family point is the live source and two arcs broadcast from it. The arcs are the D's bowl mirrored (radius 16 plus a 0.5 optical overshoot for the round form), 114 degrees each, with butt ends cut radially like the feet of the Atlas A.
+       SOURCE FILE: scripts/gen-icons.mjs renders every app icon and favicon of this studio from the
+       cut path and the point below, and components/brand/studios.ts must carry the same numbers
+       (tests/config/appIcons.test.ts checks both). Construction, shared with the Atlas mark: viewBox
+       64, one rx 16 tile in currentColor, the glyph cut out through a userSpaceOnUse mask (no second
+       fill colour), one weight-7 stroke, one r 3.6 point. -->
+  <defs>
+    <mask id="ds-stream-mark" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" rx="16" fill="#fff"/>
+      <path class="ds-logo-cut" d="M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/>
+      <circle class="ds-logo-point" cx="32" cy="32" r="3.6" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="currentColor" mask="url(#ds-stream-mark)"/>
+</svg>
