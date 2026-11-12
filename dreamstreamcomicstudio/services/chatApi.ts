@@ -159,11 +159,22 @@ export const updateChatMemory = (
     signal?: AbortSignal;
     /** `memory` was distilled from connected-account content (the sticky flag): the merge follows that policy. */
     memoryConnected?: boolean;
+    /**
+     * The model source the turn ran on (AIChatPlatform passes reqSource, as the auto-title gets it): the
+     * merge runs on that provider and its key, under the same connected-account rules. Sent only when
+     * given (the server's auto pick otherwise).
+     */
+    source?: string;
   }
 ): Promise<ChatMemoryResponse> =>
-  post<{ messages: ChatRequest['messages']; memory: string; memoryConnected?: boolean }, ChatMemoryResponse>(
+  post<{ messages: ChatRequest['messages']; memory: string; memoryConnected?: boolean; source?: string }, ChatMemoryResponse>(
     '/api/chat/memory',
-    { messages, memory, ...(options?.memoryConnected ? { memoryConnected: true } : {}) },
+    {
+      messages,
+      memory,
+      ...(options?.memoryConnected ? { memoryConnected: true } : {}),
+      ...(options?.source ? { source: options.source } : {})
+    },
     options?.signal ? { signal: options.signal } : undefined
   );
 

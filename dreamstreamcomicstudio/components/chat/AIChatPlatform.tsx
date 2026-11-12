@@ -1164,7 +1164,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     priorTurns: ChatTurn[],
     answerText: string,
     chatOwner: string | undefined,
-    answerConnectorData = false
+    answerConnectorData = false,
+    /**
+     * The model source this turn ran on (reqSource, as the auto-title gets it): the merge runs on that
+     * provider and its key, under the server's connected-account gates. In Auto (the session has no
+     * source, locked or not) that is the source Auto picked, not the server's own pick.
+     */
+    source?: string
   ) => {
     if (!user?.id || !answerText.trim()) return;
     // Facts learned from a chat go into its OWNER's memory only: a chat still on screen after
@@ -1176,7 +1182,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       .map(toRequestMessage);
     recent.push({ role: 'assistant', content: answerText, ...(answerConnectorData ? { connectorData: true } : {}) });
     const current = getChatMemory(user.id);
-    void updateChatMemory(recent, current, { memoryConnected: isChatMemoryConnected(user.id) })
+    void updateChatMemory(recent, current, { memoryConnected: isChatMemoryConnected(user.id), source })
       .then((res) => {
         const next = storeMemoryUpdate(user.id, current, res);
         if (next) setMemory(next);
@@ -1415,7 +1421,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
-      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true);
+      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true, reqSource);
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever, and keep the

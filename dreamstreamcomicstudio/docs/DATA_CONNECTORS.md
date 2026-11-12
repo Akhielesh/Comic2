@@ -136,7 +136,13 @@ routes (image APIs, third-party MCPs, web search) are listed under "Known gaps".
 - The SSE `meta` event of `/stream`, `/swarm` and `/api/recipes/run` carries `connectorPrivacy`
   (the turn may carry connected content), so the client can mark a reply the user stops before
   `final` (below).
-- Title, memory and follow-up helpers send the flag for a user with any connection. The
+- Title, memory and follow-up helpers send the flag for a user with any connection. Every helper
+  (enhance, title, memory, auto-memory, memory import, follow-ups) calls the resolved provider's own
+  model (`helperModelFor`: the fast defaults on OpenRouter and NVIDIA, a direct provider's default
+  chat model from `ai/gateway.ts`); a direct provider used to receive the OpenRouter slug and fail
+  silently. `POST /api/chat/memory` runs on the `source` the client sends: the source the turn ran
+  on (`reqSource`, the one the auto-title gets; in Auto, the source Auto picked, locked or not), sent
+  only when there is one, under the same gates. The
   auto-memory summary of a conversation that carries, or may carry, connected content denies data
   collection whatever the turn was (a connected user's free turn is not flagged; its summary is).
 - Recipes (`routes/recipes.ts`): `/run` runs the whole recipe inside `prepareChat`'s decision
@@ -195,6 +201,22 @@ routes (image APIs, third-party MCPs, web search) are listed under "Known gaps".
   `gemini` in `CONNECTOR_PROVIDERS_CONFIRMED`: embeddings go to the Gemini API with the platform
   key `ASSISTANT_GEMINI_API_KEY` (falling back to `GEMINI_API_KEY`). Full-text and recency
   retrieval still find those rows.
+- The memory **query** is gated the same way. The vector search embeds the turn's last user message
+  (up to 8,000 characters) through that Gemini key, and that message can carry connected content (a
+  follow-up chip built from a connected reply, a pasted connected item). `runChatParams` sets
+  `userMemoryNoQueryEmbedding` (→ `buildUserMemoryBlock(…, { noQueryEmbedding })`) in two cases:
+  - `prepareChat`'s `memoryNoQueryEmbedding`: the conversation may carry connected content (the
+    helpers' `conversationMayCarryConnectorData` test: marked history, a user with any connection, a
+    failed lookup, or a recorded connected reply) and `gemini` is not in
+    `CONNECTOR_PROVIDERS_CONFIRMED`. It is answered from what the turn already looked up (the memoized
+    connection rows, the provenance-store lookup when the turn made one), so the gate adds no lookup
+    of its own on the usual path;
+  - every withheld turn (`connectorPrivacy.withheld`: free, an unconfirmed direct provider, or the
+    usage-budget free re-plan `freeModelsOnlyPlan`, which withholds the turn after `prepareChat`
+    ran) of a user with, or maybe with, connections, whatever is confirmed.
+
+  Such a turn makes no `embedContent` request: retrieval uses full-text search, then recency. A user
+  with no connection and no marked or recorded history keeps the vector search.
 - The free-model fallbacks never take a conversation that carries, or may carry, connector
   content (marked history, or a user with connections and an earlier assistant reply): the capped
   shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan

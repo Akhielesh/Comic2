@@ -210,3 +210,50 @@ describe('buildUserMemoryBlock reports a marked row in the block it returns', ()
     expect(without.connected).toBe(false);
   });
 });
+
+describe('retrieveUserMemories(…, { noQueryEmbedding }): the query never reaches the embedding API', () => {
+  const embedRequests = () =>
+    (vi.mocked(fetch).mock.calls as unknown as [unknown, RequestInit | undefined][]).filter(([url]) => String(url).includes(':embedContent'));
+
+  it('skips embedText (no request at all) and answers from full-text search, then recency', async () => {
+    embed.ok = true;
+    db.rows = [row(USER, 'chat_studio', PLAIN_FACT), row(USER, CONNECTED_MEMORY_PRODUCT, CONNECTED_FACT)];
+
+    const rows = await retrieveUserMemories(USER, 'launch', { noQueryEmbedding: true });
+    expect(embedRequests()).toHaveLength(0);
+    expect(db.rpc).toHaveLength(0);
+    expect(db.queries[0].textSearch).toBe('launch');
+    expect(rows.map((r) => r.content).sort()).toEqual([CONNECTED_FACT, PLAIN_FACT].sort());
+
+    // Nothing matches the words: the recency query still answers, still without an embedding.
+    db.queries = [];
+    const recent = await retrieveUserMemories(USER, 'zebra', { noQueryEmbedding: true });
+    expect(embedRequests()).toHaveLength(0);
+    expect(db.queries.map((q) => q.textSearch)).toEqual(['zebra', undefined]);
+    expect(recent).toHaveLength(2);
+  });
+
+  it('combines with excludeConnected: word search without the marked rows, and the block still builds', async () => {
+    embed.ok = true;
+    db.rows = [row(USER, CONNECTED_MEMORY_PRODUCT, CONNECTED_FACT), row(USER, 'chat_studio', PLAIN_FACT)];
+
+    const block = await buildUserMemoryBlock(USER, 'launch', { noQueryEmbedding: true, excludeConnected: true });
+    expect(embedRequests()).toHaveLength(0);
+    expect(block).toContain(PLAIN_FACT);
+    expect(block).not.toContain(CONNECTED_FACT);
+    expect(db.queries[0].neq).toEqual([['product', CONNECTED_MEMORY_PRODUCT]]);
+  });
+
+  it('without the option the query is embedded once (RETRIEVAL_QUERY) and the vector search runs, as before', async () => {
+    embed.ok = true;
+    db.rows = [row(USER, 'chat_studio', PLAIN_FACT)];
+
+    const rows = await retrieveUserMemories(USER, 'launch');
+    expect(embedRequests()).toHaveLength(1);
+    const sent = JSON.parse(String(embedRequests()[0][1]?.body));
+    expect(sent).toMatchObject({ taskType: 'RETRIEVAL_QUERY', content: { parts: [{ text: 'launch' }] } });
+    expect(db.rpc).toHaveLength(1);
+    expect(db.queries).toHaveLength(0);
+    expect(rows.map((r) => r.content)).toEqual([PLAIN_FACT]);
+  });
+});

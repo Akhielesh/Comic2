@@ -257,6 +257,16 @@ type PreparedChat = {
    * signed-in user or with marked history. Absent on every other turn (unchanged).
    */
   connectorPrivacy?: ConnectorTurnPrivacy;
+  /**
+   * Server memory retrieval must not embed its query (the last user message) through the platform
+   * Gemini key: the conversation carries, or may carry, connected-account content and `gemini` is not
+   * confirmed (CONNECTOR_PROVIDERS_CONFIRMED). Retrieval then uses full-text search and recency
+   * (services/userMemory.ts noQueryEmbedding). A withheld turn of a user with (or maybe with)
+   * connections never embeds it either, whatever is confirmed: runChatParams derives that half from
+   * connectorPrivacy, so it also covers the usage-budget free re-plan (freeModelsOnlyPlan), which
+   * withholds the turn after prepareChat ran.
+   */
+  memoryNoQueryEmbedding?: boolean;
 };
 
 /** What prepareChat decided about connected-account content for one turn (see ai/privacy/connectorData.ts). */
@@ -387,10 +397,13 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const unconfirmedProvider = unconfirmedPlatformProvider(req, resolved.provider);
   // The client's long-term memory (composed into systemPrompt) was distilled from connected content.
   const memoryConnected = body.memoryConnected === true;
-  const knownHistoryLookup: Promise<boolean> =
+  // Whether the provenance-store lookup runs for this turn (its answer is reused for server memory below).
+  const historyLookupRuns = Boolean(
     !markedHistory && priorAssistantTurn && (resolved.provider === 'openrouter' || unconfirmedProvider) && req.user?.id
-      ? historyHasConnectorReply(req.user.id, incoming)
-      : Promise.resolve(false);
+  );
+  const knownHistoryLookup: Promise<boolean> = historyLookupRuns
+    ? historyHasConnectorReply(req.user.id, incoming)
+    : Promise.resolve(false);
   let connectionsMemo: Promise<ConnectionRow[] | null> | undefined;
   const connectorRows = (): Promise<ConnectionRow[] | null> =>
     (connectionsMemo ??= req.user?.id ? listConnections(req.user.id).catch(() => null) : Promise.resolve([]));
@@ -991,6 +1004,23 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     bindConnectorTurnDecision(clientContext, { connectorData: Boolean(connectorPrivacy?.connectorData), freeTurn });
   }
 
+  // Server memory retrieval embeds its query, the last user message (≤ 8,000 chars), with the platform
+  // Gemini key (services/userMemory.ts). That message can carry connected content (a follow-up chip
+  // built from a connected reply, a pasted item), so until the owner confirms `gemini`
+  // (CONNECTOR_PROVIDERS_CONFIRMED) the query is never embedded for a conversation that may carry
+  // connected content: the test conversationMayCarryConnectorData makes for the helpers, answered from
+  // what this turn already looked up (marked or known history, the memoized connection rows, a failed
+  // lookup counting as connected), so a turn adds no lookup of its own on the usual path. A withheld
+  // turn never embeds it at all for a user with (or maybe with) connections: runChatParams.
+  const memoryMayCarryConnectorData = async (): Promise<boolean> => {
+    if (historyConnectorData || hasConnections !== false) return true;
+    const rows = await connectorRows();
+    if (rows === null || rows.length > 0) return true;
+    return historyLookupRuns ? historyKnown : historyHasConnectorReply(req.user?.id, incoming);
+  };
+  const memoryNoQueryEmbedding =
+    Boolean(req.user?.id) && !connectorProviderConfirmed('gemini') && (await memoryMayCarryConnectorData());
+
   return {
     prepared: {
       resolved,
@@ -1011,7 +1041,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       // Free-only must mean no paid retry (services/freeOnlyMode.ts: "the server blocks rather than
       // silently charging a paid fallback"). Only OpenRouter turns ever carry one.
       ...(freeOnly && resolved.provider === 'openrouter' ? { noPaidRetry: true } : {}),
-      ...(connectorPrivacy ? { connectorPrivacy } : {})
+      ...(connectorPrivacy ? { connectorPrivacy } : {}),
+      ...(memoryNoQueryEmbedding ? { memoryNoQueryEmbedding: true } : {})
     }
   };
 };
@@ -1159,6 +1190,14 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   // (services/userMemory.ts excludeConnected) — whether or not the user still has connections.
   userMemory: Boolean(p.userId),
   userMemoryExcludeConnected: Boolean(p.connectorPrivacy?.withheld),
+  // …and its query stays off the Gemini embedding API (word search and recency instead) when the
+  // conversation may carry connected content and `gemini` is not confirmed (prepareChat), and on every
+  // turn that withholds connected content from a user with (or maybe with) connections, whatever is
+  // confirmed. Derived here from connectorPrivacy, so the usage-budget free re-plan (freeModelsOnlyPlan
+  // marks the turn withheld after prepareChat ran) is covered on POST / and /stream alike.
+  userMemoryNoQueryEmbedding: Boolean(
+    p.memoryNoQueryEmbedding || (p.connectorPrivacy?.withheld && p.connectorPrivacy.hasConnections !== false)
+  ),
   // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
   // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
   // it's safe to enable for any signed-in user. (Was declared but never set → connector
@@ -1758,6 +1797,19 @@ export const conversationMayCarryConnectorData = async (userId: string | undefin
 /** The memory `product` of facts distilled from a conversation (see CONNECTED_MEMORY_PRODUCT). */
 const memoryProductFor = (connected: boolean): string => (connected ? CONNECTED_MEMORY_PRODUCT : 'chat_studio');
 
+/**
+ * The model a background helper (enhance, title, memory, auto-memory, memory import, follow-ups) calls
+ * on the resolved provider: the fast defaults on OpenRouter and NVIDIA, and a direct provider's own
+ * default chat model (ai/gateway.ts) — the direct adapters send `model` as is, so an OpenRouter slug
+ * would fail there and the helper would silently return nothing.
+ */
+export const helperModelFor = (provider: AIProviderId): string =>
+  provider === 'nvidia'
+    ? NVIDIA_TEXT_MODEL
+    : provider === 'openrouter'
+      ? OPENROUTER_TEXT_MODEL
+      : defaultModelForProvider(provider) ?? OPENROUTER_TEXT_MODEL;
+
 /** OpenRouter helpers call the fast default with the paid net — both may be billed. */
 const helperModels = (provider: AIProviderId, model: string): string[] | undefined =>
   provider === 'openrouter' ? Array.from(new Set([model, OPENROUTER_TEXT_MODEL, TEXT_FALLBACK])) : undefined;
@@ -1815,7 +1867,7 @@ chatRouter.post('/enhance', async (req, res, next) => {
     }
     // Utility calls (enhance/memory) must be RELIABLE, not free-but-flaky — use the fast
     // default model with the paid net so they don't silently fail when free models 429.
-    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const model = helperModelFor(resolved.provider);
     const content = `Improve this prompt:\n\n${text}`;
     const meter = { operation: 'chat.enhance', provider: resolved.provider, model };
     const hold = await holdForChatHelper(req, {
@@ -1898,7 +1950,7 @@ chatRouter.post('/title', async (req, res, next) => {
       .join('\n')
       .slice(0, 4000);
 
-    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const model = helperModelFor(resolved.provider);
     const content = `Conversation:\n${transcript}\n\nWrite the title.`;
     const meter = { operation: 'chat.title', provider: resolved.provider, model };
     const hold = await holdForChatHelper(req, {
@@ -1979,7 +2031,7 @@ chatRouter.post('/memory', async (req, res, next) => {
 
     // Reliable model for memory distillation — a flaky free model that 429s or returns
     // garbage is exactly why memory "felt terrible".
-    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const model = helperModelFor(resolved.provider);
     const content = `EXISTING MEMORY:\n${existing || '(none)'}\n\nRECENT CONVERSATION:\n${transcript}`;
     const meter = { operation: 'chat.memory', provider: resolved.provider, model };
     const hold = await holdForChatHelper(req, {
@@ -2101,7 +2153,7 @@ const maybeAutoRemember = (
         .concat(`Assistant: ${answerText.slice(0, 1_500)}`)
         .join('\n')
         .slice(0, 6_000);
-      const model = p.resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+      const model = helperModelFor(p.resolved.provider);
       const content = `EXISTING MEMORY:\n(none)\n\nRECENT CONVERSATION:\n${transcript}`;
       const meter = { operation: 'chat.memory.auto', provider: p.resolved.provider, model };
       // A summary of a connected-account conversation follows its data policy (whether or not THIS
@@ -2181,7 +2233,7 @@ chatRouter.post('/memory/import', async (req, res, next) => {
 
     // Reliable model, like /memory — a flaky free model silently corrupting an import
     // would destroy the user's trust in the whole feature.
-    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const model = helperModelFor(resolved.provider);
     const prompt = `EXISTING MEMORY:\n${existing || '(none)'}\n\nIMPORTED CONTENT (from ${importSource}):\n${content}`;
     const meter = { operation: 'chat.memory.import', provider: resolved.provider, model };
     const hold = await holdForChatHelper(req, {
@@ -2292,7 +2344,7 @@ chatRouter.post('/followups', async (req, res, next) => {
       .slice(0, 6000);
 
     // Fast, reliable model + no tools — this runs after every answer, so it must be cheap.
-    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const model = helperModelFor(resolved.provider);
     const content = `Conversation so far:\n${transcript}\n\nSuggest the follow-ups.`;
     const meter = { operation: 'chat.followups', provider: resolved.provider, model };
     const hold = await holdForChatHelper(req, {
