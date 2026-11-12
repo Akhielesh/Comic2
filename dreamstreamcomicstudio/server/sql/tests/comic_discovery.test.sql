@@ -55,10 +55,10 @@ insert into auth.users (id) values
   ('00000000-0000-4000-8000-00000000000a'), ('00000000-0000-4000-8000-00000000000b'),
   ('00000000-0000-4000-8000-00000000000c'), ('00000000-0000-4000-8000-00000000000d');
 insert into public.profiles (id, username, avatar_url) values
-  ('00000000-0000-4000-8000-00000000000a', 'alice', 'https://abcdefghij12.supabase.co/storage/v1/object/public/comic-assets/avatars/alice-1.webp'),
-  ('00000000-0000-4000-8000-00000000000b', 'bob', 'https://abcdefghij12.supabase.co/storage/v1/object/public/comic-assets/avatars/bob.webp'),
+  ('00000000-0000-4000-8000-00000000000a', 'alice', 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/avatars/alice-1.webp'),
+  ('00000000-0000-4000-8000-00000000000b', 'bob', 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/avatars/bob.webp'),
   -- An uploaded avatar lives under the owner's id: never listed.
-  ('00000000-0000-4000-8000-00000000000c', 'cara_x', 'https://abcdefghij12.supabase.co/storage/v1/object/public/comic-assets/00000000-0000-4000-8000-00000000000c/avatar-1.webp'),
+  ('00000000-0000-4000-8000-00000000000c', 'cara_x', 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/00000000-0000-4000-8000-00000000000c/avatar-1.webp'),
   ('00000000-0000-4000-8000-00000000000d', 'dave', 'https://tracker.example/pixel.png');
 
 create function pg_temp.mk(
@@ -117,6 +117,10 @@ select pg_temp.mk('fSuspended0000006', '00000000-0000-4000-8000-00000000000b', '
 select pg_temp.mk('gNoRating00000007', '00000000-0000-4000-8000-00000000000c', 'Unrated Book', p_rating => null, p_kind_label => 'Storybook',
                   p_show_creator => true, p_cover => 'plain');
 select pg_temp.mk('hPercent000000008', '00000000-0000-4000-8000-00000000000d', '100% Real_Deal', p_show_creator => true, p_cover => 'page');
+-- Rated above the PG-13 ceiling (a newer build's or a hand-edited rating): live and public, popular, read this week and
+-- featured, yet never listed anywhere (the listing fails closed on a present rating it may not show).
+select pg_temp.mk('iRatedR0000000009', '00000000-0000-4000-8000-00000000000b', 'Rated Beyond', p_rating => 'R', p_kind_label => 'Manga',
+                  p_show_creator => true, p_views => 9999, p_likes => 99, p_first => now() - interval '1 hour');
 -- 30 fillers in ONE statement: now() is the same for all, so z1..z10 share the exact first-publish time (keyset ties).
 select pg_temp.mk('zFill' || lpad(i::text, 12, '0'), '00000000-0000-4000-8000-00000000000c', 'Filler ' || i,
                   p_first => case when i <= 10 then now() - interval '3 hours' + interval '0.123456 seconds' else now() - (i || ' hours')::interval end,
@@ -131,7 +135,7 @@ select c.id, d.day, d.n * 3, d.n
   from public.comic_publications c
   join (values ('aSpiceRun00000001', current_date, 5), ('aSpiceRun00000001', current_date - 1, 3),
                ('zFill000000000005', current_date, 2), ('bMoonManga0000002', current_date - 20, 100),
-               ('cHeldStory0000003', current_date, 900)) d(slug, day, n) on d.slug = c.slug;
+               ('cHeldStory0000003', current_date, 900), ('iRatedR0000000009', current_date, 900)) d(slug, day, n) on d.slug = c.slug;
 
 insert into public.comic_featured (publication_id, rank, starts_at, ends_at)
 select c.id, f.rank, f.starts_at, f.ends_at
@@ -140,7 +144,8 @@ select c.id, f.rank, f.starts_at, f.ends_at
                ('cHeldStory0000003', 1, null, null),
                ('bMoonManga0000002', 10, null, now() - interval '1 day'),
                ('gNoRating00000007', 20, now() + interval '1 day', null),
-               ('hPercent000000008', 30, now() - interval '1 day', now() + interval '1 day')) f(slug, rank, starts_at, ends_at)
+               ('hPercent000000008', 30, now() - interval '1 day', now() + interval '1 day'),
+               ('iRatedR0000000009', 2, null, null)) f(slug, rank, starts_at, ends_at)
     on f.slug = c.slug;
 
 -- Test helper: the slugs of a page, sorted.
@@ -158,9 +163,9 @@ begin
   assert has_function_privilege('anon', 'public.comic_discover_shelves(text, text, text, text)', 'execute'), 'anon can read the shelves';
   assert not has_function_privilege('anon', 'public.comic_discover_kind(jsonb)', 'execute'), 'the kind helper is internal';
   assert not has_function_privilege('authenticated', 'public.comic_discover_kind(jsonb)', 'execute'), 'the kind helper is internal';
-  assert (select bool_and(prosecdef and proconfig @> array['search_path=public']) from pg_proc
+  assert (select bool_and(prosecdef and proconfig @> array['search_path=public, pg_temp']) from pg_proc
            where pronamespace = 'public'::regnamespace and proname in ('comic_discover_list', 'comic_discover_shelves')),
-    'both RPCs are SECURITY DEFINER with search_path = public';
+    'both RPCs are SECURITY DEFINER with search_path = public, pg_temp (pg_temp last)';
   assert (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname like 'comic_discover%') = 3, 'no stray overloads';
   assert (select relrowsecurity from pg_class where oid = 'public.comic_featured'::regclass), 'comic_featured has RLS on';
   assert not exists (select 1 from pg_policies where tablename = 'comic_featured'), 'comic_featured has no policies';
@@ -266,8 +271,8 @@ begin
   assert a -> 'cover' = jsonb_build_object('w480', 'pub/' || key_a || '/cover-0123456789ab-w480.webp', 'w1080', 'pub/' || key_a || '/cover-0123456789ab-w1080.webp'),
     'cover variants: ' || coalesce((a -> 'cover')::text, 'none');
   assert a -> 'creator' = jsonb_build_object('username', 'alice', 'avatarUrl',
-    'https://abcdefghij12.supabase.co/storage/v1/object/public/comic-assets/avatars/alice-1.webp'),
-    'a shown creator carries the username and a storage avatar';
+    'https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/avatars/alice-1.webp'),
+    'a shown creator carries the username and an avatar in this project''s storage';
 
   select e into a from jsonb_array_elements(public.comic_discover_list(p_q => 'Moon') -> 'items') e;
   assert not a ? 'creator', 'no byline when the publication hides its creator';
@@ -370,6 +375,12 @@ begin
   assert jsonb_array_length(s -> 'trending') = 0 and jsonb_array_length(s -> 'featured') = 0, 'a PG-13 manga is not kids-friendly';
   s := public.comic_discover_shelves(p_rating => 'kidz');
   assert jsonb_array_length(s -> 'featured') = 0 and jsonb_array_length(s -> 'new') = 0, 'an unknown chip answers nothing';
+  -- Rated above the ceiling: in no shelf (featured, trending, new, manga…) and no search, whatever its reads.
+  s := public.comic_discover_shelves(p_your_lang => 'en');
+  assert s::text !~ 'iRatedR0000000009', 'an R-rated comic is in no shelf: ' || s::text;
+  assert public.t_slugs(public.comic_discover_list(p_q => 'Rated Beyond')) = '{}', 'nor in a search';
+  assert public.t_slugs(public.comic_discover_list(p_kind => 'manga')) = array['bMoonManga0000002'], 'nor under its kind';
+  assert public.comic_discover_list(p_rating => 'R') = '{"items": [], "next": null}'::jsonb, 'and R is no chip';
 end $$;
 reset role;
 
@@ -385,11 +396,25 @@ begin
 end $$;
 reset role;
 
+-- ── An avatar in ANOTHER Supabase project (profiles.avatar_url is client-writable) is never listed ───────────────
+update public.profiles
+   set avatar_url = 'https://zzzzzzzzzzzzzz.supabase.co/storage/v1/object/public/tracker-bucket/avatars/eve.png'
+ where username = 'dave';
+set role anon;
+do $$
+declare
+  a jsonb;
+begin
+  select e into a from jsonb_array_elements(public.comic_discover_list(p_q => 'Real') -> 'items') e;
+  assert a -> 'creator' = '{"username": "dave"}'::jsonb, 'another project''s storage is not ours: ' || coalesce((a -> 'creator')::text, 'none');
+end $$;
+reset role;
+
 -- Re-applying with data in place changes nothing.
 \ir ../comic_discovery.sql
 do $$
 begin
-  assert (select count(*) from public.comic_featured) = 5, 'featured picks survive a re-apply';
+  assert (select count(*) from public.comic_featured) = 6, 'featured picks survive a re-apply';
 end $$;
 
 \echo COMIC_DISCOVERY_OK

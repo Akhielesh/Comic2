@@ -95,10 +95,10 @@ describe('comic_discovery.sql: the two anonymous RPCs', () => {
     expect(RAW).toMatch(/ASK-FIRST/);
   });
 
-  it('both are SECURITY DEFINER, stable, with search_path = public', () => {
+  it('both are SECURITY DEFINER, stable, with search_path = public, pg_temp (pg_temp last)', () => {
     for (const f of [LIST, SHELVES]) {
       expect(f.header, 'defined').not.toBe('');
-      expect(f.header).toMatch(/\) returns jsonb language plpgsql stable security definer set search_path = public as \$\$$/);
+      expect(f.header).toMatch(/\) returns jsonb language plpgsql stable security definer set search_path = public, pg_temp as \$\$$/);
     }
   });
 
@@ -127,12 +127,14 @@ describe('only live PUBLIC, not-held comics: in every query that reads comic_pub
   });
 
   for (const [i, label] of [[0, 'ranking'], [1, 'item builder']] as const) {
-    it(`the ${label} keeps status = 'live', visibility = 'public' and the forced-private join`, () => {
+    it(`the ${label} keeps status = 'live', visibility = 'public', the forced-private join and the PG-13 ceiling`, () => {
       const q = queries[i];
       expect(q).toContain('join public.projects p on p.id = c.project_id');
       expect(q).toContain("c.status = 'live'");
       expect(q).toContain("c.visibility = 'public'");
       expect(q).toContain('coalesce(p.is_forced_private, false) = false');
+      // A present rating above the ceiling fails closed (an unrated comic is listed, as before).
+      expect(q).toContain("(c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('g', 'pg', 'pg-13'))");
     });
   }
 
@@ -234,15 +236,17 @@ describe('the item builder is the allow-list', () => {
     const creator = builderSql.indexOf("'creator', case when c.show_creator and pr.username ~ '^[a-za-z0-9_.-]{2,40}$' then jsonb_build_object( 'username', pr.username,");
     expect(creator).toBeGreaterThanOrEqual(0);
     // Every use of the profile in the whole function sits behind show_creator: the byline and the username search.
+    // (The window covers the whole byline clause: its avatar rule grew with the S2b host pin, so 400 became 500.)
     for (const m of LIST.body.matchAll(/pr\.(username|avatar_url)/g)) {
-      const before = LIST.body.slice(Math.max(0, m.index! - 400), m.index!);
+      const before = LIST.body.slice(Math.max(0, m.index! - 500), m.index!);
       expect(before, `pr.${m[1]} at ${m.index}`).toMatch(/c\.show_creator/);
     }
     expect(LIST.body).toContain("(c.show_creator and pr.username ilike v_pattern escape '\\')");
   });
 
-  it('an avatar only from our storage, and never one whose URL holds an id', () => {
-    expect(builderSql).toContain("pr.avatar_url ~ '^https://[a-z0-9]{10,40}\\.supabase\\.co/storage/v1/object/public/[a-z0-9-]{3,63}/[a-za-z0-9._/-]+$'");
+  it("an avatar only from this project's storage (never another Supabase project), and never one whose URL holds an id", () => {
+    expect(builderSql).toContain("pr.avatar_url ~ '^https://bdjfmxfmhqhzvgrhbbzm\\.supabase\\.co/storage/v1/object/public/[a-z0-9-]{3,63}/[a-za-z0-9._/-]+$'");
+    expect(builderSql).not.toContain('[a-z0-9]{10,40}\\.supabase'); // any project's host: a tracking image
     expect(builderSql).toContain("pr.avatar_url !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'");
     expect(builderSql).toContain('length(pr.avatar_url) <= 500');
   });
@@ -338,7 +342,7 @@ describe('comic_featured is service-only; the stats index; idempotence', () => {
     expect(SQL).toContain("raise exception 'apply comic_publications.sql before comic_discovery.sql';");
     expect(SQL).toMatch(/column_name = 'is_forced_private'\) then raise exception/);
     expect(SQL).toMatch(/column_name in \('username', 'avatar_url'\)\) <> 2 then raise exception/);
-    expect(SQL).toContain("raise exception 'the discover rpcs must be security definer with search_path = public';");
+    expect(SQL).toContain("raise exception 'the discover rpcs must be security definer with search_path = public, pg_temp';");
     expect(SQL).toContain("raise exception 'comic_discover_kind is internal';");
   });
 });

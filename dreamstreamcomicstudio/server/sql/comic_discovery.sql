@@ -9,7 +9,8 @@
 -- tests/config/discoveryListingGuard.test.ts.
 --
 -- Security model (privacy on Discover, redesign §14 risk 6):
---   * Two new anonymous read RPCs, both SECURITY DEFINER with search_path = public, served through the edge Worker
+--   * Two new anonymous read RPCs, both SECURITY DEFINER with search_path = public, pg_temp (pg_temp last, so no temp
+--     object can shadow a public one), served through the edge Worker
 --     (api-proxy/src/publicDiscover.ts; cached at most 2 x 30 s so a hold leaves every listing within a minute):
 --       comic_discover_list    — one page of live PUBLIC publications (keyset cursor, at most 24 rows);
 --       comic_discover_shelves — the Discover home shelves, every one built by comic_discover_list.
@@ -19,9 +20,11 @@
 --   * Outputs are an allow-list: slug, title, description, kind, page count, aspect, cover {w480, w1080} (paths
 --     under the publication's own pub/<asset_key>/ prefix only), rating, languages, published dates, likes, theme
 --     colour, and creator {username, avatarUrl} ONLY when the publication shows its creator (show_creator, the
---     "Show my username" switch, default off; avatarUrl only for an avatar in our storage whose URL holds no id).
+--     "Show my username" switch, default off; avatarUrl only for an avatar in this project's storage — the
+--     bdjfmxfmhqhzvgrhbbzm host, never another Supabase project — whose URL holds no id).
 --     Never the snapshot, safety data, an asset key or a user id. A search
 --     matches a username only where that username is shown, so a hidden byline cannot be found by searching for it.
+--   * A publication whose stored rating is above the PG-13 ceiling is never listed (an unrated one is).
 --   * Inputs fail closed: an unknown sort, rating, kind, length, language or cursor returns an empty page (never an
 --     unfiltered one); the limit is clamped to 1..24; a search is cut to 60 characters and LIKE-escaped here.
 --   * No reader statistic leaves the database: the ranking scores (reads, the staff rank) stay inside the query, and
@@ -112,7 +115,7 @@ returns jsonb
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   v_limit integer := least(greatest(coalesce(p_limit, 24), 1), 24);
@@ -164,6 +167,8 @@ begin
      where c.status = 'live'
        and c.visibility = 'public'
        and coalesce(p.is_forced_private, false) = false
+       -- A rating above the PG-13 ceiling (a present one this listing may not show) fails closed; unrated is listed.
+       and (c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('G', 'PG', 'PG-13'))
        and (p_sort <> 'featured' or f.publication_id is not null)
        and (v_pattern is null
             or c.card ->> 'title' ilike v_pattern escape '\'
@@ -217,11 +222,12 @@ begin
                               then jsonb_build_object(
                                      'username', pr.username,
                                      'avatarUrl', case when length(pr.avatar_url) <= 500
-                                                        and pr.avatar_url ~ '^https://[a-z0-9]{10,40}\.supabase\.co/storage/v1/object/public/[a-z0-9-]{3,63}/[A-Za-z0-9._/-]+$'
-                                                        and pr.avatar_url !~ '\.\.'
                                                         -- never a user id: uploaded avatars live under <uid>/, so they
                                                         -- wait for an opaque copy (docs/features/discovery.md)
                                                         and pr.avatar_url !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                                                        and pr.avatar_url !~ '\.\.'
+                                                        -- only this project's storage, never another Supabase project
+                                                        and pr.avatar_url ~ '^https://bdjfmxfmhqhzvgrhbbzm\.supabase\.co/storage/v1/object/public/[a-z0-9-]{3,63}/[A-Za-z0-9._/-]+$'
                                                        then pr.avatar_url end)
                          end
             )) order by r.n desc, r.slug desc) filter (where r.rn <= v_limit), '[]'::jsonb),
@@ -247,7 +253,8 @@ begin
     ) art on true
    where c.status = 'live'
      and c.visibility = 'public'
-     and coalesce(p.is_forced_private, false) = false;
+     and coalesce(p.is_forced_private, false) = false
+     and (c.safety ->> 'rating' is null or c.safety ->> 'rating' in ('G', 'PG', 'PG-13'));
 
   return coalesce(v_out, jsonb_build_object('items', '[]'::jsonb, 'next', null));
 end;
@@ -267,7 +274,7 @@ returns jsonb
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 begin
   return jsonb_strip_nulls(jsonb_build_object(
@@ -312,7 +319,7 @@ begin
   if exists (select 1 from pg_proc
               where pronamespace = 'public'::regnamespace
                 and proname in ('comic_discover_list', 'comic_discover_shelves')
-                and (not prosecdef or not coalesce(proconfig @> array['search_path=public'], false))) then
-    raise exception 'the Discover RPCs must be SECURITY DEFINER with search_path = public';
+                and (not prosecdef or not coalesce(proconfig @> array['search_path=public, pg_temp'], false))) then
+    raise exception 'the Discover RPCs must be SECURITY DEFINER with search_path = public, pg_temp';
   end if;
 end $$;
