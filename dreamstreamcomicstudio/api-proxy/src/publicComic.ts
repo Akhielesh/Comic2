@@ -67,7 +67,8 @@ const SECURITY_HEADERS: Record<string, string> = {
   'x-robots-tag': 'noindex'
 };
 
-function allowedOrigin(req: Request, env: PublicComicEnv): string | null {
+/** The request's origin when it is on the public CORS allow-list (the comics host, the app, CORS_ORIGIN), else null. Shared with publicDiscover.ts. */
+export function allowedOrigin(req: Request, env: PublicComicEnv): string | null {
   const origin = req.headers.get('origin');
   if (!origin) return null;
   const allowed = new Set([COMICS_ORIGIN, 'https://dreamstreamstudio.ai', ...(env.CORS_ORIGIN || '').split(',').map((o) => o.trim()).filter(Boolean)]);
@@ -89,14 +90,16 @@ export const notFound = (req: Request, env: PublicComicEnv): Response => json(re
 const tooMany = (req: Request, env: PublicComicEnv): Response =>
   json(req, env, '{"error":{"message":"Too many requests. Try again in a minute.","code":"RATE_LIMIT"}}', 429, { 'retry-after': '60' });
 
-const clientIp = (req: Request) => (req.headers.get('cf-connecting-ip') || '0.0.0.0').slice(0, 64);
+/** The caller's address as Cloudflare saw it (rate-limit keys only; never stored). Shared with publicDiscover.ts. */
+export const clientIp = (req: Request) => (req.headers.get('cf-connecting-ip') || '0.0.0.0').slice(0, 64);
 
-async function allow(limiter: RateLimiter | undefined, key: string): Promise<boolean> {
+/** One rate-limit check; fails open. Shared with publicDiscover.ts. */
+export async function allow(limiter: RateLimiter | undefined, key: string): Promise<boolean> {
   if (!limiter) return true;
   try {
     return (await limiter.limit({ key })).success;
   } catch {
-    return true; // a limiter outage never takes reading down
+    return true; // a limiter outage never takes reading (or Discover) down
   }
 }
 

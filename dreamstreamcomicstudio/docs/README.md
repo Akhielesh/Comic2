@@ -42,6 +42,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/dialogue.md` | Comic Studio's dialogue understanding: the tool-hint fix, the dialogue vocabulary, the reserved `dialogue_edit` seat, named styles, and the B-RESOLVE engine (grammar, speakers, resolver, placement, compiler, fast-path condition, phrase corpus), dormant until B-TOOL. |
 | `features/pro-edit.md` | Comic Studio's Pro Edit: the Easy \| Pro editor contract (effects, stickers, motion, opaque layers), its flags, ops and the packages that fill the PE-0 stubs. |
 | `features/settled-cards.md` | Comic Studio's settled chat cards: when a card settles, its one-line summary, the gate outcome stamps and plan counts, the SETTLED_CARDS stage, and the director wave note. |
+| `features/discovery.md` | Discover's public listing: the edge routes /api/comic/public/discover[/shelves], the item allow-list (bylines only with Show my username), the ask-first SQL comic_discovery.sql, featured seeding, tests. |
 
 ## Conventions
 

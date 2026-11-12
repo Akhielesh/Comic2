@@ -31,6 +31,7 @@
  *   GET      /api/comic/oembed?url=…          oEmbed for our own /c/<slug> links
  *   POST     /api/csp-report                  CSP violation reports (cspReport.ts, sampled log)
  * (POST /api/comic/public/s/:slug/report is still proxied: Turnstile + the safety store.)
+ *   GET|HEAD /api/comic/public/discover[/shelves]  Discover's public listing (publicDiscover.ts; anon RPCs, ≤ 60 s cache)
  * Rate limits: Workers Rate Limiting bindings PUBLIC_COMIC_RL / PUBLIC_EVENT_RL / CSP_REPORT_RL.
  * Secret: SHARE_VIEW_SALT (viewer hash + tracking HMAC; `wrangler secret put`, never in wrangler.jsonc;
  * falls back to the D1 backend_env row of the same name — src/shareViewSalt.ts).
@@ -39,6 +40,7 @@ import { AGENT_HEADERS, AGENT_POLICY, AGENT_QUESTIONS, AGENT_TIER_LABELS, buildD
 import { logVisit, parseAnswers, storeCheckin, type D1Like } from './agent-log';
 import { handleCspReport, type CspReportEnv } from './cspReport';
 import { handlePublicComic, type PublicComicEnv } from './publicComic';
+import { handlePublicDiscover } from './publicDiscover';
 import { readCappedText } from './readCapped';
 import { withShareViewSalt, type ShareSaltEnv } from './shareViewSalt';
 
@@ -154,6 +156,9 @@ export default {
 
     // Edge-only routes: CSP reports and the shared-comic read path never reach the container.
     if (url.pathname === '/api/csp-report') return handleCspReport(req, env);
+    // Discover's listing: edge-only and cached, it never wakes the container (and needs no secret).
+    const discover = await handlePublicDiscover(req, env, ctx, url);
+    if (discover) return discover;
     // The share routes' only secret may live in D1 rather than as a Worker secret; resolve it (cached)
     // only for those paths so the rest of the API never touches D1 here.
     const publicComic = url.pathname.startsWith('/api/comic/') ? await handlePublicComic(req, await withShareViewSalt(env), ctx, url) : null;
