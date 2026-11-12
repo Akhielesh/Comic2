@@ -52,3 +52,5 @@ export * as fx from './fx/index.js';
 export * as motion from './motion/index.js';
 export * as assets from './assets/index.js';
 export * as pro from './pro/index.js';
+// Program 3 (SETTLE-0): settled chat cards under one namespace (comic.settle.*), so isPassed, matchChoices and the rest never shadow a name
+export * as settle from './settle.js';

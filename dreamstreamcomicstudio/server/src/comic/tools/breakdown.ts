@@ -13,6 +13,7 @@ import { formatUsd } from '../../../../shared/comic/models.js';
 import { LANGUAGES, languageSpec } from '../../../../shared/comic/languages.js';
 import { coverStatus } from '../../../../shared/comic/book.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages, sheetTargets, summarizeBook, unitPrice, type BookSummary } from '../../../../shared/comic/plan.js';
+import { withPlanCounts } from '../../../../shared/comic/settle.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { estimateSpendAction, spendIsByok } from '../jobs.js';
 import { estimateTranslation } from '../i18n/index.js';
@@ -87,14 +88,19 @@ export function sanitizeBreakdownPageIds(doc: ComicDoc, raw: unknown): string[] 
 /** The breakdown card for a doc (live: the client re-reads the doc; the payload only scopes it). */
 export function breakdownCardFor(doc: ComicDoc, opts: { pageIds?: string[]; view?: BreakdownView; gateId?: string } = {}): Extract<Card, { type: 'breakdown' }> {
   const subset = opts.pageIds?.length && opts.pageIds.length < doc.pages.length ? opts.pageIds : undefined;
-  return {
-    type: 'breakdown',
-    id: newId('card'),
-    ...(subset ? { pageIds: subset } : {}),
-    cover: subset ? false : defaultBreakdownCover(doc),
-    view: opts.view ?? defaultBreakdownView(doc),
-    ...(opts.gateId ? { gateId: opts.gateId } : {})
-  };
+  // SETTLE-CORE #3 (B-10): stamped with its plan counts here, so every caller (this tool, intents, the breakdown action
+  // and the plan_pages wrappers, which compute the same counts) posts a card that keeps them once it settles.
+  return withPlanCounts(
+    {
+      type: 'breakdown',
+      id: newId('card'),
+      ...(subset ? { pageIds: subset } : {}),
+      cover: subset ? false : defaultBreakdownCover(doc),
+      view: opts.view ?? defaultBreakdownView(doc),
+      ...(opts.gateId ? { gateId: opts.gateId } : {})
+    },
+    doc
+  );
 }
 
 /** Best guess at who pays for images when no request keys are at hand (the latest image spend says so). */

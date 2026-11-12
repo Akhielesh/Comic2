@@ -62,6 +62,7 @@ import { createStudioContext, signAssetPaths, type OrchestratorContext, type Stu
 import { notAvailableError } from '../comic/extensions.js';
 import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
 import { recordOptionAnswer, runDirectorTurn, type OptionAnswerRef } from '../comic/director.js';
+import { settledCardsOn } from '../../../shared/comic/settle.js';
 import { canFastPath, dialogueFastIntent, parseIntent, routeIntent } from '../comic/intents.js';
 import { ASPECT_RATIOS, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
@@ -1585,7 +1586,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     // A tapped option is recorded on its card before the message is routed, so the free paths
     // (intent router, fast intents) record it as well as the director (DIR-8).
     try {
-      recordOptionAnswer(session, prepared.text, prepared.answer);
+      recordOptionAnswer(session, prepared.text, prepared.answer, { settled: settledCardsOn(ctx.caps?.admin) });
     } catch (err) {
       logger.warn('comic_answer_record_failed', { requestId: req.requestId, projectId: ctx.projectId, message: (err as Error)?.message });
     }

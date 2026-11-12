@@ -194,6 +194,12 @@ the flag off, the default, the director answers as before.
 - **`offer_next` fills a free seat** (revised by the B-TOOL review; it was core). Up to 2 chips per turn, as plain
   replies (each is its own label and message). Lowest priority of all: on a full turn it is not offered, and the
   director suggests next steps in its reply instead.
+- **At the S2b integration** the median is 1.1444 with dev's `set_style` description in (21,072 of the 21,174 cap).
+- **D13 (lead, S2b integration): Gemini schema acceptance.** The merge went ahead. A static check
+  (`server/src/comic/tools.schema.test.ts`) holds every core tool, offer_next and the lettering group inside the
+  Gemini function-declaration subset (one type per node, string enums, typed arrays and objects, `required` naming
+  declared keys; no `$ref`, `oneOf`, `anyOf`, `const` or `additionalProperties`). B-TOOL's schemas passed with nothing
+  to fix. The one paid admin turn over the Gemini director route stays the owner's call before the S2b deploy.
 
 ## 5. The engine (wave 1, B-RESOLVE)
 

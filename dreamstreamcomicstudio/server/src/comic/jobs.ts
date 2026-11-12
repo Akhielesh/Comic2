@@ -146,6 +146,7 @@ import { BILLING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { PRO_QUALITY_USAGE_MESSAGE } from './access.js';
 import { withHistoryAction } from './history/recorder.js';
+import { gateClosedFor, gateStampOps, withPlanCounts, type GateClosedStatus } from '../../../shared/comic/settle.js';
 import { actionHandlerFor } from './actions/index.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
@@ -326,6 +327,33 @@ const assistantMessage = (text: string, cards?: Card[], steps?: NextStep[] | str
 /** Commit with an ops origin (undo attribution) and an optional undo label. */
 const commitAs = (ctx: StudioContext, ops: DocOp[], origin?: OpsOrigin, label?: string): ComicDoc =>
   ctx.session.commit(ops, { ...(origin ? { origin } : {}), ...(label ? { label } : {}) });
+
+/**
+ * What a gate write does to its card's outcome stamp (settled cards, settle.md §5.6 / V.7): 'open' = a new gate (an
+ * OPEN gate it replaces is stamped 'replaced'); 'reopen' = the approval is put back because its run never started, so
+ * the stamp is cleared (it must never read "Approved"); 'close' = the gate closed, and how. Only the creator's own
+ * Approve and "Not now" are `by: 'user'`: a close the studio made never reads as the user's "Not now".
+ */
+type GateWrite = { kind: 'open' } | { kind: 'reopen' } | { kind: 'close'; status: GateClosedStatus; by: 'user' | 'system' };
+
+/**
+ * Every gate write (SETTLE-SRV): the `gate` op and, in the same commit, the `message_patch` that stamps (or clears)
+ * `closed` on the gate's card (shared/comic/settle.ts gateStampOps, ≤ about 120 bytes). A gate card the conversation
+ * does not show yet (a director turn still collecting its cards) is simply not stamped. session.ts's expiry uses the
+ * same stamp helper.
+ */
+function commitGate(ctx: StudioContext, gate: Gate, origin: OpsOrigin | undefined, write: GateWrite, extra: { ops?: DocOp[]; label?: string } = {}): ComicDoc {
+  const doc = ctx.session.doc;
+  const at = Date.now();
+  const ops: DocOp[] = [{ op: 'gate', gate }, ...(extra.ops ?? [])];
+  if (write.kind === 'open') {
+    const prev = doc.gate;
+    if (prev && prev.id !== gate.id && prev.status === 'open') ops.push(...gateStampOps(doc, prev.id, gateClosedFor(prev, 'replaced', 'system', at)));
+  } else {
+    ops.push(...gateStampOps(doc, gate.id, write.kind === 'reopen' ? null : gateClosedFor(gate, write.status, write.by, at)));
+  }
+  return commitAs(ctx, ops, origin, extra.label);
+}
 
 /** The live status line. `cost` = the Free / AI / Image badge (an image draw, a writer or vision call, or free software work). */
 const activity = (ctx: StudioContext, label: string, cost?: 'free' | 'text' | 'image') => {
@@ -1322,27 +1350,32 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     // or different spend on an old approval — re-quote instead. `forceGate: 'policy'` holds
     // under every confirm setting (under 'big' a cheaper-than-threshold price would otherwise
     // run at once); `staleFrom` makes the new card say the price changed.
-    commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], origin);
+    // The card reads "Closed — a newer approval replaced it": the studio re-quotes, the user never said "Not now".
+    commitGate(ctx, { ...gate, status: 'declined' }, origin, { kind: 'close', status: 'replaced', by: 'system' });
     const requote: RunActionOptions = { ...opts, confirmed: false, budgetApproved: false, forceGate: 'policy', staleFrom: gate.estimateUsd };
     return handler ? runFeatureAction(ctx, handler, gate.action, requote) : startSpend(ctx, gated, requote);
   }
   // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
   // 'declined' by startSpend), then put the card back if the spend never started —
   // so it never claims "drawing now" when a busy page / missing key / invalid-now blocked it.
-  const ops: DocOp[] = [{ op: 'gate', gate: { ...gate, status: 'approved' } }];
+  const ops: DocOp[] = [];
   // Approving the plan review IS approving the plan.
   if (gate.reason === 'plan_review' && doc.planStatus === 'draft' && doc.pages.length) ops.push({ op: 'plan_status', status: 'approved' });
-  commitAs(ctx, ops, origin, 'Approve');
+  // The card is stamped with the quote it was approved at ("Approved · ≈ $0.42 · 6 images").
+  commitGate(ctx, { ...gate, status: 'approved' }, origin, { kind: 'close', status: 'approved', by: 'user' }, { ops, label: 'Approve' });
+  // Put back: the approval never ran, so its stamp goes too (it would read "Approved").
   const reopen = () => {
     const cur = ctx.session.doc.gate;
-    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
+    if (cur?.id === gate.id && cur.status === 'approved') commitGate(ctx, { ...cur, status: 'open' }, origin, { kind: 'reopen' });
   };
   // Nothing left to do (the quoted page was deleted, the cover got drawn meanwhile): the gate is
   // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent" —
   // and says why ("Nothing left to draw"), not a "Not now" the user never said.
   const close = () => {
     const cur = ctx.session.doc.gate;
-    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined', closedReason: 'nothing_to_draw' } }], origin);
+    if (cur?.id === gate.id && cur.status === 'approved') {
+      commitGate(ctx, { ...cur, status: 'declined', closedReason: 'nothing_to_draw' }, origin, { kind: 'close', status: 'nothing_to_draw', by: 'system' });
+    }
   };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
@@ -1360,7 +1393,8 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
 function declineGate(ctx: StudioContext, gateId: string, opts: RunActionOptions): ActionOutcome {
   const gate = ctx.session.doc.gate;
   if (!gate || gate.id !== gateId) throw new StudioError('BAD_REQUEST', 'That approval is no longer open.', { status: 409 });
-  if (gate.status === 'open') commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], originOf(opts));
+  // decline_gate is only ever the creator's own "Not now" (GateCard, the board, a chip they tap): stamped as theirs.
+  if (gate.status === 'open') commitGate(ctx, { ...gate, status: 'declined' }, originOf(opts), { kind: 'close', status: 'declined', by: 'user' });
   return { status: 'done', message: 'Declined — nothing was spent.' };
 }
 
@@ -1547,7 +1581,8 @@ function createGate(
   const heldCard = held && rawAction.type === 'render_pages' ? heldBackNotice(doc, held, spendActionIsByok(doc, action, ctx.keys), extra.prices, rawAction) : null;
   if (heldCard) cards.push(heldCard);
   cards.push({ type: 'gate', id: newId('card'), gateId: gate.id });
-  commitAs(ctx, [{ op: 'gate', gate }], originOf(opts));
+  // The new gate takes the one gate slot: an open gate it replaces is stamped 'replaced' on its card.
+  commitGate(ctx, gate, originOf(opts), { kind: 'open' });
   const onModel = textSpend ? '' : ` on ${nickname}`;
   const text = (() => {
     switch (reason) {
@@ -1808,7 +1843,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
     const cards: Card[] = [
       ...(heldCard ? [heldCard] : []),
       ...(nothing.breakdown
-        ? [{ type: 'breakdown' as const, id: newId('card'), view: 'status' as const, cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }]
+        ? [withPlanCounts({ type: 'breakdown' as const, id: newId('card'), view: 'status' as const, cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }, doc)]
         : [noticeCard('info', nothing.message)])
     ];
     deliver(ctx, opts, nothing.message, cards, nothing.steps);
@@ -1946,7 +1981,9 @@ async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActio
 
   // Proceeding: retire an open gate this spend makes moot (the same kind of spend covering everything it would draw).
   const open = doc.gate;
-  if (open?.status === 'open' && gateMootedBy(doc, open.action, action)) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
+  if (open?.status === 'open' && gateMootedBy(doc, open.action, action)) {
+    commitGate(ctx, { ...open, status: 'declined' }, 'job', { kind: 'close', status: 'superseded', by: 'system' });
+  }
 
   // "Render all" left overfull pages out of this run and its quote: say so now, with free fixes first.
   const held = action.type === 'render_pages' ? renderAllGate(doc, action) : null;
@@ -2020,7 +2057,9 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   });
   if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
   const open = ctx.session.doc.gate;
-  if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
+  if (open?.status === 'open' && open.action.type === action.type) {
+    commitGate(ctx, { ...open, status: 'declined' }, 'job', { kind: 'close', status: 'superseded', by: 'system' });
+  }
 
   const cost = costOf(ctx);
   // What THIS re-check cost, read from its own ledger entry (other runs may spend meanwhile).
@@ -4466,7 +4505,7 @@ export async function planPages(
   if (!pageIds && !instructions && before.pages.length && before.planStatus !== 'none' && knownPlanHash(ctx.session) === planInputHashOf(before)) {
     const steps = nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) });
     const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call (${costOf(ctx).governed ? 'free' : '$0'}).`;
-    deliver(ctx, runOpts, text, [breakdownCardFor(before, { view: 'plan' })], steps);
+    deliver(ctx, runOpts, text, [withPlanCounts(breakdownCardFor(before, { view: 'plan' }), before)], steps);
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
   }
 
@@ -4575,7 +4614,8 @@ export async function planPages(
   commitAs(ctx, [{ op: 'plan_input_hash', hash: planInputHashOf(ctx.session.doc) }], 'job');
   const after = ctx.session.doc;
   const headline = planHeadline(after, revising && !rewroteAll ? pageIds : undefined);
-  const card: Card = breakdownCardFor(after, { view: 'plan', ...(revising && !rewroteAll ? { pageIds } : {}) });
+  // Counts stamped at creation (settled cards): a passed plan card reads "Page plan · 12 pages · 38 panels".
+  const card: Card = withPlanCounts(breakdownCardFor(after, { view: 'plan', ...(revising && !rewroteAll ? { pageIds } : {}) }), after);
   const drawnNote = drawn.length && revising ? ' Drawn pages that changed show as out of date until you redraw them.' : '';
   // Plan §4.1: what the free plan-fit pass did (a layout re-chosen so the words fit; the storybook panel clamp),
   // in plain words beside the plan card — never silent.

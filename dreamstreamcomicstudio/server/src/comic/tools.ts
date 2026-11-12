@@ -44,6 +44,7 @@ import {
   type RenderTarget,
   type StyleBible
 } from '../../../shared/comic/doc.js';
+import { withPlanCounts } from '../../../shared/comic/settle.js';
 import { STEER_LIMITS, type ActivityWhere, type StudioFocus } from '../../../shared/comic/events.js';
 import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety.js';
 import { applyOps, type DocOp, type SpendAction } from '../../../shared/comic/ops.js';
@@ -1634,7 +1635,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!targets.length && !coverToo) {
           // $0: nothing to draw — say so, show the book, offer next steps (never a redundant redraw).
           state.outcome = 'nothing';
-          state.cards.push({ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(ids.length ? { pageIds: ids } : {}) });
+          // SETTLE-CORE #3 (B-10): the book card carries its plan counts from the moment it is posted.
+          state.cards.push(withPlanCounts({ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(ids.length ? { pageIds: ids } : {}) }, ctx.session.doc));
           pushNextSteps(state, nothingNextSteps(d, byok()));
           const busy = scope.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering');
           if (busy.length) return `Nothing new to start: ${pageWord(busy)} ${busy.length === 1 ? 'is' : 'are'} already drawing. Nothing was spent.`;
