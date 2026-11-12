@@ -33,12 +33,15 @@ export const DISCOVER_SHELF_MIN = 4;
  * unpublish leaves every listing within 2 × 30 = 60 s. The comic itself (/c/<slug>) is never cached and stops at once.
  */
 export const DISCOVER_CACHE_SECONDS = 30;
-/** "This week": first published in the last 7 days (New), or unique readers in the last 7 days (Trending). */
+/** "This week": first published in the last 7 days (New), or read in the last 7 days (Trending). */
 export const DISCOVER_WEEK_DAYS = 7;
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Trending = unique readers in the last 7 days; New = first published, newest first; Most read = unique readers ever. */
+/**
+ * Trending = reads in the last 7 days; New = first published, newest first; Most read = all-time reads. A read counts
+ * each reader once a day (comic_publication_track), so a reader who comes back on another day counts again.
+ */
 export type DiscoverSort = 'trending' | 'new' | 'most_read';
 export const DISCOVER_SORTS: readonly DiscoverSort[] = ['trending', 'new', 'most_read'];
 /** 'kids' = G or PG (an unrated comic is never kids-friendly); a rating = exactly that rating. */
@@ -92,7 +95,10 @@ export interface DiscoverItem {
   themeColor?: string;
   creator?: DiscoverCreator;
 }
-/** GET /api/comic/public/discover. `next` is opaque: pass it back as `cursor` with the same query. */
+/**
+ * GET /api/comic/public/discover. `next` is opaque: pass it back as `cursor` with the same query. It names the last
+ * item only (never a score); a cursor whose comic has left the listing answers an empty page, so start again.
+ */
 export interface DiscoverPage { items: DiscoverItem[]; next?: string }
 export type DiscoverShelves = Partial<Record<DiscoverShelfId, DiscoverItem[]>>;
 /** GET /api/comic/public/discover/shelves. Only shelves worth showing are present. */
@@ -190,16 +196,18 @@ export const isPublicAvatarUrl = (value: unknown, origin?: string): value is str
 // ── Cursor ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const SORT_CODE: Record<DiscoverSort, string> = { trending: 't', new: 'n', most_read: 'r' };
-const CURSOR_RE = /^([tnr])(0|[1-9a-z][0-9a-z]{0,10})\.([A-Za-z0-9]{17})$/;
+/** `<sort code>.<slug>`: nothing else, so no reader statistic or staff rank can ride along. */
+const CURSOR_RE = /^([tnr])\.([A-Za-z0-9]{17})$/;
 
 /**
- * The keyset position after an item: its sort key and slug. `n` is the 7-day unique readers (trending), the first
- * publish time in microseconds (new) or the unique readers ever (most_read); the slug breaks ties.
+ * The keyset position after an item: the slug of a page's last item, and nothing else. The ranking score (reads, a
+ * publish time, the staff rank) stays inside the database: comic_discover_list continues after that comic's current
+ * score, and answers an empty page when the comic is no longer listed under the query.
  */
-export interface DiscoverCursor { n: number; slug: string }
+export interface DiscoverCursor { slug: string }
 
 export function encodeDiscoverCursor(sort: DiscoverSort, cursor: DiscoverCursor): string {
-  return `${SORT_CODE[sort]}${cursor.n.toString(36)}.${cursor.slug}`;
+  return `${SORT_CODE[sort]}.${cursor.slug}`;
 }
 
 /** The cursor's position, only for the sort it was made for (a cursor never moves between sorts). */
@@ -207,20 +215,14 @@ export function decodeDiscoverCursor(sort: DiscoverSort, value: unknown): Discov
   if (typeof value !== 'string') return null;
   const m = CURSOR_RE.exec(value);
   if (!m || m[1] !== SORT_CODE[sort]) return null;
-  const n = parseInt(m[2], 36);
-  if (!Number.isSafeInteger(n) || n.toString(36) !== m[2]) return null;
-  return { n, slug: m[3] };
+  return { slug: m[2] };
 }
 
 const isCursorShape = (v: unknown): v is string => typeof v === 'string' && CURSOR_RE.test(v);
 
-const cursorFromRpc = (v: unknown): DiscoverCursor | null => {
-  if (!isRecord(v)) return null;
-  const n = typeof v.n === 'string' && /^\d{1,16}$/.test(v.n) ? Number(v.n) : v.n;
-  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 && typeof v.slug === 'string' && SLUG_RE.test(v.slug)
-    ? { n, slug: v.slug }
-    : null;
-};
+/** The RPC's `next` → a cursor: only its slug is read (anything else the RPC might add is dropped). */
+const cursorFromRpc = (v: unknown): DiscoverCursor | null =>
+  isRecord(v) && typeof v.slug === 'string' && SLUG_RE.test(v.slug) ? { slug: v.slug } : null;
 
 // ── Queries ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -366,7 +368,6 @@ export function discoverListRpcArgs(query: DiscoverQuery): Record<string, string
     p_length: query.length ?? null,
     p_week: !!query.week,
     p_limit: query.limit,
-    p_after_n: after ? after.n : null,
     p_after_slug: after ? after.slug : null
   };
 }

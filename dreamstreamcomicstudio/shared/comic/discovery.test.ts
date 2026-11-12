@@ -71,7 +71,7 @@ describe('parseDiscoverQuery: strict, with defaults', () => {
   });
 
   it('reads every filter and normalises the language and the search', () => {
-    const cursor = encodeDiscoverCursor('new', { n: 1_762_000_000_123_456, slug: SLUG });
+    const cursor = encodeDiscoverCursor('new', { slug: SLUG });
     const parsed = parseDiscoverQuery(
       `sort=new&q=${encodeURIComponent('  Spice \n run ')}&rating=kids&lang=pt-BR&kind=webtoon&length=short&week=1&limit=12&cursor=${cursor}`
     );
@@ -96,8 +96,9 @@ describe('parseDiscoverQuery: strict, with defaults', () => {
     ['a fractional limit', 'limit=2.5', /limit/],
     ['a 61-character search', `q=${'x'.repeat(61)}`, /60 characters/],
     ['a control character', `q=${encodeURIComponent('a\u0000b')}`, /control/],
-    ['a cursor for another sort', `sort=trending&cursor=${encodeDiscoverCursor('new', { n: 5, slug: SLUG })}`, /cursor/],
-    ['a malformed cursor', 'cursor=t5.short', /cursor/]
+    ['a cursor for another sort', `sort=trending&cursor=${encodeDiscoverCursor('new', { slug: SLUG })}`, /cursor/],
+    ['a malformed cursor', 'cursor=t.short', /cursor/],
+    ['a cursor that carries a number (the old score-bearing shape)', `cursor=t5.${SLUG}`, /cursor/]
   ])('rejects %s', (_label, search, reason) => {
     const parsed = parseDiscoverQuery(search);
     expect(parsed.ok).toBe(false);
@@ -126,7 +127,7 @@ describe('the canonical search (the edge cache key)', () => {
     const queries: DiscoverQuery[] = [
       { sort: 'trending', limit: 24 },
       { sort: 'most_read', limit: 6, rating: 'PG-13', length: 'long' },
-      { sort: 'new', limit: 24, q: '100% Real_Deal & co', week: true, kind: 'storybook', lang: 'zh-hans', cursor: encodeDiscoverCursor('new', { n: 0, slug: SLUG }) }
+      { sort: 'new', limit: 24, q: '100% Real_Deal & co', week: true, kind: 'storybook', lang: 'zh-hans', cursor: encodeDiscoverCursor('new', { slug: SLUG }) }
     ];
     for (const q of queries) expect(parseDiscoverQuery(discoverSearch(q))).toEqual({ ok: true, value: q });
   });
@@ -145,26 +146,33 @@ describe('the canonical search (the edge cache key)', () => {
 });
 
 describe('the keyset cursor', () => {
-  it('round-trips every sort, from 0 to the largest safe integer (microsecond publish times fit)', () => {
+  it('round-trips every sort', () => {
     for (const sort of ['trending', 'new', 'most_read'] as const) {
-      for (const n of [0, 1, 35, 1_762_000_000_123_456, Number.MAX_SAFE_INTEGER]) {
-        expect(decodeDiscoverCursor(sort, encodeDiscoverCursor(sort, { n, slug: SLUG }))).toEqual({ n, slug: SLUG });
-      }
+      expect(decodeDiscoverCursor(sort, encodeDiscoverCursor(sort, { slug: SLUG }))).toEqual({ slug: SLUG });
     }
   });
 
-  it('never moves between sorts, and refuses non-canonical or unsafe numbers', () => {
-    expect(decodeDiscoverCursor('trending', encodeDiscoverCursor('new', { n: 5, slug: SLUG }))).toBeNull();
-    expect(decodeDiscoverCursor('trending', `t05.${SLUG}`)).toBeNull();
-    expect(decodeDiscoverCursor('trending', `t${(2 ** 60).toString(36)}.${SLUG}`)).toBeNull();
-    expect(decodeDiscoverCursor('trending', `t5.${SLUG}x`)).toBeNull();
+  it('is the sort code and the slug, nothing else: no reader count or staff rank rides along', () => {
+    expect(encodeDiscoverCursor('trending', { slug: SLUG })).toBe(`t.${SLUG}`);
+    expect(encodeDiscoverCursor('new', { slug: SLUG })).toBe(`n.${SLUG}`);
+    expect(encodeDiscoverCursor('most_read', { slug: SLUG })).toBe(`r.${SLUG}`);
+    // Even a caller that hands it a score cannot put one in the cursor.
+    expect(encodeDiscoverCursor('trending', { n: 4242, slug: SLUG } as never)).toBe(`t.${SLUG}`);
+  });
+
+  it('never moves between sorts, and refuses anything but <sort>.<slug>', () => {
+    expect(decodeDiscoverCursor('trending', encodeDiscoverCursor('new', { slug: SLUG }))).toBeNull();
+    expect(decodeDiscoverCursor('trending', `t5.${SLUG}`)).toBeNull();
+    expect(decodeDiscoverCursor('trending', `t.${SLUG}x`)).toBeNull();
+    expect(decodeDiscoverCursor('trending', `t.${SLUG}.5`)).toBeNull();
+    expect(decodeDiscoverCursor('trending', `t${SLUG}`)).toBeNull();
     expect(decodeDiscoverCursor('trending', 7)).toBeNull();
   });
 
-  it('becomes the RPC keyset arguments, with every argument named as the SQL declares it', () => {
-    const cursor = encodeDiscoverCursor('most_read', { n: 42, slug: SLUG });
+  it('becomes the RPC keyset argument (the slug only), with every argument named as the SQL declares it', () => {
+    const cursor = encodeDiscoverCursor('most_read', { slug: SLUG });
     expect(discoverListRpcArgs({ sort: 'most_read', limit: 6, q: 'moon', cursor })).toEqual({
-      p_sort: 'most_read', p_q: 'moon', p_rating: null, p_lang: null, p_kind: null, p_length: null, p_week: false, p_limit: 6, p_after_n: 42, p_after_slug: SLUG
+      p_sort: 'most_read', p_q: 'moon', p_rating: null, p_lang: null, p_kind: null, p_length: null, p_week: false, p_limit: 6, p_after_slug: SLUG
     });
     expect(discoverShelvesRpcArgs({ rating: 'kids' })).toEqual({ p_rating: 'kids', p_lang: null, p_kind: null, p_your_lang: null });
   });
@@ -172,7 +180,7 @@ describe('the keyset cursor', () => {
 
 describe('items: the allow-list (RPC → wire)', () => {
   it('maps cover paths to public URLs and keeps every allow-listed field', () => {
-    const page = discoverPageFromRpc({ items: [rpcItem()], next: { n: 42, slug: SLUG } }, 'most_read', opts);
+    const page = discoverPageFromRpc({ items: [rpcItem()], next: { slug: SLUG } }, 'most_read', opts);
     expect(page).toEqual({
       items: [
         {
@@ -192,8 +200,19 @@ describe('items: the allow-list (RPC → wire)', () => {
           creator: { username: 'alice', avatarUrl: `${SUPA}/storage/v1/object/public/comic-assets/avatars/alice.webp` }
         }
       ],
-      next: encodeDiscoverCursor('most_read', { n: 42, slug: SLUG })
+      next: encodeDiscoverCursor('most_read', { slug: SLUG })
     });
+  });
+
+  it('the next cursor carries no number, even when the RPC sends a score with it', () => {
+    // A careless RPC (or the earlier draft of the SQL) adds the ranking score to `next`: it never reaches the wire.
+    for (const sort of ['trending', 'new', 'most_read'] as const) {
+      const page = discoverPageFromRpc({ items: [rpcItem()], next: { n: 4242, score: 77, slug: SLUG } }, sort, opts)!;
+      expect(page.next).toBe(encodeDiscoverCursor(sort, { slug: SLUG }));
+      expect(page.next!.replace(SLUG, '')).toMatch(/^[tnr]\.$/);
+      expect(page.next).not.toContain((4242).toString(36));
+    }
+    expect(discoverPageFromRpc({ items: [], next: { n: 5 } }, 'trending', opts)).toEqual({ items: [] });
   });
 
   it('drops every field outside the allow-list (snapshot, safety, asset key, user id …)', () => {
@@ -257,12 +276,12 @@ describe('items: the allow-list (RPC → wire)', () => {
     expect(discoverPageFromRpc(null, 'trending', opts)).toEqual({ items: [] });
     expect(discoverPageFromRpc({ rows: [] }, 'trending', opts)).toBeNull();
     expect(discoverPageFromRpc([], 'trending', opts)).toBeNull();
-    expect(discoverPageFromRpc({ items: [], next: { n: -1, slug: SLUG } }, 'trending', opts)).toEqual({ items: [] });
+    expect(discoverPageFromRpc({ items: [], next: { slug: 'short' } }, 'trending', opts)).toEqual({ items: [] });
   });
 });
 
 describe('the UI decode (wire → components)', () => {
-  const wire = (): DiscoverPage => discoverPageFromRpc({ items: [rpcItem(), rpcItem({ slug: 'Zz3dEf6hIj9kLm2nP', creator: null, rating: null, themeColor: null })], next: { n: 9, slug: SLUG } }, 'new', opts)!;
+  const wire = (): DiscoverPage => discoverPageFromRpc({ items: [rpcItem(), rpcItem({ slug: 'Zz3dEf6hIj9kLm2nP', creator: null, rating: null, themeColor: null })], next: { slug: SLUG } }, 'new', opts)!;
 
   it('round-trips through JSON exactly', () => {
     const page = wire();

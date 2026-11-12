@@ -5,10 +5,12 @@
 --   * an anonymous caller sees every live PUBLIC comic exactly once across the pages of every sort, and never an
 --     unlisted, unpublished, suspended or held (forced-private) one; every page but the last is full;
 --   * items carry only the allow-listed keys; a byline only where the publication shows its creator; an avatar only
---     from our storage; a cover only under the publication's own pub/<key>/;
+--     from our storage; a cover only under the publication's own pub/<key>/; the cursor (`next`) is the slug alone,
+--     never a reader count or the staff rank;
 --   * the limit is clamped to 1..24; a search is LIKE-escaped (a '%' or '_' finds itself) and finds a username only
 --     where it is shown; rating, kind, language and length filter; unknown inputs answer an empty page;
---   * "this week" windows, the trending order, localized titles, featured picks (window, hold) and the shelves;
+--   * "this week" windows, the trending order, localized titles, featured picks (window, hold) and the shelves (the
+--     Kids-friendly shelf is G/PG only);
 --   * comic_featured and comic_discover_kind are out of the clients' reach; both RPCs are SECURITY DEFINER with
 --     search_path = public; a hold that lands later takes the comic out of the listing.
 \set ON_ERROR_STOP 1
@@ -149,8 +151,10 @@ $$;
 -- ── Catalogue: grants, attributes, RLS ─────────────────────────────────────────────────────────────────────────
 do $$
 begin
-  assert has_function_privilege('anon', 'public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text)', 'execute'),
+  assert has_function_privilege('anon', 'public.comic_discover_list(text, text, text, text, text, text, boolean, integer, text)', 'execute'),
     'anon can list';
+  assert to_regprocedure('public.comic_discover_list(text, text, text, text, text, text, boolean, integer, bigint, text)') is null,
+    'the score-bearing draft signature is gone';
   assert has_function_privilege('anon', 'public.comic_discover_shelves(text, text, text, text)', 'execute'), 'anon can read the shelves';
   assert not has_function_privilege('anon', 'public.comic_discover_kind(jsonb)', 'execute'), 'the kind helper is internal';
   assert not has_function_privilege('authenticated', 'public.comic_discover_kind(jsonb)', 'execute'), 'the kind helper is internal';
@@ -186,7 +190,6 @@ declare
   s text;
   page jsonb;
   seen text[];
-  after_n bigint;
   after_slug text;
   pages integer;
   item jsonb;
@@ -198,11 +201,10 @@ declare
 begin
   foreach s in array array['new', 'trending', 'most_read'] loop
     seen := '{}';
-    after_n := null;
     after_slug := null;
     pages := 0;
     loop
-      page := public.comic_discover_list(p_sort => s, p_limit => 5, p_after_n => after_n, p_after_slug => after_slug);
+      page := public.comic_discover_list(p_sort => s, p_limit => 5, p_after_slug => after_slug);
       pages := pages + 1;
       assert pages < 40, s || ': paging ends';
       for item in select * from jsonb_array_elements(page -> 'items') loop
@@ -218,7 +220,9 @@ begin
       end loop;
       exit when jsonb_typeof(page -> 'next') = 'null';
       assert jsonb_array_length(page -> 'items') = 5, s || ': a page with a next page is full';
-      after_n := (page -> 'next' ->> 'n')::bigint;
+      -- The cursor is the last item's slug and nothing else: no reader count (owner-only stats), no staff rank.
+      assert (select array_agg(k) from jsonb_object_keys(page -> 'next') k) = array['slug'], s || ': next is the slug only, got ' || (page -> 'next')::text;
+      assert page -> 'next' ->> 'slug' = page -> 'items' -> 4 ->> 'slug', s || ': next names the last item';
       after_slug := page -> 'next' ->> 'slug';
     end loop;
     assert cardinality(seen) = (select count(distinct x) from unnest(seen) x), s || ': no comic twice';
@@ -226,7 +230,12 @@ begin
       s || ': exactly the live public comics, got ' || array_to_string(seen, ',');
   end loop;
   page := public.comic_discover_list(p_sort => 'new', p_limit => 24);
-  assert page::text !~ '(user_?id|snapshot|safety|asset_?key|views_count|0000-4000-8000)', 'no internals in a page: ' || page::text;
+  assert page::text !~ '(user_?id|snapshot|safety|asset_?key|views_count|uniques|0000-4000-8000)', 'no internals in a page: ' || page::text;
+  -- Trending's score is the 7-day reads (owner-only stats) and featured's the staff rank: neither leaves the RPC.
+  foreach s in array array['trending', 'most_read', 'featured'] loop
+    page := public.comic_discover_list(p_sort => s, p_limit => 1);
+    assert (select array_agg(k) from jsonb_object_keys(page -> 'next') k) = array['slug'], s || ': next is the slug only';
+  end loop;
 end $$;
 
 -- ── Limit, order, cover, byline, localization ──────────────────────────────────────────────────────────────────
@@ -243,9 +252,9 @@ begin
 
   page := public.comic_discover_list(p_sort => 'trending', p_limit => 3);
   assert page -> 'items' -> 0 ->> 'slug' = 'aSpiceRun00000001' and page -> 'items' -> 1 ->> 'slug' = 'zFill000000000005',
-    'trending: most unique readers in the last 7 days first (old stats and held comics do not count): ' || page::text;
+    'trending: most reads in the last 7 days first (old stats and held comics do not count): ' || page::text;
   page := public.comic_discover_list(p_sort => 'most_read', p_limit => 1);
-  assert page -> 'items' -> 0 ->> 'slug' = 'bMoonManga0000002', 'most read: unique readers ever';
+  assert page -> 'items' -> 0 ->> 'slug' = 'bMoonManga0000002', 'most read: all-time reads (each reader once a day)';
   page := public.comic_discover_list(p_sort => 'new', p_limit => 1);
   assert page -> 'items' -> 0 ->> 'slug' = 'zFill000000000010', 'new: the newest first publication first (ties: slug)';
 
@@ -311,9 +320,20 @@ begin
   assert public.t_slugs(public.comic_discover_list(p_sort => 'random')) = '{}', 'an unknown sort answers nothing';
   assert public.t_slugs(public.comic_discover_list(p_sort => null)) = '{}', 'a null sort answers nothing';
   assert public.t_slugs(public.comic_discover_list(p_lang => 'english!')) = '{}', 'a malformed language answers nothing';
-  assert public.t_slugs(public.comic_discover_list(p_after_n => 5)) = '{}', 'half a cursor answers nothing';
-  assert public.t_slugs(public.comic_discover_list(p_after_n => -1, p_after_slug => 'aSpiceRun00000001')) = '{}', 'a negative cursor answers nothing';
-  assert public.t_slugs(public.comic_discover_list(p_after_n => 1, p_after_slug => 'short')) = '{}', 'a malformed cursor slug answers nothing';
+  assert public.t_slugs(public.comic_discover_list(p_after_slug => 'short')) = '{}', 'a malformed cursor slug answers nothing';
+  assert public.t_slugs(public.comic_discover_list(p_after_slug => 'a%')) = '{}', 'a wildcard cursor answers nothing';
+  -- A cursor whose comic is not listed under the query (held, unlisted, filtered out, unknown): an empty page and no
+  -- next, so the UI starts again; never the whole listing, and never a hint that the comic exists.
+  assert public.comic_discover_list(p_after_slug => 'cHeldStory0000003') = '{"items": [], "next": null}'::jsonb, 'a held cursor: empty';
+  assert public.comic_discover_list(p_after_slug => 'dUnlisted00000004') = '{"items": [], "next": null}'::jsonb, 'an unlisted cursor: empty';
+  assert public.comic_discover_list(p_after_slug => 'qNoSuchComic00009') = '{"items": [], "next": null}'::jsonb, 'an unknown cursor: empty';
+  assert public.comic_discover_list(p_kind => 'manga', p_after_slug => 'aSpiceRun00000001') = '{"items": [], "next": null}'::jsonb,
+    'a cursor outside the filter: empty';
+  -- A listed cursor continues after that comic's CURRENT score.
+  assert public.t_slugs(public.comic_discover_list(p_sort => 'trending', p_week => true, p_after_slug => 'aSpiceRun00000001')) = array['zFill000000000005'],
+    'trending continues after the cursor''s comic';
+  assert public.t_slugs(public.comic_discover_list(p_sort => 'trending', p_week => true, p_after_slug => 'zFill000000000005')) = '{}',
+    'and ends after the last one';
 
   assert public.t_slugs(public.comic_discover_list(p_sort => 'trending', p_week => true)) = array['aSpiceRun00000001', 'zFill000000000005'],
     'trending this week: read in the last 7 days';
@@ -335,6 +355,8 @@ begin
     'featured: in its window and never held';
   assert s -> 'featured' -> 0 ->> 'slug' = 'aSpiceRun00000001', 'featured by rank';
   assert jsonb_array_length(s -> 'kids') = 12, 'a shelf holds 12';
+  assert not exists (select 1 from jsonb_array_elements(s -> 'kids') e where coalesce(e ->> 'rating', '') not in ('G', 'PG')),
+    'the kids shelf is G/PG only (no PG-13, never an unrated comic): ' || (s -> 'kids')::text;
   assert public.t_slugs(jsonb_build_object('items', s -> 'manga')) = array['bMoonManga0000002'], 'manga shelf';
   assert jsonb_array_length(s -> 'webtoon') = 4, 'webtoon shelf';
   assert public.t_slugs(jsonb_build_object('items', s -> 'trending')) = array['aSpiceRun00000001', 'zFill000000000005'], 'trending this week';

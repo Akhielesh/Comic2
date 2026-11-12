@@ -96,7 +96,8 @@ describe('400 on bad parameters, before the database is asked', () => {
     ['an unknown rating', '?rating=all'],
     ['a limit over 24', '?limit=25'],
     ['a 61-character search', `?q=${'x'.repeat(61)}`],
-    ['a cursor from another sort', `?sort=new&cursor=${encodeDiscoverCursor('trending', { n: 4, slug: SLUG })}`],
+    ['a cursor from another sort', `?sort=new&cursor=${encodeDiscoverCursor('trending', { slug: SLUG })}`],
+    ['a cursor carrying a number', `?cursor=t4.${SLUG}`],
     ['an unknown shelves parameter', '/shelves?sort=new']
   ])('%s', async (_label, query) => {
     const rpc = fakeRpc(() => listOk());
@@ -132,13 +133,13 @@ describe('429 from the shared public comic limiter', () => {
 
 describe('200: the listing', () => {
   it('sends the canonical arguments and answers only allow-listed fields', async () => {
-    const rpc = fakeRpc(() => listOk([rpcItem(), rpcItem({ slug: SLUG2, creator: undefined, rating: 'PG-13' })], { n: 3, slug: SLUG2 }));
+    const rpc = fakeRpc(() => listOk([rpcItem(), rpcItem({ slug: SLUG2, creator: undefined, rating: 'PG-13' })], { slug: SLUG2 }));
     const res = (await call(`/api/comic/public/discover?kind=manga&q=${encodeURIComponent(' spice  run ')}&rating=kids&lang=EN&limit=2&week=1`, { rpc: rpc.fn }))!;
     expect(res.status).toBe(200);
     expect(rpc.calls).toEqual([
       {
         name: 'comic_discover_list',
-        args: { p_sort: 'trending', p_q: 'spice run', p_rating: 'kids', p_lang: 'en', p_kind: 'manga', p_length: null, p_week: true, p_limit: 2, p_after_n: null, p_after_slug: null },
+        args: { p_sort: 'trending', p_q: 'spice run', p_rating: 'kids', p_lang: 'en', p_kind: 'manga', p_length: null, p_week: true, p_limit: 2, p_after_slug: null },
         timeoutMs: 4000
       }
     ]);
@@ -157,12 +158,31 @@ describe('200: the listing', () => {
     expect(decodeDiscoverPage(body)).toEqual(body);
   });
 
-  it('pages with the opaque cursor: next goes back as cursor and becomes the keyset', async () => {
-    const rpc = fakeRpc(() => listOk([rpcItem()], { n: 1_762_000_000_123_456, slug: SLUG }));
+  it('pages with the opaque cursor: next goes back as cursor and becomes the keyset (the slug only)', async () => {
+    const rpc = fakeRpc(() => listOk([rpcItem()], { slug: SLUG }));
     const first = (await (await call('/api/comic/public/discover?sort=new', { rpc: rpc.fn }))!.json()) as DiscoverPage;
-    expect(first.next).toBe(encodeDiscoverCursor('new', { n: 1_762_000_000_123_456, slug: SLUG }));
+    expect(first.next).toBe(encodeDiscoverCursor('new', { slug: SLUG }));
     await call(`/api/comic/public/discover?sort=new&cursor=${first.next}`, { rpc: rpc.fn });
-    expect(rpc.calls[1].args).toMatchObject({ p_sort: 'new', p_after_n: 1_762_000_000_123_456, p_after_slug: SLUG });
+    expect(rpc.calls[1].args).toMatchObject({ p_sort: 'new', p_after_slug: SLUG });
+    expect(rpc.calls[1].args).not.toHaveProperty('p_after_n');
+  });
+
+  it('the cursor never carries a reader count: a score in the RPC\'s next stays at the edge', async () => {
+    // Trending (the default sort) ranks by 7-day reads, which are owner-only: anyone may page with limit=1.
+    const rpc = fakeRpc(() => listOk([rpcItem()], { n: 777, slug: SLUG }));
+    const res = (await call('/api/comic/public/discover?limit=1', { rpc: rpc.fn }))!;
+    const text = await res.text();
+    const body = JSON.parse(text) as DiscoverPage;
+    expect(body.next).toBe(`t.${SLUG}`);
+    expect(text).not.toContain('777');
+  });
+
+  it('an avatar from another Supabase project is dropped (only our own storage origin is trusted)', async () => {
+    const rpc = fakeRpc(() =>
+      listOk([rpcItem({ creator: { username: 'erin', avatarUrl: 'https://abcdefghijkl.supabase.co/storage/v1/object/public/comic-assets/avatars/a.webp' } })])
+    );
+    const body = (await (await call('/api/comic/public/discover', { rpc: rpc.fn }))!.json()) as DiscoverPage;
+    expect(body.items[0].creator).toEqual({ username: 'erin' });
   });
 
   it('drops a cover outside pub/ and an avatar outside our storage', async () => {
@@ -265,6 +285,9 @@ describe('the edge cache', () => {
     const again = (await call('/api/comic/public/discover?kind=manga&lang=en&limit=24', { rpc: rpc.fn, cache, origin: 'https://comics.dreamstreamstudio.ai' }))!;
     expect(again.headers.get('x-discover-cache')).toBe('hit');
     expect(again.headers.get('access-control-allow-origin')).toBe('https://comics.dreamstreamstudio.ai');
+    // A hit is public and cacheable with a per-request ACAO: without Vary a cache could replay one site's ACAO to another.
+    expect(again.headers.get('vary')).toBe('Origin');
+    expect(again.headers.get('cache-control')).toBe('public, max-age=30, s-maxage=30');
     expect(await again.json()).toEqual(await first.json());
     const head = (await call('/api/comic/public/discover?kind=manga&lang=en', { method: 'HEAD', rpc: rpc.fn, cache }))!;
     expect(head.status).toBe(200);
