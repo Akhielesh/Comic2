@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PublicationOwnerView } from '../../../shared/comic/publication';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
+import { historyLayers, layerKey, openLayers, resetBackStack } from '../mobile/backStack';
 import { qrMatrix, QrCode } from './QrCode';
 import { ShareSheet, sheetLayout } from './ShareSheet';
 import { ShareButton } from './ShareButton';
@@ -56,10 +57,14 @@ const studioWith = (v: PublicationOwnerView | null) => {
   return makeFakeStudio({ doc, publication: v });
 };
 
-beforeEach(() => setViewport(false));
+beforeEach(() => {
+  setViewport(false);
+  resetBackStack();
+});
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  resetBackStack();
 });
 
 describe('ShareSheet', () => {
@@ -543,6 +548,59 @@ describe('ShareSheet: honest while the comic is being checked (AH-1)', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
     expect(screen.getByText('Draw at least one page to publish.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+  });
+});
+
+// AH-1 (N-h): the sheet is a back layer, so the browser's or the phone's Back closes it instead of leaving the app.
+describe('ShareSheet: Back closes the sheet (AH-1)', () => {
+  /** Lets a history traversal land (jsdom delivers popstate on a later task). */
+  const settle = async () => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+  };
+  /** A fresh entry to open the sheet from: it is the last one, so the next push adds exactly one. */
+  const openFrom = () => {
+    const opening = { __shareBackTest: Math.random() };
+    window.history.pushState(opening, '');
+    return opening;
+  };
+
+  it('opening pushes ONE history entry, and Back closes the sheet and lands on the page it was opened from', async () => {
+    await settle();
+    const opening = openFrom();
+    const before = window.history.length;
+    render(<ShareButton studio={studioWith(view())} />);
+    expect(window.history.length).toBe(before); // a closed sheet owns no entry
+    fireEvent.click(screen.getByRole('button', { name: /Share \(Link only\)/ }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(window.history.length).toBe(before + 1);
+    expect(historyLayers().map(layerKey)).toEqual(['share-sheet']);
+    expect(openLayers()).toEqual(['share-sheet']);
+    await act(async () => {
+      window.history.back();
+    });
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(window.history.state).toEqual(opening); // still inside the app, on the entry under the sheet
+    expect(openLayers()).toEqual([]);
+  });
+
+  it('closing from the sheet (Close, Esc, the scrim) takes its entry with it, so a later Back never lands on a dead one', async () => {
+    await settle();
+    const opening = openFrom();
+    const before = window.history.length;
+    render(<ShareButton studio={studioWith(view())} />);
+    fireEvent.click(screen.getByRole('button', { name: /Share \(Link only\)/ }));
+    expect(window.history.length).toBe(before + 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(window.history.state).toEqual(opening);
+    // Opening it again reuses the freed slot: the history never fills with dead entries.
+    fireEvent.click(screen.getByRole('button', { name: /Share \(Link only\)/ }));
+    expect(window.history.length).toBe(before + 1);
+    expect(historyLayers().map(layerKey)).toEqual(['share-sheet']);
   });
 });
 

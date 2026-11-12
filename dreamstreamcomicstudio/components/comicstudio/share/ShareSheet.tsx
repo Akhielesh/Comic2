@@ -18,6 +18,7 @@ import { publishComic, regeneratePublicationLink, unpublishComic, updatePublicat
 import type { StudioController } from '../types';
 import { DIALOG_TITLE, FOCUS_RING, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
+import { useBackLayer } from '../mobile/backStack';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
 import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
@@ -78,6 +79,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const hintId = useId();
+  // The browser's or the phone's Back closes the sheet (one history entry while it is open) instead of leaving the app.
+  useBackLayer(open, onClose, 'share-sheet');
 
   // Layout follows the viewport (rotation, foldable posture, window resize).
   useLayoutEffect(() => {
