@@ -148,6 +148,7 @@ describe('ToastHost', () => {
     expect(el.parentElement).toBe(document.body); // portalled: no sheet transform can move or clip it
     expectClasses(el, TOAST_HOST, Z.toast);
     expect(el.className).toContain('bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)]');
+    expect(el.className).toContain('md:bottom-[calc(var(--sa-bottom-eff,0px)+24px)]');
     // The host itself is no live region (an error card inside it would nest one in another).
     expect(el).not.toHaveAttribute('role');
     expect(el).not.toHaveAttribute('aria-live');
@@ -167,6 +168,8 @@ describe('ToastHost', () => {
     const css = out.css.replace(/\s+/g, ' ');
     expect(css).toMatch(/bottom: calc\(var\(--tabbar-h,\s?56px\) \+ var\(--sa-bottom-eff,\s?0px\) \+ 12px\)/);
     expect(css).toContain('z-index: var(--ds-z-toast)');
+    // From md no surface draws a bottom tab bar: no 56 px gap under the toast on tablets and desktops.
+    expect(css).toMatch(/@media \(min-width: 768px\) \{ \.md\\:bottom-\\\[[^{]+\{ bottom: calc\(var\(--sa-bottom-eff,\s?0px\) \+ 24px\) \}/);
   });
 
   it('renders the Atlas card: TOAST, the status edge, the icon ink, title and message, the time-left bar', () => {

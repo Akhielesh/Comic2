@@ -13,7 +13,8 @@
  * whose status hue is only its 4 px edge, its icon and its time-left bar; a title that says what happened (two lines
  * at most) and an optional message (three) and action. Its clock runs while the toast is left alone and holds while
  * it is hovered or focused (`data-paused`, which also holds the time-left bar); Esc or the close button dismisses it.
- * It sits above the phone tab bar and the safe area (`--tabbar-h` + `--sa-bottom-eff`), on the toast layer, centred
+ * It sits above the phone tab bar and the safe area (`--tabbar-h` + `--sa-bottom-eff`; from md, where no tab bar is
+ * drawn, 24 px above the bottom edge and the safe area), on the toast layer, centred
  * and at most 420 px wide, so it never covers the tab bar at 320 px. A second mounted host renders nothing, so a
  * scene or a test can mount one without doubling the app's. Under reduced motion it neither enters nor leaves with
  * an animation (the hook drops the classes; the skin's CSS stops them as well). Timers exist only while a toast is
@@ -211,8 +212,12 @@ export function resetToastsForTests(): void {
 // The card and the host
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Where the host sits: above the phone tab bar and the safe area, on the toast layer, centred. */
-export const TOAST_HOST = `pointer-events-none fixed inset-x-0 ${Z.toast} flex flex-col items-center px-4 bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)]`;
+/**
+ * Where the host sits: above the phone tab bar and the safe area, on the toast layer, centred. From md (768 px) no
+ * surface draws a bottom tab bar (the studio's MobileTabBar is the < 720 px 'single' layout), so the host drops the
+ * tab-bar offset there and sits 24 px above the bottom edge and the safe area.
+ */
+export const TOAST_HOST = `pointer-events-none fixed inset-x-0 ${Z.toast} flex flex-col items-center px-4 bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)] md:bottom-[calc(var(--sa-bottom-eff,0px)+24px)]`;
 /** The host's polite status region (always in the page): ordinary toasts land in it. */
 export const TOAST_STATUS = 'flex w-full justify-center';
 /** The card's width and its content column. */
