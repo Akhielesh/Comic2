@@ -155,6 +155,7 @@ colour as the only signal; hues as status or status as series; inside the comic 
 | Highlight one against the rest | the one in `--ds-spark`, the rest in `--ds-chart-4` |
 | Categorical identity, 2–5 series | `--ds-hue-1…5` in fixed order, a legend always; ≤ 4 series also labelled directly; "Other" past five |
 | Good / bad state | the Atlas status tokens, an icon and words; never mixed with hues in one chart |
+| Spend / price charts (any series count) | ink steps `--ds-chart-1 → 5`, never the spark family: light `--ds-hue-1` is the spark's own colour, and colour never nudges spending. `StackedBars palette="ink"` (Insights spend by kind); "Other" past five is an outline in `--ds-chart-3` |
 
 **Guards.**
 - `tests/config/tokenContrast.test.ts` ("the colour layer … in all six contexts"): spark text and the label on a

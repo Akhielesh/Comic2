@@ -48,6 +48,17 @@ describe('pickDefaultPreset (the no-style render fallback)', () => {
     expect(pickDefaultPreset(indiana).id).toBe(pickDefaultPreset(ohio).id);
     expect(rankStylePresets(indiana).map((p) => p.id)).toEqual(rankStylePresets(ohio).map((p) => p.id));
   });
+
+  // On these genres a substring match ('indiana' contains 'indian') lifts Indian miniature to the
+  // top pick, so the paid page renders would be drawn in the wrong look (ST-4 #7(b)).
+  it("an 'Indiana …' premise on a myth / sci-fi / fable brief picks what an 'Ohio …' one does", () => {
+    for (const genre of ['mythology', 'sci-fi', 'fable']) {
+      const a = pickDefaultPreset(docWith({ genre, premise: 'Indiana, 1931: a river town remembers its old gods.' })).id;
+      const b = pickDefaultPreset(docWith({ genre, premise: 'Ohio, 1931: a river town remembers its old gods.' })).id;
+      expect(a, genre).toBe(b);
+      expect(a, genre).not.toBe('indian-miniature');
+    }
+  });
 });
 
 describe('rankStylePresets (the writer fill-ins)', () => {

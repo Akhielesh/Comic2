@@ -218,6 +218,7 @@ const ScrollPage: React.FC<{
           srcWidth={(w) => slotImageSource(item, w, img)?.url}
           loading={eager ? 'eager' : 'lazy'}
           develop={false}
+          stillLoading
           paper={paper}
           onImageError={onImageError}
         />
@@ -230,7 +231,8 @@ const ScrollPage: React.FC<{
       {url ? (
         <img src={url} alt={`Cover of ${doc.cover.title || doc.brief.title}`} loading={eager ? 'eager' : 'lazy'} className="absolute inset-0 h-full w-full object-contain" onError={onImageError} />
       ) : (
-        <div className="studio-shimmer absolute inset-0" role="img" aria-label="Loading cover" />
+        // Still paper, never a shimmer: the reader animates transform and opacity only.
+        <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: 'var(--ds-reader-paper-back)' }} />
       )}
     </div>
   );

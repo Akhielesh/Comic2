@@ -9,14 +9,15 @@ from is in `docs/features/comic-studio-v4.md` (the Style panel). The env vars ar
 ## Admin spend: key, caps, provenance (Program 3 ST-A)
 
 - Library builds and Model Lab spend only on DREAMSTREAMSTUDIO_MODELTEST (OpenRouter, never the platform Gemini key).
-  If it is unset, nothing can be built. COMIC_ADMIN_SPEND_KEY=platform is the escape hatch
+  If it is unset, nothing can be built. COMIC_ADMIN_SPEND_KEY=platform (any case, trimmed) is the escape hatch
   (`server/src/comic/library/adminSpend.ts`; the key is referred to by name only, and its value is never logged,
   returned or stored).
 - Each Build/Regenerate click first checks COMIC_LIBRARY_MONTHLY_CAP_USD ($20), then makes one GET /api/v1/key. It
   refuses below the run budget, warns on an unlimited key, and refuses if the check can't be read. Nothing is checked
   on page load or on a timer (`library/keyBudget.ts`).
-- A build is pinned to the key it was checked on; flipping COMIC_ADMIN_SPEND_KEY mid-run stops its next step (cancel
-  and start again).
+- A build is pinned to the key setting it was checked on (COMIC_ADMIN_SPEND_KEY); flipping it mid-run stops its next step
+  (cancel and start again). After rotating DREAMSTREAMSTUDIO_MODELTEST, cancel any running build and start a new one:
+  the setting is unchanged, so a running build would keep stepping on the new key without a new preflight.
 - Regenerate budgets just that one image (at least $0.50).
 - Every attempt is a comic_image_calls row (admin user_id, kind 'library'). Lab rows are 'lab_*'. Both are excluded
   from users' model stats.

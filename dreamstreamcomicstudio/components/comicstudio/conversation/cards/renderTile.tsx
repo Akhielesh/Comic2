@@ -320,7 +320,10 @@ export interface RenderThumbProps {
   sizes?: string;
   /** `url` is a full-size original (art stored before variants): marked `data-heavy-img` for the QA image budget. */
   heavy?: boolean;
-  /** Friendly model name shown while drawing ("Drawing · 12s · usually ~20s", then the model). */
+  /**
+   * Friendly model name, named once per view: only the live tile (the page's first drawing tile, the one that
+   * pulses) prints it under its time. A queued tile or a stuck one adds no lines under itself.
+   */
   model?: string;
   /** The model's usual seconds per image. */
   typicalSec?: number;
@@ -381,6 +384,11 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
   // The small file can't be signed (never stored or broken): say so, still, instead of a shimmer that never ends.
   const noPreview = !!unavailable && !blocked && !!render?.asset?.path && !url && (status === 'ready' || status === 'stale');
   const iconOnly = compact ?? aspectValue(aspect) >= 1;
+  // Under the tile, only a tile that is drawing normally says how long (its pill already says Queued or Still
+  // drawing), and only the live one names the model: every other tile adds no line, so the transcript is no longer.
+  const timeLine = status === 'rendering' && !stuck ? [progress?.elapsed, progress?.hint].filter(Boolean).join(' · ') : '';
+  const modelLine = status === 'rendering' && !stuck && pulsing ? model : undefined;
+  const pillLabel = status === 'queued' ? 'Queued' : stuck ? 'Still drawing' : 'Drawing…';
   const frame = cx(
     'relative w-full overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)]',
     selected && 'ring-2 ring-[var(--ds-accent)] ring-offset-1 ring-offset-[var(--ds-surface)]'
@@ -479,7 +487,9 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
             ) : (
               <span data-still-dot="" className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" aria-hidden />
             )}
-            <span className="min-w-0 truncate">{status === 'queued' ? 'Queued' : stuck ? 'Still drawing' : 'Drawing…'}</span>
+            {/* A compact tile (three style boards side by side, ~64 px on a phone) keeps the dot and speaks the word:
+                the pill would only read "Sti…". */}
+            <span className={compact ? 'sr-only' : 'min-w-0 truncate'}>{pillLabel}</span>
           </span>
         )}
         {progress?.bar && pulsing && <DrawingBar />}
@@ -501,11 +511,11 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
       <span className="mt-1 block truncate text-[11px] font-medium text-[var(--ds-ink)]" title={label}>
         {label}
       </span>
-      {busy && (progress?.elapsed || progress?.hint || model) && (
+      {(timeLine || modelLine) && (
         // Wraps instead of truncating: three style tiles side by side are ~64 px wide on a phone.
         <span data-tile-progress="" className="block min-w-0 text-[10.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
-          {(progress?.elapsed || progress?.hint) && <span className="block tabular-nums">{[progress?.elapsed, progress?.hint].filter(Boolean).join(' · ')}</span>}
-          {model && <span className="block">{model}</span>}
+          {timeLine && <span className="block tabular-nums">{timeLine}</span>}
+          {modelLine && <span className="block">{modelLine}</span>}
         </span>
       )}
       {stuck && recheck && (

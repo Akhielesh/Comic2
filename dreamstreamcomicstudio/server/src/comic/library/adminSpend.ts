@@ -38,7 +38,7 @@ const read = (env: Env, ...names: string[]): string => {
   return '';
 };
 
-/** Which key admin spend runs on: 'platform' only when COMIC_ADMIN_SPEND_KEY says exactly that. */
+/** Which key admin spend runs on: 'platform' only when COMIC_ADMIN_SPEND_KEY is platform (any case, surrounding spaces trimmed). */
 export const adminSpendMode = (env: Env = process.env): AdminSpendKey => (read(env, ADMIN_SPEND_MODE_ENV).toLowerCase() === 'platform' ? 'platform' : 'modeltest');
 
 /**

@@ -9,6 +9,8 @@ import { createFakeIndexedDb } from '../tests/fakeIndexedDb';
 import type { FakeChatSyncCloud } from './chatSync.testkit';
 
 const A = '11111111-1111-4111-8111-111111111111';
+/** Another account that signs in on the same device. */
+const B = '22222222-2222-4222-8222-222222222222';
 
 const cloud = vi.hoisted(() => ({ user: null, rows: [], upserts: [], selects: [] }) as unknown as FakeChatSyncCloud);
 
@@ -22,7 +24,7 @@ vi.stubGlobal('indexedDB', idb);
 afterAll(() => vi.unstubAllGlobals());
 
 import { createEmptySession, listChatSessions, saveChatSession, setChatSessionUser, syncFromCloud, type ChatSession } from './chatStorage';
-import { BODY_CHUNK, MANIFEST_PAGE, pullManifest, pushSession, readSyncBase, removeRemote, syncDecision } from './chatSync';
+import { BODY_CHUNK, MANIFEST_PAGE, pullBodies, pullManifest, pushSession, readSyncBase, removeRemote, syncDecision } from './chatSync';
 import { isBodySelect } from './chatSync.testkit';
 import { setLocalOwner } from './localOwner';
 
@@ -243,5 +245,73 @@ describe('light chat sync: a manifest, then only what changed', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('the account boundary: every read is the signed-in account’s, and the sync base is per account', () => {
+  /** A row in the cloud that belongs to `owner` (as that account's own device wrote it). */
+  const cloudRow = (owner: string, title: string, at: number, id?: string) => {
+    const s = { ...createEmptySession(), ...(id ? { id } : {}), title, updatedAt: at, ownerUserId: owner };
+    cloud.rows = [...cloud.rows, {
+      key: `session:${s.id}`, user_id: owner, kind: 'session', data: s as unknown as Record<string, unknown>, updated_at: new Date(at).toISOString()
+    }];
+    return s;
+  };
+
+  it("signed in as A, the manifest and the bodies hold only A's rows, and a sync writes none of B's", async () => {
+    const mine = cloudRow(A, 'A’s chat', T0);
+    const theirs = cloudRow(B, 'B’s chat', T0 + 1);
+    const manifest = await pullManifest();
+    expect(manifest?.userId).toBe(A);
+    expect(manifest?.entries.map((e) => e.key)).toEqual([`session:${mine.id}`]);
+    // Even asked for B's key by name, the body read is A's rows only.
+    const bodies = await pullBodies(A, [`session:${theirs.id}`]);
+    expect(bodies?.sessions).toEqual([]);
+    expect(bodies?.projects).toEqual([]);
+    await syncFromCloud();
+    await flush();
+    const local = await byTitle();
+    expect(local[mine.id]).toBe('A’s chat');
+    expect(local[theirs.id]).toBeUndefined();
+    expect(Object.values(local)).not.toContain('B’s chat');
+  });
+
+  it("a manifest paged past the server cap is still A's rows only", async () => {
+    // B's keys sort first, so a page that forgot the account would start with them.
+    const a1 = cloudRow(A, 'A one', T0, 'zz-a1');
+    const a2 = cloudRow(A, 'A two', T0 + 1, 'zz-a2');
+    cloudRow(B, 'B one', T0 + 2, 'aa-b1');
+    cloudRow(B, 'B two', T0 + 3, 'aa-b2');
+    cloud.maxRows = 1; // every answer holds one row: the manifest has to page
+    try {
+      const manifest = await pullManifest();
+      expect(manifest?.entries.map((e) => e.key).sort()).toEqual([`session:${a1.id}`, `session:${a2.id}`].sort());
+      expect(manifestSelects().length).toBeGreaterThan(1);
+    } finally {
+      cloud.maxRows = undefined;
+    }
+  });
+
+  it('A then B on one device: two sync bases, one per account, that never share a key', async () => {
+    const aRow = cloudRow(A, 'A’s chat', T0);
+    const bRow = cloudRow(B, 'B’s chat', T0 + 1);
+    await syncFromCloud();
+    await flush();
+    // B signs in on the same device.
+    cloud.user = B;
+    setLocalOwner(B);
+    await syncFromCloud();
+    await flush();
+    const baseA = readSyncBase(A);
+    const baseB = readSyncBase(B);
+    expect(Object.keys(baseA)).toEqual([`session:${aRow.id}`]);
+    expect(Object.keys(baseB)).toEqual([`session:${bRow.id}`]);
+    expect(Object.keys(baseA).filter((k) => k in baseB)).toEqual([]);
+    const baseKeys = Object.keys(localStorage).filter((k) => k.startsWith('dreamstream_chat_sync_base')).sort();
+    expect(baseKeys).toEqual([`dreamstream_chat_sync_base:${A}`, `dreamstream_chat_sync_base:${B}`].sort());
+    // B's device copy holds B's chat, never A's.
+    const local = await byTitle();
+    expect(local[bRow.id]).toBe('B’s chat');
+    expect(local[aRow.id]).toBeUndefined();
   });
 });

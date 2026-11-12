@@ -289,8 +289,15 @@ reset (§5). Every other entry is byte-identical. The rises, each reviewed:
   the colour layer's `create` button and making dot as specimens, in both panels (CL-0). The gallery is a spark
   specimen, so the layout smoke's one-spark check skips it.
 - Transcript screens up by one in six entries: `studio-busy@desk-*` 11 → 12, `studio-busy@phone-*` 18 → 19 and
-  `editor-pro@phone-*` 20 → 21. A reset on the merges alone, before any wave note, measures the same, so the merged
-  packages' transcript content crossed one screen boundary each. Winning the screen back is for the C9 / DC-1 pass.
+  `editor-pro@phone-*` 20 → 21. The S2a review traced it to one package, PF-2: its tile progress block
+  (`conversation/cards/renderTile.tsx`) printed lines under every busy tile, the model under a queued tile, and
+  "much longer than usual" plus the model under a stuck one (whose pill already said "Still drawing"). On the
+  `heist-12p` busy scene that grew the pages-and-cover grid and the "Pick a style" card (288 → 334 px at 320) and
+  crossed one screen boundary in each entry. It was a regression, not an accepted design rise, and it is fixed: only
+  a tile drawing normally says how long, only the live tile names the model (once per view, like the one live pulse),
+  queued and stuck tiles add no line, and a compact style tile keeps just the dot in its pill (it read "Sti…").
+  `renderTile.test.tsx` pins each of these. The loop then ran with `UPDATE_BASELINES=1`, lowering only, and all six
+  entries came back to 11 / 18 / 20. So neither S1's base content nor any other S2a package crossed a boundary.
 - The pulse guard: the chat tiles' raw `animate-pulse` is gone (PF-2), so `pulse.json`'s `animate-pulse` total is 32.
   The busy studio's live pulses did not change (3 desk, 2 phone).
 

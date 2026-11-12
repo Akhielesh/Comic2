@@ -12,6 +12,8 @@ import path from 'node:path';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Collapse, COLLAPSE_CLOSED, COLLAPSE_OPEN, CountUp, COUNT_UP_MS, InViewPause, LiveDot, PRESENCE_EXIT_MS, useInViewPause } from './index';
+import * as ds from './index';
+import * as reveal from './useImageReveal';
 
 type ObserverCallback = (entries: Array<Pick<IntersectionObserverEntry, 'target' | 'isIntersecting'>>) => void;
 const observers: Array<{ callback: ObserverCallback; targets: Set<Element>; options?: IntersectionObserverInit }> = [];
@@ -257,5 +259,30 @@ describe('Collapse', () => {
     expect(css).toMatch(/--ds-motion-exit:\s*160ms;/);
     expect(PRESENCE_EXIT_MS).toBe(160);
     expect(COLLAPSE_CLOSED).toContain('duration-[var(--ds-motion-exit)]');
+  });
+});
+
+describe('the decode gate through the components/ds barrel', () => {
+  it('useImageReveal and its helpers come through components/ds (MO-1 #1)', () => {
+    const names = [
+      'useImageReveal',
+      'decodeImage',
+      'allowFilterEffects',
+      'canPlayEntrances',
+      'isCoarsePointer',
+      'isLowPowerDevice',
+      'motionEase',
+      'motionMs',
+      'parseMotionMs',
+      'playEntrance',
+      'readRevealEnvironment',
+      'revealTokenFallbacks',
+      'REVEAL_DECODE_TIMEOUT_MS',
+      'REVEAL_FILTER_MAX_WIDTH_PX'
+    ] as const;
+    for (const k of names) {
+      expect((reveal as Record<string, unknown>)[k], k).toBeDefined();
+      expect((ds as Record<string, unknown>)[k], k).toBe((reveal as Record<string, unknown>)[k]);
+    }
   });
 });

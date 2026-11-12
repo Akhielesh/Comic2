@@ -11,6 +11,10 @@ reader tokens is in `docs/design/design-system.md` ("Reader tokens").
   reads it once per mount. "Fade" is 280 ms everywhere (`--ds-reader-turn-fade`).
 - Per-frame writes are transform and opacity only: the spotlight is four shutters (`GuidedCamera.tsx`), the edges use
   `translateX`, and progress uses `scaleX`.
+- Loading states are still paper, never the `studio-shimmer` (it animates `background-position`, a full-box repaint
+  every frame): the immersive cover and pages (`ReaderSlot.tsx`, `ComicPageView stillLoading`) show the toned paper,
+  and the classic reader's scroll view (`ComicReaderView.tsx`) the reader paper. `readerGpu.test.tsx` and
+  `ComicReaderView.test.tsx` fail if a shimmer comes back under the reader.
 - A page shows its source, then the cached original, then the fit variant, then the 480w stand-in, and cross-fades in
   over 120 ms (`--ds-reader-standin-swap`). A page with no stand-in (pages stored before variants) stands on the reader
   paper washed 14 % with the nearest cached page palette (`PAPER_TONE_ALPHA`, `ReaderSlot.tsx`), never white.

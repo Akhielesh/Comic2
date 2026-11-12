@@ -56,6 +56,20 @@ describe('Trends tab', () => {
     expect(within(screen.getByRole('list', { name: 'Legend' })).getByText('Pages')).toBeInTheDocument();
   });
 
+  it('the Pro spend chart is drawn in ink steps: no hue, never the spark (light hue 1 is the spark itself)', async () => {
+    getMock.mockResolvedValue(trends());
+    await mount(true);
+    const chart = screen.getByRole('img', { name: 'Spent on this comic over time, by kind' });
+    const rects = [...chart.querySelectorAll('rect')];
+    expect(rects.length).toBeGreaterThan(0);
+    // The first series is Pages: the darkest ink step, not the first hue.
+    expect(rects[0].getAttribute('class')).toBe('fill-[var(--ds-chart-1)]');
+    const block = chart.parentElement as HTMLElement;
+    expect(block.innerHTML).not.toMatch(/--ds-(hue|spark)/);
+    const pages = within(screen.getByRole('list', { name: 'Legend' })).getByText('Pages').previousElementSibling;
+    expect(pages?.className).toContain('bg-[var(--ds-chart-1)]');
+  });
+
   it('§4.6: T7 below 5 users is "Not enough data yet"; T3 shows no line before the first fetch; no uptime is the copy', async () => {
     getMock.mockResolvedValue(trends());
     const { container } = await mount();

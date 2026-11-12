@@ -55,6 +55,7 @@ const ComicSpend: React.FC<{ doc: ComicDoc; money: InsightsMoney; pro: boolean }
           }))}
           series={SERIES_GROUPS}
           format={(usd) => money.spent(usd)}
+          palette="ink"
         />
       ) : (
         <Sparkline values={series.cumulative} label={`Spent on this comic over time: ${money.spent(series.cumulative[series.cumulative.length - 1] ?? 0)} so far`} />

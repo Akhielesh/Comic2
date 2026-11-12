@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Download, ThumbsUp, ThumbsDown, Info, RefreshCw, Edit2, Trash2, Check, Globe, Lock } from 'lucide-react';
 import JSZip from 'jszip';
 import { Project, ProjectComment, AppStep, GenerationArtifact, ImageTag } from '../../types';
@@ -134,7 +134,8 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   const [sizeUpdatedAt, setSizeUpdatedAt] = useState<number | null>(null);
   const [sizeSourceUpdatedAt, setSizeSourceUpdatedAt] = useState<number | null>(null);
   const [sizeStatus, setSizeStatus] = useState<'latest' | 'stale' | 'updating'>('stale');
-  const [didAutoRefreshSizeForSnapshot, setDidAutoRefreshSizeForSnapshot] = useState(false);
+  /** The project snapshot (`id:updatedAt`) the automatic size refresh last ran for: once per snapshot. */
+  const autoRefreshedFor = useRef<string | null>(null);
   const hasExport = !!exportData?.project;
   const [artifacts, setArtifacts] = useState<GenerationArtifact[]>([]);
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
@@ -768,10 +769,6 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   }, [artifacts, project.id, project.state, project.state.imageTags, project.state.imageTagCounters, onUpdateProject]);
 
   useEffect(() => {
-    setDidAutoRefreshSizeForSnapshot(false);
-  }, [project.id, project.updatedAt]);
-
-  useEffect(() => {
     if (!sizeSourceUpdatedAt) {
       setSizeStatus('stale');
       return;
@@ -783,14 +780,19 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     }
   }, [project.updatedAt, sizeSourceUpdatedAt]);
 
+  // One automatic size refresh per project snapshot, 1.2 s after the sizes go stale. The snapshot is
+  // marked only when the timer fires: marking it in state before the timer re-rendered the effect, whose
+  // cleanup cancelled the timer, so the refresh never ran. It sizes the ZIP; the PDF only once an export
+  // loaded the PDF tools (D6, PF-1 #2).
   useEffect(() => {
-    if (sizeStatus !== 'stale' || didAutoRefreshSizeForSnapshot) return;
-    setDidAutoRefreshSizeForSnapshot(true);
+    const snapshot = `${project.id}:${project.updatedAt}`;
+    if (sizeStatus !== 'stale' || autoRefreshedFor.current === snapshot) return;
     const handle = setTimeout(() => {
+      autoRefreshedFor.current = snapshot;
       void handleRefreshSizes({ auto: true });
     }, 1200);
     return () => clearTimeout(handle);
-  }, [sizeStatus, project.updatedAt, didAutoRefreshSizeForSnapshot]);
+  }, [sizeStatus, project.id, project.updatedAt]);
 
   return (
     <ModalPortal>

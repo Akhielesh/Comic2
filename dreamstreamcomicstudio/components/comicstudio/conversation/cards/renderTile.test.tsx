@@ -325,21 +325,36 @@ describe('drawing tiles (styles M4)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('a render far past its usual time stops the clock and says so', () => {
+  it('a render far past its usual time stops the clock and says so in its pill, with no lines under the tile', () => {
     const doc = pageDoc('rendering');
-    render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
     act(() => void vi.advanceTimersByTime(201 * TILE_CLOCK_MS));
-    expect(screen.getByText('much longer than usual')).toBeInTheDocument();
+    expect(screen.getByText('Still drawing')).toBeInTheDocument();
+    expect(screen.queryByText('much longer than usual')).toBeNull();
+    expect(container.querySelector('[data-tile-progress]')).toBeNull();
+    expect(screen.queryByText(jobModel(doc, 'page').nickname)).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('a queued tile names the model and runs no clock', () => {
+  it('a queued tile adds no lines under itself (no time, no model) and runs no clock', () => {
     const doc = pageDoc('queued');
-    render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const { container } = render(<CardRenderer card={rendersCard(doc, 1)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
     expect(screen.getByText('Queued')).toBeInTheDocument();
-    expect(screen.getByText(jobModel(doc, 'page').nickname)).toBeInTheDocument();
+    expect(container.querySelector('[data-tile-progress]')).toBeNull();
+    expect(screen.queryByText(jobModel(doc, 'page').nickname)).toBeNull();
     expect(screen.queryByText(/usually ~/)).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the model is named once per view: on the live drawing tile only, never on the others (declutter C7)', () => {
+    const doc = pageDoc('rendering', 3);
+    const { container } = render(<CardRenderer card={rendersCard(doc, 3)} studio={makeFakeStudio({ doc, urlFor: signer() })} />);
+    const nickname = jobModel(doc, 'page').nickname;
+    expect(screen.getAllByText(nickname)).toHaveLength(1);
+    // Every drawing tile still says how long it has taken.
+    expect(container.querySelectorAll('[data-tile-progress]')).toHaveLength(3);
+    const live = container.querySelector('.ds-live-dot')?.closest('.w-full.min-w-0');
+    expect(live?.textContent).toContain(nickname);
   });
 
   it('style boards drawing in the style card show the same progress', () => {
@@ -433,7 +448,9 @@ describe('a stuck drawing tile (far past its usual time)', () => {
       );
       expect(screen.getByText('Still drawing')).toBeInTheDocument();
       expect(screen.queryByText('Drawing…')).toBeNull();
-      expect(screen.getByText('much longer than usual')).toBeInTheDocument();
+      // The pill and Check again already say it: no "much longer than usual" line, no model, nothing under the tile.
+      expect(screen.queryByText('much longer than usual')).toBeNull();
+      expect(container.querySelector('[data-tile-progress]')).toBeNull();
       expect(container.querySelector('.ds-live-dot')).toBeNull();
       expect(container.querySelector('[data-still-dot]')).not.toBeNull();
       expect(container.querySelector('[data-progress-bar]')).toBeNull();
@@ -467,6 +484,20 @@ describe('a stuck drawing tile (far past its usual time)', () => {
     } finally {
       off();
     }
+  });
+
+  it('a compact tile (a ~64 px style board) keeps only the dot in its pill and speaks the word', () => {
+    vi.setSystemTime(T0 + 201_000);
+    const { container } = render(<RenderThumb render={{ status: 'rendering', history: [], updatedAt: T0 }} label="Pastel" aspect="4 / 5" typicalSec={20} model="Test model" compact />);
+    const word = screen.getByText('Still drawing');
+    expect(word).toHaveClass('sr-only');
+    expect(word).not.toHaveClass('truncate');
+    expect(container.querySelector('[data-still-dot]')).not.toBeNull();
+    expect(container.querySelector('[data-tile-progress]')).toBeNull();
+    // A wide tile keeps its word visible.
+    vi.setSystemTime(T0 + 3_000);
+    render(<RenderThumb render={{ status: 'queued', history: [] }} label="Page 3" aspect="2 / 3" />);
+    expect(screen.getByText('Queued')).not.toHaveClass('sr-only');
   });
 
   it('without an open studio there is nothing to re-check: no dead button', () => {

@@ -223,6 +223,7 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 imageUrl={image.src}
                 loading="eager"
                 develop={false}
+                stillLoading
                 letteringAriaHidden={letteringAriaHidden}
                 visibleLineIds={visibleLineIds}
                 paper={paper}
@@ -235,7 +236,9 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 {image.src ? (
                   <img src={image.src} alt={`Cover of ${doc.brief.title}`} draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" onError={onImageError} />
                 ) : (
-                  <div className="studio-shimmer absolute inset-0" role="img" aria-label="Loading cover" />
+                  // Still toned paper, like a page with nothing to show yet: the reader animates transform and opacity
+                  // only, and a shimmer repaints the whole cover box every frame (background-position).
+                  <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: bare }} />
                 )}
                 {paper && image.src && <div className="ds-reader-paper" aria-hidden />}
                 <CoverTitleLayer doc={doc} aspect={contentAspect} />

@@ -185,6 +185,22 @@ describe('reduced motion: nothing keeps animating after a turn settles', () => {
   });
 });
 
+describe('loading states are still paper, never a shimmer (transform / opacity only)', () => {
+  it('a cover and pages that have not arrived show the toned paper; no studio-shimmer under [data-reader-root]', async () => {
+    hang = true; // nothing ever arrives: every slot stays in its loading state
+    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} onExit={() => undefined} />);
+    const cover = await screen.findByTestId('reader-cover');
+    const loading = screen.getByRole('img', { name: 'Loading cover' });
+    expect(cover.contains(loading)).toBe(true);
+    expect(loading.className).not.toContain('studio-shimmer');
+    expect(loading.getAttribute('style') || '').toMatch(/background: var\(--ds-reader-paper-back\)|background: rgb|background: #/);
+    expect(root().querySelector('.studio-shimmer')).toBeNull();
+    press('ArrowRight');
+    await waitFor(() => expect(counter()).toBe('Page 1 of 6'), { timeout: 8000 });
+    expect(root().querySelector('.studio-shimmer')).toBeNull();
+  }, 20_000);
+});
+
 describe('the turn gate (reader.md §8.2): a tapped turn waits for its pages, at most 300 ms', () => {
   it('pages not decoded → the progress arc shows, then the turn goes anyway; a blank landing is counted', async () => {
     hang = true; // nothing ever arrives

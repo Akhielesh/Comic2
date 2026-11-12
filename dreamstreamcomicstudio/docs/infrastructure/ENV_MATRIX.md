@@ -50,7 +50,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `DREAMSTREAMSTUDIO_ALL` → `OPENROUTER_API_KEY` | `ai/gateway.ts` | ⭕ 🔐 | 💸 | Effective default gateway; per-call USD |
-| `DREAMSTREAMSTUDIO_MODELTEST` | `comic/library/adminSpend.ts` (library runner + Model Lab via `comic/keys.ts adminSpendKeys`), bench, `jobs/preferModelTestKey.ts` | ⭕ 🔐 | 💸 | All admin image spend runs on it; unset → Admin › Library and Model Lab refuse (fail closed). Owner sets an OpenRouter limit of $35/month (limit_reset monthly) through December, then $15 (D4). Kept out of the user-serving pool |
+| `DREAMSTREAMSTUDIO_MODELTEST` | `comic/library/adminSpend.ts` (library runner + Model Lab via `comic/keys.ts adminSpendKeys`), bench, `jobs/preferModelTestKey.ts` | ⭕ 🔐 | 💸 | All admin image spend runs on it; unset → Admin › Library and Model Lab refuse (fail closed). Owner sets an OpenRouter limit of $35/month (limit_reset monthly) through December, then $15 (D4). Kept out of the user-serving pool. A running build is pinned to the key setting (COMIC_ADMIN_SPEND_KEY), not to this value: after rotating DREAMSTREAMSTUDIO_MODELTEST, cancel any running build and start a new one (its preflight checks the new key) |
 | `OPENROUTER_API_KEYS` / `NVIDIA_API_KEYS` | `ai/reliability/keyPool.ts` | ⭕ 🔐 | 💸 | Key-pool + circuit breaker |
 | `NVIDIA_API_KEY`, `NVIDIA_TEXT_MODEL` | NVIDIA NIM | ⭕ 🔐 | 💸 | `NVIDIA_TEXT_MODEL` **missing from .env.example** |
 | `OPENAI_API_KEY` | OpenAI | ⭕ 🔐 | 💸 | BYOK |
@@ -167,7 +167,7 @@ image spend is the Library builds and the Model Lab. The rules are in `docs/feat
 
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
-| `COMIC_ADMIN_SPEND_KEY` | `comic/library/adminSpend.ts` | ⭕ | 💸 | Unset/any value = `modeltest`; exactly `platform` = escape hatch onto DREAMSTREAMSTUDIO_ALL (OpenRouter only). A run started on one key refuses to step after a flip. |
+| `COMIC_ADMIN_SPEND_KEY` | `comic/library/adminSpend.ts` | ⭕ | 💸 | Unset/any other value = `modeltest`; `platform` (any case, trimmed) = escape hatch onto DREAMSTREAMSTUDIO_ALL (OpenRouter only). A run is pinned to this setting, not to the key's value: a run started on one setting refuses to step after a flip. |
 | `COMIC_LIBRARY_MONTHLY_CAP_USD` | `comic/library/adminSpend.ts`, enforced by `comic/library/runner.ts` (startRun) | ⭕ | 💸 | Default 20; refuses a build when this UTC month's library_runs.spent_usd + its budget would pass it; 0 stops all builds. |
 | `COMIC_LIBRARY_PRESET_BOARD` | `config.ts:312` (read by `comic/actions/library.ts`) | ⭕ | — | A boolean, default false (off): applying a library style preset also adopts its preview as the style board. Admins only after the golden A/B for content bleed, once the anchors are seeded. It is a boolean today, so `true` turns it on for everyone: keep it off until the staged form (off \| admins \| all, ST-4 #3, deferred) lands, and this row then names the stages. |
 

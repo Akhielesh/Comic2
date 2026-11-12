@@ -657,4 +657,21 @@ describe('ComicReaderView on devices', () => {
     expect(root.firstElementChild).toBe(screen.getByTestId('reader-toolbar'));
     expect(screen.getByTestId('reader-toolbar').nextElementSibling).toBe(screen.getByTestId('reader-stage'));
   });
+
+  it('a cover and pages still loading are still paper, never a shimmer (the reader animates transform and opacity only)', async () => {
+    const hanging: ((r: Response) => void)[] = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => hanging.push(r))));
+    try {
+      // Scroll mode draws every page at once (ScrollPage): the cover and the pages are all waiting for a link.
+      render(<ComicReaderView doc={drawnDoc()} urlFor={() => undefined} initialMode="scroll" />);
+      const loading = await screen.findByRole('img', { name: 'Loading cover' });
+      expect(loading.className).not.toContain('studio-shimmer');
+      expect(loading.getAttribute('style')).toContain('var(--ds-reader-paper-back)');
+      expect(screen.getAllByRole('img', { name: 'Loading page image' }).length).toBeGreaterThan(0);
+      expect(reader().querySelector('.studio-shimmer')).toBeNull();
+    } finally {
+      pageImageCache.clear();
+      for (const r of hanging.splice(0)) r(new Response(null, { status: 404 }));
+    }
+  });
 });

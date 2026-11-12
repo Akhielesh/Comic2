@@ -65,6 +65,15 @@ describe('ComicPageView', () => {
     expect(screen.getByRole('img', { name: 'Loading page image' })).toHaveClass('studio-shimmer');
   });
 
+  it('stillLoading (the readers): the same wait is still, the page box’s own paper, never the shimmer', () => {
+    const doc = makeSampleDoc();
+    const { container } = render(<ComicPageView doc={doc} page={doc.pages[0]} stillLoading style={{ background: 'var(--ds-reader-paper-back)' }} />);
+    const wait = screen.getByRole('img', { name: 'Loading page image' });
+    expect(wait).not.toHaveClass('studio-shimmer');
+    expect(wait.getAttribute('style')).toBeNull();
+    expect(container.querySelector('.studio-shimmer')).toBeNull();
+  });
+
   it('reports a broken image and falls back to the sketch', () => {
     const doc = makeSampleDoc();
     const onImageError = vi.fn();
