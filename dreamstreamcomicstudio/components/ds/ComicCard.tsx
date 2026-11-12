@@ -153,7 +153,7 @@ export function ComicCard({
   );
 
   const coverBox = (
-    <MediaTile aspect="2 / 3" artColor={artColor ?? cover?.artColor} chip={chip} menu={corner} lift={false} className={cn(row ? 'w-12 shrink-0' : hero ? 'w-[120px] shrink-0 sm:w-[168px]' : 'w-full', row && 'rounded-[var(--ds-radius-sm)]')}>
+    <MediaTile aspect="2 / 3" artColor={artColor ?? cover?.artColor} chip={chip} menu={corner} lift={false} selected={selected} className={cn(row ? 'w-12 shrink-0' : hero ? 'w-[120px] shrink-0 sm:w-[168px]' : 'w-full', row && 'rounded-[var(--ds-radius-sm)]')}>
       <CoverImage alt="" {...cover} artColor={artColor ?? cover?.artColor} sizes={cover?.sizes ?? (row ? '48px' : hero ? '168px' : undefined)} className="h-full" />
     </MediaTile>
   );

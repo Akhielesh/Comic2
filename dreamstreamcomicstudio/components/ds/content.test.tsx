@@ -125,6 +125,12 @@ describe('ComicCard', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it('a selected card rings its cover (selection on art) and says so', () => {
+    const { container } = render(<ComicCard title="Low Tide" onOpen={() => {}} selected />);
+    expect(container.querySelector('[data-slot="comic-card"]')).toHaveAttribute('data-selected', 'true');
+    expect(container.querySelector('[data-slot="media-tile"]')!.className).toContain('outline-[color:var(--ds-spark)]');
+  });
+
   it('links (href) keep the same shape: one link in the heading, Read outside it; the heading level follows the screen', () => {
     render(<ComicCard variant="public" title="Fox" href="/c/fox" read={{ href: '/c/fox' }} headingLevel={2} creator="@sol" />);
     const heading = screen.getByRole('heading', { level: 2 });

@@ -25,9 +25,9 @@ const TONE: Record<ContentRating, string> = {
 
 /** Over art: opaque surfaces only (no translucent tint for the picture to show through). */
 export const RATING_TONE_ON_ART: Record<ContentRating, string> = {
-  G: 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-soft)]',
-  PG: 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-soft)]',
-  'PG-13': 'bg-[color:color-mix(in_srgb,var(--ds-accent)_12%,var(--ds-raised))] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-soft)]'
+  G: 'bg-[var(--ds-raised)] text-[var(--ds-ink)]',
+  PG: 'bg-[var(--ds-raised)] text-[var(--ds-ink)]',
+  'PG-13': 'bg-[color:color-mix(in_srgb,var(--ds-accent)_12%,var(--ds-raised))] text-[var(--ds-ink)]'
 };
 
 export const RatingBadge: React.FC<RatingBadgeProps> = ({ rating, reason, onArt = false }) => {
