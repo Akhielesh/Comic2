@@ -20,7 +20,7 @@ import { APP_ROOT, parseRules, indexCss, tokenBlocks } from '../../tests/config/
 import { findCompetingInks, findHandRolledOverlines } from '../../tests/config/classLists';
 
 const DS_DIR = path.join(APP_ROOT, 'components/ds');
-const SCENE = path.join(APP_ROOT, 'qa/app/scenes/ds-gallery.tsx');
+const SCENES = ['qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx'].map((f) => path.join(APP_ROOT, f));
 const isTest = (f: string) => /\.(test|spec)\.[tj]sx?$/.test(f);
 
 function sources(): Array<{ rel: string; text: string }> {
@@ -33,7 +33,7 @@ function sources(): Array<{ rel: string; text: string }> {
     }
   };
   walk(DS_DIR);
-  out.push(SCENE);
+  out.push(...SCENES);
   return out.map((f) => ({ rel: path.relative(APP_ROOT, f).split(path.sep).join('/'), text: readFileSync(f, 'utf8') }));
 }
 
@@ -65,7 +65,7 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
 
   it('scans the primitives and the gallery scene', () => {
     expect(files.length).toBeGreaterThan(20);
-    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx']));
+    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx']));
   });
 
   it('the scanner catches each forbidden spelling (planted samples)', () => {
@@ -118,8 +118,8 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
     expect([...used].filter((t) => !ROOT_TOKENS.has(t))).toEqual([]);
   });
 
-  it('no overlay here yet (Dialog, Menu, Popover, Tooltip and the Toast host wait for DS-1c)', () => {
-    for (const { rel, text } of files) expect(text, rel).not.toMatch(/aria-modal|role="dialog"|role="menu"|role="tooltip"/);
+  it('no hand-rolled overlay: Dialog, AlertDialog, Menu, Popover and Tooltip take their roles and modality from Radix (DS-1c)', () => {
+    for (const { rel, text } of files) expect(text, rel).not.toMatch(/aria-modal|role="dialog"|role="alertdialog"|role="menu"|role="tooltip"/);
   });
 });
 

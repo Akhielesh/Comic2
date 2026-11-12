@@ -112,7 +112,7 @@ describe('skins are index.css token blocks, as data', () => {
     // in the block comparisons above.
     const shared: Record<string, string> = {
       '--ds-z-stage': '0', '--ds-z-chrome': '40', '--ds-z-header': '40', '--ds-z-editor': '70', '--ds-z-reader': '80',
-      '--ds-z-scrim': '85', '--ds-z-sheet': '86', '--ds-z-popover': '90', '--ds-z-toast': '95', '--ds-z-tooltip': '100',
+      '--ds-z-scrim': '85', '--ds-z-sheet': '86', '--ds-z-dialog': '88', '--ds-z-popover': '90', '--ds-z-toast': '95', '--ds-z-tooltip': '100',
       '--ds-density-compact': '28px', '--ds-density-comfortable': '36px', '--ds-density-touch': '44px',
       '--ds-text-xl': '1.25rem', '--ds-text-2xl': '1.5rem', '--ds-text-3xl': '1.875rem',
       '--ds-motion-enter-quick': 'var(--ds-motion-enter)', '--ds-motion-enter-slow': '420ms', '--ds-motion-stagger': '40ms',

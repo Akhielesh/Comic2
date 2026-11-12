@@ -53,7 +53,8 @@ const WAVE5_TOKENS = [
  * ladder, the control densities, the heading steps, Atlas's slow entrance, stagger and the 280 ms
  * entrance under its Atlas name, and the label on a solid danger fill.
  */
-const DS1A_Z = ['stage', 'chrome', 'header', 'editor', 'reader', 'scrim', 'sheet', 'popover', 'toast', 'tooltip'] as const;
+// 'dialog' (88) is DS-1c's rung (wave note 12, S2b integration): a modal dialog above every sheet, below its own menus.
+const DS1A_Z = ['stage', 'chrome', 'header', 'editor', 'reader', 'scrim', 'sheet', 'dialog', 'popover', 'toast', 'tooltip'] as const;
 const DS1A_TOKENS = [
   ...DS1A_Z.map((l) => `--ds-z-${l}`),
   '--ds-density-compact', '--ds-density-comfortable', '--ds-density-touch',
@@ -445,15 +446,15 @@ describe('Atlas skin — DS-1a tokens (z ladder, densities, heading steps, motio
     expect(DS1A_TOKENS.filter((k) => ATLAS_DARK.has(k))).toEqual(['--ds-on-danger']);
   });
 
-  it('the stacking ladder: stage 0, chrome and header 40, editor 70, reader 80, scrim 85, sheet 86, popover 90, toast 95, tooltip 100', () => {
+  it('the stacking ladder: stage 0, chrome and header 40, editor 70, reader 80, scrim 85, sheet 86, dialog 88, popover 90, toast 95, tooltip 100', () => {
     const ladder = (block: Map<string, string>) => DS1A_Z.map((l) => Number(block.get(`--ds-z-${l}`)));
-    expect(ladder(ROOT_TOKENS)).toEqual([0, 40, 40, 70, 80, 85, 86, 90, 95, 100]);
+    expect(ladder(ROOT_TOKENS)).toEqual([0, 40, 40, 70, 80, 85, 86, 88, 90, 95, 100]);
     // Atlas has no z tokens: the skin restates the same ladder (never a different stacking under the skin).
     expect(ladder(ATLAS_LIGHT)).toEqual(ladder(ROOT_TOKENS));
     // Non-decreasing, and every overlay layer clears the page editor and the reader it may open over.
     const values = ladder(ROOT_TOKENS);
     expect([...values].sort((a, b) => a - b)).toEqual(values);
-    for (const l of ['scrim', 'sheet', 'popover', 'toast', 'tooltip']) expect(Number(ROOT_TOKENS.get(`--ds-z-${l}`))).toBeGreaterThan(80);
+    for (const l of ['scrim', 'sheet', 'dialog', 'popover', 'toast', 'tooltip']) expect(Number(ROOT_TOKENS.get(`--ds-z-${l}`))).toBeGreaterThan(80);
     // The ladder the mobile sheets already document (BottomSheet / SideSheet) is the same one.
     const sheet = readFileSync(path.join(ROOT, 'components/comicstudio/mobile/sheets/BottomSheet.tsx'), 'utf8');
     expect(sheet).toMatch(/z 85 \(scrim\) \/ 86 \(sheet\)/);

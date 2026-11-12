@@ -1,7 +1,7 @@
 /**
  * DreamStream design-system primitives (docs/design/design-system.md): Atlas's ui-generated recipes on
- * the `--ds-*` tokens and the studioDesign recipes. Overlays (Dialog, AlertDialog, Menu, Popover,
- * Tooltip, the Toast host) follow in DS-1c; the mobile sheets are imported from `components/ds/sheet`.
+ * the `--ds-*` tokens and the studioDesign recipes. The overlays (DS-1c) are Radix: an unused one tree-shakes away
+ * through this barrel (components/ds/overlays.hygiene.test.ts); the mobile sheets are imported from `components/ds/sheet`.
  */
 export * from './recipes';
 
@@ -36,6 +36,14 @@ export { ErrorState, type ErrorStateProps } from './ErrorState';
 export { StateIconTile, STATE_DESCRIPTION, STATE_TITLE, type StateAction, type StateHeading, type StateVariant } from './stateParts';
 export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from './Skeleton';
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';
+
+// Overlays (DS-1c: Radix, lead decision D6) and the app's one toast slot
+export { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, dialogMotion, DIALOG_CLOSE, DIALOG_DESCRIPTION, DIALOG_FOOTER, DIALOG_HEADER, DIALOG_LAYER, DIALOG_PANEL, DIALOG_SCRIM, DIALOG_SIZE, DIALOG_TITLE_CLASSES, type DialogContentProps, type DialogProps, type DialogSize } from './Dialog';
+export { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, ALERT_DIALOG_HEADER, type AlertDialogActionProps, type AlertDialogActionVariant, type AlertDialogContentProps, type AlertDialogProps } from './AlertDialog';
+export { Menu, MenuCheckboxItem, MenuContent, MenuGroup, MenuItem, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuShortcut, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, MENU_GROUP_LABEL, MENU_PANEL, MENU_ROW, MENU_ROW_CHOICE, MENU_ROW_INK, MENU_ROW_MARK, MENU_SEPARATOR, MENU_SHORTCUT, type MenuItemProps, type MenuItemVariant, type MenuProps } from './Menu';
+export { Popover, PopoverAnchor, PopoverClose, PopoverContent, PopoverTrigger, POPOVER_PANEL, type PopoverProps } from './Popover';
+export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, TOOLTIP_ARROW, TOOLTIP_DELAY_MS, TOOLTIP_LONG_PRESS_MS, TOOLTIP_PANEL, TOOLTIP_SKIP_DELAY_MS, TOOLTIP_TOUCH_HOLD_MS, type TooltipProps, type TooltipProviderProps } from './Tooltip';
+export { claimToast, dismissToast, subscribeToastSlot, toast, ToastCard, ToastHost, toastSlotOwner, useToastSlot, TOAST_ACTIONS, TOAST_BODY, TOAST_CARD_WIDTH, TOAST_DURATION_MS, TOAST_HOST, TOAST_ICON, TOAST_STATUS, type ToastAction, type ToastCardProps, type ToastHandle, type ToastHostProps, type ToastOptions, type ToastTone } from './Toast';
 
 // Motion and live state (bridge: Atlas effects ported onto styles/ds-motion.css)
 export { useInViewPause, inViewAttribute, inViewRootMargin } from './useInViewPause';

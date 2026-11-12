@@ -425,7 +425,8 @@ export const INVERSE_SURFACE = 'ds-inverse-surface bg-[var(--ds-ink)] text-[var(
  * The stacking ladder (index.css `--ds-z-*`). A screen takes a LAYER, never a number: stage 0 (the
  * canvas / page content; its own layers stack 1–30 inside it), chrome and the sticky header 40, the
  * full-screen page editor 70 and reader 80, a sheet's scrim 85 and the sheet 86 (the ladder
- * mobile/sheets documents), popovers and menus 90, toasts 95, tooltips 100. This is the one place a
+ * mobile/sheets documents), a modal dialog 88 (above every sheet, below the menus and popovers it opens), popovers and
+ * menus 90, toasts 95, tooltips 100. This is the one place a
  * z-index class is spelled; anywhere else a raw z class is off the ladder (DS-0's z-ladder guard).
  */
 export const Z = {
@@ -436,6 +437,7 @@ export const Z = {
   reader: 'z-[var(--ds-z-reader)]',
   scrim: 'z-[var(--ds-z-scrim)]',
   sheet: 'z-[var(--ds-z-sheet)]',
+  dialog: 'z-[var(--ds-z-dialog)]',
   popover: 'z-[var(--ds-z-popover)]',
   toast: 'z-[var(--ds-z-toast)]',
   tooltip: 'z-[var(--ds-z-tooltip)]'
