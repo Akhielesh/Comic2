@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 import { labelInName } from '../mobile/testing/labelInName';
-import { ActivityLine, activityCost, savedSince } from './ActivityLine';
+import { ActivityLine, activityCost, presencePlace, savedSince } from './ActivityLine';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
-import type { ActivityItem } from '../types';
+import type { ActivityItem, StudioPresence } from '../types';
 
 // Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
 beforeEach(showDollarPrices);
@@ -66,5 +66,61 @@ describe('ActivityLine', () => {
     expect(savedSince(0.2, 0.1)).toBeCloseTo(0.1);
     expect(savedSince(0.1, 0.2)).toBe(0);
     expect(savedSince(undefined, undefined)).toBe(0);
+  });
+});
+
+// Presence (agent-editor plan §3 A2/A4): the step names where the director works; the line says it in words.
+describe('ActivityLine: where the director is working', () => {
+  const presence = (over: Partial<StudioPresence> = {}): StudioPresence => ({ pageId: 'pg_2', lineIds: ['pg_2_l1'], label: 'Moving a balloon', at: 1, ...over });
+
+  it('names the place beside the label ("page 2 · 1 balloon")', () => {
+    render(<ActivityLine studio={makeFakeStudio({ busy: true, messageBusy: true, activity: [item('a', 'Moving a balloon', 'free')], presence: presence() })} />);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Moving a balloon… page 2 · 1 balloon');
+    const where = status.querySelector('[data-activity-where]');
+    expect(where).toHaveTextContent('page 2 · 1 balloon');
+    expect(screen.getByTitle('Moving a balloon… page 2 · 1 balloon')).toBeInTheDocument();
+  });
+
+  it('reads as before when no step names a place', () => {
+    render(<ActivityLine studio={makeFakeStudio({ busy: true, messageBusy: true, activity: [item('a', 'Moving a balloon', 'free')], presence: null })} />);
+    expect(screen.getByRole('status').querySelector('[data-activity-where]')).toBeNull();
+    expect(screen.getByRole('status')).not.toHaveTextContent('page 2');
+  });
+
+  it('never puts the place beside another step (a newer drawing job): it sits on its own line in the list', () => {
+    render(
+      <ActivityLine
+        studio={makeFakeStudio({ busy: true, messageBusy: true, activity: [item('a', 'Moving a balloon', 'free'), item('b', 'Drawing page 3', 'image')], presence: presence() })}
+      />
+    );
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Drawing page 3…');
+    expect(status.querySelector('[data-activity-where]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '+1' }));
+    const row = screen.getByText('Moving a balloon…').closest('li');
+    expect(row).toHaveTextContent('Moving a balloon… page 2 · 1 balloon');
+  });
+
+  it('on a phone the View button carries it, and its name still starts with what it shows', () => {
+    render(<ActivityLine studio={makeFakeStudio({ busy: true, messageBusy: true, activity: [item('a', 'Moving a balloon', 'free')], presence: presence({ lineIds: ['pg_2_l1', 'x'] }) })} onView={vi.fn()} />);
+    const view = screen.getByRole('button', { name: /^Moving a balloon… page 2 · 2 balloons View/ });
+    expect(labelInName(view).ok).toBe(true);
+  });
+
+  it('says nothing about a place while Stop winds down', () => {
+    render(<ActivityLine studio={makeFakeStudio({ busy: true, cancelling: true, activity: [item('a', 'Moving a balloon', 'free')], presence: presence() })} />);
+    expect(screen.getByRole('status').querySelector('[data-activity-where]')).toBeNull();
+  });
+
+  it('presencePlace: page and balloons, either alone, a page found from its balloon, nothing guessed', () => {
+    const doc = makeSampleDoc();
+    expect(presencePlace(doc, { pageId: 'pg_2', lineIds: ['pg_2_l1'] })).toBe('page 2 · 1 balloon');
+    expect(presencePlace(doc, { pageId: 'pg_3', lineIds: [] })).toBe('page 3');
+    expect(presencePlace(doc, { lineIds: ['pg_1_l1'] })).toBe('page 1 · 1 balloon');
+    expect(presencePlace(doc, { pageId: 'pg_new', lineIds: ['ln_a', 'ln_b', 'ln_c'] })).toBe('3 balloons');
+    expect(presencePlace(doc, { pageId: 'pg_new', lineIds: [] })).toBeNull();
+    expect(presencePlace(null, { pageId: 'pg_2', lineIds: ['a'] })).toBe('1 balloon');
+    expect(presencePlace(doc, null)).toBeNull();
   });
 });

@@ -7,10 +7,15 @@
 // what software saved in it ("Saved ≈$0.07 — done by software, no AI cost", decisions-final
 // #6; governed users read it as a share of their usage, never dollars). Honest and subtle:
 // badges only appear when the server says what a step costs.
+//
+// Presence (agent-editor plan §3 A2/A4): when the step names where the director is working (`activity.where`, read as
+// studio.presence), the line says the place in words beside its label: "Moving a balloon… page 2 · 1 balloon".
+// Steps that name no place read exactly as before.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Square } from 'lucide-react';
-import type { ActivityItem } from '../types';
+import type { ComicDoc } from '../../../shared/comic/doc';
+import type { ActivityItem, StudioPresence } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { activeActivities } from '../studioReducer';
 import { useCostFormat } from './cost';
@@ -48,6 +53,45 @@ const COST_BADGE: Record<ActivityCost, { text: string; title: string; cls: strin
     cls: 'bg-[#D97757]/10 text-[var(--ds-ink)]'
   }
 };
+
+/**
+ * Where the director is working, in words: "page 2 · 1 balloon", "page 2", "3 balloons". The page comes from the
+ * presence's page id, else from the page that holds its first known balloon (a page the doc does not have yet is left
+ * out rather than guessed). Null when there is nothing to say. Pure.
+ */
+export const presencePlace = (doc: Pick<ComicDoc, 'pages'> | null | undefined, presence: Pick<StudioPresence, 'pageId' | 'lineIds'> | null | undefined): string | null => {
+  if (!presence) return null;
+  const lineIds = Array.isArray(presence.lineIds) ? presence.lineIds : [];
+  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
+  let page = presence.pageId ? pages.find((p) => p.id === presence.pageId) : undefined;
+  if (!page && lineIds.length) {
+    const ids = new Set(lineIds);
+    page = pages.find((p) => p.panels?.some((panel) => panel.lines?.some((line) => ids.has(line.id))));
+  }
+  const n = lineIds.length;
+  const parts = [page && typeof page.n === 'number' ? `page ${page.n}` : null, n ? `${n} ${n === 1 ? 'balloon' : 'balloons'}` : null].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+};
+
+/** The live line presence belongs to: the newest one with its label (presence carries the label of its start). */
+const presenceLineId = (active: ActivityItem[], presence: StudioPresence | null | undefined): string | undefined => {
+  if (!presence?.label) return undefined;
+  for (let i = active.length - 1; i >= 0; i -= 1) if ((active[i].label || '').trim() === presence.label) return active[i].id;
+  return undefined;
+};
+
+/**
+ * The place words beside a label, muted. Visible text only, so a button's name still starts with what it shows; the
+ * space sits outside the span so the computed name keeps it ("balloon… page 2", not "balloon…page 2").
+ */
+const PlaceWords: React.FC<{ words: string }> = ({ words }) => (
+  <>
+    {' '}
+    <span data-activity-where className="text-[var(--ds-muted)]">
+      {words}
+    </span>
+  </>
+);
 
 /** A governed user's words for the AI-writer step: no money words at all (P1-LIMITS rule). */
 export const GOVERNED_TEXT_COST_TITLE = 'Uses the AI writer — barely touches your usage';
@@ -117,6 +161,10 @@ export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, o
   const canStop = (studio.busy && !studio.messageBusy) || detached;
   const cost = studio.cancelling ? undefined : activityCost(latest);
   const saved = savedSince(savedUsd, baseline.current);
+  // Presence: the place goes beside the line it came from (not beside a job's line that happens to be newer).
+  const place = studio.cancelling ? null : presencePlace(studio.doc, studio.presence);
+  const placeLineId = place ? presenceLineId(active, studio.presence) : undefined;
+  const latestPlace = latest && placeLineId === latest.id ? place : null;
 
   return (
     <div className={cx('min-w-0 px-1', className)}>
@@ -131,7 +179,7 @@ export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, o
           <button
             type="button"
             onClick={onView}
-            title={`${label} ${viewLabel}`}
+            title={`${latestPlace ? `${label} ${latestPlace}` : label} ${viewLabel}`}
             data-activity-view
             className={cx(
               'flex min-h-[28px] min-w-0 flex-1 basis-[8rem] items-center gap-1.5 text-left text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
@@ -139,15 +187,19 @@ export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, o
               TRANSITION
             )}
           >
-            <span className="min-w-0 truncate">{label}</span>{' '}
+            <span className="min-w-0 truncate">
+              {label}
+              {latestPlace && <PlaceWords words={latestPlace} />}
+            </span>{' '}
             <span className="shrink-0 font-medium text-[var(--ds-accent)]">
               View{' '}
               <span className="sr-only">{viewLabel.replace(/^View\s*/, '')}</span>
             </span>
           </button>
         ) : (
-          <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={label}>
+          <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={latestPlace ? `${label} ${latestPlace}` : label}>
             {label}
+            {latestPlace && <PlaceWords words={latestPlace} />}
           </span>
         )}
         {cost && <CostBadge cost={cost} governed={fmt.governed} />}
@@ -193,7 +245,10 @@ export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, o
               const c = activityCost(a);
               return (
                 <li key={a.id} className="flex min-w-0 items-center gap-1.5">
-                  <span className="min-w-0 truncate">{ellipsize(a.label)}</span>
+                  <span className="min-w-0 truncate">
+                    {ellipsize(a.label)}
+                    {place && a.id === placeLineId && <PlaceWords words={place} />}
+                  </span>
                   {c && <CostBadge cost={c} governed={fmt.governed} />}
                 </li>
               );
