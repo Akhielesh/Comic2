@@ -41,6 +41,7 @@ import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pag
 import { useCostFormat, type CostFormat } from './costFormat';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { keepRefusedInComposer } from '../conversation/composerBus';
+import { proEditorV2On } from '../../../shared/comic/capabilities';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -171,6 +172,16 @@ export const PageCard: React.FC<{
   const target: RenderTarget = { kind: 'page', id: page.id };
   const render = (safe = false) => fire('render', () => studio.act({ type: 'render_pages', pageIds: [page.id], force: true, ...(safe ? { safe: true } : {}) }));
   const open = () => studio.openPage(page.id);
+  // Pro editor flag on (PE-SHELL; master plan §2.2 Entry): "Edit lettering" opens the same editor on the lettering, with
+  // the first balloon in reading order selected so its lettering panel is open (Select tool). Overlay lettering only.
+  const firstLine = page.panels.flatMap((p) => p.lines).find((l) => l.text.trim());
+  const letteringEntry = proEditorV2On(studio.caps) && !compact && drawn && !blocked && doc.format.lettering === 'overlay' && !!firstLine;
+  const openLettering = () => {
+    if (!firstLine) return;
+    // The editor opens on the Select tool (its default) with this balloon selected ("Show me" path).
+    studio.setSelection({ pageId: page.id, lineIds: [firstLine.id], surface: 'page_editor' });
+    studio.openPage(page.id);
+  };
   const scriptView = !compact && (status === 'planned' || status === 'empty' || (drawn && showScript));
   const mismatch = drawn && !blocked ? aspectMismatch(doc, asset) : null;
   const priceId = `price-${page.id}`;
@@ -182,6 +193,7 @@ export const PageCard: React.FC<{
       page={page}
       imageUrl={imageUrl}
       srcWidth={blocked ? undefined : () => imageUrl}
+      urlForPath={(path, widthPx) => studio.urlFor(path, widthPx ? { width: widthPx } : undefined)}
       alt={`Page ${page.n}`}
       overlay={
         <RenderOverlay
@@ -316,7 +328,12 @@ export const PageCard: React.FC<{
         {(status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
         {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={target} label={`Page ${page.n}`} />}
-        <GhostButton size="xs" onClick={open} aria-label={`${drawn ? 'Edit' : 'Open'} page ${page.n}`} className={compact ? '' : 'ml-auto'}>
+        {letteringEntry && (
+          <GhostButton size="xs" onClick={openLettering} aria-label={`Edit lettering on page ${page.n}`} className="ml-auto" data-testid="edit-lettering">
+            Edit lettering
+          </GhostButton>
+        )}
+        <GhostButton size="xs" onClick={open} aria-label={`${drawn ? 'Edit' : 'Open'} page ${page.n}`} className={compact || letteringEntry ? '' : 'ml-auto'}>
           {drawn ? 'Edit' : 'Open'}
         </GhostButton>
       </footer>

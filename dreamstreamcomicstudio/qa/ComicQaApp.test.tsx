@@ -292,16 +292,16 @@ describe('?surface=pro (Program 2 placeholder) and the Comic Studio surfaces', (
   beforeEach(resetLook);
   afterEach(resetLook);
 
-  it('mounts the Pro Edit placeholder, named and ready, with no scenes registered yet', async () => {
+  it('mounts the Pro Edit index, named and ready: PE-SHELL’s scenes, and an unknown scene named calmly', async () => {
     render(<ComicQaApp params={parseQaHarnessParams('?surface=pro&scene=layers')} />);
     await act(async () => {
       await settle();
     });
-    expect(QA_PRO_SCENES).toEqual([]);
-    const main = document.querySelector('main[data-qa-pro="placeholder"]');
+    expect(QA_PRO_SCENES).toEqual(['shell-easy', 'shell-pro', 'shell-pro-selected', 'shell-pro-parts', 'shell-flag-off']);
+    const main = document.querySelector('main[data-qa-pro="index"]');
     expect(main).not.toBeNull();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Pro Edit scenes');
-    expect(main?.textContent).toMatch(/No Pro Edit scene named "layers" yet/);
+    expect(main?.textContent).toContain('No Pro Edit scene named “layers”');
     // The placeholder is told the surface it runs on (Pro scenes may branch on params.surface).
     expect(main?.getAttribute('data-qa-surface')).toBe('pro');
     await waitFor(() => expect(document.documentElement.hasAttribute('data-qa-ready')).toBe(true));

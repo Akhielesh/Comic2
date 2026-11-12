@@ -488,6 +488,22 @@ describe('ModeToggle (decisions-final #1: a view, never a permission)', () => {
     expect(screen.getByText(MODE_HINT)).toBeInTheDocument();
   });
 
+  it('both forms carry data-action="mode", the switch’s one home per viewport (declutter C2; DC-1 #8)', () => {
+    const studio = makeFakeStudio();
+    const { container: header } = render(
+      <FormFactorProvider value={DESKTOP}>
+        <ModeToggle studio={studio} />
+      </FormFactorProvider>
+    );
+    expect(header.querySelectorAll('[data-action="mode"]')).toHaveLength(1);
+    const { container: menu } = render(
+      <FormFactorProvider value={PHONE}>
+        <ModeToggle studio={studio} variant="menu" />
+      </FormFactorProvider>
+    );
+    expect(menu.querySelectorAll('[data-action="mode"]')).toHaveLength(1);
+  });
+
   it('Pro is shown as unavailable (never hidden) when the capability is off', () => {
     const studio = makeFakeStudio({ caps: { ...DEFAULT_CAPS, proEditor: false }, mode: 'pro' });
     render(

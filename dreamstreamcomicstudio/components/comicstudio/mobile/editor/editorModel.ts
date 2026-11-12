@@ -80,6 +80,40 @@ export function editorLayoutFor(ff: LayoutInput): EditorLayout {
   return { kind: 'desktop', tools: 'aside', toolbar: 'top', toolsWidth: w >= 1200 ? ASIDE_W_LARGE : ASIDE_W, fullBleed: w < EDITOR_INSET_MIN_WIDTH, compactInspector: false, filmstrip: 'stage' };
 }
 
+// ── The Pro workspace (master plan §2.7, PE-SHELL slice 1) ────────────────────
+
+/** The tool rail (desktop, px). */
+export const PRO_RAIL_W = 48;
+/** The Layers / Assets rail on the left from 1440 px (px). */
+export const PRO_LEFT_RAIL_W = 280;
+export const PRO_LEFT_RAIL_MIN_WIDTH = 1440;
+
+/**
+ * How the Pro view lays out a window (Easy keeps today's layout):
+ *  - 'docked' (desktop and tablet landscape, ≥ 1024): the 48 px rail, the canvas, and the docked inspector at the
+ *    aside's width (360 px, 400 px from 1200), plus the 280 px Layers / Assets rail from 1440 px. The dock is a
+ *    column of the layout, so it can never overlap the page.
+ *  - 'tool-row' (tablet portrait): today's layout with the tools as a row under the top bar.
+ *  - 'phone' (phones, landscape phones, foldables): today's layout; the inspector stays a bottom sheet (phones) and the
+ *    thumb bar gains Layers.
+ * Pure; tested.
+ */
+export interface ProWorkspaceLayout {
+  kind: 'docked' | 'tool-row' | 'phone';
+  railW: number;
+  dockW: number;
+  leftRailW: number;
+}
+
+export function proWorkspaceFor(layout: Pick<EditorLayout, 'kind' | 'toolsWidth'>, width: number): ProWorkspaceLayout {
+  if (layout.kind === 'desktop') {
+    const w = Number.isFinite(width) && width > 0 ? width : 1024;
+    return { kind: 'docked', railW: PRO_RAIL_W, dockW: layout.toolsWidth || ASIDE_W, leftRailW: w >= PRO_LEFT_RAIL_MIN_WIDTH ? PRO_LEFT_RAIL_W : 0 };
+  }
+  if (layout.kind === 'tablet-portrait') return { kind: 'tool-row', railW: 0, dockW: 0, leftRailW: 0 };
+  return { kind: 'phone', railW: 0, dockW: 0, leftRailW: 0 };
+}
+
 // ── Tools sheet detents ──────────────────────────────────────────────────────
 
 export type ToolsDetent = 'peek' | 'half' | 'full';

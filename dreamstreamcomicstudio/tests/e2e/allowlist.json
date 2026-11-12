@@ -579,6 +579,36 @@
       },
       "reason": "ComicReaderView: the side 'Previous page' / 'Next page' zones (md+) are opacity-0 until hover, so on touch tablets they are invisible yet tappable.",
       "removeBy": "wave3"
+    },
+    {
+      "id": "pro-shell-phone-balloon-handles",
+      "check": "hit-target",
+      "owner": "P2-EDITOR",
+      "surfaces": [
+        "pro"
+      ],
+      "scenes": [
+        "shell-pro-selected-*"
+      ],
+      "match": {
+        "testid": "^(balloon-hit|tail-handle)$"
+      },
+      "reason": "Pro view at 360 px with a balloon selected (flag COMIC_PRO_EDITOR_V2 on): the rotate and height handles sit 21 px above and below the selected balloon, so the probes from a short balloon's hit box and its 20 px tail handle land on them. Found by the new @pro smoke (PE-SHELL (c)) at the S2b integration; the phone handle layout goes to PE-SHELL-2 (S3).",
+      "removeBy": "S3"
+    },
+    {
+      "id": "pro-lettering-font-row-36",
+      "check": "hit-target",
+      "owner": "P1-LETTER-UI",
+      "surfaces": [
+        "pro"
+      ],
+      "match": {
+        "testid": "^pro-lettering$",
+        "sig": "^button\\.flex\\.h-9\\.w-full"
+      },
+      "reason": "The Pro lettering panel's font picker button (lettering/FontPicker.tsx, h-9) is 36 px tall on touch in the phone inspector sheet. Found by the new @pro smoke (PE-SHELL (c)) at the S2b integration; for PE-INSPECT's FontPicker work (PE-FONTS #6) or its next owner.",
+      "removeBy": "S3"
     }
   ],
   "knownTestFailures": [

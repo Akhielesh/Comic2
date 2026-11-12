@@ -8,9 +8,13 @@
 // page tools sheet (Edit with AI, re-render, versions, quality check, script). Every control is a 44 px
 // target with a visible label (portrait) or a name and tooltip (the rail), and the tray sits IN the
 // layout — beside the rail or above the bar — so it never covers the page.
+//
+// The buttons size to their labels (flex-auto: a content basis, the spare room shared), so "Mark up" and
+// "Lettering" read in full at 320 px (DC-0 #10); a label only truncates on a screen narrower than that.
+// Pro (PE-SHELL, agent-editor plan C9): a "Layers" button opens the Layers sheet when the Layers part is mounted.
 
 import React from 'react';
-import { Cloud, Eye, EyeOff, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
+import { Cloud, Eye, EyeOff, Layers, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../../shared/comic/doc';
 
 import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
@@ -48,6 +52,8 @@ export interface EditorToolbarProps {
   tools: { open: boolean; onToggle(): void };
   /** The tray's contents (shown while `lettering.open`). */
   tray?: LetteringTrayProps | null;
+  /** Pro: the Layers sheet's button (absent = no button, today's bar). */
+  layers?: { open: boolean; onToggle(): void };
   className?: string;
 }
 
@@ -89,7 +95,7 @@ const BarButton: React.FC<{
       onClick={onClick}
       className={cx(
         'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
-        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-1 px-1',
+        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5',
         on ? 'bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         FOCUS
       )}
@@ -205,6 +211,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   lettering,
   tools,
   tray,
+  layers,
   className
 }) => {
   const vertical = orientation === 'vertical';
@@ -223,7 +230,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
       )}
       style={vertical ? undefined : { paddingBottom: 'calc(var(--sa-bottom-eff, 0px) + 4px)' }}
     >
-      <div role="radiogroup" aria-label="Editing mode" className={cx('flex', vertical ? 'flex-col gap-1' : 'min-w-0 flex-[2] gap-0.5')}>
+      <div role="radiogroup" aria-label="Editing mode" className={cx('flex', vertical ? 'flex-col gap-1' : 'min-w-0 flex-auto gap-0.5')}>
         <BarButton
           vertical={vertical}
           role="radio"
@@ -257,6 +264,9 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           testId="toolbar-lettering"
           onClick={lettering.onToggle}
         />
+      )}
+      {layers && (
+        <BarButton vertical={vertical} label="Layers" icon={<Layers className="h-4 w-4" aria-hidden />} expanded={layers.open} testId="toolbar-layers" onClick={layers.onToggle} />
       )}
       <BarButton
         vertical={vertical}
