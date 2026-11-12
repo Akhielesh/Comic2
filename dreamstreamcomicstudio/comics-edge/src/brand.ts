@@ -37,8 +37,10 @@ export const BRAND = {
   ogImageWidth: '1200',
   ogImageHeight: '630',
   ogImageAlt: 'DreamStream Comic Studio: comic pages with speech balloons on warm paper',
-  themeLight: '#FAF9F5',
-  themeDark: '#262624'
+  // The browser chrome around the comics host's pages: the Atlas skin's paper and dark paper (index.css
+  // [data-ds-skin="atlas"] --ds-canvas), so the address bar meets a white page, not the old warm paper.
+  themeLight: '#ffffff',
+  themeDark: '#0a0a0a'
 } as const;
 
 const escAttr = (value: string): string =>

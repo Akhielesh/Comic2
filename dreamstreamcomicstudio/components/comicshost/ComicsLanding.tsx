@@ -1,90 +1,128 @@
-// The front page of comics.dreamstreamstudio.ai: Comic Studio's own landing + sign-in entry.
-// Calm-studio language (--ds-* tokens, one terracotta accent, glass cards) and procedural art
-// from the library seams (EmptyArt, LayoutGlyph) — no images to load, correct in light and dark.
-// Sign-in itself reuses the existing auth UI (App's AuthPage) via onSignIn / onRequestAccess.
+// The front page of comics.dreamstreamstudio.ai: Comic Studio's own landing and sign-in entry, in the Atlas
+// public composition (design values only, from Atlas's public page: a centred hero over a dot grid, the product
+// proof, a band, a steps rail, a bento, an inverse panel, a three-column footer) on the DreamStream tokens and
+// recipes, with the Ink & Spark colour layer: ink on paper, colour as a spot, the spark only on the one
+// creation call to action ("Start creating", signed out; none signed in).
+//
+// The header is ComicsHeader (the app's AppHeader, the same object and height as the studio's header). The proof
+// is a replica of the studio's own screen (StudioPreview: the Director's plan card beside drawn pages) and every
+// comic page is ComicPageSpecimen — the library's procedural art, bordered panels and real lettering — so the page
+// shows the product instead of placeholders, with no image, no request and no timer. Sign-in itself is the app's
+// AuthPage (onSignIn / onRequestAccess). Motion is the shared vocabulary (styles/ds-motion.css: the hero staggers
+// in, the proof rises in, sections reveal on scroll, cards lift, arrows nudge), all of it still under reduced
+// motion. No price, cost or model name anywhere on the page.
 
-import React from 'react';
-import { ArrowRight, LayoutGrid, LogIn, Mail } from 'lucide-react';
-import { EmptyArt, type EmptyArtVariant } from '../comicstudio/library/procedural/EmptyArt';
-import { LayoutGlyph } from '../comicstudio/library/procedural/LayoutGlyph';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, BookOpen, Download, Link2, MessageSquareText, SlidersHorizontal, Users } from 'lucide-react';
+import { cn } from '../../lib/utils';
 import { mainAppUrl } from '../../services/productHost';
-import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../chat/studioDesign';
+import {
+  ARROW_NUDGE,
+  CANVAS_BG,
+  CTA_LG,
+  DENSITY,
+  DISPLAY_CARD_TITLE,
+  DISPLAY_HERO,
+  DISPLAY_SECTION,
+  FOCUS_RING,
+  FOCUS_RING_FLUSH,
+  INVERSE_ACTION,
+  INVERSE_ACTION_QUIET,
+  INVERSE_SURFACE,
+  LIFT,
+  OVERLINE,
+  OVERLINE_DISPLAY,
+  PUBLIC_BODY,
+  PUBLIC_LEAD,
+  RADIUS_FEATURE,
+  RADIUS_HERO,
+  RADIUS_PANEL,
+  RADIUS_ROUND,
+  SHADOW_HERO
+} from '../chat/studioDesign';
+import { HEADER_INNER } from '../ds/AppHeader';
+import { Button } from '../ds/Button';
+import { prefersReducedMotion } from '../ds/useReducedMotion';
+import { BrandLockup } from '../layout/BrandLockup';
+import { CONTACT_HREF } from '../layout/LegalMicroLinks';
+import { ComicPageSpecimen, SPECIMEN_LOOKS, specimenPreset } from './ComicPageSpecimen';
+import { ComicsHeader, type ComicsSectionId } from './ComicsHeader';
 import { ComicsMark } from './ComicsMark';
+import { StudioPreview } from './StudioPreview';
 
 export interface ComicsLandingProps {
   signedIn: boolean;
+  /** "Start creating", the header's "Sign in" and the access panel's "Sign in". */
   onSignIn: () => void;
+  /** The hero's second action, the header (lg), the menu, the access panel and the footer. */
   onRequestAccess: () => void;
-  /** Signed in: the comics dashboard. */
+  /** Signed in: the comics dashboard (hero, header "My comics", access panel, footer). */
   onOpenComics: () => void;
+  /** The public Library, everywhere it is offered (and the signed-in hero's second action). */
   onBrowseGallery: () => void;
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
 }
 
-const FEATURES: { art: EmptyArtVariant; title: string; body: string }[] = [
+const STEPS: ReadonlyArray<{ title: string; body: string }> = [
+  { title: 'Tell it the idea', body: 'Paste a script, an outline, notes or a single line. The Comic Director asks what matters.' },
+  // The studio's own words (the Director's plan card). Never "nothing is drawn until you say so": small image runs
+  // can start without a gate under the creator's confirm setting.
+  { title: 'Agree the plan', body: 'Pages, cast, setting and look, settled together. Drawn pages are only redrawn when you ask.' },
+  { title: 'Lock the look', body: 'Character sheets and a locked style keep faces and outfits the same from cover to last page.' },
+  { title: 'Polish and share', body: 'Change panels and lettering in Easy or Pro, then read it, share a link or export it.' }
+];
+
+const FEATURES: ReadonlyArray<{ icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; title: string; body: string }> = [
   {
-    art: 'studio',
-    title: 'A director that listens',
-    body: 'Tell it the idea in your own words. It asks what matters, explains every step and shows the cost before anything is drawn.'
-  },
-  {
-    art: 'cast',
+    icon: Users,
     title: 'Characters that stay themselves',
     body: 'Reference sheets and a locked style keep faces, outfits and colours consistent from the cover to the last page.'
   },
   {
-    art: 'pages',
+    icon: MessageSquareText,
     title: 'Lettering you control',
-    body: 'Balloons, captions and sound effects are real text. Restyle, move or rewrite them without redrawing a single panel.'
+    body: 'Balloons, captions and sound effects are real text. Move, restyle or rewrite them without redrawing a panel.'
   },
-  {
-    art: 'reader',
-    title: 'Read and share anywhere',
-    body: 'A page-turning reader for phones, tablets and desktops, and read-only share links your readers can download from.'
-  }
+  { icon: SlidersHorizontal, title: 'Easy or Pro', body: 'Talk it through in Easy, or switch to Pro for finer control of panels and lettering.' }
 ];
 
-const STEPS: { title: string; body: string }[] = [
-  { title: 'Prompt', body: 'Paste a script, an outline, notes or one line.' },
-  { title: 'Plan', body: 'Agree on pages, cast, world and budget together.' },
-  { title: 'Build', body: 'Lock the style, then the cover and every page.' },
-  { title: 'Polish', body: 'Edit panels and lettering, read, share, export.' }
+const PROMISES: ReadonlyArray<{ icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; text: string }> = [
+  { icon: BookOpen, text: 'A page-turning reader that fits phones, tablets and desktops.' },
+  { icon: Link2, text: 'Share a read-only link, or list it in the Library.' },
+  { icon: Download, text: 'Readers can download it only if you allow it.' }
 ];
 
-const focusRing =
-  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D97757]';
-const primaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[var(--ds-accent)] px-5 text-sm font-semibold ${ON_ACCENT_TEXT} motion-safe:transition-colors hover:bg-[var(--ds-accent-hover)] ${focusRing}`;
-const secondaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-5 text-sm font-semibold text-[var(--ds-ink)] motion-safe:transition-colors hover:bg-[var(--ds-hover)] ${focusRing}`;
-const quietLink = `inline-flex min-h-[44px] items-center rounded-lg px-2 text-sm text-[var(--ds-muted)] hover:text-[var(--ds-ink)] ${focusRing}`;
+/** A footer link: muted, ink on hover, the underline draws in; 44 px tall under a coarse pointer. */
+const FOOTER_LINK = cn('ds-link inline-flex items-center text-left text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
+/** The bottom bar's one way off the product, in ink. */
+const FOOTER_LINK_INK = cn('ds-link inline-flex items-center text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
+/** A section heading that section links move focus to (programmatic focus only: no ring on a heading). */
+const FOCUS_TARGET = 'focus:outline-none';
+const SECTION = 'scroll-mt-[var(--header-h)]';
 
-/** Three overlapping comic pages with a speech balloon — pure SVG/CSS, decorative. */
-const HeroArt: React.FC = () => (
-  <div aria-hidden className="relative mx-auto h-[260px] w-full max-w-[300px] sm:h-[320px] sm:max-w-[360px]" data-testid="comics-hero-art">
-    {[
-      { panels: 3, cls: 'left-[4%] top-[10%] -rotate-6' },
-      { panels: 5, cls: 'left-[28%] top-[2%] rotate-3' },
-      { panels: 4, cls: 'left-[16%] top-[22%] -rotate-1' }
-    ].map((page, i) => (
-      <div
-        key={i}
-        className={`absolute ${page.cls} rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2 text-[var(--ds-ink)] shadow-[0_8px_24px_rgba(0,0,0,0.08)]`}
-      >
-        <LayoutGlyph panels={page.panels} aspect="2:3" size={120} />
-      </div>
-    ))}
-    <svg viewBox="0 0 120 84" className="absolute right-[2%] top-[4%] w-[120px] sm:right-0 sm:w-[140px]" focusable="false">
-      <path
-        d="M16 4h88a12 12 0 0 1 12 12v34a12 12 0 0 1-12 12H52l-20 18V62H16A12 12 0 0 1 4 50V16A12 12 0 0 1 16 4z"
-        style={{ fill: 'var(--ds-raised)' }}
-        stroke="#D97757"
-        strokeWidth="3"
-        strokeLinejoin="round"
-      />
-      <path d="M24 26h72M24 40h48" style={{ stroke: 'var(--ds-muted)' }} strokeWidth="5" strokeLinecap="round" fill="none" />
-    </svg>
-  </div>
-);
+/**
+ * Whether a horizontal scroller really overflows, read on mount and whenever it or the window resizes (no timer, no
+ * polling). The looks band is a tab stop only then: a region that does not scroll gives the keyboard nothing to do.
+ */
+const useOverflowsX = <T extends HTMLElement>(): [React.RefObject<T | null>, boolean] => {
+  const ref = useRef<T>(null);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === 'undefined') return undefined;
+    const read = () => setOverflows(el.scrollWidth - el.clientWidth > 1);
+    read();
+    window.addEventListener('resize', read);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
+    observer?.observe(el);
+    return () => {
+      window.removeEventListener('resize', read);
+      observer?.disconnect();
+    };
+  }, []);
+  return [ref, overflows];
+};
 
 export const ComicsLanding: React.FC<ComicsLandingProps> = ({
   signedIn,
@@ -94,153 +132,314 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
   onBrowseGallery,
   onOpenPrivacy,
   onOpenTerms
-}) => (
-  <div className="min-h-screen overflow-x-hidden bg-[var(--ds-canvas)] text-[var(--ds-ink)]" data-testid="comics-landing">
-    <header className="sticky top-0 z-40 border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-strong)] backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
-        <div className="flex min-h-[44px] min-w-0 items-center gap-2.5">
-          <ComicsMark size={36} className="shrink-0" />
-          <span className="min-w-0 leading-tight">
-            <span className="block truncate text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ds-muted)]">DreamStream</span>
-            <span className="block truncate text-base font-semibold">Comic Studio</span>
-          </span>
-        </div>
-        <nav className="flex shrink-0 items-center gap-1 sm:gap-2" aria-label="Comic Studio">
-          <button type="button" onClick={onBrowseGallery} className={`hidden sm:inline-flex ${quietLink}`}>
-            Library
-          </button>
-          {signedIn ? (
-            <button type="button" onClick={onOpenComics} className={primaryButton}>
-              My comics
-            </button>
-          ) : (
-            <>
-              <button type="button" onClick={onRequestAccess} className={`hidden sm:inline-flex ${quietLink}`}>
-                Request access
-              </button>
-              <button type="button" onClick={onSignIn} className={primaryButton}>
-                <LogIn size={16} aria-hidden /> Sign in
-              </button>
-            </>
-          )}
-        </nav>
-      </div>
-    </header>
+}) => {
+  /** Scroll a section under the sticky header (smooth unless reduced motion), then move focus to its heading. */
+  const showSection = useCallback((id: ComicsSectionId) => {
+    const section = document.getElementById(id);
+    if (!section) return;
+    section.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    section.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+  }, []);
+  const [looksRef, looksOverflow] = useOverflowsX<HTMLDivElement>();
+  const goTop = useCallback(() => {
+    try {
+      window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    } catch {
+      /* no scrolling outside a browser */
+    }
+  }, []);
 
-    <main>
-      <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-10 sm:px-6 sm:pt-16 lg:grid-cols-[1.1fr_0.9fr] lg:pb-20">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#D97757]">Comic Studio</p>
-          <h1 className={`mt-3 break-words text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl ${FONT_DISPLAY}`}>
-            Talk it through.
-            <br />
-            Get a finished comic.
-          </h1>
-          <p className="mt-5 max-w-xl text-base leading-relaxed text-[var(--ds-muted)] sm:text-lg">
-            Tell the Comic Director your idea: a script, an outline or a single line. It plans every page with you, keeps your cast
-            on-model and letters every balloon. Change anything in Easy or Pro mode.
-          </p>
-          <div className="mt-7 flex flex-wrap gap-3">
-            {signedIn ? (
-              <>
-                <button type="button" onClick={onOpenComics} className={primaryButton}>
-                  Open my comics <ArrowRight size={16} aria-hidden />
-                </button>
-                <button type="button" onClick={onBrowseGallery} className={secondaryButton}>
-                  <LayoutGrid size={16} aria-hidden /> Browse the Library
-                </button>
-              </>
-            ) : (
-              <>
-                <button type="button" onClick={onSignIn} className={primaryButton}>
-                  Sign in to your studio <ArrowRight size={16} aria-hidden />
-                </button>
-                <button type="button" onClick={onRequestAccess} className={secondaryButton}>
-                  <Mail size={16} aria-hidden /> Request access
-                </button>
-              </>
-            )}
+  return (
+    <div data-testid="comics-landing" className={cn(CANVAS_BG, 'min-h-screen overflow-x-clip text-[var(--ds-ink)]')}>
+      <ComicsHeader
+        signedIn={signedIn}
+        page="home"
+        onGoHome={goTop}
+        onSignIn={onSignIn}
+        onRequestAccess={onRequestAccess}
+        onOpenComics={onOpenComics}
+        onBrowseGallery={onBrowseGallery}
+        onShowSection={showSection}
+      />
+
+      <main>
+        {/* 1 · Hero and the product proof */}
+        <section aria-labelledby="comics-hero-title" className="relative overflow-hidden">
+          <div aria-hidden className="ds-grid-backdrop pointer-events-none absolute inset-0" />
+          <div className={cn(HEADER_INNER, 'relative')}>
+            <div className="ds-stagger mx-auto flex max-w-5xl flex-col items-center pb-10 pt-12 text-center sm:pb-14 sm:pt-24">
+              <p
+                className={cn(
+                  RADIUS_ROUND,
+                  'inline-flex items-center gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] px-3.5 py-1.5 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]'
+                )}
+              >
+                <span aria-hidden className={cn(RADIUS_ROUND, 'size-1.5 bg-[var(--ds-ink)]')} />
+                In beta · new accounts by invite
+              </p>
+              <h1 id="comics-hero-title" className={cn(DISPLAY_HERO, 'mt-7 max-w-4xl text-[var(--ds-ink)]')}>
+                <span className="block">Talk it through.</span>
+                <span className="block">Get a finished comic.</span>
+              </h1>
+              <p className={cn(PUBLIC_LEAD, 'mt-5 max-w-2xl medium:mt-6')}>
+                Tell the Comic Director your idea — a script, an outline or one line. It plans every page with you, keeps your cast on-model and
+                letters every balloon.
+              </p>
+              <div className="mt-8 flex w-full flex-col gap-3 medium:mt-9 medium:w-auto medium:flex-row medium:justify-center">
+                {/* The one creation call to action: the spark signed out, the ink primary signed in (one element, so
+                    the spark is spelled once in this file: tests/config/sparkGuard.test.ts). */}
+                <Button
+                  data-testid="comics-hero-cta"
+                  variant={signedIn ? 'default' : 'create'}
+                  size="lg"
+                  className={cn(CTA_LG, 'group w-full medium:w-auto')}
+                  onClick={signedIn ? onOpenComics : onSignIn}
+                >
+                  {signedIn ? 'Open your comics' : 'Start creating'}
+                  <ArrowRight aria-hidden className={ARROW_NUDGE} />
+                </Button>
+                <Button variant="outline" size="lg" className={cn(CTA_LG, 'w-full medium:w-auto')} onClick={signedIn ? onBrowseGallery : onRequestAccess}>
+                  {signedIn ? 'Browse the Library' : 'Request access'}
+                </Button>
+              </div>
+              {!signedIn && (
+                <p className="mt-5 max-w-md text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
+                  New accounts are invite-only during the beta. Already have a DreamStream account? It works here too.
+                </p>
+              )}
+            </div>
           </div>
-          {!signedIn && (
-            <p className="mt-4 text-sm text-[var(--ds-muted)]">
-              New accounts are invite-only during the beta. Already have a DreamStream account? It works here too.
-            </p>
-          )}
-        </div>
-        <HeroArt />
-      </section>
+          <figure
+            data-testid="comics-proof"
+            className="ds-rise-in relative px-4 pb-16 medium:px-6 sm:pb-20"
+            style={{ animationDelay: 'calc(6 * var(--ds-motion-stagger))' }}
+          >
+            <div aria-hidden className={cn('mx-auto max-w-5xl overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-surface)]', RADIUS_FEATURE, SHADOW_HERO)}>
+              <StudioPreview />
+            </div>
+            <figcaption className="mx-auto mt-3 max-w-xl text-center text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
+              Illustrated example. Your pages are drawn for your story, in the look you lock.
+            </figcaption>
+          </figure>
+        </section>
 
-      <section aria-labelledby="comics-features" className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-sidebar)]">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-          <h2 id="comics-features" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
-            Built for stories, not prompts
+        {/* 2 · The looks band: one scene in six looks (static; scrolls inside its own region when it does not fit) */}
+        <section
+          id="looks"
+          aria-labelledby="comics-looks"
+          className={cn(SECTION, 'border-y border-[var(--ds-hairline)] bg-[var(--ds-well)] py-10 sm:py-12 [contain-intrinsic-size:auto_30rem] [content-visibility:auto]')}
+        >
+          <h2 id="comics-looks" tabIndex={-1} className={cn(OVERLINE_DISPLAY, FOCUS_TARGET, 'text-center')}>
+            One scene, six looks
           </h2>
-          <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map((f) => (
-              <li key={f.title} className="min-w-0 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-                <EmptyArt variant={f.art} />
-                <h3 className="mt-3 text-base font-semibold">{f.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-[var(--ds-muted)]">{f.body}</p>
+          <p className={cn(PUBLIC_BODY, 'mx-auto mt-3 max-w-md px-4 text-center')}>Pick a look and lock it. Every page follows.</p>
+          <div
+            ref={looksRef}
+            role="region"
+            aria-label="Six looks"
+            tabIndex={looksOverflow ? 0 : undefined}
+            className={cn('ds-fade-edge-x mt-8 snap-x snap-mandatory overflow-x-auto', FOCUS_RING_FLUSH)}
+          >
+            <ul className="mx-auto flex w-max gap-4 px-4 pb-2 medium:px-6">
+              {SPECIMEN_LOOKS.map((id) => (
+                <li key={id} className="shrink-0 snap-center">
+                  <figure className="w-[10.5rem] medium:w-44">
+                    <ComicPageSpecimen look={id} layout="opening" />
+                    <figcaption className="mt-2.5 text-center text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-ink)]">{specimenPreset(id).name}</figcaption>
+                  </figure>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* 3 · How it works: the steps rail, then the bento */}
+        <section id="how-it-works" aria-labelledby="comics-how" className={cn(SECTION, 'py-16 sm:py-24')}>
+          <div className={HEADER_INNER}>
+            <div className="ds-reveal max-w-2xl">
+              <p className={OVERLINE_DISPLAY}>How it works</p>
+              <h2 id="comics-how" tabIndex={-1} className={cn(DISPLAY_SECTION, FOCUS_TARGET, 'mt-4 text-[var(--ds-ink)]')}>
+                From one line to finished pages
+              </h2>
+            </div>
+            <ol className="mt-12 grid gap-10 md:grid-cols-2 md:gap-x-6 lg:grid-cols-4">
+              {STEPS.map((step, i) => (
+                <li key={step.title} data-step={i + 1} className="ds-reveal relative border-t border-[var(--ds-ink)] pt-6">
+                  <span aria-hidden className={cn(RADIUS_ROUND, 'absolute -top-[5px] left-0 size-2.5 bg-[var(--ds-ink)]')} />
+                  <p aria-hidden className="text-[length:var(--ds-text-xs)] font-medium tabular-nums text-[var(--ds-muted)]">
+                    {String(i + 1).padStart(2, '0')}
+                  </p>
+                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-2 text-[var(--ds-ink)]')}>{step.title}</h3>
+                  <p className={cn(PUBLIC_BODY, 'mt-2')}>{step.body}</p>
+                </li>
+              ))}
+            </ol>
+            <ul className="mt-12 grid gap-4 sm:mt-14 lg:grid-cols-3">
+              {FEATURES.map(({ icon: Icon, title, body }) => (
+                <li key={title} className={cn('group ds-reveal border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 medium:p-7', RADIUS_FEATURE, LIFT)}>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'flex size-10 items-center justify-center bg-[var(--ds-ink)] text-[var(--ds-canvas)] transition-transform duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] can-hover:motion-safe:group-hover:-rotate-6 can-hover:motion-safe:group-hover:scale-105',
+                      RADIUS_PANEL
+                    )}
+                  >
+                    <Icon aria-hidden className="size-5" />
+                  </span>
+                  {/* Two lines tall from lg (3.5rem at leading-7), so the three bodies start on one line. */}
+                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-6 text-[var(--ds-ink)] lg:min-h-14')}>{title}</h3>
+                  <p className={cn(PUBLIC_BODY, 'mt-2 max-w-xl')}>{body}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* 4 · Read and share: what readers get, beside a page as the reader shows it */}
+        <section id="read" aria-labelledby="comics-read" className={cn(SECTION, 'pb-16 sm:pb-24')}>
+          <div className={cn(HEADER_INNER, 'grid items-center gap-12 lg:grid-cols-2')}>
+            <div className="ds-reveal">
+              <p className={OVERLINE_DISPLAY}>Read and share</p>
+              <h2 id="comics-read" tabIndex={-1} className={cn(DISPLAY_SECTION, FOCUS_TARGET, 'mt-4 text-[var(--ds-ink)]')}>
+                Made to be read, anywhere
+              </h2>
+              <ul className="mt-8 space-y-4">
+                {PROMISES.map(({ icon: Icon, text }) => (
+                  <li key={text} className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-3 text-[length:var(--ds-text-md)] leading-6 text-[var(--ds-ink)]">
+                    <Icon aria-hidden className="mt-0.5 size-5" />
+                    <span>{text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <figure className={cn('ds-reveal flex flex-col items-center gap-4 border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-6 py-10 medium:px-10', RADIUS_HERO)}>
+              <div aria-hidden className="w-full max-w-[13rem] medium:max-w-[15rem]">
+                <ComicPageSpecimen look="watercolor-storybook" layout="chase" />
+              </div>
+              <div aria-hidden className="flex gap-1.5">
+                {[0, 1, 2, 3].map((i) => (
+                  <span key={i} className={i === 1 ? cn(RADIUS_ROUND, 'h-1.5 w-4 bg-[var(--ds-ink)]') : cn(RADIUS_ROUND, 'size-1.5 bg-[var(--ds-hairline)]')} />
+                ))}
+              </div>
+              <figcaption className="sr-only">An illustrated page in the Storybook watercolor look, as the reader shows it.</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        {/* 5 · The access panel (the inverse ink panel; a raised dark panel with a light rim in dark) */}
+        <section id="access" aria-labelledby="comics-access" className={cn(HEADER_INNER, SECTION)}>
+          <div
+            className={cn(
+              INVERSE_SURFACE,
+              RADIUS_HERO,
+              'ds-reveal grid gap-10 px-6 py-12 medium:px-10 sm:px-14 sm:py-20 md:grid-cols-[1.4fr_1fr] md:items-end'
+            )}
+          >
+            <div>
+              <h2 id="comics-access" tabIndex={-1} className={cn(DISPLAY_SECTION, FOCUS_TARGET)}>
+                {signedIn ? (
+                  'Pick up where you left off'
+                ) : (
+                  <>
+                    Comic Studio is <span className="whitespace-nowrap">invite-only</span> while it’s in beta
+                  </>
+                )}
+              </h2>
+              <p className="mt-5 max-w-lg text-[length:var(--ds-text-md)] leading-7 text-[color:color-mix(in_srgb,var(--ds-canvas)_70%,transparent)]">
+                {signedIn
+                  ? 'Your comics and drafts are waiting in My comics.'
+                  : 'Request access and we’ll be in touch. Already have a DreamStream account? It works here too.'}
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 medium:flex-row medium:flex-wrap md:justify-end">
+              {signedIn ? (
+                <Button variant="secondary" size="lg" className={cn(CTA_LG, INVERSE_ACTION, 'group')} onClick={onOpenComics}>
+                  Open your comics
+                  <ArrowRight aria-hidden className={ARROW_NUDGE} />
+                </Button>
+              ) : (
+                <>
+                  <Button variant="secondary" size="lg" className={cn(CTA_LG, INVERSE_ACTION, 'group')} onClick={onRequestAccess}>
+                    Request access
+                    <ArrowRight aria-hidden className={ARROW_NUDGE} />
+                  </Button>
+                  <Button variant="outline" size="lg" className={cn(CTA_LG, INVERSE_ACTION_QUIET)} onClick={onSignIn}>
+                    Sign in
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="mt-16 border-t border-[var(--ds-hairline)] bg-[var(--ds-canvas)] sm:mt-24">
+        {/* Two link columns side by side from 320 px (the brand spans both), three columns from md. */}
+        <div className={cn(HEADER_INNER, 'grid grid-cols-2 gap-x-6 gap-y-10 py-12 text-[length:var(--ds-text-base)] md:grid-cols-[1.4fr_1fr_1fr]')}>
+          <div className="col-span-2 md:col-span-1">
+            <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways clickable={false} />
+            <p className="mt-4 max-w-sm leading-6 text-[var(--ds-muted)]">
+              Talk through an idea with the Comic Director and get finished, lettered pages you can read and share.
+            </p>
+          </div>
+          <nav aria-label="Comic Studio links">
+            <p className={OVERLINE}>Comic Studio</p>
+            <ul className="mt-3 space-y-1">
+              <li>
+                <button type="button" className={FOOTER_LINK} onClick={onBrowseGallery}>
+                  Library
+                </button>
               </li>
-            ))}
-          </ul>
+              <li>
+                <button type="button" className={FOOTER_LINK} onClick={() => showSection('how-it-works')}>
+                  How it works
+                </button>
+              </li>
+              <li>
+                {signedIn ? (
+                  <button type="button" className={FOOTER_LINK} onClick={onOpenComics}>
+                    My comics
+                  </button>
+                ) : (
+                  <button type="button" className={FOOTER_LINK} onClick={onRequestAccess}>
+                    Request access
+                  </button>
+                )}
+              </li>
+            </ul>
+          </nav>
+          <nav aria-label="Legal">
+            <p className={OVERLINE}>Legal</p>
+            <ul className="mt-3 space-y-1">
+              <li>
+                <button type="button" className={FOOTER_LINK} onClick={onOpenPrivacy}>
+                  Privacy Policy
+                </button>
+              </li>
+              <li>
+                <button type="button" className={FOOTER_LINK} onClick={onOpenTerms}>
+                  Terms &amp; Conditions
+                </button>
+              </li>
+              <li>
+                <a href={CONTACT_HREF} className={FOOTER_LINK}>
+                  Contact
+                </a>
+              </li>
+            </ul>
+          </nav>
         </div>
-      </section>
-
-      <section aria-labelledby="comics-steps" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-        <h2 id="comics-steps" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
-          From idea to pages in four steps
-        </h2>
-        <ol className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {STEPS.map((s, i) => (
-            <li key={s.title} className="flex min-w-0 gap-3 rounded-2xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-4">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#D97757]/10 text-sm font-semibold text-[#D97757] tabular-nums">
-                {i + 1}
-              </span>
-              <span className="min-w-0">
-                <span className="block font-semibold">{s.title}</span>
-                <span className="mt-0.5 block text-sm text-[var(--ds-muted)]">{s.body}</span>
-              </span>
-            </li>
-          ))}
-        </ol>
-        <div className="mt-8 flex flex-wrap gap-3">
-          <button type="button" onClick={signedIn ? onOpenComics : onSignIn} className={primaryButton}>
-            {signedIn ? 'Start a comic' : 'Sign in to start'} <ArrowRight size={16} aria-hidden />
-          </button>
-          <button type="button" onClick={onBrowseGallery} className={secondaryButton}>
-            See what people made
-          </button>
+        <div className="border-t border-[var(--ds-hairline)]">
+          <p className={cn(HEADER_INNER, 'py-5 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]')}>
+            Comic Studio · Part of{' '}
+            <a href={mainAppUrl('/')} className={FOOTER_LINK_INK}>
+              DreamStream Studio
+            </a>
+          </p>
         </div>
-      </section>
-    </main>
-
-    <footer className="border-t border-[var(--ds-hairline-soft)]">
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <p className="text-[var(--ds-muted)]">Comic Studio is part of DreamStream.</p>
-        <nav aria-label="DreamStream" className="-mx-2 flex flex-wrap items-center gap-x-1">
-          <a href={mainAppUrl('/')} className={quietLink}>
-            DreamStream home
-          </a>
-          <a href={mainAppUrl('/?view=chat')} className={quietLink}>
-            Chat Studio
-          </a>
-          <a href={mainAppUrl('/live.html')} className={quietLink}>
-            Stream Studio
-          </a>
-          <button type="button" onClick={onOpenPrivacy} className={quietLink}>
-            Privacy
-          </button>
-          <button type="button" onClick={onOpenTerms} className={quietLink}>
-            Terms
-          </button>
-          <a href="mailto:contact@dreamstreamstudio.ai" className={quietLink}>
-            Contact
-          </a>
-        </nav>
-      </div>
-    </footer>
-  </div>
-);
+      </footer>
+    </div>
+  );
+};
 
 export default ComicsLanding;

@@ -53,7 +53,12 @@ const TEST_FILE = 'tests/config/sparkGuard.test.ts';
  * header "New comic", the studio composer Send, the landing hero "Start a comic", "Share" on the ready moment,
  * "Make one like this" on a reader's share page. Never a price, never a spend control, never the panel.
  */
-export const ALLOWLIST: Record<string, { uses: Array<{ token: string; line: string }>; reason: string }> = {};
+export const ALLOWLIST: Record<string, { uses: Array<{ token: string; line: string }>; reason: string }> = {
+  'components/comicshost/ComicsLanding.tsx': {
+    uses: [{ token: 'variant=create', line: "variant={signedIn ? 'default' : 'create'}" }],
+    reason: 'the comics landing hero’s Start creating — the one creation call to action on the signed-out landing (design-system.md, Landing row)'
+  }
+};
 
 /** Files that show every primitive variant as a specimen (rules 1 and 2 do not apply; rule 5 still does). */
 export const SPECIMENS: Record<string, string> = {

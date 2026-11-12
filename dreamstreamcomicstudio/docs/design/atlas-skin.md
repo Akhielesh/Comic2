@@ -511,8 +511,8 @@ primitives) and DS-1b (the QA harness).
   gone (headings still balance their lines). `CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, sheet headers
   and empty-state titles are IBM Plex Sans semibold. Tailwind's `font-display` (Bangers) is never used. The
   public titles that relied on the blanket rule now ask for it, as Atlas's own public hero and section
-  titles carry `atlas-display`: the comics landing's hero `h1` and its two section `h2`s
-  (`ComicsLanding.tsx`) and the public reader cover's `h1` (`ReaderCoverCard.tsx`).
+  titles carry `atlas-display`: the comics landing's hero `h1` and its section `h2`s (`ComicsLanding.tsx`,
+  through `DISPLAY_HERO` / `DISPLAY_SECTION`) and the public reader cover's `h1` (`ReaderCoverCard.tsx`).
 - D3: the glass blur and the header blur are two tokens. `--ds-glass-blur` (12 px by default, 0 under the
   skin) for GLASS, GLASS_STRONG and MENU; `--ds-header-blur` (18 px everywhere) for the new
   `STICKY_HEADER` + `HEADER_GLASS` recipes (the blur on an aria-hidden layer, only once content scrolls
@@ -734,3 +734,45 @@ each needing a component change Comic Studio has no shared primitive for yet:
 - Atlas's `ScrollArea` viewport draws focus as a 2 px inset ink outline (an outset one is clipped by the
   scroller): Comic Studio's focusable scroll regions (`tabIndex={0}` panels) still get the base
   outset outline.
+
+## The comics home (Atlas public composition)
+
+The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) takes Atlas's public page
+composition, design values only: a centred hero over the dot grid (`.ds-grid-backdrop`, `.ds-stagger`), the product
+proof (`StudioPreview`, a still replica of the studio: the Director's "Here's what I've got" card beside drawn pages,
+in a `RADIUS_FEATURE` frame with `SHADOW_HERO`), the looks band (six `ComicPageSpecimen` pages: the library's
+procedural art with real lettering), the steps rail and a three-card bento (`.ds-reveal`, `LIFT`), the read-and-share
+section, the `INVERSE_SURFACE` access panel and a three-column footer. Its header is `ComicsHeader` on the app's
+`AppHeader` (`--header-h`, the same object as the studio's header), with the ink `ComicsMark` and a one-line
+"Comic Studio" lockup. One spark: the signed-out hero's "Start creating". The new public tokens
+(`--ds-radius-pill`, `--ds-shadow-hero`, `--ds-text-md|4xl|5xl|7xl`) and recipes are in design-system.md.
+
+The views one click off the landing are in the same language and chrome (`components/comicshost/hostRouting.ts`
+`comicsChromeFor`, unit-tested, is what App.tsx renders). Signed out, sign-in, Privacy, Terms and the Library keep
+`ComicsHeader` (`page="other"`: the Library link from `lg`, no "Sign in" on the sign-in page itself) and drop the
+floating widgets; signed in, only the landing does, and every other view keeps the app header with its account menu.
+On those views the App wrapper is the skin's paper (`CANVAS_BG` + ink), never the old `bg-slate-50`, so dark mode is
+dark from header to footer. `AppHeader` owns its ink (`HEADER_INK`), so a ghost button or an icon in any header reads
+on the header's paper in both themes. The page bodies:
+
+- **Sign-in** (`AuthPage`, DS-3's card): the `Segmented` sign-in / join switch, `Field` inputs and calm status
+  callouts on a `RADIUS_PANEL` card. On the comics host it centres in `calc(100dvh - var(--header-h))` and draws no
+  brand of its own (the header carries it). App keys it per request, so a header "Sign in" / "Request access" pressed
+  on the open page switches the form. Its "Request access" step (`WaitlistForm`, shared with the main site's "Stay
+  updated" card) is on the tokens too: a `FIELD_GROUP` email field, the ink submit, outline toggle chips, a `Textarea`
+  and `STATUS_SURFACE` callouts; its running text inherits the surrounding ink, so it also reads in that fixed-white
+  card in dark mode.
+- **Library** (`PublicGallery`): a `DISPLAY_SECTION` title, the search field (`FIELD_GROUP`), a `Segmented` sort and a
+  pressed "Kids-friendly" toggle, a calm sign-in note with an outline "Sign in", then 2 / 3 / 4 covers a row with the
+  title (`CARD_TITLE`), creator and counts under the art, in ink; the empty state is `EmptyState`. The rating pill on
+  a cover is DS-R1's opaque on-art `RatingBadge` (no terracotta literal).
+- **Privacy, Terms**: the `OVERLINE_DISPLAY` "Legal" eyebrow, a `DISPLAY_SECTION` title, the date as `OVERLINE`, then the
+  text in a 3xl reading column on `SECTION_CARD`, styled by `LEGAL_PROSE` (the app ships no typography plugin). No
+  Back button: the header's lockup goes home.
+
+One fill per view: on the landing the hero holds the one filled control, so the header's "Sign in" / "My comics" is
+`outline` there (the ink fill on the other views). The proof (`StudioPreview`) draws its pages in the Manga look (ink
+and screentone) so the spark stays the only colour in the first view; the colour arrives with the six looks below. The
+legal line's Contact is `mailto:SUPPORT_EMAIL` (`components/legal/contacts.ts`, the routed support mailbox), and on the
+comics host it offers no FAQs (there is no FAQ page there). `comicsHome.guard.test.ts` holds the landing, its header,
+`AppHeader`, `BrandLockup`, `LegalMicroLinks`, these views and `WaitlistForm` to 0 on every design guard.

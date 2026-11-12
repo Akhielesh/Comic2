@@ -226,3 +226,36 @@ describe('PublicGallery reads cards', () => {
     expect(db.getImageUrl).toHaveBeenCalledWith('u1/cover.png', expect.anything());
   });
 });
+
+describe('PublicGallery on the Atlas tokens', () => {
+  it('signed out: a calm sign-in note (an outline "Sign in", no yellow "Log In"), no Back button of its own, the display title', async () => {
+    const onRequireAuth = vi.fn();
+    const { container } = render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} onRequireAuth={onRequireAuth} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    expect(screen.getByRole('heading', { level: 1, name: 'Library' })).toBeInTheDocument();
+    const signIn = screen.getByRole('button', { name: 'Sign in' });
+    expect(signIn).toHaveAttribute('data-variant', 'outline');
+    fireEvent.click(signIn);
+    expect(onRequireAuth).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /log in|back home/i })).toBeNull();
+    expect(container.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|bg-slate-50|text-white|#[0-9a-f]{6}\b/i);
+  });
+
+  it('sorts with one segmented switch and filters with a pressed toggle; each card names its comic under the cover', async () => {
+    render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    const sort = screen.getByRole('radiogroup', { name: 'Sort the Library' });
+    expect(screen.getByRole('radio', { name: 'Trending' })).toHaveAttribute('aria-checked', 'true');
+    expect(sort).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search comics or creators' })).toBeInTheDocument();
+    for (const card of screen.getAllByTestId('gallery-card')) expect(card.tagName).toBe('LI');
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['The Lake', 'Night Raid', 'Old Classic']);
+  });
+
+  it('says so in the shared empty state when nothing is listed', async () => {
+    rows.value = [];
+    render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} />);
+    expect(await screen.findByRole('heading', { level: 2, name: 'No comics found.' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveAttribute('data-slot', 'empty-state');
+  });
+});
