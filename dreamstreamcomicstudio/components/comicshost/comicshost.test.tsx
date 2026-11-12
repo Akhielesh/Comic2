@@ -1,6 +1,9 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import { DENSITY } from '../chat/studioDesign';
+import { CONTACT_HREF } from '../layout/LegalMicroLinks';
+import { mainAppUrl } from '../../services/productHost';
 import { ComicsLanding } from './ComicsLanding';
 import { OFF_HOST_VIEWS, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 import { useComicsHost } from './useComicsHost';
@@ -83,14 +86,46 @@ describe('useComicsHost', () => {
     expect(setView).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps signed-out visitors on the landing (which owns its chrome)', () => {
+  it('keeps signed-out visitors on the landing, and its chrome on the views they reach from it', () => {
     const setView = vi.fn();
     const { result } = renderHook(() => useComicsHost({ view: 'home', setView, signedIn: false, ready: true, hostname: COMICS }));
     expect(setView).not.toHaveBeenCalled();
     expect(result.current.active).toBe(true);
-    expect(result.current.ownsChrome('home')).toBe(true);
+    // Sign-in, Privacy, Terms and the signed-out Library keep the comics header (no suite header, no widgets).
+    for (const view of ['home', 'auth', 'privacy', 'terms', 'gallery']) expect(result.current.ownsChrome(view), view).toBe(true);
+    for (const view of ['dashboard', 'comicstudio', 'reader', 'settings', 'learn']) expect(result.current.ownsChrome(view), view).toBe(false);
+  });
+
+  it('signed in, the Library and the dashboard keep the app header; the landing, sign-in and legal pages stay comics chrome', () => {
+    const { result } = renderHook(() => useComicsHost({ view: 'dashboard', setView: vi.fn(), signedIn: true, ready: true, hostname: COMICS }));
+    expect(result.current.ownsChrome('gallery')).toBe(false);
     expect(result.current.ownsChrome('dashboard')).toBe(false);
-    expect(result.current.ownsChrome('auth')).toBe(false);
+    for (const view of ['home', 'auth', 'privacy', 'terms']) expect(result.current.ownsChrome(view), view).toBe(true);
+  });
+
+  it('starts each view change at the top of the page on the comics host (never on the first render, never on the main site)', () => {
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    try {
+      const { rerender } = renderHook((props: { view: string }) => useComicsHost({ view: props.view, setView: vi.fn(), signedIn: false, ready: true, hostname: COMICS }), {
+        initialProps: { view: 'home' }
+      });
+      expect(scrollTo).not.toHaveBeenCalled();
+      rerender({ view: 'gallery' });
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 0 });
+      rerender({ view: 'gallery' });
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      rerender({ view: 'privacy' });
+      expect(scrollTo).toHaveBeenCalledTimes(2);
+      scrollTo.mockClear();
+      const main = renderHook((props: { view: string }) => useComicsHost({ view: props.view, setView: vi.fn(), signedIn: false, ready: true, hostname: 'dreamstreamstudio.ai' }), {
+        initialProps: { view: 'home' }
+      });
+      main.rerender({ view: 'gallery' });
+      expect(scrollTo).not.toHaveBeenCalled();
+    } finally {
+      scrollTo.mockRestore();
+    }
   });
 
   it('does not boot when the first URL carried a deep link (read before the URL sync rewrites it)', () => {
@@ -128,68 +163,107 @@ describe('ComicsLanding', () => {
     onOpenPrivacy: vi.fn(),
     onOpenTerms: vi.fn()
   });
+  const heroOf = () => screen.getByTestId('comics-hero-cta').closest('section') as HTMLElement;
 
   it('greets signed-out visitors with Comic Studio branding and the existing sign-in / request-access flows', () => {
     const h = handlers();
     render(<ComicsLanding signedIn={false} {...h} />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Talk it through.Get a finished comic.');
-    expect(screen.getAllByText('Comic Studio').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: /sign in to your studio/i }));
+    expect(screen.getByRole('button', { name: 'Comic Studio, home' })).toBeInTheDocument();
+    const cta = screen.getByTestId('comics-hero-cta');
+    expect(cta).toHaveTextContent(/start creating/i);
+    fireEvent.click(cta);
     expect(h.onSignIn).toHaveBeenCalledTimes(1);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i }));
     expect(h.onSignIn).toHaveBeenCalledTimes(2);
-    fireEvent.click(within(screen.getByRole('main')).getByRole('button', { name: /request access/i }));
+    fireEvent.click(within(heroOf()).getByRole('button', { name: /^request access$/i }));
     expect(h.onRequestAccess).toHaveBeenCalledTimes(1);
+    // The access panel offers both again (Request access first, then Sign in).
+    const access = document.getElementById('access') as HTMLElement;
+    fireEvent.click(within(access).getByRole('button', { name: /request access/i }));
+    fireEvent.click(within(access).getByRole('button', { name: /^sign in$/i }));
+    expect(h.onRequestAccess).toHaveBeenCalledTimes(2);
+    expect(h.onSignIn).toHaveBeenCalledTimes(3);
     expect(screen.getByText(/invite-only during the beta/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /my comics/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /open your comics/i })).toBeNull();
   });
 
   it('offers signed-in visitors their comics and the Library', () => {
     const h = handlers();
     render(<ComicsLanding signedIn {...h} />);
-    fireEvent.click(screen.getByRole('button', { name: /open my comics/i }));
+    const open = screen.getAllByRole('button', { name: /open your comics/i });
+    expect(open).toHaveLength(2); // the hero and the access panel
+    for (const b of open) fireEvent.click(b);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /my comics/i }));
-    expect(h.onOpenComics).toHaveBeenCalledTimes(2);
+    expect(h.onOpenComics).toHaveBeenCalledTimes(3);
     fireEvent.click(screen.getByRole('button', { name: /browse the library/i }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(screen.getByRole('contentinfo')).getByRole('button', { name: 'My comics' }));
+    expect(h.onOpenComics).toHaveBeenCalledTimes(4);
     expect(screen.queryByText(/gallery/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /request access/i })).toBeNull();
     expect(screen.queryByText(/invite-only/i)).toBeNull();
   });
 
-  it('links other DreamStream products to the main site and keeps legal pages in-app', () => {
+  it('the footer: the Library, the legal pages in-app, Contact, and DreamStream Studio as the only way off the product', () => {
     const h = handlers();
     render(<ComicsLanding signedIn={false} {...h} />);
     const footer = screen.getByRole('contentinfo');
-    expect(within(footer).getByRole('link', { name: 'DreamStream home' })).toHaveAttribute('href', 'https://dreamstreamstudio.ai/');
-    expect(within(footer).getByRole('link', { name: 'Chat Studio' })).toHaveAttribute('href', 'https://dreamstreamstudio.ai/?view=chat');
-    expect(within(footer).getByRole('link', { name: 'Stream Studio' })).toHaveAttribute('href', 'https://dreamstreamstudio.ai/live.html');
-    fireEvent.click(within(footer).getByRole('button', { name: 'Privacy' }));
-    fireEvent.click(within(footer).getByRole('button', { name: 'Terms' }));
+    expect(within(footer).getByRole('link', { name: 'DreamStream Studio' })).toHaveAttribute('href', mainAppUrl('/'));
+    expect(within(footer).queryByRole('link', { name: /^(?:chat studio|stream studio|dreamstream home)$/i })).toBeNull();
+    expect(screen.queryAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([CONTACT_HREF, mainAppUrl('/')]);
+    expect(within(footer).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', CONTACT_HREF);
+    fireEvent.click(within(footer).getByRole('button', { name: 'Privacy Policy' }));
+    fireEvent.click(within(footer).getByRole('button', { name: 'Terms & Conditions' }));
     expect(h.onOpenPrivacy).toHaveBeenCalledTimes(1);
     expect(h.onOpenTerms).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(footer).getByRole('button', { name: 'Library' }));
+    fireEvent.click(within(footer).getByRole('button', { name: 'Request access' }));
+    expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
+    expect(h.onRequestAccess).toHaveBeenCalledTimes(1);
+    expect(within(footer).getByRole('navigation', { name: 'Comic Studio links' })).toBeInTheDocument();
+    expect(within(footer).getByRole('navigation', { name: 'Legal' })).toBeInTheDocument();
   });
 
-  it('uses calm tokens, 44px targets and decorative-only art (no legacy comic chrome)', () => {
+  it('every target is the ds Button or carries the coarse-pointer 44 px floor; the art is decorative; no legacy comic chrome', () => {
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
     const markup = container.innerHTML;
-    expect(markup).not.toMatch(/font-comic|border-2 border-black|shadow-comic/);
+    expect(markup).not.toMatch(/font-comic|border-black|shadow-comic/);
     expect(markup).toContain('var(--ds-canvas)');
-    for (const target of [...screen.getAllByRole('button'), ...screen.getAllByRole('link')]) expect(target.className).toMatch(/min-h-\[44px\]/);
-    expect(screen.getByTestId('comics-hero-art')).toHaveAttribute('aria-hidden');
+    const floor = DENSITY.coarse.split(' ')[0];
+    for (const target of [...screen.getAllByRole('button'), ...screen.getAllByRole('link')]) {
+      const ok = target.getAttribute('data-slot') === 'button' || target.className.split(/\s+/).includes(floor);
+      expect(ok, target.outerHTML.slice(0, 120)).toBe(true);
+    }
+    const proof = screen.getByTestId('comics-proof');
+    expect(proof.firstElementChild).toHaveAttribute('aria-hidden');
+    expect(within(proof).getByText(/illustrated example/i)).toBeInTheDocument();
+    // The replica is art: nothing in it is interactive.
+    expect(proof.querySelectorAll('button, a, input, [tabindex]')).toHaveLength(0);
+    for (const art of container.querySelectorAll('[data-comic-art]')) expect(art.closest('[aria-hidden]')).not.toBeNull();
   });
 
-  it('primary buttons put the on-accent ink on the accent fill, never hard white (white on near-white in Atlas dark)', () => {
+  it('one spark: signed out exactly one create fill (the hero), signed in none; never hard white', () => {
     for (const signedIn of [false, true]) {
-      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
-      const primaries = screen.getAllByRole('button').filter((b) => b.className.includes('bg-[var(--ds-accent)]'));
-      expect(primaries.length).toBeGreaterThanOrEqual(3);
-      for (const b of primaries) {
-        expect(b.className.split(/\s+/)).not.toContain('text-white');
-        expect(b.className).toContain('text-[var(--ds-on-accent)]');
-      }
+      const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const sparks = container.querySelectorAll('[data-variant="create"]');
+      expect(sparks).toHaveLength(signedIn ? 0 : 1);
+      if (!signedIn) expect(sparks[0]).toBe(screen.getByTestId('comics-hero-cta'));
+      expect(container.innerHTML).not.toMatch(/(?<![\w-])text-white(?![\w-])/);
+      unmount();
+    }
+  });
+
+  it('no money and no model names, for anyone (governed users never see $ or ¢)', () => {
+    for (const signedIn of [false, true]) {
+      const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const text = container.textContent || '';
+      expect(text).not.toMatch(/[$¢€£]/);
+      expect(text).not.toMatch(/\b(?:cost|price|pricing|credits?|usd|gemini|gpt|claude|imagen|flux|nano banana)\b/i);
       unmount();
     }
   });

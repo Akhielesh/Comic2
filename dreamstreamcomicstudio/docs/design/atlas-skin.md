@@ -511,8 +511,8 @@ primitives) and DS-1b (the QA harness).
   gone (headings still balance their lines). `CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, sheet headers
   and empty-state titles are IBM Plex Sans semibold. Tailwind's `font-display` (Bangers) is never used. The
   public titles that relied on the blanket rule now ask for it, as Atlas's own public hero and section
-  titles carry `atlas-display`: the comics landing's hero `h1` and its two section `h2`s
-  (`ComicsLanding.tsx`) and the public reader cover's `h1` (`ReaderCoverCard.tsx`).
+  titles carry `atlas-display`: the comics landing's hero `h1` and its section `h2`s (`ComicsLanding.tsx`,
+  through `DISPLAY_HERO` / `DISPLAY_SECTION`) and the public reader cover's `h1` (`ReaderCoverCard.tsx`).
 - D3: the glass blur and the header blur are two tokens. `--ds-glass-blur` (12 px by default, 0 under the
   skin) for GLASS, GLASS_STRONG and MENU; `--ds-header-blur` (18 px everywhere) for the new
   `STICKY_HEADER` + `HEADER_GLASS` recipes (the blur on an aria-hidden layer, only once content scrolls
@@ -734,3 +734,16 @@ each needing a component change Comic Studio has no shared primitive for yet:
 - Atlas's `ScrollArea` viewport draws focus as a 2 px inset ink outline (an outset one is clipped by the
   scroller): Comic Studio's focusable scroll regions (`tabIndex={0}` panels) still get the base
   outset outline.
+
+## The comics home (Atlas public composition)
+
+The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) takes Atlas's public page
+composition, design values only: a centred hero over the dot grid (`.ds-grid-backdrop`, `.ds-stagger`), the product
+proof (`StudioPreview`, a still replica of the studio: the Director's "Here's what I've got" card beside drawn pages,
+in a `RADIUS_FEATURE` frame with `SHADOW_HERO`), the looks band (six `ComicPageSpecimen` pages: the library's
+procedural art with real lettering), the steps rail and a three-card bento (`.ds-reveal`, `LIFT`), the read-and-share
+section, the `INVERSE_SURFACE` access panel and a three-column footer. Its header is `ComicsHeader` on the app's
+`AppHeader` (`--header-h`, the same object as the studio's header), with the ink `ComicsMark` and a one-line
+"Comic Studio" lockup; the sign-in, Privacy, Terms and signed-out Library views keep it, without the floating
+widgets (`useComicsHost.ownsChrome`). One spark: the signed-out hero's "Start creating". The new public tokens
+(`--ds-radius-pill`, `--ds-shadow-hero`, `--ds-text-md|4xl|5xl|7xl`) and recipes are in design-system.md.

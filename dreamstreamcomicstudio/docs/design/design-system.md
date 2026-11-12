@@ -54,6 +54,9 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-grid-dot` (wave 9) | ink at 14 % | same | the dot of `.ds-grid-backdrop` |
 | `--ds-spot-ink` (wave 9) | `var(--ds-ink)` | same | the spotlight pool's ink (the header and home work) |
 | `--ds-radius-hero` / `-feature` (wave 9) | `28px` / `16px` | same | the hero frame; feature cards |
+| `--ds-radius-pill` (comics home) | `9999px` | same | public pills and calls to action (Atlas `rounded-full`); unlike `--ds-radius-chip`, the same in every skin |
+| `--ds-shadow-hero` (comics home) | `0 24px 60px -28px` black 35 %; `.dark` a white 6 % rim + black 80 % | same | the product-proof frame (Atlas's hero demo shadow) |
+| `--ds-text-md` / `-4xl` / `-5xl` / `-7xl` (comics home) | `0.9375rem` / `2.25rem` / `3rem` / `4.5rem` | same (Atlas `text-[15px]`, `--text-4xl…7xl`) | public body copy and large CTA labels; the public h1 (36 → 48 → 72) and section h2 (30 → 36 → 48) steps |
 | `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper. Paper only (1.5:1 on `--ds-reader-room`): controls over the room draw `--ds-reader-hud-focus` (readerDesigns.css, RD-A) |
 | `--sidebar-w` (M1a) | `240px` | same | the wide-screen sidebar, beside `--rail-w` (72 px) |
 
@@ -134,7 +137,7 @@ Atlas's six variants are untouched). Progress takes `tone="making"` (`PROGRESS_M
 | Tags (colour mode, medium, kind) | — | a 6 px dot before the word, in a neutral chip | — | — |
 | Art-adjacent surfaces | — | — | — | placeholder, glow, reader room |
 | Empty-state art | one spot element per drawing | — | — | — |
-| Landing | the hero call to action; `BENDAY` behind the hero art | — | — | real covers |
+| Landing | "Start creating", signed out only (signed in: none); `BENDAY` behind the studio preview's pages | — | — | the procedural looks in `ComicPageSpecimen` (real covers wait for the Discover listing) |
 
 When more than one place wants the one spark, page content wins in this order: the My comics header's New comic, then
 the composer Send, then the landing hero. The panel's New comic stays ink.
@@ -193,7 +196,7 @@ in `atlas-skin.md`, "The shared constants"):
 
 **The display face (wave 9).** Space Grotesk only where a recipe asks for it: `FONT_DISPLAY` (`.ds-font-display`),
 `HEADING`, `PAGE_TITLE` and the page and public titles built on them (the comics landing's hero and section
-titles, the public reader cover). Card, section-card, dialog, sheet and empty-state titles are IBM Plex Sans
+titles through `DISPLAY_HERO`, `DISPLAY_SECTION` and `DISPLAY_CARD_TITLE`, the public reader cover). Card, section-card, dialog, sheet and empty-state titles are IBM Plex Sans
 semibold (`CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, `STATE_TITLE`), as Atlas's. Tailwind's
 `font-display` is Bangers, lettering content: never in chrome.
 | `ACCENT_*`, `ON_ACCENT_TEXT`, `PRIMARY_BTN` | the accent (ink under the skin) and the text-bearing accent fill |
@@ -212,6 +215,9 @@ semibold (`CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, `STATE_TITLE`), as Atla
 | **`SEGMENTED_ACTIVE_FILL`** (wave 9) | the selected pill's paint without an ink, for an item on `SEGMENTED_ITEM` (which inks the selected item itself) |
 | **`Z`** (DS-1a) | `Z.stage … Z.tooltip` = `z-[var(--ds-z-*)]`: the only place a z-index class is spelled |
 | **`DENSITY`** (DS-1a) | `compact` / `comfortable` / `touch` row heights; `coarse` (44 px tall under a coarse pointer) and `coarseSquare` (44 × 44) |
+| **`RADIUS_ROUND`**, **`RADIUS_FEATURE`**, **`RADIUS_HERO`**, **`SHADOW_HERO`** (comics home) | public pills and CTAs; feature cards; hero panels; the product-proof frame |
+| **`DISPLAY_HERO`**, **`DISPLAY_SECTION`**, **`DISPLAY_CARD_TITLE`**, **`PUBLIC_LEAD`**, **`PUBLIC_BODY`**, **`OVERLINE_DISPLAY`** (comics home) | the public type: h1 36 → 48 → 72, section h2 30 → 36 → 48, card titles 24/28 (all Space Grotesk 600), the 16/28 → 20/32 lead, 15/28 body, the 12 px section eyebrow |
+| **`CTA_LG`**, **`ARROW_NUDGE`**, **`INVERSE_ACTION`**, **`INVERSE_ACTION_QUIET`** (comics home) | the public call-to-action shape (Button `size="lg"` + 44 px, pill, 15 px); the 2 px arrow nudge; the paper buttons inside `INVERSE_SURFACE` (no Button variant reads there) |
 
 ## Composing classes
 

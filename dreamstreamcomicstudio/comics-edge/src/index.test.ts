@@ -191,8 +191,8 @@ describe('Pages proxy', () => {
     expect(body).toContain(`<meta name="description" content="${BRAND.description}">`);
     expect(body).toContain('<link rel="manifest" href="/comics.webmanifest">');
     expect(body).toContain('<link rel="apple-touch-icon" href="/icons/comics-apple-touch-180.png">');
-    expect(body).toContain('<meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)">');
-    expect(body).toContain('<meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">');
+    expect(body).toContain('<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">');
+    expect(body).toContain('<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">');
     expect(body).toContain('<meta name="ds-product" content="comics">');
     expect(body).toContain('<meta property="og:site_name" content="DreamStream Comic Studio">');
     expect(body).toContain(`<meta property="og:url" content="${PUBLIC}/">`);

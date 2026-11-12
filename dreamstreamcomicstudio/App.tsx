@@ -65,6 +65,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppStatusBar } from './components/status/AppStatusBar';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
+import { ComicsHeader } from './components/comicshost/ComicsHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
@@ -1048,7 +1049,10 @@ const App: React.FC = () => {
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
-  const showUniversalAssistant = assistant.mounted;
+  // The comics host's own views (landing, sign-in, Privacy, Terms, the signed-out Library) carry no floating
+  // widgets, as the studio carries none: nothing sits over the art or the sign-in form.
+  const comicsChrome = comicsHost.ownsChrome(effectiveView);
+  const showUniversalAssistant = assistant.mounted && !comicsChrome;
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared' && effectiveView !== 'publiccomic';
@@ -1056,7 +1060,7 @@ const App: React.FC = () => {
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  const showFeedbackWidget = !comicsChrome && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
   // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
   const publicComicIsOwner =
     !!publicComicRoute?.slug &&
@@ -1117,6 +1121,19 @@ const App: React.FC = () => {
           }
           return header;
         })()}
+        {/* The comics host keeps the landing's header on the views a visitor reaches from it (sign-in, Privacy,
+            Terms, the signed-out Library): one product from the first click. The landing renders its own. */}
+        {comicsChrome && effectiveView !== 'home' && (
+          <ComicsHeader
+            signedIn={!!user}
+            page="other"
+            onGoHome={handleBackToHome}
+            onSignIn={() => goToAuth('signin')}
+            onRequestAccess={() => goToAuth('request-access')}
+            onOpenComics={() => handleNavigate('dashboard')}
+            onBrowseGallery={() => handleNavigate('gallery')}
+          />
+        )}
 
         {gatedProductLabel ? (
           <ProductGateScreen
