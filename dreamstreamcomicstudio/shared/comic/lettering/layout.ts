@@ -342,7 +342,8 @@ const lineSetup = (doc: ComicDoc, line: Line, measure: Measure): LineSetup => {
     rotate: raw.rotate === 'auto' ? auto?.rotate ?? 0 : raw.rotate
   };
   const rf = resolveLetteringFont(style.font, line.kind, lang, { weight: style.weight, italic: style.italic });
-  const meta = FONT_REGISTRY[rf.fontId];
+  // A face outside the base registry (a Pro font, once PE-FONTS resolves one) never leaves the metrics undefined.
+  const meta = FONT_REGISTRY[rf.fontId] ?? FONT_REGISTRY['comic-neue'];
   const fontAt = (px: number) => fontString(rf.fontId, px, rf.weight, rf.italic);
   const spacing = style.letterSpacing;
   const measureAt = (s: string, px: number) => {
