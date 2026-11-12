@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { CHIP, CHIP_VARIANT, FOCUS_ITEM, FOCUS_RING_FLUSH, OVERLAY, OVERLINE, RISE_IN, SEGMENTED_ACTIVE_FILL, Z } from '../chat/studioDesign';
+import { CHIP, CHIP_VARIANT, FOCUS_ITEM, FOCUS_RING_FLUSH, OVERLAY, OVERLINE, SEGMENTED_ACTIVE_FILL, Z } from '../chat/studioDesign';
 
 export interface NavDropdownItem {
   label: string;
@@ -40,12 +40,21 @@ export const NAV_TRIGGER_REST = 'text-[var(--ds-muted)] hover:text-[var(--ds-ink
 
 /** The menu: the overlay surface on the popover layer, rows highlighted in the overlay-row colour. */
 export const NAV_MENU = `w-64 p-1.5 ${OVERLAY}`;
+/**
+ * The menu's entrance: the 280 ms overlay scale-in (styles/ds-motion.css), not the 420 ms page entrance
+ * (redesign §2 Motion keeps enter-slow for a new page); still under reduced motion.
+ */
+export const NAV_MENU_ENTER = 'ds-scale-in';
 export const NAV_MENU_ROW = `flex w-full items-center gap-3 rounded-[var(--ds-radius-control,0.75rem)] px-3 py-2 text-left hover:bg-[var(--ds-overlay-hover)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent coarse:min-h-[var(--ds-density-touch)] ${NAV_MOTION} ${FOCUS_ITEM}`;
 
 /**
  * A header nav item that reveals a menu of specific options on hover (and on tap, for touch). Each top-level
- * product uses one so its sub-destinations are one hover away. Escape closes it and returns focus to the
- * trigger; moving focus out of it closes it too.
+ * product uses one so its sub-destinations are one hover away. Hover opens it for a real mouse only: a tap
+ * fires a compatibility mouseenter before its click, which used to open the menu and then toggle it shut, so
+ * on a touch screen from 1024 px (no phone toggle there) the products could not be reached. Touch and pen
+ * open it with the click alone. Escape closes it and returns focus to the trigger; moving focus out of it
+ * closes it too. The trigger is a disclosure (aria-expanded + aria-controls) over plain buttons, not a menu,
+ * so it announces no menu semantics it does not have.
  */
 export const NavDropdown: React.FC<NavDropdownProps> = ({ label, icon, items, caption, badge, variant = 'default' }) => {
   const [open, setOpen] = useState(false);
@@ -68,8 +77,12 @@ export const NavDropdown: React.FC<NavDropdownProps> = ({ label, icon, items, ca
     <div
       ref={rootRef}
       className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onPointerEnter={(e) => {
+        if (e.pointerType === 'mouse') setOpen(true);
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType === 'mouse') setOpen(false);
+      }}
       onBlur={(e) => {
         if (!rootRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
       }}
@@ -78,7 +91,6 @@ export const NavDropdown: React.FC<NavDropdownProps> = ({ label, icon, items, ca
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         data-variant={variant}
@@ -93,7 +105,7 @@ export const NavDropdown: React.FC<NavDropdownProps> = ({ label, icon, items, ca
       {open && (
         // pt-2 keeps a hover "bridge" so moving the cursor from trigger to menu doesn't close it.
         <div className={cn('absolute left-1/2 top-full -translate-x-1/2 pt-2', Z.popover)}>
-          <div id={menuId} data-slot="nav-menu" className={cn(NAV_MENU, RISE_IN)}>
+          <div id={menuId} data-slot="nav-menu" className={cn(NAV_MENU, NAV_MENU_ENTER)}>
             {caption && <p className={cn('m-0 px-3 pb-1 pt-1.5', OVERLINE)}>{caption}</p>}
             {items.map((item, i) => (
               <button

@@ -22,7 +22,7 @@ vi.mock('../TokenAvailabilityPill', () => ({ TokenAvailabilityPill: () => <span 
 import { DENSITY, HEADER_GLASS, OVERLAY, SEGMENTED_TRACK, STICKY_HEADER } from '../chat/studioDesign';
 import { expectClasses } from '../ds/ds.testkit';
 import { BRAND_MARK_SRC } from './BrandLockup';
-import { LEGAL_LINK, LegalMicroLinks } from './LegalMicroLinks';
+import { CONTACT_HREF, LEGAL_LINK, LegalMicroLinks } from './LegalMicroLinks';
 import { MENU_TOGGLE, StaticSiteHeader } from './StaticSiteHeader';
 
 const classesIn = (root: Element): string[] => [root, ...root.querySelectorAll('*')].flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/)).filter(Boolean);
@@ -90,7 +90,66 @@ describe('StaticSiteHeader on Atlas chrome', () => {
   });
 });
 
+describe('a product menu by pointer, touch and focus', () => {
+  const comicTrigger = () => within(screen.getByRole('navigation', { name: 'Products' })).getByRole('button', { name: /Comic/ });
+  const comicRoot = () => comicTrigger().parentElement!;
+  const menuOf = (trigger: HTMLElement) => (trigger.getAttribute('aria-controls') ? document.getElementById(trigger.getAttribute('aria-controls')!) : null);
+
+  it('a tap opens it: the touch pointer entering does not, so the click is not a toggle back shut', () => {
+    // From 1024 px the phone toggle is gone, so on a touch screen (iPad landscape) a tap is the only way in.
+    // A tap fires pointerenter (and a compatibility mouseenter) before its click.
+    render(<StaticSiteHeader {...props()} />);
+    fireEvent.pointerEnter(comicRoot(), { pointerType: 'touch' });
+    fireEvent.mouseEnter(comicRoot());
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(comicTrigger());
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'true');
+    expect(menuOf(comicTrigger())).toHaveAttribute('data-slot', 'nav-menu');
+    // The finger lifting (touch pointerleave) leaves it open.
+    fireEvent.pointerLeave(comicRoot(), { pointerType: 'touch' });
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('a real mouse opens it on hover and closes it on leaving', () => {
+    render(<StaticSiteHeader {...props()} />);
+    fireEvent.pointerEnter(comicRoot(), { pointerType: 'mouse' });
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.pointerLeave(comicRoot(), { pointerType: 'mouse' });
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('focus moving out closes it; focus moving to one of its rows keeps it open', () => {
+    render(<StaticSiteHeader {...props()} />);
+    fireEvent.click(comicTrigger());
+    const row = within(menuOf(comicTrigger())!).getByRole('button', { name: /Library/ });
+    fireEvent.blur(comicTrigger(), { relatedTarget: row });
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.blur(row, { relatedTarget: document.body });
+    expect(comicTrigger()).toHaveAttribute('aria-expanded', 'false');
+    expect(menuOf(comicTrigger())).toBeNull();
+  });
+
+  it('is a disclosure over plain buttons, not a menu, and enters with the 280 ms overlay scale-in', () => {
+    render(<StaticSiteHeader {...props()} />);
+    for (const trigger of within(screen.getByRole('navigation', { name: 'Products' })).getAllByRole('button')) {
+      expect(trigger, trigger.textContent ?? '').not.toHaveAttribute('aria-haspopup');
+    }
+    fireEvent.click(comicTrigger());
+    const menu = menuOf(comicTrigger())!;
+    expect(menu).not.toHaveAttribute('role', 'menu');
+    expect(menu.classList.contains('ds-scale-in')).toBe(true);
+    expect(menu.classList.contains('ds-rise-in')).toBe(false);
+  });
+});
+
 describe('the phone menu toggle', () => {
+  it('carries a hook the IconButton does not overwrite (its data-slot stays icon-button)', () => {
+    render(<StaticSiteHeader {...props()} />);
+    const toggle = screen.getByRole('button', { name: 'Open menu' });
+    expect(document.querySelector('[data-menu-toggle]')).toBe(toggle);
+    expect(toggle).toHaveAttribute('data-slot', 'icon-button');
+  });
+
   it('is 44 px (size-11) below the desktop breakpoint, at every pointer, instead of the old 36 px h-9 w-9', () => {
     render(<StaticSiteHeader {...props()} />);
     const toggle = screen.getByRole('button', { name: 'Open menu' });
@@ -165,6 +224,12 @@ describe('the legal line', () => {
     render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
     for (const name of ['Privacy Policy', 'Terms & Conditions', 'FAQs']) expectClasses(screen.getByRole('button', { name }), LEGAL_LINK, DENSITY.coarseSquare);
     expectClasses(screen.getByRole('link', { name: 'Contact' }), DENSITY.coarseSquare);
+  });
+
+  it('Contact writes to the site address the rest of the app uses, never a third-party domain', () => {
+    render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
+    expect(CONTACT_HREF).toBe('mailto:contact@dreamstreamstudio.ai');
+    expect(screen.getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:contact@dreamstreamstudio.ai');
   });
 });
 

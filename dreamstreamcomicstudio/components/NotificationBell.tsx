@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useId, useRef } from 'react';
+import React, { useState, useEffect, useId, useLayoutEffect, useRef } from 'react';
 import { Bell, Heart, MessageSquare, UserPlus, Sparkles, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/db';
 import { AppNotification } from '../types';
 import { cn } from '../lib/utils';
-import { FOCUS_ITEM, OVERLAY, RISE_IN, STATUS_INK, Z } from './chat/studioDesign';
+import { FOCUS_ITEM, OVERLAY, STATUS_INK, Z } from './chat/studioDesign';
 import { IconButton } from './ds/IconButton';
 
 // Friendly text for usage-alert system notifications (entity_id: usage:<kind>:<pct>:<period>).
@@ -33,8 +33,18 @@ export const NOTIFICATION_POLL_MS = 30_000;
 
 /** The unread count on the bell: the danger mark with its on-colour, a ring of the page around it. */
 export const BELL_COUNT = 'pointer-events-none absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--ds-danger-mark)] px-1 text-[10.5px] font-semibold tabular-nums leading-none text-[var(--ds-on-danger)] ring-2 ring-[var(--ds-canvas)]';
-/** The panel: the overlay surface on the popover layer, inside the viewport on a phone. */
-export const BELL_PANEL = `absolute right-0 mt-2 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden ${OVERLAY}`;
+/**
+ * The panel: the overlay surface on the popover layer. On a phone the bell sits third from the right (before
+ * the profile and the menu toggle), so a panel hung from it ran off the left edge: below `sm` it is pinned to
+ * the viewport instead, 16 px from each side, its top just under the bell (`--bell-top`, measured when it
+ * opens; 4rem until then). From `sm` up it hangs from the bell's right edge, 22rem wide. Either way it stops
+ * 1rem above the bottom of the screen and its list scrolls.
+ */
+export const BELL_PANEL = `fixed inset-x-4 top-[var(--bell-top,4rem)] flex max-h-[calc(100dvh-var(--bell-top,4rem)-1rem)] flex-col overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[22rem] ${OVERLAY}`;
+/** The overlay entrance (styles/ds-motion.css: 280 ms, fade and grow from 96 %; still under reduced motion). */
+export const BELL_PANEL_ENTER = 'ds-scale-in';
+/** The gap between the bell and the panel's top, in px (the `sm:mt-2` of the wider layout). */
+const PANEL_GAP_PX = 8;
 /** One notification row (unread rows sit on the soft accent). */
 export const BELL_ROW = `flex w-full items-start gap-3 px-4 py-3 text-left transition-colors duration-[var(--ds-motion-fast,120ms)] hover:bg-[var(--ds-overlay-hover)] motion-reduce:transition-none ${FOCUS_ITEM}`;
 
@@ -46,7 +56,8 @@ export interface NotificationBellProps {
  * The header's notification bell (Atlas chrome): a 44 px icon button (on a coarse pointer) with the unread
  * count, opening a panel of the latest notifications. It looks for new ones every 30 s while the tab is
  * visible and once more when the tab comes back, never while it is hidden. Escape or a click outside closes
- * the panel.
+ * the panel. The trigger is a disclosure (aria-expanded + aria-controls), not a menu: the panel is a region of
+ * plain buttons, so it announces no menu semantics it does not have.
  */
 export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }) => {
     const { user } = useAuth();
@@ -56,6 +67,9 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
     const dropdownRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const panelId = useId();
+    // Where the phone panel's top goes: just under the bell, wherever the header puts it (the home page's
+    // announcement line sits above the row). Measured before paint when the panel opens, and again on resize.
+    const [panelTop, setPanelTop] = useState<number | null>(null);
 
     const loadNotifications = async () => {
         if (!user) return;
@@ -82,6 +96,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
+
+    useLayoutEffect(() => {
+        if (!isOpen) return undefined;
+        const place = () => {
+            const bottom = triggerRef.current?.getBoundingClientRect().bottom ?? 0;
+            setPanelTop(bottom > 0 ? Math.round(bottom + PANEL_GAP_PX) : null);
+        };
+        place();
+        window.addEventListener('resize', place);
+        return () => window.removeEventListener('resize', place);
+    }, [isOpen]);
 
     // Close the panel on a click outside it or on Escape (focus goes back to the bell).
     useEffect(() => {
@@ -151,7 +176,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                 label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
                 title="Notifications"
                 onClick={() => setIsOpen((o) => !o)}
-                aria-haspopup="true"
                 aria-expanded={isOpen}
                 aria-controls={isOpen ? panelId : undefined}
                 size="lg"
@@ -166,8 +190,15 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
             </IconButton>
 
             {isOpen && (
-                <div id={panelId} role="region" aria-label="Notifications" data-slot="bell-panel" className={cn(BELL_PANEL, Z.popover, RISE_IN)}>
-                    <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] px-4 py-3">
+                <div
+                    id={panelId}
+                    role="region"
+                    aria-label="Notifications"
+                    data-slot="bell-panel"
+                    className={cn(BELL_PANEL, Z.popover, BELL_PANEL_ENTER)}
+                    style={panelTop === null ? undefined : ({ '--bell-top': `${panelTop}px` } as React.CSSProperties)}
+                >
+                    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ds-hairline)] px-4 py-3">
                         <h3 className="m-0 text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)]">Notifications</h3>
                         {unreadCount > 0 && (
                             <button
@@ -185,7 +216,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                         )}
                     </div>
 
-                    <div className="max-h-96 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto overscroll-contain">
+                    <div className="max-h-96 min-h-0 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto overscroll-contain">
                         {notifications.length === 0 ? (
                             <p role="status" className="m-0 p-8 text-center text-[length:var(--ds-text-base)] text-[var(--ds-muted)]">
                                 You&apos;re all caught up.

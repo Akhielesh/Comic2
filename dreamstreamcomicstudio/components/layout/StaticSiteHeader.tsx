@@ -221,7 +221,8 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
         onClick={() => setMobileOpen((o) => !o)}
         aria-expanded={mobileOpen}
         aria-controls={mobileOpen ? menuId : undefined}
-        data-slot="menu-toggle"
+        // A hook, not a slot: IconButton owns data-slot ("icon-button") and writes it after the props.
+        data-menu-toggle=""
         className={MENU_TOGGLE}
       >
         {mobileOpen ? <X size={20} /> : <Menu size={20} />}
