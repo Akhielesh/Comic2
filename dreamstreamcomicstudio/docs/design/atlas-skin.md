@@ -409,9 +409,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- The Atlas repository, its design branch, commit **`7a6f3e16`** (checked for S2b on 2026-11-12). The design files
-  are byte-identical from `0677199b` through `7a6f3e16`: the 4 commits after `292b17b6` change only `lib/server`,
-  deploy, CI and docs, nothing to port. At the S2a check (`292b17b6`) the 7 commits since `0677199b` changed connector,
+- The Atlas repository, its design branch, commit **`c567c621`** (checked for the S2b release on 2026-11-12). The
+  design files are byte-identical from `0677199b` through `c567c621`: the one commit after `7a6f3e16` touches none of
+  them, and the 4 commits after `292b17b6` change only `lib/server`, deploy, CI and docs, nothing to port. At the S2a
+  check (`292b17b6`) the 7 commits since `0677199b` changed connector,
   beta-copy and `lib/server` code, tests and docs, and the only design-list hit was again Atlas's own connector copy
   guard (`tests/lib/beta-connector-copy.test.ts`, a Google Photos case). At `0677199b` the design files
   were **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
@@ -420,9 +421,9 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   12 commits since are security dependency bumps, connector fixes and public beta-copy pages, and the only
   design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
-  agreed with the Atlas session from `0677199b`. Previous syncs `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
+  agreed with the Atlas session from `0677199b`. Previous syncs `7a6f3e16`, `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
   `496f265c`, `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
-  `git diff 7a6f3e16 <design branch> -- app/globals.css
+  `git diff c567c621 <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).
