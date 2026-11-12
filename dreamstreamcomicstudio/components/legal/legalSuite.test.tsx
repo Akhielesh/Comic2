@@ -33,6 +33,7 @@ import type { LegalPageProps } from './LegalDocument';
 import {
     LEGAL_DOCS,
     isLegalDocId,
+    isOnLegalPage,
     keepLegalEntryMark,
     legalDocForPath,
     legalEntryState,
@@ -491,7 +492,10 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(privacy).toContain('service announcements our team writes and sends by hand');
         // Sign-out and unsaved recordings: who is offered one, including ones no account made, and
         // what another account at the device can see and do (live/recorder.unit.test.ts checks it).
-        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account signed in there when this version first ran or, if none was, is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them.");
+        // One left from an earlier version goes to the account whose data the device held when this version
+        // first ran there (settleUnownedRecordings), not to whoever was signing in at that moment.
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there or, if there was none, is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them.");
+        for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('goes to the account signed in there when this version first ran');
         expect(privacy).not.toContain('only the account that made them is offered them');
         expect(privacy).not.toContain('the Stream Studio data on that device is removed');
         const retention = textOf(privacyMain.querySelector('#retention') as HTMLElement);
@@ -505,6 +509,7 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(textOf(subs.querySelector('#ai-models') as HTMLElement)).toContain("NVIDIA also does Comic Studio's writing steps");
         const cookies = textOf(renderDoc('cookies').main.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
+        expect(cookies).toContain('One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there or, if there was none, is offered to anyone who opens Stream Studio on that device');
         // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
         expect(cookies).toContain('the names of people you called and the name you used as a viewer) and ends its alert subscription. Three things stay.');
         expect(cookies).toContain("This browser's baby-monitor encryption keys stay: its own keys, its copies of nursery keys, and which cameras it has seen encrypt");
@@ -512,6 +517,15 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(cookies).toContain('Each is offered only to the account its studio was opened for.');
         expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them.');
         expect(cookies).not.toContain('only the account that made them is offered them');
+    });
+
+    it('Privacy: free models may keep and learn from what they receive, the Contact form and its retention row, and memory import (DreamStream review)', () => {
+        const privacyMain = renderDoc('privacy').main;
+        const privacy = textOf(privacyMain);
+        expect(textOf(privacyMain.querySelector('#ai-processing') as HTMLElement)).toContain('Free models in particular may keep what they receive and learn from it, that is, use it to train or improve their models.');
+        expect(privacy).toContain('The Contact form in Settings sends our database the email address you enter, your message, a phone number if you add one, and your account, so we can reply by email.');
+        expect(textOf(privacyMain.querySelector('#retention') as HTMLElement)).toMatch(/Messages sent with the Contact form in Settings\s*How long\s*Not deleted automatically today; email us to have yours deleted\./);
+        expect(privacy).toContain('You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list: what you paste or upload (up to the first 24,000 characters) is sent with the list to an AI model, the same way as the notes written from Chat Studio');
     });
 
     it('Privacy: API keys, the assistant, usage events, location, images, emails, events and sign-in records', () => {
@@ -689,24 +703,33 @@ describe('Back and Forward between documents opened in the app', () => {
 describe('Back from a legal page shows the view the entry names (App routing in miniature)', () => {
     // App.tsx in miniature, built from the same legalRoutes helpers App uses: its restorable views,
     // its address sync (replaceState keeping only a legal entry's mark; the share viewer and the
-    // reader keep their own address), handleNavigate (one pushState, marked for a legal document),
-    // restoreViewFromHistory (a reader entry, the open project's workspace and the profile App holds
-    // included), leaveLegalPage, openLegalFromReader, the header on every view, and the shared footer
-    // under the other views. The comic reader (ComicReader, also inside SharedViewer) holds a
-    // back-stack layer and wraps its footer links in leaveTo, as the real one does.
+    // reader keep their own address), handleNavigate (one entry, pushLegalPath for a legal document),
+    // restoreViewFromHistory (a reader entry, the comic already open shown again without loading it,
+    // the open project's workspace and the profile App holds included), leaveLegalPage, openLegal,
+    // the date-of-birth prompt (which waits while a legal page is open), the header on every view, and
+    // the shared footer under the other views. The comic reader (ComicReader, also inside SharedViewer)
+    // holds a back-stack layer and wraps all its footer links in leaveTo, as the real one does.
     const RESTORABLE = new Set<string>(['dashboard', 'gallery', 'settings', ...LEGAL_DOCS.map((d) => d.id)]);
-    const Reader: React.FC<{ label: string; layer: string; onOpenPrivacy: () => void; onOpenTerms: () => void }> = ({ label, layer, onOpenPrivacy, onOpenTerms }) => {
+    const Reader: React.FC<{ label: string; layer: string; onOpenPrivacy: () => void; onOpenTerms: () => void; onOpenLegal: (doc: LegalDocId) => void }> = ({ label, layer, onOpenPrivacy, onOpenTerms, onOpenLegal }) => {
         const leaveReader = useBackLayer(true, () => undefined, layer);
         const leaveTo = (fn: () => void) => () => leaveReader(fn, { final: false });
         return (
             <div>
                 <p>{label}</p>
-                <LegalMicroLinks onOpenPrivacy={leaveTo(onOpenPrivacy)} onOpenTerms={leaveTo(onOpenTerms)} onOpenFaq={vi.fn()} />
+                <LegalMicroLinks onOpenPrivacy={leaveTo(onOpenPrivacy)} onOpenTerms={leaveTo(onOpenTerms)} onOpenFaq={vi.fn()} onOpenLegal={(doc) => leaveTo(() => onOpenLegal(doc))()} />
             </div>
         );
     };
-    const Shell: React.FC<{ initial: string; signedIn?: boolean; project?: string; profile?: string }> = ({ initial, signedIn = true, project, profile }) => {
+    const Shell: React.FC<{ initial: string; signedIn?: boolean; project?: string; profile?: string; needsDob?: boolean; onLoadComic?: (id: string) => void }> = ({ initial, signedIn = true, project, profile, needsDob = false, onLoadComic }) => {
         const [view, setView] = React.useState(initial);
+        const [dobPrompted, setDobPrompted] = React.useState(false);
+        // App's date-of-birth prompt: it opens Settings once, but never off a legal page.
+        React.useEffect(() => {
+            if (!needsDob || dobPrompted) return;
+            if (isOnLegalPage(view)) return;
+            setDobPrompted(true);
+            setView('settings');
+        }, [needsDob, dobPrompted, view]);
         const [token, setToken] = React.useState<string | null>(() => /^\/share\/([^/]+)$/.exec(window.location.pathname)?.[1] ?? null);
         const [comic, setComic] = React.useState<string | null>(() => new URLSearchParams(window.location.search).get('id'));
         React.useEffect(() => {
@@ -734,8 +757,12 @@ describe('Back from a legal page shows the view the entry names (App routing in 
             if (!entry) return leaveLegalPage();
             if (entry.shareToken) setToken(entry.shareToken);
             if (entry.view === 'read' && entry.id) {
-                // App: navigateToReader(entry.id, …), which rewrites this same ?view=read&id= entry.
-                setComic(entry.id);
+                // App: the comic the reader had open is shown again as it was; another one goes through
+                // navigateToReader(entry.id, …) (a fetch and a view count), which rewrites this same entry.
+                if (entry.id !== comic) {
+                    onLoadComic?.(entry.id);
+                    setComic(entry.id);
+                }
                 setView('reader');
                 return;
             }
@@ -746,7 +773,7 @@ describe('Back from a legal page shows the view the entry names (App routing in 
             }
             setView(entry.view);
         };
-        const openLegalFromReader = (doc: LegalDocId) => () => {
+        const openLegal = (doc: LegalDocId) => () => {
             pushLegalPath(doc);
             setView(doc);
         };
@@ -756,7 +783,7 @@ describe('Back from a legal page shows the view the entry names (App routing in 
             url.searchParams.delete('view');
             url.searchParams.delete('id');
             url.pathname = '/';
-            if (isLegalDocId(to)) window.history.pushState(legalEntryState(), '', legalPath(to));
+            if (isLegalDocId(to)) pushLegalPath(to);
             else window.history.pushState({}, '', url);
         };
         const Page = isLegalDocId(view) ? PAGES[view] : null;
@@ -768,8 +795,9 @@ describe('Back from a legal page shows the view the entry names (App routing in 
                     key={`${view}:${token}:${comic}`}
                     label={view === 'shared' ? `View: shared ${token}` : `View: reader ${comic}`}
                     layer={view === 'shared' ? `reader:share-${token}` : `reader:${comic}`}
-                    onOpenPrivacy={openLegalFromReader('privacy')}
-                    onOpenTerms={openLegalFromReader('terms')}
+                    onOpenPrivacy={openLegal('privacy')}
+                    onOpenTerms={openLegal('terms')}
+                    onOpenLegal={(doc) => openLegal(doc)()}
                 />
             );
         } else {
@@ -788,6 +816,7 @@ describe('Back from a legal page shows the view the entry names (App routing in 
         return (
             <div>
                 <button type="button" onClick={() => navigate('gallery')}>Header: Gallery</button>
+                <button type="button" onClick={() => navigate('privacy')}>Header: Privacy Policy</button>
                 {body}
             </div>
         );
@@ -1025,6 +1054,70 @@ describe('Back from a legal page shows the view the entry names (App routing in 
         await waitFor(() => expect(screen.getByText('View: dashboard')).toBeInTheDocument());
         expect(window.location.search).toBe('?view=dashboard');
     });
+
+    it('the header\'s link to the document already shown adds no entry (pushLegalPath), so one Back still leaves it', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        const before = window.history.length;
+        render(<Shell initial="gallery" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Header: Privacy Policy' }));
+        await heading('Privacy Policy');
+        fireEvent.click(screen.getByRole('button', { name: 'Header: Privacy Policy' }));
+        expect(window.history.length).toBe(before + 1);
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(address()).toBe('/?view=gallery');
+    });
+
+    it('the reader\'s footer opens all six documents in the app: a comic → its footer\'s Cookies → Back shows that comic again, without loading it again', async () => {
+        const onLoadComic = vi.fn();
+        window.history.replaceState({}, '', '/?view=read&id=c1');
+        render(<Shell initial="reader" onLoadComic={onLoadComic} />);
+        document.addEventListener('click', swallow);
+        // A plain click is handled in the app (no page load), after the reader has left its layer.
+        expect(fireEvent.click(screen.getByRole('link', { name: 'Cookies' }))).toBe(false);
+        document.removeEventListener('click', swallow);
+        await heading('Cookies & Local Storage');
+        expect(window.location.pathname).toBe('/cookies');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: reader c1')).toBeInTheDocument());
+        expect(address()).toBe('/?view=read&id=c1');
+        expect(onLoadComic).not.toHaveBeenCalled();
+    });
+
+    it('a /share/<token> link → the reader\'s footer Subprocessors → the page\'s Back button → the shared comic, at its own address', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        window.history.pushState({}, '', '/share/tok-789');
+        render(<Shell initial="shared" />);
+        clickFooter('Subprocessors');
+        await heading('Subprocessors');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: shared tok-789')).toBeInTheDocument());
+        expect(window.location.pathname).toBe('/share/tok-789');
+    });
+
+    it('the date-of-birth prompt never pulls someone off a legal page: it waits until they leave it', async () => {
+        window.history.replaceState({}, '', '/privacy');
+        render(<Shell initial="privacy" needsDob />);
+        await heading('Privacy Policy');
+        expect(window.location.pathname).toBe('/privacy');
+        pageBack(); // a cold load: the Back button goes to the Dashboard, and the prompt runs from there
+        await waitFor(() => expect(screen.getByText('View: settings')).toBeInTheDocument());
+    });
+});
+
+describe('App\'s automatic moves wait while a legal page is open (isOnLegalPage)', () => {
+    it('a legal view, or an old ?view= link to one that the view hasn\'t caught up with; not a path App is leaving', () => {
+        window.history.replaceState({}, '', '/');
+        for (const doc of LEGAL_DOCS) expect(isOnLegalPage(doc.id), doc.id).toBe(true);
+        for (const view of ['home', 'dashboard', 'gallery', 'settings', 'reader']) expect(isOnLegalPage(view), view).toBe(false);
+        window.history.replaceState({}, '', '/?view=terms');
+        expect(isOnLegalPage('home')).toBe(true);
+        window.history.replaceState({}, '', '/?view=gallery');
+        expect(isOnLegalPage('gallery')).toBe(false);
+        // Leaving a document: the view has changed and the address catches up a moment later.
+        window.history.replaceState({}, '', '/privacy');
+        expect(isOnLegalPage('dashboard')).toBe(false);
+    });
 });
 
 describe('footers and other entry points reach the documents', () => {
@@ -1056,6 +1149,10 @@ describe('footers and other entry points reach the documents', () => {
     it('support links go to the routed support mailbox, not the unrouted contact@', () => {
         for (const f of ['components/layout/LegalMicroLinks.tsx', 'components/ComicReader.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx', 'components/WaitlistForm.tsx', 'server/src/routes/interest.ts']) expect(read(f), f).not.toContain('contact@');
         expect(LIVE_LEGAL_LINKS.find((l) => l.label === 'Support')?.href).toBe(`mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support`);
+        // Settings → Contact names the mailbox legalFacts defines, not a copy of it.
+        const settings = read('components/AccountSettings.tsx');
+        expect(settings).toContain('Support Email: {SUPPORT_EMAIL}');
+        expect(settings).not.toContain(SUPPORT_EMAIL);
         for (const id of ['acceptable-use', 'copyright'] as const) {
             expect(LIVE_LEGAL_LINKS.some((l) => legalDocForPath(new URL(l.href, 'https://dreamstreamstudio.ai').pathname) === id)).toBe(true);
         }

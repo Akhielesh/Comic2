@@ -189,6 +189,18 @@ export const MEMORY_NOTE_MODEL = {
 export const MEMORY_SEARCH_MAX_CHARS = 8000;
 
 /**
+ * Importing memories from another AI tool (Chat Studio → Settings → Memory, components/chat/
+ * ChatSettingsModal.tsx): what the user pastes or uploads is reduced in the browser
+ * (services/memoryImport.ts prepareMemoryImportContent, at most MAX_IMPORT_CHARS) and sent with the
+ * in-app list to POST /api/chat/memory/import (services/chatApi.ts importChatMemory: no text source,
+ * so the app-wide pick or OpenRouter, like updateChatMemory), which slices it to
+ * MAX_IMPORT_CONTENT_CHARS (server/src/routes/chat.ts) and runs the same models as the notes written
+ * from Chat Studio (MEMORY_NOTE_MODEL). The merged list is shown first and replaces the in-app list
+ * only when the user accepts it (applyImport).
+ */
+export const MEMORY_IMPORT_MAX_CHARS = 24_000;
+
+/**
  * The quick-finder (components/QuickFinder.tsx): select text on any page App shows it on (every view
  * but the ones in hiddenOn: App.tsx showQuickFinder) and pick Explain, Define, Summarize and so on.
  * It sends up to selectionChars characters of the selection, with the client context, to Chat

@@ -201,6 +201,15 @@ describe('recordings left unsaved before entries carried an owner', () => {
     expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-old']);
   });
 
+  it('go to the account whose data the device held when this version first ran, even when another account is the one signing in to Stream Studio at that moment (the Privacy Policy\'s wording)', () => {
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([entry('ds-rec-old')]));
+    localStorage.setItem(OWNER_KEY, 'u-a'); // A never signed out under the earlier version
+    expect(claimDevice('u-b')).toBe(true); // B opens Stream Studio here first: A's data goes, the old entry is A's
+    expect(registry()[0].owner).toBe('u-a');
+    expect(unsavedRecordingsOf('u-b')).toEqual([]);
+    expect(otherAccountsUnsaved('u-b').count).toBe(1);
+  });
+
   it('with no account holding the device then (signed out before this release), they go to no account: anyone here is offered them, and they stay that way', () => {
     localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([entry('ds-rec-old')]));
     claimDevice('u-b');

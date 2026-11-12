@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
 import { SUPPORT_EMAIL } from './legal/legalFacts';
+import type { LegalDocId } from './legal/legalRoutes';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import { halftone } from './comicstudio/library/procedural/textures';
@@ -177,6 +178,8 @@ interface ComicReaderProps {
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
   onOpenFaq: () => void;
+  /** Opens the footer's other legal documents in the app (without it, those links load their page). */
+  onOpenLegal?: (doc: LegalDocId) => void;
 }
 
 /**
@@ -236,7 +239,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   onNavigate,
   onOpenPrivacy,
   onOpenTerms,
-  onOpenFaq
+  onOpenFaq,
+  onOpenLegal
 }) => {
   const { user } = useAuth();
   const [showStory, setShowStory] = useState(false);
@@ -1164,6 +1168,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         onOpenPrivacy={leaveTo(onOpenPrivacy)}
         onOpenTerms={leaveTo(onOpenTerms)}
         onOpenFaq={leaveTo(onOpenFaq)}
+        onOpenLegal={onOpenLegal && ((doc) => leaveTo(() => onOpenLegal(doc))())}
       />
       )}
 

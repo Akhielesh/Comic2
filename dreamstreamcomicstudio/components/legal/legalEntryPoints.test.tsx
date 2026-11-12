@@ -20,8 +20,6 @@ import {
     isLegalDocId,
     keepLegalEntryMark,
     legalBackGoesBack,
-    legalEntryState,
-    legalPath,
     pushLegalPath,
     syncLegalPath,
     viewForHistoryEntry,
@@ -56,7 +54,7 @@ const Shell: React.FC<{ initial: string; comics?: boolean }> = ({ initial, comic
         url.searchParams.delete('view');
         url.searchParams.delete('id');
         url.pathname = '/';
-        if (isLegalDocId(to)) window.history.pushState(legalEntryState(), '', legalPath(to));
+        if (isLegalDocId(to)) pushLegalPath(to);
         else window.history.pushState({}, '', url);
     };
     // App.tsx openLegal, exactly.

@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { historyLayers, leaveLayer, pushLayer, resetBackStack } from '../comicstudio/mobile/backStack';
@@ -18,6 +18,17 @@ describe('LegalMicroLinks', () => {
     render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
     for (const doc of LEGAL_DOCS) expect(screen.getByRole('link', { name: doc.label })).toHaveAttribute('href', doc.path);
     expect(screen.queryByText(/Conditions/)).toBeNull();
+  });
+
+  it('is a navigation landmark, and every link and button is a 44 px target on a touch screen', () => {
+    render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
+    const nav = screen.getByRole('navigation', { name: 'Legal and support' });
+    const targets = [...within(nav).getAllByRole('link'), within(nav).getByRole('button', { name: 'FAQs' })];
+    expect(targets).toHaveLength(LEGAL_DOCS.length + 2); // the six documents, Contact and FAQs
+    for (const el of targets) {
+      expect(el.className, el.textContent ?? '').toContain('[@media(pointer:coarse)]:min-h-[44px]');
+      expect(el.className, el.textContent ?? '').toContain('[@media(pointer:coarse)]:min-w-[44px]');
+    }
   });
 
   it('opens documents inside the app on a plain click, and lets modified clicks through', () => {

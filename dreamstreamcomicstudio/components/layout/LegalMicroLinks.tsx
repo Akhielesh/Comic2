@@ -11,7 +11,8 @@ interface LegalMicroLinksProps {
   className?: string;
 }
 
-const LINK = 'hover:text-black transition-colors';
+// On a touch screen each link is at least 44 x 44 px (the footer's 11 px text alone is far smaller).
+const LINK = 'inline-flex items-center justify-center hover:text-black transition-colors [@media(pointer:coarse)]:min-h-[44px] [@media(pointer:coarse)]:min-w-[44px]';
 
 // Every legal document has a real address (/privacy, /terms, …): a plain click opens it inside the
 // app (with its own history entry, so Back returns here), and a middle-click, a copied link or a new
@@ -27,7 +28,7 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
     doc === 'privacy' ? onOpenPrivacy : doc === 'terms' ? onOpenTerms : onOpenLegal ? () => onOpenLegal(doc) : undefined;
 
   return (
-    <div className={`border-t border-slate-200 bg-white/80 ${className}`}>
+    <nav aria-label="Legal and support" className={`border-t border-slate-200 bg-white/80 ${className}`}>
       <div className="max-w-7xl mx-auto px-6 py-3 text-[11px] font-bold text-slate-500 flex flex-wrap items-center gap-4">
         {LEGAL_DOCS.map((doc) => {
           const open = openIn(doc.id);
@@ -54,6 +55,6 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
           Contact
         </a>
       </div>
-    </div>
+    </nav>
   );
 };

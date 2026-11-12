@@ -25,6 +25,7 @@ import {
     CONFIRM_LINK_DAYS,
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
+    MEMORY_IMPORT_MAX_CHARS,
     MEMORY_NOTE_MODEL,
     MEMORY_SEARCH_MAX_CHARS,
     MIN_SIGNUP_AGE_YEARS,
@@ -352,6 +353,64 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(policy).toContain('Through OpenRouter the model is one DreamStream picks, today {MEMORY_NOTE_MODEL.label}, or {MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
         expect(policy).not.toContain('not by the chat');
         expect(read('components/legal/SubprocessorsPage.tsx')).toContain('today by ${MEMORY_NOTE_MODEL.label}, or ${MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
+    });
+
+    it(`importing memories from another AI tool sends what you paste or upload (first ${MEMORY_IMPORT_MAX_CHARS} characters) with the in-app list through the app-wide pick, like the notes written from Chat Studio; the merged list replaces yours only when you accept it`, () => {
+        expect(constValue('server/src/routes/chat.ts', 'MAX_IMPORT_CONTENT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
+        expect(constValue('services/memoryImport.ts', 'MAX_IMPORT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
+        const route = read('server/src/routes/chat.ts');
+        const handler = route.slice(route.indexOf("chatRouter.post('/memory/import'"), route.indexOf('// Proactive follow-ups'));
+        expect(handler).toContain("const content = typeof body.content === 'string' ? body.content.trim().slice(0, MAX_IMPORT_CONTENT_CHARS) : '';");
+        expect(handler).toContain("const existing = typeof body.memory === 'string' ?");
+        // No chat source: the app-wide pick (X-Text-Source) or the first key, as POST /memory.
+        expect(handler).toContain('const resolved = resolveChatProvider(req);');
+        expect(handler).toContain("const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;");
+        expect(handler).toContain("fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,");
+        const api = read('services/chatApi.ts');
+        const call = api.slice(api.indexOf('export const importChatMemory'), api.indexOf('export const importChatMemory') + 500);
+        expect(call).toContain("'/api/chat/memory/import',");
+        expect(call).toContain('{ source, content, memory },');
+        const modal = read('components/chat/ChatSettingsModal.tsx');
+        expect(modal).toContain('const content = prepareMemoryImportContent(importText);');
+        expect(modal).toContain('const res = await importChatMemory(importSource, content, existing);');
+        expect(modal).toContain('setPreview(merged);');
+        expect(modal).toMatch(/const applyImport = \(\) => \{\s*if \(!preview\) return;\s*commit\(preview\);/);
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list: what you paste or upload (up to the first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters) is sent with the list to an AI model, the same way as the notes written from Chat Studio, to merge the two, and the merged list replaces yours only if you accept it.");
+        expect(policy).toContain('memory notes (including memories you import from another AI tool)');
+        expect(policy).toContain('and memories you import from another AI tool to merge them into your list');
+    });
+
+    it('free models: the site-wide assistant picks one first, and DreamStream\'s own picks lead with one; the page says free models may keep and learn from what they receive', () => {
+        // The assistant: free-only on the platform key (or with Free-only on), free-first on the user's own key.
+        expect(read('server/src/routes/assistant.ts')).toContain("const freeOnly = !hasByokForProvider(req, 'openrouter') || req.freeOnly === true;");
+        expect(read('server/src/routes/assistant.ts')).toContain("effectiveModel = await pickTextModel(freeOnly ? { costPref: 'free-only', stageHint: 'assistant' } : { preferFree: true });");
+        // DreamStream's own picks default to free-first.
+        expect(read('server/src/ai/autoRouter.ts')).toContain("opts?.costPref ?? (opts?.preferFree === false ? 'cheap' : 'free');");
+        expect(read('server/src/ai/autoRouter.ts')).toContain(" *  - 'free'      free-first; falls back to cheapest paid when no free model exists.");
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain('Free models in particular may keep what they receive and learn from it, that is, use it to train or improve their models. The site-wide assistant picks a free model first, and other features can use one when you pick it or when DreamStream picks the model for you.');
+    });
+
+    it('the Contact form in Settings sends the email address, message, phone (inside the message) and account to contact_messages, nothing deletes them, and the page discloses both', () => {
+        const db = read('services/db.ts');
+        const save = db.slice(db.indexOf('export const savePublicContactMessage'), db.indexOf('// --- COMMUNITY FEATURES'));
+        expect(save).toMatch(/supabase\.from\('contact_messages'\)\.insert\(\{\s*user_id: user\.id,\s*email: normalizedEmail,\s*message: normalizedMessage\s*\}\)/);
+        const settings = read('components/AccountSettings.tsx');
+        const form = settings.slice(settings.indexOf('const ContactSection = () =>'), settings.indexOf('export const AccountSettings'));
+        expect(form).toContain('const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\\n\\n${normalizedMessage}` : normalizedMessage;');
+        expect(form).toContain('const saved = await savePublicContactMessage(normalizedEmail, finalMessage);');
+        // Nothing in the server, the client or the SQL deletes them (no table file, no purge).
+        for (const f of [...sourceFiles('server/src'), ...sourceFiles('services')]) {
+            expect(/from\(\s*'contact_messages'\s*\)[^;]*?\.delete\(/.test(read(f)), `${f} deletes contact_messages`).toBe(false);
+        }
+        for (const f of sourceFiles('server/sql', /\.sql$/)) expect(read(f).toLowerCase(), f).not.toMatch(/(delete\s+from|truncate(\s+table)?)\s+(public\.)?contact_messages\b/);
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain('The Contact form in Settings sends our database the email address you enter, your message, a phone number if you add one, and your account, so we can reply by email.');
+        expect(policy).toContain("['Messages sent with the Contact form in Settings', 'Not deleted automatically today; email us to have yours deleted.']");
+        // The form promises a reply by email, and no hours or reply time.
+        expect(form).toContain("Thanks — we'll reply by email.");
+        expect(form).not.toMatch(/representative|Business Hours|business days/);
     });
 
     it("in the classic editor and Page Studio an image step without references can fall back to Ideogram, which the server runs only on the user's own key or for an account with access; the page says so", () => {

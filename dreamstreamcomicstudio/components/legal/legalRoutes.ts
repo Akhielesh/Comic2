@@ -60,6 +60,24 @@ export const legalDocForPath = (pathname: string | null | undefined): LegalDocId
 };
 
 /**
+ * A legal document is on screen, or an old ?view=privacy link names one that App's view hasn't
+ * caught up with yet. App's automatic moves (the stream-only accounts' hand-off to Stream Studio,
+ * the date-of-birth prompt that opens Settings) wait while this is true, so they never pull someone
+ * off a document they opened, and run once the reader leaves it. A document's own path needs no
+ * check of its own: App derives the view from it before the first paint, and while App leaves a
+ * document the path is still /privacy for a moment (until the address sync rewrites it), which must
+ * not hold the move back.
+ */
+export const isOnLegalPage = (view: string): boolean => {
+  if (isLegalDocId(view)) return true;
+  try {
+    return isLegalDocId(new URLSearchParams(window.location.search).get('view'));
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Drop the #fragment before opening another document in the app, so the next page starts at its
  * top instead of jumping to a same-named section (#contact, #changes) of the page you left.
  */

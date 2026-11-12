@@ -32,6 +32,15 @@ All notable user-facing changes. Format loosely follows
   spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
+- **Legal suite, DreamStream review (2026-11-12):** all six documents now open in the app from
+  the comic reader's footer (four used to load a new page and leave the comic), and Back to the
+  comic shows it again without reloading it or counting another view. The Stream Studio hand-off
+  for stream-only accounts and the date-of-birth prompt wait until you leave a legal page. The
+  Privacy Policy now says free models may keep and learn from what they receive, and it
+  describes the Contact form in Settings (with a retention row) and importing memories from
+  another AI tool. Its wording on unsaved recordings from an earlier version of Stream Studio is
+  more precise. The Contact form now says "Thanks — we'll reply by email." and makes no
+  business-hours promise. The site footer is a navigation landmark, with 44 px touch targets.
 - **Legal suite and register interest, fifth review (2026-11-12):** a legal page's Back button
   now returns to the page that opened it after you use its table of contents or a link to a
   section (those jumps stay on the same history entry, and a link to a section of another

@@ -103,7 +103,9 @@ describe('legal routes', () => {
     expect(restore).toContain("(v === 'auth' && !user) ||");
     // A reader entry reopens its comic, a workspace entry its project, a profile entry the profile.
     expect(restore).toContain("(v === 'read' && !!id) ||");
-    expect(restore).toContain('void navigateToReader(entry.id,');
+    expect(restore).toContain('void navigateToReader(entry.id, readerOrigin);');
+    // Back to the comic the reader already has loaded shows it again: no fetch, no view counted, no loader.
+    expect(restore).toMatch(/if \(entry\.id === activeProjectId && \(publicProject\?\.id === entry\.id \|\| projects\.some\(\(project\) => project\.id === entry\.id\)\)\) \{\s*setReturnView\(readerOrigin\);\s*setCurrentView\('reader'\);\s*return;\s*\}\s*void navigateToReader/);
     expect(restore).toContain('(!!studioViewFromUrlParam(v) && !!id) ||');
     expect(restore).toContain('if (entry.id === activeProjectId) setCurrentView(workspace);');
     expect(restore).toContain("else setPendingStudioTarget({ id: entry.id, view: workspace, source: 'id' });");
@@ -119,6 +121,12 @@ describe('legal routes', () => {
       expect(start, component).toBeGreaterThan(-1);
       expect(props, component).toContain("onOpenPrivacy={openLegal('privacy')}");
       expect(props, component).toContain("onOpenTerms={openLegal('terms')}");
+    }
+    // The reader's footer (ComicReader, also inside SharedViewer) opens the other four documents through
+    // openLegal too (ComicReader wraps it in leaveTo, so it runs after the reader left its layer).
+    for (const component of ['ComicReader', 'SharedViewer']) {
+      const start = app.indexOf(`<${component}\n`);
+      expect(app.slice(start, app.indexOf('/>', start)), component).toContain('onOpenLegal={(doc) => openLegal(doc)()}');
     }
     expect(app.match(/onOpenPrivacy=\{openLegal\('privacy'\)\}/g)).toHaveLength(5);
     expect(app.match(/onOpenTerms=\{openLegal\('terms'\)\}/g)).toHaveLength(5);
@@ -136,11 +144,27 @@ describe('legal routes', () => {
     const branchStart = app.indexOf('isLegalDocId(view)\n    ) {');
     const branch = app.slice(branchStart, app.indexOf('const goToAuth', branchStart));
     expect(branchStart).toBeGreaterThan(-1);
-    // One pushState per move (one or the other), and a legal document's entry is marked.
-    expect(branch).toContain("if (isLegalDocId(view)) window.history.pushState(legalEntryState(), '', legalPath(view));\n        else window.history.pushState({}, '', url);");
-    expect(branch.match(/pushState\(/g)).toHaveLength(2);
+    // One entry per move: a legal document's through pushLegalPath (marked; none for the document
+    // already shown, none on a back-stack layer's entry), any other view's by one pushState.
+    expect(branch).toContain("if (isLegalDocId(view)) pushLegalPath(view);\n        else window.history.pushState({}, '', url);");
+    expect(branch.match(/pushState\(/g)).toHaveLength(1);
     expect(branch).not.toContain('clearReaderUrlParams(');
     expect(branch).not.toContain('replaceState(');
+  });
+
+  it('is wired into App.tsx: the stream-only hand-off and the date-of-birth prompt wait while a legal page is open', () => {
+    const app = read('../../App.tsx');
+    const redirectStart = app.indexOf('if (streamOnlyRedirectedRef.current) return;');
+    const redirect = app.slice(redirectStart, app.indexOf('}, [', redirectStart) + 80);
+    expect(redirectStart).toBeGreaterThan(-1);
+    // Checked before the hand-off, and re-run when the view changes, so it happens once they leave the page.
+    expect(redirect.indexOf('if (isOnLegalPage(currentView)) return;')).toBeGreaterThan(-1);
+    expect(redirect.indexOf('if (isOnLegalPage(currentView)) return;')).toBeLessThan(redirect.indexOf("openLiveApp('/live.html'"));
+    expect(redirect).toContain('}, [authLoading, user, isAdmin, allowedProducts, currentView]);');
+    const dobStart = app.indexOf('if (!needsDobCompletion || hasPromptedDobThisSession) return;');
+    const dob = app.slice(dobStart, app.indexOf("openSettings('profile');", dobStart));
+    expect(dobStart).toBeGreaterThan(-1);
+    expect(dob).toContain('if (isOnLegalPage(currentView)) return;');
   });
 
   it('marks an in-app legal entry, and the address sync keeps only that mark', () => {

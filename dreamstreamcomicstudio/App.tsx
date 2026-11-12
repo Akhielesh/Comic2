@@ -70,7 +70,7 @@ import { AppStatusBar } from './components/status/AppStatusBar';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
-import { isLegalDocId, keepLegalEntryMark, legalDocForPath, legalEntryState, legalPath, pushLegalPath, syncLegalPath, viewForHistoryEntry, type LegalDocId } from './components/legal/legalRoutes';
+import { isLegalDocId, isOnLegalPage, keepLegalEntryMark, legalDocForPath, pushLegalPath, syncLegalPath, viewForHistoryEntry, type LegalDocId } from './components/legal/legalRoutes';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
@@ -284,13 +284,14 @@ const App: React.FC = () => {
     if (publicComicRoute) return; // a share link is read by anyone, whatever their account can do
     if (authLoading || !user || isAdmin) return;
     if (!allowedProducts) return; // unrestricted or still unknown
+    if (isOnLegalPage(currentView)) return; // never off a legal page they opened; it runs once they leave
     if (allowedProducts.size === 1 && allowedProducts.has('stream_studio')) {
       streamOnlyRedirectedRef.current = true;
       // A pending ?next= hand-back takes them where they asked to go (two at once would race).
       if (hasPendingNext()) return;
       void openLiveApp('/live.html', { replace: true });
     }
-  }, [authLoading, user, isAdmin, allowedProducts]);
+  }, [authLoading, user, isAdmin, allowedProducts, currentView]);
 
   // Post-login hand-back: sub-apps link here with ?next=<same-origin path> — or, with
   // Stream Studio on its own host, ?next=https://stream.dreamstreamstudio.ai/#/<screen>
@@ -418,7 +419,15 @@ const App: React.FC = () => {
     if (!entry) return leaveLegalPage();
     if (entry.shareToken) setShareToken(entry.shareToken);
     if (entry.view === 'read' && entry.id) {
-      void navigateToReader(entry.id, returnView !== 'reader' && !isLegalDocId(returnView) ? returnView : user ? 'dashboard' : 'home');
+      const readerOrigin = returnView !== 'reader' && !isLegalDocId(returnView) ? returnView : user ? 'dashboard' : 'home';
+      // Back to the comic the reader had open (its footer opened the document): show it again as it
+      // was, without fetching it again, counting another view or flashing the loader.
+      if (entry.id === activeProjectId && (publicProject?.id === entry.id || projects.some((project) => project.id === entry.id))) {
+        setReturnView(readerOrigin);
+        setCurrentView('reader');
+        return;
+      }
+      void navigateToReader(entry.id, readerOrigin);
       return;
     }
     const workspace = studioViewFromUrlParam(entry.view);
@@ -775,6 +784,7 @@ const App: React.FC = () => {
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
     const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures', 'publiccomic'];
     if (immersive.includes(currentView)) return;
+    if (isOnLegalPage(currentView)) return; // not off a legal page either: it waits until they leave it
 
     setHasPromptedDobThisSession(true);
     openSettings('profile');
@@ -862,7 +872,7 @@ const App: React.FC = () => {
         url.searchParams.delete('view');
         url.searchParams.delete('id');
         url.pathname = view === 'models' ? '/models' : '/';
-        if (isLegalDocId(view)) window.history.pushState(legalEntryState(), '', legalPath(view));
+        if (isLegalDocId(view)) pushLegalPath(view);
         else window.history.pushState({}, '', url);
       } catch { /* history unavailable; navigation still works via state */ }
     }
@@ -1355,6 +1365,7 @@ const App: React.FC = () => {
               onOpenPrivacy={openLegal('privacy')}
               onOpenTerms={openLegal('terms')}
               onOpenFaq={handleOpenFaq}
+              onOpenLegal={(doc) => openLegal(doc)()}
             />
           )}
 
@@ -1409,6 +1420,7 @@ const App: React.FC = () => {
               onOpenPrivacy={openLegal('privacy')}
               onOpenTerms={openLegal('terms')}
               onOpenFaq={handleOpenFaq}
+              onOpenLegal={(doc) => openLegal(doc)()}
             />
           )}
         </Suspense>

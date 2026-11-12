@@ -35,7 +35,7 @@ import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
-import { LEGAL_LAST_UPDATED, PRIVACY_EMAIL } from './legal/legalFacts';
+import { LEGAL_LAST_UPDATED, PRIVACY_EMAIL, SUPPORT_EMAIL } from './legal/legalFacts';
 import { LEGAL_DOCS } from './legal/legalRoutes';
 
 interface AccountSettingsProps {
@@ -93,7 +93,7 @@ const ContactSection = () => {
                     <Mail size={40} />
                 </div>
                 <h3 className="font-display text-2xl">Message Sent!</h3>
-                <p className="font-comic text-slate-600 mt-2">A representative will be in touch shortly.</p>
+                <p className="font-comic text-slate-600 mt-2">Thanks — we'll reply by email.</p>
                 <button onClick={() => setSent(false)} className="mt-8 text-sm font-bold underline">Send another</button>
             </div>
         );
@@ -103,12 +103,11 @@ const ContactSection = () => {
         <div className="max-w-xl animate-fade-in">
             <h3 className="font-display text-2xl mb-2">Contact Support</h3>
             <p className="text-slate-500 mb-6 font-comic">
-                Share bugs, billing issues, or feature requests. We usually reply within 1-2 business days.
+                Share bugs, billing issues, or feature requests.
             </p>
             <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
                 <p className="font-bold mb-1">Basic Contact Info</p>
-                <p className="text-slate-600">Support Email: support@dreamstreamstudio.ai</p>
-                <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
+                <p className="text-slate-600">Support Email: {SUPPORT_EMAIL}</p>
             </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
