@@ -22,7 +22,10 @@ export const BrandLockup: React.FC<BrandLockupProps> = ({ onClick, clickable = t
       <img src={BRAND_MARK_SRC} alt="" width={28} height={28} draggable={false} className="size-7 shrink-0 select-none" />
       <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none">
         <span className={cn('text-[15px] font-semibold tracking-[-0.01em]', INK)}>DreamStream</span>
-        <span className={cn('hidden text-[15px] font-medium min-[380px]:inline', MUTED)}>Studio</span>
+        {/* From 380 px. An arbitrary media variant: this config's raw screens turn min-[…]: into no CSS at all.
+            The leading space (collapsed on screen; the gap spaces the words) keeps the visible text "DreamStream
+            Studio" inside the button's name "DreamStream Studio, home" (axe label-content-name-mismatch). */}
+        <span className={cn('hidden text-[15px] font-medium [@media(min-width:380px)]:inline', MUTED)}>{' '}Studio</span>
       </span>
     </>
   );

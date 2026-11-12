@@ -53,7 +53,12 @@ const TEST_FILE = 'tests/config/sparkGuard.test.ts';
  * header "New comic", the studio composer Send, the landing hero "Start a comic", "Share" on the ready moment,
  * "Make one like this" on a reader's share page. Never a price, never a spend control, never the panel.
  */
-export const ALLOWLIST: Record<string, { uses: Array<{ token: string; line: string }>; reason: string }> = {};
+export const ALLOWLIST: Record<string, { uses: Array<{ token: string; line: string }>; reason: string }> = {
+  'components/comicshost/ComicsLanding.tsx': {
+    uses: [{ token: 'SPARK_FILL', line: 'const heroButton = `${BUTTON_SHAPE} ${SPARK_FILL} ${FOCUS_RING}`;' }],
+    reason: 'the landing hero "Sign in to your studio" / "Open my comics": the one start-making CTA on the comics front page (CL-3); the header and closing buttons stay the ink primary'
+  }
+};
 
 /** Files that show every primitive variant as a specimen (rules 1 and 2 do not apply; rule 5 still does). */
 export const SPECIMENS: Record<string, string> = {
@@ -560,6 +565,7 @@ describe('spark guard — the detector', () => {
       costSummaryForExport: 'the export JSON payload, not on screen',
       aiUsageForExport: 'the export JSON payload, not on screen',
       artifactsForExport: 'the export JSON payload, not on screen',
+      projectForExport: 'the export JSON payload (project.json, dollar fields dropped for governed users), not on screen',
       costContextFor: 'a display context, not text',
       useCostContext: 'a display context, not text',
       boardCostContext: 'a display context, not text',

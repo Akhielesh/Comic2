@@ -185,7 +185,7 @@ describe('ComicsLanding', () => {
     for (const signedIn of [false, true]) {
       const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
       const primaries = screen.getAllByRole('button').filter((b) => b.className.includes('bg-[var(--ds-accent)]'));
-      expect(primaries.length).toBeGreaterThanOrEqual(3);
+      expect(primaries.length).toBeGreaterThanOrEqual(2);
       for (const b of primaries) {
         expect(b.className.split(/\s+/)).not.toContain('text-white');
         expect(b.className).toContain('text-[var(--ds-on-accent)]');

@@ -1,9 +1,35 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Download, ThumbsUp, ThumbsDown, Info, RefreshCw, Edit2, Trash2, Check, Globe, Lock } from 'lucide-react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { X, Download, ThumbsUp, ThumbsDown, Info, RefreshCw, Edit2, Trash2, Check, Globe, Lock, AlertTriangle } from 'lucide-react';
 import JSZip from 'jszip';
 import { Project, ProjectComment, AppStep, GenerationArtifact, ImageTag } from '../../types';
-import { Button } from '../Button';
+import { Button as DsButton, type ButtonProps as DsButtonProps, type ButtonVariant } from '../ds/Button';
 import { ModalPortal } from './ModalPortal';
+import { IconButton } from '../ds/IconButton';
+import { Input, Textarea } from '../ds/Input';
+import { Select } from '../ds/Select';
+import { Switch } from '../ds/Switch';
+import { cn } from '../../lib/utils';
+import {
+  CHIP,
+  CHIP_VARIANT,
+  DENSITY,
+  DIALOG_TITLE,
+  FOCUS_RING,
+  OVERLAY,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  SCRIM,
+  SECTION_ICON_TILE,
+  SECTION_TITLE,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TONE_TEXT,
+  Z
+} from '../chat/studioDesign';
+import { useUsageAllowance } from '../usage/useUsageAllowance';
+import { compactUsageShare, costContextFromAllowance, formatCostForUser } from '../../services/costDisplay';
+import { aiUsageForExport, artifactsForExport, costSummaryForExport, projectForExport } from '../steps/comicCostDisplay';
 import { exportProject, loadArtifactsForProject } from '../../services/db';
 import { parseRatio } from '../../services/imageUtils';
 import { estimateTokensFromTextInput } from '../../services/reporting';
@@ -112,6 +138,44 @@ const loadImage = (dataUrl: string) =>
     img.src = dataUrl;
   });
 
+/**
+ * The export row's buttons on the DS Button, keeping the old call shape (size "sm", variant primary /
+ * secondary / outline, an `icon`): PF-1 (S2a) rewrites the "Update Sizes" line beside them, so those lines
+ * stay byte-identical until the S2b integration, which can inline this. One ink primary (Download PDF), the
+ * other files outlined, the size refresh quiet.
+ */
+const LEGACY_VARIANT: Record<'primary' | 'secondary' | 'outline', ButtonVariant> = { primary: 'default', secondary: 'outline', outline: 'ghost' };
+interface ExportButtonProps extends Omit<DsButtonProps, 'variant' | 'size'> {
+  variant?: keyof typeof LEGACY_VARIANT;
+  size?: 'sm';
+  icon?: React.ReactNode;
+}
+const Button: React.FC<ExportButtonProps> = ({ variant = 'primary', size: _size, icon, children, ...rest }) => (
+  <DsButton {...rest} size="sm" variant={LEGACY_VARIANT[variant]}>
+    {icon ? (
+      <span aria-hidden="true" className="contents">
+        {icon}
+      </span>
+    ) : null}
+    {children}
+  </DsButton>
+);
+
+/** A block inside the dialog: a card on the overlay. */
+const BLOCK = `min-w-0 ${RADIUS_PANEL} border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface)] p-4`;
+/** A quiet text action (Show Advanced, View): 44 px tall under a coarse pointer. */
+const TEXT_ACTION = `inline-flex items-center ${RADIUS_CONTROL} text-xs font-medium text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${DENSITY.coarse} ${FOCUS_RING}`;
+/** A vote that is on reads as pressed: the active tint, never a hue alone. */
+const VOTE = 'aria-pressed:bg-[var(--ds-active)] aria-pressed:text-[var(--ds-ink)]';
+
+/** One labelled figure (a stat, a size, a cost). `boxed` sets it in its own tile. */
+const Fact: React.FC<{ label: string; boxed?: boolean; children: React.ReactNode }> = ({ label, boxed, children }) => (
+  <div className={cn('min-w-0', boxed && cn('border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2 py-1.5', RADIUS_CONTROL))}>
+    <dt className="text-[var(--ds-muted)]">{label}</dt>
+    <dd className="m-0 font-mono font-medium tabular-nums text-[var(--ds-ink)] [overflow-wrap:anywhere]">{children}</dd>
+  </div>
+);
+
 export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onClose, onUpdateProject }) => {
   const [overview, setOverview] = useState(project.state.overview || '');
   const [commentAuthor, setCommentAuthor] = useState('');
@@ -148,6 +212,44 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [galleryModalItems, setGalleryModalItems] = useState<MasterGalleryItem[]>([]);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  // Governed users never see dollars (P1-LIMITS): the usage status decides how cost reads here and in the ZIP
+  // (read on mount and focus by the shared store, never polled).
+  const allowance = useUsageAllowance();
+  const costCtx = useMemo(() => costContextFromAllowance(allowance), [allowance]);
+  /** A cost for this reader: dollars for admins and own-key use, a share of their usage for everyone governed. */
+  const costText = (value: unknown, currency?: string): string => {
+    const amount = Number(value);
+    const usd = Number.isFinite(amount) ? amount : 0;
+    return costCtx.governed ? formatCostForUser(usd, costCtx) : `${currency || '$'}${usd.toFixed(4)}`;
+  };
+  /** The same in a narrow spot (a list row, a table cell): "≈2%", or a dash while a governed share is unknown. */
+  const costCell = (value: unknown, currency?: string): string => {
+    if (!costCtx.governed) return costText(value, currency);
+    return compactUsageShare(costText(value)) ?? '—';
+  };
+
+  // A centred modal dialog: focus moves in when it opens and back when it closes; Escape closes it (the
+  // gallery, while open on top, takes Escape itself).
+  const titleId = `project-info-${useId().replace(/:/g, '')}`;
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const galleryOpenRef = useRef(galleryOpen);
+  galleryOpenRef.current = galleryOpen;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || galleryOpenRef.current) return;
+      e.preventDefault();
+      onCloseRef.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (previous && typeof previous.focus === 'function' && document.contains(previous)) previous.focus();
+    };
+  }, []);
 
   useEffect(() => {
     setOverview(project.state.overview || '');
@@ -552,7 +654,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     const zip = new JSZip();
     const safeName = project.name.replace(/[^a-zA-Z0-9-_]+/g, '_');
 
-    zip.file('project.json', JSON.stringify(data.project, null, 2));
+    zip.file('project.json', JSON.stringify(projectForExport(data.project, costCtx), null, 2));
 
     const imagesFolder = zip.folder('images');
     const imageFileMap: Record<string, string> = {};
@@ -573,13 +675,13 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
     const artifactsFolder = zip.folder('artifacts');
     if (artifactsFolder) {
-      artifactsFolder.file('artifacts.json', JSON.stringify(data.artifacts, null, 2));
+      artifactsFolder.file('artifacts.json', JSON.stringify(artifactsForExport(data.artifacts, costCtx), null, 2));
     }
 
     const reportFolder = zip.folder('report');
     if (reportFolder && data.report) {
-      reportFolder.file('ai_usage.json', JSON.stringify(data.report.ai_usage, null, 2));
-      reportFolder.file('cost_summary.json', JSON.stringify(data.report.cost_summary, null, 2));
+      reportFolder.file('ai_usage.json', JSON.stringify(aiUsageForExport(data.report.ai_usage, costCtx), null, 2));
+      reportFolder.file('cost_summary.json', JSON.stringify(costSummaryForExport(data.report.cost_summary, costCtx), null, 2));
       reportFolder.file('storage.json', JSON.stringify(data.report.storage, null, 2));
     }
 
@@ -796,34 +898,37 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+      <div className={cn('fixed inset-0 flex items-center justify-center p-3 sm:p-4', Z.scrim, SCRIM)} onClick={onClose} data-testid="project-info">
         <div
-          className="relative max-w-5xl w-full max-h-[90vh] overflow-y-auto bg-white border-4 border-black rounded-2xl shadow-comic p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className={cn('relative max-h-[90dvh] w-full min-w-0 max-w-5xl overflow-y-auto p-4 sm:p-6', OVERLAY)}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center">
-                <Info className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="text-xs font-bold uppercase text-slate-500">Project Info</div>
-                <h2 className="font-display text-2xl">{project.name}</h2>
+          <div className="mb-6 flex min-w-0 items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span aria-hidden className={SECTION_ICON_TILE}>
+                <Info className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className={OVERLINE}>Project info</p>
+                <h2 id={titleId} className={cn(DIALOG_TITLE, 'truncate')}>{project.name}</h2>
               </div>
             </div>
-            <button onClick={onClose} className="text-slate-500 hover:text-brand-red">
-              <X className="w-6 h-6" />
-            </button>
+            <IconButton ref={closeRef} label="Close project info" onClick={onClose} className="shrink-0 text-[var(--ds-muted)]">
+              <X />
+            </IconButton>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="space-y-6">
-              <div className="border-4 border-black rounded-xl p-4 bg-slate-50 shadow-comic">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-xs font-bold uppercase text-slate-500">Overview</div>
+          <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="min-w-0 space-y-6">
+              <section aria-labelledby={`${titleId}-overview`} className={BLOCK}>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 id={`${titleId}-overview`} className={OVERLINE}>Overview</h3>
                   {isStudioComic ? (
                   <span
-                    className="flex items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-1 text-xs font-semibold text-[var(--ds-muted)]"
+                    className={cn(CHIP, CHIP_VARIANT.outline, 'gap-1.5 px-3 py-1 text-xs')}
                     title="Comic Studio comics are published from the studio's Share sheet."
                     data-testid="studio-publish-hint"
                   >
@@ -831,97 +936,100 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     {isPublic ? 'Public' : 'Private'} · Publish from the studio
                   </span>
                   ) : (
-                  <button
-                    onClick={() => {
-                      const next = !isPublic;
-                      setIsPublic(next);
-                      onUpdateProject(project.id, (prev) => {
-                        const existingPublishedAt = prev.publishedAt ?? prev.state.publishedAt;
-                        const publishedAt = next ? (existingPublishedAt ?? Date.now()) : existingPublishedAt;
-                        return {
-                          isPublic: next,
-                          publishedAt,
-                          state: {
-                            ...prev.state,
-                            publishedAt
-                          }
-                        };
-                      });
-                    }}
-                    className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border-2 border-black transition-all ${isPublic ? 'bg-green-400 shadow-[2px_2px_0px_0px_#000]' : 'bg-slate-200 opacity-70'
-                      }`}
+                  // A setting, not a status: a switch with one constant name ("Public in the Library") whose state is
+                  // aria-checked and the track (never a name that flips between Public and Private).
+                  <label
+                    className={cn('inline-flex min-w-0 cursor-pointer items-center gap-2 text-xs font-medium text-[var(--ds-ink)]', DENSITY.coarse)}
                     title={isPublic ? "Visible in the Library" : "Only visible to you"}
                   >
-                    {isPublic ? <Globe size={14} /> : <Lock size={14} />}
-                    {isPublic ? 'Public' : 'Private'}
-                  </button>
+                    <Switch
+                      checked={isPublic}
+                      onCheckedChange={(next) => {
+                        setIsPublic(next);
+                        onUpdateProject(project.id, (prev) => {
+                          const existingPublishedAt = prev.publishedAt ?? prev.state.publishedAt;
+                          const publishedAt = next ? (existingPublishedAt ?? Date.now()) : existingPublishedAt;
+                          return {
+                            isPublic: next,
+                            publishedAt,
+                            state: {
+                              ...prev.state,
+                              publishedAt
+                            }
+                          };
+                        });
+                      }}
+                    />
+                    <span className="min-w-0">Public in the Library</span>
+                  </label>
                   )}
                 </div>
-                <textarea
+                <Textarea
                   value={overview}
                   onChange={(e) => setOverview(e.target.value)}
+                  aria-label="Overview"
                   placeholder="Write a quick overview for this comic..."
-                  className="w-full mt-2 border-2 border-black rounded-lg p-3 text-sm font-comic min-h-[120px]"
+                  className="mt-2 min-h-[120px]"
                 />
                 <div className="mt-3 flex justify-end">
-                  <Button size="sm" onClick={handleSaveOverview}>Save Overview</Button>
+                  <DsButton size="sm" variant="outline" onClick={handleSaveOverview}>Save Overview</DsButton>
                 </div>
-              </div>
+              </section>
 
-              <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
-                <div className="text-xs font-bold uppercase text-slate-500">Project Stats</div>
-                <div className="mt-3 grid grid-cols-2 gap-3 text-sm font-bold">
-                  <div>Step: <span className="font-mono">{STEP_LABELS[project.state.step] || 'Unknown'}</span></div>
-                  <div>Scenes: <span className="font-mono">{project.state.scenes.length}</span></div>
-                  <div>Panels: <span className="font-mono">{project.state.panels.length}</span></div>
-                  <div>Updated: <span className="font-mono">{new Date(project.updatedAt).toLocaleString()}</span></div>
-                  <div>Layout: <span className="font-mono">{project.state.layoutType}</span></div>
-                  <div>Text: <span className="font-mono">{project.state.textLayout || 'caption'}</span></div>
-                </div>
-              </div>
+              <section aria-labelledby={`${titleId}-stats`} className={BLOCK}>
+                <h3 id={`${titleId}-stats`} className={OVERLINE}>Project Stats</h3>
+                <dl className="m-0 mt-3 grid grid-cols-2 gap-3 text-sm">
+                  <Fact label="Step">{STEP_LABELS[project.state.step] || 'Unknown'}</Fact>
+                  <Fact label="Scenes">{project.state.scenes.length}</Fact>
+                  <Fact label="Panels">{project.state.panels.length}</Fact>
+                  <Fact label="Updated">{new Date(project.updatedAt).toLocaleString()}</Fact>
+                  <Fact label="Layout">{project.state.layoutType}</Fact>
+                  <Fact label="Text">{project.state.textLayout || 'caption'}</Fact>
+                </dl>
+              </section>
 
-              <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
-                <div className="text-xs font-bold uppercase text-slate-500">Cost & Usage</div>
+              <section aria-labelledby={`${titleId}-cost`} className={BLOCK} data-testid="project-cost">
+                <h3 id={`${titleId}-cost`} className={OVERLINE}>{costCtx.governed ? 'Usage' : 'Cost & Usage'}</h3>
                 {isLoadingExport ? (
-                  <div className="mt-3 text-sm font-comic text-slate-500">Loading report…</div>
+                  <p className="mt-3 text-sm text-[var(--ds-muted)]">Loading report…</p>
                 ) : (
-                  <div className="mt-3 space-y-2 text-sm font-bold">
-                    <div>Total Cost: <span className="font-mono">{costSummary.totalCost !== undefined ? `${costSummary.currency || '$'}${Number(costSummary.totalCost).toFixed(4)}` : 'n/a'}</span></div>
-                    {imageCost !== undefined && (
-                      <div>Image Cost: <span className="font-mono">{`${costSummary.currency || '$'}${Number(imageCost).toFixed(4)}`}</span></div>
-                    )}
-                    {textCost !== undefined && (
-                      <div>Text Cost: <span className="font-mono">{`${costSummary.currency || '$'}${Number(textCost).toFixed(4)}`}</span></div>
-                    )}
-                    <div>Artifacts: <span className="font-mono">{usageSummary.totalArtifacts ?? 'n/a'}</span></div>
-                    <div>Tokens: <span className="font-mono">{usageSummary.totalTokens ?? 'n/a'}</span></div>
-                    <div>Estimated Items: <span className="font-mono">{costSummary.estimatedArtifactCount ?? 0}</span></div>
+                  <div className="mt-3 space-y-3 text-sm">
+                    <dl className="m-0 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Fact label={costCtx.governed ? 'This comic' : 'Total Cost'}>{costSummary.totalCost !== undefined ? costText(costSummary.totalCost, costSummary.currency) : 'n/a'}</Fact>
+                      {imageCost !== undefined && <Fact label={costCtx.governed ? 'Images' : 'Image Cost'}>{costText(imageCost, costSummary.currency)}</Fact>}
+                      {textCost !== undefined && <Fact label={costCtx.governed ? 'Writing' : 'Text Cost'}>{costText(textCost, costSummary.currency)}</Fact>}
+                      <Fact label="Artifacts">{usageSummary.totalArtifacts ?? 'n/a'}</Fact>
+                      <Fact label="Tokens">{usageSummary.totalTokens ?? 'n/a'}</Fact>
+                      <Fact label="Estimated Items">{costSummary.estimatedArtifactCount ?? 0}</Fact>
+                    </dl>
                     <button
+                      type="button"
+                      aria-expanded={advancedCostOpen}
                       onClick={() => setAdvancedCostOpen((prev) => !prev)}
-                      className="mt-2 text-xs font-bold underline"
+                      className={TEXT_ACTION}
                     >
                       {advancedCostOpen ? 'Hide Advanced' : 'Show Advanced'}
                     </button>
                     {advancedCostOpen && (
-                      <div className="mt-3 space-y-3">
+                      <div className="space-y-4">
                         <div>
-                          <div className="text-xs font-bold uppercase text-slate-500 mb-2">Per-Artifact Costs</div>
-                          <div className="max-h-48 overflow-y-auto border-2 border-black rounded-lg">
+                          <h4 className={cn(OVERLINE, 'mb-2')}>{costCtx.governed ? 'Per-Artifact Usage' : 'Per-Artifact Costs'}</h4>
+                          <div className={cn('max-h-48 overflow-y-auto border border-[var(--ds-hairline)]', RADIUS_CONTROL)}>
                             {reportArtifacts.length === 0 && (
-                              <div className="p-2 text-xs text-slate-500 font-comic">No artifact costs available.</div>
+                              <p className="m-0 p-2 text-xs text-[var(--ds-muted)]">{costCtx.governed ? 'No artifact usage available.' : 'No artifact costs available.'}</p>
                             )}
                             {reportArtifacts.slice(0, 50).map((artifact: any) => {
                               const tag = artifact.outputImageId ? project.state.imageTags?.[artifact.outputImageId]?.tag : undefined;
                               return (
-                                <div key={artifact.id} className="flex items-center justify-between px-2 py-1 text-[11px] border-b border-black/10">
-                                  <div>
-                                    <div className="font-bold uppercase">{artifact.stage || 'unknown'} · {artifact.type}</div>
-                                    <div className="text-slate-500">{artifact.model}</div>
-                                    {tag && <div className="text-slate-500">{tag}</div>}
+                                <div key={artifact.id} className="flex min-w-0 items-center justify-between gap-2 border-b border-[var(--ds-hairline-soft)] px-2 py-1.5 text-[11px] last:border-b-0">
+                                  <div className="min-w-0">
+                                    <div className="font-medium uppercase [overflow-wrap:anywhere]">{artifact.stage || 'unknown'} · {artifact.type}</div>
+                                    <div className="text-[var(--ds-muted)] [overflow-wrap:anywhere]">{artifact.model}</div>
+                                    {tag && <div className="text-[var(--ds-muted)]">{tag}</div>}
                                   </div>
-                                  <div className="text-right font-mono">
+                                  <div className="shrink-0 text-right font-mono tabular-nums">
                                     <div>{artifact.totalTokens ?? 'n/a'} tok</div>
-                                    <div>{artifact.cost?.value !== undefined ? `${artifact.cost?.currency || costSummary.currency || '$'}${Number(artifact.cost?.value).toFixed(4)}` : 'n/a'}</div>
+                                    <div>{artifact.cost?.value !== undefined ? costCell(artifact.cost?.value, artifact.cost?.currency || costSummary.currency) : 'n/a'}</div>
                                   </div>
                                 </div>
                               );
@@ -929,14 +1037,14 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                           </div>
                         </div>
                         <div>
-                          <div className="text-xs font-bold uppercase text-slate-500 mb-2">Multiple Cost Occurrences</div>
+                          <h4 className={cn(OVERLINE, 'mb-2')}>{costCtx.governed ? 'Repeated Sources' : 'Multiple Cost Occurrences'}</h4>
                           {multipleCostGroups.length === 0 && (
-                            <div className="text-xs text-slate-500 font-comic">No repeated cost sources detected.</div>
+                            <p className="m-0 text-xs text-[var(--ds-muted)]">No repeated cost sources detected.</p>
                           )}
                           {multipleCostGroups.map((group) => (
-                            <div key={group.id} className="flex items-center justify-between text-[11px] font-bold border-2 border-black rounded px-2 py-1 bg-slate-50 mb-2">
-                              <div>{group.label}</div>
-                              <div className="font-mono">{group.count}x · {costSummary.currency || '$'}{group.cost.toFixed(4)}</div>
+                            <div key={group.id} className={cn('mb-2 flex min-w-0 items-center justify-between gap-2 border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2 py-1 text-[11px] font-medium', RADIUS_CONTROL)}>
+                              <div className="min-w-0 [overflow-wrap:anywhere]">{group.label}</div>
+                              <div className="shrink-0 font-mono tabular-nums">{group.count}x · {costCell(group.cost, costSummary.currency)}</div>
                             </div>
                           ))}
                         </div>
@@ -944,28 +1052,29 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     )}
                   </div>
                 )}
-              </div>
+              </section>
             </div>
 
-            <div className="space-y-6">
-              <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
-                <div className="text-xs font-bold uppercase text-slate-500">Storage & Files</div>
+            <div className="min-w-0 space-y-6">
+              <section aria-labelledby={`${titleId}-files`} className={BLOCK}>
+                <h3 id={`${titleId}-files`} className={OVERLINE}>Storage & Files</h3>
                 {exportNotice && (
-                  <div className="mt-3 border-2 border-amber-500 bg-amber-50 text-amber-800 rounded-lg px-3 py-2 text-xs font-bold">
-                    {exportNotice}
-                  </div>
+                  <p role="status" className={cn('m-0 mt-3 flex items-start gap-2 border px-3 py-2 text-xs font-medium', RADIUS_CONTROL, STATUS_SURFACE.attention)}>
+                    <AlertTriangle aria-hidden className={cn('mt-px size-3.5 shrink-0', STATUS_INK.attention)} />
+                    <span className="min-w-0">{exportNotice}</span>
+                  </p>
                 )}
                 {isLoadingExport ? (
-                  <div className="mt-3 text-sm font-comic text-slate-500">Loading storage…</div>
+                  <p className="mt-3 text-sm text-[var(--ds-muted)]">Loading storage…</p>
                 ) : (
-                  <div className="mt-3 space-y-2 text-sm font-bold">
-                    <div>Images: <span className="font-mono">{storageSummary.imageCount ?? 0}</span></div>
-                    <div>Image Bytes: <span className="font-mono">{formatBytes(storageSummary.imageBytes)}</span></div>
-                    <div>Project ZIP Size: <span className="font-mono">{zipSize ? formatBytes(zipSize) : 'n/a'}</span></div>
-                    <div>PDF Size: <span className="font-mono">{pdfSize ? formatBytes(pdfSize) : 'n/a'}</span></div>
-                    <div>Last Updated: <span className="font-mono">{sizeUpdatedAt ? new Date(sizeUpdatedAt).toLocaleString() : 'n/a'}</span></div>
-                    <div>Status: <span className="font-mono">{sizeStatus === 'latest' ? 'Latest' : sizeStatus === 'updating' ? 'Updating' : 'Stale'}</span></div>
-                  </div>
+                  <dl className="m-0 mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                    <Fact label="Images">{storageSummary.imageCount ?? 0}</Fact>
+                    <Fact label="Image Bytes">{formatBytes(storageSummary.imageBytes)}</Fact>
+                    <Fact label="Project ZIP Size">{zipSize ? formatBytes(zipSize) : 'n/a'}</Fact>
+                    <Fact label="PDF Size">{pdfSize ? formatBytes(pdfSize) : 'n/a'}</Fact>
+                    <Fact label="Last Updated">{sizeUpdatedAt ? new Date(sizeUpdatedAt).toLocaleString() : 'n/a'}</Fact>
+                    <Fact label="Status">{sizeStatus === 'latest' ? 'Latest' : sizeStatus === 'updating' ? 'Updating' : 'Stale'}</Fact>
+                  </dl>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" onClick={handleDownloadPdf} icon={<Download className="w-4 h-4" />} disabled={!hasExport || isBuildingPdf}>Download PDF</Button>
@@ -973,16 +1082,16 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                   <Button size="sm" variant="secondary" onClick={handleDownloadZip} icon={<Download className="w-4 h-4" />} disabled={!hasExport || isBuildingZip}>Download ZIP</Button>
                   <Button size="sm" variant="outline" onClick={() => void handleRefreshSizes()} icon={<RefreshCw className="w-4 h-4" />} disabled={!hasExport}>Update Sizes</Button>
                   {sizeStatus === 'latest' && (
-                    <span className="text-xs font-bold text-slate-500 self-center">Latest</span>
+                    <span className="self-center text-xs font-medium text-[var(--ds-muted)]">Latest</span>
                   )}
                 </div>
-              </div>
+              </section>
 
-              <div className="border-4 border-black rounded-xl p-4 bg-slate-50 shadow-comic">
-                <div className="text-xs font-bold uppercase text-slate-500">User Reviews</div>
+              <section aria-labelledby={`${titleId}-reviews`} className={BLOCK}>
+                <h3 id={`${titleId}-reviews`} className={OVERLINE}>User Reviews</h3>
                 <div className="mt-3 space-y-3">
                   {comments.length === 0 && (
-                    <div className="text-sm font-comic text-slate-500">No reviews yet. Be the first!</div>
+                    <p className="m-0 text-sm text-[var(--ds-muted)]">No reviews yet. Be the first!</p>
                   )}
                   {comments.map((comment) => {
                     const canEdit = !comment.authorId || comment.authorId === localUserId;
@@ -993,196 +1102,211 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     const timestamp = new Date(comment.updatedAt || comment.createdAt).toLocaleString();
 
                     return (
-                      <div key={comment.id} className="bg-white border-2 border-black rounded-lg p-3">
-                        <div className="flex items-start justify-between text-xs font-bold text-slate-500">
-                          <div>{comment.author || 'Anonymous'}</div>
-                          <div className="text-right">
+                      <article key={comment.id} className={cn('border border-[var(--ds-hairline-soft)] bg-[var(--ds-raised)] p-3', RADIUS_CONTROL)}>
+                        <div className="flex min-w-0 items-start justify-between gap-2 text-xs text-[var(--ds-muted)]">
+                          <div className="min-w-0 font-medium text-[var(--ds-ink)] [overflow-wrap:anywhere]">{comment.author || 'Anonymous'}</div>
+                          <div className="shrink-0 text-right">
                             <div>{timestamp}</div>
-                            {hasEdit && <div className="text-[10px] uppercase">Edited</div>}
+                            {hasEdit && <div className="text-[11px]">Edited</div>}
                           </div>
                         </div>
                         {isEditing ? (
                           <div className="mt-2 space-y-2">
-                            <textarea
+                            <Textarea
                               value={editingCommentText}
                               onChange={(e) => setEditingCommentText(e.target.value)}
-                              className="w-full border-2 border-black rounded px-2 py-1 text-sm"
+                              aria-label="Edit your review"
                             />
-                            <div className="flex gap-2">
-                              <button onClick={handleSaveEdit} className="px-2 py-1 text-xs font-bold border-2 border-black rounded bg-brand-yellow">
-                                <Check className="w-3 h-3 inline-block mr-1" /> Save
-                              </button>
-                              <button
+                            <div className="flex flex-wrap gap-2">
+                              <DsButton size="sm" onClick={handleSaveEdit}>
+                                <Check aria-hidden /> Save
+                              </DsButton>
+                              <DsButton
+                                size="sm"
+                                variant="ghost"
                                 onClick={() => {
                                   setEditingCommentId(null);
                                   setEditingCommentText('');
                                 }}
-                                className="px-2 py-1 text-xs font-bold border-2 border-black rounded"
                               >
                                 Cancel
-                              </button>
+                              </DsButton>
                             </div>
                           </div>
                         ) : (
-                          <div className="mt-2 text-sm font-comic text-black">{comment.text}</div>
+                          <p className="m-0 mt-2 text-sm text-[var(--ds-ink)] [overflow-wrap:anywhere]">{comment.text}</p>
                         )}
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs font-bold">
-                          <button
+                        <div className="mt-3 flex flex-wrap items-center gap-1">
+                          <DsButton
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={isLiked}
+                            aria-label={`Like (${comment.likes ?? 0})`}
                             onClick={() => handleVote(comment.id, 'like')}
-                            className={`flex items-center gap-1 ${isLiked ? 'text-brand-blue' : ''}`}
+                            className={VOTE}
                           >
-                            <ThumbsUp className="w-4 h-4" /> {comment.likes}
-                          </button>
-                          <button
+                            <ThumbsUp aria-hidden /> <span className="tabular-nums">{comment.likes}</span>
+                          </DsButton>
+                          <DsButton
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={isDisliked}
+                            aria-label={`Dislike (${comment.dislikes ?? 0})`}
                             onClick={() => handleVote(comment.id, 'dislike')}
-                            className={`flex items-center gap-1 ${isDisliked ? 'text-brand-red' : ''}`}
+                            className={VOTE}
                           >
-                            <ThumbsDown className="w-4 h-4" /> {comment.dislikes}
-                          </button>
+                            <ThumbsDown aria-hidden /> <span className="tabular-nums">{comment.dislikes}</span>
+                          </DsButton>
                           {canEdit && !isEditing && (
                             <>
-                              <button onClick={() => handleStartEdit(comment)} className="flex items-center gap-1">
-                                <Edit2 className="w-3 h-3" /> Edit
-                              </button>
-                              <button onClick={() => handleDeleteComment(comment.id)} className="flex items-center gap-1 text-brand-red">
-                                <Trash2 className="w-3 h-3" /> Delete
-                              </button>
+                              <DsButton size="sm" variant="ghost" onClick={() => handleStartEdit(comment)}>
+                                <Edit2 aria-hidden /> Edit
+                              </DsButton>
+                              <DsButton size="sm" variant="ghost" onClick={() => handleDeleteComment(comment.id)} className={TONE_TEXT.danger}>
+                                <Trash2 aria-hidden /> Delete
+                              </DsButton>
                             </>
                           )}
                         </div>
-                      </div>
+                      </article>
                     );
                   })}
                 </div>
-                <div className="mt-4 border-t-2 border-black pt-4 space-y-2">
-                  <input
+                <div className="mt-4 space-y-2 border-t border-[var(--ds-hairline-soft)] pt-4">
+                  <Input
                     value={commentAuthor}
                     onChange={(e) => setCommentAuthor(e.target.value)}
+                    aria-label="Your name (optional)"
                     placeholder="Your name (optional)"
-                    className="w-full border-2 border-black rounded px-3 py-2 text-xs"
                   />
-                  <textarea
+                  <Textarea
                     value={commentText}
                     onChange={(e) => setCommentText(e.target.value)}
+                    aria-label="Your review"
                     placeholder="Write a quick review..."
-                    className="w-full border-2 border-black rounded px-3 py-2 text-sm min-h-[80px]"
+                    className="min-h-[80px]"
                   />
                   <div className="flex justify-end">
-                    <Button size="sm" onClick={handleAddComment}>Post Review</Button>
+                    <DsButton size="sm" variant="outline" onClick={handleAddComment}>Post Review</DsButton>
                   </div>
                 </div>
-              </div>
+              </section>
             </div>
           </div>
           <div className="mt-6 space-y-6">
-            <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="text-xs font-bold uppercase text-slate-500">Mastery Gallery</div>
-                  <div className="font-display text-xl">Mastery Gallery</div>
+            <section aria-labelledby={`${titleId}-gallery`} className={BLOCK}>
+              <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                <div className="min-w-0">
+                  <p className={OVERLINE}>Images</p>
+                  <h3 id={`${titleId}-gallery`} className={SECTION_TITLE}>Mastery Gallery</h3>
                 </div>
-                <div className="text-xs font-bold">{filteredGallery.length} images</div>
+                <span className={cn(CHIP, CHIP_VARIANT.outline, 'tabular-nums')}>{filteredGallery.length} images</span>
               </div>
-              <div className="flex flex-col md:flex-row gap-2 mb-3">
-                <input
+              <div className="mb-3 flex min-w-0 flex-col gap-2 md:flex-row">
+                <Input
                   value={gallerySearch}
                   onChange={(e) => setGallerySearch(e.target.value)}
+                  aria-label="Search the images"
                   placeholder="Search tags, labels, usage..."
-                  className="flex-1 border-2 border-black rounded px-3 py-2 text-xs font-bold"
+                  className="flex-1"
                 />
-                <select
+                <Select
                   value={galleryFilter}
                   onChange={(e) => setGalleryFilter(e.target.value)}
-                  className="border-2 border-black rounded px-2 py-2 text-xs font-bold"
+                  aria-label="Category"
+                  wrapperClassName="md:w-48"
                 >
                   <option value="all">All Categories</option>
                   {galleryCategories.map((category) => (
                     <option key={category} value={category}>{category}</option>
                   ))}
-                </select>
-                <select
+                </Select>
+                <Select
                   value={gallerySort}
                   onChange={(e) => setGallerySort(e.target.value as typeof gallerySort)}
-                  className="border-2 border-black rounded px-2 py-2 text-xs font-bold"
+                  aria-label="Sort"
+                  wrapperClassName="md:w-40"
                 >
                   <option value="newest">Newest</option>
                   <option value="oldest">Oldest</option>
                   <option value="tag">Tag</option>
                   <option value="category">Category</option>
-                </select>
+                </Select>
               </div>
               {filteredGallery.length === 0 ? (
-                <div className="text-sm font-comic text-slate-500">No images match your filters yet.</div>
+                <p className="m-0 text-sm text-[var(--ds-muted)]">No images match your filters yet.</p>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                <ul className="m-0 grid list-none grid-cols-2 gap-3 p-0 md:grid-cols-3 lg:grid-cols-4">
                   {filteredGallery.map((item, idx) => (
-                    <button
-                      key={item.imageId}
-                      onClick={() => openGalleryModal(filteredGallery, idx)}
-                      className="border-2 border-black rounded-lg p-2 bg-slate-50 hover:bg-white transition-all text-left"
-                    >
-                      <img src={item.url} alt={item.tag || item.label || 'gallery'} className="w-full h-32 object-cover rounded" />
-                      <div className="mt-2 text-[11px] font-bold">{item.tag || item.category || 'UNTAGGED'}</div>
-                      <div className="text-[10px] text-slate-500 truncate">{item.usedIn?.[0] || item.label || item.category}</div>
-                    </button>
+                    <li key={item.imageId} className="min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => openGalleryModal(filteredGallery, idx)}
+                        className={cn('w-full min-w-0 border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2 text-left hover:bg-[var(--ds-hover)] motion-safe:transition-colors', RADIUS_CONTROL, FOCUS_RING)}
+                      >
+                        <img src={item.url} alt={item.tag || item.label || 'gallery'} className={cn('h-32 w-full object-cover', RADIUS_CONTROL)} />
+                        <span className="mt-2 block truncate text-[11px] font-medium">{item.tag || item.category || 'UNTAGGED'}</span>
+                        <span className="block truncate text-[11px] text-[var(--ds-muted)]">{item.usedIn?.[0] || item.label || item.category}</span>
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </section>
 
-            <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="text-xs font-bold uppercase text-slate-500">Generation Log</div>
-                  <div className="font-display text-xl">Production Runs</div>
+            <section aria-labelledby={`${titleId}-log`} className={BLOCK}>
+              <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                <div className="min-w-0">
+                  <p className={OVERLINE}>Generation Log</p>
+                  <h3 id={`${titleId}-log`} className={SECTION_TITLE}>Production Runs</h3>
                 </div>
-                <div className="text-xs font-bold">{isLoadingArtifacts ? 'Loading…' : `${artifacts.length} events`}</div>
+                <span className={cn(CHIP, CHIP_VARIANT.outline, 'tabular-nums')}>{isLoadingArtifacts ? 'Loading…' : `${artifacts.length} events`}</span>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-bold mb-4">
-                <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Events: {artifactSummary.total}</div>
-                <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Success: {Math.round(artifactSummary.successRate * 100)}%</div>
-                <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Errors: {artifactSummary.errors}</div>
-                <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Tokens: {artifactSummary.tokens}</div>
-              </div>
+              <dl className="m-0 mb-4 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <Fact label="Events" boxed>{artifactSummary.total}</Fact>
+                <Fact label="Success" boxed>{Math.round(artifactSummary.successRate * 100)}%</Fact>
+                <Fact label="Errors" boxed>{artifactSummary.errors}</Fact>
+                <Fact label="Tokens" boxed>{artifactSummary.tokens}</Fact>
+              </dl>
 
               <div className="mb-4">
-                <div className="text-xs font-bold uppercase text-slate-500 mb-2">Recent Errors</div>
+                <h4 className={cn(OVERLINE, 'mb-2')}>Recent Errors</h4>
                 {artifactSummary.recentErrors.length === 0 && (
-                  <div className="text-xs text-slate-500 font-comic">No recent errors.</div>
+                  <p className="m-0 text-xs text-[var(--ds-muted)]">No recent errors.</p>
                 )}
                 {artifactSummary.recentErrors.map((artifact) => (
-                  <div key={artifact.id} className="border-2 border-black rounded px-2 py-1 bg-red-50 text-[11px] mb-2">
-                    <div className="font-bold uppercase">{artifact.stage || artifact.type}</div>
-                    <div>{artifact.error || 'Unknown error'}</div>
+                  <div key={artifact.id} className={cn('mb-2 border px-2 py-1.5 text-[11px]', RADIUS_CONTROL, STATUS_SURFACE.error)}>
+                    <div className={cn('font-medium uppercase', STATUS_INK.error)}>{artifact.stage || artifact.type}</div>
+                    <div className="[overflow-wrap:anywhere]">{artifact.error || 'Unknown error'}</div>
                   </div>
                 ))}
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-[11px] border-2 border-black">
-                  <thead className="bg-slate-100 border-b-2 border-black">
+              <div className={cn('overflow-x-auto border border-[var(--ds-hairline)]', RADIUS_CONTROL)}>
+                <table className="w-full text-[11px]">
+                  <thead className="bg-[var(--ds-well)] text-[var(--ds-muted)]">
                     <tr>
-                      <th className="p-2 text-left">Time</th>
-                      <th className="p-2 text-left">Stage</th>
-                      <th className="p-2 text-left">Type</th>
-                      <th className="p-2 text-left">Duration</th>
-                      <th className="p-2 text-left">API</th>
-                      <th className="p-2 text-left">Save</th>
-                      <th className="p-2 text-left">Provider</th>
-                      <th className="p-2 text-left">Model</th>
-                      <th className="p-2 text-left">Prompt</th>
-                      <th className="p-2 text-left">Tokens</th>
-                      <th className="p-2 text-left">Cost</th>
-                      <th className="p-2 text-left">Output</th>
-                      <th className="p-2 text-left">Status</th>
-                      <th className="p-2 text-left">Details</th>
+                      <th className="p-2 text-left font-medium">Time</th>
+                      <th className="p-2 text-left font-medium">Stage</th>
+                      <th className="p-2 text-left font-medium">Type</th>
+                      <th className="p-2 text-left font-medium">Duration</th>
+                      <th className="p-2 text-left font-medium">API</th>
+                      <th className="p-2 text-left font-medium">Save</th>
+                      <th className="p-2 text-left font-medium">Provider</th>
+                      <th className="p-2 text-left font-medium">Model</th>
+                      <th className="p-2 text-left font-medium">Prompt</th>
+                      <th className="p-2 text-left font-medium">Tokens</th>
+                      <th className="p-2 text-left font-medium">{costCtx.governed ? 'Usage' : 'Cost'}</th>
+                      <th className="p-2 text-left font-medium">Output</th>
+                      <th className="p-2 text-left font-medium">Status</th>
+                      <th className="p-2 text-left font-medium">Details</th>
                     </tr>
                   </thead>
                   <tbody>
                     {artifacts.length === 0 && (
                       <tr>
-                        <td className="p-3 text-center text-slate-500 font-comic" colSpan={14}>
+                        <td className="p-3 text-center text-[var(--ds-muted)]" colSpan={14}>
                           No generation artifacts yet.
                         </td>
                       </tr>
@@ -1205,33 +1329,35 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
                       return (
                         <React.Fragment key={artifact.id}>
-                          <tr className="border-t border-black">
-                            <td className="p-2">{new Date(artifact.timestamp).toLocaleTimeString()}</td>
-                            <td className="p-2 uppercase font-bold">{artifact.stage || 'unknown'}</td>
+                          <tr className="border-t border-[var(--ds-hairline-soft)]">
+                            <td className="p-2 tabular-nums">{new Date(artifact.timestamp).toLocaleTimeString()}</td>
+                            <td className="p-2 font-medium uppercase">{artifact.stage || 'unknown'}</td>
                             <td className="p-2">{artifact.type}</td>
-                            <td className="p-2">{duration ? `${duration} ms` : '—'}</td>
-                            <td className="p-2">{artifact.timings?.apiMs ?? '—'}</td>
-                            <td className="p-2">{artifact.timings?.saveMs ?? '—'}</td>
+                            <td className="p-2 tabular-nums">{duration ? `${duration} ms` : '—'}</td>
+                            <td className="p-2 tabular-nums">{artifact.timings?.apiMs ?? '—'}</td>
+                            <td className="p-2 tabular-nums">{artifact.timings?.saveMs ?? '—'}</td>
                             <td className="p-2">{artifact.provider || '—'}</td>
                             <td className="p-2">{artifact.model}</td>
                             <td className="p-2" title={artifact.prompt}>{promptPreview}</td>
-                            <td className="p-2">{tokens}</td>
-                            <td className="p-2">{costValue !== undefined ? `${currency}${Number(costValue).toFixed(4)}` : '—'}</td>
+                            <td className="p-2 tabular-nums">{tokens}</td>
+                            <td className="p-2 tabular-nums">{costValue !== undefined ? costCell(costValue, currency) : '—'}</td>
                             <td className="p-2">{outputTag}</td>
-                            <td className={`p-2 ${status === 'Failed' ? 'text-brand-red' : 'text-green-700'}`}>{status}</td>
+                            <td className={cn('p-2 font-medium', status === 'Failed' ? TONE_TEXT.danger : TONE_TEXT.success)}>{status}</td>
                             <td className="p-2">
                               <button
+                                type="button"
+                                aria-expanded={expandedArtifactId === artifact.id}
                                 onClick={() => setExpandedArtifactId(expandedArtifactId === artifact.id ? null : artifact.id)}
-                                className="text-xs font-bold underline"
+                                className={TEXT_ACTION}
                               >
                                 {expandedArtifactId === artifact.id ? 'Hide' : 'View'}
                               </button>
                             </td>
                           </tr>
                           {expandedArtifactId === artifact.id && (
-                            <tr className="bg-slate-50 border-t border-black">
+                            <tr className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)]">
                               <td colSpan={14} className="p-3">
-                                <pre className="text-[11px] whitespace-pre-wrap">{JSON.stringify(artifact, null, 2)}</pre>
+                                <pre className="whitespace-pre-wrap text-[11px] [overflow-wrap:anywhere]" data-testid="artifact-json">{JSON.stringify((artifactsForExport([artifact], costCtx) as unknown[])[0], null, 2)}</pre>
                               </td>
                             </tr>
                           )}
@@ -1241,7 +1367,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                   </tbody>
                 </table>
               </div>
-            </div>
+            </section>
           </div>
         </div>
       </div>

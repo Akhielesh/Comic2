@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { Ticket, Check, Loader2 } from 'lucide-react';
+import React, { useEffect, useId, useState } from 'react';
+import { Check, Ticket } from 'lucide-react';
 import { redeemInvite, getInviteStatus } from '../services/invites';
+import { Button } from './ds/Button';
+import { Input } from './ds/Input';
+import { FIELD_LABEL } from './ds/Field';
+import { RADIUS_PANEL, SHADOW_SOFT, STATUS_CHIP, STATUS_CHIP_TONE } from './chat/studioDesign';
 
 // Compact tester-access redeemer. Lives in the API Configuration tab because
 // redeeming an invite unlocks the BYOK testing flow. Self-contained; quietly
@@ -10,6 +14,7 @@ export const RedeemInvite: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'submitting'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [isTester, setIsTester] = useState(false);
+  const inputId = `redeem-invite-${useId().replace(/:/g, '')}`;
 
   useEffect(() => {
     let active = true;
@@ -28,36 +33,52 @@ export const RedeemInvite: React.FC = () => {
   };
 
   return (
-    <div className="border-2 border-black rounded-xl bg-white p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Ticket className="w-4 h-4" />
-        <h3 className="font-display text-lg">Tester access</h3>
+    <section
+      aria-labelledby={`${inputId}-title`}
+      className={`${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 text-[var(--ds-ink)] ${SHADOW_SOFT}`}
+    >
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <Ticket aria-hidden className="size-4 text-[var(--ds-muted)]" />
+        <h3 id={`${inputId}-title`} className="text-base font-semibold tracking-tight">
+          Tester access
+        </h3>
         {isTester && (
-          <span className="ml-auto flex items-center gap-1 text-xs font-bold text-green-700 bg-green-100 border-2 border-green-300 rounded-full px-2 py-0.5">
-            <Check className="w-3 h-3" /> Tester
+          <span className={`ml-auto ${STATUS_CHIP} ${STATUS_CHIP_TONE.healthy}`}>
+            <Check aria-hidden className="size-3" /> Tester
           </span>
         )}
       </div>
-      <p className="text-xs text-slate-500 mb-3">
+      <p className="mb-3 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
         Have an invite code? Redeem it to join the tester program, then add your own API keys below to try the platform.
       </p>
-      <div className="flex items-center gap-2">
-        <input
+      <label htmlFor={inputId} className={`sr-only ${FIELD_LABEL}`}>
+        Invite code
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          id={inputId}
           value={code}
           onChange={(e) => setCode(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void handleRedeem(); }}
           placeholder="DS-XXXX-XXXX"
-          className="flex-1 font-mono border-2 border-black rounded-md px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:outline-none uppercase"
+          autoComplete="off"
+          spellCheck={false}
+          className="min-w-[10rem] flex-1 font-mono uppercase"
         />
-        <button
+        <Button
+          variant="outline"
           onClick={() => void handleRedeem()}
-          disabled={!code.trim() || status === 'submitting'}
-          className="flex items-center gap-1 text-sm font-bold border-2 border-black rounded-md px-3 py-2 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40"
+          disabled={!code.trim()}
+          loading={status === 'submitting'}
         >
-          {status === 'submitting' ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Redeem
-        </button>
+          Redeem
+        </Button>
       </div>
-      {message && <div className="mt-2 text-xs font-bold text-slate-700">{message}</div>}
-    </div>
+      {message && (
+        <p role="status" className="mt-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-ink)]">
+          {message}
+        </p>
+      )}
+    </section>
   );
 };

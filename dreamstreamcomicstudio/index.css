@@ -1449,7 +1449,6 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 [data-ds-skin="atlas"] .border-\[\#D97757\]\/60 { border-color: color-mix(in srgb, var(--ds-accent) 60%, transparent); }
 [data-ds-skin="atlas"] .enabled\:hover\:border-\[\#D97757\]\/35:enabled:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
 [data-ds-skin="atlas"] .fill-\[\#D97757\] { fill: var(--ds-accent); }
-[data-ds-skin="atlas"] .focus-visible\:outline-\[\#D97757\]:focus-visible { outline-color: var(--ds-ink); }
 [data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]:focus-visible { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/30:focus-visible { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/40:focus-visible { --tw-ring-color: var(--ds-ring); }

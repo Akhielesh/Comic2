@@ -50,7 +50,11 @@ const CENTRED: Record<string, 'DIALOG_TITLE' | 'DIALOG_TITLE_FROM_SM'> = {
   // A bottom sheet below `sm`, centred from `sm` up (`items-end sm:items-center`).
   'components/comicstudio/timeline/ui.tsx': 'DIALOG_TITLE_FROM_SM',
   'components/comicstudio/models/ModelChangeConfirm.tsx': 'DIALOG_TITLE_FROM_SM',
-  'components/comicstudio/models/lab/RunConfirmDialog.tsx': 'DIALOG_TITLE_FROM_SM'
+  'components/comicstudio/models/lab/RunConfirmDialog.tsx': 'DIALOG_TITLE_FROM_SM',
+  // Centred on the scrim at every width (DS-3).
+  'components/modals/ProjectInfoModal.tsx': 'DIALOG_TITLE',
+  // The image lightbox over Project info, a layer above it (Z.sheet).
+  'components/modals/MasterGalleryModal.tsx': 'DIALOG_TITLE'
 };
 /** Modal (or modal-capable) surfaces that are not a centred dialog with a title, and why. */
 const NOT_CENTRED: Record<string, string> = {
