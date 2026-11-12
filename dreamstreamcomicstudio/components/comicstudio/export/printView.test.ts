@@ -5,7 +5,7 @@ import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeBook } from './__fixtures__/books';
 import { localizedFor } from './sequence';
-import { preloadFontFiles } from '../lettering/fontLoader';
+import { preloadFontFiles, resetFontLoaderForTests } from '../lettering/fontLoader';
 import { PrintError, buildPrintHtml, collectPrintSheets, decoratePrintDocument, escapeHtml, fitBox, openPrintView, printPageSize } from './printView';
 
 const withCover = (mutate?: (d: ComicDoc) => void) =>
@@ -166,6 +166,26 @@ describe('openPrintView', () => {
     const win = fakeWindow();
     await openPrintView(makeBook(), fakeUrlFor, { win, timeoutMs: 5, lang: 'te' });
     expect(win.document.documentElement.getAttribute('lang')).toBe('te');
+  });
+
+  it("loads the edition's lazy face tables itself, so the print CSS declares its script face (PE-FONTS #2)", async () => {
+    // Nothing preloads here: the face tables of script and Pro faces are lazy, and fontFaceCss lists only tables that
+    // have arrived, so without openPrintView's own preload the print window would drop the edition's @font-face rules.
+    resetFontLoaderForTests();
+    const win = fakeWindow();
+    const writes: string[] = [];
+    const write = win.document.write.bind(win.document);
+    win.document.write = (...parts: string[]) => {
+      writes.push(parts.join(''));
+      write(...parts);
+    };
+    await openPrintView(makeBook(), fakeUrlFor, { win, timeoutMs: 5, lang: 'te' });
+    const html = writes.find((w) => w.includes('class="sheet')) ?? writes[writes.length - 1];
+    const family = FONT_REGISTRY[languageSpec('te')!.fonts.dialogue].family;
+    expect(family).toBe('Noto Sans Telugu');
+    expect(html).toContain(`@font-face{font-family:"${family}"`);
+    const weights = new Set([...html.matchAll(new RegExp(`font-family:"${family}";font-style:normal;font-weight:(\\d+);`, 'g'))].map((m) => Number(m[1])));
+    expect([...weights].sort()).toEqual([400, 700, 800, 900]);
   });
 
   it('explains a blocked pop-up', async () => {
