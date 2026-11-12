@@ -9,7 +9,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
 import type { PublicationOwnerView, PublishReadiness, PublishRequest } from '../../../shared/comic/publication';
-import { FOCUS_RING, OVERLINE, RADIUS_CONTROL, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { CONTROL_BTN, FOCUS_RING, OVERLINE, RADIUS_CONTROL, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx, plural } from '../conversation/ui';
 import { pageIdsFor } from './shareModel';
 
@@ -57,10 +57,10 @@ export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; 
 
 /** The owner view could not be fetched: what happened, and the one next step (the Share sheet and the panel share it). */
 export const CheckFailed: React.FC<{ onRetry?(): void }> = ({ onRetry }) => (
-  <div role="alert" className={cx('flex min-w-0 flex-wrap items-center justify-between gap-2 border px-3 py-1 text-[13px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.error)}>
-    <span className="min-w-0 py-1">Couldn’t check your comic.</span>
+  <div role="alert" className={cx('flex min-w-0 flex-wrap items-center justify-between gap-2 border px-3 py-2 text-[13px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.error)}>
+    <span className="min-w-0">Couldn’t check your comic.</span>
     {onRetry && (
-      <button type="button" onClick={onRetry} className={cx('min-h-[44px] px-3 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] touch-manipulation', RADIUS_CONTROL, FOCUS_RING)}>
+      <button type="button" onClick={onRetry} className={cx('min-h-[44px] px-3 text-[13px] font-semibold text-[var(--ds-ink)] touch-manipulation', CONTROL_BTN, FOCUS_RING)}>
         Try again
       </button>
     )}
