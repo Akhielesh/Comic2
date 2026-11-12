@@ -79,18 +79,16 @@ const loadTable = (id: AnyFontId): Promise<FontFile[]> => {
   if (ready) return Promise.resolve(ready);
   const pending = tableLoads.get(id);
   if (pending) return pending;
-  const p = (async () => {
-    try {
+  // Settles on a later tick, so the pending entry below is always set before it is cleared.
+  const p = Promise.resolve()
+    .then(async () => {
       const load = LAZY_FONT_FILES[id as keyof typeof LAZY_FONT_FILES];
       const files = load ? await load() : [];
       if (files?.length) tables.set(id, files);
       return files || [];
-    } catch {
-      return [];
-    } finally {
-      tableLoads.delete(id);
-    }
-  })();
+    })
+    .catch(() => [] as FontFile[]) // retried on the next ask
+    .finally(() => tableLoads.delete(id));
   tableLoads.set(id, p);
   return p;
 };
