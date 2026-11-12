@@ -732,8 +732,9 @@ describe('Pro Edit contract (PE-0): flags and seams', () => {
     expect(CAMERA_MOVE_IDS).toHaveLength(6);
     const parts = [composePart, renderPart, kitPart, inspectorPart, layersPart, assetsPart, animatePart, stagePart];
     expect(parts.map((p) => p.id).sort()).toEqual([...PRO_EDIT_PARTS].sort());
-    // The parts the merged S2 packages made ready (PE-COMPOSE: compose; PE-SHELL: kit); the rest stay stubs.
-    expect(parts.filter((p) => p.ready).map((p) => p.id).sort()).toEqual(['compose', 'kit']);
+    // The parts the merged S2 packages made ready (PE-COMPOSE: compose; PE-SHELL: kit; PE-INSPECT: inspector, layers);
+    // the rest stay stubs.
+    expect(parts.filter((p) => p.ready).map((p) => p.id).sort()).toEqual(['compose', 'inspector', 'kit', 'layers']);
     // The barrel reaches the contracts under their namespaces.
     expect(comic.fx.renderFx).toBe(renderFx);
     expect(comic.motion.MOTION_PRESET_IDS).toBe(MOTION_PRESET_IDS);

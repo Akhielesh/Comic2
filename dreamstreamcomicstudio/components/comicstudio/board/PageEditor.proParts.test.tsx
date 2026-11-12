@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
 import { PRO_FREE_FOOTER, type ProEditPartId, type ProSample } from '../../../shared/comic/pro/types';
@@ -14,6 +14,7 @@ import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import type { StudioController } from '../types';
 import { PRO_COACH_KEY, ProPartsContext, mountedParts, partModule, type ProPanelProps, type ProPartModule } from '../editor/useProEditor';
 import { MODE_STORAGE_KEY } from '../useStudioMode';
+import { clearViewHidden, setViewHidden } from '../editor/layers/viewHidden';
 
 const allowance = vi.hoisted(() => ({ status: null as unknown }));
 vi.mock('../../usage/useUsageAllowance', () => ({ useUsageAllowance: () => allowance.status }));
@@ -48,10 +49,12 @@ const stub = (id: ProEditPartId, extra: Partial<ProPartModule> = {}): ProPartMod
 });
 const SAMPLE: ProSample = { id: 'action-hit', kind: 'recipe', name: 'Action hit', label: "Apply 'Action hit' · Free", ops: [] };
 
+/** A part a test leaves out: not ready. The real inspector and layers parts are ready since PE-INSPECT merged. */
+const absent = (id: ProEditPartId): ProPartModule => ({ part: { id, ready: false } });
 const reader =
   (parts: Partial<Record<ProEditPartId, ProPartModule>>) =>
   (id: ProEditPartId): ProPartModule =>
-    parts[id] ?? partModule(id);
+    parts[id] ?? (id === 'inspector' || id === 'layers' ? absent(id) : partModule(id));
 
 const DESKTOP = formFactorFor({ w: 1280, h: 800 });
 const WIDE = formFactorFor({ w: 1440, h: 900 });
@@ -81,10 +84,12 @@ const open = (o: {
 
 const ALL = { inspector: stub('inspector'), layers: stub('layers'), assets: stub('assets') };
 
-describe('the real PE-0 stubs mount nothing', () => {
-  it('every part but compose is not ready, so no panel and no samples; compose (ready since PE-COMPOSE) unlocks Shapes (flag on, Pro)', () => {
+describe('the real parts: the merged packages mount theirs, the stubs mount nothing', () => {
+  it('inspector and layers (PE-INSPECT) mount lazily, compose (PE-COMPOSE) unlocks Shapes; assets and animate stay stubs, no samples (flag on, Pro)', () => {
     const parts = mountedParts(true, true);
-    expect(parts).toEqual({ inspector: undefined, layers: undefined, assets: undefined, animate: undefined, compose: true, samples: [] });
+    expect(parts.inspector).toBeTruthy();
+    expect(parts.layers).toBeTruthy();
+    expect({ ...parts, inspector: undefined, layers: undefined }).toEqual({ inspector: undefined, layers: undefined, assets: undefined, animate: undefined, compose: true, samples: [] });
   });
   it('the flag gates every part on its own: all parts ready, flag off, nothing mounts', () => {
     const allReady = reader({ ...ALL, animate: stub('animate'), compose: { part: { id: 'compose', ready: true } }, assets: stub('assets', { samples: [SAMPLE] }) });
@@ -311,5 +316,23 @@ describe('the Shapes tool (once the compose part draws overlays)', () => {
     expect(ops.some((op) => op.op === 'layer' && op.patch && (op.patch as { kind?: string }).kind === 'shape')).toBe(true);
     // Back to Select after one shape.
     expect(within(screen.getByTestId('pro-tool-rail')).getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('the Layers eye reaches the canvas (PE-INSPECT wave note 3, wired at the S2b integration)', () => {
+  afterEach(() => clearViewHidden());
+  it('hiding a balloon in this view removes its drawing and hit box from the editor canvas; showing it brings both back; no op', async () => {
+    const { studio } = open({});
+    const hitOf = (id: string) => document.querySelector(`[data-testid="balloon-hit"][data-line-id="${id}"]`);
+    const drawnOf = (id: string) => document.querySelector(`svg [data-line-id="${id}"]`);
+    await waitFor(() => expect(hitOf('pg_1_l1')).not.toBeNull());
+    expect(drawnOf('pg_1_l1')).not.toBeNull();
+    act(() => void setViewHidden('pg_1', 'pg_1_l1', true));
+    await waitFor(() => expect(hitOf('pg_1_l1')).toBeNull());
+    expect(drawnOf('pg_1_l1')).toBeNull();
+    expect(hitOf('pg_1_l2')).not.toBeNull();
+    act(() => void setViewHidden('pg_1', 'pg_1_l1', false));
+    await waitFor(() => expect(hitOf('pg_1_l1')).not.toBeNull());
+    expect(studio.patch).not.toHaveBeenCalled();
   });
 });

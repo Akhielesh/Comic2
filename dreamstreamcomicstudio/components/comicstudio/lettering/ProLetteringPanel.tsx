@@ -9,12 +9,16 @@ import { AlignCenter, AlignLeft, AlignRight, ArrowDownToLine, ArrowUpToLine, Lin
 import { SCRIPTS } from '../../../shared/comic/languages';
 import { languageSpec } from '../../../shared/comic/languages';
 import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
-import { SFX_EFFECTS, type BorderStyle, type LetterStyle, type LetterStylePatch, type SfxEffect, type TextCase } from '../../../shared/comic/lettering/style';
+import { SFX_EFFECTS, type BorderStyle, type BubbleShape, type LetterStyle, type LetterStylePatch, type ProSfxEffect, type SfxEffect, type TextCase } from '../../../shared/comic/lettering/style';
+import type { Line } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { PatchOptions } from '../types';
 import { ColorField } from './ColorField';
 import { FontPicker } from './FontPicker';
-import { ShapePicker, TailPicker } from './ShapePicker';
+import { ProShapePicker, ShapePicker, TailPicker } from './ShapePicker';
+import type { NumberCommit, NumberFieldProps } from './NumberField';
+import { useProExtras } from './pro/proExtras';
+import { proFieldsWritable } from '../editor/inspector/proSwitch';
 import {
   aimAtSpeakerOps,
   alignOps,
@@ -52,11 +56,15 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'apply', label: 'Apply' }
 ];
 const LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
+/** The panel's label ink and size (the Pro extras' rows read the same). */
+export const PANEL_LABEL = LABEL;
 // The button's shape without an ink (`cx` does not merge: a tone stacked on the neutral ink loses to
 // it). BTN is the neutral button; Delete is BTN_SHAPE + TONE_TEXT.danger (statusInkGuard.test.ts).
 const BTN_SHAPE =
   'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
 const BTN = `${BTN_SHAPE} text-[var(--ds-ink)]`;
+/** The panel's neutral button (the Pro extras' buttons read the same). */
+export const PANEL_BTN = BTN;
 const CASES: { value: TextCase; label: string }[] = [
   { value: 'upper', label: 'UPPER' },
   { value: 'as_typed', label: 'As typed' },
@@ -71,6 +79,26 @@ const BORDERS: { value: BorderStyle; label: string }[] = [
   { value: 'none', label: 'None' }
 ];
 const SFX_LABEL: Record<SfxEffect, string> = { filled_stroke: 'Filled', outlined: 'Outlined', shadow: 'Shadow', skewed: 'Skewed', arched: 'Arched', pop: 'Pop' };
+/** The Pro SFX effects (PE-LETTER draws them; the unions stay separate in S2, collisions B-4). halftone_fill is S3. */
+export const PRO_SFX_LABEL: Record<ProSfxEffect, string> = {
+  extrude3d: '3D extrude',
+  outline_stack: 'Stacked outline',
+  wobble: 'Wobble',
+  shatter: 'Shatter',
+  gradient: 'Gradient',
+  halftone_fill: 'Halftone'
+};
+
+/** A typed field beside a slider (Pro Edit): display range, step and unit; stored × scale = shown. */
+interface NumericSpec {
+  scale: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+}
+/** A NumericSpec with the typed field to draw it (the lazily loaded Pro extras' NumberField). */
+type NumericField = NumericSpec & { Field: React.ComponentType<NumberFieldProps> };
 
 /** A labelled slider with a live value; `mixed` when the selection disagrees. */
 const Slider: React.FC<{
@@ -83,7 +111,11 @@ const Slider: React.FC<{
   disabled?: boolean;
   note?: string;
   onChange(v: number): void;
-}> = ({ label, value, min, max, step, format = (v) => String(Math.round(v * 100) / 100), disabled, note, onChange }) => {
+  /** Pro Edit: a typed field instead of the read-out (arrows step, Shift ×10, Enter commits one undo entry). */
+  numeric?: NumericField;
+  /** A typed value (`via: 'type'`, its own undo entry) or an arrow step (`via: 'step'`, coalesced). */
+  onTyped?(v: number, how: NumberCommit): void;
+}> = ({ label, value, min, max, step, format = (v) => String(Math.round(v * 100) / 100), disabled, note, onChange, numeric, onTyped }) => {
   const id = React.useId();
   return (
     <div className="min-w-0">
@@ -91,7 +123,25 @@ const Slider: React.FC<{
         <label htmlFor={id} className={LABEL}>
           {label}
         </label>
-        <span className="text-[11px] tabular-nums text-[var(--ds-muted)]">{value === undefined ? 'Mixed' : format(value)}</span>
+        {numeric ? (
+          <numeric.Field
+            label={label}
+            hideLabel
+            steppers={false}
+            className="w-[4.75rem] shrink-0"
+            value={value}
+            scale={numeric.scale}
+            min={numeric.min}
+            max={numeric.max}
+            step={numeric.step}
+            unit={numeric.unit}
+            disabled={disabled}
+            testId={`num-${label}`}
+            onCommit={(v, how) => (onTyped ? onTyped(v, how) : onChange(v))}
+          />
+        ) : (
+          <span className="text-[11px] tabular-nums text-[var(--ds-muted)]">{value === undefined ? 'Mixed' : format(value)}</span>
+        )}
       </div>
       <input
         id={id}
@@ -110,7 +160,7 @@ const Slider: React.FC<{
   );
 };
 
-const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?: string; onChange(on: boolean): void }> = ({ label, on, disabled, title, onChange }) => (
+export const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?: string; onChange(on: boolean): void }> = ({ label, on, disabled, title, onChange }) => (
   <button type="button" role="switch" aria-checked={on} disabled={disabled} title={title} onClick={() => onChange(!on)} className={cx(BTN, on && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}>
     <span aria-hidden className={cx('h-3 w-5 rounded-full p-px transition-colors', on ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-well-strong)]')}>
       <span className={cx('block h-2.5 w-2.5 rounded-full bg-white transition-transform motion-reduce:transition-none', on && 'translate-x-2')} />
@@ -118,6 +168,15 @@ const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?:
     {label}
   </button>
 );
+
+/** A line's OWN value of a style key, when every selected line agrees (Pro keys a build without their drawing
+ *  cannot resolve still show what is stored). */
+const ownValue = <K extends keyof LetterStyle>(lines: readonly Line[], key: K): LetterStyle[K] | undefined => {
+  if (!lines.length) return undefined;
+  const vals = lines.map((l) => (l.style as Record<string, unknown> | undefined)?.[key as string]);
+  const first = JSON.stringify(vals[0] ?? null);
+  return vals.every((x) => JSON.stringify(x ?? null) === first) ? (vals[0] as LetterStyle[K]) : undefined;
+};
 
 /**
  * Editing a translated edition (LE-3 / LE-4): stacking, lock and the connector are SHARED by every
@@ -130,11 +189,20 @@ export interface ProLetteringEditionProps {
   editionLang?: string;
   /** The original's language name ("English") for the hint. */
   sourceName?: string;
+  /**
+   * Pro Edit (COMIC_PRO_EDITOR_V2 on; PE-INSPECT): typed fields beside every slider, Forward / Backward / Duplicate,
+   * align to the selection, panel or page and distribute across, Copy / Paste style — and, only while Pro fields are
+   * writable (PRO_EDIT_OPS_PATCHABLE), the Pro text effects, shapes, SFX effects, fonts and saved styles. Off = today.
+   * Everything Pro beyond the switch's own checks is in the lazily loaded Pro extras (lettering/pro/proExtras.ts), so
+   * the Easy path never loads it; the Balloon width slider gives way to the typed transform's W.
+   */
+  proEdit?: boolean;
 }
 
-export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditionProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang, sourceName }) => {
+export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditionProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang, sourceName, proEdit }) => {
   const [tab, setTab] = useState<Tab>('text');
   const [scope, setScope] = useState<StyleScope>('kind_comic');
+  const pro = useProExtras(!!proEdit);
   const ids = lines.map((l) => l.id);
   const one = lines.length === 1 ? lines[0] : undefined;
   const lang = one?.lang || doc.format?.language || 'en';
@@ -167,6 +235,13 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
     { id: 'comic', label: 'The whole comic' }
   ];
   const overrides = one?.style && Object.keys(one.style).length ? one.style : undefined;
+  // ── Pro Edit ──
+  const writable = !!proEdit && proFieldsWritable();
+  /** The typed field beside a slider: Pro Edit only, once the Pro extras are there (the read-out shows until then). */
+  const num = (spec: NumericSpec): NumericField | undefined => (proEdit && pro ? { ...spec, Field: pro.NumberField } : undefined);
+  /** A typed slider value: its own undo entry when typed, coalesced with the slider's key when stepped. */
+  const typed = (key: string, label: string, patchOf: (x: number) => LetterStylePatch) => (x: number, how: NumberCommit) => style(patchOf(x), label, how.via === 'step' ? key : undefined);
+  const pv = <K extends keyof LetterStyle>(key: K): LetterStyle[K] | undefined => (v(key) ?? ownValue(lines, key)) as LetterStyle[K] | undefined;
 
   return (
     <div className="space-y-3" data-testid="pro-lettering">
@@ -193,8 +268,18 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
       <div role="tabpanel" id={`pl-panel-${tab}`} aria-labelledby={`pl-tab-${tab}`} className="space-y-3">
         {tab === 'text' && (
           <>
-            <FontPicker value={font} lang={lang} onChange={(f) => style({ font: f }, 'Change font')} />
-            <Slider label="Size" value={v('sizeScale')} min={0.5} max={3.5} step={0.05} format={(x) => `${Math.round(x * 100)}%`} onChange={(x) => style({ sizeScale: x }, 'Text size', 'size')} />
+            <FontPicker value={font} lang={lang} pro={proEdit} onChange={(f) => style({ font: f }, 'Change font')} />
+            <Slider
+              label="Size"
+              value={v('sizeScale')}
+              min={0.5}
+              max={3.5}
+              step={0.05}
+              format={(x) => `${Math.round(x * 100)}%`}
+              onChange={(x) => style({ sizeScale: x }, 'Text size', 'size')}
+              numeric={num({ scale: 100, min: 50, max: 350, step: 5, unit: '%' })}
+              onTyped={typed('size', 'Text size', (x) => ({ sizeScale: x }))}
+            />
             <div className="space-y-1">
               <p className={LABEL}>Weight</p>
               <Segmented<string>
@@ -241,15 +326,35 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               disabled={!script.allowLetterSpacing}
               note={script.allowLetterSpacing ? undefined : 'Spacing would break this script’s joined letters, so it stays off.'}
               onChange={(x) => style({ letterSpacing: x }, 'Letter spacing', 'spacing')}
+              numeric={num({ scale: 1000, min: -50, max: 300, step: 10, unit: '‰' })}
+              onTyped={typed('spacing', 'Letter spacing', (x) => ({ letterSpacing: x }))}
             />
-            <Slider label="Line height" value={v('lineHeight')} min={0.9} max={1.8} step={0.05} onChange={(x) => style({ lineHeight: x }, 'Line height', 'lh')} />
-            <ColorField label="Text colour" value={v('textColor') ?? '#111111'} swatches={[...TEXT_SWATCHES, ...palette]} allowAlpha allowAuto={anySfx} onChange={(c, o) => style({ textColor: c }, 'Text colour', o?.scrub ? 'tc' : undefined)} />
+            <Slider
+              label="Line height"
+              value={v('lineHeight')}
+              min={0.9}
+              max={1.8}
+              step={0.05}
+              onChange={(x) => style({ lineHeight: x }, 'Line height', 'lh')}
+              numeric={num({ scale: 100, min: 90, max: 180, step: 5, unit: '%' })}
+              onTyped={typed('lh', 'Line height', (x) => ({ lineHeight: x }))}
+            />
+            <ColorField label="Text colour" value={v('textColor') ?? '#111111'} swatches={[...TEXT_SWATCHES, ...palette]} allowAlpha allowAuto={anySfx} numeric={proEdit} onChange={(c, o) => style({ textColor: c }, 'Text colour', o?.scrub ? 'tc' : undefined)} />
             <div className="space-y-1.5">
               <Toggle label="Text outline" on={!!textStroke} onChange={(on) => style({ textStroke: on ? { color: '#ffffff', width: 0.12 } : null }, on ? 'Text outline' : 'No text outline')} />
               {textStroke && (
                 <>
                   <ColorField label="Outline colour" value={textStroke.color} swatches={['#ffffff', '#111111', ...palette]} onChange={(c) => style({ textStroke: { ...textStroke, color: c } }, 'Text outline colour')} />
-                  <Slider label="Outline width" value={textStroke.width} min={0} max={0.3} step={0.01} onChange={(x) => style({ textStroke: { ...textStroke, width: x } }, 'Text outline width', 'tsw')} />
+                  <Slider
+                    label="Outline width"
+                    value={textStroke.width}
+                    min={0}
+                    max={0.3}
+                    step={0.01}
+                    onChange={(x) => style({ textStroke: { ...textStroke, width: x } }, 'Text outline width', 'tsw')}
+                    numeric={num({ scale: 100, min: 0, max: 30, step: 1, unit: '%' })}
+                    onTyped={typed('tsw', 'Text outline width', (x) => ({ textStroke: { ...textStroke, width: x } }))}
+                  />
                 </>
               )}
             </div>
@@ -282,6 +387,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                     </button>
                   ))}
                 </div>
+                {writable && pro && <pro.ProSfxPicker value={pv('sfxEffect') as string | undefined} onPick={(e) => style({ sfxEffect: e as unknown as SfxEffect }, 'Sound effect style')} />}
                 {v('sfxEffect') === 'arched' && <Slider label="Arc" value={v('arc')} min={-1} max={1} step={0.05} onChange={(x) => style({ arc: x }, 'Arc', 'arc')} />}
                 <div className="flex items-end gap-2">
                   <div className="min-w-0 flex-1">
@@ -301,27 +407,71 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 </div>
               </div>
             )}
+            {writable && pro && (
+              <pro.ProTextEffects
+                gradient={pv('fillGradient')}
+                strokes={pv('strokes')}
+                glow={pv('glow')}
+                warp={pv('warp')}
+                warpAmount={pv('warpAmount')}
+                warpOk={pro.warpAllowed(languageSpec(lang)?.script)}
+                textColor={v('textColor')}
+                palette={palette}
+                style={style}
+              />
+            )}
           </>
         )}
 
         {tab === 'bubble' && (
           <>
             <ShapePicker value={v('shape')} onChange={(s) => style({ shape: s }, 'Bubble shape')} />
-            <ColorField label="Fill colour" value={v('fill') ?? '#ffffff'} swatches={[...FILL_SWATCHES, ...palette]} allowAlpha allowNone onChange={(c, o) => style({ fill: c }, 'Bubble fill', o?.scrub ? 'fill' : undefined)} />
-            <ColorField label="Border colour" value={v('border') ?? '#111111'} swatches={[...BORDER_SWATCHES, ...palette]} allowAlpha onChange={(c, o) => style({ border: c }, 'Border colour', o?.scrub ? 'border' : undefined)} />
-            <Slider label="Border width" value={v('borderWidth')} min={0} max={4} step={0.1} format={(x) => `${Math.round(x * 100)}%`} onChange={(x) => style({ borderWidth: x }, 'Border width', 'bw')} />
+            {writable && <ProShapePicker value={ownValue(lines, 'shape') as string | undefined} onChange={(s) => style({ shape: s as unknown as BubbleShape }, 'Bubble shape')} />}
+            <ColorField label="Fill colour" value={v('fill') ?? '#ffffff'} swatches={[...FILL_SWATCHES, ...palette]} allowAlpha allowNone numeric={proEdit} onChange={(c, o) => style({ fill: c }, 'Bubble fill', o?.scrub ? 'fill' : undefined)} />
+            <ColorField label="Border colour" value={v('border') ?? '#111111'} swatches={[...BORDER_SWATCHES, ...palette]} allowAlpha numeric={proEdit} onChange={(c, o) => style({ border: c }, 'Border colour', o?.scrub ? 'border' : undefined)} />
+            <Slider
+              label="Border width"
+              value={v('borderWidth')}
+              min={0}
+              max={4}
+              step={0.1}
+              format={(x) => `${Math.round(x * 100)}%`}
+              onChange={(x) => style({ borderWidth: x }, 'Border width', 'bw')}
+              numeric={num({ scale: 100, min: 0, max: 400, step: 10, unit: '%' })}
+              onTyped={typed('bw', 'Border width', (x) => ({ borderWidth: x }))}
+            />
             <div className="space-y-1">
               <p className={LABEL}>Border style</p>
               <Segmented<string> label="Border style" size="xs" className="w-full" value={v('borderStyle') ?? ''} onChange={(b) => style({ borderStyle: b as BorderStyle }, 'Border style')} options={BORDERS} />
             </div>
-            <Slider label="Padding" value={v('padding')} min={0} max={3} step={0.05} format={(x) => `${Math.round(x * 100)}%`} onChange={(x) => style({ padding: x }, 'Padding', 'pad')} />
+            <Slider
+              label="Padding"
+              value={v('padding')}
+              min={0}
+              max={3}
+              step={0.05}
+              format={(x) => `${Math.round(x * 100)}%`}
+              onChange={(x) => style({ padding: x }, 'Padding', 'pad')}
+              numeric={num({ scale: 100, min: 0, max: 300, step: 5, unit: '%' })}
+              onTyped={typed('pad', 'Padding', (x) => ({ padding: x }))}
+            />
           </>
         )}
 
         {tab === 'tail' && (
           <>
             <TailPicker value={v('tail')} shape={v('shape')} onChange={(t) => style({ tail: t }, 'Tail style')} />
-            <Slider label="Tail width" value={v('tailWidth')} min={0.4} max={2} step={0.05} format={(x) => `${Math.round(x * 100)}%`} onChange={(x) => style({ tailWidth: x }, 'Tail width', 'tw')} />
+            <Slider
+              label="Tail width"
+              value={v('tailWidth')}
+              min={0.4}
+              max={2}
+              step={0.05}
+              format={(x) => `${Math.round(x * 100)}%`}
+              onChange={(x) => style({ tailWidth: x }, 'Tail width', 'tw')}
+              numeric={num({ scale: 100, min: 40, max: 200, step: 5, unit: '%' })}
+              onTyped={typed('tw', 'Tail width', (x) => ({ tailWidth: x }))}
+            />
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
@@ -346,6 +496,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'back', plans, placements.balloons), 'Send to back')}>
                 <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden /> Back
               </button>
+              {pro && <pro.ProStackButtons page={page} ids={ids} one={one} plans={plans} balloons={placements.balloons} inOriginal={inOriginal} run={(ops, label) => run(ops, label)} />}
               <button
                 type="button"
                 className={BTN}
@@ -375,7 +526,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 {inOriginal}
               </p>
             )}
-            {one && (
+            {/* Pro Edit: the typed transform above owns W (the outline's width), so a second, different width never shows. */}
+            {one && !proEdit && (
               <Slider
                 label="Balloon width"
                 value={(selPlans[0]?.w ?? 0) / 1000}
@@ -387,7 +539,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 onChange={(x) => run(pinKeepingSizeOps([balloonOp(page, one.id, { w: Math.round(x * 1000) / 1000, pinned: true }, placements.balloons)], page, plans, [one.id], editionLang), 'Balloon width', { coalesce: `w:${page.id}:${one.id}` })}
               />
             )}
-            {lines.length >= 2 && (
+            {pro && <pro.ProAlign doc={doc} page={page} plans={plans} ids={ids} H={H} locked={locked} editionLang={editionLang} apply={apply} />}
+            {!proEdit && lines.length >= 2 && (
               <div className="space-y-1">
                 <p className={LABEL}>Align</p>
                 <div className="grid grid-cols-3 gap-1">
@@ -458,6 +611,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               Clear this balloon’s own styles
             </button>
             {!overrides && <p className="text-[11px] text-[var(--ds-muted)]">This balloon uses the comic’s style. Change something in Text, Bubble or Tail first.</p>}
+            {pro && <pro.ProStyleClipboard doc={doc} page={page} ids={ids} one={one} sharedLocked={sharedLocked} apply={apply} />}
+            {writable && pro && <pro.NamedStyles doc={doc} page={page} lines={lines} apply={apply} editionLang={editionLang} />}
           </>
         )}
       </div>

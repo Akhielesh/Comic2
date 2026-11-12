@@ -336,7 +336,11 @@ describe('BalloonLayer: presence (A4)', () => {
     expect(outline.className).toContain(RADIUS_PILL);
     expect(outline.className).not.toMatch(/rounded-\[\d/);
     expect(hit('pg_1_l3').querySelector('[data-testid="presence-chip"]')?.textContent).toBe(PRESENCE_LABEL);
-    expect(container.querySelector(`#bd-pg_1-pg_1_l3`)?.textContent).toMatch(/director is editing this balloon/);
+    // The chip's words are visible inside the balloon's button, so they are in its accessible name (WCAG 2.5.3 label in
+    // name; axe label-content-name-mismatch on the S2b qa/pro pro-layers scene), and not repeated in its description.
+    expect(hit('pg_1_l3').getAttribute('aria-label')).toContain(`${PRESENCE_LABEL}.`);
+    expect(container.querySelector(`#bd-pg_1-pg_1_l3`)?.textContent).not.toMatch(/director is editing/i);
+    expect(hit('pg_1_l2').getAttribute('aria-label')).not.toContain(PRESENCE_LABEL);
     expect(hit('pg_1_l2').querySelector('[data-testid="presence-outline"]')).toBeNull();
   });
 });

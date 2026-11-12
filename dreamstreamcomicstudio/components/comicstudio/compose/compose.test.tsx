@@ -277,6 +277,19 @@ describe('ComicPageView composes a page from the node tree', () => {
     expect(ids(editor.container)).not.toContain('ly_future');
   });
 
+  it('the Layers eye (viewHidden, editor only): a hidden overlay leaves this view’s tree; the page itself is unchanged', () => {
+    const doc = layeredDoc([LAYERS.image, LAYERS.sticker, LAYERS.shape]);
+    const page = doc.pages[0];
+    const before = JSON.stringify(page);
+    const ids = (c: HTMLElement) => [...c.querySelectorAll('g[data-layer-id]')].map((g) => g.getAttribute('data-layer-id'));
+    const editor = render(<ComicPageView doc={doc} page={page} imageUrl={fakeUrlFor(page.render.asset)} urlForPath={fakePathUrl} guides viewHidden={new Set(['ly_star'])} />);
+    expect(ids(editor.container)).toEqual(['ly_photo', 'ly_box']);
+    expect(JSON.stringify(page)).toBe(before);
+    editor.unmount();
+    const all = render(<ComicPageView doc={doc} page={page} imageUrl={fakeUrlFor(page.render.asset)} urlForPath={fakePathUrl} guides viewHidden={new Set()} />);
+    expect(ids(all.container)).toEqual(['ly_photo', 'ly_star', 'ly_box']);
+  });
+
   it('an empty frame is a blank bordered frame for readers and a dashed placeholder in the editor', () => {
     const doc = framedDoc((page) => (page.render.cuts!.cuts = page.render.cuts!.cuts.slice(0, 2)));
     const reader = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} />);

@@ -174,14 +174,14 @@ describe('the phone header with the flag on (320 / 360)', () => {
 });
 
 describe('the docked Pro workspace (1280 × 800)', () => {
-  it('rail, canvas and a 400 px inspector column: Properties and AI tabs, the free footer, Edit with AI in AI', async () => {
+  it('rail, canvas and a 400 px inspector column: Properties, Layers (PE-INSPECT’s part) and AI tabs, the free footer, Edit with AI in AI', async () => {
     open({ mode: 'pro' });
     const dock = await screen.findByTestId('pro-dock');
     expect(dock.style.width).toBe('400px');
     expect(screen.getByTestId('pro-tool-rail')).toHaveAttribute('aria-orientation', 'vertical');
     expect(document.querySelector('[data-pro-workspace="docked"]')).not.toBeNull();
     const tabs = within(dock).getAllByRole('tab').map((t) => t.textContent);
-    expect(tabs).toEqual(['Properties', 'AI']);
+    expect(tabs).toEqual(['Properties', 'Layers', 'AI']);
     expect(within(dock).getByTestId('pro-free-footer').textContent).toBe(PRO_FREE_FOOTER);
     // The priced tool lives in the AI tab, with no "free" footer.
     fireEvent.click(within(dock).getByRole('tab', { name: 'AI' }));

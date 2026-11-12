@@ -1,13 +1,16 @@
-// Font picker (lettering.md §7.4): every self-hosted lettering face, each name shown in its own face
-// (loaded lazily when the list opens), with its licence badge and role. Faces that do not cover the
+// Font picker (lettering.md §7.4): every self-hosted lettering face, each name shown in its own face through the
+// specimen sprite (fontSpecimens.ts: one image, so browsing the list downloads no face), with its licence badge and role. Faces that do not cover the
 // comic's script say so honestly ("Telugu uses Noto Sans Telugu"). Easy view: six friendly chips.
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
-import { FONT_REGISTRY, fontCoversLanguage, fontFamilyStack, resolveLetteringFont } from '../../../shared/comic/lettering/fonts';
+import { FONT_REGISTRY, fontCoversLanguage, fontFaceMeta, fontFamilyStack, resolveLetteringFont } from '../../../shared/comic/lettering/fonts';
 import type { FontId, LatinFontId } from '../../../shared/comic/lettering/style';
 import { languageSpec } from '../../../shared/comic/languages';
 import { ensureFonts } from './fontLoader';
+import { fontSpecimenStyle } from './fontSpecimens';
+import { PRO_FONT_ROLES } from '../../../shared/comic/lettering/proFonts';
+import { proFieldsWritable, proFontIds } from '../editor/inspector/proSwitch';
 import { cx } from '../board/ui';
 import { RADIUS_PILL } from '../../chat/studioDesign';
 
@@ -32,7 +35,11 @@ export const LATIN_FONTS: LatinFontId[] = [
 /** The Easy view's friendly six. */
 export const EASY_FONTS: LatinFontId[] = ['comic-neue', 'andika', 'patrick-hand', 'shantell-sans', 'atkinson', 'bangers'];
 
-const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? id;
+const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? String(id).split('-').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+
+/** A Pro face's role line (PE-FONTS's PRO_FONT_ROLES; a named import since PE-FONTS merged, PE-INSPECT wave note 9). */
+const proRoleOf = (id: string): string | undefined =>
+  Object.prototype.hasOwnProperty.call(PRO_FONT_ROLES, id) ? (PRO_FONT_ROLES as Readonly<Record<string, string>>)[id] : undefined;
 
 /**
  * The Easy chips for a lettering language: the friendly six for Latin-script languages; otherwise every
@@ -54,9 +61,12 @@ export interface FontPickerProps {
   /** Easy chips instead of the full list. */
   simple?: boolean;
   label?: string;
+  /** Pro Edit: list the Pro faces (PRO_FONT_IDS) after the base ones — only while Pro fields are writable (a Pro
+   *  font is a Pro field; C-9). The open list shows each face's specimen, so no face loads to browse it. */
+  pro?: boolean;
 }
 
-export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, simple, label = 'Font' }) => {
+export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, simple, label = 'Font', pro }) => {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -76,15 +86,18 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   // Script faces the comic's language can use (non-Latin languages only).
   const options: FontId[] = useMemo(() => {
     const extra = spec && spec.script !== 'Latn' ? [...new Set([spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx])].filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
-    return [...extra, ...LATIN_FONTS];
-  }, [spec]);
+    const proFaces = pro && proFieldsWritable() ? (proFontIds() as readonly string[] as readonly FontId[]).filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
+    return [...extra, ...LATIN_FONTS, ...proFaces];
+  }, [spec, pro]);
+  const proSet = useMemo(() => new Set<string>(proFontIds()), []);
   const shown = simple ? easyFontsFor(lang) : options;
 
-  // Load the faces for the previews when the list is visible (free; files are cached).
+  // The Easy chips are live text in their own faces, so those six load (free; files are cached). The open list draws
+  // each name from the specimen sprite instead, so opening it fetches no face (PE-FONTS wave note 6).
   useEffect(() => {
-    if (simple || open) void ensureFonts(shown, { weights: [400, 700] });
+    if (simple) void ensureFonts(shown, { weights: [400, 700] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, simple]);
+  }, [simple]);
   useEffect(() => {
     if (!open) return;
     const i = Math.max(0, options.indexOf(value as FontId));
@@ -189,8 +202,9 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
           className="absolute inset-x-0 top-full z-20 mt-1 max-h-72 overflow-y-auto overscroll-contain rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised,var(--ds-surface-strong))] p-1 shadow-[0_12px_40px_rgba(0,0,0,0.22)] focus:outline-none"
         >
           {options.map((f, i) => {
-            const meta = FONT_REGISTRY[f];
+            const meta = fontFaceMeta(f);
             const n = note(f);
+            const specimen = fontSpecimenStyle(f);
             return (
               <li
                 key={f}
@@ -202,16 +216,23 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
                 className={cx('flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5', i === active ? 'bg-[var(--ds-hover)]' : '')}
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px] leading-tight text-[var(--ds-ink)]" style={{ fontFamily: fontFamilyStack(f) }}>
-                    {labelOf(f)}
-                  </span>
+                  {specimen ? (
+                    <>
+                      <span aria-hidden data-font-specimen={f} className="block max-w-full text-[var(--ds-ink)]" style={specimen} />
+                      <span className="sr-only">{labelOf(f)}</span>
+                    </>
+                  ) : (
+                    <span className="block truncate text-[15px] leading-tight text-[var(--ds-ink)]" style={{ fontFamily: fontFamilyStack(f) }}>
+                      {labelOf(f)}
+                    </span>
+                  )}
                   <span className="block truncate text-[11px] text-[var(--ds-muted)]">
-                    {(ROLE as Record<string, string>)[f] ?? 'Script face'}
+                    {(ROLE as Record<string, string>)[f] ?? (proSet.has(f) ? proRoleOf(f) ?? 'Pro face' : 'Script face')}
                     {n ? ` · ${n}` : ''}
                   </span>
                 </span>
                 <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-1.5 py-px text-[9.5px] font-medium tabular-nums text-[var(--ds-muted)]" title="Font licence">
-                  {meta.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
+                  {meta?.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
                 </span>
                 {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
               </li>

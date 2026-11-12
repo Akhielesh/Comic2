@@ -112,6 +112,11 @@ export interface ComicPageViewProps {
   urlForPath?: (path: string, widthPx?: number) => string | undefined;
   /** The editor: also draw guide-only overlays (print: false) and a dashed placeholder in an empty frame. */
   guides?: boolean;
+  /**
+   * The editor only (PE-INSPECT, the Layers eye: editor/layers/viewHidden): balloon line ids and overlay ids hidden in
+   * this view — neither drawn nor hit-tested here. Readers and exports never pass it; nothing is saved.
+   */
+  viewHidden?: ReadonlySet<string>;
 }
 
 /** SafetyVeil wiring for a page or cover (the host decides which actions it can offer). */
@@ -292,7 +297,8 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   onEditionTextChange,
   safety,
   urlForPath,
-  guides
+  guides,
+  viewHidden
 }) => {
   const [measureRef, size] = useElementSize<HTMLDivElement>();
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -308,7 +314,12 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const [variantFailed, setVariantFailed] = useState<string | null>(null);
   const assetPath = page.render.asset?.path;
   // Frames or overlays to draw (undefined: the page renders exactly as before Ship 2).
-  const composition = useMemo(() => (pageComposes(page, { guides }) ? composePage(doc, page, { guides }) : undefined), [doc, page, guides]);
+  // An overlay the Layers eye hides is left out of this view's tree (the editor only; the page itself is unchanged).
+  const shownPage = useMemo(
+    () => (viewHidden?.size && page.layers?.some((l) => viewHidden.has(l.id)) ? { ...page, layers: page.layers.filter((l) => !viewHidden.has(l.id)) } : page),
+    [page, viewHidden]
+  );
+  const composition = useMemo(() => (pageComposes(shownPage, { guides }) ? composePage(doc, shownPage, { guides }) : undefined), [doc, shownPage, guides]);
   const framed = composition?.mode === 'panels';
   // loading="lazy": a composed page's pictures (its drawing in frames, other takes, overlays) wait until the page is
   // near the screen, like a lazy <img>. Without IntersectionObserver (jsdom, old engines) they load at once.
@@ -489,6 +500,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           onSelectionChange={onSelectionChange}
           ariaHidden={letteringAriaHidden}
           visibleLineIds={visibleLineIds}
+          viewHidden={viewHidden}
           editionLang={editionLang}
           markUntranslated={markUntranslated}
           editingLineId={editingLineId}

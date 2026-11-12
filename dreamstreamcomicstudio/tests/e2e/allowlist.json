@@ -588,12 +588,13 @@
         "pro"
       ],
       "scenes": [
-        "shell-pro-selected-*"
+        "shell-pro-selected-*",
+        "pro-inspector-docked-*"
       ],
       "match": {
         "testid": "^(balloon-hit|tail-handle)$"
       },
-      "reason": "Pro view at 360 px with a balloon selected (flag COMIC_PRO_EDITOR_V2 on): the rotate and height handles sit 21 px above and below the selected balloon, so the probes from a short balloon's hit box and its 20 px tail handle land on them. Found by the new @pro smoke (PE-SHELL (c)) at the S2b integration; the phone handle layout goes to PE-SHELL-2 (S3).",
+      "reason": "Pro view at 360 px with a balloon selected (flag COMIC_PRO_EDITOR_V2 on): the rotate and height handles sit 21 px above and below the selected balloon, so the probes from a short balloon's hit box and its 20 px tail handle land on them. Found by the new @pro smoke (PE-SHELL (c)) at the S2b integration; the phone handle layout goes to PE-SHELL-2 (S3). pro-inspector-docked (the same selected balloon, a qa/pro scene added at M14) shows the same two findings.",
       "removeBy": "S3"
     },
     {

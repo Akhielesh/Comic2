@@ -13,11 +13,15 @@ import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ScanFace, TriangleAlert, X } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
-import type { Balloon, Page } from '../../../shared/comic/doc';
+import type { Balloon, LineKind, Page } from '../../../shared/comic/doc';
+import { PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
 import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
-import { balloonOp, drawnSpotPatch, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
+import { balloonOp, drawnSpotPatch, fixSafeAreaOps, KIND_ROW, kindOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
+import { useProExtras } from './pro/proExtras';
+import { cn } from '../../../lib/utils';
+import { FOCUS_RING, SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 // drawnSpotPatch moved to styleOps (lockOps uses it too); re-exported here for its existing importers.
 export { drawnSpotPatch } from './styleOps';
 import type { LetteringPanelProps } from './panelTypes';
@@ -73,6 +77,15 @@ export interface LetteringInspectorProps extends Omit<LetteringPanelProps, 'line
    */
   bounds?: Rect | null;
   onClose(): void;
+  /**
+   * Pro Edit (COMIC_PRO_EDITOR_V2 on; PE-INSPECT): the kind row (keys 1–6), the typed transform, typed fields beside
+   * every slider, Copy / Paste style (⌘⌥C / ⌘⌥V) and the Pro lettering controls behind the Pro switch. Off = today.
+   * All but the kind row come from the lazily loaded Pro extras (lettering/pro/proExtras.ts): the Easy path never
+   * loads them.
+   */
+  proEdit?: boolean;
+  /** Docked in the Pro workspace's inspector column (≥ 1024 px): in the page flow, never floating over the page. */
+  docked?: boolean;
 }
 
 /** A placed panel clamped into `bounds` (8 px margin); unchanged without bounds. Pure; tested. */
@@ -100,6 +113,10 @@ export const CROWDED_COPY: Record<CrowdedReason, string> = {
   moved: 'No room where it was — the editor moved it so nothing overlaps.',
   cover: 'Its panel has more words than picture — the editor moved this balloon so more of the art shows. Keep here keeps it where it is drawn.'
 };
+
+/** "a caption", "a shout", "a sound effect" — the kind row's undo label ("Make it a caption"). */
+const KIND_WORD: Record<LineKind, string> = { speech: 'a speech balloon', thought: 'a thought balloon', whisper: 'a whisper', shout: 'a shout', caption: 'a caption', sfx: 'a sound effect' };
+export const kindWord = (kind: LineKind): string => KIND_WORD[kind];
 
 /** The visible explanation of a dense page's smaller lettering (the chip on the page says the same). */
 export const densityNote = (scale: number): string =>
@@ -240,8 +257,40 @@ export const PlacementFixChip: React.FC<{
   );
 };
 
+// ── The kind row (agent-editor plan §3 C3) ───────────────────────────────────
+
+const KIND_TILE = cn(
+  'flex min-h-8 min-w-0 flex-1 items-center justify-center whitespace-nowrap px-1 text-[11.5px] font-medium coarse:min-h-11 coarse:min-w-11',
+  'rounded-[calc(var(--ds-radius-control)-2px)]',
+  FOCUS_RING
+);
+
+/** Speech · Thought · Whisper · Shout · Caption · SFX, keys 1–6: `line {kind}` for the selection (the look follows). */
+export const KindRow: React.FC<{ kinds: readonly LineKind[]; onKind(kind: LineKind): void; disabled?: boolean; title?: string }> = ({ kinds, onKind, disabled, title }) => {
+  const current = kinds.length && kinds.every((k) => k === kinds[0]) ? kinds[0] : undefined;
+  return (
+    <div role="radiogroup" aria-label="Balloon kind" data-testid="kind-row" title={title} className="flex min-w-0 gap-0.5 overflow-x-auto rounded-[var(--ds-radius-control)] bg-[var(--ds-segment-track)] p-0.5 [scrollbar-width:none]">
+      {KIND_ROW.map((k, i) => (
+        <button
+          key={k}
+          type="button"
+          role="radio"
+          aria-checked={current === k}
+          aria-keyshortcuts={String(i + 1)}
+          title={`${LINE_KIND_LABEL[k]} (${i + 1})`}
+          disabled={disabled}
+          onClick={() => onKind(k)}
+          className={cn(KIND_TILE, current === k ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', disabled && 'opacity-40')}
+        >
+          {k === 'sfx' ? 'SFX' : LINE_KIND_LABEL[k]}
+        </button>
+      ))}
+    </div>
+  );
+};
+
 export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => {
-  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, bounds, onClose } = props;
+  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, bounds, onClose, proEdit, docked } = props;
   const boundsKey = bounds ? `${Math.round(bounds.left)},${Math.round(bounds.top)},${Math.round(bounds.right)},${Math.round(bounds.bottom)}` : '';
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -277,7 +326,12 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
     return () => ro.disconnect();
   }, [compact, lines.length > 0]);
 
+  // Pro Edit: the keys (1–6, ⌘⌥C / ⌘⌥V), the typed transform and the typed fields arrive with the Pro extras.
+  const pro = useProExtras(!!proEdit);
+
   if (!lines.length) return null;
+  // The selection the Pro parts edit: they are keyed by it, so each balloon gets fresh fields and a fresh refusal note.
+  const target = lineIds.join(',');
   const selPlans = plans.filter((p) => lineIds.includes(p.lineId));
   const outside = selPlans.filter((p) => p.outOfSafeArea && !p.locked);
   const overflow = selPlans.filter((p) => p.overflow);
@@ -308,9 +362,9 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
 
   const body = (
     <>
-      <header className="flex items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2">
+      <header className={docked ? 'flex items-center gap-2 border-b border-[var(--ds-hairline)] pb-2' : 'flex items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2'}>
         <h3 className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-[var(--ds-ink)]">{title}</h3>
-        {canPro && (
+        {canPro && !docked && (
           <Segmented<StudioMode>
             label="Editor view"
             size="xs"
@@ -322,16 +376,22 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
             ]}
           />
         )}
-        <button
+        {!docked && <button
           type="button"
           aria-label="Close the lettering panel"
           onClick={onClose}
           className={`grid h-7 w-7 place-items-center ${RADIUS_CONTROL} text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:h-11 coarse:w-11`}
         >
           <X className="h-3.5 w-3.5" aria-hidden />
-        </button>
+        </button>}
       </header>
-      <div className={cx('min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3', !compact && 'max-h-[min(70vh,560px)]')}>
+      {proEdit && (
+        <div className={docked ? 'pt-2' : 'px-3 pt-2'}>
+          <KindRow kinds={lines.map((l) => l.kind)} onKind={(k) => apply(kindOps(page, lineIds, k), { label: `Make it ${kindWord(k)}` })} />
+        </div>
+      )}
+      {pro && <pro.ProInspectorKeys doc={doc} page={page} lineIds={lineIds} apply={apply} />}
+      <div className={docked ? 'min-w-0 space-y-3 py-3' : cx('min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3', !compact && 'max-h-[min(70vh,560px)]')}>
         {(outside.length > 0 || overflow.length > 0 || showCrowded || !!tooMuch) && (
           <ul className="space-y-1.5" aria-label="Lettering warnings">
             {outside.length > 0 && (
@@ -447,11 +507,37 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
             This line is empty, so no balloon is drawn. Type it in the script (Page tools), or Delete it below.
           </p>
         )}
+        {pro && view === 'pro' && <pro.TransformSection key={target} doc={doc} page={page} plans={plans} H={H} lineIds={lineIds} balloons={placements.balloons} apply={apply} editionLang={props.editionLang} />}
         {view === 'pro' ? <ProLetteringPanel {...props} lines={lines} /> : <EasyLetteringPanel {...props} lines={lines} />}
       </div>
-      <p className="border-t border-[var(--ds-hairline)] px-3 py-1.5 text-[10.5px] text-[var(--ds-muted)]">Free — done by the editor, no AI cost.</p>
+      {/* Docked, the workspace's panel frame draws the free footer under the whole column. */}
+      {!docked && (
+        <p className="border-t border-[var(--ds-hairline)] px-3 py-1.5 text-[10.5px] text-[var(--ds-muted)]" data-testid={proEdit ? 'pro-free-footer' : undefined}>
+          {proEdit ? PRO_FREE_FOOTER : 'Free — done by the editor, no AI cost.'}
+        </p>
+      )}
     </>
   );
+
+  if (docked) {
+    return (
+      <section
+        ref={ref}
+        aria-label="Lettering"
+        data-testid="lettering-inspector"
+        data-presentation="docked"
+        className="flex min-w-0 flex-col"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+      >
+        {body}
+      </section>
+    );
+  }
 
   if (compact) {
     return (

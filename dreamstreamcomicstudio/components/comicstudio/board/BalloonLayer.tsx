@@ -98,6 +98,8 @@ export interface BalloonLayerProps {
   ariaHidden?: boolean;
   /** Balloons not in the set render at opacity 0 (guided reading). Undefined = all visible. */
   visibleLineIds?: ReadonlySet<string>;
+  /** The editor only (the Layers eye, PE-INSPECT): balloons hidden in this view are neither drawn nor hit-tested. */
+  viewHidden?: ReadonlySet<string>;
   /** Editing a translated edition: geometry changes are reported with `{ lang }`. */
   editionLang?: string;
   /** Show the subtle "not translated yet" marker on fallback-language lines. */
@@ -237,6 +239,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   onSelectionChange,
   ariaHidden,
   visibleLineIds,
+  viewHidden,
   editionLang,
   markUntranslated,
   editingLineId,
@@ -377,8 +380,14 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const lang = editionLang ? { lang: editionLang } : undefined;
   const planById = useMemo(() => new Map(plans.map((p) => [p.lineId, p])), [plans]);
   const basePlanById = useMemo(() => new Map(base.plans.map((p) => [p.lineId, p])), [base.plans]);
+  // The Layers eye (editor only): a balloon hidden in this view is neither drawn nor hit-tested here.
+  const hiddenHere = editable && viewHidden && viewHidden.size ? viewHidden : undefined;
+  const drawnPlans = useMemo(() => (hiddenHere ? plans.filter((p) => !hiddenHere.has(p.lineId)) : plans), [plans, hiddenHere]);
   // Hit layer order = reading order (Tab cycles like a reader reads), not z order.
-  const readingOrder = useMemo(() => page.panels.flatMap((p) => p.lines.map((l) => l.id)).filter((id) => planById.has(id)), [page.panels, planById]);
+  const readingOrder = useMemo(
+    () => page.panels.flatMap((p) => p.lines.map((l) => l.id)).filter((id) => planById.has(id) && !hiddenHere?.has(id)),
+    [page.panels, planById, hiddenHere]
+  );
 
   const labels = useMemo(() => {
     const m = new Map<string, string>();
@@ -1090,7 +1099,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       data-testid="balloon-layer"
     >
       <LetteringSvg
-        plans={plans}
+        plans={drawnPlans}
         aspect={aspect}
         widthPx={pageWidth}
         ariaHidden={ariaHidden || editable}
@@ -1116,7 +1125,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           const drawnTurn = p.transform ? Math.round((p.transform.rotate - tilt) * 100) / 100 : 0;
           const turnDeg = turning ?? (drawnTurn || null);
           const growH = grow && grow.id === id ? grow.h : null;
-          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}${onBalloonMenu ? '; the menu key opens its actions' : ''}${presence ? `; ${PRESENCE_LABEL.toLowerCase()}` : ''}${extras.keyboard ? '; Tab moves to the next balloon, Esc leaves the page' : ''}`;
+          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}${onBalloonMenu ? '; the menu key opens its actions' : ''}${extras.keyboard ? '; Tab moves to the next balloon, Esc leaves the page' : ''}`;
           return (
             <div
               key={id}
@@ -1151,7 +1160,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               role="button"
               tabIndex={0}
               aria-roledescription="movable balloon"
-              aria-label={`${asSentence(labels.get(id) ?? planText(p))} ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}.${canEditText && onEditingChange ? ' Enter edits the text.' : ''}`}`}
+              // The presence chip's words are visible inside this button, so they are part of its name (label in name).
+              aria-label={`${asSentence(labels.get(id) ?? planText(p))}${presence ? ` ${PRESENCE_LABEL}.` : ''} ${p.locked ? 'Locked.' : `Drag or use the arrow keys to move${planTip(p, H, resolvedOf(id)) ? '; Alt+arrows move the tail' : ''}.${canEditText && onEditingChange ? ' Enter edits the text.' : ''}`}`}
               aria-describedby={`bd-${page.id}-${id}`}
               aria-pressed={sel}
               onPointerDown={(e) => beginDrag(e, p, 'move')}

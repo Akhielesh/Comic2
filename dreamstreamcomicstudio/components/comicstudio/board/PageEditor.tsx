@@ -23,6 +23,8 @@
 // overwritten from another language. Safety: the art sits in a SafetyVeil at the comic's rating.
 
 import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { loadProExtras } from '../lettering/pro/proExtras';
+import { useViewHidden } from '../editor/layers/viewHidden';
 import {
   ChevronLeft,
   ChevronRight,
@@ -875,6 +877,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const docked = pro.pro && ws.kind === 'docked';
   const toolRow = pro.pro && ws.kind === 'tool-row';
   const railed = docked || toolRow;
+  // Tablets and phones show the floating or sheet inspector: warm its lazy Pro half once the flag is on (PE-INSPECT
+  // wave note 12), so the first selection does not wait for the chunk.
+  const touchInspector = layout.kind === 'phone' || layout.kind === 'phone-landscape' || layout.kind === 'tablet-portrait';
+  // The Layers eye (PE-INSPECT wave note 3): what this view hides on the page, read from its store directly (never the
+  // layers barrel). Only the editor's canvas skips it; readers and exports never see the set.
+  const viewHiddenIds = useViewHidden(page.id);
+  useEffect(() => {
+    if (pro.on && touchInspector) void loadProExtras().catch(() => undefined);
+  }, [pro.on, touchInspector]);
   const tool: ProTool = pro.pro ? pro.tool : 'select';
   const proRef = useRef(pro);
   proRef.current = pro;
@@ -1656,6 +1667,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 // onAspectChange is not called for it.
                 guides
                 urlForPath={(path, widthPx) => studio.urlFor(path, widthPx ? { width: widthPx } : undefined)}
+                viewHidden={viewHiddenIds.size ? viewHiddenIds : undefined}
                 onAspectChange={setLoadedAspect}
                 safety={safety}
                 overlay={
@@ -2016,6 +2028,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         maxHeight={inspectorMaxH}
         bounds={inspectorBounds}
         onClose={() => setInspectorClosed(true)}
+        // PE-INSPECT: with the Pro editor flag on, the floating and sheet inspector gets the kind row, keys 1-6, the
+        // typed fields and Copy / Paste style; its Pro half loads lazily the first time (lettering/pro/proExtras).
+        proEdit={pro.on}
       />
     </div>
   );

@@ -6,6 +6,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { parseQaHarnessParams } from '../ComicQaApp';
 import { QA_PRO_SCENES, QaProSurface, type QaProParams } from './index';
+import { PRO_LETTERING_PRESET_IDS } from '../../shared/comic/lettering/style';
+import { DIRECTOR_EDITING } from '../../components/comicstudio/editor/layers/LayersPanel';
+import { PRO_EDIT_OPS_PATCHABLE } from '../../shared/comic/ops';
 
 vi.mock('../../components/usage/useUsageAllowance', () => ({ useUsageAllowance: () => null }));
 
@@ -63,5 +66,53 @@ describe('the Pro Edit QA surface', () => {
     await mount('shell-flag-off');
     expect(within(screen.getByTestId('editor-header')).queryByRole('radiogroup', { name: 'Easy or Pro mode' })).toBeNull();
     expect(screen.queryByTestId('pro-tool-rail')).toBeNull();
+  });
+});
+
+describe('the scenes the later Pro packages asked for (S2b integration)', () => {
+  it('pro-inspector-docked: the real docked inspector with the first balloon selected; the switch stays off', async () => {
+    expect(PRO_EDIT_OPS_PATCHABLE).toBe(false);
+    await mount('pro-inspector-docked');
+    expect(document.querySelectorAll('main')).toHaveLength(1);
+    expect(await screen.findByTestId('pro-tool-rail')).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-testid="balloon-hit"][aria-pressed="true"]')).not.toBeNull());
+    expect(document.querySelector('[data-qa-stub-part]')).toBeNull();
+  });
+
+  it('pro-inspector-empty: Pro with nothing selected', async () => {
+    await mount('pro-inspector-empty');
+    expect(await screen.findByTestId('pro-tool-rail')).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="balloon-hit"][aria-pressed="true"]')).toBeNull();
+  });
+
+  it('pro-layers: the director badge on the first balloon’s row and an empty panel group', async () => {
+    await mount('pro-layers');
+    expect(await screen.findByTestId('pro-tool-rail')).toBeInTheDocument();
+    const doc = window.__qaDoc?.();
+    const page = doc?.pages[0];
+    expect(page?.panels[page.panels.length - 1].lines).toEqual([]);
+    expect(page?.panels.slice(0, -1).every((p) => p.lines.length > 0)).toBe(true);
+    // The Layers part is lazy: its rows (and the badge) appear once it loads, wherever the layout docks it.
+    await waitFor(() => expect(screen.getAllByText(DIRECTOR_EDITING).length).toBeGreaterThan(0), { timeout: 10_000 });
+  }, 20_000);
+
+  it('compose-panels: heist page 1 in frames with every overlay kind, editor and reader', async () => {
+    await mount('compose-panels');
+    expect(await screen.findByTestId('pro-tool-rail')).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelectorAll('g[data-layer-id]').length).toBeGreaterThanOrEqual(5));
+    expect(document.querySelector('g[data-layer-id="ly_tone_in_panel"]')).not.toBeNull();
+    cleanup();
+    await mount('compose-panels-reader');
+    expect(document.querySelectorAll('main')).toHaveLength(1);
+    expect(screen.queryByTestId('pro-tool-rail')).toBeNull();
+    await waitFor(() => expect(document.querySelectorAll('g[data-layer-id]').length).toBeGreaterThanOrEqual(5));
+  });
+
+  it('pro-looks: one reader page per Pro look', async () => {
+    await mount('pro-looks');
+    expect(document.querySelectorAll('main')).toHaveLength(1);
+    const pages = [...document.querySelectorAll('[data-qa-pro-page]')].map((e) => e.getAttribute('data-qa-pro-page'));
+    expect(pages).toEqual([...PRO_LETTERING_PRESET_IDS]);
+    expect(document.querySelectorAll('h2')).toHaveLength(PRO_LETTERING_PRESET_IDS.length);
   });
 });

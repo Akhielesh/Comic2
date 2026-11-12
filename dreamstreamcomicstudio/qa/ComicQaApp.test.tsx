@@ -297,7 +297,20 @@ describe('?surface=pro (Program 2 placeholder) and the Comic Studio surfaces', (
     await act(async () => {
       await settle();
     });
-    expect(QA_PRO_SCENES).toEqual(['shell-easy', 'shell-pro', 'shell-pro-selected', 'shell-pro-parts', 'shell-flag-off']);
+    // PE-SHELL's five, then the scenes the later Pro packages asked for (added at the S2b integration after PE-INSPECT).
+    expect(QA_PRO_SCENES).toEqual([
+      'shell-easy',
+      'shell-pro',
+      'shell-pro-selected',
+      'shell-pro-parts',
+      'shell-flag-off',
+      'pro-inspector-docked',
+      'pro-inspector-empty',
+      'pro-layers',
+      'compose-panels',
+      'compose-panels-reader',
+      'pro-looks'
+    ]);
     const main = document.querySelector('main[data-qa-pro="index"]');
     expect(main).not.toBeNull();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Pro Edit scenes');
