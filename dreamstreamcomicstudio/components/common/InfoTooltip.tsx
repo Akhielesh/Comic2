@@ -2,11 +2,21 @@ import React, { useState, useId, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { HelpCircle } from 'lucide-react';
 import { GLOSSARY, type GlossaryEntry } from '../../services/modelGlossary';
+import { cn } from '../../lib/utils';
+import { FOCUS_RING, Z } from '../chat/studioDesign';
 
 // Hover/focus tooltip rendered through a PORTAL with fixed positioning. The previous version was
 // absolutely positioned inside its parent, so inside scroll/overflow containers (the detail &
 // compare modals) the bubble got clipped or painted under sibling content. Portalling to <body>
-// with a computed fixed position and a very high z-index fixes the clipping and the "overshadowing".
+// with a computed fixed position on the tooltip layer (Z.tooltip, the top of the ladder) fixes the
+// clipping and the "overshadowing". The bubble is Atlas's tooltip: inverted ink (the ink as the
+// fill, the page colour as the words), the control radius, the overlay shadow.
+// (DS-1c's Tooltip primitive takes this over: a wave note, so the glossary keeps working meanwhile.)
+
+/** The bubble: Atlas's inverted-ink tooltip on the tooltip layer. */
+export const INFO_TOOLTIP_BUBBLE = 'pointer-events-none w-60 rounded-[var(--ds-radius-control,0.75rem)] bg-[var(--ds-ink)] px-3 py-2 text-left text-[var(--ds-canvas)] shadow-[shadow:var(--ds-shadow-overlay)]';
+/** The bubble's secondary line (the scale), in the page colour at 72 %. */
+export const INFO_TOOLTIP_SCALE = 'mt-1 text-[10.5px] font-medium text-[color:color-mix(in_srgb,var(--ds-canvas)_72%,transparent)]';
 
 interface TooltipContent {
   title?: string;
@@ -26,11 +36,11 @@ const Bubble: React.FC<{ content: TooltipContent; id: string; pos: BubblePos }> 
       left: pos.left,
       transform: pos.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)'
     }}
-    className="pointer-events-none z-[9999] w-60 rounded-lg border-2 border-black bg-white p-2.5 text-left shadow-comic"
+    className={cn(INFO_TOOLTIP_BUBBLE, Z.tooltip)}
   >
-    {content.title && <div className="text-[11px] font-bold text-black">{content.title}</div>}
-    <div className="mt-0.5 text-[11px] leading-snug text-slate-700">{content.body}</div>
-    {content.scale && <div className="mt-1 text-[10px] font-bold uppercase text-slate-400">{content.scale}</div>}
+    {content.title && <div className="text-xs font-semibold">{content.title}</div>}
+    <div className="mt-0.5 text-[11.5px] leading-snug">{content.body}</div>
+    {content.scale && <div className={INFO_TOOLTIP_SCALE}>{content.scale}</div>}
   </div>
 );
 
@@ -53,7 +63,7 @@ export const InfoTooltip: React.FC<{ content: TooltipContent; children: React.Re
   return (
     <span
       ref={ref}
-      className={`relative inline-flex items-center ${className}`}
+      className={`${cn('relative inline-flex items-center rounded-[var(--ds-radius-sm,0.25rem)]', className)} ${FOCUS_RING}`}
       onMouseEnter={open}
       onMouseLeave={close}
       onFocus={open}
@@ -73,7 +83,7 @@ export const InfoDot: React.FC<{ term?: keyof typeof GLOSSARY; content?: Tooltip
   if (!resolved) return null;
   return (
     <InfoTooltip content={resolved} className={className}>
-      <HelpCircle className="h-3 w-3 cursor-help text-slate-400 hover:text-slate-700" aria-label={resolved.title || 'More info'} />
+      <HelpCircle className="h-3 w-3 cursor-help text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label={resolved.title || 'More info'} />
     </InfoTooltip>
   );
 };
@@ -84,7 +94,7 @@ export const GlossaryTerm: React.FC<{ term: keyof typeof GLOSSARY; children?: Re
   if (!entry) return <>{children}</>;
   return (
     <InfoTooltip content={entryToContent(entry)} className={className}>
-      <span className="cursor-help border-b border-dotted border-slate-400">{children ?? entry.title}</span>
+      <span className="cursor-help border-b border-dotted border-[var(--ds-control-border)]">{children ?? entry.title}</span>
     </InfoTooltip>
   );
 };
