@@ -524,6 +524,30 @@ const isProjectCardRow = (value: unknown): value is Record<string, unknown> & Om
 
 const isUndefinedColumnError = (error: unknown): boolean => isRecord(error) && String(error.code ?? '') === '42703';
 
+// --- Public gallery and profile cards (EGRESS-DB E3) ---
+// What a public card reads: the row's columns plus the state keys behind the share link, the published
+// cover, the rating badge and the cover fallbacks (shareSlugOf, publicCoverUrl, gateRatingOf,
+// coverCandidates, hydratePreview). Never the whole state: a public classic comic's `versions` alone are
+// ~0.7 MB, and every gallery view shipped every public comic's.
+export const GALLERY_CARD_STATE_KEYS = ['studioVersion', 'shareSlug', 'publicCover', 'publishedAt', 'coverImageId', 'coverImageUrl', 'panels', 'styleVariants'] as const;
+export const GALLERY_CARD_SELECT = [
+  'id,user_id,name,created_at,updated_at,cover_image_url,is_public,is_forced_private,likes_count,views_count,content_rating',
+  ...GALLERY_CARD_STATE_KEYS.map((k) => `${k}:state->${k}`)
+].join(',');
+/** The gallery shows at most this many comics per view. */
+export const GALLERY_PAGE_SIZE = 48;
+
+/** The state a public card row stands for (arrays default to []). */
+export const galleryCardStateOf = (row: Record<string, unknown>): Project['state'] => {
+  const state: Record<string, unknown> = {};
+  for (const key of GALLERY_CARD_STATE_KEYS) {
+    const value = row[key];
+    if (key === 'panels' || key === 'styleVariants') state[key] = Array.isArray(value) ? value : [];
+    else if (value !== null && value !== undefined) state[key] = value;
+  }
+  return state as unknown as Project['state'];
+};
+
 /**
  * Ids whose in-memory project is a card (a state subset). The save guard is keyed by the id, not by
  * the state object, so a state rebuilt from a card (a spread, an update) is still refused.
@@ -1562,16 +1586,21 @@ export const getProfileByUsername = async (username: string): Promise<UserProfil
 };
 
 export const getPublicProjectsByUser = async (userId: string): Promise<Project[]> => {
+  // Cards only (EGRESS-DB E3), and a comic held by moderation is never shipped.
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select(GALLERY_CARD_SELECT)
     .eq('user_id', userId)
     .eq('is_public', true)
+    .not('is_forced_private', 'is', true)
     .order('created_at', { ascending: false });
 
   if (error) return [];
 
-  const rows = (data || []).filter(isProjectRow);
+  const rows = ((data || []) as unknown[])
+    .filter(isProjectCardRow)
+    .map((row) => ({ ...row, state: galleryCardStateOf(row) }) as ProjectRow)
+    .filter(isProjectRow);
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
   return rows.map((row): Project => {
     const project: ProjectWithStats = {

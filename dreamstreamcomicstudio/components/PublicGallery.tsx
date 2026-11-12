@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
 import { Loader2, Heart, Eye, Search, BookOpen, User, Star, Baby } from 'lucide-react';
 import { Project } from '../types';
-import { getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
+import { GALLERY_CARD_SELECT, GALLERY_PAGE_SIZE, galleryCardStateOf, getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { isStudioV4Project } from '../services/studioDeepLink';
@@ -149,28 +149,28 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     const fetchComics = async () => {
         setLoading(true);
         try {
-            let query = supabase
+            // Cards only (EGRESS-DB E3): the columns and state keys a card reads, never a comic's whole state,
+            // and a comic held by moderation is never shipped (the row filter below stays as a second check).
+            const cards = (order: 'likes_count' | 'created_at') => supabase
                 .from('projects')
-                .select('*')
-                .eq('is_public', true);
+                .select(GALLERY_CARD_SELECT)
+                .eq('is_public', true)
+                .not('is_forced_private', 'is', true)
+                .order(order, { ascending: false })
+                .range(0, GALLERY_PAGE_SIZE - 1);
 
-            if (filter === 'trending') query = query.order('likes_count', { ascending: false });
-            else query = query.order('created_at', { ascending: false });
-
-            let { data, error } = await query;
+            let { data, error } = await cards(filter === 'trending' ? 'likes_count' : 'created_at');
             if (error && filter === 'trending') {
                 // Schema fallback when likes_count is unavailable
-                const fallback = await supabase
-                    .from('projects')
-                    .select('*')
-                    .eq('is_public', true)
-                    .order('created_at', { ascending: false });
+                const fallback = await cards('created_at');
                 data = fallback.data;
                 error = fallback.error;
             }
             if (error) throw error;
 
-            const rows = (data || []).filter((p: any) =>
+            const rows = ((data || []) as unknown as Record<string, unknown>[])
+                .map((row) => (row && typeof row === 'object' ? { ...row, state: galleryCardStateOf(row) } : row))
+                .filter((p: any) =>
                 p &&
                 typeof p.id === 'string' &&
                 typeof p.name === 'string' &&

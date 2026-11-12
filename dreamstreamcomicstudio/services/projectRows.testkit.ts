@@ -91,7 +91,9 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
     /** Make the next query whose recorded shape matches fail with this error (once). */
     failures: [] as Array<{ when: (q: RecordedQuery) => boolean; error: Row }>,
     /** Hold queries matching this until released (to test races). */
-    gates: [] as Array<{ when: (q: RecordedQuery) => boolean; release: Promise<void> }>
+    gates: [] as Array<{ when: (q: RecordedQuery) => boolean; release: Promise<void> }>,
+    /** Columns whose filters the fake database records but does not apply (a server that missed a filter). */
+    ignoredFilterColumns: new Set<string>()
   };
 
   const reset = () => {
@@ -103,11 +105,12 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
     state.missingColumns = new Set(options.missingColumns ?? []);
     state.failures = [];
     state.gates = [];
+    state.ignoredFilterColumns = new Set();
   };
 
   const from = (table: string) => {
     const q: RecordedQuery = { table, columns: '*', filters: [], head: false, single: false };
-    const predicates: Array<(row: Row) => boolean> = [];
+    const predicates: Array<{ column: string; test: (row: Row) => boolean }> = [];
     let order: { column: string; ascending: boolean } | undefined;
     let range: [number, number] | undefined;
     let limit: number | undefined;
@@ -136,12 +139,12 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
         return { data: null, error: null };
       }
       if (mode === 'delete') {
-        state.tables[table] = rows.filter((r) => !predicates.every((p) => p(r)));
+        state.tables[table] = rows.filter((r) => !predicates.every(({ test }) => test(r)));
         return { data: null, error: null };
       }
       const missing = columnsRead(q.columns).find((c) => state.missingColumns.has(c));
       if (missing) return { data: null, error: { code: '42703', message: `column ${table}.${missing} does not exist` } };
-      let matched = rows.filter((r) => predicates.every((p) => p(r)));
+      let matched = rows.filter((r) => predicates.every(({ column, test }) => state.ignoredFilterColumns.has(column) || test(r)));
       if (order) {
         const { column, ascending } = order;
         matched = [...matched].sort((a, b) => {
@@ -170,27 +173,27 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       },
       eq: (column: string, value: unknown) => {
         q.filters.push(`${column}=eq.${String(value)}`);
-        predicates.push((r) => r[column] === value);
+        predicates.push({ column, test: (r) => r[column] === value });
         return builder;
       },
       not: (column: string, op: string, value: unknown) => {
         q.filters.push(`${column}=not.${op}.${String(value)}`);
-        predicates.push((r) => (op === 'is' ? r[column] !== value : r[column] !== value));
+        predicates.push({ column, test: (r) => r[column] !== value });
         return builder;
       },
       in: (column: string, values: unknown[]) => {
         q.filters.push(`${column}=in.(${values.join(',')})`);
-        predicates.push((r) => values.includes(r[column]));
+        predicates.push({ column, test: (r) => values.includes(r[column]) });
         return builder;
       },
       ilike: (column: string, pattern: string) => {
         q.filters.push(`${column}=ilike.${pattern}`);
-        predicates.push((r) => String(r[column]).toLowerCase() === pattern.toLowerCase());
+        predicates.push({ column, test: (r) => String(r[column]).toLowerCase() === pattern.toLowerCase() });
         return builder;
       },
       gt: (column: string, value: unknown) => {
         q.filters.push(`${column}=gt.${String(value)}`);
-        predicates.push((r) => (r[column] as string) > (value as string));
+        predicates.push({ column, test: (r) => (r[column] as string) > (value as string) });
         return builder;
       },
       order: (column: string, opts?: { ascending?: boolean }) => {
