@@ -100,6 +100,19 @@ describe('the Easy | Pro switch (flag on)', () => {
     expect(screen.queryByRole('radiogroup', { name: MODE_GROUP_LABEL })).toBeNull();
   });
 
+  it('a tablet with a balloon selected shows one Easy | Pro switch, the header’s (the inspector repeats none; PE-SHELL (e))', async () => {
+    open({ ff: TABLET, studio: { selection: { pageId: 'pg_1', lineIds: ['pg_1_l3'], surface: 'page_editor' } } });
+    const inspector = await screen.findByTestId('lettering-inspector');
+    expect(inspector.getAttribute('data-presentation')).not.toBe('docked');
+    expect(within(inspector).queryByRole('radiogroup', { name: 'Editor view' })).toBeNull();
+    expect(screen.queryAllByRole('radiogroup', { name: 'Editor view' })).toHaveLength(0);
+    expect(screen.getAllByRole('radiogroup', { name: MODE_GROUP_LABEL })).toHaveLength(1);
+    cleanup();
+    // Flag off, the floating inspector keeps today's switch.
+    open({ ff: TABLET, caps: { ...DEFAULT_CAPS, proEditorV2: false }, studio: { selection: { pageId: 'pg_1', lineIds: ['pg_1_l3'], surface: 'page_editor' } } });
+    expect(within(await screen.findByTestId('lettering-inspector')).getByRole('radiogroup', { name: 'Editor view' })).toBeInTheDocument();
+  });
+
   it('Shift+P does nothing with the flag off', () => {
     const { studio } = open({ caps: { ...DEFAULT_CAPS, proEditorV2: false } });
     fireEvent.keyDown(document.body, { key: 'P', shiftKey: true });

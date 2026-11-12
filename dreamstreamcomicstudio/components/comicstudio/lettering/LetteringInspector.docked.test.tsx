@@ -88,6 +88,16 @@ describe('LetteringInspector, Pro Edit', () => {
     expect(screen.getByTestId('pro-free-footer').textContent).toBe(PRO_FREE_FOOTER);
   });
 
+  it('floating with the flag on, it repeats no Easy | Pro switch: the editor header’s is the one switch (PE-SHELL (e))', () => {
+    const { onClose } = mount(['pg_1_l4'], { proEdit: true });
+    const panel = screen.getByTestId('lettering-inspector');
+    expect(panel.getAttribute('data-presentation')).toBe('floating');
+    expect(within(panel).queryByRole('radiogroup', { name: 'Editor view' })).toBeNull();
+    // The floating chrome that is still its own stays: closing the panel.
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close the lettering panel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('keys 1–6 write line {kind} for the selection (one labelled undo entry), never while typing', () => {
     const { apply } = mount(['pg_1_l4'], { proEdit: true, docked: true });
     fireEvent.keyDown(window, { key: '5' });

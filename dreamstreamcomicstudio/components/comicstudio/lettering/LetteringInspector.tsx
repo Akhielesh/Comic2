@@ -364,7 +364,9 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
     <>
       <header className={docked ? 'flex items-center gap-2 border-b border-[var(--ds-hairline)] pb-2' : 'flex items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2'}>
         <h3 className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-[var(--ds-ink)]">{title}</h3>
-        {canPro && !docked && (
+        {/* Flag on (proEdit), the editor header's Easy | Pro switch is the one switch (PE-SHELL (e), M6): the floating
+            and sheet inspector do not repeat it, as the docked one and the lettering toolbar do not. */}
+        {canPro && !docked && !proEdit && (
           <Segmented<StudioMode>
             label="Editor view"
             size="xs"
