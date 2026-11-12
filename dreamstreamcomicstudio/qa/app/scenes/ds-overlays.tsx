@@ -1,11 +1,13 @@
 // QA scene `ds-overlays` (DS-1c; the scene contract is in qa/app/index.tsx): the design system's overlays on Radix —
 // Dialog, AlertDialog, Menu, Popover, Tooltip — and the app's one toast slot (the Toast host and its card in every
 // status), so the app layout smoke (DS-1b) measures their triggers at every viewport, light and dark, with and without
-// the Atlas skin, and a person can open each one with a pointer, a finger or the keyboard. Every overlay starts closed
+// the Atlas skin, and a person can open each one with a pointer, a finger or the keyboard. "Inside a sheet" opens a
+// menu and a confirm from a phone BottomSheet, where they open on phones: each is the top layer there (drawn above the
+// sheet; Esc, a row or an answer acts on it, never on the sheet). Every overlay starts closed
 // (an open modal would hide the page from the smoke); the static toast cards show the card itself. Nothing here reaches
 // the network or starts a timer until someone asks for a toast.
 import React, { useState } from 'react';
-import { Copy, FolderInput, Info, MoreHorizontal, Pencil, Redo2, Share2, SlidersHorizontal, Trash2, Undo2 } from 'lucide-react';
+import { Copy, FolderInput, Info, MoreHorizontal, PanelBottom, Pencil, Redo2, Share2, SlidersHorizontal, Trash2, Undo2 } from 'lucide-react';
 import { Button } from '../../../components/ds/Button';
 import { IconButton } from '../../../components/ds/IconButton';
 import { Field } from '../../../components/ds/Field';
@@ -43,6 +45,7 @@ import {
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '../../../components/ds/Popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../../components/ds/Tooltip';
 import { toast, ToastCard, ToastHost, type ToastTone } from '../../../components/ds/Toast';
+import { BottomSheet } from '../../../components/ds/sheet';
 
 const ROW = 'flex min-w-0 flex-wrap items-center gap-2';
 const STACK = 'flex min-w-0 flex-col gap-3';
@@ -239,6 +242,67 @@ function TooltipDemo() {
   );
 }
 
+function SheetDemo() {
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  return (
+    <SectionCard
+      title="Inside a sheet"
+      description="On phones the overlays open from sheets. Each is the top layer there: Esc closes it, not the sheet; its rows and answers never close the sheet."
+      icon={<PanelBottom />}
+    >
+      <div className={STACK} data-qa-overlay="sheet">
+        <div className={ROW}>
+          <Button variant="outline" onClick={() => setOpen(true)}>
+            Open page 3’s sheet
+          </Button>
+        </div>
+        <p className={NOTE} role="status">
+          {done ?? 'Nothing done in the sheet yet.'}
+        </p>
+        <BottomSheet open={open} onClose={() => setOpen(false)} label="Page 3" title="Page 3">
+          <div className={`${ROW} p-4`}>
+            <Menu>
+              <MenuTrigger asChild>
+                <IconButton label="More for page 3" title={null} variant="outline">
+                  <MoreHorizontal />
+                </IconButton>
+              </MenuTrigger>
+              <MenuContent align="start">
+                <MenuItem onSelect={() => setDone('Duplicated page 3 from its sheet.')}>
+                  <Copy aria-hidden />
+                  Duplicate
+                </MenuItem>
+                <MenuItem onSelect={() => setDone('Renamed page 3 from its sheet.')}>
+                  <Pencil aria-hidden />
+                  Rename
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline">Clear the lettering</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear page 3’s lettering?</AlertDialogTitle>
+                  <AlertDialogDescription>The balloons go; the art stays. Undo brings them back.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Keep it</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onClick={() => setDone('Cleared page 3’s lettering.')}>
+                    Clear lettering
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </BottomSheet>
+      </div>
+    </SectionCard>
+  );
+}
+
 const SAMPLES: Array<{ tone: ToastTone; title: string; message?: string; action?: string }> = [
   { tone: 'healthy', title: 'Saved to your library', message: 'Spice Market, 12 pages.' },
   { tone: 'active', title: 'Drawing page 4', message: 'It shows up here when it is done.' },
@@ -285,6 +349,7 @@ function DsOverlays() {
           <PopoverDemo />
           <TooltipDemo />
           <ToastDemo />
+          <SheetDemo />
         </div>
       </div>
       <ToastHost />

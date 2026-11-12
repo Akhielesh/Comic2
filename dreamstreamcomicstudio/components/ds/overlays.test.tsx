@@ -10,10 +10,16 @@ import scene from '../../qa/app/scenes/ds-overlays';
 import { QaAppSurface } from '../../qa/app/index';
 import { resetToastsForTests } from './Toast';
 import { DENSITY } from './recipes';
+import { resetBackStack } from '../comicstudio/mobile/backStack';
 
 let reducedMotion = false;
+let entryNo = 0;
 beforeEach(() => {
   reducedMotion = false;
+  // The dialogs and the sheet take back-gesture layers (history.state): each test starts on an entry of its own.
+  resetBackStack();
+  entryNo += 1;
+  window.history.pushState({ overlaysScene: entryNo }, '');
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: reducedMotion && query.includes('prefers-reduced-motion'),
     media: query,
@@ -35,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetBackStack();
   act(() => resetToastsForTests());
   vi.unstubAllGlobals();
 });
@@ -59,7 +66,7 @@ describe('the ds-overlays scene', () => {
     const { container } = render(<QaAppSurface scene="ds-overlays" theme="light" skin={null} index={{ scenes: [scene], problems: [] }} />);
     expect(container.querySelectorAll('main')).toHaveLength(1);
     expect(container.querySelector('[data-qa-app-scene="ds-overlays"] > main[data-qa-scene="ds-overlays"]')).not.toBeNull();
-    for (const name of ['dialog', 'alert-dialog', 'menu', 'popover', 'tooltip', 'toast']) expect(container.querySelector(`[data-qa-overlay="${name}"]`), name).not.toBeNull();
+    for (const name of ['dialog', 'alert-dialog', 'menu', 'popover', 'tooltip', 'toast', 'sheet']) expect(container.querySelector(`[data-qa-overlay="${name}"]`), name).not.toBeNull();
     expect(container.querySelectorAll('[data-qa-toast-samples] [data-slot="toast"]')).toHaveLength(5);
   });
 
@@ -85,6 +92,29 @@ describe('the ds-overlays scene', () => {
     expect(hostCard).toHaveTextContent('Page 3 deleted');
     fireEvent.click(within(hostCard as HTMLElement).getByRole('button', { name: 'Undo' }));
     expect(document.querySelector('[data-slot="toast-host"] [data-slot="toast"]')).toHaveTextContent('Page 3 is back');
+  });
+
+  it('inside its sheet a menu row and a confirm answer act on the overlay, and Esc closes the overlay, not the sheet', () => {
+    const { Scene } = scene;
+    render(<Scene />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open page 3’s sheet' }));
+    const sheet = () => document.querySelector('[data-sheet="bottom"]');
+    expect(sheet()).not.toBeNull();
+    const more = screen.getByRole('button', { name: 'More for page 3' });
+    more.focus();
+    fireEvent.keyDown(more, { key: 'Enter' });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(sheet()).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the lettering' }));
+    const clear = screen.getByRole('button', { name: 'Clear lettering' });
+    fireEvent.pointerDown(clear, { pointerType: 'touch', button: 0 });
+    fireEvent.pointerUp(clear, { pointerType: 'touch', button: 0 });
+    fireEvent.click(clear);
+    expect(screen.getByText('Cleared page 3’s lettering.')).toBeInTheDocument();
+    expect(sheet()).not.toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(sheet()).toBeNull();
   });
 
   it('under reduced motion nothing animates: no entrance on the cards, the dialogs, the menu, the popover, the tooltip or a toast', () => {
