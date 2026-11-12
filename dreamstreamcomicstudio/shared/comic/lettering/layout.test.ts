@@ -3,7 +3,7 @@ import { balloonShape, hashSeed as boardHashSeed, sfxStyle } from '../../../comp
 import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { normalizeDoc, type ComicDoc, type Page } from '../doc';
 import { applyTextCase, estimateMeasure, letteringAspect, letteringSizer, planLettering, planLetteringForPage, sfxAutoStyle, type Measure } from './layout';
-import { FONT_REGISTRY } from './fonts';
+import { FONT_REGISTRY, PRO_FONT_REGISTRY } from './fonts';
 
 const ASPECT = 2 / 3;
 const H = 1000 / ASPECT;
@@ -230,6 +230,23 @@ describe('planLettering: styles and scripts', () => {
       d.letterStyle = { presetId: 'classic', kinds: { whisper: { font: 'bangers' } } };
     });
     const whisper = planLettering(doc, page, ASPECT, fixedMeasure).find((p) => p.lineId === 'pg_1_l2')!;
+    expect(whisper.transform?.skewX).toBe(-10);
+  });
+  it('a line in a Pro face (PE-FONTS #7) is measured and slanted by that face, never by comic-neue', () => {
+    const { doc, page } = sample((d) => {
+      d.letterStyle = JSON.parse(JSON.stringify({ presetId: 'classic', kinds: { whisper: { font: 'bungee', italic: true } } }));
+    });
+    const bungee = PRO_FONT_REGISTRY.bungee;
+    expect(bungee.avgAdvanceEm).not.toBeCloseTo(FONT_REGISTRY['comic-neue'].avgAdvanceEm, 3);
+    const whisper = planLettering(doc, page, ASPECT, estimateMeasure).find((p) => p.lineId === 'pg_1_l2')!;
+    expect(whisper.fontId).toBe('bungee');
+    expect(whisper.font).toContain(`"${bungee.family}"`);
+    // The estimate reads the Pro face's calibration: an all-caps run is graphemes × bungee's advance × px.
+    const run = whisper.runs[0];
+    const px = Number(/(\d+(?:\.\d+)?)px/.exec(whisper.font)![1]);
+    expect(estimateMeasure(run.text, whisper.font)).toBeCloseTo(Array.from(run.text).length * (/\p{Ll}/u.test(run.text) ? bungee.mixedCaseEm ?? bungee.avgAdvanceEm : bungee.avgAdvanceEm) * px, 3);
+    // Bungee ships no italic: the italic look is a synthetic skew (comic-neue's own italic would draw none).
+    expect(bungee.italic).toBeFalsy();
     expect(whisper.transform?.skewX).toBe(-10);
   });
 });
