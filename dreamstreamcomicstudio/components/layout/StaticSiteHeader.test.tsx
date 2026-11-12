@@ -248,11 +248,9 @@ describe('no legacy kit anywhere the header renders', () => {
     auth.user = { id: 'u1', email: 'reader@example.com' };
     const { container } = render(<StaticSiteHeader {...props({ isAuthenticated: true })} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Notifications' }));
-    // UserAvatar (its own file, not this package's) is wave-noted; everything around it is checked.
-    const avatar = container.querySelector('[data-slot="profile-button"]')!;
-    const mine = [container, ...container.querySelectorAll('*')].filter((el) => !avatar.contains(el) || el === avatar);
-    const classes = mine.flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/)).filter(Boolean);
-    expect(classes.filter((c) => LEGACY.test(c))).toEqual([]);
+    // The avatar inside the profile button is on the tokens too (DS-2 #6): the whole header is checked.
+    expect(container.querySelector('[data-slot="profile-button"]')).not.toBeNull();
+    expect(classesIn(container).filter((c) => LEGACY.test(c))).toEqual([]);
     expect(screen.getByRole('region', { name: 'Notifications' })).toBeInTheDocument();
   });
 });
