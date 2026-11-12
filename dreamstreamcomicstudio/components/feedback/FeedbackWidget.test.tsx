@@ -41,6 +41,33 @@ describe('FeedbackWidget', () => {
     });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('button', { name: 'Send feedback' })).toBeInTheDocument();
+    // Focus goes back to the pill, not to <body>.
+    expect(screen.getByRole('button', { name: 'Send feedback' })).toHaveFocus();
+  });
+
+  it('Close and a click on the scrim hand focus back to the pill too; it never steals focus on mount', () => {
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    outside.focus();
+    render(<FeedbackWidget />);
+    expect(outside).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send feedback' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+    fireEvent.click(screen.getByRole('dialog').parentElement!);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send feedback' })).toHaveFocus();
+    outside.remove();
+  });
+
+  it('the panel enters with the 280 ms overlay scale-in, not the page entrance', () => {
+    render(<FeedbackWidget />);
+    fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+    const panel = screen.getByRole('dialog', { name: 'Send feedback' });
+    expect(panel.classList.contains('ds-scale-in')).toBe(true);
+    expect(panel.classList.contains('ds-rise-in')).toBe(false);
   });
 
   it('sends what the person chose with the DS fields, then thanks them', async () => {

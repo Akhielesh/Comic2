@@ -18,7 +18,7 @@ import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
 import { LiveDot } from './LiveDot';
 import { PRESS } from '../chat/studioDesign';
-import { DENSITY, FOCUS_RING_FLUSH, RADIUS_PILL, RISE_IN, SHADOW_SOFT, STATUS_DOT, Z } from './recipes';
+import { DENSITY, FOCUS_RING_FLUSH, RADIUS_PILL, SHADOW_SOFT, STATUS_DOT, Z } from './recipes';
 
 /** A status dot on an item: `accent` a new reply, `amber` waiting for the person's approval, `pulse` drawing now. */
 export type TabDot = 'accent' | 'amber' | 'pulse';
@@ -42,6 +42,12 @@ export interface TabBarItem<Id extends string = string> {
 
 /** How long the "why is this unavailable" bubble stays after a tap on a disabled item. */
 export const TAB_HINT_MS = 2600;
+/**
+ * The bubble's entrance: the 280 ms overlay fade (styles/ds-motion.css; still under reduced motion), not the
+ * 420 ms page entrance. Not exported: it is a hand-written class, which the ds class-compile test only
+ * accepts from its HAND_WRITTEN_CLASSES list (wave note).
+ */
+const HINT_ENTER = 'ds-fade-in';
 
 /** Lower-case words, as WCAG 2.5.3 tools compare names ("6/12" → "6 12"). */
 const words = (s: string) =>
@@ -119,7 +125,7 @@ function DisabledHint({ text, rect, orientation }: { text: string; rect: DOMRect
       : { left: rect.right + 8, right: 12, top: Math.max(8, rect.top), justifyContent: 'flex-start' };
   return createPortal(
     <div role="status" data-nav-hint="" className={cn('pointer-events-none fixed flex', Z.tooltip)} style={style}>
-      <span className={cn(TAB_HINT, RISE_IN)}>{text}</span>
+      <span className={cn(TAB_HINT, HINT_ENTER)}>{text}</span>
     </div>,
     document.body
   );

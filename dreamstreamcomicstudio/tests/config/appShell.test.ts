@@ -92,6 +92,14 @@ describe('index.html head', () => {
     expect(meta.height).toBe(180);
   });
 
+  it('says who sets theme-color at runtime truthfully (no landing page sets a brand blue)', () => {
+    expect(head).not.toMatch(/brand blue/i);
+    for (const file of ['components/comicstudio/mobile/useThemeColor.ts', 'components/comicstudio/immersive/useImmersive.ts']) {
+      expect(head, file).toContain(file.replace('components/', ''));
+      expect(read(file), file).toContain('theme-color');
+    }
+  });
+
   it('has exactly two theme-color metas (light + dark) and no unconditioned one', () => {
     const metas: string[] = [...(head.match(/<meta name="theme-color"[^>]*>/g) ?? [])];
     expect(metas).toHaveLength(2);

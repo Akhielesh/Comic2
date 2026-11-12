@@ -116,6 +116,9 @@ describe('TabBar: an unavailable item says why', () => {
     const bubble = screen.getByRole('status');
     expect(bubble).toHaveTextContent('Sign in to keep comics');
     expect(bubble).toHaveAttribute('data-nav-hint');
+    // A hint takes the 280 ms overlay fade, not the 420 ms page entrance.
+    expect(bubble.firstElementChild!.classList.contains('ds-fade-in')).toBe(true);
+    expect(bubble.firstElementChild!.classList.contains('ds-rise-in')).toBe(false);
     act(() => {
       vi.advanceTimersByTime(TAB_HINT_MS - 1);
     });

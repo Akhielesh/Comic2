@@ -207,6 +207,12 @@ export const SystemErrorScreen: React.FC<{ message: string; onRetry: () => void;
 export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['dashboard', 'learn', 'editor', 'fontlab']);
 /** The root's page under the views: the canvas token, or the legacy light page for the views above. */
 export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-slate-50' : CANVAS_BG);
+/**
+ * The root div's classes. A gated view (product_access) shows the product gate, which is on the DS, so it
+ * always sits on the canvas, even for a legacy-paper view such as the dashboard.
+ */
+export const appRootClass = (view: string, gated: boolean): string =>
+  cn('relative min-h-screen font-sans', gated ? CANVAS_BG : appRootSurface(view));
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -1057,7 +1063,7 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div data-slot="app-root" className={cn('relative min-h-screen font-sans', gatedProductLabel ? CANVAS_BG : appRootSurface(effectiveView))}>
+      <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel))}>
         {inviteNotice && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-md">
             <div

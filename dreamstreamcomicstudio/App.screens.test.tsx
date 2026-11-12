@@ -3,12 +3,14 @@
  * and the root's page are on the DS states and recipes, with no legacy kit class and no raw hue.
  */
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./services/liveLink', () => ({ openLiveApp: vi.fn(async () => undefined) }));
 
-import { AppLoader, LEGACY_PAPER_VIEWS, ProductGateScreen, SystemErrorScreen, appRootSurface } from './App';
+import { AppLoader, LEGACY_PAPER_VIEWS, ProductGateScreen, SystemErrorScreen, appRootClass, appRootSurface } from './App';
 import { CANVAS_BG } from './components/chat/studioDesign';
 import { openLiveApp } from './services/liveLink';
 
@@ -84,5 +86,29 @@ describe('the root page under the views', () => {
     }
     expect([...LEGACY_PAPER_VIEWS].sort()).toEqual(['dashboard', 'editor', 'fontlab', 'learn']);
     for (const view of LEGACY_PAPER_VIEWS) expect(appRootSurface(view), view).not.toBe(CANVAS_BG);
+  });
+});
+
+describe('the root div', () => {
+  const classes = (view: string, gated: boolean) => appRootClass(view, gated).split(/\s+/);
+
+  it('is the positioned full-height page on the canvas, or the legacy light page for a legacy view', () => {
+    expect(classes('home', false)).toEqual(expect.arrayContaining(['relative', 'min-h-screen', 'font-sans', ...CANVAS_BG.split(/\s+/)]));
+    expect(classes('dashboard', false)).toContain('bg-slate-50');
+    expect(classes('dashboard', false)).not.toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
+  });
+
+  it('a gated view sits on the canvas: the product gate is on the DS, even over a legacy-paper view', () => {
+    for (const view of [...LEGACY_PAPER_VIEWS, 'chat', 'comicstudio']) {
+      expect(classes(view, true), view).toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
+      expect(classes(view, true), view).not.toContain('bg-slate-50');
+    }
+  });
+
+  it('App renders its root div with appRootClass, gated on the product gate', () => {
+    const src = readFileSync(path.join(__dirname, 'App.tsx'), 'utf8');
+    const root = src.split('\n').filter((l) => l.includes('data-slot="app-root"'));
+    expect(root).toHaveLength(1);
+    expect(root[0]).toContain('className={appRootClass(effectiveView, Boolean(gatedProductLabel))}');
   });
 });

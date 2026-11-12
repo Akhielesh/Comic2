@@ -35,7 +35,7 @@ export const AppCrashScreen: React.FC<{ error: Error }> = ({ error }) => (
             <ErrorState
                 as="h2"
                 title="Something went wrong"
-                description="DreamStream hit an unexpected error. Reload the page to pick up where you left off."
+                description="DreamStream hit an unexpected error. Reload the page to carry on; anything that wasn’t saved yet may need redoing."
                 retryLabel="Reload"
                 onRetry={() => window.location.reload()}
             />

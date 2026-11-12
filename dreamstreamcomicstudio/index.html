@@ -19,8 +19,11 @@
     <!-- Keep the viewport zoomable: never add maximum-scale or user-scalable=no
          (WCAG 1.4.4; a11y.spec.ts asserts it). -->
     <meta name="description" content="Make comics with an AI director, then read and share them anywhere. DreamStream Studio also does AI chat and code." />
-    <!-- Browser/OS chrome colour follows the calm-studio paper (light) and ink (dark)
-         canvases; the landing page sets its brand blue at runtime. -->
+    <!-- Browser/OS chrome colour before the app runs: the calm-studio paper (light) and
+         ink (dark), pinned to the manifest's theme_color and :root's --ds-canvas
+         (tests/config/appShell.test.ts). At runtime only the studio's phone shell
+         (comicstudio/mobile/useThemeColor.ts) and the immersive reader
+         (comicstudio/immersive/useImmersive.ts) change it. -->
     <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)" />
     <link rel="manifest" href="/app.webmanifest" />

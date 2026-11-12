@@ -41,6 +41,9 @@ describe('ErrorBoundary (the app root)', () => {
     const alert = screen.getByRole('alert');
     expect(alert).toHaveAttribute('data-slot', 'error-state');
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Something went wrong');
+    // Honest about what a reload keeps: no promise to pick up where the person left off.
+    expect(alert).toHaveTextContent('Reload the page to carry on; anything that wasn’t saved yet may need redoing.');
+    expect(alert).not.toHaveTextContent(/pick up where you left off/i);
     expect(container.querySelector('[data-slot="app-crash"]')!.className).toContain('bg-[var(--ds-canvas)]');
     expect(screen.queryByText(/secret stack detail/)).toBeNull();
     expect(screen.getByTestId('feedback-buttons')).toBeInTheDocument();

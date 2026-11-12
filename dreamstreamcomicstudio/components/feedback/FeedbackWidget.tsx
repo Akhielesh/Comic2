@@ -2,7 +2,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { Megaphone, X, Check } from 'lucide-react';
 import { submitFeedback, FEEDBACK_CATEGORIES, type FeedbackSentiment } from '../../services/feedback';
 import { cn } from '../../lib/utils';
-import { DENSITY, FOCUS_RING, OVERLAY, OVERLINE, RISE_IN, SCRIM, SHADOW_SOFT, STATUS_INK, Z } from '../chat/studioDesign';
+import { DENSITY, FOCUS_RING, OVERLAY, OVERLINE, SCRIM, SHADOW_SOFT, STATUS_INK, Z } from '../chat/studioDesign';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
 import { Select } from '../ds/Select';
@@ -25,10 +25,13 @@ export const FEEDBACK_LAUNCHER = `fixed bottom-[calc(1rem+var(--sa-bottom-eff,0p
 export const SENTIMENT_TILE = `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-[var(--ds-radius-control,0.75rem)] border py-2 transition-colors duration-[var(--ds-motion-fast,120ms)] motion-reduce:transition-none ${DENSITY.coarse}`;
 export const SENTIMENT_TILE_ON = 'border-[var(--ds-ink)] bg-[var(--ds-accent-soft)]';
 export const SENTIMENT_TILE_OFF = 'border-[var(--ds-hairline)] hover:border-[var(--ds-control-border-hover)]';
+/** The panel's entrance: the 280 ms overlay scale-in (styles/ds-motion.css), still under reduced motion. */
+export const FEEDBACK_PANEL_ENTER = 'ds-scale-in';
 
 /**
  * The global "Send feedback" pill and its panel (Atlas: the overlay surface over the scrim, a plain title,
- * the DS fields and the ink primary). Escape, the close button or a click on the scrim closes it.
+ * the DS fields and the ink primary). Escape, the close button or a click on the scrim closes it, and focus
+ * goes back to the pill, so a keyboard or screen-reader user keeps their place.
  */
 export const FeedbackWidget: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -40,6 +43,8 @@ export const FeedbackWidget: React.FC = () => {
   const moodId = useId();
   const topicId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
 
   const reset = () => {
     setSentiment(null);
@@ -65,6 +70,17 @@ export const FeedbackWidget: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // The pill remounts when the panel closes: hand focus back to it (never on the first render).
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      return;
+    }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    launcherRef.current?.focus();
+  }, [open]);
+
   const canSubmit = Boolean(sentiment || category || comment.trim());
 
   const handleSubmit = async () => {
@@ -86,6 +102,7 @@ export const FeedbackWidget: React.FC = () => {
     <>
       {!open && (
         <button
+          ref={launcherRef}
           type="button"
           onClick={() => setOpen(true)}
           data-slot="feedback-launcher"
@@ -103,7 +120,7 @@ export const FeedbackWidget: React.FC = () => {
             role="dialog"
             aria-labelledby={titleId}
             data-slot="feedback-panel"
-            className={cn('w-full max-w-sm overflow-hidden', OVERLAY, RISE_IN)}
+            className={cn('w-full max-w-sm overflow-hidden', OVERLAY, FEEDBACK_PANEL_ENTER)}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] py-2 pl-4 pr-2">

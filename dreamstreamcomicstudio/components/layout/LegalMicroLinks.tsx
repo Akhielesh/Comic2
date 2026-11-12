@@ -13,6 +13,9 @@ interface LegalMicroLinksProps {
 /** The legal line's links: muted, ink on hover, a 44 × 44 target under a coarse pointer (short words like "FAQs" too), the ink focus ring. */
 export const LEGAL_LINK = `inline-flex items-center justify-center rounded-[var(--ds-radius-sm,0.25rem)] text-[var(--ds-muted)] transition-colors duration-[var(--ds-motion-fast,120ms)] hover:text-[var(--ds-ink)] motion-reduce:transition-none ${DENSITY.coarseSquare}`;
 
+/** The site's contact address, the one the home page, the reader's footer and the comics host use. */
+export const CONTACT_HREF = 'mailto:contact@dreamstreamstudio.ai';
+
 /** The quiet legal line under a page (Atlas GlobalFooter's small print): on the page, a hairline above. */
 export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
   onOpenPrivacy,
@@ -33,7 +36,7 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
         <button type="button" onClick={onOpenFaq} className={link}>
           FAQs
         </button>
-        <a href="mailto:contact@dreamstream.com" className={link}>
+        <a href={CONTACT_HREF} className={link}>
           Contact
         </a>
       </div>
