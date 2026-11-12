@@ -1,44 +1,12 @@
 // Atmosphere effects (master plan §2.6 "Effects": atmosphere 6, PE-FX): rain, snow, falling petals, bokeh lights,
 // sparkles and smoke. Pure; registered by fx/generators.ts, never imported by the registry. Parameters arrive clamped
-// (fxParamsOf); every mark is filled (no strokes) in the isotropic frame (seed.ts), kept inside the box, at most 400
-// segments.
-//
-// Also home of the procedural library's bokeh and rain geometry, moved here unchanged from
-// components/comicstudio/library/procedural/textures.ts, which re-exports it.
+// (fxParamsOf); every mark is filled (no strokes) in the isotropic frame (draw.ts), kept inside the box, at most 400
+// segments. Pro code only: the procedural library's bokeh and rainPath live in seed.ts, so the library shim never
+// loads this file.
 
 import type { FxNode } from './types.js';
-import { clampNum, fillPath, FxPath, fxFrame, fxRng, pBool, pNum, pStr, r2, rng, seedOf, TAU, turn, type FxParams, type Pt } from './seed.js';
-
-// ── Library geometry (moved from library/procedural/textures.ts; byte-identical) ──────────────────────────────────
-
-/** Soft round "bokeh" lights (x, y, r, opacity) for glowing backgrounds. */
-export function bokeh(seed: number | string, o: { count?: number; w?: number; h?: number; minR?: number; maxR?: number } = {}): { x: number; y: number; r: number; o: number }[] {
-  const rand = rng(seedOf(seed) ^ 0x2545f491);
-  const W = o.w ?? 100;
-  const H = o.h ?? 100;
-  const n = Math.round(clampNum(o.count ?? 9, 1, 40));
-  const lo = o.minR ?? 3;
-  const hi = o.maxR ?? 11;
-  return Array.from({ length: n }, () => ({ x: r2(rand() * W), y: r2(rand() * H), r: r2(lo + rand() * (hi - lo)), o: r2(0.25 + rand() * 0.45) }));
-}
-
-/** Diagonal rain streaks as one path. */
-export function rainPath(seed: number | string, o: { count?: number; w?: number; h?: number; slant?: number; len?: number } = {}): string {
-  const rand = rng(seedOf(seed) ^ 0x68e31da4);
-  const W = o.w ?? 100;
-  const H = o.h ?? 100;
-  const n = Math.round(clampNum(o.count ?? 40, 1, 200));
-  const slant = o.slant ?? -0.25;
-  const len = o.len ?? 9;
-  let d = '';
-  for (let i = 0; i < n; i += 1) {
-    const x = rand() * W;
-    const y = rand() * H;
-    const l = len * (0.6 + rand() * 0.8);
-    d += `M${r2(x)} ${r2(y)}l${r2(slant * l)} ${r2(l)}`;
-  }
-  return d;
-}
+import { fillPath, FxPath, fxFrame, fxRng, pBool, pNum, pStr, TAU, turn, type FxParams, type Pt } from './draw.js';
+import { clampNum } from './seed.js';
 
 // ── Generators ───────────────────────────────────────────────────────────────────────────────────────────────────
 

@@ -1,15 +1,12 @@
 // Line effects (master plan §2.6 "Effects": lines 6, PE-FX): speed lines (linear, radial, curved) and focus lines.
 // Pure; the registry never imports this file (fx/generators.ts registers the draws). Every draw reads parameters that
-// fxParamsOf already clamped to the generator's schema (fx/registry.ts), works in the isotropic frame (seed.ts) and fills
-// shapes only: tapered spindles, wedges and ribbons, at most 400 segments.
-//
-// Also home of the procedural library's motion-line geometry (speedLines, focusLines), moved here unchanged from
-// components/comicstudio/library/procedural/textures.ts, which re-exports it.
+// fxParamsOf already clamped to the generator's schema (fx/registry.ts), works in the isotropic frame (draw.ts) and fills
+// shapes only: tapered spindles, wedges and ribbons, at most 400 segments. Pro code only: the procedural library's
+// speedLines and focusLines live in seed.ts, so the library shim never loads this file.
 
 import type { FxNode } from './types.js';
 import {
   chordIn,
-  clampNum,
   cornersBetween,
   dirOf,
   edgePt,
@@ -21,71 +18,11 @@ import {
   pBool,
   pNum,
   pStr,
-  r2,
   rayToEdge,
-  rng,
-  seedOf,
   TAU,
   type FxParams,
   type Pt
-} from './seed.js';
-
-// ── Library geometry (moved from library/procedural/textures.ts; byte-identical) ──────────────────────────────────
-
-/** One straight speed line in a w×h frame (React SVG strokes it). */
-export interface SpeedLine {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  w: number;
-}
-
-/**
- * Radial speed lines toward a focus point inside a w×h frame: they start at the frame edge and
- * stop short of the focus, leaving a clear centre (manga action, impact panels).
- */
-export function speedLines(seed: number | string, cx: number, cy: number, o: { count?: number; w?: number; h?: number; inner?: number } = {}): SpeedLine[] {
-  const rand = rng(seedOf(seed));
-  const W = o.w ?? 100;
-  const H = o.h ?? 100;
-  const count = Math.round(clampNum(o.count ?? 28, 4, 96));
-  const reach = Math.hypot(W, H);
-  const inner = clampNum(o.inner ?? 0.32, 0.05, 0.9);
-  const out: SpeedLine[] = [];
-  for (let i = 0; i < count; i += 1) {
-    const a = (i / count) * Math.PI * 2 + rand() * ((Math.PI * 2) / count) * 0.8;
-    const start = reach * (inner + rand() * 0.18);
-    out.push({
-      x1: r2(cx + Math.cos(a) * reach),
-      y1: r2(cy + Math.sin(a) * reach),
-      x2: r2(cx + Math.cos(a) * start),
-      y2: r2(cy + Math.sin(a) * start),
-      w: r2(0.35 + rand() * 1.1)
-    });
-  }
-  return out;
-}
-
-/** Wedge-shaped focus lines as one closed path (filled ink), centred in a w×h frame. */
-export function focusLines(seed: number | string, o: { count?: number; w?: number; h?: number; inner?: number } = {}): string {
-  const rand = rng(seedOf(seed) ^ 0x5bd1e995);
-  const W = o.w ?? 100;
-  const H = o.h ?? 100;
-  const cx = W / 2;
-  const cy = H / 2;
-  const count = Math.round(clampNum(o.count ?? 36, 6, 120));
-  const reach = Math.hypot(W, H);
-  const inner = clampNum(o.inner ?? 0.36, 0.05, 0.9) * Math.min(W, H);
-  let d = '';
-  for (let i = 0; i < count; i += 1) {
-    const a = (i / count) * Math.PI * 2 + rand() * 0.05;
-    const spread = 0.012 + rand() * 0.022;
-    const tip = inner * (0.9 + rand() * 0.35);
-    d += `M${r2(cx + Math.cos(a) * tip)} ${r2(cy + Math.sin(a) * tip)}L${r2(cx + Math.cos(a - spread) * reach)} ${r2(cy + Math.sin(a - spread) * reach)}L${r2(cx + Math.cos(a + spread) * reach)} ${r2(cy + Math.sin(a + spread) * reach)}Z`;
-  }
-  return d;
-}
+} from './draw.js';
 
 // ── speed-lines@1 ────────────────────────────────────────────────────────────────────────────────────────────────
 

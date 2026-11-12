@@ -1,8 +1,10 @@
 // @vitest-environment node
 // textures.ts is a re-export shim (master plan §2.6, PE-FX; collisions A-8): the seeds and the motion and atmosphere
-// geometry moved to shared/comic/fx unchanged. These pin that the shim hands out the very same functions and that their
-// output is byte-identical to the implementation before the move (goldens captured from the pre-shim textures.ts on
-// 756b5a70), so the PresetThumb / procedural snapshots never move. Tones and paper stay here until PE-TONES (S3).
+// geometry moved to shared/comic/fx/seed.ts unchanged. These pin that the shim hands out the very same functions and that
+// their output is byte-identical to the implementation before the move (goldens captured from the pre-shim textures.ts
+// on 756b5a70), so the PresetThumb / procedural snapshots never move. Tones and paper stay here until PE-TONES (S3).
+// That the shim reaches no Pro effect code (fx/draw.ts, the generators) is pinned by an import walk in
+// shared/comic/fx/registry.test.ts.
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -21,10 +23,10 @@ describe('library/procedural/textures.ts (re-export shim)', () => {
     expect(textures.seedOf).toBe(seed.seedOf);
     expect(textures.rng).toBe(seed.rng);
     expect(textures.r2).toBe(seed.r2);
-    expect(textures.speedLines).toBe(lines.speedLines);
-    expect(textures.focusLines).toBe(lines.focusLines);
-    expect(textures.bokeh).toBe(atmosphere.bokeh);
-    expect(textures.rainPath).toBe(atmosphere.rainPath);
+    expect(textures.speedLines).toBe(seed.speedLines);
+    expect(textures.focusLines).toBe(seed.focusLines);
+    expect(textures.bokeh).toBe(seed.bokeh);
+    expect(textures.rainPath).toBe(seed.rainPath);
     // The module (the library barrel's `textures` namespace) still carries exactly the exports it had.
     expect(Object.keys(textures).sort()).toEqual(
       ['benDay', 'bokeh', 'crosshatch', 'focusLines', 'halftone', 'luminance', 'mix', 'paperGrain', 'r2', 'rainPath', 'rasterLines', 'risoGrain', 'rng', 'screentone', 'screentoneRadius', 'seamlessDirection', 'seedOf', 'speedLines'].sort()
@@ -57,10 +59,13 @@ describe('library/procedural/textures.ts (re-export shim)', () => {
     });
   });
 
-  it('keeps no second copy of the moved code (one implementation, in shared/comic/fx)', () => {
+  it('keeps no second copy of the moved code (one implementation, in shared/comic/fx/seed.ts)', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'textures.ts'), 'utf8');
     for (const name of ['seedOf', 'rng', 'r2', 'speedLines', 'focusLines', 'bokeh', 'rainPath']) {
       expect(src, name).not.toMatch(new RegExp(`(?:function|const)\\s+${name}\\b`));
     }
+    // The Pro line and atmosphere modules hold the Pro drawings only (they ship in the lazy Pro chunk).
+    for (const name of ['speedLines', 'focusLines']) expect(name in lines, `lines.${name}`).toBe(false);
+    for (const name of ['bokeh', 'rainPath']) expect(name in atmosphere, `atmosphere.${name}`).toBe(false);
   });
 });

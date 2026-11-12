@@ -4,7 +4,7 @@
 // is loaded (collisions B-7), then loads it and sees the same effect draw.
 
 import { readFileSync } from 'node:fs';
-import { dirname, join, normalize, relative } from 'node:path';
+import { dirname, join, normalize, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -138,7 +138,9 @@ describe('fx registry: renderFx loading seam, budget helpers', () => {
 });
 
 describe('fx registry: generator code never follows into the shared barrel', () => {
-  const GENERATOR_MODULES = ['generators', 'lines', 'bursts', 'emanata', 'atmosphere', 'borders', 'seed'].map((m) => normalize(join(here, `${m}.ts`)));
+  /** Pro effect code: the drawings and their helpers. Only fx/generators.ts imports them (the lazy Pro chunk). */
+  const PRO_MODULES = ['generators', 'draw', 'lines', 'bursts', 'emanata', 'atmosphere', 'borders'].map((m) => normalize(join(here, `${m}.ts`)));
+  const GENERATOR_MODULES = [...PRO_MODULES, normalize(join(here, 'seed.ts'))];
   /** Every module specifier a file names: import / export … from (type-only included), side-effect and dynamic imports. */
   const importsOf = (file: string): string[] => {
     const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
@@ -176,8 +178,8 @@ describe('fx registry: generator code never follows into the shared barrel', () 
     expect(importsOf(join(here, 'index.ts')).sort()).toEqual(['../limits.js', './names.js', './registry.js', './registry.js', './types.js', './types.js'].sort());
   });
 
-  it('no module the shared barrel (shared/comic/index.ts) reaches imports a generator module', () => {
-    const start = normalize(join(here, '..', 'index.ts'));
+  /** Every module reachable from `start` through relative imports (static, type-only, side-effect and dynamic). */
+  const reachable = (start: string): Set<string> => {
     const seen = new Set<string>([start]);
     const queue = [start];
     while (queue.length) {
@@ -190,7 +192,24 @@ describe('fx registry: generator code never follows into the shared barrel', () 
         }
       }
     }
+    return seen;
+  };
+
+  it('no module the shared barrel (shared/comic/index.ts) reaches imports a generator module', () => {
+    const seen = reachable(normalize(join(here, '..', 'index.ts')));
     expect(seen.has(normalize(join(here, 'registry.ts')))).toBe(true);
     expect([...seen].filter((f) => GENERATOR_MODULES.includes(f)).map((f) => relative(here, f))).toEqual([]);
+  });
+
+  it('the library textures shim (the reader page mat, the library thumbnails) reaches fx/seed.ts only, never Pro effect code', () => {
+    // Rollup splits by module, not by function: a Pro helper in a module the shim reaches ships to every reader.
+    const library = normalize(join(here, '..', '..', '..', 'components', 'comicstudio', 'library', 'procedural'));
+    const inFx = (files: Set<string>) => [...files].filter((f) => f.startsWith(here + sep)).map((f) => relative(here, f)).sort();
+    expect(inFx(reachable(join(library, 'textures.ts')))).toEqual(['seed.ts']);
+    expect(importsOf(join(here, 'seed.ts'))).toEqual([]);
+    // PresetThumb (StyleTab, StylePanel, OptionsCard, LibraryImage) also reaches the schemas through stylePresets, never a drawing.
+    const thumb = reachable(join(library, 'PresetThumb.tsx'));
+    expect(thumb.has(normalize(join(library, 'textures.ts')))).toBe(true);
+    expect([...thumb].filter((f) => PRO_MODULES.includes(f)).map((f) => relative(here, f))).toEqual([]);
   });
 });

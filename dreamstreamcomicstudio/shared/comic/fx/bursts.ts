@@ -1,9 +1,9 @@
 // Burst effects (master plan §2.6 "Effects": bursts 8, PE-FX): spiky and puffy bursts, sunburst rays, a layered
 // explosion and shock rings. Pure; registered by fx/generators.ts, never imported by the registry. Parameters arrive
-// clamped (fxParamsOf); every draw fills shapes in the isotropic frame (seed.ts), at most 400 segments.
+// clamped (fxParamsOf); every draw fills shapes in the isotropic frame (draw.ts), at most 400 segments.
 
 import type { FxNode } from './types.js';
-import { cornersBetween, dirOf, edgePt, fillPath, FxPath, fxFrame, fxRng, inFrame, pBool, pNum, pStr, TAU, type FxParams, type Pt } from './seed.js';
+import { cornersBetween, dirOf, edgePt, fillPath, FxPath, fxFrame, fxRng, inFrame, pBool, pNum, pStr, TAU, type FxParams, type Pt } from './draw.js';
 
 const BURST_SALT = 0x3c6ef372;
 const SUN_SALT = 0x1b873593;

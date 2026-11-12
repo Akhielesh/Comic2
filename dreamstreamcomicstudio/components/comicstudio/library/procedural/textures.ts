@@ -5,16 +5,15 @@
 //   - geometry: plain numbers and path strings that React SVG (PresetThumb, BubblePreview) draws.
 // Colours here are ART content (preset palettes, ink and paper), not UI chrome; chrome uses --ds-*.
 //
-// Re-export shim (master plan §2.6, PE-FX): the seeds and the motion and atmosphere geometry now live with the Pro
-// effect generators in shared/comic/fx (seed.ts, lines.ts, atmosphere.ts), moved unchanged, so every output here is
-// byte-identical. The tiles (halftone … risoGrain) and the colour helpers stay below until PE-TONES (S3) ports the
-// tones and paper to shared/comic/fx/{tones,paper}.ts.
+// Re-export shim (master plan §2.6, PE-FX): the seeds and the motion and atmosphere geometry now live in
+// shared/comic/fx/seed.ts, moved unchanged, so every output here is byte-identical. This file imports seed.ts only:
+// the reader (ComicReader) and the library thumbnails (PresetThumb) load it, and the Pro effect code (fx/draw.ts and
+// the generators) stays in the lazy Pro chunk (registry.test.ts walks these imports). The tiles (halftone … risoGrain)
+// and the colour helpers stay below until PE-TONES (S3) ports the tones and paper to shared/comic/fx/{tones,paper}.ts.
 
 import { clampNum as clamp, r2, seedOf } from '../../../../shared/comic/fx/seed';
 
-export { r2, rng, seedOf } from '../../../../shared/comic/fx/seed';
-export { focusLines, speedLines, type SpeedLine as Line } from '../../../../shared/comic/fx/lines';
-export { bokeh, rainPath } from '../../../../shared/comic/fx/atmosphere';
+export { bokeh, focusLines, r2, rainPath, rng, seedOf, speedLines, type SpeedLine as Line } from '../../../../shared/comic/fx/seed';
 
 /** Escape an attribute value (colours come from presets, but never trust a string into markup). */
 const attr = (v: string | number): string => String(v).replace(/[^#a-zA-Z0-9.,()% -]/g, '');

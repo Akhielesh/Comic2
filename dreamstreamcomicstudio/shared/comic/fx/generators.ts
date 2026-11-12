@@ -11,7 +11,7 @@
 import { fxParamsOf } from './index.js';
 import { fxDefaultsOf, fxGeneratorOf, latestFxGenerator, registerFxDraw, type FxDraw } from './registry.js';
 import type { FxGroup, FxParamValue, LayerFx } from './types.js';
-import type { FxDrawFn } from './seed.js';
+import type { FxDrawFn } from './draw.js';
 import { drawFocusLines, drawSpeedLines } from './lines.js';
 import { drawBurst, drawExplosion, drawShockRings, drawSunburst } from './bursts.js';
 import { drawEmanata } from './emanata.js';

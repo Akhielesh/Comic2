@@ -2,14 +2,14 @@
 // in ten styles: rough ink, brush, double rule, dashed, dotted, wavy, jagged, film strip, torn paper and scalloped.
 // One generator, `frame-border@1`. Pure; registered by fx/generators.ts, never imported by the registry. Parameters
 // arrive clamped (fxParamsOf). Every border is a filled ring (the outer contour, then the inner contour wound the other
-// way, so the middle stays open) in the isotropic frame (seed.ts): corners stay square on any aspect, at most 400
+// way, so the middle stays open) in the isotropic frame (draw.ts): corners stay square on any aspect, at most 400
 // segments.
 //
 // The panel-border styles PanelFrameBorder.style rough, brush, double, dashed, wavy, jagged and film (doc.ts) are this
 // generator's styles of the same name, so a frame border can be drawn through renderFx as well.
 
 import type { FxNode } from './types.js';
-import { fillPath, FxPath, fxFrame, fxRng, loopNoise, pNum, pStr, type FxParams, type Pt } from './seed.js';
+import { fillPath, FxPath, fxFrame, fxRng, loopNoise, pNum, pStr, type FxParams, type Pt } from './draw.js';
 
 const SALT = 0x7a1f33c9;
 

@@ -2,10 +2,11 @@
 // shake marks, surprise lines, the anger mark, hearts, dizzy stars, steam puffs, sleep Zs, music notes, gloom lines,
 // an exclamation and a dizzy swirl). One generator, `emanata@1`: a symbol, how many, how big and how they are arranged.
 // Pure; registered by fx/generators.ts, never imported by the registry. Parameters arrive clamped (fxParamsOf); every
-// symbol is filled (no strokes) in the isotropic frame (seed.ts), at most 29 segments a symbol and 12 symbols.
+// symbol is filled (no strokes) in the isotropic frame (draw.ts), at most 29 segments a symbol and 12 symbols.
 
 import type { FxNode } from './types.js';
-import { clampNum, fillPath, FxPath, fxFrame, fxRng, pBool, pNum, pStr, TAU, type FxParams, type Pt } from './seed.js';
+import { fillPath, FxPath, fxFrame, fxRng, pBool, pNum, pStr, TAU, type FxParams, type Pt } from './draw.js';
+import { clampNum } from './seed.js';
 
 const SALT = 0x0b4611a3;
 
