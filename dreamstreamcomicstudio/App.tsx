@@ -76,6 +76,7 @@ import { ComicsHeader } from './components/comicshost/ComicsHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
+import { resolveProjectOpen } from './services/projectOpen';
 import { comicsChromeFor } from './components/comicshost/hostRouting';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
@@ -444,13 +445,17 @@ const App: React.FC = () => {
     }
     if (local) {
       setIsHydratingProject(true);
-      hydrateProjectAssets(id).finally(() => {
-        setPublicProject(null);
-        setActiveProjectId(id);
-        setCurrentView('reader');
-        setReaderUrlParams(id);
-        setIsHydratingProject(false);
-      });
+      void resolveProjectOpen(() => hydrateProjectAssets(id), () => local)
+        .then((opened) => {
+          // The comic's full state did not load: stay where the reader was asked for (the hook has said
+          // "Couldn't load this comic. Try again."), never a reader on the library card.
+          if (opened.outcome === 'stayed') return;
+          setPublicProject(null);
+          setActiveProjectId(id);
+          setCurrentView('reader');
+          setReaderUrlParams(id);
+        })
+        .finally(() => setIsHydratingProject(false));
       return;
     }
 
@@ -899,20 +904,20 @@ const App: React.FC = () => {
       if (view === 'comicstudio') openComicStudio(id);
       else setCurrentView(view);
     };
-    hydrateProjectAssets(id)
-      .then((hydrated) => {
-        if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
+    void resolveProjectOpen(() => hydrateProjectAssets(id), () => projects.find((candidate) => candidate.id === id))
+      .then((opened) => {
+        // The comic's full state did not load (EGRESS-DB E1: the library holds only its card). Stay on the library:
+        // the hook has said "Couldn't load this comic. Try again.", and a workspace on a card would show a comic
+        // with pieces missing and refuse every change. Opening it again retries.
+        if (opened.outcome === 'stayed') return;
+        if (opened.outcome === 'opened' && activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
           setPublicProject(null);
         }
         setActiveProjectId(id);
-        // Route off the freshly hydrated project (not the stale render-time snapshot),
-        // so a migrated/updated pipelineMode opens the correct workspace.
-        routeTo(hydrated);
-      })
-      .catch(() => {
-        // Hydration failed — still open the project, best-effort on the workspace.
-        setActiveProjectId(id);
-        routeTo(projects.find((candidate) => candidate.id === id));
+        // Route off the freshly hydrated project (not the stale render-time snapshot), so a migrated/updated
+        // pipelineMode opens the correct workspace. When only the image signing failed, the comic is whole and
+        // still opens, best-effort, from the copy in memory.
+        routeTo(opened.project);
       })
       .finally(() => setIsHydratingProject(false));
   };

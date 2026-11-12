@@ -124,3 +124,47 @@ describe('the root div', () => {
     expect(src).toContain('const comicsChrome = chrome.owns;');
   });
 });
+
+describe('opening a comic from the library (EGRESS-DB follow-up)', () => {
+  const src = readFileSync(path.join(__dirname, 'App.tsx'), 'utf8');
+  /** The body of a top-level arrow function declared with `const name = ` inside App, up to the next one. */
+  const body = (name: string) => {
+    const start = src.indexOf(`  const ${name} = `);
+    expect(start, name).toBeGreaterThan(-1);
+    const next = src.indexOf('\n  const ', start + 1);
+    const nextEffect = src.indexOf('\n  useEffect(', start + 1);
+    const end = Math.min(...[next, nextEffect].filter((i) => i > start));
+    return src.slice(start, end);
+  };
+
+  it('both opens go through resolveProjectOpen, and nothing else calls hydrateProjectAssets', () => {
+    const calls = src.split('\n').filter((line) => /hydrateProjectAssets\(/.test(line));
+    expect(calls).toHaveLength(2);
+    for (const line of calls) expect(line).toContain('resolveProjectOpen(() => hydrateProjectAssets(id), ');
+    // No bare promise chain on the hook's open: a `.catch` or `.finally` there is how the card used to be opened.
+    expect(src).not.toMatch(/hydrateProjectAssets\(id\)\s*\.(then|catch|finally)\(/);
+  });
+
+  it('the workspace open returns before it sets the active comic or routes when the comic did not load', () => {
+    const open = body('handleOpenProject');
+    const stay = open.indexOf("if (opened.outcome === 'stayed') return;");
+    expect(stay).toBeGreaterThan(open.indexOf('resolveProjectOpen('));
+    // Every setActiveProjectId / routeTo in the promise chain comes after the early return.
+    const chain = open.slice(open.indexOf('resolveProjectOpen('));
+    expect(chain.indexOf('setActiveProjectId(id)')).toBeGreaterThan(chain.indexOf("if (opened.outcome === 'stayed') return;"));
+    expect(chain.indexOf('routeTo(opened.project)')).toBeGreaterThan(chain.indexOf("if (opened.outcome === 'stayed') return;"));
+    expect(chain.match(/setActiveProjectId\(id\)/g)).toHaveLength(1);
+    // The loader always clears, whatever happened.
+    expect(chain).toContain('.finally(() => setIsHydratingProject(false))');
+  });
+
+  it('the reader open does the same: no reader on the library card', () => {
+    const read = body('navigateToReader');
+    const chain = read.slice(read.indexOf('resolveProjectOpen('), read.indexOf('setIsHydratingProject(true);\n    try {'));
+    const stay = chain.indexOf("if (opened.outcome === 'stayed') return;");
+    expect(stay).toBeGreaterThan(-1);
+    expect(chain.indexOf("setCurrentView('reader')")).toBeGreaterThan(stay);
+    expect(chain.indexOf('setActiveProjectId(id)')).toBeGreaterThan(stay);
+    expect(chain).toContain('.finally(() => setIsHydratingProject(false))');
+  });
+});
