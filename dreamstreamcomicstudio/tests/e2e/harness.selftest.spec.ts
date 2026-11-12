@@ -177,6 +177,20 @@ test.describe('layout scanner', () => {
     expect(f.map((x) => `${x.check}:${x.label}`).sort()).toEqual(['hinge:Fold', 'safe-area:Top']);
   });
 
+  test('one spark per viewport: two visible create fills fail; hidden, collapsed or below-the-fold ones do not count (CL-0 #5)', async ({ page: p }) => {
+    const create = (label: string, style = '') => `<button data-slot="button" data-variant="create" style="width:120px;height:44px;${style}">${label}</button>`;
+    await p.setContent(page(`<main>${create('New comic')}${create('Start a comic')}<button data-slot="button" data-variant="default" style="width:120px;height:44px">Approve</button></main>`));
+    const two = await scanLayout(p, { checks: ['one-spark'] });
+    expect(two.map((x) => x.check)).toEqual(['one-spark']);
+    expect(two[0].label).toBe('Start a comic');
+    expect(two[0].detail).toMatch(/2 spark fills in the 800×600 viewport: New comic \| Start a comic/);
+    await p.setContent(
+      page(`<main>${create('New comic')}${create('Hidden', 'display:none')}${create('Invisible', 'visibility:hidden')}
+        <div aria-hidden="true">${create('Dormant')}</div><div style="height:1400px"></div>${create('Below the fold')}</main>`)
+    );
+    expect(await scanLayout(p, { checks: ['one-spark'] })).toEqual([]);
+  });
+
   test('landmarks and the layout class', async ({ page: p }) => {
     await p.setContent(page(`<div class="gesture-root" data-layout="split"><main>a</main><main>b</main><div data-tabbar style="height:50px">tabs</div></div>`));
     const f = await scanLayout(p, { checks: ['landmarks', 'layout-class'], expectLayout: 'single' });

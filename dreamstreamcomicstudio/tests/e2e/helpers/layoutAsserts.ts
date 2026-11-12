@@ -21,6 +21,8 @@
 //   hinge          dual-screen: an interactive element straddling the fold; panes off their segments
 //   landmarks      exactly one visible <main>; a <nav> whenever the tab bar or rail is shown
 //   layout-class   the studio root's data-layout differs from the device's expected layout
+//   one-spark      more than one spark fill (`[data-slot="button"][data-variant="create"]`) visible in the viewport
+//                  (the colour layer's "one spark per view", CL-0; sparkGuard holds the static half per file)
 // `runAxe` adds axe-core serious/critical violations (color-contrast included) as `axe` findings.
 // `expectLayoutClean` triages findings against tests/e2e/allowlist.json and fails softly on new ones.
 
@@ -607,6 +609,19 @@ function detect(args: DetectArgs) {
     const navShown = Array.from(document.querySelectorAll('[data-tabbar], [data-rail]')).some((n) => visible(n));
     const navs = Array.from(document.querySelectorAll('nav, [role="navigation"]')).filter((n) => visible(n) && !dormant(n));
     if (navShown && navs.length === 0) out.push({ check: 'landmarks', sig: 'nav', label: 'tab bar or rail without a nav landmark', ctx: '' });
+  }
+  // ── one spark per view (CL-0 #5) ───────────────────────────────────────────
+  // A create fill counts when it is rendered (not display:none / visibility:hidden, through `visible`) and its box
+  // intersects the viewport; one off screen below the fold is another view.
+  if (on('one-spark')) {
+    const sparks = Array.from(document.querySelectorAll('[data-slot="button"][data-variant="create"]')).filter((el) => {
+      if (!visible(el) || dormant(el)) return false;
+      const r = el.getBoundingClientRect();
+      return r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
+    });
+    if (sparks.length > 1) {
+      for (const el of sparks.slice(1)) push('one-spark', el, `${sparks.length} spark fills in the ${vw}×${vh} viewport: ${sparks.map((s) => labelOf(s) || sig(s)).join(' | ')}`);
+    }
   }
   if (on('layout-class') && args.expectLayout) {
     const root = document.querySelector('.gesture-root[data-layout]:not([data-testid="immersive-reader"])') || document.querySelector('[data-layout]');
