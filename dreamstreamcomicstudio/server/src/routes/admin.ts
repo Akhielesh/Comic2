@@ -24,6 +24,7 @@ import {
 import { isBootstrapAdminEmail, parseAdminEmails } from '../services/rbac.js';
 import { recordAudit } from '../observability/auditLog.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
+import { listContactMessages, markContactMessageHandled } from '../services/contactStore.js';
 
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
 const allowedRoles = ['admin', 'moderator'] as const;
@@ -520,6 +521,45 @@ adminRouter.get('/analytics/feedback', requireAdmin, async (req, res, next) => {
 adminRouter.get('/analytics/sessions/:sessionId', requireAdmin, async (req, res, next) => {
   try {
     res.json(await getSessionTimeline(String(req.params.sessionId || '').trim()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Settings › Contact messages (CONTACT-1, admin-only) ────────────────────────
+// Every user's messages and reply-to addresses, so admin-only (requireAdmin: roles and the bootstrap
+// list, never a literal address) and never cached. Newest first, 50 a page; `?cursor=` is the offset
+// the previous page returned as nextCursor. Before server/sql/contact_messages.sql is applied (or with
+// no service role) the list is empty with storageEnabled: false.
+const CONTACT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CONTACT_READ_FAILED = 'Contact messages could not be read right now. If server/sql/contact_messages.sql has not been applied yet, apply it first.';
+
+adminRouter.get('/contact-messages', requireAdmin, async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const result = await listContactMessages({ limit: req.query.limit, cursor: req.query.cursor });
+    if (result.ok === false) {
+      if (result.reason === 'unavailable') return res.json({ items: [], storageEnabled: false });
+      return res.status(503).json({ error: { message: CONTACT_READ_FAILED, code: 'CONTACT_UNAVAILABLE' } });
+    }
+    res.json({ items: result.items, ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}), storageEnabled: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Marks one message handled (idempotent: the first handled time is kept). Audited.
+adminRouter.post('/contact-messages/:id/handled', requireAdmin, async (req, res, next) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!CONTACT_ID_RE.test(id)) return res.status(400).json({ error: { message: 'That is not a contact message id.', code: 'INVALID_ID' } });
+    const result = await markContactMessageHandled(id);
+    if (result.ok === false) {
+      if (result.reason === 'not_found') return res.status(404).json({ error: { message: 'No contact message with that id.', code: 'NOT_FOUND' } });
+      return res.status(503).json({ error: { message: CONTACT_READ_FAILED, code: 'CONTACT_UNAVAILABLE' } });
+    }
+    await recordAudit({ actorId: req.user?.id ?? null, action: 'contact_message.handled', targetType: 'contact_message', targetId: id });
+    res.json({ ok: true, id, handledAt: result.handledAt });
   } catch (error) {
     next(error);
   }

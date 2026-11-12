@@ -1524,23 +1524,28 @@ export const syncMarketingConsentLegacy = async (userId: string, marketingEnable
 // --- CONTACT FORM ---
 // --- CONTACT FORM ---
 export const savePublicContactMessage = async (email: string, message: string) => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return false;
-  const normalizedEmail = typeof email === 'string' ? email.trim() : '';
-  const normalizedMessage = typeof message === 'string' ? message.trim() : '';
-  if (!normalizedEmail || !normalizedMessage) return false;
-
-  const { error } = await supabase.from('contact_messages').insert({
-    user_id: user.id,
-    email: normalizedEmail,
-    message: normalizedMessage
-  });
-
-  if (error) {
-    console.error("Failed to save contact message", error);
+  // Sends through the authenticated, rate-limited POST /api/contact (server/src/routes/contact.ts); the
+  // server stores it with the service role in public.contact_messages, which no client can read or write.
+  // Only the session token travels with it (no provider keys). True only when the server answered 2xx with
+  // { ok: true }; false for signed out, offline, a refusal (400/401/429/503) or a misrouted reply. Never throws.
+  try {
+    const normalizedEmail = typeof email === 'string' ? email.trim() : '';
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+    if (!normalizedEmail || !normalizedMessage) return false;
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return false;
+    const response = await fetch(buildApiUrl('/api/contact'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ email: normalizedEmail, message: normalizedMessage })
+    });
+    if (!response.ok) return false;
+    const body = (await response.json().catch(() => null)) as { ok?: unknown } | null;
+    return body?.ok === true;
+  } catch {
     return false;
   }
-  return true;
 };
 // --- COMMUNITY FEATURES (Phase 11) ---
 
