@@ -12,17 +12,26 @@
 // still never waits on a URL the server will not sign: it shows the withheld tile instead of a shimmer.
 // A public snapshot's `render.withheld` page shows "Page N isn't available right now".
 // `ComicCoverView` is the cover counterpart: the art plus the overlay title (CoverTitleLayer).
+//
+// Composition (Ship 2 B1 + Pro Edit PE-COMPOSE; ComposedArt.tsx): a page shown in its panel frames draws the paper,
+// every frame (one shared image URL for the page's drawing), the borders and the overlays as one SVG instead of the
+// <img>; a page in page mode with overlays draws them over the <img>. Guide-only overlays only with `guides` (the
+// editor), never in readers. Other pictures (another take in a frame, an image overlay) need `urlForPath`. A page
+// without frames or overlays renders exactly as before (compose/legacyGolden.test.tsx).
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EyeOff } from 'lucide-react';
 import type { Balloon, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
+import { composePage, pageComposes } from '../../../shared/comic/panelize/compose';
+import { composeScene } from '../compose/pageNodes';
 import type { PatchOptions } from '../types';
 import { ImageDevelop } from '../../studio/kit/streamMotion';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { BalloonLayer } from './BalloonLayer';
+import { ComposedArt } from './ComposedArt';
 import { pageAspectOf } from './balloonGeometry';
 import { SHOT_LABEL, isFreshRender } from './boardModel';
 import { panelBoxesFor } from './pageLayout';
@@ -84,6 +93,13 @@ export interface ComicPageViewProps {
   onEditionTextChange?: (lineId: string, text: string) => void;
   /** Wrap the art and lettering in a SafetyVeil at this rating, with the actions the host offers. */
   safety?: PageSafety;
+  /**
+   * A storage path's URL (another take or an image in a frame, an image overlay). Without it those pictures are not
+   * fetched: such a frame shows empty and such an overlay is left out. The page's own drawing always uses `imageUrl`.
+   */
+  urlForPath?: (path: string) => string | undefined;
+  /** The editor: also draw guide-only overlays (print: false) and a dashed placeholder in an empty frame. */
+  guides?: boolean;
 }
 
 /** SafetyVeil wiring for a page or cover (the host decides which actions it can offer). */
@@ -205,34 +221,57 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   onLetteringOps,
   onBalloonMenu,
   onEditionTextChange,
-  safety
+  safety,
+  urlForPath,
+  guides
 }) => {
   const [boxRef, size] = useElementSize<HTMLDivElement>();
   const [natural, setNatural] = useState<{ path: string; w: number; h: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [variantFailed, setVariantFailed] = useState<string | null>(null);
   const assetPath = page.render.asset?.path;
-  // Adopt the real pixel ratio once the image is known (models snap to their nearest supported aspect).
-  const naturalAspect = natural && natural.path === assetPath && natural.w > 0 && natural.h > 0 ? natural.w / natural.h : 0;
+  // Frames or overlays to draw (undefined: the page renders exactly as before Ship 2).
+  const composition = useMemo(() => (pageComposes(page, { guides }) ? composePage(doc, page, { guides }) : undefined), [doc, page, guides]);
+  const framed = composition?.mode === 'panels';
+  // Adopt the real pixel ratio once the image is known (models snap to their nearest supported aspect). A page shown in
+  // its frames has the book's aspect, whatever shape the drawing came back in.
+  const naturalAspect = !framed && natural && natural.path === assetPath && natural.w > 0 && natural.h > 0 ? natural.w / natural.h : 0;
   const aspect = naturalAspect || pageAspectOf(doc, page);
   const width = size.width || FALLBACK_WIDTH;
   const height = size.height || width / aspect;
+  // In frames the drawing is shown enlarged: pick the variant for the most zoomed frame (at most 4×).
+  const zoom = framed ? Math.min(4, Math.max(1, ...composition!.pieces.filter((p) => p.raster && p.src).map((p) => p.dst.w / p.src!.w))) : 1;
   // Variant pick from the real box width (only once measured; the plain URL until then).
   // A variant that fails to load falls back to the original image (never to the sketch while the
   // original is fine).
-  const pickedUrl = srcWidth && size.width > 0 ? srcWidth(size.width) : undefined;
+  const pickedUrl = srcWidth && size.width > 0 ? srcWidth(framed ? Math.round(size.width * zoom) : size.width) : undefined;
   const src = pickedUrl && variantFailed !== pickedUrl ? pickedUrl : imageUrl;
-  const showImage = !!src && failed !== src;
-  const waitingForUrl = !src && !!assetPath;
+  // Frames that show only other pictures need no drawing.
+  const needsDrawing = !framed || composition!.pieces.some((p) => p.raster && !p.empty);
+  const showImage = needsDrawing ? !!src && failed !== src : true;
+  const waitingForUrl = needsDrawing && !src && !!assetPath;
   const lettering = doc.format.lettering === 'overlay' && showImage && !hideLettering;
+  const scene = useMemo(
+    () => (composition && showImage ? composeScene(doc, page, { guides, composition, resolve: { rasterUrl: src, urlForPath } }) : undefined),
+    [composition, showImage, doc, page, guides, src, urlForPath]
+  );
+  const pageLabel = alt || `Page ${page.n}${page.summary ? ` — ${page.summary}` : ''}`;
+  const onDrawingError = () => {
+    if (pickedUrl && src === pickedUrl && pickedUrl !== imageUrl) {
+      setVariantFailed(pickedUrl);
+      return;
+    }
+    setFailed(src || null);
+    onImageError?.();
+  };
   // Public snapshots mark art they withhold; a blocked image is never signed, so never wait for it.
   const withheld = !!page.render.withheld;
   const blocked = !withheld && !safety && !!page.render.asset && !canServeToOwner(page.render.asset);
 
-  const img = showImage ? (
+  const img = showImage && !framed ? (
     <img
       src={src}
-      alt={alt || `Page ${page.n}${page.summary ? ` — ${page.summary}` : ''}`}
+      alt={pageLabel}
       loading={loading}
       decoding="async"
       draggable={false}
@@ -244,14 +283,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           onAspectChange?.(el.naturalWidth / el.naturalHeight);
         }
       }}
-      onError={() => {
-        if (pickedUrl && src === pickedUrl && pickedUrl !== imageUrl) {
-          setVariantFailed(pickedUrl);
-          return;
-        }
-        setFailed(src || null);
-        onImageError?.();
-      }}
+      onError={onDrawingError}
     />
   ) : null;
 
@@ -277,7 +309,14 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
 
   const art = (
     <>
-      {showImage ? (
+      {showImage && framed && scene ? (
+        // The page in its frames: one SVG (paper, frames, borders, overlays), the page image itself.
+        <div className="absolute inset-0">
+          <ImageDevelop key={assetPath || src || page.id} active={develop && isFreshRender(page.render)} className="h-full w-full" rounded="rounded-none">
+            <ComposedArt scene={scene} label={pageLabel} onImageError={(url) => url === src && onDrawingError()} />
+          </ImageDevelop>
+        </div>
+      ) : showImage ? (
         // Keyed by asset: a new render remounts (and develops in when it just landed); the
         // wrapper never changes shape as time passes, so the image is never re-created.
         <div className="absolute inset-0">
@@ -297,6 +336,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           )}
         </div>
       )}
+      {showImage && !framed && scene && <ComposedArt scene={scene} />}
       {paper && showImage && <div className="ds-reader-paper pointer-events-none absolute inset-0" aria-hidden data-testid="reader-paper" />}
       {lettering && (
         <BalloonLayer
