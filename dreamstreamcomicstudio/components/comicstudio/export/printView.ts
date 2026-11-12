@@ -8,14 +8,22 @@
 // window gets the same self-hosted faces (`fontFaceCss`) plus the Google CSS for script faces only.
 // Every author text is escaped (SVG text nodes and attributes), and only http(s)/blob/data-image URLs
 // are ever written into the document.
+//
+// A page that composes (shown in its panel frames, or carrying overlays) gets ONE more inline SVG drawn from the page
+// node tree (compose/pageNodes.ts, the tree the board draws): in panels mode it replaces the <img> (paper, frames,
+// borders, overlays); in page mode it holds the overlays over the <img>. Guide-only overlays never print. Every other
+// page is written exactly as before (compose/legacyGolden.test.tsx).
 
 import type { ComicDoc, Page } from '../../../shared/comic/doc';
 import { estimateMeasure, planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { FONT_REGISTRY, fontsForDoc, googleFontsHref } from '../../../shared/comic/lettering/fonts';
 import type { FontId } from '../../../shared/comic/lettering/style';
 import { dirOf } from '../../../shared/comic/languages';
+import { libAssetUrl } from '../../../shared/comic/assets/index';
+import { pageComposes } from '../../../shared/comic/panelize/compose';
+import { composeScene, composeSvgNodes } from '../compose/pageNodes';
 import { fontFaceCss } from '../lettering/fontLoader';
-import { letteringSvgMarkup } from '../lettering/svgMarkup';
+import { letteringSvgMarkup, nodesToMarkup } from '../lettering/svgMarkup';
 import { plateLayout, type PlateKind } from '../timeline/plates';
 import { coverTitleSvgMarkup, coverTitleText } from './coverTitle';
 import { exportFaces, prepareExportFonts } from './fonts';
@@ -109,6 +117,28 @@ const printFontIds = (doc: ComicDoc): FontId[] => {
   return [...ids];
 };
 
+/**
+ * The composed page's SVG (frames and/or overlays) for a print sheet, or '' for a page that does not compose. Every
+ * picture URL is checked (safeImageUrl); stickers resolve against the opener's origin (the print window is blank).
+ */
+const composedMarkup = (doc: ComicDoc, page: Page, rasterUrl: string | undefined, label: string, i: number, opts: PrintHtmlOptions, origin: string): { markup: string; framed: boolean } => {
+  if (!pageComposes(page)) return { markup: '', framed: false };
+  const scene = composeScene(doc, page, {
+    resolve: {
+      rasterUrl,
+      urlForPath: (path) => safeImageUrl(opts.urlFor?.(path)),
+      libUrl: (ref) => (origin ? safeImageUrl(`${origin}${libAssetUrl(ref)}`) : undefined)
+    }
+  });
+  const framed = scene.mode === 'panels';
+  const a11y = framed ? ` role="img" aria-label="${escapeHtml(label)}"` : ' aria-hidden="true"';
+  const body = nodesToMarkup(composeSvgNodes(scene, `cp${i}`));
+  return {
+    framed,
+    markup: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 ${scene.H}" preserveAspectRatio="none" data-compose="${scene.mode}" style="overflow:hidden"${a11y}>${body}</svg>`
+  };
+};
+
 /** Lettering plans for a page sheet (overlay comics only). */
 const pagePlans = (doc: ComicDoc, page: Page, aspect: number, measure: Measure): LetterPlan[] =>
   doc.format.lettering === 'overlay' ? planLettering(doc, page, aspect, measure) : [];
@@ -168,8 +198,9 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a
         lettering = coverTitleSvgMarkup(doc, s.aspect, measure);
       }
       const coverText = s.kind === 'cover' ? coverTitleText(doc, s.aspect, measure) : '';
-      const img = url ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(coverText ? `${alt}: ${coverText}` : alt)}">` : '';
-      return `<section class="sheet" data-kind="${s.kind}" data-label="${label}"><div class="frame"><div class="page" data-aspect="${round3(s.aspect)}" data-key="${escapeHtml(s.key)}" style="width:${box.w}in;height:${box.h}in">${img}${lettering}</div></div></section>`;
+      const composed = s.kind === 'page' && s.page ? composedMarkup(doc, s.page, url, alt, i, opts, origin) : { markup: '', framed: false };
+      const img = url && !composed.framed ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(coverText ? `${alt}: ${coverText}` : alt)}">` : '';
+      return `<section class="sheet" data-kind="${s.kind}" data-label="${label}"><div class="frame"><div class="page" data-aspect="${round3(s.aspect)}" data-key="${escapeHtml(s.key)}" style="width:${box.w}in;height:${box.h}in">${img}${composed.markup}${lettering}</div></div></section>`;
     })
     .join('\n');
   const skipped = opts.skipped?.length ? `<span class="muted">Not included: ${escapeHtml(opts.skipped.join(', '))}</span>` : '';
@@ -219,7 +250,8 @@ export const decoratePrintDocument = (root: Document, doc: ComicDoc, measure: Me
       boxWidthPx = box.w;
     }
     pageEl.dataset.aspect = String(round3(real));
-    pageEl.querySelector(':scope > svg')?.remove();
+    // The lettering is re-planned at the real aspect; a composed page's overlays (svg[data-compose]) stay.
+    pageEl.querySelector(':scope > svg:not([data-compose])')?.remove();
     const page = pages.get(pageEl.dataset.key || '');
     const kind = sheet.dataset.kind;
     let markup = '';
@@ -252,6 +284,39 @@ const waitForImages = (root: Document, timeoutMs: number): Promise<string[]> => 
         })
     )
   ).then((r) => r.filter((x): x is string => !!x));
+};
+
+/**
+ * The pictures a composed page draws as SVG <image> (frames, overlays): an <img> preload of each distinct URL, bounded,
+ * so printing waits for them as it does for the page images. Returns the labels of the sheets whose pictures failed.
+ */
+const waitForComposedPictures = (root: Document, timeoutMs: number): Promise<string[]> => {
+  const byUrl = new Map<string, string>();
+  root.querySelectorAll('svg[data-compose] image').forEach((el) => {
+    const url = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
+    if (url && !byUrl.has(url)) byUrl.set(url, el.closest<HTMLElement>('.sheet')?.dataset.label || 'image');
+  });
+  const View = root.defaultView?.Image ?? (typeof Image !== 'undefined' ? Image : undefined);
+  if (!byUrl.size || !View) return Promise.resolve([]);
+  return Promise.all(
+    [...byUrl].map(
+      ([url, label]) =>
+        new Promise<string | null>((resolve) => {
+          const img = new View();
+          let settled = false;
+          const done = (failed: boolean) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(failed ? label : null);
+          };
+          const timer = setTimeout(() => done(!(img.naturalWidth > 0)), timeoutMs);
+          img.addEventListener('load', () => done(false), { once: true });
+          img.addEventListener('error', () => done(true), { once: true });
+          img.src = url;
+        })
+    )
+  ).then((r) => [...new Set(r.filter((x): x is string => !!x))]);
 };
 
 /** Wait (bounded) until the print window has the faces the lettering draws with. */
@@ -336,6 +401,7 @@ export async function openPrintView(doc: ComicDoc, urlFor: UrlFor, opts: OpenPri
   const artCount = sheets.filter((s) => s.kind !== 'plate').length;
   status(`Loading ${artCount} ${artCount === 1 ? 'image' : 'images'}…`);
   const failedImages = await waitForImages(win.document, opts.timeoutMs ?? 45_000);
+  for (const label of await waitForComposedPictures(win.document, opts.timeoutMs ?? 45_000)) if (!failedImages.includes(label)) failedImages.push(label);
   await fontsReady(win.document, book, 6000);
   decoratePrintDocument(win.document, book, measure);
   fitSheetsToScreen(win);

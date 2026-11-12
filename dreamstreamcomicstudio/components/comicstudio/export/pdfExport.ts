@@ -102,7 +102,9 @@ export async function exportComicPdf(doc: ComicDoc, urlFor: UrlFor, opts: PdfExp
     mime: 'image/jpeg',
     quality: opts.quality ?? 0.9,
     measure: fonts?.measure,
-    plateWidth: plateWidthFor(targets)
+    plateWidth: plateWidthFor(targets),
+    // A composed page's other pictures (frame sources, image overlays).
+    urlForPath: (path) => urlFor(path)
   };
   const coverUrl = targets.find((t) => t.kind === 'cover')?.url;
   let pages = 0;

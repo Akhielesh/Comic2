@@ -178,7 +178,7 @@ export async function exportPngZip(doc: ComicDoc, urlFor: UrlFor, opts: ZipExpor
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const folder = zip.folder(stem) || zip;
-  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, urlForPath: (path) => urlFor(path), ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
   const coverUrl = slots.find((s) => s.kind === 'cover')?.url;
   let files = 0;
 
@@ -226,7 +226,7 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const root = zip.folder(stem) || zip;
-  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, urlForPath: (path) => urlFor(path), ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
   const coverSlot = slots.find((s) => s.kind === 'cover');
   const coverUrl = coverSlot?.url;
   const multi = books.length > 1;
