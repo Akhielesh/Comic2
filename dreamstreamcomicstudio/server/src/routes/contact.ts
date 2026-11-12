@@ -1,12 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getRateLimitStore, type RateLimitHit, type RateLimitStore } from '../middleware/rateLimitStore.js';
-import {
-  CONTACT_EMAIL_MAX,
-  CONTACT_EMAIL_MIN,
-  CONTACT_MESSAGE_MAX,
-  supabaseContactStore,
-  type ContactStore
-} from '../services/contactStore.js';
+import { supabaseContactStore, type ContactStore } from '../services/contactStore.js';
+import { CONTACT_MESSAGE_MAX, contactCodePoints, isContactEmail } from '../../../shared/contactMessage.js';
 
 // POST /api/contact — Settings › Contact (CONTACT-1).
 //
@@ -26,17 +21,18 @@ export const CONTACT_RATE_LIMITS = [
   { scope: 'contact_day', windowMs: 24 * 60 * 60_000, maxRequests: 20 }
 ] as const;
 
-/** A practical address shape: something@something.tld, no spaces, one @. */
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
-
-/** Postgres char_length counts code points; so do these caps. NUL cannot be stored in text. */
-const codePoints = (value: string): number => Array.from(value).length;
+/**
+ * The address shape and caps live in shared/contactMessage.ts (CONTACT_EMAIL_SHAPE): something@something.tld,
+ * one @, no spaces and none of the characters that would let a stored address rewrite an admin's mailto:
+ * Reply link (? # & % and friends). Postgres char_length counts code points; so do the caps. NUL cannot be
+ * stored in text.
+ */
 const clean = (value: unknown): string => (typeof value === 'string' ? value.replace(/\u0000/g, '').trim() : '');
 
 export const CONTACT_COPY = {
   signIn: 'Sign in to send us a message.',
   emailMissing: 'Add the email address we should reply to.',
-  emailShape: 'That email address doesn’t look complete. Check it and send again.',
+  emailShape: 'That email address doesn’t look right. Check it and send again.',
   messageMissing: 'Write a message before sending.',
   messageTooLong: `Your message is over ${CONTACT_MESSAGE_MAX.toLocaleString('en-US')} characters. Shorten it and send again.`,
   rateLimited: 'You’ve sent several messages in a short time. Please wait a while before sending another.',
@@ -53,12 +49,9 @@ export const parseContactBody = (body: unknown): ContactBodyResult => {
   const email = clean(raw.email);
   const message = clean(raw.message);
   if (!email) return { ok: false, field: 'email', message: CONTACT_COPY.emailMissing };
-  const emailLength = codePoints(email);
-  if (emailLength < CONTACT_EMAIL_MIN || emailLength > CONTACT_EMAIL_MAX || !EMAIL_SHAPE.test(email)) {
-    return { ok: false, field: 'email', message: CONTACT_COPY.emailShape };
-  }
+  if (!isContactEmail(email)) return { ok: false, field: 'email', message: CONTACT_COPY.emailShape };
   if (!message) return { ok: false, field: 'message', message: CONTACT_COPY.messageMissing };
-  if (codePoints(message) > CONTACT_MESSAGE_MAX) return { ok: false, field: 'message', message: CONTACT_COPY.messageTooLong };
+  if (contactCodePoints(message) > CONTACT_MESSAGE_MAX) return { ok: false, field: 'message', message: CONTACT_COPY.messageTooLong };
   return { ok: true, email, message };
 };
 

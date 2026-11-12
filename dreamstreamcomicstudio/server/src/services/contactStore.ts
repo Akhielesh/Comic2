@@ -12,10 +12,8 @@
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import { logger } from '../lib/logger.js';
 
-/** The caps server/sql/contact_messages.sql checks (char_length counts code points). */
-export const CONTACT_EMAIL_MIN = 3;
-export const CONTACT_EMAIL_MAX = 320;
-export const CONTACT_MESSAGE_MAX = 5000;
+/** The caps server/sql/contact_messages.sql checks (char_length counts code points); shared with the form. */
+export { CONTACT_EMAIL_MAX, CONTACT_EMAIL_MIN, CONTACT_MESSAGE_MAX } from '../../../shared/contactMessage.js';
 /** One admin page of messages, newest first. */
 export const CONTACT_PAGE_LIMIT = 50;
 
@@ -58,6 +56,13 @@ const errorCode = (error: unknown): string | undefined => {
   return typeof code === 'string' ? code : undefined;
 };
 
+/**
+ * The table is not there yet (server/sql/contact_messages.sql not applied): PostgREST answers PGRST205,
+ * Postgres 42P01. That is "not set up", not an outage, so it maps to 'unavailable' like a missing
+ * service role, and the admin reader can say so instead of "the service didn't answer".
+ */
+const tableMissing = (error: unknown): boolean => ['PGRST205', '42P01'].includes(errorCode(error) ?? '');
+
 const clampInt = (value: unknown, fallback: number, min: number, max: number): number => {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -87,7 +92,7 @@ export const insertContactMessage = async (input: ContactMessageInput): Promise<
     const { error } = await getSupabaseAdmin().from(TABLE).insert(contactInsertRow(input));
     if (error) {
       logger.warn('contact_persist_failed', { code: errorCode(error) });
-      return { ok: false, reason: 'failed' };
+      return { ok: false, reason: tableMissing(error) ? 'unavailable' : 'failed' };
     }
     return { ok: true };
   } catch (error) {
@@ -109,7 +114,7 @@ export const listContactMessages = async (opts: { limit?: unknown; cursor?: unkn
       .range(offset, offset + limit - 1);
     if (error) {
       logger.warn('contact_list_failed', { code: errorCode(error) });
-      return { ok: false, reason: 'failed' };
+      return { ok: false, reason: tableMissing(error) ? 'unavailable' : 'failed' };
     }
     const items = ((data || []) as Array<Record<string, unknown>>).map(toRow);
     return { ok: true, items, ...(items.length === limit ? { nextCursor: String(offset + limit) } : {}) };
@@ -136,7 +141,7 @@ export const markContactMessageHandled = async (id: string): Promise<ContactHand
       .maybeSingle();
     if (error) {
       logger.warn('contact_handled_failed', { code: errorCode(error) });
-      return { ok: false, reason: 'failed' };
+      return { ok: false, reason: tableMissing(error) ? 'unavailable' : 'failed' };
     }
     if (updated && typeof (updated as { handled_at?: unknown }).handled_at === 'string') {
       return { ok: true, handledAt: (updated as { handled_at: string }).handled_at };
@@ -145,7 +150,7 @@ export const markContactMessageHandled = async (id: string): Promise<ContactHand
     const { data: existing, error: readError } = await admin.from(TABLE).select('id, handled_at').eq('id', id).maybeSingle();
     if (readError) {
       logger.warn('contact_handled_read_failed', { code: errorCode(readError) });
-      return { ok: false, reason: 'failed' };
+      return { ok: false, reason: tableMissing(readError) ? 'unavailable' : 'failed' };
     }
     const handledAt = (existing as { handled_at?: unknown } | null)?.handled_at;
     if (typeof handledAt === 'string') return { ok: true, handledAt };

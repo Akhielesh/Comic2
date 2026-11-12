@@ -12,7 +12,9 @@ const sb = vi.hoisted(() => ({
   rows: [] as Array<Record<string, unknown>>,
   selectError: null as null | { code?: string; message: string },
   updated: null as null | Record<string, unknown>,
-  existing: null as null | Record<string, unknown>
+  updateError: null as null | { code?: string; message: string },
+  existing: null as null | Record<string, unknown>,
+  readError: null as null | { code?: string; message: string }
 }));
 
 vi.mock('./supabase.js', () => ({
@@ -36,7 +38,10 @@ vi.mock('./supabase.js', () => ({
           record('range', ...args);
           return { data: sb.selectError ? null : sb.rows, error: sb.selectError };
         },
-        maybeSingle: async () => ({ data: mode === 'update' ? sb.updated : sb.existing, error: null })
+        maybeSingle: async () =>
+          mode === 'update'
+            ? { data: sb.updateError ? null : sb.updated, error: sb.updateError }
+            : { data: sb.readError ? null : sb.existing, error: sb.readError }
       };
       return q;
     }
@@ -72,7 +77,9 @@ beforeEach(() => {
   sb.rows = [];
   sb.selectError = null;
   sb.updated = null;
+  sb.updateError = null;
   sb.existing = null;
+  sb.readError = null;
   logged.lines.length = 0;
 });
 
@@ -92,12 +99,19 @@ describe('insertContactMessage', () => {
     expect(sb.calls).toEqual([]);
   });
 
-  it('reports a database error (the table missing, PGRST205) as failed, logging the code only', async () => {
-    sb.insertError = { code: 'PGRST205', message: `Could not find the table 'public.contact_messages' (${INPUT.message})` };
+  it('reports a database error as failed, logging the code only', async () => {
+    sb.insertError = { code: '23514', message: `new row violates check constraint (${INPUT.message}, ${INPUT.email})` };
     expect(await insertContactMessage(INPUT)).toEqual({ ok: false, reason: 'failed' });
-    expect(logged.lines).toEqual([['contact_persist_failed', { code: 'PGRST205' }]]);
+    expect(logged.lines).toEqual([['contact_persist_failed', { code: '23514' }]]);
     expect(JSON.stringify(logged.lines)).not.toContain(INPUT.message);
     expect(JSON.stringify(logged.lines)).not.toContain(INPUT.email);
+  });
+
+  it.each(['PGRST205', '42P01'])('reports the table missing (%s) as unavailable — not set up yet — logging the code only', async (code) => {
+    sb.insertError = { code, message: `Could not find the table 'public.contact_messages' (${INPUT.message})` };
+    expect(await insertContactMessage(INPUT)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(logged.lines).toEqual([['contact_persist_failed', { code }]]);
+    expect(JSON.stringify(logged.lines)).not.toContain(INPUT.message);
   });
 
   it('never throws, and never logs the text when the client throws with it in the error', async () => {
@@ -155,8 +169,18 @@ describe('listContactMessages', () => {
     sb.persistence = false;
     expect(await listContactMessages()).toEqual({ ok: false, reason: 'unavailable' });
     sb.persistence = true;
-    sb.selectError = { code: '42P01', message: 'relation does not exist' };
+    sb.selectError = { code: '57014', message: 'canceling statement due to statement timeout' };
     expect(await listContactMessages()).toEqual({ ok: false, reason: 'failed' });
+    expect(logged.lines).toEqual([['contact_list_failed', { code: '57014' }]]);
+  });
+
+  it.each([
+    ['PGRST205', "Could not find the table 'public.contact_messages' in the schema cache"],
+    ['42P01', 'relation "public.contact_messages" does not exist']
+  ])('is unavailable, not failed, while the table is missing (%s): the SQL is not applied yet', async (code, message) => {
+    sb.selectError = { code, message };
+    expect(await listContactMessages()).toEqual({ ok: false, reason: 'unavailable' });
+    expect(logged.lines).toEqual([['contact_list_failed', { code }]]);
   });
 });
 
@@ -181,6 +205,34 @@ describe('markContactMessageHandled', () => {
 
   it('answers not_found for an id with no row', async () => {
     expect(await markContactMessageHandled(MSG_ID)).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('is failed, not not_found, when the update errors, logging the code only', async () => {
+    sb.updateError = { code: '57014', message: `timeout updating ${MSG_ID}` };
+    expect(await markContactMessageHandled(MSG_ID)).toEqual({ ok: false, reason: 'failed' });
+    expect(logged.lines).toEqual([['contact_handled_failed', { code: '57014' }]]);
+    // It stops there: no follow-up read.
+    expect(sb.calls.filter((c) => c.op === 'select')).toHaveLength(1);
+  });
+
+  it('is failed, not not_found, when the follow-up read errors, logging the code only', async () => {
+    sb.updated = null;
+    sb.existing = { id: MSG_ID, handled_at: '2026-11-10T08:00:00.000Z' };
+    sb.readError = { code: '57014', message: `timeout reading ${MSG_ID}` };
+    expect(await markContactMessageHandled(MSG_ID)).toEqual({ ok: false, reason: 'failed' });
+    expect(logged.lines).toEqual([['contact_handled_read_failed', { code: '57014' }]]);
+  });
+
+  it.each(['PGRST205', '42P01'])('is unavailable while the table is missing (%s), on the update and on the read', async (code) => {
+    sb.updateError = { code, message: 'relation does not exist' };
+    expect(await markContactMessageHandled(MSG_ID)).toEqual({ ok: false, reason: 'unavailable' });
+    sb.updateError = null;
+    sb.readError = { code, message: 'relation does not exist' };
+    expect(await markContactMessageHandled(MSG_ID)).toEqual({ ok: false, reason: 'unavailable' });
+    expect(logged.lines).toEqual([
+      ['contact_handled_failed', { code }],
+      ['contact_handled_read_failed', { code }]
+    ]);
   });
 
   it('is the store the routes use', () => {

@@ -120,6 +120,11 @@ describe('POST /api/contact', () => {
     ['an email without @', { email: 'reader.example.com', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
     ['an email without a domain dot', { email: 'reader@example', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
     ['an email with a space', { email: 'rea der@example.com', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
+    // A stored address becomes an admin's mailto: Reply link; URL-significant characters would let it add Cc/Bcc/subject/body.
+    ['an email carrying mailto: headers', { email: 'x@evil.com?cc=a%40b.org', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
+    ['an email with a fragment', { email: 'x@evil.com#body=pay', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
+    ['an email with & in the local part', { email: 'x&subject=hi@evil.com', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
+    ['an email with angle brackets', { email: '<x@evil.com>', message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
     ['an email over 320 characters', { email: `${'a'.repeat(310)}@example.com`, message: MESSAGE }, 'email', CONTACT_COPY.emailShape],
     ['an email that is not a string', { email: ['a@b.co'], message: MESSAGE }, 'email', CONTACT_COPY.emailMissing],
     ['a blank message', { email: EMAIL, message: ' \n\t ' }, 'message', CONTACT_COPY.messageMissing],
@@ -241,6 +246,10 @@ describe('POST /api/contact', () => {
 describe('parseContactBody', () => {
   it('accepts an ordinary address and message, trimmed', () => {
     expect(parseContactBody({ email: ' a@b.co ', message: ' hi ' })).toEqual({ ok: true, email: 'a@b.co', message: 'hi' });
+  });
+
+  it.each(['first.last+tag@example.co.uk', 'o_brien-2@mail.example.org', 'josé@exämple.com'])('accepts %s', (email) => {
+    expect(parseContactBody({ email, message: 'hi' })).toEqual({ ok: true, email, message: 'hi' });
   });
 
   it('rejects arrays and non-objects', () => {
