@@ -568,8 +568,10 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     for (const sfxEffect of PRO_SFX_EFFECTS) expect(sanitizeLetterStylePatch({ sfxEffect }), sfxEffect).toBeUndefined();
     expect(PRO_BUBBLE_SHAPES.filter((s) => (BUBBLE_SHAPES as readonly string[]).includes(s))).toEqual([]);
     expect(PRO_SFX_EFFECTS.filter((s) => (SFX_EFFECTS as readonly string[]).includes(s))).toEqual([]);
-    expect(PRO_FONT_IDS).toEqual([]);
-    expect(isProFontId('bungee')).toBe(false);
+    // PE-FONTS filled the font seam (28 faces); a client still cannot write one until the drawing lands (PE-LETTER).
+    expect(PRO_FONT_IDS).toHaveLength(28);
+    expect(isProFontId('bungee')).toBe(true);
+    expect(sanitizeLetterStylePatch({ font: 'bungee' })).toBeUndefined();
   });
 
   // ── Rollback (§2.3 graft 1, §6.4): S2 writes Pro lettering; rolled back to PE-0, a load + write-back must keep it. ──

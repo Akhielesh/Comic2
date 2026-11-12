@@ -98,8 +98,9 @@ const FONT_ALIASES: Record<string, FontId> = {
   hindi: 'kalam', devanagari: 'kalam', 'noto': 'noto-sans', 'plain': 'noto-sans', sans: 'noto-sans'
 };
 
+/** The Latin faces to offer (the 12 base faces + Noto Sans); a comic's script faces are picked by its language. */
 const fontChoices = () =>
-  FONT_IDS.filter((id) => FONT_REGISTRY[id].source === 'fontsource' || id === 'noto-sans')
+  FONT_IDS.filter((id) => !id.startsWith('noto-') || id === 'noto-sans')
     .map((id) => `${FONT_REGISTRY[id].label ?? id} (${id})`)
     .join(', ');
 

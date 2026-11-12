@@ -23,7 +23,7 @@ import { PUBLIC_QC_CHECKED_AT } from '../publication.js';
 import { PANEL_LIMITS, panelWords, textBudget, textUnitFor } from '../panelRules.js';
 import { isKidsAudience } from '../safety.js';
 import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, wrapLines, wrapUnits, type FitResult, type WrapUnit } from '../textLayout.js';
-import { FONT_REGISTRY, fontByFamily, fontString, resolveLetteringFont } from './fonts.js';
+import { FONT_REGISTRY, fontByFamily, fontFaceMeta, fontString, resolveLetteringFont } from './fonts.js';
 import { balloonFootprint, coverageOf, placeBalloonsDetailed, ROW_TOLERANCE, safeAreaBox, settleBalloons, type SettleItem, type SizedLine } from './place.js';
 import { bubbleGeometry, hashSeed, resolveTailStyle, type BubbleGeometry } from './shapes.js';
 import {
@@ -342,8 +342,9 @@ const lineSetup = (doc: ComicDoc, line: Line, measure: Measure): LineSetup => {
     rotate: raw.rotate === 'auto' ? auto?.rotate ?? 0 : raw.rotate
   };
   const rf = resolveLetteringFont(style.font, line.kind, lang, { weight: style.weight, italic: style.italic });
-  // A face outside the base registry (a Pro font, once PE-FONTS resolves one) never leaves the metrics undefined.
-  const meta = FONT_REGISTRY[rf.fontId] ?? FONT_REGISTRY['comic-neue'];
+  // Any face this build ships, base or Pro (PE-FONTS #7: an explicit lookup now that LetterStyle.font can hold a Pro id);
+  // an unknown one falls back to comic-neue's metrics, never undefined.
+  const meta = fontFaceMeta(rf.fontId) ?? FONT_REGISTRY['comic-neue'];
   const fontAt = (px: number) => fontString(rf.fontId, px, rf.weight, rf.italic);
   const spacing = style.letterSpacing;
   const measureAt = (s: string, px: number) => {

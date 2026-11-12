@@ -14,6 +14,12 @@
 // The S2b integration re-recorded it on the merged tree just before PE-COMPOSE (22084f2c), whose legacy DOM equals dev
 // 99b870c4's: dev's S2a changes had moved the board and reader DOM of the 756b5a70 recording (raster and print did
 // not move), and S2a added the chat-14 fixture.
+//
+// The print document's @font-face URLs are where Vite resolves each @fontsource file, which depends on where
+// node_modules physically lives (a symlinked shared tree resolves through "/@fs/<its path>/node_modules/…", a real
+// node_modules under the root as "/node_modules/…"), so they are hashed with that prefix made canonical: only the face,
+// file and rules count. The S2b integration made this change at PE-FONTS (M9) and re-recorded the print hashes on the
+// merged tree just before PE-FONTS; with the prefix canonical, PE-FONTS leaves every fixture's print document unchanged.
 
 import React from 'react';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -73,6 +79,10 @@ const domHash = (doc: ComicDoc, pageIndex: number, reader: boolean): string => {
   return hashString(html);
 };
 
+/** A font file URL with its install-location prefix made canonical (see the header): "<origin>/node_modules/@fontsource/…". */
+const stableFontUrls = (html: string): string =>
+  html.replace(/url\("([a-z]+:\/\/[^/"]+)\/[^"]*?node_modules\/@fontsource\//g, 'url("$1/node_modules/@fontsource/');
+
 /** Canvas contexts the exporter creates, in order (main page canvas and offscreen layers). */
 let made: FakeCtx[] = [];
 /** The art "loads" at its recorded pixel size (the QA path names it too: qa/<seed>-<w>x<h>.png). */
@@ -106,7 +116,7 @@ const computeAll = async (): Promise<{ pages: Record<string, PageHashes>; print:
     }
     const book = localizedFor(doc);
     const { sheets, skipped } = collectPrintSheets(book, fakeUrlFor);
-    print[name] = hashString(buildPrintHtml(book, sheets, { skipped, measure: estimateMeasure, origin: 'https://studio.test', urlFor: fakeUrlFor }));
+    print[name] = hashString(stableFontUrls(buildPrintHtml(book, sheets, { skipped, measure: estimateMeasure, origin: 'https://studio.test', urlFor: fakeUrlFor })));
   }
   return { pages, print };
 };

@@ -53,7 +53,7 @@ the PE-SERVER sanitizer is deployed.
 | Motion | `Page.motion = {clips: MotionClip[] (≤ 48), camera?: {panelId, move}[], hold?}` (`shared/comic/motion/types.ts`) | `normalizePageMotion`: structural only, so a newer build's presets survive a rollback |
 | Reader default | `ReaderSettings.motion?: 'on' \| 'off'` | Kept by `pickReader` when set; absent stays absent |
 | Text styling | `LetterStyle.fillGradient`, `strokes` (≤ 3), `glow`, `warp`, `warpAmount` (`lettering/style.ts`) | Neutral `PRO_LETTER_DEFAULTS`. A client cannot write them until PE-LETTER; a stored one is kept on load and draws nothing (see "Rollback" below) |
-| Bubble shapes, SFX effects, fonts | `PRO_BUBBLE_SHAPES`, `PRO_SFX_EFFECTS` (`style.ts`), `ProFontId` (`lettering/proFonts.ts`, empty) | Not accepted from a client until they draw; a stored one is kept on load and `resolveLetterStyle` draws the cascade's value instead |
+| Bubble shapes, SFX effects, fonts | `PRO_BUBBLE_SHAPES`, `PRO_SFX_EFFECTS` (`style.ts`), `PRO_FONT_IDS` / `ProFontId` (28 faces, `lettering/proFonts.ts`; metadata `PRO_FONT_REGISTRY` in `lettering/fonts.ts`) | Not accepted from a client until they draw; a stored one is kept on load and `resolveLetterStyle` draws the cascade's value instead |
 | Named styles | `LetteringStyle.named` (≤ 32, names ≤ 40 characters), `Line.styleId` (W0) | Kept on load and by every `letter_style` op, a reset included; not client-writable and not in the cascade until C-STYLES / PE-SERVER |
 
 **Opaque passthrough (rollback, graft 1).** The server hydrates through `normalizeDoc` and writes the whole doc back, so a
@@ -132,7 +132,7 @@ source scan (TypeScript AST) proves `components/comicstudio/editor/**` (and `com
 | PE-FX (S2) | `FX_GENERATORS` and `renderFx` (36 entries); one `FX_NAMES` entry per generator (each `name` equals it). Keep generator implementations out of `registry.ts`'s static imports (`renderFx` dispatches through a lazily imported module): the shared barrel re-exports the registry |
 | PE-MOTION-ENGINE (S2) | `motion/{beats,easing,presets,sample,reduced,budget}.ts` |
 | PE-LETTER (S2) | draws the Pro text styling, shapes and SFX effects, then lets the client sanitizer accept them (the load keep is already in PE-0) and lets `resolveLetterStyle` draw them |
-| PE-FONTS (S2) | `PRO_FONT_IDS` |
+| PE-FONTS (S2) | `PRO_FONT_IDS` (28 faces), self-hosted Noto (no Google CSS2), lazy face tables (`fontFiles.ts` `LAZY_FONT_FILES`, each wait bounded by the caller's timeout) and the picker sprite (`fontSpecimens.ts`, under 60 KB; regenerate with `npx tsx scripts/build-font-specimens.mjs`). Lead decisions at the S2b integration: **D15** keeps the six CJK weights (the deploy stays within the Pages limits of 20,000 files and 25 MiB per file); **D16** the new packages come only through `package.json` and the lockfile (no npm install, ci or prune against a shared tree; the integration worktree used its own node_modules overlay) |
 | PE-COMPOSE, PE-SHELL, PE-INSPECT (S2); PE-ANIMATE, PE-ASSETS, PE-STAGE, PE-PROPS (S3); PE-STICKERS, PE-READER-MOTION (S4) | the client parts |
 | S2 integration | flip `PRO_EDIT_OPS_PATCHABLE` after the PE-SERVER deploy; `conflicts.ts` keys `motion` / `page_motion` per page; settle the dangling-motion prune (§7) and add a random-book case with motion to the history property tests |
 

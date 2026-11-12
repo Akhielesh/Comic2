@@ -1,5 +1,5 @@
 {
- "note": "The renderers before PE-COMPOSE (756b5a70): hashString of ComicPageView innerHTML (board props; reader props: paper, letteringAriaHidden, eager, develop off; useId tokens renumbered by first appearance), of JSON.stringify of every canvas call renderPageToBlob makes (JPEG, estimateMeasure, fakeCanvas), per page, and of buildPrintHtml per book. Every QA fixture and its rtl edition, and the sample doc. Re-recorded at the S2b integration on the merged tree just before PE-COMPOSE (22084f2c: dev 99b870c4 + PE-MOTION-ENGINE, PE-SERVER, PE-FX, PE-LETTER): its legacy DOM equals dev 99b870c4's page for page, and dev's S2a changes moved the board and reader DOM hashes of 152 pages from 756b5a70 (the raster and print hashes did not move); the chat-14 fixture (S2a) is new.",
+ "note": "The renderers before PE-COMPOSE (756b5a70): hashString of ComicPageView innerHTML (board props; reader props: paper, letteringAriaHidden, eager, develop off; useId tokens renumbered by first appearance), of JSON.stringify of every canvas call renderPageToBlob makes (JPEG, estimateMeasure, fakeCanvas), per page, and of buildPrintHtml per book. Every QA fixture and its rtl edition, and the sample doc. Re-recorded at the S2b integration on the merged tree just before PE-COMPOSE (22084f2c: dev 99b870c4 + PE-MOTION-ENGINE, PE-SERVER, PE-FX, PE-LETTER): its legacy DOM equals dev 99b870c4's page for page, and dev's S2a changes moved the board and reader DOM hashes of 152 pages from 756b5a70 (the raster and print hashes did not move); the chat-14 fixture (S2a) is new. Print hashes re-recorded at the S2b integration (M9, the merged tree just before PE-FONTS) with each @font-face URL's node_modules prefix made canonical (the test's stableFontUrls): the URL depended on where node_modules lives, not on the renderers. With it canonical, PE-FONTS leaves every print document byte-identical.",
  "pages": {
   "lake-1p|pg_1": {
    "board": "2e0168f7",
@@ -911,20 +911,20 @@
   }
  },
  "print": {
-  "lake-1p": "6a88834c",
-  "lake-1p|rtl": "6a88834c",
-  "heist-12p": "0713ae65",
-  "heist-12p|rtl": "61797b6b",
-  "deep-40p": "31ba3cc7",
-  "deep-40p|rtl": "24d5de49",
-  "webtoon-20p": "8ca40d50",
-  "webtoon-20p|rtl": "8ca40d50",
-  "stress": "55559ba4",
-  "stress|rtl": "38defd7e",
+  "lake-1p": "250cfb4a",
+  "lake-1p|rtl": "250cfb4a",
+  "heist-12p": "a30a2d13",
+  "heist-12p|rtl": "3122792d",
+  "deep-40p": "761998e9",
+  "deep-40p|rtl": "d3ab171f",
+  "webtoon-20p": "4f891f0a",
+  "webtoon-20p|rtl": "4f891f0a",
+  "stress": "2b07e3ea",
+  "stress|rtl": "4a3942dc",
   "empty": "3f29cf7d",
   "empty|rtl": "3f29cf7d",
-  "chat-14": "2e0233b8",
-  "chat-14|rtl": "6e766e28",
-  "sample": "15c92739"
+  "chat-14": "0c7af6d2",
+  "chat-14|rtl": "2e88db52",
+  "sample": "db5d322f"
  }
 }

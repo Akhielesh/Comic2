@@ -5,6 +5,7 @@ import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeBook } from './__fixtures__/books';
 import { localizedFor } from './sequence';
+import { preloadFontFiles } from '../lettering/fontLoader';
 import { PrintError, buildPrintHtml, collectPrintSheets, decoratePrintDocument, escapeHtml, fitBox, openPrintView, printPageSize } from './printView';
 
 const withCover = (mutate?: (d: ComicDoc) => void) =>
@@ -91,13 +92,21 @@ describe('buildPrintHtml', () => {
     expect(dom.querySelectorAll('[data-testid="balloon"]')).toHaveLength(0);
   });
 
-  it('prints an edition: html lang, its lettering, the script face from Google CSS, the overlay cover title', () => {
+  it('prints an edition: html lang, its lettering, its self-hosted script face, the overlay cover title', async () => {
     const te = localizedFor(makeBook(undefined, { overlayCover: true }), 'te');
+    await preloadFontFiles([languageSpec('te')!.fonts.dialogue]);
     const html = buildPrintHtml(te, collectPrintSheets(te, fakeUrlFor).sheets, { origin: ORIGIN, urlFor: fakeUrlFor });
     const dom = parse(html);
     expect(dom.documentElement.getAttribute('lang')).toBe('te');
     const family = FONT_REGISTRY[languageSpec('te')!.fonts.dialogue].family;
-    expect(html).toContain(`fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}`);
+    expect(html).toContain(`@font-face{font-family:"${family}"`);
+    expect(html).toMatch(/src:url\("https:\/\/[^"]*noto-sans-telugu-telugu-700-normal/);
+    expect(html).not.toMatch(/googleapis|gstatic/);
+    // Only the weights lettering uses (400, 700, 800, 900) of a script face, not all six it ships.
+    const weightsOf = (fam: string) => new Set([...html.matchAll(new RegExp(`font-family:"${fam}";font-style:normal;font-weight:(\\d+);`, 'g'))].map((m) => Number(m[1])));
+    expect([...weightsOf(family)].sort()).toEqual([400, 700, 800, 900]);
+    // A Latin face still declares every weight it ships.
+    expect(weightsOf('DSL Comic Neue')).toEqual(new Set(FONT_REGISTRY['comic-neue'].weights));
     expect(dom.querySelector('.sheet[data-label="Page 1"] svg')!.textContent).toContain('పాత దిల్లీ');
     const coverSvg = dom.querySelector('.sheet[data-label="Cover"] svg.cover-title')!;
     expect(coverSvg.textContent).toContain('కుంకుమపువ్వు దొంగ');

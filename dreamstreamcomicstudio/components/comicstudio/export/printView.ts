@@ -5,7 +5,7 @@
 // full-resolution art plus ONE inline SVG of its lettering, drawn from the shared engine's plans
 // (`planLettering` → `letteringSvgMarkup`) and measured in the opener after the exact faces loaded —
 // so "Save as PDF" keeps crisp vector lettering that matches the board line for line. The print
-// window gets the same self-hosted faces (`fontFaceCss`) plus the Google CSS for script faces only.
+// window gets the same self-hosted faces (`fontFaceCss`), script faces included; nothing comes from a third party.
 // Every author text is escaped (SVG text nodes and attributes), and only http(s)/blob/data-image URLs
 // are ever written into the document.
 //
@@ -18,13 +18,13 @@
 
 import type { ComicDoc, Page } from '../../../shared/comic/doc';
 import { estimateMeasure, planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
-import { FONT_REGISTRY, fontsForDoc, googleFontsHref } from '../../../shared/comic/lettering/fonts';
+import { FONT_REGISTRY, fontsForDoc } from '../../../shared/comic/lettering/fonts';
 import type { FontId } from '../../../shared/comic/lettering/style';
 import { dirOf } from '../../../shared/comic/languages';
 import { libAssetUrl } from '../../../shared/comic/assets/index';
 import { pageComposes } from '../../../shared/comic/panelize/compose';
 import { composeScene, composeSvgNodes, ensureFxDrawings, fxDrawingsPending } from '../compose/pageNodes';
-import { fontFaceCss } from '../lettering/fontLoader';
+import { fontFaceCss, preloadFontFiles } from '../lettering/fontLoader';
 import { letteringSvgMarkup, nodesToMarkup } from '../lettering/svgMarkup';
 import { plateLayout, type PlateKind } from '../timeline/plates';
 import { coverTitleSvgMarkup, coverTitleText } from './coverTitle';
@@ -112,6 +112,15 @@ export interface PrintHtmlOptions {
   urlFor?: UrlFor;
 }
 
+/**
+ * Weights the print CSS declares for a script face (the set the Google CSS2 href asked for before PE-FONTS): regular
+ * captions, bold dialogue, the shout preset and SFX. A CJK weight is about 124 unicode-range rules, so declaring all six
+ * shipped weights would write about 0.5 MB of CSS per face into the print window. Latin and Pro faces keep every
+ * shipped weight (a few rules each).
+ */
+const PRINT_SCRIPT_WEIGHTS = [400, 700, 800, 900];
+const isScriptFace = (id: FontId): boolean => id.startsWith('noto-');
+
 /** Faces the print document must declare: every resolved lettering face plus the plans' faces. */
 const printFontIds = (doc: ComicDoc): FontId[] => {
   const ids = new Set<FontId>(fontsForDoc(doc));
@@ -181,11 +190,9 @@ export const buildPrintHtml = (doc: ComicDoc, sheets: PrintSheet[], opts: PrintH
   const title = escapeHtml(titleText);
   const origin = opts.origin ?? (typeof location !== 'undefined' ? location.origin : '');
   const ids = printFontIds(doc);
-  const faceCss = origin ? fontFaceCss(ids, origin) : '';
-  const scriptHref = googleFontsHref(
-    ids.filter((id) => FONT_REGISTRY[id]?.source === 'google-css2'),
-    [400, 700, 800, 900]
-  );
+  const faceCss = origin
+    ? [fontFaceCss(ids.filter((id) => !isScriptFace(id)), origin), fontFaceCss(ids.filter(isScriptFace), origin, PRINT_SCRIPT_WEIGHTS)].filter(Boolean).join('\n')
+    : '';
   const css = `
 @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
 * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -240,7 +247,7 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-${scriptHref ? `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n<link rel="stylesheet" href="${escapeHtml(scriptHref)}">\n` : ''}<style>${faceCss}
+<style>${faceCss}
 ${css}</style>
 </head>
 <body>
@@ -415,6 +422,7 @@ export async function openPrintView(doc: ComicDoc, urlFor: UrlFor, opts: OpenPri
     /* the real document below reports the failure */
   }
   const fonts = opts.measure ? null : await prepareExportFonts([book]);
+  await preloadFontFiles(printFontIds(book)); // the print CSS declares every face the sheets letter with
   const measure = opts.measure ?? fonts!.measure;
   // Effects draw from drawings that load lazily: load them before the document is written; a page whose effects still
   // can't be drawn prints without them, and says so.

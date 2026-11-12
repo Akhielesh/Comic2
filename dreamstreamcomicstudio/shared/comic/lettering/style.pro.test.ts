@@ -11,6 +11,7 @@ import { makeQaDoc } from '../../../components/comicstudio/testing/qaFixtures';
 import { createEmptyDoc, normalizeDoc, type ComicDoc, type Line } from '../doc';
 import { PRO_LETTER_LIMITS } from '../limits';
 import { FONT_REGISTRY } from './fonts';
+import { isProFontId } from './proFonts';
 import {
   BUBBLE_SHAPES,
   DRAWN_PRO_SFX_EFFECTS,
@@ -222,13 +223,15 @@ describe('load keep: a stored Pro id or look survives load and draws', () => {
       expect(sanitizeLetteringStyle({ presetId, base: { italic: true } }, { keepStoredPro: true }), presetId).toEqual({ presetId: 'classic' });
   });
 
-  it('what this build cannot draw stays kept and is skipped: halftone_fill (S3) and a face PE-FONTS has not shipped', () => {
+  it('what this build cannot draw stays kept and is skipped: halftone_fill (S3), and a Pro face only until PE-FONTS ships it', () => {
     const style = sanitizeLetterStylePatch({ sfxEffect: 'halftone_fill', font: 'bungee-shade' }, { keepStoredPro: true });
     expect(style).toEqual({ sfxEffect: 'halftone_fill', font: 'bungee-shade' });
     const doc = { format: createEmptyDoc('d', 'D', 1).format, letterStyle: { presetId: 'classic' as const } };
     const r = resolveLetterStyle(doc, line('sfx', { style }));
     expect(SFX_EFFECTS).toContain(r.sfxEffect);
-    expect(FONT_IDS).toContain(r.font);
+    // S2b integration: with PE-FONTS merged the face ships, so it draws (as the PE-0 rollback cases branch on it).
+    if (isProFontId('bungee-shade')) expect(r.font).toBe('bungee-shade');
+    else expect(FONT_IDS).toContain(r.font);
     // Every drawn shape is a base or Pro one (the exhaustive records see no other id).
     for (const s of [...BUBBLE_SHAPES, ...PRO_BUBBLE_SHAPES]) expect(isDrawnShape(s)).toBe(true);
     expect(isDrawnShape('blob')).toBe(false);

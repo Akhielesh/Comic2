@@ -254,8 +254,9 @@ describe('previews and the cover title', () => {
     expect(plan.tagline!.fontSize).toBeLessThan(plan.title!.fontSize);
   });
 
-  it('a Telugu overlay cover loads the Telugu script face it is drawn in (not only the Latin title face)', () => {
-    vi.stubGlobal('FontFace', class {});
+  it('a Telugu overlay cover loads the Telugu script face it is drawn in (not only the Latin title face)', async () => {
+    const families: string[] = [];
+    vi.stubGlobal('FontFace', class { constructor(family: string) { families.push(family); } load() { return Promise.resolve(this); } });
     Object.defineProperty(document, 'fonts', { value: { load: vi.fn(async () => []), check: () => true, forEach: () => undefined, add: vi.fn(), addEventListener: vi.fn() }, configurable: true });
     try {
       const te = makeSampleDoc((d) => {
@@ -265,8 +266,9 @@ describe('previews and the cover title', () => {
       render(<CoverTitleLayer doc={te} aspect={ASPECT} />);
       const plan = planCoverTitle(te, ASPECT, estimateMeasure);
       expect(plan.title!.style.font).toBe('noto-sans-telugu');
-      const hrefs = [...document.head.querySelectorAll<HTMLLinkElement>('link[data-ds-lettering-fonts]')].map((l) => l.href);
-      expect(hrefs.some((h) => h.includes('Noto+Sans+Telugu'))).toBe(true);
+      // Self-hosted (PE-FONTS): the Telugu slices are registered from our origin; no stylesheet is added.
+      await vi.waitFor(() => expect(families).toContain('Noto Sans Telugu'));
+      expect(document.head.querySelector('link[href*="googleapis"]')).toBeNull();
     } finally {
       document.head.querySelectorAll('link[data-ds-lettering-fonts]').forEach((l) => l.remove());
       delete (document as unknown as { fonts?: unknown }).fonts;

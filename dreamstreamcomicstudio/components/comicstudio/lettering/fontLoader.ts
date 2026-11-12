@@ -1,28 +1,36 @@
-// Lettering font loader (lettering.md §6.5). Client only; the shared registry
+// Lettering font loader (lettering.md §6.5, master plan §2.6 / §2.8). Client only; the shared registry
 // (shared/comic/lettering/fonts.ts) holds the metadata, this module loads the files.
 //
-// - Latin faces are the self-hosted @fontsource files (fontFiles.ts), registered with the FontFace API
-//   under PRIVATE family names ('DSL Comic Neue', …) so they never collide with the legacy Google
+// - Every face is self-hosted (@fontsource, pinned in package.json); nothing is fetched from another host.
+// - Latin faces (the 12 base faces, FONT_FILES, and the 28 Pro faces) are registered with the FontFace API under
+//   PRIVATE family names ('DSL Comic Neue', 'DSL Bungee', …) so they never collide with the legacy Google
 //   'Comic Neue'/'Bangers' link in index.html. Board, print and export use byte-identical files.
-// - Script faces (Noto Sans Telugu, …) come lazily from Google Fonts CSS2 (one <link> per family set),
-//   only when a page actually letters in that script.
-// - Everything is memoized per face file, never rejects and works (as a no-op) without a DOM.
+// - Script faces (the 14 Noto families) keep their Noto names. Their files are unicode-range slices (a CJK weight is
+//   about 125 of them): the loader registers the slices of the asked weight and lets `document.fonts.load(font, sample)`
+//   fetch only the ones the text touches, as a stylesheet would.
+// - On demand only: importing this module loads nothing. A face's table (fontFiles.ts LAZY_FONT_FILES, one chunk per Pro
+//   or script table) and its files load the first time `ensureFonts` asks for that face, once (memoized per face file).
+// - Never rejects and works (as a no-op) without a DOM.
 // - `fontLoadGeneration()` bumps whenever a face finishes loading so measuring hooks can re-plan with
 //   real metrics (useLetteringFontsReady).
 
 import { FONT_IDS, type FontId, type LatinFontId } from '../../../shared/comic/lettering/style';
-import { FONT_REGISTRY, fontString, googleFontsHref } from '../../../shared/comic/lettering/fonts';
-import { FONT_FILES, type FontFile } from './fontFiles';
+import { PRO_FONT_IDS, isProFontId, type AnyFontId } from '../../../shared/comic/lettering/proFonts';
+import { fontFaceMeta, fontString } from '../../../shared/comic/lettering/fonts';
+import { FONT_FILES, LAZY_FONT_FILES, type FontFile } from './fontFiles';
 
-export interface EnsureFontsResult {
+export interface EnsureFontsResult<T extends AnyFontId = FontId> {
   /** Faces that are ready to measure and draw. */
-  loaded: FontId[];
+  loaded: T[];
   /** Faces that failed or timed out (a fallback face will be used; never silent — callers may tell the user). */
-  failed: FontId[];
+  failed: T[];
 }
 
-const isLatin = (id: FontId): id is LatinFontId => Object.prototype.hasOwnProperty.call(FONT_FILES, id);
-const known = (id: unknown): id is FontId => typeof id === 'string' && (FONT_IDS as readonly string[]).includes(id);
+const ALL_IDS: readonly AnyFontId[] = [...FONT_IDS, ...PRO_FONT_IDS];
+const isLatin = (id: AnyFontId): id is LatinFontId => Object.prototype.hasOwnProperty.call(FONT_FILES, id);
+const known = (id: unknown): id is AnyFontId => typeof id === 'string' && (ALL_IDS as readonly string[]).includes(id);
+/** Script faces load as unicode-range slices; Latin and Pro faces load file by file. */
+const isSliced = (id: AnyFontId): boolean => !isLatin(id) && !isProFontId(id);
 
 const hasFontApi = (): boolean =>
   typeof document !== 'undefined' && !!(document as Document & { fonts?: FontFaceSet }).fonts && typeof FontFace !== 'undefined';
@@ -59,20 +67,80 @@ const listenToDocumentFonts = () => {
   }
 };
 
-// ── Latin faces (FontFace API) ────────────────────────────────────────────────
+// ── Face tables (the base Latin table is eager; Pro and script tables load on first use) ─────────────────────────
 
-/** Face files a style needs: the nearest shipped weight, italic only when the face ships it. */
-export const filesFor = (id: LatinFontId, weight = 400, italic = false): FontFile[] => {
-  const files = FONT_FILES[id] || [];
+const tables = new Map<AnyFontId, FontFile[]>();
+const tableLoads = new Map<AnyFontId, Promise<FontFile[]>>();
+
+/** The files of a face, loading its table chunk the first time (an empty list when it cannot load; retried next time). */
+const loadTable = (id: AnyFontId): Promise<FontFile[]> => {
+  if (isLatin(id)) return Promise.resolve(FONT_FILES[id] || []);
+  const ready = tables.get(id);
+  if (ready) return Promise.resolve(ready);
+  const pending = tableLoads.get(id);
+  if (pending) return pending;
+  // Settles on a later tick, so the pending entry below is always set before it is cleared.
+  const p = Promise.resolve()
+    .then(async () => {
+      const load = LAZY_FONT_FILES[id as keyof typeof LAZY_FONT_FILES];
+      const files = load ? await load() : [];
+      if (files?.length) tables.set(id, files);
+      return files || [];
+    })
+    .catch(() => [] as FontFile[]) // retried on the next ask
+    .finally(() => tableLoads.delete(id));
+  tableLoads.set(id, p);
+  return p;
+};
+/** The files of a face whose table is already here (the eager Latin table, or a table an earlier load fetched). */
+const tableNow = (id: AnyFontId): FontFile[] => (isLatin(id) ? FONT_FILES[id] || [] : tables.get(id) || []);
+
+/**
+ * `work`, or `fallback` once `ms` have passed, whichever comes first. A table chunk can stall (a weak mobile connection
+ * never answers the dynamic import), so every wait on one has a deadline; the stalled load keeps running and lands in
+ * the memo if it ever arrives.
+ */
+const withDeadline = <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(0, ms));
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Load the tables (not the font files) of these faces, so `fontFaceCss` can list them. Never rejects, and never waits
+ * longer than `timeoutMs` (default 5 s): a face whose table has not arrived by then is left out of the CSS.
+ */
+export async function preloadFontFiles(ids: readonly AnyFontId[], timeoutMs = 5000): Promise<void> {
+  await Promise.all([...new Set(ids.filter(known))].map((id) => withDeadline(loadTable(id), timeoutMs, [] as FontFile[])));
+}
+
+/** The files a style needs from `files`: the nearest shipped weight, italic only when the face ships it. */
+const pick = (files: readonly FontFile[], weight: number, italic: boolean): FontFile[] => {
   if (!files.length) return [];
   const weights = [...new Set(files.map((f) => f.weight))];
-  const w = weights.reduce((best, x) => (Math.abs(x - weight) < Math.abs(best - weight) ? x : best), weights[0]);
+  const target = Number.isFinite(weight) ? weight : 400;
+  const w = weights.reduce((best, x) => (Math.abs(x - target) < Math.abs(best - target) ? x : best), weights[0]);
   const style = italic && files.some((f) => f.style === 'italic') ? 'italic' : 'normal';
   return files.filter((f) => f.weight === w && f.style === style);
 };
 
+/** Face files a style needs: the nearest shipped weight, italic only when the face ships it. */
+export const filesFor = (id: LatinFontId, weight = 400, italic = false): FontFile[] => pick(FONT_FILES[id] || [], weight, italic);
+
+// ── Latin and Pro faces (FontFace API, file by file) ──────────────────────────
+
 const faceLoads = new Map<string, Promise<boolean>>();
 const loadedFiles = new Set<string>();
+
+const fontFace = (family: string, file: FontFile, display: FontDisplay): FontFace =>
+  new FontFace(family, `url(${JSON.stringify(file.url)}) format("woff2")`, {
+    weight: String(file.weight),
+    style: file.style,
+    unicodeRange: file.unicodeRange || undefined,
+    display
+  });
 
 const loadFile = (family: string, file: FontFile, timeoutMs: number): Promise<boolean> => {
   const key = `${family}|${file.url}`;
@@ -81,12 +149,7 @@ const loadFile = (family: string, file: FontFile, timeoutMs: number): Promise<bo
   const p = (async () => {
     if (!hasFontApi()) return false;
     try {
-      const face = new FontFace(family, `url(${JSON.stringify(file.url)}) format("woff2")`, {
-        weight: String(file.weight),
-        style: file.style,
-        unicodeRange: file.unicodeRange || undefined,
-        display: 'block'
-      });
+      const face = fontFace(family, file, 'block');
       document.fonts.add(face);
       const ok = await Promise.race([
         face.load().then(() => true, () => false),
@@ -106,61 +169,36 @@ const loadFile = (family: string, file: FontFile, timeoutMs: number): Promise<bo
   return p;
 };
 
-// ── Script faces (Google Fonts CSS2) ──────────────────────────────────────────
+// ── Script faces (self-hosted unicode-range slices) ───────────────────────────
 
-const injectedHrefs = new Map<string, Promise<void>>();
-/**
- * Add the Google Fonts CSS2 stylesheet once; resolves when it has loaded (or failed / timed out), so
- * `document.fonts.load` runs only after its @font-face rules exist — otherwise the load resolves with
- * no faces and the face is wrongly reported as failed.
- */
-const injectGoogleCss = (href: string, timeoutMs: number): Promise<void> => {
-  if (typeof document === 'undefined') return Promise.resolve();
-  const known = injectedHrefs.get(href);
-  if (known) return known;
-  const ready = new Promise<void>((resolve) => {
-    let existing: HTMLLinkElement | null = null;
-    try {
-      existing = [...document.querySelectorAll<HTMLLinkElement>('link[data-ds-lettering-fonts]')].find((l) => l.getAttribute('href') === href) ?? null;
-    } catch {
-      existing = null;
-    }
-    if (existing?.sheet) return resolve();
-    const link = existing ?? document.createElement('link');
-    const timer = setTimeout(resolve, timeoutMs);
-    const done = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    link.addEventListener('load', done, { once: true });
-    link.addEventListener('error', done, { once: true });
-    if (!existing) {
-      link.rel = 'stylesheet';
-      link.href = href;
-      link.setAttribute('data-ds-lettering-fonts', '');
-      document.head.appendChild(link);
-    }
-  });
-  injectedHrefs.set(href, ready);
-  return ready;
+const registered = new Set<string>();
+/** Add a slice to document.fonts without fetching it: the browser fetches it when text in its range needs it. */
+const registerSlice = (family: string, file: FontFile) => {
+  const key = `${family}|${file.url}`;
+  if (registered.has(key)) return;
+  try {
+    document.fonts.add(fontFace(family, file, 'swap'));
+    registered.add(key);
+  } catch {
+    /* an engine without FontFace descriptors: the load below reports the face as failed */
+  }
 };
 
 const scriptLoads = new Map<string, Promise<boolean>>();
-const loadScriptFace = (id: FontId, weight: number, sample: string, timeoutMs: number): Promise<boolean> => {
+const loadScriptFace = (id: AnyFontId, family: string, files: readonly FontFile[], weight: number, sample: string, timeoutMs: number): Promise<boolean> => {
   const key = `${id}|${weight}|${sample}`;
   const existing = scriptLoads.get(key);
   if (existing) return existing;
   const p = (async () => {
     if (!hasFontApi()) return false;
-    const href = googleFontsHref([id], [400, 700, weight]);
+    const slices = pick(files, weight, false);
+    if (!slices.length) return false;
     try {
+      for (const f of slices) registerSlice(family, f);
       const font = fontString(id, 16, weight, false);
-      // One budget for the stylesheet AND the face (the exporter waits at most `timeoutMs`).
+      // One budget for every slice the sample needs (the exporter waits at most `timeoutMs`).
       const ok = await Promise.race([
-        (async () => {
-          if (href) await injectGoogleCss(href, timeoutMs);
-          return document.fonts.load(font, sample || undefined).then((faces) => faces.length > 0, () => false);
-        })(),
+        document.fonts.load(font, sample || undefined).then((faces) => faces.length > 0, () => false),
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))
       ]);
       if (ok) bump();
@@ -184,55 +222,69 @@ export interface EnsureFontsOptions {
   italic?: boolean;
   /** Sample text (script faces load only the unicode-range slices the text needs). */
   sample?: string;
-  /** Per-face timeout; default 5 s (as the export path always did). */
+  /** Per-face timeout, the face's table chunk included; default 5 s (as the export path always did). */
   timeoutMs?: number;
 }
 
-/** Load lettering faces; resolves with what is ready (never rejects). */
-export async function ensureFonts(ids: readonly FontId[], opts: EnsureFontsOptions = {}): Promise<EnsureFontsResult> {
+/**
+ * Load lettering faces (base or Pro ids) on demand; resolves with what is ready (never rejects) within `timeoutMs`: a
+ * face whose table or files have not arrived by then is reported in `failed` (its loads keep going and bump the
+ * generation if they land later). Each face file is fetched once; a face nobody asks for is never fetched.
+ */
+export async function ensureFonts<T extends AnyFontId = FontId>(ids: readonly T[], opts: EnsureFontsOptions = {}): Promise<EnsureFontsResult<T>> {
   listenToDocumentFonts();
-  const unique = [...new Set(ids.filter(known))];
+  const unique = [...new Set(ids.filter((id): id is T => known(id)))];
   const weights = opts.weights?.length ? opts.weights : [400, 700];
   const timeoutMs = opts.timeoutMs ?? 5000;
-  const loaded: FontId[] = [];
-  const failed: FontId[] = [];
+  const loaded: T[] = [];
+  const failed: T[] = [];
   if (!hasFontApi()) return { loaded, failed: unique };
+  const loadFace = async (id: T): Promise<boolean> => {
+    const meta = fontFaceMeta(id);
+    const files = meta ? await loadTable(id) : [];
+    const jobs: Promise<boolean>[] = [];
+    if (meta && files.length) {
+      if (isSliced(id)) {
+        for (const w of weights) jobs.push(loadScriptFace(id, meta.family, files, w, opts.sample || '', timeoutMs));
+      } else {
+        for (const w of weights) {
+          for (const file of pick(files, w, false)) jobs.push(loadFile(meta.family, file, timeoutMs));
+          if (opts.italic && meta.italic) for (const file of pick(files, w, true)) jobs.push(loadFile(meta.family, file, timeoutMs));
+        }
+      }
+    }
+    const results = await Promise.all(jobs);
+    return results.length > 0 && results.some(Boolean);
+  };
   await Promise.all(
     unique.map(async (id) => {
-      const meta = FONT_REGISTRY[id];
-      const jobs: Promise<boolean>[] = [];
-      if (isLatin(id)) {
-        for (const w of weights) {
-          for (const file of filesFor(id, w, false)) jobs.push(loadFile(meta.family, file, timeoutMs));
-          if (opts.italic && meta.italic) for (const file of filesFor(id, w, true)) jobs.push(loadFile(meta.family, file, timeoutMs));
-        }
-      } else {
-        for (const w of weights) jobs.push(loadScriptFace(id, w, opts.sample || '', timeoutMs));
-      }
-      const results = await Promise.all(jobs);
-      (results.length && results.some(Boolean) ? loaded : failed).push(id);
+      // One deadline per face, table chunk included (the per-file and per-sample timers start only once it is here).
+      const ok = await withDeadline(loadFace(id).catch(() => false), timeoutMs, false);
+      (ok ? loaded : failed).push(id);
     })
   );
-  return { loaded: FONT_IDS.filter((id) => loaded.includes(id)), failed: FONT_IDS.filter((id) => failed.includes(id)) };
+  const order = (list: T[]) => ALL_IDS.filter((id) => (list as readonly AnyFontId[]).includes(id)) as T[];
+  return { loaded: order(loaded), failed: order(failed) };
 }
 
-/** True when a Latin face file for (id, weight, italic) has loaded (script faces: document.fonts.check). */
-export function isFontReady(id: FontId, weight = 400, italic = false): boolean {
+/** True when a face file for (id, weight, italic) has loaded (script faces: a loaded slice and document.fonts.check). */
+export function isFontReady(id: AnyFontId, weight = 400, italic = false): boolean {
   if (!known(id)) return false;
-  const meta = FONT_REGISTRY[id];
-  if (isLatin(id)) {
-    const files = filesFor(id, weight, italic);
+  const meta = fontFaceMeta(id);
+  if (!meta) return false;
+  if (!isSliced(id)) {
+    const files = pick(tableNow(id), weight, italic);
     return files.length > 0 && files.some((f) => loadedFiles.has(`${meta.family}|${f.url}`));
   }
   if (!hasFontApi()) return false;
   try {
-    // document.fonts.check() is also true when NO face of the family is known yet (the Google CSS has
-    // not arrived), which would measure with a fallback face: require a loaded face of the family too.
-    let loaded = false;
+    // document.fonts.check() is also true when NO face of the family is known yet, which would measure with a
+    // fallback face: require a loaded face of the family too.
+    let ready = false;
     document.fonts.forEach((f) => {
-      if (!loaded && f.status === 'loaded' && f.family.replace(/["']/g, '').trim() === meta.family) loaded = true;
+      if (!ready && f.status === 'loaded' && f.family.replace(/["']/g, '').trim() === meta.family) ready = true;
     });
-    return loaded && document.fonts.check(fontString(id, 16, weight, false));
+    return ready && document.fonts.check(fontString(id, 16, weight, false));
   } catch {
     return false;
   }
@@ -250,18 +302,24 @@ const absolute = (url: string, origin: string): string => {
 const cssString = (s: string) => `"${s.replace(/["\\\n\r]/g, '')}"`;
 
 /**
- * `@font-face` CSS for the used Latin faces (all shipped weights/styles; unicode-range keeps the
- * unneeded slices idle) with absolute URLs — for the print window. Script faces are not included:
- * use `googleFontsHref(ids)` for those.
+ * `@font-face` CSS for the used faces with absolute URLs, for the print window: every shipped weight and style (or only
+ * the nearest shipped weights to `weights`); unicode-range keeps the unneeded slices idle. Base Latin faces are always
+ * included; a Pro or script face once its table is loaded (`ensureFonts` or `preloadFontFiles` loads it; the export
+ * path runs `prepareExportFonts` first). No third-party stylesheet is ever needed.
  */
-export function fontFaceCss(ids: readonly FontId[], origin: string): string {
+export function fontFaceCss(ids: readonly AnyFontId[], origin: string, weights?: readonly number[]): string {
   const rules: string[] = [];
   for (const id of [...new Set(ids.filter(known))]) {
-    if (!isLatin(id)) continue;
-    const family = FONT_REGISTRY[id].family;
-    for (const f of FONT_FILES[id]) {
+    const meta = fontFaceMeta(id);
+    if (!meta) continue;
+    let files = tableNow(id);
+    if (weights?.length) {
+      const keep = new Set(weights.map((w) => pick(files, w, false)[0]?.weight).filter((w): w is number => w !== undefined));
+      files = files.filter((f) => keep.has(f.weight));
+    }
+    for (const f of files) {
       rules.push(
-        `@font-face{font-family:${cssString(family)};font-style:${f.style};font-weight:${f.weight};font-display:block;` +
+        `@font-face{font-family:${cssString(meta.family)};font-style:${f.style};font-weight:${f.weight};font-display:block;` +
           `src:url(${cssString(absolute(f.url, origin))}) format("woff2");${f.unicodeRange ? `unicode-range:${f.unicodeRange};` : ''}}`
       );
     }
@@ -274,6 +332,8 @@ export function resetFontLoaderForTests(): void {
   faceLoads.clear();
   loadedFiles.clear();
   scriptLoads.clear();
-  injectedHrefs.clear();
+  registered.clear();
+  tables.clear();
+  tableLoads.clear();
   generation = 0;
 }
