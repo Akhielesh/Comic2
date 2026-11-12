@@ -17,13 +17,16 @@ import { LetteringInspector } from '../../lettering/LetteringInspector';
 import { PresetGallery } from '../../lettering/PresetGallery';
 import { NamedStyles } from '../../lettering/NamedStyles';
 import { linesOf, presetOps } from '../../lettering/styleOps';
-import { proFieldsWritable, proLooks } from './proGate';
+import { proFieldsWritable, proLooks } from './proSwitch';
 import type { PartPanelProps } from './types';
 
 /** What the empty inspector says (a selection fills it). */
 export const INSPECTOR_EMPTY_HINT = 'Select a balloon on the page or in Layers to change its words’ look, position and size. Lettering edits are free — done by the editor, no AI cost.';
 
-/** The page's facts for the empty inspector, in plain words. */
+/**
+ * The page's facts for the empty inspector, in plain words. A stored balloon is counted as one "with a set position",
+ * never "placed by you": the director (arrange_balloons), job placement and Lock store balloons too.
+ */
 export function pageFacts(doc: ComicDoc, page: Page): { label: string; value: string }[] {
   const lines = page.panels.flatMap((p) => p.lines);
   const spoken = lines.filter((l) => l.text.trim());
@@ -34,7 +37,7 @@ export function pageFacts(doc: ComicDoc, page: Page): { label: string; value: st
   const facts = [
     { label: 'Page', value: `${page.n} of ${doc.pages.length}` },
     { label: 'Panels', value: String(page.panels.length) },
-    { label: 'Lines', value: `${spoken.length}${placed ? ` · ${placed} placed by you` : ''}` },
+    { label: 'Lines', value: `${spoken.length}${placed ? ` · ${placed} with a set position` : ''}` },
     { label: 'Language', value: languageSpec(doc.format?.language || 'en')?.english ?? (doc.format?.language || 'en') },
     { label: 'Lettering', value: doc.format?.lettering === 'overlay' ? preset : 'Drawn into the art' }
   ];

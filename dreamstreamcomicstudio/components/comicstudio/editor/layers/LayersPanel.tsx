@@ -2,20 +2,24 @@
 // screen-reader path to every object on the page: each object is a labelled role=group row, and every move is
 // announced in a polite live region.
 //
-//   click             select (Shift / ⌘ / Ctrl adds or removes); on touch, the row's checkbox multi-selects
+//   click             select (Shift / ⌘ / Ctrl adds or removes); on touch, the row's checkbox multi-selects. Overlay
+//                     rows select the same way (Enter / Space too) through the shell's selectLayers, so the arrows
+//                     nudge them (graft 4)
 //   drag a row        onto another row of its panel: restack in front of / behind it (zOrderEdit, within the
-//                     lettering band — lettering always stays above overlays); onto another panel: move the line
-//                     there (line_move, its translations travel with it)
+//                     lettering band — lettering always stays above overlays); onto another panel's row, header or
+//                     empty group: move the line there (line_move, its translations travel with it)
 //   Alt+↑ / Alt+↓     the same restack without a drag (WCAG 2.5.7); Alt+← / Alt+→ move to the previous / next panel
 //   eye               hide in this view only (no edit, nothing saved)
 //   lock              lock / unlock (balloon {locked}, layer {locked})
-//   badge             "Director is editing" while the director works on that balloon (StudioController.presence)
+//   badge             "Director is editing" while the director works on that balloon (StudioController.presence); on
+//                     touch, where the 44 px controls fill the row, it is the director's icon with the words for
+//                     screen readers
 //
 // Every edit is free, undoable and labelled, through the shell's `apply` (studio.patch); never editActionFor, never
 // studio.act. Rows: h-8 on the overlay-hover token; the selected row is accent-soft with a 3 px ink edge.
 
 import React, { useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, GripVertical, Lock, LockOpen } from 'lucide-react';
+import { Bot, Eye, EyeOff, GripVertical, Lock, LockOpen } from 'lucide-react';
 import type { DocOp } from '../../../../shared/comic/ops';
 import type { LetterPlan } from '../../../../shared/comic/lettering/layout';
 import { LETTERING_ON_TOP_NOTE } from '../../../../shared/comic/pro/types';
@@ -23,7 +27,8 @@ import { BANDS, zOrderEdit, type EditResult } from '../../../../shared/comic/edi
 import { cn } from '../../../../lib/utils';
 import { ACCENT_SOFT_BG, FOCUS_RING, INK, MUTED, OVERLINE, RADIUS_CONTROL, RADIUS_PILL } from '../../../chat/studioDesign';
 import { LINE_KIND_LABEL } from '../../board/boardModel';
-import { lockOps, moveLineToPanelOps, pinKeepingSizeOps, restackEdit, sceneFor } from '../../lettering/styleOps';
+import { lockOps, moveLineToPanelOps, pinKeepingSizeOps } from '../../lettering/styleOps';
+import { restackEdit, sceneFor } from '../../lettering/proStyleOps';
 import type { PartPanelProps } from '../inspector/types';
 import { balloonRows, layersModel, type LayerRow } from './layersModel';
 import { setViewHidden, useViewHidden } from './viewHidden';
@@ -49,13 +54,21 @@ const KIND_SHORT: Record<string, string> = { speech: 'Speech', thought: 'Thought
 
 export type LayersPanelProps = PartPanelProps;
 
-export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, placements, selection, apply, editionLang, presence }) => {
+/** What an empty panel group says (while a line is dragged, where it can go). */
+export const EMPTY_PANEL_HINT = 'No lettering yet';
+export const EMPTY_PANEL_DROP_HINT = 'Drop here to move the line to this panel';
+
+export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, plans, placements, selection, selectLayers, apply, editionLang, presence }) => {
   const bands = useMemo(() => layersModel(doc, page, { plans, lang: editionLang }), [doc, page, plans, editionLang]);
   const hidden = useViewHidden(page.id);
   const [said, setSaid] = useState('');
   const [over, setOver] = useState<string | null>(null);
   const dragging = useRef<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const selected = new Set(selection.ids);
+  // The overlays the studio has selected on this page (selectLayers sets them; the balloon selection is then empty).
+  const studioSel = studio?.selection;
+  const selectedLayers = new Set(studioSel && studioSel.pageId === page.id ? (studioSel.layerIds ?? []) : []);
   const inEdition = !!editionLang;
   const inOriginal = inEdition ? 'Stacking, locks and panels belong to the original language — switch to it to change them.' : undefined;
   const lettering = balloonRows(bands);
@@ -73,6 +86,16 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
       return;
     }
     send(r.ops, r.label, announce);
+  };
+
+  /** Select an overlay (Shift / ⌘ / Ctrl adds or removes), through the shell's selectLayers. */
+  const chooseLayer = (row: LayerRow, add: boolean) => {
+    if (!selectLayers) return;
+    const now = [...selectedLayers];
+    const next = add ? (selectedLayers.has(row.id) ? now.filter((x) => x !== row.id) : [...now, row.id]) : [row.id];
+    selectLayers(next);
+    const one = next.length === 1 ? bands.flatMap((b) => b.groups.flatMap((g) => g.rows)).find((r) => r.id === next[0]) : undefined;
+    setSaid(next.length === 0 ? 'Nothing selected' : one ? `${one.label} selected` : `${next.length} overlays selected`);
   };
 
   const choose = (id: string, add: boolean) => {
@@ -206,6 +229,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
         }}
         onDragStart={(e) => {
           dragging.current = row.id;
+          setDragActive(true);
           try {
             e.dataTransfer?.setData('text/plain', row.id);
             if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
@@ -215,6 +239,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
         }}
         onDragEnd={() => {
           dragging.current = null;
+          setDragActive(false);
           setOver(null);
         }}
         onDragOver={(e) => {
@@ -227,6 +252,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
           e.preventDefault();
           const id = dragging.current;
           dragging.current = null;
+          setDragActive(false);
           setOver(null);
           if (id) dropOnRow(id, row.id);
         }}
@@ -249,8 +275,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
           {row.speaker && <span className={cn('ml-1', MUTED)}>· {row.speaker}</span>}
         </span>
         {editing && (
-          <span data-testid="director-editing" className={cn('shrink-0 border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-1.5 text-[10.5px] font-medium leading-4', RADIUS_PILL, INK)}>
-            {DIRECTOR_EDITING}
+          <span
+            data-testid="director-editing"
+            title={DIRECTOR_EDITING}
+            className={cn('inline-flex shrink-0 items-center gap-1 border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-1.5 text-[10.5px] font-medium leading-4 coarse:px-1', RADIUS_PILL, INK)}
+          >
+            <Bot className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="coarse:sr-only">{DIRECTOR_EDITING}</span>
           </span>
         )}
         {rowControls(row)}
@@ -258,13 +289,54 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
     );
   };
 
-  const objectRow = (row: LayerRow) => (
-    <div key={row.id} role="group" aria-label={`${row.label}${row.locked ? ', locked' : ''}${row.guide ? ', guide only' : ''}`} data-row-id={row.id} className={cn(ROW, 'pl-2', hidden.has(row.id) && 'opacity-60')}>
-      <span className="min-w-0 flex-1 truncate">{row.label}</span>
-      {row.guide && <span className={cn('shrink-0 text-[10.5px]', MUTED)}>Guide</span>}
-      {row.kind === 'overlay' && rowControls(row)}
-    </div>
-  );
+  const objectRow = (row: LayerRow) => {
+    // Overlays select (the shell's selectLayers); frame and page rows are read-only in S2 (PE-PROPS adds their rows).
+    const pick = row.kind === 'overlay' && !!selectLayers;
+    const on = pick && selectedLayers.has(row.id);
+    return (
+      <div
+        key={row.id}
+        role="group"
+        aria-label={`${row.label}${on ? ', selected' : ''}${row.locked ? ', locked' : ''}${row.guide ? ', guide only' : ''}`}
+        data-row-id={row.id}
+        data-selected={on || undefined}
+        tabIndex={pick ? 0 : undefined}
+        onClick={pick ? (e) => chooseLayer(row, e.shiftKey || e.metaKey || e.ctrlKey) : undefined}
+        onKeyDown={
+          pick
+            ? (e) => {
+                if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+                e.preventDefault();
+                chooseLayer(row, e.shiftKey || e.metaKey || e.ctrlKey);
+              }
+            : undefined
+        }
+        className={cn(ROW, 'pl-2', on && ROW_SELECTED, hidden.has(row.id) && 'opacity-60')}
+      >
+        <span className="min-w-0 flex-1 truncate">{row.label}</span>
+        {row.guide && <span className={cn('shrink-0 text-[10.5px]', MUTED)}>Guide</span>}
+        {row.kind === 'overlay' && rowControls(row)}
+      </div>
+    );
+  };
+
+  /** A lettering group's drop target (its header, and an empty group's hint): the line moves to the end of the panel. */
+  const dropTarget = (g: { id: string; panelId?: string }) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragging.current || !g.panelId || rowById.get(dragging.current)?.panelId === g.panelId) return;
+      e.preventDefault();
+      setOver(g.id);
+    },
+    onDragLeave: () => setOver((cur) => (cur === g.id ? null : cur)),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const id = dragging.current;
+      dragging.current = null;
+      setDragActive(false);
+      setOver(null);
+      if (id && g.panelId) dropOnPanel(id, g.panelId);
+    }
+  });
 
   return (
     <div className="min-w-0 space-y-3" data-testid="layers-panel">
@@ -279,25 +351,20 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ doc, page, plans, plac
           {band.groups.map((g) => (
             <div key={g.id} role="group" aria-label={band.band === BANDS.lettering ? `${g.title} lettering` : band.band === BANDS.art ? `${g.title} art` : g.title} className="min-w-0 space-y-0.5" data-group={g.id}>
               {band.band === BANDS.lettering ? (
-                <h5
-                  className={cn('m-0 px-1 pt-1 text-[11px] font-semibold', over === g.id ? cn(INK, 'underline') : MUTED)}
-                  onDragOver={(e) => {
-                    if (!dragging.current || !g.panelId || rowById.get(dragging.current)?.panelId === g.panelId) return;
-                    e.preventDefault();
-                    setOver(g.id);
-                  }}
-                  onDragLeave={() => setOver((cur) => (cur === g.id ? null : cur))}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const id = dragging.current;
-                    dragging.current = null;
-                    setOver(null);
-                    if (id && g.panelId) dropOnPanel(id, g.panelId);
-                  }}
-                  data-drop-panel={g.panelId}
-                >
-                  {g.title}
-                </h5>
+                <>
+                  <h5 className={cn('m-0 px-1 pt-1 text-[11px] font-semibold', over === g.id ? cn(INK, 'underline') : MUTED)} {...dropTarget(g)} data-drop-panel={g.panelId}>
+                    {g.title}
+                  </h5>
+                  {g.rows.length === 0 && (
+                    <p
+                      {...dropTarget(g)}
+                      data-drop-empty={g.panelId}
+                      className={cn('m-0 flex min-h-8 items-center border border-dashed px-2 text-[11px] coarse:min-h-11', RADIUS_CONTROL, over === g.id ? cn('border-[var(--ds-ink)]', INK) : cn('border-[var(--ds-hairline)]', MUTED))}
+                    >
+                      {dragActive ? EMPTY_PANEL_DROP_HINT : EMPTY_PANEL_HINT}
+                    </p>
+                  )}
+                </>
               ) : g.head ? (
                 objectRow(g.head)
               ) : null}

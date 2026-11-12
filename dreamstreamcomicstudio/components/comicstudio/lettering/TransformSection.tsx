@@ -6,6 +6,8 @@
 //   Rotation  balloon {rot}                   rotateEdit (±45°)
 // These are existing, server-accepted balloon fields (not Pro fields), so they write whatever the Pro switch says.
 // Arrow steps coalesce into one undo entry per field; a typed value is its own. A refusal is said in plain words.
+// Each field is keyed by the balloon it edits, so selecting another balloon gives fresh fields: a value typed for one
+// balloon can never be committed to the next (NumberField also commits a draft through the commit it was typed for).
 
 import React, { useMemo, useState } from 'react';
 import type { Balloon, ComicDoc, Page } from '../../../shared/comic/doc';
@@ -19,7 +21,8 @@ import { cn } from '../../../lib/utils';
 import { MUTED, OVERLINE } from '../../chat/studioDesign';
 import { Segmented } from '../board/ui';
 import { NumberField, type NumberCommit } from './NumberField';
-import { balloonOp, pinKeepingSizeOps, sceneFor } from './styleOps';
+import { balloonOp, pinKeepingSizeOps } from './styleOps';
+import { sceneFor } from './proStyleOps';
 import { LENGTH_UNITS, readUnits, unitScale, unitStep, writeUnits, type LengthUnit } from '../editor/inspector/units';
 
 export interface TransformSectionProps {
@@ -124,7 +127,7 @@ export const TransformSection: React.FC<TransformSectionProps> = ({ doc, page, p
       <div className="grid min-w-0 grid-cols-2 gap-x-2 gap-y-1.5">
         {lengths.map((f) => (
           <NumberField
-            key={`${f.field}-${units}`}
+            key={`${id}-${f.field}-${units}`}
             label={f.label}
             value={f.value}
             scale={f.scale}
@@ -140,6 +143,7 @@ export const TransformSection: React.FC<TransformSectionProps> = ({ doc, page, p
           />
         ))}
         <NumberField
+          key={`${id}-rot`}
           label="Rotation"
           value={me.rot}
           min={-EDITOR_LIMITS.balloonRot}

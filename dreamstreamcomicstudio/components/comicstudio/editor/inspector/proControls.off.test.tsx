@@ -4,12 +4,13 @@
 // (mocked), so their absence is the switch's doing, not an empty list's.
 
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { makeSampleDoc } from '../../board/__fixtures__/sampleDoc';
 import { estimateMeasure, planLettering } from '../../../../shared/comic/lettering/layout';
 import { PRO_EDIT_OPS_PATCHABLE } from '../../../../shared/comic/ops';
 import { resolvePlacements } from '../../lettering/useLetterPlans';
+import { loadProExtras } from '../../lettering/pro/proExtras';
 import { LetteringInspector } from '../../lettering/LetteringInspector';
 import { InspectorPanel } from './InspectorPanel';
 import { proFieldsWritable, proLooks, writablePatch } from './proGate';
@@ -28,6 +29,11 @@ vi.mock('../../../../shared/comic/lettering/style', async (orig) => {
 
 const ASPECT = 2 / 3;
 const H = 1000 / ASPECT;
+
+// The Pro parts are the lazily loaded Pro extras: load them once, so every render below is synchronous.
+beforeAll(async () => {
+  await loadProExtras();
+});
 
 const inspector = (lineIds: string[], mutate?: Parameters<typeof makeSampleDoc>[0]) => {
   const doc = makeSampleDoc(mutate);
@@ -54,7 +60,7 @@ const inspector = (lineIds: string[], mutate?: Parameters<typeof makeSampleDoc>[
       docked
     />
   );
-  return { apply, doc };
+  return { apply, doc, page };
 };
 const tab = (name: string) => fireEvent.click(screen.getByRole('tab', { name }));
 
@@ -99,6 +105,45 @@ describe('Pro controls with the switch off', () => {
     expect(apply).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l4'], patch: { fill: '#ffd84a' }, mode: 'replace' }], { label: 'Paste style' });
     expect(writablePatch({ strokes: [], warp: 'arc' })).toBeUndefined();
     setStyleClip(null);
+  });
+
+  it('Duplicate never copies the saved-style link or a Pro key a newer build kept on the line', () => {
+    const { apply } = inspector(['pg_1_l4'], (d) => {
+      const line = d.pages[0].panels[2].lines[1];
+      line.styleId = 'st_v';
+      line.style = { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 }, shape: 'heart' as never };
+    });
+    tab('Arrange');
+    fireEvent.click(screen.getByRole('button', { name: /Duplicate/ }));
+    const [ops, opts] = apply.mock.calls[apply.mock.calls.length - 1];
+    expect(opts).toEqual({ label: 'Duplicate balloon' });
+    expect(ops[0]).toMatchObject({ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', patch: { kind: 'speech', style: { fill: '#ffd84a' } } });
+    expect(ops[0].patch).not.toHaveProperty('styleId');
+    expect(ops[0].patch.style).toEqual({ fill: '#ffd84a' });
+  });
+
+  it('with one balloon, Align lines it up with its panel at once (no dead buttons)', async () => {
+    const { apply, doc, page } = inspector(['pg_1_l4']);
+    tab('Arrange');
+    const align = screen.getByTestId('pro-align');
+    expect(within(align).getByRole('radio', { name: 'Panel' }).getAttribute('aria-checked')).toBe('true');
+    expect((within(align).getByRole('radio', { name: 'Selection' }) as HTMLButtonElement).disabled).toBe(true);
+    const left = within(align).getByRole('button', { name: 'Left' }) as HTMLButtonElement;
+    expect(left.disabled).toBe(false);
+    fireEvent.click(left);
+    const { alignToEdit } = await import('../../lettering/proStyleOps');
+    const want = alignToEdit(doc, page, planLettering(doc, page, ASPECT, estimateMeasure), ['pg_1_l4'], 'left', 'panel', ASPECT);
+    expect(want.ok).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply.mock.calls[0][1]).toEqual({ label: want.ok ? want.label : '' });
+    expect(apply.mock.calls[0][0][0]).toMatchObject({ op: 'balloon', lineId: 'pg_1_l4' });
+  });
+
+  it('Arrange shows one width only: the typed transform’s W (no second “Balloon width”)', () => {
+    inspector(['pg_1_l4']);
+    expect(screen.getByRole('spinbutton', { name: 'W' })).toBeTruthy();
+    tab('Arrange');
+    expect(screen.queryByText('Balloon width')).toBeNull();
   });
 
   it('the empty inspector shows the 8 base looks only and no saved styles', () => {

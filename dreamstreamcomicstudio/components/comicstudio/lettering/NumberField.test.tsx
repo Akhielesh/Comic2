@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { NumberField, clampTo, parseNumberText, roundTo, stepValue } from './NumberField';
 
 const field = (extra: Partial<React.ComponentProps<typeof NumberField>> = {}) => {
@@ -35,6 +35,49 @@ describe('NumberField', () => {
     fireEvent.blur(input);
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenLastCalledWith(0.62, { via: 'type' });
+  });
+
+  it('a changed string with the same value ("50.0" for 50) commits nothing, typed or after an arrow at the end of the range', () => {
+    const { onCommit, input } = field();
+    fireEvent.change(input, { target: { value: '50.0' } });
+    fireEvent.blur(input);
+    fireEvent.change(input, { target: { value: ' 50 % ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('an arrow at the top (or bottom) of the range commits nothing', () => {
+    const top = field({ value: 1 });
+    fireEvent.keyDown(top.input, { key: 'ArrowUp' });
+    fireEvent.keyDown(top.input, { key: 'ArrowUp', shiftKey: true });
+    expect(top.onCommit).not.toHaveBeenCalled();
+    cleanup();
+    const bottom = field({ value: 0 });
+    fireEvent.keyDown(bottom.input, { key: 'ArrowDown' });
+    expect(bottom.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('a typed draft commits through the onCommit it was typed for, even after the field re-renders for another target', () => {
+    // The page editor selects the next balloon on pointerdown, before the field blurs: the field re-renders for it
+    // first (often with the same value — the default size), then blurs.
+    const forL3 = vi.fn();
+    const forL4 = vi.fn();
+    const at = (onCommit: (v: number) => void) => <NumberField label="Size" value={1} scale={100} min={50} max={350} step={5} unit="%" onCommit={onCommit} />;
+    const { rerender } = render(at(forL3));
+    const input = screen.getByRole('spinbutton', { name: 'Size' }) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '150' } });
+    rerender(at(forL4));
+    expect(input.value).toBe('150');
+    fireEvent.blur(input);
+    expect(forL3).toHaveBeenCalledTimes(1);
+    expect(forL3).toHaveBeenCalledWith(1.5, { via: 'type' });
+    expect(forL4).not.toHaveBeenCalled();
+    // The next value typed is for the balloon the field now shows — the same number too.
+    fireEvent.change(input, { target: { value: '150' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(forL4).toHaveBeenCalledWith(1.5, { via: 'type' });
+    expect(forL3).toHaveBeenCalledTimes(1);
   });
 
   it('arrow keys step by the step, Shift steps ×10, each a "step" commit (callers coalesce them)', () => {

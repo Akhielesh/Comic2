@@ -1,6 +1,6 @@
 // What the Pro shell (PE-SHELL, editor/useProEditor.ts `ProPanelProps`) hands a mounted Pro panel: the same fields,
 // declared here so the inspector and Layers parts build in parallel with the shell. The shell reads a part's
-// `Panel: React.ComponentType<ProPanelProps>`; this shape is field-for-field the shell's.
+// `loadPanel` (its `Panel: React.ComponentType<ProPanelProps>`); this shape is field-for-field the shell's.
 
 import type { ComicDoc, Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
@@ -27,6 +27,12 @@ export interface PartPanelProps {
   placements: Placements;
   /** The selected balloons (reading order, primary first). */
   selection: { ids: readonly string[]; set(ids: string[]): void; clear(): void };
+  /**
+   * Select overlays (the Layers panel; PE-SHELL's ProPanelProps.selectLayers): the balloon selection is cleared first,
+   * then the studio selection becomes {pageId, lineIds: [], layerIds}, so the arrows nudge them. [] clears. Optional
+   * here so a host without overlay selection still mounts the panels.
+   */
+  selectLayers?(ids: readonly string[]): void;
   /** Free, undoable, labelled edits (in an edition they land in it). Never editActionFor, never studio.act. */
   apply(ops: DocOp[], opts?: PatchOptions): void;
   /** Open the inline text editor on a balloon. */

@@ -6,21 +6,22 @@
 // beside every slider, align and distribute, Copy / Paste style (⌘⌥C / ⌘⌥V) and — behind PRO_EDIT_OPS_PATCHABLE — the
 // Pro lettering controls and saved styles.
 //
-// The shell (PE-SHELL, editor/useProEditor.ts) mounts `Panel` only when `part.ready` is true and COMIC_PRO_EDITOR_V2 is
-// on. Every Pro edit is free software: this folder never imports editActionFor and never calls studio.act
+// The shell (PE-SHELL, editor/useProEditor.ts) imports this file on the Easy path, so it stays tiny: `part` (the flag
+// the shell reads) and `loadPanel` (its lazy mount contract, collisions B-16). The panel and everything it draws load
+// only when the shell mounts the Properties tab, together with the Pro extras, so the tab opens complete. Import the
+// panel's helpers from their own modules (./InspectorPanel, ./proGate, ./styleClipboard, ./keys, ./units), never
+// through here. Every Pro edit is free software: this folder never imports editActionFor and never calls studio.act
 // (proEdit.contract.test.ts scans it).
 
+import type { ComponentType } from 'react';
 import type { ProEditPart } from '../../../../shared/comic/pro/types';
-import { InspectorPanel } from './InspectorPanel';
+import { loadProExtras } from '../../lettering/pro/proExtras';
+import type { PartPanelProps } from './types';
 
 export const part: ProEditPart = { id: 'inspector', ready: true };
 
-/** The part's panel (the shell's mount contract: `Panel: React.ComponentType<ProPanelProps>`). */
-export const Panel = InspectorPanel;
+/** The part's panel, loaded lazily (the shell's mount contract: the module exports `Panel: ComponentType<ProPanelProps>`). */
+export const loadPanel = (): Promise<{ Panel: ComponentType<PartPanelProps> }> =>
+  Promise.all([import('./InspectorPanel'), loadProExtras()]).then(([m]) => ({ Panel: m.InspectorPanel }));
 
-export { InspectorPanel, EmptySelection, pageFacts, INSPECTOR_EMPTY_HINT } from './InspectorPanel';
 export type { PartPanelProps } from './types';
-export { proFieldsWritable, stripProFields, writablePatch, proLooks, proFontIds, PRO_SFX_DRAWN, WARP_SCRIPTS, warpAllowed, type ProLook } from './proGate';
-export { styleClip, setStyleClip, useStyleClip, styleClipboardKey } from './styleClipboard';
-export { kindForKey, isTypingTarget } from './keys';
-export { LENGTH_UNITS, TRIM_WIDTH_IN, unitScale, unitStep, type LengthUnit } from './units';

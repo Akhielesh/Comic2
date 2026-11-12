@@ -12,6 +12,7 @@ import { safeAreaBox } from '../../../shared/comic/lettering/place';
 import { sceneObject } from '../../../shared/comic/editor/scene';
 import type { ComicDoc, Line } from '../../../shared/comic/doc';
 import { resolvePlacements } from './useLetterPlans';
+import { duplicateLineOps, findLineRef, kindOps, KIND_ROW, moveLineToPanelOps } from './styleOps';
 import {
   alignToEdit,
   cleanStyleName,
@@ -19,11 +20,7 @@ import {
   deleteNamedStyleOps,
   distributeToEdit,
   duplicateNamedStyleOps,
-  findLineRef,
   foldedStyleOf,
-  kindOps,
-  KIND_ROW,
-  moveLineToPanelOps,
   namedStylesOf,
   pasteStyleOps,
   redefineNamedStyleOps,
@@ -33,7 +30,7 @@ import {
   sceneFor,
   uniqueStyleName,
   useNamedStyleOps
-} from './styleOps';
+} from './proStyleOps';
 import { stripProFields } from '../editor/inspector/proGate';
 
 const ASPECT = 2 / 3;
@@ -277,6 +274,26 @@ describe('named styles (C-STYLES)', () => {
     });
     expect(saveNamedStyleOps(doc, page, 'pg_1_l3', 'One more', 'st_x')).toEqual([]);
     expect(duplicateNamedStyleOps(doc, 'st_0', 'st_y')).toEqual([]);
+  });
+});
+
+describe('Duplicate while Pro fields are not writable (collisions C-9)', () => {
+  it('keepLink false drops the saved-style link and clean filters the copied style; omitted, the copy is whole', () => {
+    const { page, placements } = ctx((d) => {
+      const line = d.pages[0].panels[2].lines[1];
+      line.styleId = 'st_v';
+      line.style = { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } };
+    });
+    const whole = duplicateLineOps(page, 'pg_1_l4', placements.balloons, 'ln_copy');
+    expect(whole[0]).toMatchObject({ op: 'line', id: 'ln_copy', patch: { styleId: 'st_v', style: { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } } } });
+    const clean = duplicateLineOps(page, 'pg_1_l4', placements.balloons, 'ln_copy', { keepLink: false, clean: stripProFields });
+    expect(clean[0].op === 'line' && clean[0].patch).toMatchObject({ kind: 'speech', style: { fill: '#ffd84a' } });
+    expect(clean[0].op === 'line' && 'styleId' in clean[0].patch).toBe(false);
+    // Nothing left to copy: no style key at all.
+    const bare = duplicateLineOps(page, 'pg_1_l4', placements.balloons, 'ln_copy', { keepLink: false, clean: () => undefined });
+    expect(bare[0].op === 'line' && 'style' in bare[0].patch).toBe(false);
+    // The balloon beside it is the same either way.
+    expect(clean.slice(1)).toEqual(whole.slice(1));
   });
 });
 

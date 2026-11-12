@@ -10,7 +10,7 @@ import { estimateMeasure, planLettering } from '../../../shared/comic/lettering/
 import { sceneObject } from '../../../shared/comic/editor/scene';
 import { resolvePlacements } from './useLetterPlans';
 import { TransformSection, transformEdit } from './TransformSection';
-import { sceneFor } from './styleOps';
+import { sceneFor } from './proStyleOps';
 import { COMIC_TRIM_WIDTH_PT } from '../export/pdfExport';
 import { TRIM_WIDTH_IN, UNITS_KEY, unitScale } from '../editor/inspector/units';
 
@@ -47,6 +47,20 @@ afterEach(() => {
 });
 
 describe('TransformSection', () => {
+  it('each field belongs to its balloon: selecting another balloon gives fresh fields, a pending value never moves to it', () => {
+    const c = ctx();
+    const apply = vi.fn();
+    const at = (ids: string[]) => <TransformSection doc={c.doc} page={c.page} plans={c.plans} H={H} lineIds={ids} balloons={c.placements.balloons} apply={apply} />;
+    const { rerender } = render(at(['pg_1_l3']));
+    const fields = ['X', 'Y', 'W', 'H (minimum)', 'Rotation'].map((name) => screen.getByRole('spinbutton', { name }));
+    for (const f of fields) fireEvent.change(f, { target: { value: '12' } });
+    rerender(at(['pg_1_l5']));
+    const fresh = ['X', 'Y', 'W', 'H (minimum)', 'Rotation'].map((name) => screen.getByRole('spinbutton', { name }));
+    fresh.forEach((f, i) => expect(f).not.toBe(fields[i]));
+    for (const f of fresh) fireEvent.blur(f);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it('X writes balloon {x, y, pinned: true} — the outline lands at the typed X, the text box moves with it', () => {
     const { doc, page, plans, apply } = mount(['pg_1_l3']);
     const me = sceneObject(sceneFor(doc, page, plans), { kind: 'balloon', id: 'pg_1_l3' })!;

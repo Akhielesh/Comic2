@@ -9,7 +9,7 @@
 // says how much it holds and offers free fixes) and "Fix balloon placement" (free: around the art's busy areas;
 // paid, quoted in the user's terms: the existing gated page re-check, recheck_page).
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ScanFace, TriangleAlert, X } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
@@ -18,11 +18,8 @@ import { PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
 import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
-import { balloonOp, copyStyleOf, drawnSpotPatch, fixSafeAreaOps, KIND_ROW, kindOps, linesOf, moveLineToPanelOps, findLineRef, pasteStyleOps, pinKeepingSizeOps, widenOps } from './styleOps';
-import { TransformSection } from './TransformSection';
-import { kindForKey, isTypingTarget } from '../editor/inspector/keys';
-import { setStyleClip, styleClip, styleClipboardKey } from '../editor/inspector/styleClipboard';
-import { proFieldsWritable, writablePatch } from '../editor/inspector/proGate';
+import { balloonOp, drawnSpotPatch, fixSafeAreaOps, KIND_ROW, kindOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
+import { useProExtras } from './pro/proExtras';
 import { cn } from '../../../lib/utils';
 import { FOCUS_RING, SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 // drawnSpotPatch moved to styleOps (lockOps uses it too); re-exported here for its existing importers.
@@ -83,6 +80,8 @@ export interface LetteringInspectorProps extends Omit<LetteringPanelProps, 'line
   /**
    * Pro Edit (COMIC_PRO_EDITOR_V2 on; PE-INSPECT): the kind row (keys 1–6), the typed transform, typed fields beside
    * every slider, Copy / Paste style (⌘⌥C / ⌘⌥V) and the Pro lettering controls behind the Pro switch. Off = today.
+   * All but the kind row come from the lazily loaded Pro extras (lettering/pro/proExtras.ts): the Easy path never
+   * loads them.
    */
   proEdit?: boolean;
   /** Docked in the Pro workspace's inspector column (≥ 1024 px): in the page flow, never floating over the page. */
@@ -327,41 +326,12 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
     return () => ro.disconnect();
   }, [compact, lines.length > 0]);
 
-  // Pro Edit keys while the inspector is open on a selection: 1–6 set the kind, ⌘⌥C / ⌘⌥V copy and paste a style.
-  // Never while typing; the latest props are read through a ref so the listener is added once per open.
-  const live = useRef({ doc, page, lineIds, apply });
-  live.current = { doc, page, lineIds, apply };
-  const hasLines = lines.length > 0;
-  useEffect(() => {
-    if (!proEdit || !hasLines || typeof window === 'undefined') return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || isTypingTarget(e.target)) return;
-      const { doc: d, page: p, lineIds: ids, apply: run } = live.current;
-      const kind = kindForKey(e);
-      if (kind) {
-        const ops = kindOps(p, ids, kind);
-        e.preventDefault();
-        if (ops.length) run(ops, { label: `Make it ${kindWord(kind)}` });
-        return;
-      }
-      const clip = styleClipboardKey(e);
-      if (!clip) return;
-      e.preventDefault();
-      if (clip === 'copy') {
-        const c = ids.length === 1 ? copyStyleOf(d, p, ids[0], proFieldsWritable()) : undefined;
-        if (c) setStyleClip(c);
-        return;
-      }
-      const held = styleClip();
-      if (!held) return;
-      const ops = pasteStyleOps(d, p, ids, held, { linkable: proFieldsWritable(), clean: writablePatch });
-      if (ops.length) run(ops, { label: 'Paste style' });
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [proEdit, hasLines]);
+  // Pro Edit: the keys (1–6, ⌘⌥C / ⌘⌥V), the typed transform and the typed fields arrive with the Pro extras.
+  const pro = useProExtras(!!proEdit);
 
   if (!lines.length) return null;
+  // The selection the Pro parts edit: they are keyed by it, so each balloon gets fresh fields and a fresh refusal note.
+  const target = lineIds.join(',');
   const selPlans = plans.filter((p) => lineIds.includes(p.lineId));
   const outside = selPlans.filter((p) => p.outOfSafeArea && !p.locked);
   const overflow = selPlans.filter((p) => p.overflow);
@@ -420,6 +390,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
           <KindRow kinds={lines.map((l) => l.kind)} onKind={(k) => apply(kindOps(page, lineIds, k), { label: `Make it ${kindWord(k)}` })} />
         </div>
       )}
+      {pro && <pro.ProInspectorKeys doc={doc} page={page} lineIds={lineIds} apply={apply} />}
       <div className={docked ? 'min-w-0 space-y-3 py-3' : cx('min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3', !compact && 'max-h-[min(70vh,560px)]')}>
         {(outside.length > 0 || overflow.length > 0 || showCrowded || !!tooMuch) && (
           <ul className="space-y-1.5" aria-label="Lettering warnings">
@@ -536,9 +507,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
             This line is empty, so no balloon is drawn. Type it in the script (Page tools), or Delete it below.
           </p>
         )}
-        {proEdit && view === 'pro' && (
-          <TransformSection doc={doc} page={page} plans={plans} H={H} lineIds={lineIds} balloons={placements.balloons} apply={apply} editionLang={props.editionLang} />
-        )}
+        {pro && view === 'pro' && <pro.TransformSection key={target} doc={doc} page={page} plans={plans} H={H} lineIds={lineIds} balloons={placements.balloons} apply={apply} editionLang={props.editionLang} />}
         {view === 'pro' ? <ProLetteringPanel {...props} lines={lines} /> : <EasyLetteringPanel {...props} lines={lines} />}
       </div>
       {/* Docked, the workspace's panel frame draws the free footer under the whole column. */}

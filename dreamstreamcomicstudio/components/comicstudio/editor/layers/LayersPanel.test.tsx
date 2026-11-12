@@ -10,7 +10,7 @@ import { estimateMeasure, planLettering } from '../../../../shared/comic/letteri
 import { LETTERING_ON_TOP_NOTE } from '../../../../shared/comic/pro/types';
 import { resolvePlacements } from '../../lettering/useLetterPlans';
 import type { PartPanelProps } from '../inspector/types';
-import { LayersPanel, DIRECTOR_EDITING } from './LayersPanel';
+import { LayersPanel, DIRECTOR_EDITING, EMPTY_PANEL_DROP_HINT, EMPTY_PANEL_HINT } from './LayersPanel';
 import { clearViewHidden, viewHidden } from './viewHidden';
 import * as layersPart from './index';
 import * as inspectorPart from '../inspector/index';
@@ -47,22 +47,25 @@ const mount = (ids: string[] = [], extra: Partial<PartPanelProps> = {}, mutate?:
 };
 
 /** A drag the way a browser fires it (jsdom has no DataTransfer). */
-const drag = (from: HTMLElement, to: HTMLElement) => {
+const drag = (from: HTMLElement, to: HTMLElement | (() => HTMLElement)) => {
   const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: 'none', dropEffect: 'none' };
   fireEvent.dragStart(from, { dataTransfer });
-  fireEvent.dragOver(to, { dataTransfer });
-  fireEvent.drop(to, { dataTransfer });
+  const target = typeof to === 'function' ? to() : to;
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
   fireEvent.dragEnd(from, { dataTransfer });
 };
+const star = (id: string, name: string) => ({ id, kind: 'shape' as const, name, box: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 }, shape: { type: 'rect' as const, fill: '#ffffff', stroke: '#111111', strokeW: 0.003 } });
 
 afterEach(() => clearViewHidden());
 
 describe('LayersPanel', () => {
-  it('is the part the shell mounts: ready, under the stub names', () => {
+  it('is the part the shell mounts: ready, a lazy loadPanel under the stub names — never a static Panel', async () => {
     expect(layersPart.part).toEqual({ id: 'layers', ready: true });
-    expect(layersPart.Panel).toBe(LayersPanel);
+    expect(Object.keys(layersPart).sort()).toEqual(['loadPanel', 'part']);
+    expect((await layersPart.loadPanel()).Panel).toBe(LayersPanel);
     expect(inspectorPart.part).toEqual({ id: 'inspector', ready: true });
-    expect(typeof inspectorPart.Panel).toBe('function');
+    expect(Object.keys(inspectorPart).sort()).toEqual(['loadPanel', 'part']);
   });
 
   it('every object is a labelled role=group row; the lettering band says it stays on top', () => {
@@ -116,6 +119,76 @@ describe('LayersPanel', () => {
     expect(screen.getByTestId('layers-live').textContent).toBe('Moved to panel 2');
   });
 
+  it('a drag onto another panel’s row lands at that row’s place in it (line_move index)', () => {
+    const { row, apply } = mount();
+    drag(row('pg_1_l4'), row('pg_1_l2'));
+    expect(apply.mock.calls[0][0][0]).toEqual({ op: 'line_move', pageId: 'pg_1', id: 'pg_1_l4', toPanelId: 'pg_1_p2', index: 0 });
+    // Onto the second row of a three-line panel: second place.
+    drag(row('pg_1_l1'), row('pg_1_l4'));
+    expect(apply.mock.calls[1][0][0]).toEqual({ op: 'line_move', pageId: 'pg_1', id: 'pg_1_l1', toPanelId: 'pg_1_p3', index: 1 });
+  });
+
+  it('a panel with no lettering is still a group a line can be dragged into', () => {
+    const { row, apply } = mount([], {}, (d) => {
+      d.pages[0].panels[1].lines = [];
+      d.pages[0].balloons = d.pages[0].balloons.filter((b) => b.lineId !== 'pg_1_l2');
+    });
+    const group = screen.getByRole('group', { name: 'Panel 2 lettering' });
+    expect(within(group).getByText(EMPTY_PANEL_HINT)).toBeTruthy();
+    drag(row('pg_1_l4'), () => {
+      // While a line is dragged, the empty group says where it can go.
+      const empty = document.querySelector('[data-drop-empty="pg_1_p2"]') as HTMLElement;
+      expect(empty.textContent).toBe(EMPTY_PANEL_DROP_HINT);
+      return empty;
+    });
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply.mock.calls[0][0][0]).toEqual({ op: 'line_move', pageId: 'pg_1', id: 'pg_1_l4', toPanelId: 'pg_1_p2', index: 0 });
+    expect(screen.getByTestId('layers-live').textContent).toBe('Moved to panel 2');
+    expect(within(group).getByText(EMPTY_PANEL_HINT)).toBeTruthy();
+  });
+
+  it('Alt+↑ on a line the software placed stores its whole drawn balloon with the new z (it never jumps)', () => {
+    const { row, apply, doc, page } = mount();
+    expect(page.balloons.some((b) => b.lineId === 'pg_1_l4')).toBe(false);
+    fireEvent.keyDown(row('pg_1_l4'), { key: 'ArrowUp', altKey: true });
+    const drawn = resolvePlacements(doc, page, ASPECT, estimateMeasure).balloons.get('pg_1_l4')!;
+    expect(apply).toHaveBeenCalledTimes(1);
+    const [op] = apply.mock.calls[0][0];
+    expect(op).toMatchObject({ op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l4', patch: { x: drawn.x, y: drawn.y, w: drawn.w } });
+    expect(typeof op.patch.z).toBe('number');
+  });
+
+  it('overlay rows select through the shell’s selectLayers (click, Enter; Shift adds), and show the selection', () => {
+    const selectLayers = vi.fn();
+    const layers = [star('ly_star', 'Star'), star('ly_moon', 'Moon')];
+    const { row, set } = mount([], { selectLayers, studio: { selection: { pageId: 'pg_1', lineIds: [], surface: 'page_editor', layerIds: ['ly_star'] } } as never }, (d) => {
+      d.pages[0].layers = layers;
+    });
+    expect(row('ly_star').getAttribute('data-selected')).toBe('true');
+    expect(row('ly_star').getAttribute('aria-label')).toBe('Star, selected');
+    expect(row('ly_star').className).toContain('shadow-[inset_3px_0_0_0_var(--ds-ink)]');
+    expect(row('ly_moon').getAttribute('tabindex')).toBe('0');
+    fireEvent.click(row('ly_moon'));
+    expect(selectLayers).toHaveBeenLastCalledWith(['ly_moon']);
+    fireEvent.click(row('ly_moon'), { shiftKey: true });
+    expect(selectLayers).toHaveBeenLastCalledWith(['ly_star', 'ly_moon']);
+    fireEvent.keyDown(row('ly_star'), { key: 'Enter' });
+    expect(selectLayers).toHaveBeenLastCalledWith(['ly_star']);
+    expect(screen.getByTestId('layers-live').textContent).toBe('Star selected');
+    // Its lock button still only locks (no selection change).
+    fireEvent.click(within(row('ly_moon')).getByRole('button', { name: 'Lock Moon' }));
+    expect(selectLayers).toHaveBeenCalledTimes(3);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('without selectLayers (an older shell) overlay rows stay plain rows', () => {
+    const { row } = mount([], {}, (d) => {
+      d.pages[0].layers = [star('ly_star', 'Star')];
+    });
+    expect(row('ly_star').getAttribute('tabindex')).toBeNull();
+    fireEvent.click(row('ly_star'));
+  });
+
   it('Alt+↑/↓ restack and Alt+←/→ move panels without a drag (WCAG 2.5.7)', () => {
     const { row, apply } = mount();
     fireEvent.keyDown(row('pg_1_l3'), { key: 'ArrowUp', altKey: true });
@@ -159,6 +232,14 @@ describe('LayersPanel', () => {
     expect(badges).toHaveLength(1);
     expect(badges[0].textContent).toBe(DIRECTOR_EDITING);
     expect(badges[0].closest('[data-row-id]')?.getAttribute('data-row-id')).toBe('pg_1_l4');
+    // On touch the row's 44 px controls take the room: the badge is the director's icon, its words for screen readers.
+    expect(within(badges[0]).getByText(DIRECTOR_EDITING).className).toContain('coarse:sr-only');
+    expect(badges[0].querySelector('svg')).toBeTruthy();
+  });
+
+  it('the badge is for this page only: the director editing the same line id on another page shows nothing here', () => {
+    mount([], { presence: { pageId: 'pg_2', lineIds: ['pg_1_l4'], label: 'Moving a balloon', at: 1 } });
+    expect(screen.queryByTestId('director-editing')).toBeNull();
   });
 
   it('in a translated edition, stacking, locks and panels wait for the original (no drag, no op)', () => {

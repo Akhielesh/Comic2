@@ -28,8 +28,12 @@ const ctx = (mutate?: Parameters<typeof makeSampleDoc>[0]) => {
 describe('layersModel', () => {
   it('lettering rows are in reading order, grouped by panel in panel order — never by z', () => {
     const { doc, page, plans } = ctx((d) => {
-      // Stacking that disagrees with reading order: l5 at the back, l3 at the front.
-      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l5' ? { ...b, z: -5 } : b.lineId === 'pg_1_l3' ? { ...b, z: 9 } : b));
+      // Stacking that disagrees with reading order AND with both z orders in panel 3: front to back is l4, l3, l5 and
+      // back to front is l5, l3, l4 — neither is the reading order l3, l4, l5. (l4 gets a stored balloon for its z.)
+      d.pages[0].balloons = [
+        ...d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l5' ? { ...b, z: -5 } : b.lineId === 'pg_1_l3' ? { ...b, z: 0 } : b)),
+        { lineId: 'pg_1_l4', x: 0.3, y: 0.62, w: 0.22, z: 9 }
+      ];
     });
     const bands = layersModel(doc, page, { plans });
     const lettering = bands[0];
@@ -41,8 +45,28 @@ describe('layersModel', () => {
       ['Panel 3', ['pg_1_l3', 'pg_1_l4', 'pg_1_l5']]
     ]);
     expect(balloonRows(bands).map((r) => r.id)).toEqual(['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l4', 'pg_1_l5']);
-    const l3 = balloonRows(bands)[2];
-    expect(l3).toMatchObject({ kind: 'balloon', lineKind: 'shout', speaker: 'Vendor', text: 'Thief!', panelId: 'pg_1_p3', z: 9, drawn: true, locked: false });
+    const rows = balloonRows(bands);
+    expect(rows.slice(2).map((r) => r.z)).toEqual([0, 9, -5]);
+    expect(rows[2]).toMatchObject({ kind: 'balloon', lineKind: 'shout', speaker: 'Vendor', text: 'Thief!', panelId: 'pg_1_p3', z: 0, drawn: true, locked: false });
+  });
+
+  it('every panel has a lettering group once the page has lines — an empty one too, to drop a line into', () => {
+    const { doc, page, plans } = ctx((d) => {
+      d.pages[0].panels[1].lines = [];
+      d.pages[0].balloons = d.pages[0].balloons.filter((b) => b.lineId !== 'pg_1_l2');
+    });
+    const lettering = layersModel(doc, page, { plans })[0];
+    expect(lettering.groups.map((g) => [g.panelId, g.rows.length])).toEqual([
+      ['pg_1_p1', 1],
+      ['pg_1_p2', 0],
+      ['pg_1_p3', 3]
+    ]);
+    // A page with no lines at all has no lettering band.
+    const silent = ctx((d) => {
+      for (const p of d.pages[0].panels) p.lines = [];
+      d.pages[0].balloons = [];
+    });
+    expect(layersModel(silent.doc, silent.page, { plans: silent.plans }).map((b) => b.title)).not.toContain('Lettering');
   });
 
   it('bands run front first: lettering, page overlays (frontmost first), panels with their clipped overlays, the page', () => {

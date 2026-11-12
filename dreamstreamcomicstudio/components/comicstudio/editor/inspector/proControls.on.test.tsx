@@ -3,13 +3,14 @@
 // the 5 drawn Pro SFX effects, Pro fonts, the Pro looks and saved styles — and Paste style keeps Pro fields.
 
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { makeSampleDoc } from '../../board/__fixtures__/sampleDoc';
 import { estimateMeasure, planLettering } from '../../../../shared/comic/lettering/layout';
 import { resolveLetterStyle } from '../../../../shared/comic/lettering/style';
 import { WARP_SCRIPT_NOTE } from '../../../../shared/comic/pro/types';
 import { resolvePlacements } from '../../lettering/useLetterPlans';
+import { loadProExtras } from '../../lettering/pro/proExtras';
 import { LetteringInspector } from '../../lettering/LetteringInspector';
 import { findLineRef } from '../../lettering/styleOps';
 import { PRO_SHAPE_LABEL } from '../../lettering/ShapePicker';
@@ -31,6 +32,11 @@ vi.mock('../../../../shared/comic/lettering/style', async (orig) => {
 
 const ASPECT = 2 / 3;
 const H = 1000 / ASPECT;
+
+// The Pro parts are the lazily loaded Pro extras: load them once, so every render below is synchronous.
+beforeAll(async () => {
+  await loadProExtras();
+});
 
 const inspector = (lineIds: string[], mutate?: Parameters<typeof makeSampleDoc>[0]) => {
   const doc = makeSampleDoc(mutate);
@@ -165,6 +171,18 @@ describe('Pro controls with the switch on', () => {
       { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', id: 'pg_1_l3', patch: { styleId: id } },
       { op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l3'], patch: null }
     ]);
+  });
+
+  it('Duplicate copies the line whole, its saved-style link and Pro keys included', () => {
+    const { apply } = inspector(['pg_1_l4'], (d) => {
+      const line = d.pages[0].panels[2].lines[1];
+      line.styleId = 'st_v';
+      line.style = { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } };
+    });
+    tab('Arrange');
+    fireEvent.click(screen.getByRole('button', { name: /Duplicate/ }));
+    const [ops] = apply.mock.calls[apply.mock.calls.length - 1];
+    expect(ops[0]).toMatchObject({ op: 'line', patch: { styleId: 'st_v', style: { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } } } });
   });
 
   it('the empty inspector offers the Pro looks (8 → 24) and the saved styles', () => {

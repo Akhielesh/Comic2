@@ -3,7 +3,7 @@
 // cleared with the tab. The inspector, the Arrange tab and the keyboard all read it here.
 
 import { useSyncExternalStore } from 'react';
-import type { StyleClip } from '../../lettering/styleOps';
+import type { StyleClip } from '../../lettering/proStyleOps';
 
 let clip: StyleClip | null = null;
 const listeners = new Set<() => void>();

@@ -26,7 +26,7 @@ import {
   saveNamedStyleOps,
   uniqueStyleName,
   useNamedStyleOps
-} from './styleOps';
+} from './proStyleOps';
 
 export interface NamedStylesProps {
   doc: ComicDoc;

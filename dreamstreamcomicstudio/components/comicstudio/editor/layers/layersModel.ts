@@ -1,7 +1,8 @@
 // The Layers panel's rows (agent-editor plan §3 C1; master plan §2.4, §2.9): every object on the page in the scene's
 // bands (shared/comic/editor/scene.ts), front band first, so the list reads the way the page stacks:
 //   Lettering  balloons, captions and sound effects — always on top (LETTERING_ON_TOP_NOTE) — grouped by panel, each
-//              group and its rows in READING order (reading order belongs to panels and lines, never to z)
+//              group and its rows in READING order (reading order belongs to panels and lines, never to z). Once the
+//              page has any line, every panel has a group — an empty one too, so a line can be dragged into it
 //   Overlays   page stickers, images, shapes and effects, frontmost first
 //   Panels     the frames in reading order, each with the overlays kept inside it
 //   Page       the paper
@@ -78,10 +79,12 @@ export function layersModel(doc: ComicDoc, page: Page, opts: LayersOptions = {})
   const byKey = new Map(scene.objects.map((o) => [`${o.kind}:${o.id}`, o]));
   const bands: LayerBand[] = [];
 
-  // Lettering: every line, panel by panel, in reading order.
+  // Lettering: every line, panel by panel, in reading order. A panel without lines still gets its (empty) group while
+  // the page has lettering at all: the group is where a dragged line lands (line_move).
   const lettering: LayerGroup[] = [];
+  const anyLines = page.panels.some((p) => p.lines.length > 0);
   for (const panel of page.panels) {
-    if (!panel.lines.length) continue;
+    if (!anyLines) break;
     const rows: LayerRow[] = panel.lines.map((line) => {
       const o = byKey.get(`balloon:${line.id}`);
       const b = page.balloons.find((x) => x.lineId === line.id);

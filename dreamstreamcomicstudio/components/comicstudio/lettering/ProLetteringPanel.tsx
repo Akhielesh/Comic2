@@ -5,46 +5,24 @@
 // to…" any scope. Edits apply to the selection; sliders coalesce into one undo entry. All free.
 
 import React, { useState } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpToLine, ClipboardCopy, ClipboardPaste, CopyPlus, Link2, Link2Off, Lock, LockOpen, PencilLine, Plus, Trash2, X } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, ArrowDownToLine, ArrowUpToLine, Link2, Link2Off, Lock, LockOpen, PencilLine, Trash2 } from 'lucide-react';
 import { SCRIPTS } from '../../../shared/comic/languages';
 import { languageSpec } from '../../../shared/comic/languages';
 import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
-import {
-  SFX_EFFECTS,
-  WARP_STYLES,
-  type BorderStyle,
-  type BubbleShape,
-  type FillGradient,
-  type Glow,
-  type LetterStyle,
-  type LetterStylePatch,
-  type ProSfxEffect,
-  type SfxEffect,
-  type StrokeLayer,
-  type TextCase,
-  type WarpStyle
-} from '../../../shared/comic/lettering/style';
-import { PRO_LETTER_LIMITS } from '../../../shared/comic/limits';
-import { WARP_SCRIPT_NOTE } from '../../../shared/comic/pro/types';
+import { SFX_EFFECTS, type BorderStyle, type BubbleShape, type LetterStyle, type LetterStylePatch, type ProSfxEffect, type SfxEffect, type TextCase } from '../../../shared/comic/lettering/style';
 import type { Line } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { PatchOptions } from '../types';
 import { ColorField } from './ColorField';
 import { FontPicker } from './FontPicker';
 import { ProShapePicker, ShapePicker, TailPicker } from './ShapePicker';
-import { NumberField, type NumberCommit } from './NumberField';
-import { NamedStyles } from './NamedStyles';
-import { PRO_SFX_DRAWN, proFieldsWritable, warpAllowed, writablePatch } from '../editor/inspector/proGate';
-import { setStyleClip, useStyleClip } from '../editor/inspector/styleClipboard';
+import type { NumberCommit, NumberFieldProps } from './NumberField';
+import { useProExtras } from './pro/proExtras';
+import { proFieldsWritable } from '../editor/inspector/proSwitch';
 import {
   aimAtSpeakerOps,
   alignOps,
-  alignToEdit,
   balloonOp,
-  copyStyleOf,
-  distributeToEdit,
-  duplicateLineOps,
-  pasteStyleOps,
   canLinkToPrevious,
   isLinked,
   clearStyleOps,
@@ -60,10 +38,8 @@ import {
   styleScopeOps,
   zOrderOps,
   type AlignEdge,
-  type AlignTo,
   type StyleScope
 } from './styleOps';
-import type { EditResult } from '../../../shared/comic/editor/scene';
 import { measureForGeneration } from './measure';
 import { fontLoadGeneration } from './fontLoader';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
@@ -80,11 +56,15 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'apply', label: 'Apply' }
 ];
 const LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
+/** The panel's label ink and size (the Pro extras' rows read the same). */
+export const PANEL_LABEL = LABEL;
 // The button's shape without an ink (`cx` does not merge: a tone stacked on the neutral ink loses to
 // it). BTN is the neutral button; Delete is BTN_SHAPE + TONE_TEXT.danger (statusInkGuard.test.ts).
 const BTN_SHAPE =
   'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
 const BTN = `${BTN_SHAPE} text-[var(--ds-ink)]`;
+/** The panel's neutral button (the Pro extras' buttons read the same). */
+export const PANEL_BTN = BTN;
 const CASES: { value: TextCase; label: string }[] = [
   { value: 'upper', label: 'UPPER' },
   { value: 'as_typed', label: 'As typed' },
@@ -108,12 +88,6 @@ export const PRO_SFX_LABEL: Record<ProSfxEffect, string> = {
   gradient: 'Gradient',
   halftone_fill: 'Halftone'
 };
-const WARP_LABEL: Record<WarpStyle, string> = { none: 'None', arc: 'Arc', bulge: 'Bulge', wave: 'Wave', rise: 'Rise', flag: 'Flag' };
-const ALIGN_TO: { value: AlignTo; label: string; title: string }[] = [
-  { value: 'selection', label: 'Selection', title: 'Line them up with each other' },
-  { value: 'panel', label: 'Panel', title: 'Line them up with their panel' },
-  { value: 'page', label: 'Page', title: 'Line them up with the page (its safe area)' }
-];
 
 /** A typed field beside a slider (Pro Edit): display range, step and unit; stored × scale = shown. */
 interface NumericSpec {
@@ -123,6 +97,8 @@ interface NumericSpec {
   step: number;
   unit?: string;
 }
+/** A NumericSpec with the typed field to draw it (the lazily loaded Pro extras' NumberField). */
+type NumericField = NumericSpec & { Field: React.ComponentType<NumberFieldProps> };
 
 /** A labelled slider with a live value; `mixed` when the selection disagrees. */
 const Slider: React.FC<{
@@ -136,7 +112,7 @@ const Slider: React.FC<{
   note?: string;
   onChange(v: number): void;
   /** Pro Edit: a typed field instead of the read-out (arrows step, Shift ×10, Enter commits one undo entry). */
-  numeric?: NumericSpec;
+  numeric?: NumericField;
   /** A typed value (`via: 'type'`, its own undo entry) or an arrow step (`via: 'step'`, coalesced). */
   onTyped?(v: number, how: NumberCommit): void;
 }> = ({ label, value, min, max, step, format = (v) => String(Math.round(v * 100) / 100), disabled, note, onChange, numeric, onTyped }) => {
@@ -148,7 +124,7 @@ const Slider: React.FC<{
           {label}
         </label>
         {numeric ? (
-          <NumberField
+          <numeric.Field
             label={label}
             hideLabel
             steppers={false}
@@ -184,7 +160,7 @@ const Slider: React.FC<{
   );
 };
 
-const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?: string; onChange(on: boolean): void }> = ({ label, on, disabled, title, onChange }) => (
+export const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?: string; onChange(on: boolean): void }> = ({ label, on, disabled, title, onChange }) => (
   <button type="button" role="switch" aria-checked={on} disabled={disabled} title={title} onClick={() => onChange(!on)} className={cx(BTN, on && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}>
     <span aria-hidden className={cx('h-3 w-5 rounded-full p-px transition-colors', on ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-well-strong)]')}>
       <span className={cx('block h-2.5 w-2.5 rounded-full bg-white transition-transform motion-reduce:transition-none', on && 'translate-x-2')} />
@@ -203,103 +179,6 @@ const ownValue = <K extends keyof LetterStyle>(lines: readonly Line[], key: K): 
 };
 
 /**
- * Pro text effects (master plan §2.3 "Text styling"; drawn by PE-LETTER): a two-stop gradient fill, up to three stacked
- * outlines, a glow and a warp. Every control writes a Pro field, so the section exists only while they are writable.
- * Warp is offered only for scripts it shapes correctly; others read WARP_SCRIPT_NOTE.
- */
-const ProTextEffects: React.FC<{
-  gradient: FillGradient | null | undefined;
-  strokes: StrokeLayer[] | undefined;
-  glow: Glow | null | undefined;
-  warp: WarpStyle | undefined;
-  warpAmount: number | undefined;
-  warpOk: boolean;
-  textColor: string | undefined;
-  palette: string[];
-  style(patch: LetterStylePatch, label: string, scrubKey?: string): void;
-}> = ({ gradient, strokes = [], glow, warp = 'none', warpAmount = 0, warpOk, textColor, palette, style }) => {
-  const step = (key: string) => (how: NumberCommit) => (how.via === 'step' ? key : undefined);
-  const solid = textColor && /^#/.test(textColor) ? textColor.slice(0, 7) : '#111111';
-  const setStrokes = (next: StrokeLayer[], label: string, key?: string) => style({ strokes: next.slice(0, PRO_LETTER_LIMITS.strokes) }, label, key);
-  return (
-    <div className="space-y-2.5 rounded-xl border border-[var(--ds-hairline)] p-2" data-testid="pro-text-effects">
-      <p className={LABEL}>Text effects</p>
-      <div className="space-y-1.5">
-        <Toggle
-          label="Gradient fill"
-          on={!!gradient}
-          onChange={(on) => style({ fillGradient: on ? { from: solid, to: '#e63946', angle: 90 } : null }, on ? 'Gradient fill' : 'No gradient fill')}
-        />
-        {gradient && (
-          <>
-            <ColorField label="Gradient from" value={gradient.from} swatches={[...TEXT_SWATCHES, ...palette]} onChange={(c) => style({ fillGradient: { ...gradient, from: c } }, 'Gradient colour')} />
-            <ColorField label="Gradient to" value={gradient.to} swatches={[...TEXT_SWATCHES, ...palette]} onChange={(c) => style({ fillGradient: { ...gradient, to: c } }, 'Gradient colour')} />
-            <NumberField label="Gradient angle" value={gradient.angle} min={0} max={360} step={5} unit="°" onCommit={(a, how) => style({ fillGradient: { ...gradient, angle: a } }, 'Gradient angle', step('ga')(how))} />
-          </>
-        )}
-      </div>
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <p className={LABEL}>Outlines</p>
-          <button
-            type="button"
-            className={BTN}
-            disabled={strokes.length >= PRO_LETTER_LIMITS.strokes}
-            title={strokes.length >= PRO_LETTER_LIMITS.strokes ? `Up to ${PRO_LETTER_LIMITS.strokes} outlines` : 'Add an outline around the letters'}
-            onClick={() => setStrokes([...strokes, { color: strokes.length % 2 ? '#111111' : '#ffffff', w: 0.08 + strokes.length * 0.06 }], 'Add outline')}
-          >
-            <Plus className="h-3.5 w-3.5" aria-hidden /> Add outline
-          </button>
-        </div>
-        {strokes.map((st, i) => (
-          <div key={i} className="flex min-w-0 items-end gap-1.5" data-testid={`stroke-${i}`}>
-            <ColorField className="min-w-0 flex-1" label={`Outline ${i + 1}`} value={st.color} swatches={['#ffffff', '#111111', ...palette]} onChange={(c) => setStrokes(strokes.map((x, j) => (j === i ? { ...x, color: c } : x)), 'Outline colour')} />
-            <NumberField
-              className="w-[5.5rem] shrink-0"
-              label={`Outline ${i + 1} width`}
-              value={st.w}
-              scale={100}
-              min={0}
-              max={PRO_LETTER_LIMITS.strokeWMax * 100}
-              step={1}
-              unit="%"
-              onCommit={(w, how) => setStrokes(strokes.map((x, j) => (j === i ? { ...x, w } : x)), 'Outline width', step(`sw${i}`)(how))}
-            />
-            <button type="button" aria-label={`Remove outline ${i + 1}`} className={cx(BTN, 'px-1.5')} onClick={() => setStrokes(strokes.filter((_, j) => j !== i), 'Remove outline')}>
-              <X className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          </div>
-        ))}
-      </div>
-      <div className="space-y-1.5">
-        <Toggle label="Glow" on={!!glow} onChange={(on) => style({ glow: on ? { color: '#ffd84a', size: 0.15 } : null }, on ? 'Glow' : 'No glow')} />
-        {glow && (
-          <>
-            <ColorField label="Glow colour" value={glow.color} swatches={['#ffd84a', '#ffffff', ...palette]} onChange={(c) => style({ glow: { ...glow, color: c } }, 'Glow colour')} />
-            <NumberField label="Glow size" value={glow.size} scale={100} min={0} max={PRO_LETTER_LIMITS.glowSizeMax * 100} step={1} unit="%" onCommit={(z, how) => style({ glow: { ...glow, size: z } }, 'Glow size', step('gs')(how))} />
-          </>
-        )}
-      </div>
-      <div className="space-y-1">
-        <p className={LABEL}>Warp</p>
-        {warpOk ? (
-          <>
-            <Segmented<WarpStyle> label="Warp" size="xs" className="w-full" value={warp} onChange={(w) => style({ warp: w, ...(w !== 'none' && !warpAmount ? { warpAmount: 0.5 } : {}) }, 'Warp')} options={WARP_STYLES.map((w) => ({ value: w, label: WARP_LABEL[w] }))} />
-            {warp !== 'none' && (
-              <NumberField label="Warp amount" value={warpAmount} scale={100} min={-PRO_LETTER_LIMITS.warpAmountMax * 100} max={PRO_LETTER_LIMITS.warpAmountMax * 100} step={5} unit="%" onCommit={(a, how) => style({ warpAmount: a }, 'Warp amount', step('wa')(how))} />
-            )}
-          </>
-        ) : (
-          <p className="text-[11px] leading-snug text-[var(--ds-muted)]" data-testid="warp-script-note">
-            {WARP_SCRIPT_NOTE}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-};
-
-/**
  * Editing a translated edition (LE-3 / LE-4): stacking, lock and the connector are SHARED by every
  * language and belong to the original, so the Arrange tab offers them disabled with the reason instead
  * of letting a tap half-apply (the edition would freeze the balloon) or do nothing silently. The page
@@ -314,6 +193,8 @@ export interface ProLetteringEditionProps {
    * Pro Edit (COMIC_PRO_EDITOR_V2 on; PE-INSPECT): typed fields beside every slider, Forward / Backward / Duplicate,
    * align to the selection, panel or page and distribute across, Copy / Paste style — and, only while Pro fields are
    * writable (PRO_EDIT_OPS_PATCHABLE), the Pro text effects, shapes, SFX effects, fonts and saved styles. Off = today.
+   * Everything Pro beyond the switch's own checks is in the lazily loaded Pro extras (lettering/pro/proExtras.ts), so
+   * the Easy path never loads it; the Balloon width slider gives way to the typed transform's W.
    */
   proEdit?: boolean;
 }
@@ -321,9 +202,7 @@ export interface ProLetteringEditionProps {
 export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditionProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang, sourceName, proEdit }) => {
   const [tab, setTab] = useState<Tab>('text');
   const [scope, setScope] = useState<StyleScope>('kind_comic');
-  const [alignTo, setAlignTo] = useState<AlignTo>('selection');
-  const [arrangeNote, setArrangeNote] = useState<string | null>(null);
-  const clip = useStyleClip();
+  const pro = useProExtras(!!proEdit);
   const ids = lines.map((l) => l.id);
   const one = lines.length === 1 ? lines[0] : undefined;
   const lang = one?.lang || doc.format?.language || 'en';
@@ -358,27 +237,11 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
   const overrides = one?.style && Object.keys(one.style).length ? one.style : undefined;
   // ── Pro Edit ──
   const writable = !!proEdit && proFieldsWritable();
-  const num = (spec: NumericSpec): NumericSpec | undefined => (proEdit ? spec : undefined);
+  /** The typed field beside a slider: Pro Edit only, once the Pro extras are there (the read-out shows until then). */
+  const num = (spec: NumericSpec): NumericField | undefined => (proEdit && pro ? { ...spec, Field: pro.NumberField } : undefined);
   /** A typed slider value: its own undo entry when typed, coalesced with the slider's key when stepped. */
   const typed = (key: string, label: string, patchOf: (x: number) => LetterStylePatch) => (x: number, how: NumberCommit) => style(patchOf(x), label, how.via === 'step' ? key : undefined);
   const pv = <K extends keyof LetterStyle>(key: K): LetterStyle[K] | undefined => (v(key) ?? ownValue(lines, key)) as LetterStyle[K] | undefined;
-  const engine = (r: EditResult, opts?: PatchOptions) => {
-    if (r.ok === false) {
-      setArrangeNote(r.reason);
-      return;
-    }
-    setArrangeNote(null);
-    apply(sharedLocked ? r.ops : pinKeepingSizeOps(r.ops, page, plans, ids, editionLang), { label: r.label, ...opts });
-  };
-  const copyStyle = () => {
-    if (!one) return;
-    const c = copyStyleOf(doc, page, one.id, writable);
-    if (c) setStyleClip(c);
-  };
-  const pasteStyle = () => {
-    if (!clip) return;
-    run(pasteStyleOps(doc, page, ids, clip, { linkable: writable, clean: writablePatch }), 'Paste style');
-  };
 
   return (
     <div className="space-y-3" data-testid="pro-lettering">
@@ -524,22 +387,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                     </button>
                   ))}
                 </div>
-                {writable && (
-                  <div role="radiogroup" aria-label="Pro sound effect style" data-testid="pro-sfx" className="grid grid-cols-3 gap-1">
-                    {PRO_SFX_DRAWN.map((e) => (
-                      <button
-                        key={e}
-                        type="button"
-                        role="radio"
-                        aria-checked={pv('sfxEffect') === (e as unknown as SfxEffect)}
-                        onClick={() => style({ sfxEffect: e as unknown as SfxEffect }, 'Sound effect style')}
-                        className={cx(BTN, 'px-1', pv('sfxEffect') === (e as unknown as SfxEffect) && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
-                      >
-                        {PRO_SFX_LABEL[e]}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {writable && pro && <pro.ProSfxPicker value={pv('sfxEffect') as string | undefined} onPick={(e) => style({ sfxEffect: e as unknown as SfxEffect }, 'Sound effect style')} />}
                 {v('sfxEffect') === 'arched' && <Slider label="Arc" value={v('arc')} min={-1} max={1} step={0.05} onChange={(x) => style({ arc: x }, 'Arc', 'arc')} />}
                 <div className="flex items-end gap-2">
                   <div className="min-w-0 flex-1">
@@ -559,14 +407,14 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 </div>
               </div>
             )}
-            {writable && (
-              <ProTextEffects
+            {writable && pro && (
+              <pro.ProTextEffects
                 gradient={pv('fillGradient')}
                 strokes={pv('strokes')}
                 glow={pv('glow')}
                 warp={pv('warp')}
                 warpAmount={pv('warpAmount')}
-                warpOk={warpAllowed(languageSpec(lang)?.script)}
+                warpOk={pro.warpAllowed(languageSpec(lang)?.script)}
                 textColor={v('textColor')}
                 palette={palette}
                 style={style}
@@ -648,21 +496,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'back', plans, placements.balloons), 'Send to back')}>
                 <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden /> Back
               </button>
-              {proEdit && (
-                <>
-                  <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'forward', plans, placements.balloons), 'Bring forward')}>
-                    <ArrowUp className="h-3.5 w-3.5" aria-hidden /> Forward
-                  </button>
-                  <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal} onClick={() => run(zOrderOps(page, ids, 'backward', plans, placements.balloons), 'Send backward')}>
-                    <ArrowDown className="h-3.5 w-3.5" aria-hidden /> Backward
-                  </button>
-                  {one && (
-                    <button type="button" className={BTN} disabled={sharedLocked} title={inOriginal ?? 'A copy of this balloon, just beside it'} onClick={() => run(duplicateLineOps(page, one.id, placements.balloons), 'Duplicate balloon')}>
-                      <CopyPlus className="h-3.5 w-3.5" aria-hidden /> Duplicate
-                    </button>
-                  )}
-                </>
-              )}
+              {pro && <pro.ProStackButtons page={page} ids={ids} one={one} plans={plans} balloons={placements.balloons} inOriginal={inOriginal} run={(ops, label) => run(ops, label)} />}
               <button
                 type="button"
                 className={BTN}
@@ -692,7 +526,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 {inOriginal}
               </p>
             )}
-            {one && (
+            {/* Pro Edit: the typed transform above owns W (the outline's width), so a second, different width never shows. */}
+            {one && !proEdit && (
               <Slider
                 label="Balloon width"
                 value={(selPlans[0]?.w ?? 0) / 1000}
@@ -702,46 +537,9 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
                 format={(x) => `${Math.round(x * 100)}%`}
                 disabled={locked}
                 onChange={(x) => run(pinKeepingSizeOps([balloonOp(page, one.id, { w: Math.round(x * 1000) / 1000, pinned: true }, placements.balloons)], page, plans, [one.id], editionLang), 'Balloon width', { coalesce: `w:${page.id}:${one.id}` })}
-                numeric={num({ scale: 100, min: 6, max: 95, step: 1, unit: '%' })}
-                onTyped={(x, how) =>
-                  run(pinKeepingSizeOps([balloonOp(page, one.id, { w: Math.round(x * 1000) / 1000, pinned: true }, placements.balloons)], page, plans, [one.id], editionLang), 'Balloon width', how.via === 'step' ? { coalesce: `w:${page.id}:${one.id}` } : undefined)
-                }
               />
             )}
-            {proEdit && (
-              <div className="space-y-1" data-testid="pro-align">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <p className={LABEL}>Align to</p>
-                  <Segmented<AlignTo> label="Align to" size="xs" value={alignTo} onChange={setAlignTo} options={ALIGN_TO.map((o) => ({ ...o, disabled: o.value === 'selection' && lines.length < 2 }))} />
-                </div>
-                <div className="grid grid-cols-3 gap-1">
-                  {(['left', 'center', 'right', 'top', 'middle', 'bottom'] as AlignEdge[]).map((edge) => (
-                    <button
-                      key={edge}
-                      type="button"
-                      className={BTN}
-                      disabled={locked || (alignTo === 'selection' && lines.length < 2)}
-                      onClick={() => engine(alignToEdit(doc, page, plans, ids, edge, alignTo === 'selection' && lines.length < 2 ? 'panel' : alignTo, aspect))}
-                    >
-                      {edge === 'center' ? 'Centre' : edge[0].toUpperCase() + edge.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="grid grid-cols-2 gap-1">
-                  <button type="button" className={BTN} disabled={lines.length < 3} title="Equal gaps from left to right" onClick={() => engine(distributeToEdit(doc, page, plans, ids, 'h'))}>
-                    Space across
-                  </button>
-                  <button type="button" className={BTN} disabled={lines.length < 3} title="Equal gaps from top to bottom" onClick={() => engine(distributeToEdit(doc, page, plans, ids, 'v'))}>
-                    Space down
-                  </button>
-                </div>
-                {arrangeNote && (
-                  <p role="status" data-testid="arrange-note" className="text-[11px] leading-snug text-[var(--ds-muted)]">
-                    {arrangeNote}
-                  </p>
-                )}
-              </div>
-            )}
+            {pro && <pro.ProAlign doc={doc} page={page} plans={plans} ids={ids} H={H} locked={locked} editionLang={editionLang} apply={apply} />}
             {!proEdit && lines.length >= 2 && (
               <div className="space-y-1">
                 <p className={LABEL}>Align</p>
@@ -813,17 +611,8 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               Clear this balloon’s own styles
             </button>
             {!overrides && <p className="text-[11px] text-[var(--ds-muted)]">This balloon uses the comic’s style. Change something in Text, Bubble or Tail first.</p>}
-            {proEdit && (
-              <div className="grid grid-cols-2 gap-1.5" data-testid="style-clipboard">
-                <button type="button" className={BTN} disabled={!one} title={one ? 'Copy this balloon’s look (⌘⌥C)' : 'Select one balloon to copy its look'} onClick={copyStyle}>
-                  <ClipboardCopy className="h-3.5 w-3.5" aria-hidden /> Copy style
-                </button>
-                <button type="button" className={BTN} disabled={!clip || sharedLocked} title={clip ? 'Give the selection the copied look (⌘⌥V)' : 'Copy a balloon’s style first'} onClick={pasteStyle}>
-                  <ClipboardPaste className="h-3.5 w-3.5" aria-hidden /> Paste style
-                </button>
-              </div>
-            )}
-            {writable && <NamedStyles doc={doc} page={page} lines={lines} apply={apply} editionLang={editionLang} />}
+            {pro && <pro.ProStyleClipboard doc={doc} page={page} ids={ids} one={one} sharedLocked={sharedLocked} apply={apply} />}
+            {writable && pro && <pro.NamedStyles doc={doc} page={page} lines={lines} apply={apply} editionLang={editionLang} />}
           </>
         )}
       </div>

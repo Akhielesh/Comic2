@@ -9,7 +9,7 @@ import type { FontId, LatinFontId } from '../../../shared/comic/lettering/style'
 import { languageSpec } from '../../../shared/comic/languages';
 import { ensureFonts } from './fontLoader';
 import * as proFontsModule from '../../../shared/comic/lettering/proFonts';
-import { proFieldsWritable, proFontIds } from '../editor/inspector/proGate';
+import { proFieldsWritable, proFontIds } from '../editor/inspector/proSwitch';
 import { cx } from '../board/ui';
 import { RADIUS_PILL } from '../../chat/studioDesign';
 
@@ -36,9 +36,12 @@ export const EASY_FONTS: LatinFontId[] = ['comic-neue', 'andika', 'patrick-hand'
 
 const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? String(id).split('-').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
 
-/** A Pro face's role line (PE-FONTS's PRO_FONT_ROLES, read by name so the picker builds before it lands). */
+/**
+ * A Pro face's role line (PE-FONTS's PRO_FONT_ROLES, read by name so the picker builds before it lands). A static member
+ * read, never the namespace as a value, so proFonts.ts still tree-shakes (editor/inspector/easyPath.test.ts).
+ */
 const proRoleOf = (id: string): string | undefined => {
-  const roles = (proFontsModule as unknown as Record<string, unknown>)['PRO_FONT_ROLES'] as Record<string, string> | undefined;
+  const roles = (proFontsModule as unknown as { PRO_FONT_ROLES?: Record<string, string> }).PRO_FONT_ROLES;
   return roles && Object.prototype.hasOwnProperty.call(roles, id) ? roles[id] : undefined;
 };
 

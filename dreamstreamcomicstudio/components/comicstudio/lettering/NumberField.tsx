@@ -5,6 +5,11 @@
 //
 // The field shows DISPLAY units (a percentage, 1/1000 em, degrees…) and commits STORED units: `scale` converts
 // (stored × scale = shown). A selection that disagrees shows "Mixed" and the arrows wait for a typed value.
+//
+// A typed value belongs to what the field showed when the typing started: the field keeps the `onCommit` of that
+// moment and commits the draft through it. The page editor selects a balloon on pointerdown, before the field blurs, so
+// "type 150, then click the next balloon" re-renders the field for the next balloon first; the draft still goes to the
+// balloon it was typed for, never to the newly selected one.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
@@ -102,37 +107,53 @@ export const NumberField: React.FC<NumberFieldProps> = ({
   const places = decimals ?? decimalsOf(step);
   const shown = value === undefined || !Number.isFinite(value) ? undefined : roundTo(value * scale, places);
   const [draft, setDraft] = useState<string | null>(null);
-  // The last value committed or shown (display units): a commit only goes out when the value really changes, so Enter
-  // and then leaving the field never makes two undo entries.
+  // The value shown for the field's current target (display units).
   const last = useRef<number | undefined>(shown);
+  // Who the pending draft belongs to (see the header): the `onCommit` of the moment it started, and the value it started
+  // from. A commit only goes out when the value really differs from that start, so Enter and then leaving the field
+  // never makes two undo entries, and an unchanged value ("50.0" for 50) makes none.
+  const pending = useRef<{ send: NumberFieldProps['onCommit']; base: number | undefined } | null>(null);
+  const own = () => (pending.current ??= { send: onCommit, base: last.current });
+  const clearDraft = () => {
+    pending.current = null;
+    setDraft(null);
+  };
   useEffect(() => {
     last.current = shown;
+    pending.current = null;
     setDraft(null);
   }, [shown]);
 
   const commit = (display: number, how: NumberCommit) => {
+    const p = own();
     const next = roundTo(clampTo(display, min, max), places);
-    if (last.current !== undefined && Math.abs(next - last.current) < 10 ** -(places + 1)) {
-      setDraft(null);
+    if (p.base !== undefined && Math.abs(next - p.base) < 10 ** -(places + 1)) {
+      clearDraft();
       return;
     }
-    last.current = next;
-    setDraft(how.via === 'step' ? String(next) : null);
-    onCommit(roundTo(next / scale, places + Math.max(0, Math.round(Math.log10(scale))) + 2), how);
+    if (how.via === 'step') {
+      // Arrow steps run on from the stepped value until the new value comes back as `shown`.
+      p.base = next;
+      setDraft(String(next));
+    } else clearDraft();
+    p.send(roundTo(next / scale, places + Math.max(0, Math.round(Math.log10(scale))) + 2), how);
   };
   const commitDraft = () => {
     if (draft === null) return;
     const n = parseNumberText(draft);
     if (n === undefined) {
-      setDraft(null);
+      clearDraft();
       return;
     }
     commit(n, { via: 'type' });
-    setDraft(null);
+  };
+  const typeDraft = (text: string) => {
+    own();
+    setDraft(text);
   };
   const stepBy = (dir: 1 | -1, big: boolean) => {
     if (disabled) return;
-    const base = draft !== null ? parseNumberText(draft) ?? last.current : last.current;
+    const base = draft !== null ? parseNumberText(draft) ?? pending.current?.base ?? last.current : last.current;
     // Mixed: the arrows wait for a typed value (stepping from an arbitrary middle would be a guess).
     if (base === undefined) return;
     commit(stepValue(base, dir, step, big, min, max, places), { via: 'step' });
@@ -166,7 +187,7 @@ export const NumberField: React.FC<NumberFieldProps> = ({
           placeholder={shown === undefined ? 'Mixed' : undefined}
           value={text}
           onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => typeDraft(e.target.value)}
           onBlur={commitDraft}
           onKeyDown={(e) => {
             // Typing here never moves a balloon, turns the page or fires a tool.
@@ -176,7 +197,7 @@ export const NumberField: React.FC<NumberFieldProps> = ({
               commitDraft();
             } else if (e.key === 'Escape') {
               e.preventDefault();
-              setDraft(null);
+              clearDraft();
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
               e.preventDefault();
               stepBy(e.key === 'ArrowUp' ? 1 : -1, e.shiftKey);

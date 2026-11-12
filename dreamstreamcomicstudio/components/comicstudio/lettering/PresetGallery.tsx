@@ -12,7 +12,7 @@ import { letteringNodes, planOutline } from './svgMarkup';
 import { svgNodeToReact } from './LetteringSvg';
 import { useLetteringFontsReady } from './useLetteringFontsReady';
 import { cx } from '../board/ui';
-import { proFieldsWritable, proLooks } from '../editor/inspector/proGate';
+import { proFieldsWritable, proLooks } from '../editor/inspector/proSwitch';
 
 const PREVIEW_ASPECT = 1.6;
 const H = 1000 / PREVIEW_ASPECT;

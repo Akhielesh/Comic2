@@ -8,7 +8,7 @@ import { Pipette } from 'lucide-react';
 import { normalizeColor, type Color } from '../../../shared/comic/lettering/style';
 import { paintOf } from './svgMarkup';
 import { cx } from '../board/ui';
-import { NumberField } from './NumberField';
+import { useProExtras } from './pro/proExtras';
 
 export interface ColorFieldProps {
   label: string;
@@ -24,7 +24,8 @@ export interface ColorFieldProps {
   allowAuto?: boolean;
   /** Easy view: swatches + transparent only (custom colour behind "More"). */
   simple?: boolean;
-  /** Pro Edit: a typed opacity (0–100 %, the colour's alpha byte) beside the slider. */
+  /** Pro Edit: a typed opacity (0–100 %, the colour's alpha byte) beside the slider (the lazily loaded Pro extras'
+   *  NumberField; the read-out shows until it is there). */
   numeric?: boolean;
   className?: string;
 }
@@ -52,6 +53,7 @@ const CHECKER: React.CSSProperties = {
 
 export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, swatches = [], allowAlpha, allowNone, allowAuto, simple, numeric, className }) => {
   const id = useId();
+  const pro = useProExtras(!!numeric);
   const paint = paintOf(value);
   const hex = paint?.color ?? '#ffffff';
   const alpha = paint?.opacity ?? 1;
@@ -184,8 +186,8 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             onChange={(e) => onChange(withAlpha(hex, Number(e.target.value) / 100), { scrub: true })}
             className="min-w-0 flex-1 accent-[var(--ds-accent)]"
           />
-          {numeric ? (
-            <NumberField
+          {pro ? (
+            <pro.NumberField
               label={`${label} opacity`}
               hideLabel
               steppers={false}
