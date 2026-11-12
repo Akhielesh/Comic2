@@ -1467,7 +1467,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         cards={pro.coach.cards}
         onDismiss={pro.coach.dismiss}
         samples={pro.parts.samples}
-        onSamples={() => (docked ? (ws.leftRailW > 0 && pro.parts.assets ? setLeftTab('assets') : setDockTab('assets')) : toolRow ? setDrawer('assets') : undefined)}
+        // Where the Assets part opens: the dock or the 1440 left rail, the tablet drawer; phones have no Assets panel in S2.
+        onSamples={docked ? () => (ws.leftRailW > 0 && pro.parts.assets ? setLeftTab('assets') : setDockTab('assets')) : toolRow ? () => setDrawer('assets') : undefined}
         className={docked ? 'mx-3 mt-3' : 'basis-full'}
       />
     </Suspense>

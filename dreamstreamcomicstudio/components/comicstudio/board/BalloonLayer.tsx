@@ -295,6 +295,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const [grow, setGrow] = useState<{ id: string; h: number } | null>(null);
   /** What the two-finger rotate (the kit's window listener) calls into; refreshed every render. */
   const twoFingerApi = useRef<TwoFingerApi | null>(null);
+  /** The text's own height per drawn plan (a re-plan without the stored minimum), kept while the plan object is. */
+  const naturalCache = useRef(new WeakMap<LetterPlan, number>());
   const arbiter = useGestureArbiter();
   const layerRef = useRef<HTMLDivElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
@@ -464,6 +466,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     if (!plan) return 0.01;
     const stored = storedOf(id);
     if (!stored || !(typeof stored.minH === 'number' && stored.minH > 0)) return outlineFractions(plan, H).h;
+    const cached = naturalCache.current.get(plan);
+    if (cached !== undefined) return cached;
     const sub: Page = {
       ...page,
       panels: page.panels.map((panel) => ({ ...panel, lines: panel.lines.filter((l) => l.id === id) })),
@@ -474,7 +478,9 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       })
     };
     const p = planLettering(doc, sub, aspect, base.measure).find((x) => x.lineId === id);
-    return outlineFractions(p ?? plan, H).h;
+    const h = outlineFractions(p ?? plan, H).h;
+    naturalCache.current.set(plan, h);
+    return h;
   };
   /** A height edit: a minimum above the text's own height; at or under it a stored minimum is cleared ({minH: null}). */
   const commitHeight = (id: string, h: number) => {
