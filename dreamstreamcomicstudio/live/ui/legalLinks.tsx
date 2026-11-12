@@ -6,7 +6,7 @@ import { cx } from './primitives';
 export const LIVE_LEGAL_LINKS = [
   { label: 'Privacy', href: mainAppUrl('/?view=privacy') },
   { label: 'Terms', href: mainAppUrl('/?view=terms') },
-  { label: 'Support', href: 'mailto:contact@dreamstream.com?subject=Stream%20Studio%20support' },
+  { label: 'Support', href: 'mailto:contact@dreamstreamstudio.ai?subject=Stream%20Studio%20support' },
 ] as const;
 
 type LiveLegalLinksProps = {

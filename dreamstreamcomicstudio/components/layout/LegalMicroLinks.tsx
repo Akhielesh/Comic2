@@ -25,7 +25,7 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
         <button type="button" onClick={onOpenFaq} className="hover:text-black transition-colors">
           FAQs
         </button>
-        <a href="mailto:contact@dreamstream.com" className="hover:text-black transition-colors">
+        <a href="mailto:contact@dreamstreamstudio.ai" className="hover:text-black transition-colors">
           Contact
         </a>
       </div>

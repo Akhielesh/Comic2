@@ -13,7 +13,7 @@ describe('LiveLegalLinks', () => {
     expect(within(nav).getByRole('link', { name: /terms/i })).toHaveAttribute('href', '/?view=terms');
     expect(within(nav).getByRole('link', { name: /support/i })).toHaveAttribute(
       'href',
-      'mailto:contact@dreamstream.com?subject=Stream%20Studio%20support'
+      'mailto:contact@dreamstreamstudio.ai?subject=Stream%20Studio%20support'
     );
   });
 });
