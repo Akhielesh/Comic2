@@ -96,6 +96,9 @@ describe('the stage (EDITION_ON_LINK)', () => {
     expect(readyOffLink(null, doc)).toEqual([]);
     // Only as many as the link has room for (one publication carries 12 languages, the original included).
     expect(MAX_LINK_LANGUAGES).toBe(12);
+    // The number is the server's own cap: if that moves, this one must move with it.
+    const server = readFileSync(resolve(__dirname, '../../../server/src/comic/publication/publication.ts'), 'utf8');
+    expect(Number(server.match(/const MAX_LANGUAGES = (\d+);/)?.[1])).toBe(MAX_LINK_LANGUAGES);
     const eleven = ['en', 'ta', 'kn', 'ml', 'mr', 'bn', 'gu', 'pa', 'ur', 'es', 'fr'];
     expect(readyOffLink(liveView([EN, HI_READY, TE_READY], { languages: eleven }), doc)).toEqual(['hi']);
     expect(readyOffLink(liveView([EN, HI_READY, TE_READY], { languages: [...eleven, 'de'] }), doc)).toEqual([]);
