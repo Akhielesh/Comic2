@@ -8,6 +8,34 @@
   - **Lead decision D12 (S2b integration): not applied with S2b.** It waits for its security review, which must cover
     the anon-executable SECURITY DEFINER RPCs (a direct anon RPC call bypasses the edge limiter and cache), and lands
     with DS-R6 (S3).
+  - **Fixed at the S2b integration, before the review** (so the reviewed text is the text that ships): the avatar rule
+    accepts only this project's storage host (`bdjfmxfmhqhzvgrhbbzm.supabase.co`), never another Supabase project; a
+    publication whose stored rating is above PG-13 is never listed (an unrated one is); both definer RPCs run with
+    `search_path = public, pg_temp`. Pinned by `server/sql/tests/comic_discovery.test.sql` and
+    `tests/config/discoveryListingGuard.test.ts`. The edge route backs off for 30 s after a failed database answer
+    (`DISCOVER_BACKOFF_MS`), so until the SQL is applied a hit costs no Supabase call.
+  - **Security review checklist (before apply):**
+    1. **Grants** (`comic_discovery.sql` grants): anon and authenticated can call both RPCs directly with the public anon
+       key, which bypasses `PUBLIC_COMIC_RL` and the 30 s cache. Decide: accept, or move to a dedicated role or key for
+       the Worker.
+    2. **Cost per anonymous call:** the base CTE ranks every public row with leading-wildcard ILIKE over title,
+       description, every i18n title (`jsonb_each`) and username, plus a 7-day stats aggregate;
+       `comic_discover_shelves` repeats that 7 times. There is no function-level statement timeout (a `set
+       statement_timeout` on the function does not bound the call itself): confirm the anon role's timeout in
+       production. Plan `pg_trgm` or per-sort indexes past about 10k public rows.
+    3. **search_path:** now `public, pg_temp` (pg_temp last), asserted after apply and by the guard. Confirm.
+    4. **Avatars:** the host pin (above) and the UUID rule. The UUID rule matches only hyphenated UUIDs: confirm no
+       avatar path carries a user id in another form.
+    5. **Rating:** fail closed above the ceiling (above). Confirm the stored values are exactly `G`, `PG`, `PG-13`.
+    6. **Unlisting completeness:** the filters are status, visibility and `is_forced_private`. Confirm that account
+       suspension or deletion and `projects.is_public = false` (the `comic_hold_unlists` trigger) always end in a
+       non-live publication.
+    7. **comic_featured** stays service-only (RLS on, no policies). Confirm no other migration adds a policy, and
+       define the staff write path.
+    8. **Exposure:** `likes_count` and the trending order disclose relative readership; the cursor is slug-only.
+       Confirm this is acceptable.
+    9. After the apply, run `get_advisors(security)` and check that `comic_discover_kind` is not executable by anon or
+       authenticated.
 - **The UI is DS-R6 (S3)**, behind `DISCOVER_V2_STAGE` (DS-R3's flag; redesign plan §12). It builds against a fake of
   this contract (`components/discover/discoverApi.fake.ts`, DS-R6) until the SQL is applied.
 - **Plan:** redesign plan §0, §1.3 and §3.5 (Discover), §10 DS-R2, §13 R-D3, §14 risk 6.
