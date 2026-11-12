@@ -59,6 +59,7 @@ import { requireAdmin, requireModerator, requireResearcher } from './middleware/
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
 import { accountStudiosRouter } from './routes/accountStudios.js';
+import { contactRouter } from './routes/contact.js';
 import { learnRouter } from './routes/learn.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
@@ -300,6 +301,7 @@ app.use('/api/account/studios', systemRateLimit, accountStudiosRouter);
 // link for the caller's own account. Has its own per-account limiter (10/min).
 app.use('/api/auth/handoff', authHandoffRouter);
 app.use('/api/account', systemRateLimit, accountRouter);
+app.use('/api/contact', systemRateLimit, contactRouter); // Settings › Contact (signed in; 5/hour, 20/day per user in the router)
 // Account connectors (authenticated): catalog, connect, sync, disconnect, query, dashboard.
 app.use('/api/connectors', systemRateLimit, connectorsRouter);
 // Learning execution (sandboxed SQL playground). Auth'd + text-tier rate limited.
