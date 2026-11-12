@@ -69,6 +69,9 @@ import { ComicsHeader } from './components/comicshost/ComicsHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
+import { comicsChromeFor } from './components/comicshost/hostRouting';
+import { CANVAS_BG, INK } from './components/chat/studioDesign';
+import { cn } from './lib/utils';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
@@ -329,6 +332,9 @@ const App: React.FC = () => {
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
+  // Bumped by every goToAuth(): AuthPage reads its mode once, at mount, so a header "Sign in" / "Request access"
+  // pressed while the sign-in page is already open remounts it on the step asked for (an invite still wins there).
+  const [authRequest, setAuthRequest] = useState(0);
 
   // ── Invite deep link (email → /?invite=CODE) ──────────────────────────────────
   // Capture the code off the URL, keep it across the whole auth round trip
@@ -401,10 +407,12 @@ const App: React.FC = () => {
     setCurrentView('settings');
   };
 
+  // The FAQ lives on the main site's home page (#home-faq). The comics host's home is its own landing, which has
+  // none: a FAQ entry there (the dashboard's, the readers') lands on the landing's "How it works" instead of the top.
   const handleOpenFaq = () => {
     handleBackToHome();
     window.setTimeout(() => {
-      document.getElementById('home-faq')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById(comicsHost.active ? 'how-it-works' : 'home-faq')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 180);
   };
 
@@ -810,6 +818,7 @@ const App: React.FC = () => {
 
   const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
     setAuthInitialMode(mode);
+    setAuthRequest((n) => n + 1);
     handleNavigate('auth');
   };
 
@@ -1045,14 +1054,17 @@ const App: React.FC = () => {
   // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
   // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
-  const showSharedHeader = !comicsHost.ownsChrome(effectiveView) && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
+  // The comics host's own chrome for this view (components/comicshost/hostRouting.ts, unit-tested there): whether the
+  // suite header steps aside, whether App draws ComicsHeader, whether the floating widgets may show.
+  const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });
+  const comicsChrome = chrome.owns;
+  const showSharedHeader = !comicsChrome && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
-  // The comics host's own views (landing, sign-in, Privacy, Terms, the signed-out Library) carry no floating
+  // The comics host's own views (the landing; signed out, sign-in, Privacy, Terms and the Library) carry no floating
   // widgets, as the studio carries none: nothing sits over the art or the sign-in form.
-  const comicsChrome = comicsHost.ownsChrome(effectiveView);
-  const showUniversalAssistant = assistant.mounted && !comicsChrome;
+  const showUniversalAssistant = assistant.mounted && chrome.widgets;
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared' && effectiveView !== 'publiccomic';
@@ -1060,7 +1072,7 @@ const App: React.FC = () => {
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = !comicsChrome && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  const showFeedbackWidget = chrome.widgets && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
   // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
   const publicComicIsOwner =
     !!publicComicRoute?.slug &&
@@ -1076,7 +1088,9 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen font-sans relative bg-slate-50">
+      {/* The comics host's own views sit on the skin's paper (dark in dark mode), as the landing does; elsewhere the
+          app's page colour is unchanged. The wrapper also owns the ink, so nothing under it inherits the body's. */}
+      <div className={cn('min-h-screen font-sans relative', comicsChrome ? cn(CANVAS_BG, INK) : 'bg-slate-50')}>
         {inviteNotice && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-md">
             <div
@@ -1123,10 +1137,11 @@ const App: React.FC = () => {
         })()}
         {/* The comics host keeps the landing's header on the views a visitor reaches from it (sign-in, Privacy,
             Terms, the signed-out Library): one product from the first click. The landing renders its own. */}
-        {comicsChrome && effectiveView !== 'home' && (
+        {chrome.header && (
           <ComicsHeader
             signedIn={!!user}
             page="other"
+            current={chrome.current}
             onGoHome={handleBackToHome}
             onSignIn={() => goToAuth('signin')}
             onRequestAccess={() => goToAuth('request-access')}
@@ -1166,6 +1181,7 @@ const App: React.FC = () => {
 
           {effectiveView === 'auth' && (
             <AuthPage
+              key={`auth-${authRequest}`}
               initialMode={authInitialMode}
               pendingInviteCode={getPendingInviteCode()}
               onLoginSuccess={() => {
@@ -1358,7 +1374,8 @@ const App: React.FC = () => {
           <LegalMicroLinks
             onOpenPrivacy={() => setCurrentView('privacy')}
             onOpenTerms={() => setCurrentView('terms')}
-            onOpenFaq={handleOpenFaq}
+            // The comics host has no FAQ page (its landing has no #home-faq), so its legal line offers none.
+            onOpenFaq={comicsHost.active ? undefined : handleOpenFaq}
           />
         )}
 

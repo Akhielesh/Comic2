@@ -1,6 +1,6 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
-import { DENSITY, FOCUS_RING, INK, MUTED } from '../chat/studioDesign';
+import { DENSITY, FOCUS_RING, INK, MUTED, RADIUS_CONTROL } from '../chat/studioDesign';
 
 interface BrandLockupProps {
   onClick?: () => void;
@@ -40,8 +40,10 @@ export const BrandLockup: React.FC<BrandLockupProps> = ({
     <>
       {mark ?? <img src={BRAND_MARK_SRC} alt="" width={28} height={28} draggable={false} className="size-7 shrink-0 select-none" />}
       <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none">
-        <span className={cn('text-[15px] font-semibold tracking-[-0.01em]', INK)}>{name}</span>
-        <span className={cn(suffixAlways ? 'inline text-[15px] font-medium' : 'hidden text-[15px] font-medium min-[380px]:inline', MUTED)}>{suffix}</span>
+        <span className={cn('text-[length:var(--ds-text-md)] font-semibold tracking-[-0.01em]', INK)}>{name}</span>
+        {/* DS-2's rule read `min-[380px]:inline`, which this config's raw screens compile to nothing (the suffix never
+            showed); `medium` (600 px) is the first named screen with room for it beside the main site's header. */}
+        <span className={cn(suffixAlways ? 'inline text-[length:var(--ds-text-md)] font-medium' : 'hidden text-[length:var(--ds-text-md)] font-medium medium:inline', MUTED)}>{suffix}</span>
       </span>
     </>
   );
@@ -54,7 +56,8 @@ export const BrandLockup: React.FC<BrandLockupProps> = ({
         aria-label={label}
         data-slot="brand-lockup"
         className={`${cn(
-          '-ml-1 flex min-w-0 items-center gap-2 rounded-[var(--ds-radius-control,0.75rem)] px-1 py-1 transition-opacity duration-[var(--ds-motion-fast,120ms)] hover:opacity-80',
+          '-ml-1 flex min-w-0 items-center gap-2 px-1 py-1 transition-opacity duration-[var(--ds-motion-fast)] hover:opacity-80',
+          RADIUS_CONTROL,
           DENSITY.coarse,
           className
         )} ${FOCUS_RING}`}

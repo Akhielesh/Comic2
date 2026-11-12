@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
-import { Loader2, ArrowRight, Check, Mail } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Mail } from 'lucide-react';
+import { cn } from '../lib/utils';
+import { DENSITY, FIELD_EMBEDDED, FIELD_GROUP, FOCUS_RING, RADIUS_CONTROL, RADIUS_PILL, STATUS_INK, STATUS_SURFACE } from './chat/studioDesign';
+import { Button } from './ds/Button';
+import { Textarea } from './ds/Input';
 import { submitWaitlistEmail, WaitlistKind, type ProductInterest } from '../services/waitlist';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
@@ -9,7 +13,7 @@ interface WaitlistFormProps {
   kind?: WaitlistKind;
   /** Free-form tag stored with the row so we know which surface it came from. */
   source?: string;
-  /** 'light' for pale backgrounds, 'dark' for the black footer band. */
+  /** Kept for its callers: the form reads the page tokens, so it suits light and dark pages alike. */
   variant?: 'light' | 'dark';
   placeholder?: string;
   buttonLabel?: string;
@@ -31,7 +35,6 @@ const PRODUCT_OPTIONS: { id: ProductInterest; label: string }[] = [
 export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   kind = 'updates',
   source,
-  variant = 'light',
   placeholder = 'you@example.com',
   buttonLabel = 'Notify me',
   className = '',
@@ -45,8 +48,6 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   // Optional intent: product chips + free-form note — email alone still submits.
   const [interests, setInterests] = useState<ProductInterest[]>([]);
   const [feedback, setFeedback] = useState('');
-
-  const isDark = variant === 'dark';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,31 +91,24 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
 
   if (status === 'success') {
     return (
-      <div
-        className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 font-bold ${
-          isDark
-            ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow'
-            : 'border-green-500 bg-green-50 text-green-700'
-        } ${className}`}
-      >
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-current">
-          <Check size={16} />
+      <div role="status" className={cn('flex items-center gap-3 border px-4 py-3', RADIUS_CONTROL, STATUS_SURFACE.healthy, className)}>
+        <span aria-hidden className={cn('flex size-7 shrink-0 items-center justify-center border border-current', RADIUS_PILL, STATUS_INK.healthy)}>
+          <Check className="size-4" />
         </span>
-        <span className="text-sm">{message}</span>
+        <span className="text-[length:var(--ds-text-base)] font-medium">{message}</span>
       </div>
     );
   }
 
+  // On the page tokens (DS fields, the ink submit, outline toggle chips, calm status callouts), in both themes: the
+  // request-access step of the sign-in card is one click off the comics landing. The logic above is unchanged.
+  // Running text (the legend, the callouts' words) inherits the surrounding ink rather than naming it, so the form
+  // also reads inside the main site's fixed-white "Stay updated" card in dark mode; every field paints its own.
   return (
-    <form onSubmit={handleSubmit} className={`w-full ${className}`}>
+    <form onSubmit={handleSubmit} className={cn('w-full', className)}>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="relative flex-1">
-          <Mail
-            size={16}
-            className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${
-              isDark ? 'text-zinc-500' : 'text-slate-400'
-            }`}
-          />
+        <label className={cn(FIELD_GROUP, DENSITY.coarse, 'h-10 min-w-0 flex-1 px-3')}>
+          <Mail aria-hidden className="size-4 shrink-0 text-[var(--ds-muted)]" />
           <input
             type="email"
             required
@@ -125,35 +119,21 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
             }}
             placeholder={placeholder}
             aria-label="Email address"
-            className={`w-full rounded-lg border-2 py-3 pl-9 pr-3 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue ${
-              isDark
-                ? 'border-zinc-700 bg-zinc-900 text-white placeholder:text-zinc-600'
-                : 'border-black bg-white text-black placeholder:text-slate-400'
-            }`}
+            autoComplete="email"
+            className={cn(FIELD_EMBEDDED, 'h-full text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)]')}
           />
-        </div>
-        <button
-          type="submit"
-          disabled={status === 'loading'}
-          className="flex shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-black bg-brand-yellow px-5 py-3 font-comic text-sm font-bold uppercase tracking-wide text-black shadow-comic transition-all hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {status === 'loading' ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <>
-              {buttonLabel} <ArrowRight size={16} />
-            </>
-          )}
-        </button>
+        </label>
+        <Button type="submit" loading={status === 'loading'} className="h-10 shrink-0">
+          {buttonLabel} <ArrowRight aria-hidden />
+        </Button>
       </div>
 
       {/* Optional intent — chips + note. Email alone still submits. */}
-      <div className="mt-3">
-        <p className={`text-xs font-bold ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
-          What do you want first access to?{' '}
-          <span className={`font-medium ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>(optional)</span>
-        </p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+      <fieldset className="mt-4 min-w-0">
+        <legend className="text-[length:var(--ds-text-sm)] font-medium">
+          What do you want first access to? <span className="font-normal opacity-70">(optional)</span>
+        </legend>
+        <div className="mt-2 flex flex-wrap gap-1.5">
           {PRODUCT_OPTIONS.map(({ id, label }) => {
             const selected = interests.includes(id);
             return (
@@ -161,37 +141,30 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
                 key={id}
                 type="button"
                 aria-pressed={selected}
-                onClick={() =>
-                  setInterests((prev) => (selected ? prev.filter((p) => p !== id) : [...prev, id]))
-                }
-                className={`rounded-full border-2 px-3 py-1 text-xs font-bold transition-colors ${
-                  selected
-                    ? isDark
-                      ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow'
-                      : 'border-black bg-brand-yellow text-black'
-                    : isDark
-                      ? 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
-                      : 'border-slate-300 bg-white text-slate-500 hover:border-black hover:text-black'
-                }`}
+                onClick={() => setInterests((prev) => (selected ? prev.filter((p) => p !== id) : [...prev, id]))}
+                className={cn(
+                  'inline-flex items-center gap-1 border px-3 py-1 text-[length:var(--ds-text-sm)] font-medium transition-colors duration-[var(--ds-motion-fast)]',
+                  'border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-pressed:border-[var(--ds-ink)] aria-pressed:bg-[var(--ds-well)] aria-pressed:text-[var(--ds-ink)]',
+                  RADIUS_PILL,
+                  DENSITY.coarse,
+                  FOCUS_RING
+                )}
               >
+                {selected ? <Check aria-hidden className="size-3.5" /> : null}
                 {label}
               </button>
             );
           })}
         </div>
-      </div>
-      <textarea
+      </fieldset>
+      <Textarea
         value={feedback}
         onChange={(e) => setFeedback(e.target.value)}
         maxLength={1000}
         rows={2}
         placeholder="Anything you'd want to see? (optional)"
         aria-label="Anything you'd want to see? (optional)"
-        className={`mt-2 w-full resize-y rounded-lg border-2 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue ${
-          isDark
-            ? 'border-zinc-700 bg-zinc-900 text-white placeholder:text-zinc-600'
-            : 'border-black bg-white text-black placeholder:text-slate-400'
-        }`}
+        className="mt-3 resize-y"
       />
 
       {turnstileEnabled() && (
@@ -200,30 +173,28 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
         </div>
       )}
       {status === 'error' && message && (
-        <p className={`mt-2 text-xs font-bold ${isDark ? 'text-red-400' : 'text-red-600'}`}>{message}</p>
+        <p role="alert" className={cn('mt-3 flex items-start gap-2 border px-3 py-2 text-[length:var(--ds-text-sm)]', RADIUS_CONTROL, STATUS_SURFACE.error)}>
+          <AlertCircle aria-hidden className={cn('mt-0.5 size-4 shrink-0', STATUS_INK.error)} />
+          <span>{message}</span>
+        </p>
       )}
       {status === 'already-invited' && (
-        <div
-          className={`mt-2 rounded-lg border-2 px-3 py-2 text-xs font-bold ${
-            isDark ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow' : 'border-green-600 bg-green-50 text-green-700'
-          }`}
-        >
-          {message || 'You already have access — follow the instructions in your invite email to set up your account.'}
-        </div>
+        <p role="status" className={cn('mt-3 flex items-start gap-2 border px-3 py-2 text-[length:var(--ds-text-sm)]', RADIUS_CONTROL, STATUS_SURFACE.healthy)}>
+          <Check aria-hidden className={cn('mt-0.5 size-4 shrink-0', STATUS_INK.healthy)} />
+          <span>
+            {message || 'You already have access — follow the instructions in your invite email to set up your account.'}
+          </span>
+        </p>
       )}
       {status === 'account-exists' && (
-        <div
-          className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border-2 px-3 py-2 text-xs font-bold ${
-            isDark ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow' : 'border-brand-blue bg-brand-blue/5 text-brand-blue'
-          }`}
-        >
+        <div role="status" className={cn('mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border px-3 py-2 text-[length:var(--ds-text-sm)]', RADIUS_CONTROL, STATUS_SURFACE.active)}>
           <span>{message || 'You already have an account — sign in instead.'}</span>
           {onSignIn ? (
-            <button type="button" onClick={onSignIn} className="underline hover:no-underline">
+            <button type="button" onClick={onSignIn} className={cn('font-medium underline underline-offset-2 hover:no-underline', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING)}>
               Sign in
             </button>
           ) : (
-            <a href="/" className="underline hover:no-underline">
+            <a href="/" className={cn('font-medium underline underline-offset-2 hover:no-underline', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING)}>
               Sign in
             </a>
           )}

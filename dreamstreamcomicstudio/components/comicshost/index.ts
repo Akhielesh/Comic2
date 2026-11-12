@@ -5,4 +5,4 @@ export { ComicsHeader, type ComicsHeaderProps, type ComicsSectionId } from './Co
 export { ComicsMark } from './ComicsMark';
 export { ComicPageSpecimen, SPECIMEN_LINES, SPECIMEN_LOOKS, type ComicPageSpecimenProps, type SpecimenLayout } from './ComicPageSpecimen';
 export { StudioPreview } from './StudioPreview';
-export { OFF_HOST_VIEWS, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
+export { COMICS_CHROME_VIEWS, OFF_HOST_VIEWS, comicsChromeFor, offHostUrlForView, shouldBootToDashboard, type ComicsChrome, type ComicsHeaderCurrent } from './hostRouting';

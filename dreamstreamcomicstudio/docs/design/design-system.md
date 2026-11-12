@@ -217,6 +217,8 @@ semibold (`CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, `STATE_TITLE`), as Atla
 | **`DENSITY`** (DS-1a) | `compact` / `comfortable` / `touch` row heights; `coarse` (44 px tall under a coarse pointer) and `coarseSquare` (44 × 44) |
 | **`RADIUS_ROUND`**, **`RADIUS_FEATURE`**, **`RADIUS_HERO`**, **`SHADOW_HERO`** (comics home) | public pills and CTAs; feature cards; hero panels; the product-proof frame |
 | **`DISPLAY_HERO`**, **`DISPLAY_SECTION`**, **`DISPLAY_CARD_TITLE`**, **`PUBLIC_LEAD`**, **`PUBLIC_BODY`**, **`OVERLINE_DISPLAY`** (comics home) | the public type: h1 36 → 48 → 72, section h2 30 → 36 → 48, card titles 24/28 (all Space Grotesk 600), the 16/28 → 20/32 lead, 15/28 body, the 12 px section eyebrow |
+| **`LEGAL_PROSE`** (comics home) | running legal text (Privacy, Terms): the 15/28 muted body, ink semibold section titles, ink `<strong>`, muted list markers, long words wrap; styles the plain tags (no typography plugin) |
+| **`HEADER_INK`** (`components/ds/AppHeader.tsx`) | the header owns its ink: ghost buttons and icons in any `AppHeader` read on its paper in both themes |
 | **`CTA_LG`**, **`ARROW_NUDGE`**, **`INVERSE_ACTION`**, **`INVERSE_ACTION_QUIET`** (comics home) | the public call-to-action shape (Button `size="lg"` + 44 px, pill, 15 px); the 2 px arrow nudge; the paper buttons inside `INVERSE_SURFACE` (no Button variant reads there) |
 
 ## Composing classes

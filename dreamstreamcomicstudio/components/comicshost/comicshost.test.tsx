@@ -5,7 +5,7 @@ import { DENSITY } from '../chat/studioDesign';
 import { CONTACT_HREF } from '../layout/LegalMicroLinks';
 import { mainAppUrl } from '../../services/productHost';
 import { ComicsLanding } from './ComicsLanding';
-import { OFF_HOST_VIEWS, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
+import { OFF_HOST_VIEWS, comicsChromeFor, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 import { useComicsHost } from './useComicsHost';
 
 afterEach(() => {
@@ -55,6 +55,39 @@ describe('hostRouting', () => {
   });
 });
 
+describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the floating widgets per view)', () => {
+  const on = (signedIn: boolean) => ({ active: true, signedIn });
+
+  it('signed out, the landing, sign-in, Privacy, Terms and the Library are comics chrome: ComicsHeader (but the landing draws its own), no widgets', () => {
+    expect(comicsChromeFor('home', on(false))).toEqual({ owns: true, header: false, widgets: false, current: 'other' });
+    expect(comicsChromeFor('auth', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'auth' });
+    expect(comicsChromeFor('privacy', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'other' });
+    expect(comicsChromeFor('terms', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'other' });
+    expect(comicsChromeFor('gallery', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'gallery' });
+  });
+
+  it('signed in, only the landing is comics chrome; every other view keeps the app header and the widgets', () => {
+    expect(comicsChromeFor('home', on(true))).toMatchObject({ owns: true, header: false, widgets: false });
+    for (const view of ['auth', 'privacy', 'terms', 'gallery', 'dashboard', 'comicstudio', 'reader', 'settings']) {
+      expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: false, header: false, widgets: true });
+    }
+  });
+
+  it('the studio and the dashboard are never comics chrome, signed in or out', () => {
+    for (const signedIn of [false, true]) {
+      for (const view of ['dashboard', 'comicstudio']) expect(comicsChromeFor(view, on(signedIn)), `${view} ${signedIn}`).toMatchObject({ owns: false, header: false, widgets: true });
+    }
+  });
+
+  it('off the comics host nothing changes: no comics chrome on any view', () => {
+    for (const view of ['home', 'auth', 'privacy', 'terms', 'gallery', 'dashboard']) {
+      for (const signedIn of [false, true]) {
+        expect(comicsChromeFor(view, { active: false, signedIn }), view).toMatchObject({ owns: false, header: false, widgets: true });
+      }
+    }
+  });
+});
+
 describe('useComicsHost', () => {
   const COMICS = 'comics.dreamstreamstudio.ai';
 
@@ -96,11 +129,10 @@ describe('useComicsHost', () => {
     for (const view of ['dashboard', 'comicstudio', 'reader', 'settings', 'learn']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
-  it('signed in, the Library and the dashboard keep the app header; the landing, sign-in and legal pages stay comics chrome', () => {
+  it('signed in, only the landing is comics chrome: the Library, Privacy, Terms and the dashboard keep the app header and its account menu', () => {
     const { result } = renderHook(() => useComicsHost({ view: 'dashboard', setView: vi.fn(), signedIn: true, ready: true, hostname: COMICS }));
-    expect(result.current.ownsChrome('gallery')).toBe(false);
-    expect(result.current.ownsChrome('dashboard')).toBe(false);
-    for (const view of ['home', 'auth', 'privacy', 'terms']) expect(result.current.ownsChrome(view), view).toBe(true);
+    expect(result.current.ownsChrome('home')).toBe(true);
+    for (const view of ['gallery', 'privacy', 'terms', 'auth', 'dashboard', 'comicstudio']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
   it('starts each view change at the top of the page on the comics host (never on the first render, never on the main site)', () => {
@@ -216,7 +248,9 @@ describe('ComicsLanding', () => {
     expect(within(footer).getByRole('link', { name: 'DreamStream Studio' })).toHaveAttribute('href', mainAppUrl('/'));
     expect(within(footer).queryByRole('link', { name: /^(?:chat studio|stream studio|dreamstream home)$/i })).toBeNull();
     expect(screen.queryAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([CONTACT_HREF, mainAppUrl('/')]);
-    expect(within(footer).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', CONTACT_HREF);
+    // The routed support mailbox, spelled out (comparing with the imported constant would pass any address).
+    expect(within(footer).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:support@dreamstreamstudio.ai');
+    expect(footer.innerHTML).not.toMatch(/contact@/);
     fireEvent.click(within(footer).getByRole('button', { name: 'Privacy Policy' }));
     fireEvent.click(within(footer).getByRole('button', { name: 'Terms & Conditions' }));
     expect(h.onOpenPrivacy).toHaveBeenCalledTimes(1);

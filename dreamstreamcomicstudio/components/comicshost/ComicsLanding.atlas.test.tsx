@@ -46,6 +46,16 @@ const ownMarkup = (container: HTMLElement): HTMLElement => {
   return own;
 };
 
+/** Give every element a scroll width and a client width (jsdom lays nothing out). */
+const stubWidths = (scrollWidth: number, clientWidth: number) => {
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get: () => scrollWidth });
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => clientWidth });
+};
+const unstubWidths = () => {
+  delete (HTMLElement.prototype as { scrollWidth?: unknown }).scrollWidth;
+  delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+};
+
 describe('ComicsLanding on Atlas', () => {
   it('(a) spells no hue: no hex or rgba in any class, no terracotta, no comic chrome outside the art', () => {
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
@@ -187,13 +197,12 @@ describe('ComicsLanding on Atlas', () => {
     }
   });
 
-  it('landmarks: one banner, one main, one contentinfo; the looks scroller is a labelled, focusable region', () => {
+  it('landmarks: one banner, one main, one contentinfo; the looks scroller is a labelled region', () => {
     render(<ComicsLanding signedIn={false} {...handlers()} />);
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('main')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
     const looks = screen.getByRole('region', { name: 'Six looks' });
-    expect(looks).toHaveAttribute('tabindex', '0');
     expect(within(looks).getAllByRole('listitem').map((li) => li.querySelector('figcaption')?.textContent)).toEqual([
       'Ligne claire',
       'Manga',
@@ -202,5 +211,68 @@ describe('ComicsLanding on Atlas', () => {
       'Indie riso',
       'Retro pop'
     ]);
+  });
+
+  it('the looks band is a tab stop only while it scrolls: measured on mount and again on resize', () => {
+    try {
+      stubWidths(1136, 1216); // 1280 px: the six pages fit
+      render(<ComicsLanding signedIn={false} {...handlers()} />);
+      const looks = screen.getByRole('region', { name: 'Six looks' });
+      expect(looks).not.toHaveAttribute('tabindex');
+      stubWidths(1136, 390); // a phone: the band scrolls inside its region
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(looks).toHaveAttribute('tabindex', '0');
+    } finally {
+      unstubWidths();
+    }
+  });
+
+  it('one fill in the first view: the banner and the hero hold exactly one filled control, signed out and signed in', () => {
+    for (const signedIn of [false, true]) {
+      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const hero = screen.getByRole('heading', { level: 1 }).closest('section') as HTMLElement;
+      const filled = [screen.getByRole('banner'), hero].flatMap((root) => [...root.querySelectorAll('[data-variant="default"],[data-variant="create"]')]);
+      expect(filled, `signedIn=${signedIn}`).toHaveLength(1);
+      expect(filled[0]).toBe(screen.getByTestId('comics-hero-cta'));
+      unmount();
+    }
+  });
+
+  it('the proof is the studio as drawn: ink-and-screentone pages, the plan’s Look from the data, initials, the composer', () => {
+    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const preview = screen.getByTestId('studio-preview');
+    const pages = [...preview.querySelectorAll('[data-comic-art]')];
+    expect(pages).toHaveLength(2);
+    for (const page of pages) expect(page).toHaveAttribute('data-specimen-look', 'manga-screentone');
+    expect(within(preview).getByText('Manga · locked')).toBeInTheDocument();
+    expect(preview.textContent).not.toMatch(/Ligne claire/);
+    // The cast chips carry the character's initial, as the studio's cast avatars do.
+    for (const name of ['Mira', 'Biscuit']) {
+      const chip = within(preview).getByText(name).closest('[data-slot="chip"]') as HTMLElement;
+      // The initial sits in the chip's icon slot (a flex item beside the name, never stacked above it).
+      expect(chip.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+      expect(chip.firstElementChild).toHaveTextContent(name[0]);
+    }
+    // The composer still, with the studio's own placeholder, and no control inside the replica.
+    const composer = preview.querySelector('[data-slot="preview-composer"]') as HTMLElement;
+    expect(composer).toHaveTextContent('Reply, or describe a change…');
+    expect(preview.querySelectorAll('button, a, input, textarea')).toHaveLength(0);
+    // The six looks band keeps its colour looks, Ligne claire first.
+    expect(container.querySelector('#looks [data-comic-art]')).toHaveAttribute('data-specimen-look', 'ligne-claire');
+  });
+
+  it('the feature titles hold two lines from lg, so the three bodies start level', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const titles = ['Characters that stay themselves', 'Lettering you control', 'Easy or Pro'].map((t) => screen.getByRole('heading', { level: 3, name: t }));
+    for (const h3 of titles) expect(classes(h3), h3.textContent!).toContain('lg:min-h-14');
+  });
+
+  it('the phone footer puts its two link lists side by side (the brand spans both) and goes to three columns from md', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const grid = screen.getByRole('navigation', { name: 'Comic Studio links' }).parentElement as HTMLElement;
+    expect(classes(grid)).toEqual(expect.arrayContaining(['grid', 'grid-cols-2', 'md:grid-cols-[1.4fr_1fr_1fr]']));
+    expect(classes(grid.firstElementChild!)).toEqual(expect.arrayContaining(['col-span-2', 'md:col-span-1']));
   });
 });

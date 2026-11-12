@@ -41,6 +41,14 @@ describe('ComicsHeader', () => {
     for (const region of ['brand', 'nav', 'actions']) expect(header.querySelector(`[data-region="${region}"]`), region).not.toBeNull();
   });
 
+  it('owns its ink, so its ghost buttons and icons read in dark whatever page sits under it', () => {
+    for (const page of ['home', 'other'] as const) {
+      const { unmount } = render(<ComicsHeader {...props({ page })} />);
+      expect(screen.getByRole('banner').className.split(/\s+/), page).toContain('text-[var(--ds-ink)]');
+      unmount();
+    }
+  });
+
   it('the lockup is the Comic Studio home link', () => {
     const p = props();
     render(<ComicsHeader {...p} />);
@@ -48,12 +56,16 @@ describe('ComicsHeader', () => {
     expect(p.onGoHome).toHaveBeenCalledTimes(1);
   });
 
-  it('signed out: Request access and Sign in (round, ink); no My comics', () => {
+  it('signed out: Request access and Sign in (round; outline on the landing, the ink fill elsewhere); no My comics', () => {
+    const other = render(<ComicsHeader {...props({ page: 'other' })} />);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i })).toHaveAttribute('data-variant', 'default');
+    other.unmount();
     const p = props();
     render(<ComicsHeader {...p} />);
     const actions = screen.getByRole('banner').querySelector('[data-region="actions"]') as HTMLElement;
     const signIn = within(actions).getByRole('button', { name: /^sign in$/i });
-    expect(signIn).toHaveAttribute('data-variant', 'default');
+    // On the landing the hero holds the one fill (one fill per view), so the header's Sign in is outline.
+    expect(signIn).toHaveAttribute('data-variant', 'outline');
     expect(signIn.className.split(/\s+/)).toContain(RADIUS_ROUND);
     fireEvent.click(signIn);
     fireEvent.click(within(actions).getByRole('button', { name: /^request access$/i }));
@@ -62,10 +74,14 @@ describe('ComicsHeader', () => {
     expect(within(actions).queryByRole('button', { name: /my comics/i })).toBeNull();
   });
 
-  it('signed in: My comics only; no Sign in, no Request access', () => {
+  it('signed in: My comics only (outline on the landing, the ink fill elsewhere); no Sign in, no Request access', () => {
+    const other = render(<ComicsHeader {...props({ signedIn: true, page: 'other' })} />);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' })).toHaveAttribute('data-variant', 'default');
+    other.unmount();
     const p = props({ signedIn: true });
     render(<ComicsHeader {...p} />);
     const actions = screen.getByRole('banner').querySelector('[data-region="actions"]') as HTMLElement;
+    expect(within(actions).getByRole('button', { name: 'My comics' })).toHaveAttribute('data-variant', 'outline');
     fireEvent.click(within(actions).getByRole('button', { name: 'My comics' }));
     expect(p.onOpenComics).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
@@ -82,12 +98,32 @@ describe('ComicsHeader', () => {
     for (const [over, rows] of cases) {
       const { unmount } = render(<ComicsHeader {...props(over)} />);
       expect(menuRows(), JSON.stringify(over)).toEqual(rows);
-      // The lg nav: on the landing the section links and the Library; elsewhere no nav at all.
-      const nav = screen.queryByRole('navigation', { name: 'Comic Studio' });
-      if (over.page === 'home') expect(within(nav!).getAllByRole('button').map((b) => b.textContent)).toEqual(['How it works', 'Looks', 'Library']);
-      else expect(nav).toBeNull();
+      // The lg nav: on the landing the section links and the Library; elsewhere the Library alone (the menu trigger
+      // is hidden from lg, so without it a desktop visitor on sign-in or a legal page had no way to the Library).
+      const nav = screen.getByRole('navigation', { name: 'Comic Studio' });
+      expect(within(nav).getAllByRole('button').map((b) => b.textContent), JSON.stringify(over)).toEqual(
+        over.page === 'home' ? ['How it works', 'Looks', 'Library'] : ['Library']
+      );
+      expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'lg:flex']));
       unmount();
     }
+  });
+
+  it('on the sign-in page the header offers no Sign in (Request access stays); on the Library its link is the current page', () => {
+    const p = props({ page: 'other', current: 'auth' });
+    const { unmount } = render(<ComicsHeader {...p} />);
+    const banner = screen.getByRole('banner');
+    expect(within(banner).queryByRole('button', { name: /^sign in$/i })).toBeNull();
+    fireEvent.click(within(banner).getByRole('button', { name: /^request access$/i }));
+    expect(p.onRequestAccess).toHaveBeenCalledTimes(1);
+    unmount();
+    const g = props({ page: 'other', current: 'gallery' });
+    render(<ComicsHeader {...g} />);
+    const library = within(screen.getByRole('navigation', { name: 'Comic Studio' })).getByRole('button', { name: 'Library' });
+    expect(library).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(library);
+    expect(g.onBrowseGallery).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
   });
 
   it('the menu opens from its trigger, runs a row and closes; Esc closes it and returns focus to the trigger', () => {

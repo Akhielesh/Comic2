@@ -2,7 +2,13 @@
 // the HEADER_INNER column and gutters, the glass that frosts once the page scrolls under it, the Z.header
 // layer), with Comic Studio's lockup (the ink ComicsMark, "Comic Studio" on one line, a Beta chip). The landing
 // shows its section links (How it works, Looks) and the Library from `lg` up; the sign-in, Privacy, Terms and
-// signed-out Library views use it with `page="other"`, so every click off the landing stays in one product.
+// Library views (signed out) use it with `page="other"`, where the lg nav keeps the Library, so every click off the
+// landing stays in one product. The header owns its ink (AppHeader), so its labels and icons read in both themes
+// whatever page sits under it.
+//
+// One fill per view (Ink & Spark): on the landing the hero carries the one filled call to action, so the header's
+// "Sign in" / "My comics" is outline there; elsewhere it is the page's filled action. On the sign-in page itself the
+// header offers no "Sign in".
 //
 // Below `lg` the links move into a menu: a disclosure under the trigger (aria-expanded / aria-controls), closed
 // by choosing a row, Esc (focus returns to the trigger) or a press outside. It is drawn on the overlay recipe and
@@ -10,6 +16,7 @@
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, Menu as MenuIcon, X } from 'lucide-react';
+import type { ComicsHeaderCurrent } from './hostRouting';
 import { cn } from '../../lib/utils';
 import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, OVERLINE, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
 import { AppHeader, HEADER_INNER } from '../ds/AppHeader';
@@ -22,8 +29,10 @@ export type ComicsSectionId = 'how-it-works' | 'looks';
 
 export interface ComicsHeaderProps {
   signedIn: boolean;
-  /** 'home' shows the in-page section links; 'other' (sign-in, Privacy, Terms, Library) does not. */
+  /** 'home' shows the in-page section links; 'other' (sign-in, Privacy, Terms, Library) shows the Library only. */
   page: 'home' | 'other';
+  /** On `page="other"`, the view under the header: 'auth' hides "Sign in", 'gallery' marks the Library link. */
+  current?: ComicsHeaderCurrent;
   onGoHome: () => void;
   onSignIn: () => void;
   onRequestAccess: () => void;
@@ -32,9 +41,9 @@ export interface ComicsHeaderProps {
   onShowSection?: (id: ComicsSectionId) => void;
 }
 
-/** The header's text links (the lg nav): muted, ink on hover, the underline draws in. */
+/** The header's text links (the lg nav): muted, ink on hover and when it is the current page, the underline draws in. */
 const NAV_LINK = cn(
-  'ds-link inline-flex items-center justify-center text-[length:var(--ds-text-base)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)]',
+  'ds-link inline-flex items-center justify-center text-[length:var(--ds-text-base)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-[current=page]:text-[var(--ds-ink)]',
   RADIUS_CONTROL,
   DENSITY.coarseSquare,
   FOCUS_RING
@@ -57,6 +66,7 @@ interface MenuEntry {
 export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   signedIn,
   page,
+  current = 'other',
   onGoHome,
   onSignIn,
   onRequestAccess,
@@ -69,6 +79,9 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   const headerRef = useRef<HTMLElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const sections = page === 'home' && !!onShowSection;
+  const home = page === 'home';
+  const onLibrary = !home && current === 'gallery';
+  const onSignInPage = !home && current === 'auth';
 
   // Close on Esc (focus back to the trigger) and on a press outside the header. Listeners only while open.
   useEffect(() => {
@@ -112,29 +125,34 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
     </>
   );
 
-  const nav =
-    page === 'home' ? (
-      <nav aria-label="Comic Studio" className="hidden items-center gap-7 lg:flex">
-        {sections && (
-          <>
-            <button type="button" className={NAV_LINK} onClick={() => onShowSection!('how-it-works')}>
-              How it works
-            </button>
-            <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
-              Looks
-            </button>
-          </>
-        )}
-        <button type="button" className={NAV_LINK} onClick={onBrowseGallery}>
-          Library
-        </button>
-      </nav>
-    ) : null;
+  // From lg: the section links on the landing, and the Library on every page (marked when it is the page).
+  const nav = (
+    <nav aria-label="Comic Studio" className="hidden items-center gap-7 lg:flex">
+      {sections && (
+        <>
+          <button type="button" className={NAV_LINK} onClick={() => onShowSection!('how-it-works')}>
+            How it works
+          </button>
+          <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
+            Looks
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        aria-current={onLibrary ? 'page' : undefined}
+        className={NAV_LINK}
+        onClick={onBrowseGallery}
+      >
+        Library
+      </button>
+    </nav>
+  );
 
   const actions = (
     <>
       {signedIn ? (
-        <Button className={RADIUS_ROUND} onClick={onOpenComics}>
+        <Button variant={home ? 'outline' : 'default'} className={RADIUS_ROUND} onClick={onOpenComics}>
           My comics
         </Button>
       ) : (
@@ -142,10 +160,12 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
           <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden lg:inline-flex')} onClick={onRequestAccess}>
             Request access
           </Button>
-          <Button className={cn(RADIUS_ROUND, 'group')} onClick={onSignIn}>
-            Sign in
-            <ArrowRight aria-hidden className={cn('hidden medium:block', ARROW_NUDGE)} />
-          </Button>
+          {onSignInPage ? null : (
+            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group')} onClick={onSignIn}>
+              Sign in
+              <ArrowRight aria-hidden className={cn('hidden medium:block', ARROW_NUDGE)} />
+            </Button>
+          )}
         </>
       )}
       <IconButton

@@ -12,7 +12,7 @@
 // in, the proof rises in, sections reveal on scroll, cards lift, arrows nudge), all of it still under reduced
 // motion. No price, cost or model name anywhere on the page.
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, BookOpen, Download, Link2, MessageSquareText, SlidersHorizontal, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { mainAppUrl } from '../../services/productHost';
@@ -101,6 +101,29 @@ const FOOTER_LINK_INK = cn('ds-link inline-flex items-center text-[var(--ds-ink)
 const FOCUS_TARGET = 'focus:outline-none';
 const SECTION = 'scroll-mt-[var(--header-h)]';
 
+/**
+ * Whether a horizontal scroller really overflows, read on mount and whenever it or the window resizes (no timer, no
+ * polling). The looks band is a tab stop only then: a region that does not scroll gives the keyboard nothing to do.
+ */
+const useOverflowsX = <T extends HTMLElement>(): [React.RefObject<T | null>, boolean] => {
+  const ref = useRef<T>(null);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === 'undefined') return undefined;
+    const read = () => setOverflows(el.scrollWidth - el.clientWidth > 1);
+    read();
+    window.addEventListener('resize', read);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
+    observer?.observe(el);
+    return () => {
+      window.removeEventListener('resize', read);
+      observer?.disconnect();
+    };
+  }, []);
+  return [ref, overflows];
+};
+
 export const ComicsLanding: React.FC<ComicsLandingProps> = ({
   signedIn,
   onSignIn,
@@ -117,6 +140,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
     section.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
     section.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
   }, []);
+  const [looksRef, looksOverflow] = useOverflowsX<HTMLDivElement>();
   const goTop = useCallback(() => {
     try {
       window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
@@ -209,7 +233,13 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
             One scene, six looks
           </h2>
           <p className={cn(PUBLIC_BODY, 'mx-auto mt-3 max-w-md px-4 text-center')}>Pick a look and lock it. Every page follows.</p>
-          <div role="region" aria-label="Six looks" tabIndex={0} className={cn('ds-fade-edge-x mt-8 snap-x snap-mandatory overflow-x-auto', FOCUS_RING_FLUSH)}>
+          <div
+            ref={looksRef}
+            role="region"
+            aria-label="Six looks"
+            tabIndex={looksOverflow ? 0 : undefined}
+            className={cn('ds-fade-edge-x mt-8 snap-x snap-mandatory overflow-x-auto', FOCUS_RING_FLUSH)}
+          >
             <ul className="mx-auto flex w-max gap-4 px-4 pb-2 medium:px-6">
               {SPECIMEN_LOOKS.map((id) => (
                 <li key={id} className="shrink-0 snap-center">
@@ -256,7 +286,8 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                   >
                     <Icon aria-hidden className="size-5" />
                   </span>
-                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-6 text-[var(--ds-ink)]')}>{title}</h3>
+                  {/* Two lines tall from lg (3.5rem at leading-7), so the three bodies start on one line. */}
+                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-6 text-[var(--ds-ink)] lg:min-h-14')}>{title}</h3>
                   <p className={cn(PUBLIC_BODY, 'mt-2 max-w-xl')}>{body}</p>
                 </li>
               ))}
@@ -343,8 +374,9 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
       </main>
 
       <footer className="mt-16 border-t border-[var(--ds-hairline)] bg-[var(--ds-canvas)] sm:mt-24">
-        <div className={cn(HEADER_INNER, 'grid gap-10 py-12 text-[length:var(--ds-text-base)] md:grid-cols-[1.4fr_1fr_1fr]')}>
-          <div>
+        {/* Two link columns side by side from 320 px (the brand spans both), three columns from md. */}
+        <div className={cn(HEADER_INNER, 'grid grid-cols-2 gap-x-6 gap-y-10 py-12 text-[length:var(--ds-text-base)] md:grid-cols-[1.4fr_1fr_1fr]')}>
+          <div className="col-span-2 md:col-span-1">
             <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways clickable={false} />
             <p className="mt-4 max-w-sm leading-6 text-[var(--ds-muted)]">
               Talk through an idea with the Comic Director and get finished, lettered pages you can read and share.

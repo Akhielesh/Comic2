@@ -1,8 +1,9 @@
 // @vitest-environment node
 /**
- * The comics home (the landing, its header, the studio replica, the comic page specimen, the mark) and its QA scenes
- * read 0 on every design-system guard's own detector (tests/config/classLists.ts), so none of them needs a ratchet
- * baseline entry (tests/config/baselines/*.json):
+ * The comics home (the landing, its header and the shared header, lockup and legal line it is built from, the studio
+ * replica, the comic page specimen, the mark), the views a visitor reaches from it in the same chrome (sign-in, the
+ * access request and the tester invite, the Library, Privacy, Terms) and their QA scenes read 0 on every design-system guard's own detector
+ * (tests/config/classLists.ts), so none of them needs a ratchet baseline entry (tests/config/baselines/*.json):
  *   - legacyKit: border-black, shadow-comic, font-comic, Tailwind font-display (Bangers), brand-* colours;
  *   - terracotta: #D97757 / #c2643f (and the old mark's #c2603f);
  *   - zLadder: raw z-index classes (stacking goes through Z);
@@ -19,14 +20,33 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { APP_ROOT, VARIANT, findHandRolledOverlines, findInLiterals, withoutVariant } from '../../tests/config/classLists';
 
+/** The comics home and the shared pieces it is built from: tokens only, and no timer or request of their own. */
 const OWNED = [
   'components/comicshost/ComicsLanding.tsx',
   'components/comicshost/ComicsHeader.tsx',
   'components/comicshost/StudioPreview.tsx',
   'components/comicshost/ComicPageSpecimen.tsx',
-  'components/comicshost/ComicsMark.tsx'
+  'components/comicshost/ComicsMark.tsx',
+  'components/ds/AppHeader.tsx',
+  'components/layout/BrandLockup.tsx',
+  'components/layout/LegalMicroLinks.tsx'
 ];
-const SCENES = ['qa/app/scenes/landing.tsx', 'qa/app/scenes/landing-signedin.tsx'];
+/** The views one click off the landing, under the same header (they load data, so only the design rules apply). */
+const VIEWS = [
+  'components/AuthPage.tsx',
+  'components/RedeemInvite.tsx',
+  'components/WaitlistForm.tsx',
+  'components/PublicGallery.tsx',
+  'components/PrivacyPolicy.tsx',
+  'components/TermsOfService.tsx'
+];
+const SCENES = [
+  'qa/app/scenes/landing.tsx',
+  'qa/app/scenes/landing-signedin.tsx',
+  'qa/app/scenes/auth.tsx',
+  'qa/app/scenes/auth-signin.tsx',
+  'qa/app/scenes/auth-access.tsx'
+];
 
 const read = (rel: string) => readFileSync(path.join(APP_ROOT, rel), 'utf8');
 const stripComments = (source: string) =>
@@ -51,7 +71,7 @@ const CLASS_TOKEN = /[^\s'"`{}]+/g;
 const hits = (rel: string, pattern: RegExp) => findInLiterals(read(rel), pattern, (m) => withoutVariant(m), rel).map((h) => `${rel}:${h.line} ${h.token}`);
 
 describe('the comics home reads 0 on every design-system guard', () => {
-  for (const rel of [...OWNED, ...SCENES]) {
+  for (const rel of [...OWNED, ...VIEWS, ...SCENES]) {
     it(`${rel}: no legacy kit, terracotta, raw z, raw hue ink, hand-rolled eyebrow, local cx, hard white or spelled motion`, () => {
       expect(hits(rel, LEGACY_KIT), 'legacy kit').toEqual([]);
       expect(hits(rel, TERRACOTTA), 'terracotta').toEqual([]);

@@ -1,15 +1,21 @@
 import React from 'react';
+import { cn } from '../lib/utils';
+import { CANVAS_BG, DISPLAY_SECTION, LEGAL_PROSE, OVERLINE, OVERLINE_DISPLAY, SECTION_CARD } from './chat/studioDesign';
 
-export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+// On the Atlas tokens (Atlas LegalDocumentPage's values: the "Legal" eyebrow, the display title, the date, the text in
+// a reading column on a card). No Back button: the header's lockup goes home on both hosts. `onBack` stays in the
+// props for the callers that still pass it.
+export const TermsOfService: React.FC<{ onBack?: () => void }> = () => {
     return (
-        <div className="min-h-screen bg-slate-50 font-sans">
-            <main className="max-w-4xl mx-auto px-6 py-12 prose prose-slate">
-                <div className="flex items-center justify-between mb-6 not-prose">
-                    <h1 className="font-display text-3xl text-black">Terms of Service</h1>
-                    <button onClick={onBack} className="text-xs font-bold hover:underline">Back</button>
-                </div>
-                <p className="font-bold text-sm text-slate-500 uppercase">Effective Date: June 24, 2026</p>
-                <div className="bg-white p-8 border-2 border-slate-200 rounded-xl shadow-sm">
+        <div className={cn(CANVAS_BG, 'min-h-screen font-sans text-[var(--ds-ink)]')}>
+            <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-12 medium:px-6 sm:pb-24 sm:pt-16">
+                <header className="mb-8 sm:mb-10">
+                    <p className={OVERLINE_DISPLAY}>Legal</p>
+                    <h1 className={cn(DISPLAY_SECTION, 'mt-4 text-[var(--ds-ink)]')}>Terms of Service</h1>
+                    <p className={cn(OVERLINE, 'mt-5')}>Effective date: June 24, 2026</p>
+                </header>
+                <div className={cn(SECTION_CARD, 'p-6 sm:p-8')}>
+                <div className={LEGAL_PROSE}>
                     <p>These Terms of Service ("Terms") govern your use of DreamStream Studio, including Stream Studio live events and AI-assisted creative workflows. By accessing or using the service, you agree to these Terms.</p>
 
                     <h3>1. Eligibility and Acceptance</h3>
@@ -101,6 +107,7 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                         <li><strong>Will features always stay the same?</strong> No. Integrations, models, and limits may change over time.</li>
                         <li><strong>Who is responsible for final legal review?</strong> You are responsible for final review and release decisions for your content.</li>
                     </ul>
+                </div>
                 </div>
             </main>
         </div>

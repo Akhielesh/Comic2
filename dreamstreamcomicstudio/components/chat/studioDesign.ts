@@ -569,6 +569,13 @@ export const DISPLAY_CARD_TITLE = `${FONT_DISPLAY} text-[length:var(--ds-text-2x
 export const PUBLIC_LEAD = 'text-pretty text-[length:var(--ds-text-lg)] leading-7 text-[var(--ds-muted)] medium:text-[length:var(--ds-text-xl)] medium:leading-8';
 /** Public body copy (Atlas text-[15px] leading-7, muted). */
 export const PUBLIC_BODY = 'text-[length:var(--ds-text-md)] leading-7 text-[var(--ds-muted)]';
+/**
+ * Running legal text (Privacy, Terms): Atlas LegalDocumentPage's reading values on the tokens — the 15/28 muted body,
+ * ink semibold section titles with room above, ink <strong>, muted list markers, long words that wrap instead of
+ * scrolling a phone sideways. The app ships no typography plugin, so the recipe styles the pages' plain tags.
+ */
+export const LEGAL_PROSE =
+  'text-[length:var(--ds-text-md)] leading-7 text-[var(--ds-muted)] [overflow-wrap:break-word] marker:text-[var(--ds-muted)] [&>:first-child]:mt-0 [&_h3]:mt-10 [&_h3]:text-[length:var(--ds-text-lg)] [&_h3]:font-semibold [&_h3]:leading-6 [&_h3]:tracking-[-0.01em] [&_h3]:text-[var(--ds-ink)] [&_p]:mt-3 [&_ul]:mt-3 [&_strong]:font-semibold [&_strong]:text-[var(--ds-ink)]';
 /** The public hero / panel call-to-action shape (Atlas h-11 rounded-full px-7 text-[15px]); pass as className to Button size="lg". */
 export const CTA_LG = `h-11 px-7 has-[>svg]:px-7 text-[length:var(--ds-text-md)] ${RADIUS_ROUND}`;
 /** The trailing arrow that nudges 2 px on hover (put `group` on the button); still under reduced motion. */
