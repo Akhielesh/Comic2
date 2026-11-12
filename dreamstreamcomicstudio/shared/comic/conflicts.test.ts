@@ -53,6 +53,30 @@ describe('entityKeys', () => {
   });
 });
 
+describe('entityKeys: motion (S2 integration, PE-0 wave note 7)', () => {
+  const clip = (pageId: string, id: string, patch: unknown = { role: 'enter', preset: 'pop' }): DocOp => ({ op: 'motion', pageId, id, patch } as unknown as DocOp);
+  const camera = (pageId: string, patch: unknown = { hold: 400 }): DocOp => ({ op: 'page_motion', pageId, patch } as unknown as DocOp);
+
+  it("a clip's upsert or delete is that clip of that page; page_motion is the page's camera and hold", () => {
+    expect(entityKeys(clip('pg_1', 'mc_a'))).toEqual(['motion:pg_1:mc_a']);
+    expect(entityKeys(clip('pg_1', 'mc_a', null))).toEqual(['motion:pg_1:mc_a']);
+    expect(entityKeys(camera('pg_1'))).toEqual(['page_motion:pg_1']);
+    expect(entityKeys(camera('pg_1', null))).toEqual(['page_motion:pg_1']);
+    // Malformed ops change no tracked entity.
+    expect(entityKeys({ op: 'motion', pageId: 'pg_1' } as unknown as DocOp)).toEqual([]);
+    expect(entityKeys({ op: 'page_motion' } as unknown as DocOp)).toEqual([]);
+  });
+
+  it('two clips never collide, the same clip does, and the camera never collides with a clip', () => {
+    expect(collidingKeys([clip('pg_1', 'mc_a')], [clip('pg_1', 'mc_b')])).toEqual([]);
+    expect(collidingKeys([clip('pg_1', 'mc_a')], [clip('pg_2', 'mc_a')])).toEqual([]);
+    expect(collidingKeys([clip('pg_1', 'mc_a')], [clip('pg_1', 'mc_a', null)])).toEqual(['motion:pg_1:mc_a']);
+    expect(collidingKeys([camera('pg_1')], [camera('pg_1', null)])).toEqual(['page_motion:pg_1']);
+    expect(collidingKeys([camera('pg_1')], [clip('pg_1', 'mc_a')])).toEqual([]);
+    expect(lineIdOfKey('motion:pg_1:mc_a')).toBeUndefined();
+  });
+});
+
 describe('collidingKeys', () => {
   it('two different balloons on one page never collide; the same balloon does', () => {
     expect(collidingKeys([move('ln_a', 0.1)], [move('ln_b', 0.4)])).toEqual([]);
