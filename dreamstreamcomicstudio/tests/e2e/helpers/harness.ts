@@ -32,7 +32,7 @@ export type QaQuery = Partial<{
   surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit' | 'app' | 'pro';
   /** surface=kit: the component scene (qa/KitScenes.tsx). */
   kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art' | 'model-picker' | 'model-confirm';
-  fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty';
+  fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty' | 'chat-14';
   tab: string;
   page: number;
   lang: string;
