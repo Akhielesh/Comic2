@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { get } from '../services/apiClient';
 import { Project } from '../types';
 import { ComicReader } from './ComicReader';
+import type { LegalDocId } from './legal/legalRoutes';
 import { useAuth } from '../contexts/AuthContext';
 import { Loader2, Lock, AlertTriangle, LogIn } from 'lucide-react';
 
@@ -11,6 +12,8 @@ interface SharedViewerProps {
     onOpenPrivacy: () => void;
     onOpenTerms: () => void;
     onOpenFaq: () => void;
+    /** The reader footer's other legal documents, opened in the app (passed through to ComicReader). */
+    onOpenLegal?: (doc: LegalDocId) => void;
 }
 
 type ViewerState =
@@ -25,6 +28,7 @@ export const SharedViewer: React.FC<SharedViewerProps> = ({
     onOpenPrivacy,
     onOpenTerms,
     onOpenFaq,
+    onOpenLegal,
 }) => {
     const { user } = useAuth();
     const [state, setState] = useState<ViewerState>({ status: 'loading' });
@@ -107,6 +111,7 @@ export const SharedViewer: React.FC<SharedViewerProps> = ({
             onOpenPrivacy={onOpenPrivacy}
             onOpenTerms={onOpenTerms}
             onOpenFaq={onOpenFaq}
+            onOpenLegal={onOpenLegal}
         />
     );
 };

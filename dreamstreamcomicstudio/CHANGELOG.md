@@ -6,6 +6,162 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **The full legal suite (2026-11-05, dated November 12, 2026 after its last review):** six
+  documents, each at its own address, written to match what the product does today: **Terms of Service**
+  (`/terms`; one name on the legal pages, the footers, Stream Studio and the sign-up form, with
+  the YouTube Terms of Service agreement, the AI notice,
+  Stream Studio recording consent, the baby monitor's safety terms and "no charges today"),
+  an expanded **Privacy Policy** (`/privacy`; every category we collect, Stream Studio's
+  monitor, tracker, calls, people search and alerts, the email open-tracking image, interest
+  registrations, legal bases, a retention table, rights and how to use them; in the
+  `#google-user-data` section, the Limited Use statements are unchanged, and the additions are the
+  YouTube Terms of Service sentence, the YouTube revocation link, a sentence that DreamStream
+  doesn't train AI models of its own on Google user data, and an HTTPS line that now names the
+  connections it covers), and new
+  **Acceptable Use** (`/acceptable-use`), **Copyright & DMCA** (`/copyright`), **Cookies & Local
+  Storage** (`/cookies`) and **Subprocessors** (`/subprocessors`) pages. Every page has a table of
+  contents and stable section anchors. `?view=privacy` and `?view=terms` still work (the Google
+  consent screen uses them) and land on the new paths. The footer and Stream Studio link to the
+  real paths. Tests tie the retention numbers, providers, contacts and age rule to the code.
+
+- **Register interest (2026-11):** the home page's "stay updated" form lets you pick the studios
+  you want to hear about (Comic, Stream, Chat, Atlas, future studios). It is the updates double
+  opt-in: one email with a link that opens a Confirm page, and no updates until you press
+  Confirm there. Anyone can type any address, so every request gets the same answer, at most one
+  confirmation email goes to an inbox every 10 minutes (3 a day, the address's +tag and Gmail dot
+  spellings counted together), and a subscriber's picks change only when they press Confirm.
+
+### Fixed
+- **Legal suite, ninth review (2026-11-12):** Stream Studio's unsaved recordings now really go
+  to the browser's private file storage as you record: a check for something browsers offer
+  only to background workers kept every recording in memory, so "Decide later" lost it while
+  saying it was kept. A recording the browser can't store asks before its save screen closes.
+  Another account at the device can no longer delete your unsaved recordings: it sees only how
+  many there are and their size. Anyone there can delete the ones offered to no one, and only
+  the ones the confirmation named. The comic reader gives each picture the size it last loaded
+  at here (or the shape it was made in) before it loads, and reopens on the panel you were on,
+  as far into it, whatever the screen width (on phones it reopened several panels late, or at
+  the end of a long comic). Settings → Contact keeps keyboard focus on Send while it sends, ties
+  each label to its field, and clears the message once it is sent. A confirmation whose send
+  record was written but not acknowledged no longer counts against the inbox, and a held
+  confirmation is logged for us.
+- **Legal suite, eighth review (2026-11-12):** in Stream Studio, an unsaved recording an earlier
+  version made is no longer given to whichever account held the device when this version first
+  ran: that version kept no note of the account, so the one who made it, and anyone else there,
+  is offered it while that version's list names it, as that version offered it, and one it had
+  stopped listing is offered to no one (counted, deletable). A tab still running the earlier
+  version can no longer hand a recording to the next account by rewriting its entry, and a full
+  browser storage changes nothing about who is offered what. Stream Studio removes a share-link
+  guest's pass 90 days past its end when it next opens on that device, whichever nursery it is
+  for. The comic reader keeps a restored place while a tap brings its controls back or a key is
+  typed in a field, keeps it until the images above it have loaded (on phones it landed on a
+  later panel and saved that), and saves where a screen reader or find in page moved you (the
+  ninth review, above, replaced this with pictures that have their size before they load). Moving
+  to another legal document from its navigation or a link in its text moves keyboard focus to the
+  new document's title. The Privacy Policy says when the confirmation email isn't sent, and the
+  Cookies notice that the reader keeps when you last read each comic. Public-form email whose send
+  can't be logged is no longer sent, and the email previews no longer go stale on 1 January.
+- **Legal suite, seventh review (2026-11-12):** in Stream Studio, a recording whose entry a tab
+  still on the earlier version drops comes back for its own account, never for whoever holds the
+  device then (the eighth review, above, changed how an earlier version's own recordings are
+  offered). One whose account can't be told is
+  offered to no one: the dashboard shows how many there are and their size, and can delete them.
+  A recording you downloaded no longer comes back as "Recovered recording" when the browser can't
+  note it for deleting, or can't delete it yet. The comic reader no longer saves page 1 when it
+  opens (or twice under `npm run dev`), and a saved page beyond a shortened comic's end opens on
+  its last page. A link to the legal document already shown, or the footer under one, moves
+  keyboard focus to the document's title. The Privacy Policy says what a memory import sends
+  from JSON it doesn't recognise (a Google Takeout file: all of it, replies included), and the
+  Cookies notice every way a signed-out guest's pass goes. A slow send no longer stands out after
+  an hour with no sends, and the security notes state the timing and cap residuals as they are.
+- **Legal suite, sixth review (2026-11-12):** Stream Studio no longer deletes recordings on
+  start: a kept recording an earlier version dropped from its list (it kept only the 10 newest)
+  is listed again under Unsaved recordings as "Recovered recording", and only empty files are
+  deleted. Signing out of Stream Studio or DreamStream now also removes guest passes from
+  nurseries' share links (since the eighth review, neither sign-out touches unsaved recordings).
+  The comic reader keeps your page, mode and scroll
+  position when you open a legal document from it and come back. A link to a section of another
+  legal document moves keyboard focus to that section, and a link to the document already shown
+  goes to its top without adding a history entry. The Privacy Policy now says what turning memory
+  off doesn't stop (the in-app list, synced to your account), what a memory import sends from an
+  export file, and that the quick-finder isn't in Stream Studio; the Cookies notice lists what stays
+  after a sign-out in full. The confirmation email no longer promises at most 3 a day for spellings
+  we can't recognise as one inbox. One slow send now holds form answers for an hour at most.
+- **Legal suite, DreamStream review (2026-11-12):** all six documents now open in the app from
+  the comic reader's footer (four used to load a new page and leave the comic), and Back to a
+  comic opened from your comics or a public link shows it again without reloading it or counting
+  another view. A comic opened from a share link (`/share/…`) loads again. The Stream Studio hand-off
+  for stream-only accounts and the date-of-birth prompt wait until you leave a legal page. The
+  Privacy Policy now says free models may keep and learn from what they receive, and it
+  describes the Contact form in Settings (with a retention row) and importing memories from
+  another AI tool. Its wording on unsaved recordings from an earlier version of Stream Studio is
+  more precise. The Contact form now says "Thanks — we'll reply by email." and makes no
+  business-hours promise. The site footer is a navigation landmark, with 44 px touch targets.
+- **Legal suite and register interest, fifth review (2026-11-12):** a legal page's Back button
+  now returns to the page that opened it after you use its table of contents or a link to a
+  section (those jumps stay on the same history entry, and a link to a section of another
+  document opens it in the app), and the home page's and Comics landing's footers and the sign-up
+  form's consent links now give the document its own history entry, so Back returns there
+  instead of leaving the site. The Privacy Policy now describes both ways memory notes are written
+  (after an answer, through the provider that answered; from Chat Studio, through your pick under
+  Settings → API & Models), OpenAI's GPT-4o mini as the fallback model, what turning memory off
+  does and doesn't stop, the quick-finder (selected text goes to Chat Studio's AI on every page
+  but sign-in and shared comics), Ideogram in the classic editor, and the early-access receipt's
+  real limits. The confirmation email no longer says "nothing happens" if you ignore it, and says
+  how to have your address removed. A Confirm click that races a new registration shows the page
+  again instead of dropping the new pick, and a throttled answer now takes as long as a sent one
+  from the first request after the backend wakes. In Stream Studio, a recording started after a
+  sign-out elsewhere still belongs to the host, unsaved recordings are never pushed off the list
+  (and old orphaned copies are deleted on start), another account's leftover recordings can be
+  deleted from the dashboard without seeing them, older untagged recordings no longer go to
+  whoever lists them first, and signing out also removes the names of people you called.
+- **Legal suite and register interest, final review (2026-11-12):** the Privacy Policy now says
+  that each Chat Studio message you send while signed in also goes to Google's Gemini API to
+  search your memory notes, whichever model answers, and describes how memory notes are written
+  (corrected in the fifth review). Comic Studio's writing steps name NVIDIA, Supabase is listed among the services your
+  browser loads, team announcements are named as service email without an unsubscribe link, and
+  invitations and usage records have retention rows. Signing out of Stream Studio now also
+  removes the name you used as a viewer, and recordings you never saved are offered only to the
+  account they were made for. A legal page's own Back button now does what the browser's Back does
+  (back to Settings on its Legal tab, the gallery, a shared comic, the reader, the editor or a
+  profile). The register-interest and early-access emails can't be multiplied with address
+  aliases or parallel requests, early-access receipts go once a day per inbox and share the
+  confirmation email budget, a capped mailer answers every address the same way, the Confirm
+  button applies only the studios its page showed, no request can put a name into our email,
+  and the confirmation email describes the two-step page.
+- **Legal suite review fixes (2026-11-05):** the pages now name everything a browser loads
+  straight from other companies (map tiles, radar, site icons, market logos, QR codes, the Python
+  runtime, code previews, STUN servers, images in answers), on both the Cookies notice and a new
+  Subprocessors section, with a test that fails on a new host in the client code, the CSP, the
+  ICE servers or Chat Studio's tools. The Privacy Policy now covers API keys stored with your
+  account, the site-wide assistant (and the feedback it saves automatically), per-answer usage
+  events, the approximate location sent to the model (and its plain-HTTP lookup), project images
+  at unguessable public addresses, that a username can reveal its email address today, what a
+  Stream Studio event keeps, Supabase sign-in records, notifications and deleted tracker entries.
+  Settings → Legal links to the documents instead of an old copy. Support links use the routed
+  support@ mailbox. Back and Forward work between legal pages opened in the app. Tables read as
+  cards on phones. Stream Studio links the Acceptable Use and Copyright policies. The sign-up
+  checkbox says "Terms of Service".
+- **Legal suite second review (2026-11-05):** the site-wide assistant's entry now says where it
+  runs (the main site and the comics site, including the classic editor and Page Studio) and
+  that it receives the open project's story overview, the first 600 characters of its script
+  and its style, layout and cover prompts. Chat Studio's place searches near you send your
+  location to Foursquare or OpenStreetMap, and news gets your country and language; the
+  Subprocessors page and the Privacy Policy say so. Frustrated assistant messages are named as a
+  diagnostics event too, MCP servers you add (and their tokens) are in the Cookies notice, and
+  the plain-HTTP exception covers websites the AI reads over HTTP. The comic reader's phone
+  sheet says "Terms of Service" (so does the server's sign-up error) and its Contact goes to
+  support@. A legal link in the reader's footer no longer leaves a stale reader entry in
+  the history, and Forward after Back reopens a legal page instead of leaving its address over
+  another view.
+- **Legal wording that didn't match the product (2026-11-05):** the sign-in page's copyright
+  line said "DreamStream Inc." (it is "DreamStream Studio"); the footer called the Terms
+  "Terms & Conditions"; the Stream Studio help said "we never ask for your Google
+  permissions" while saving to Drive from the save sheet does ask; the Privacy Policy's
+  children section and account-data list didn't match sign-up (8+, with phone and date of
+  birth).
+
+### Added
 - **See what's free — and what goes through our servers (2026-10-23):** Stream Studio now shows
   how each thing travels. Before you start: "Direct between you and your guests — free" on
   Instant meeting, and a ready check with the path before any Go live. While live: a small
@@ -92,6 +248,25 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Changed
+- **The privacy policy now covers connected Google accounts (2026-11-04):** a new section,
+  **Google User Data** (`/?view=privacy#google-user-data`), says what DreamStream reads from
+  Gmail, Drive, Calendar, Sheets and YouTube and why, what is sent to the AI model that answers
+  you and which providers that can be (including for the "You might ask" follow-up
+  suggestions), which search, lookup and reference services the model's tools can contact
+  (including the Jina Reader service used when a page can't be read directly), how chat memory
+  notes are kept and that they go with every later chat (and that deleting the saved copy
+  currently takes an email), who else receives it, how tokens are protected, how long it is
+  kept, and how to disconnect in DreamStream or remove access at
+  myaccount.google.com/connections. It
+  includes Google's Limited Use statements, the YouTube API Services notice with a link to the
+  Google Privacy Policy, a privacy contact (privacy@dreamstreamstudio.ai), and a November 4,
+  2026 date. The page follows the light/dark theme and jumps straight to a section from a `#`
+  link. Every contact address that pointed at dreamstream.com, a domain we don't own, is now on
+  dreamstreamstudio.ai: the Contact link in the Privacy · Terms · FAQs footer, Stream Studio's
+  Support link and guide, the comic reader's footer, and the support address in Account Settings
+  (all support@dreamstreamstudio.ai; the reader's footer first used contact@, which isn't routed,
+  until the legal suite moved it). The section also covers Atlas Studio,
+  which connects through the same Google apps, and links its own privacy policy.
 - **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
   shows one screen — sign in or create your DreamStream account, the same one as Comic Studio
   and Chat Studio — instead of the whole studio. Nothing sits behind it: no dashboard, events,

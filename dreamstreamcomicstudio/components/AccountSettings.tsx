@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { UserPrivateProfile, UserProfile } from '../types';
 import { supabase } from '../services/supabase';
 import {
@@ -28,6 +28,7 @@ import { getAdminAccess, getBillingSummary } from '../services/billing';
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { AdminConsole } from './admin/AdminConsole';
+import { TONE_TEXT } from './chat/studioDesign';
 import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
@@ -35,6 +36,8 @@ import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
+import { LEGAL_LAST_UPDATED, PRIVACY_EMAIL, SUPPORT_EMAIL } from './legal/legalFacts';
+import { LEGAL_DOCS } from './legal/legalRoutes';
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -55,18 +58,27 @@ type MessageState = { type: 'success' | 'error'; text: string } | null;
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
-const ContactSection = () => {
+export const ContactSection = () => {
     const { user } = useAuth();
     const [msg, setMsg] = useState('');
     const [contactEmail, setContactEmail] = useState(user?.email || '');
     const [phone, setPhone] = useState('');
     const [sent, setSent] = useState(false);
     const [sendError, setSendError] = useState<string | null>(null);
+    // A send that didn't go through points to the support mailbox (the form has nowhere else to send it).
+    const [sendFailed, setSendFailed] = useState(false);
+    // While it sends, Send stays focusable (aria-disabled, not disabled, which would drop keyboard focus to the page)
+    // and the ref, not the render, stops a second send.
+    const [sending, setSending] = useState(false);
+    const sendingRef = useRef(false);
+    const fieldId = useId();
     const words = normalizeText(msg) ? normalizeText(msg).split(/\s+/).length : 0;
 
     const send = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (sendingRef.current) return;
         setSendError(null);
+        setSendFailed(false);
         if (words > 300) return;
         const normalizedEmail = normalizeText(contactEmail);
         const normalizedMessage = normalizeText(msg);
@@ -76,12 +88,22 @@ const ContactSection = () => {
             return;
         }
         const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\n\n${normalizedMessage}` : normalizedMessage;
-        const saved = await savePublicContactMessage(normalizedEmail, finalMessage);
-        if (saved) {
-            setSent(true);
-        } else {
-            setSendError('Unable to send message right now. Please try again.');
+        sendingRef.current = true;
+        setSending(true);
+        let saved = false;
+        try {
+            saved = await savePublicContactMessage(normalizedEmail, finalMessage);
+        } catch {
+            saved = false;
+        } finally {
+            sendingRef.current = false;
+            setSending(false);
         }
+        if (saved) {
+            setMsg('');
+            setPhone('');
+            setSent(true);
+        } else setSendFailed(true);
     };
 
     if (sent) {
@@ -91,8 +113,8 @@ const ContactSection = () => {
                     <Mail size={40} />
                 </div>
                 <h3 className="font-display text-2xl">Message Sent!</h3>
-                <p className="font-comic text-slate-600 mt-2">A representative will be in touch shortly.</p>
-                <button onClick={() => setSent(false)} className="mt-8 text-sm font-bold underline">Send another</button>
+                <p className="font-comic text-slate-600 mt-2">Thanks — we'll reply by email.</p>
+                <button onClick={() => setSent(false)} className="mt-8 inline-flex items-center coarse:min-h-[44px] text-sm font-bold underline">Send another</button>
             </div>
         );
     }
@@ -101,17 +123,17 @@ const ContactSection = () => {
         <div className="max-w-xl animate-fade-in">
             <h3 className="font-display text-2xl mb-2">Contact Support</h3>
             <p className="text-slate-500 mb-6 font-comic">
-                Share bugs, billing issues, or feature requests. We usually reply within 1-2 business days.
+                Share bugs or feature requests.
             </p>
             <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
                 <p className="font-bold mb-1">Basic Contact Info</p>
-                <p className="text-slate-600">Support Email: support@dreamstream.com</p>
-                <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
+                <p className="text-slate-600">Support Email: {SUPPORT_EMAIL}</p>
             </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
-                    <label className="font-bold text-xs uppercase">Your Email</label>
+                    <label htmlFor={`${fieldId}-email`} className="font-bold text-xs uppercase">Your Email</label>
                     <input
+                        id={`${fieldId}-email`}
                         type="email"
                         required
                         value={contactEmail}
@@ -120,8 +142,9 @@ const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Phone Number (Optional)</label>
+                    <label htmlFor={`${fieldId}-phone`} className="font-bold text-xs uppercase">Phone Number (Optional)</label>
                     <input
+                        id={`${fieldId}-phone`}
                         type="tel"
                         value={phone}
                         onChange={e => setPhone(e.target.value)}
@@ -129,8 +152,9 @@ const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Message (300 words max)</label>
+                    <label htmlFor={`${fieldId}-message`} className="font-bold text-xs uppercase">Message (300 words max)</label>
                     <textarea
+                        id={`${fieldId}-message`}
                         required
                         rows={6}
                         value={msg}
@@ -142,7 +166,12 @@ const ContactSection = () => {
                     </div>
                 </div>
                 {sendError && <div className="text-xs font-bold text-red-600">{sendError}</div>}
-                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300}>Send Message</Button>
+                {sendFailed && (
+                    <div role="alert" className={`text-xs font-bold ${TONE_TEXT.danger}`}>
+                        We couldn't send that. Please email <a href={`mailto:${SUPPORT_EMAIL}`} className="inline-flex items-center coarse:min-h-[44px] underline">{SUPPORT_EMAIL}</a> instead.
+                    </div>
+                )}
+                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300} aria-disabled={sending || undefined} aria-busy={sending || undefined}>{sending ? 'Sending…' : 'Send Message'}</Button>
             </form>
         </div>
     );
@@ -1011,35 +1040,34 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
+    // The legal documents live at their own pages (components/legal/): link to them, never a copy.
     const renderLegal = () => (
         <div className="space-y-6 animate-fade-in max-w-3xl">
-            <div className="bg-white border-2 border-black rounded-xl p-6 h-[400px] overflow-y-auto font-mono text-xs leading-relaxed">
-                <h3 className="font-bold text-lg mb-4 underline">Privacy Policy</h3>
-                <p><strong>Last Updated: Feb 11, 2026</strong></p>
-                <p className="mt-2">DreamStream processes account, project, and operational data to run comic generation and community features.</p>
-                <p className="mt-4 font-bold">1. Data We Process</p>
-                <p>Account/profile data, consent values, project scripts/prompts/images, artifacts/logs, comments/follows/reviews, token usage ledger events, and support messages.</p>
-                <p className="mt-4 font-bold">2. Where Data Is Processed</p>
-                <p>Supabase (auth/db/storage), Google Gemini APIs (text/image/vision), Pixazo Flux endpoint (image generation), and Stripe for subscriptions, credit packs, and payment methods.</p>
-                <p className="mt-4 font-bold">3. Device Storage</p>
-                <p>LocalStorage/IndexedDB may keep key settings, guest projects, test runs/images, reader state, and local notifications.</p>
-                <p className="mt-4 font-bold">4. Visibility and Retention</p>
-                <p>Projects remain private unless you publish them. We retain operational/security records as needed for legal and service integrity.</p>
-
-                <hr className="my-6 border-slate-200" />
-
-                <h3 className="font-bold text-lg mb-4 underline">Terms of Service</h3>
-                <p><strong>Effective Date: Feb 11, 2026</strong></p>
-                <p className="mt-4 font-bold">1. Your Responsibilities</p>
-                <p>You are responsible for account security, key handling, rights clearance, and lawful use of generated output.</p>
-                <p className="mt-4 font-bold">2. Plans and BYOK</p>
-                <p>Token-based limits apply by plan tier. If you supply your own provider key, provider-side charges remain your responsibility.</p>
-                <p className="mt-4 font-bold">3. Prohibited Use</p>
-                <p>No unlawful, abusive, infringing, deceptive, or infrastructure-harmful activity.</p>
-                <p className="mt-4 font-bold">4. Enforcement and Availability</p>
-                <p>We may remove content or suspend accounts for policy/legal/security reasons. Features and integrations may change over time.</p>
-                <p className="mt-4 font-bold">5. Disclaimers</p>
-                <p>Service and AI output are provided as-is; outputs are not guaranteed accurate/original and must be reviewed before publication.</p>
+            <div className="bg-white border-2 border-black rounded-xl p-6">
+                <h3 className="font-bold text-lg mb-1">Legal documents</h3>
+                <p className="text-sm text-slate-600 mb-4">
+                    Last updated <time dateTime={LEGAL_LAST_UPDATED.iso}>{LEGAL_LAST_UPDATED.label}</time>. They cover Comic Studio, Chat Studio and Stream Studio.
+                </p>
+                <ul className="space-y-2">
+                    {LEGAL_DOCS.map((doc) => (
+                        <li key={doc.id}>
+                            <a
+                                href={doc.path}
+                                onClick={(e) => {
+                                    if (!onNavigate || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                                    e.preventDefault();
+                                    onNavigate(doc.id);
+                                }}
+                                className="font-bold underline"
+                            >
+                                {doc.title}
+                            </a>
+                        </li>
+                    ))}
+                </ul>
+                <p className="text-sm text-slate-600 mt-4">
+                    Privacy questions and requests: <a href={`mailto:${PRIVACY_EMAIL}`} className="underline">{PRIVACY_EMAIL}</a>
+                </p>
             </div>
         </div>
     );

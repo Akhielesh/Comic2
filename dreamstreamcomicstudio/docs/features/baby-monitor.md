@@ -371,7 +371,8 @@ The nursery's MonitorRoom is the authority; nothing about guests lives in Supaba
   Parents get a push (`guest` category) for each new guest, a lock, and a
   shutdown.
 - **Guest pass**: a 256-bit token stored only as SHA-256, kept on the guest's
-  device, sent in the socket's first frame. It ends with the link (1 / 7 / 30
+  device (removed there when an account signed in on that device signs out:
+  `live/accountPurge.ts`), sent in the socket's first frame. It ends with the link (1 / 7 / 30
   days or until turned off; at most 90 days), when a parent removes the guest,
   or when the link is replaced or turned off. Up to 10 guests per link.
   The room is the authority on when it ends: a guest's `hello` carries

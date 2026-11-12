@@ -44,7 +44,7 @@ import { CLOUD_COPY_DRIVE_TIP, CLOUD_COPY_HEAD, FREE_CHIP, allowanceLevel, cloud
 import { addSave, type SaveDest } from '../usage/ledger';
 import { fmtBytes, fmtDuration } from '../metrics';
 import { cloudCopyNoticePending, loadPrefs, markCloudCopyNoticeSeen, savePrefs, type StudioPrefs } from '../prefs';
-import { discardOpfsRecording, removeUnsaved, type FinishedRecording } from '../recorder';
+import { discardOpfsRecording, removeUnsaved, sweepOrphanRecordings, type FinishedRecording } from '../recorder';
 import {
   DRIVE_UPLOAD_URL,
   canPickFolder,
@@ -63,28 +63,65 @@ import { Btn, Meter, cx, type PushToast } from '../ui/primitives';
 
 const DISCARD_KEY = 'ds-live-discard-later';
 
-/** Downloads read the disk copy lazily — delete it later, not right away. */
-function discardLater(name: string | null): void {
-  if (!name) return;
-  removeUnsaved(name);
-  try {
-    const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as { name: string; at: number }[];
-    list.push({ name, at: Date.now() });
-    localStorage.setItem(DISCARD_KEY, JSON.stringify(list.slice(-20)));
-  } catch { /* storage unavailable */ }
+type DiscardItem = { name: string; at: number };
+
+/** The disk copies waiting to be deleted (discardLater). Throws when the list can't be read. */
+function readDiscardList(): DiscardItem[] {
+  const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as unknown;
+  if (!Array.isArray(list)) throw new Error('not a list');
+  return list as DiscardItem[];
 }
 
-/** Run on app start: purge disk copies of recordings downloaded >1 h ago. */
-export async function sweepDiscardedRecordings(): Promise<void> {
+/**
+ * Downloads read the disk copy lazily — delete it later, not right away. The name goes on this list
+ * before it leaves the unsaved registry, so it is always on one of the two: the start-up sweep
+ * (sweepOrphanRecordings) lists a disk copy neither names as a recording to recover. When this list
+ * can't be written (storage full or blocked), the entry stays in the registry, with its title and
+ * owner, until it is deleted by hand. No cap: a name dropped from here would come back as an unsaved
+ * recording.
+ */
+function discardLater(name: string | null): void {
+  if (!name) return;
   try {
-    const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as { name: string; at: number }[];
-    const keep: typeof list = [];
-    for (const item of list) {
-      if (Date.now() - item.at > 60 * 60_000) await discardOpfsRecording(item.name);
-      else keep.push(item);
+    localStorage.setItem(DISCARD_KEY, JSON.stringify([...readDiscardList(), { name, at: Date.now() }]));
+  } catch {
+    return;
+  }
+  removeUnsaved(name);
+}
+
+/**
+ * Run on app start: purge disk copies of recordings downloaded >1 h ago, then list again any disk
+ * copy no list names any more (recorder.ts sweepOrphanRecordings, which reads this list itself, after
+ * reading the disk). Only the names whose disk copy is gone leave the list, re-read first, so a name
+ * another tab added meanwhile stays on it, and one whose file couldn't be deleted is tried again at
+ * the next start instead of being listed again as an unsaved recording.
+ */
+export async function sweepDiscardedRecordings(): Promise<void> {
+  let due: string[];
+  try {
+    due = readDiscardList().filter((item) => Date.now() - item.at > 60 * 60_000).map((item) => item.name);
+  } catch {
+    // Storage unavailable or unreadable: without this list nothing can tell an orphan from a
+    // download in progress, so no disk copy is touched.
+    return;
+  }
+  const done = new Set<string>();
+  for (const name of due) if (await discardOpfsRecording(name)) done.add(name);
+  if (done.size) {
+    try {
+      localStorage.setItem(DISCARD_KEY, JSON.stringify(readDiscardList().filter((item) => !done.has(item.name))));
+    } catch {
+      return;
     }
-    localStorage.setItem(DISCARD_KEY, JSON.stringify(keep));
-  } catch { /* storage unavailable */ }
+  }
+  await sweepOrphanRecordings(() => {
+    try {
+      return readDiscardList().map((item) => item.name);
+    } catch {
+      return null;
+    }
+  });
 }
 
 type Target = StudioPrefs['saveTarget'];
@@ -425,9 +462,12 @@ export function SaveSheet({
     return true;
   };
 
+  // Only a recording on disk (opfsName) is kept for later. One the browser couldn't write to its private file storage
+  // is only in this tab's memory and goes with the sheet, so leaving without saving it asks first.
   const keepForLater = () => {
     if (!okToLeave()) return;
-    if (!saved.length) push('Kept on this device — find it under “Unsaved recordings” on the dashboard', { icon: 'info', duration: 3600 });
+    if (!saved.length && !rec.opfsName && !window.confirm('This recording is only in this tab, not stored on this device. Close without saving it? It will be lost.')) return;
+    if (!saved.length && rec.opfsName) push('Kept on this device — find it under “Unsaved recordings” on the dashboard', { icon: 'info', duration: 3600 });
     onClose();
   };
 

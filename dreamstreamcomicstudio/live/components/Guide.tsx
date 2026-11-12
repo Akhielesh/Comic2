@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } fro
 import { Icon } from '../ui/icons';
 import { Btn, cx } from '../ui/primitives';
 import { STREAM_HOST_ON, STREAM_HOSTNAME } from '@/shared/streamHost';
+import { SUPPORT_EMAIL } from '@/components/legal/contacts';
 
 export interface TourStep {
   target?: string;
@@ -457,7 +458,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     icon: 'record',
     items: [
       { q: 'Where do recordings go?', a: 'When a recording stops you choose: your Google Drive, a folder on your computer, Share (Photos/Files on phones), or Downloads. All of these are free and the file is yours to keep — nothing is kept on our servers unless you also choose a 7-day copy. Tick “Remember my choice” to skip the question next time.', tags: 'download save free drive device' },
-      { q: 'Save to Google Drive without signing in to Google here', a: 'On a computer with Google Drive for desktop, pick your “My Drive” folder once — every recording then saves straight into it and Drive syncs it. On phones, choose Drive in the share menu. We never ask for your Google password or permissions.', tags: 'drive oauth' },
+      { q: 'Save to Google Drive without signing in to Google here', a: 'On a computer with Google Drive for desktop, pick your “My Drive” folder once — every recording then saves straight into it and Drive syncs it. On phones, choose Drive in the share menu. This way needs no Google sign-in and no Google permissions. (Choosing Google Drive in the save sheet instead asks for your Google permission to create a “DreamStream Recordings” folder and save into it — it can only see the files it saves there.)', tags: 'drive oauth' },
       { q: 'Time limits & alerts', a: 'Customize → Recording: set a stream or recording length limit. You’ll get alerts at 5 minutes, 1 minute and 10 seconds (with a one-tap +15 min for streams), then it stops and asks where to save.', tags: 'duration limit timer' },
       { q: 'I closed the tab before saving', a: 'Recordings are written to this device’s disk as they record. Reopen the studio (or the dashboard) and choose “Save it now”.', tags: 'recover lost' },
       { q: '7-day cloud copy', a: 'Off unless you choose it. In the save sheet, “Keep a 7-day copy” puts a copy on our servers so you can download it from the recap on any device; it’s deleted after 7 days. The sheet shows its size and how much of your 10 GB of 7-day copies is in use before anything uploads. It uses your upload and our storage, so Google Drive or this device (both free, and yours for good) come first. To copy every recording automatically, turn on “Also keep a 7-day cloud copy” in Customize → Recording.', tags: 'cloud copy server storage quota 10 GB link' },
@@ -503,7 +504,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Black video or “can’t decode”', a: 'Ask the host to stream from Chrome/Edge/Safari (MP4). iPhones can’t play WebM streams.' },
       { q: 'No sound', a: 'Browsers start muted — tap the speaker / “Tap to hear”.' },
       { q: 'Camera or mic blocked', a: 'Allow camera & microphone for this site in your browser’s site settings, then reload.' },
-      { q: 'Contact support', a: 'Email contact@dreamstream.com with what you were doing and the device/browser.' },
+      { q: 'Contact support', a: `Email ${SUPPORT_EMAIL} with what you were doing and the device/browser.` },
     ],
   },
 ];
@@ -570,7 +571,7 @@ function HelpPanel({ screenTour, initialGuide, onClose }: { screenTour: TourId |
               )}
             </section>
           )}
-          {results.length === 0 && guides.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email contact@dreamstream.com.</div>}
+          {results.length === 0 && guides.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email {SUPPORT_EMAIL}.</div>}
           {results.map((s) => (
             <section key={s.section} className="help-sect">
               <h3><Icon name={s.icon} size={15} />{s.section}</h3>

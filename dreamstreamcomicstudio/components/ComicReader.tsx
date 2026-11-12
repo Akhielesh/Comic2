@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
+import { Project, ComicPanel, DialogueBlock, TextLayout, ReaderState } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles, MoreHorizontal, Library, LayoutDashboard, Info, Rows3, LogIn } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
@@ -12,10 +12,14 @@ import { submitReview } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
+import { SUPPORT_EMAIL } from './legal/legalFacts';
+import type { LegalDocId } from './legal/legalRoutes';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import { halftone } from './comicstudio/library/procedural/textures';
 import { useBackLayer } from './comicstudio/mobile/backStack';
+import { parseRatio } from '../services/imageUtils';
+import { getGridTemplate } from '../services/panelLayout';
 import {
   IOS_FULLSCREEN_NOTE,
   enterFullscreen,
@@ -31,6 +35,20 @@ import {
 // phones and tablets; the width test covers narrow desktop windows.
 const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
 const CHROME_AUTO_HIDE_MS = 2500;
+// A picture's box before it loads: the size this browser last saw it at (kept with the reading place), else the ratio
+// it was generated at (a panel: a custom crop, its layout slot, the comic's style ratio; a Page Studio page: the
+// studio's ratio). The <img> gets it as width/height attributes, so the comic is (near) its final height at mount and a
+// restored place can't clamp; the loaded image's own ratio still wins (the UA maps them to aspect-ratio: auto w / h).
+type PanelBox = [number, number];
+type ReaderAnchor = NonNullable<ReaderState['anchor']>;
+const boxKeyOf = (panel: ComicPanel, idx: number) => panel.imageId || `${panel.id || 'panel'}:${idx}`;
+const ratioBox = (ratio: number | null): PanelBox | undefined => (ratio ? [1000, Math.round(1000 / ratio)] : undefined);
+const panelBoxHint = (state: Project['state'], idx: number): PanelBox | undefined => {
+  const custom = state.customAspectRatioEnabled && state.customAspectRatio ? parseRatio(state.customAspectRatio) : null;
+  const slots = state.gridTemplateId ? getGridTemplate(state.gridTemplateId)?.panelSlots : undefined;
+  const slot = slots && slots.length ? slots[idx % slots.length] : undefined;
+  return ratioBox(custom ?? parseRatio(slot?.effectiveRatio || state.styleAspectRatio || ''));
+};
 // Page Flip on phones: the dialogue goes UNDER the art (never beside it, where it ran off-screen) and the art gets
 // the rest of the page region. The dialogue may take at most this share of the region's height (less in landscape,
 // so the art stays large), and scrolls inside itself beyond that.
@@ -176,6 +194,8 @@ interface ComicReaderProps {
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
   onOpenFaq: () => void;
+  /** Opens the footer's other legal documents in the app (without it, those links load their page). */
+  onOpenLegal?: (doc: LegalDocId) => void;
 }
 
 /**
@@ -235,7 +255,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   onNavigate,
   onOpenPrivacy,
   onOpenTerms,
-  onOpenFaq
+  onOpenFaq,
+  onOpenLegal
 }) => {
   const { user } = useAuth();
   const [showStory, setShowStory] = useState(false);
@@ -369,6 +390,17 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
+  // Where the reader is, kept current for the save on close (below): an effect cleanup with no deps
+  // would see only the first render's mode and page, and by then the scroll box is already detached.
+  const lastPosition = useRef({ projectId: project.id, mode: readerMode, pageIndex, scrollTop: 0 });
+  const positionLoaded = useRef(false);
+  // The picture boxes this browser has seen for this comic (kept with its place), and the place to restore once the
+  // render that gives every picture its box is on the page.
+  const [seenBoxes, setSeenBoxes] = useState<Record<string, PanelBox>>({});
+  const seenBoxesRef = useRef(seenBoxes);
+  seenBoxesRef.current = seenBoxes;
+  const pendingPlace = useRef<{ anchor?: ReaderAnchor; scrollTop: number } | null>(null);
+  const [placeTick, setPlaceTick] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const touchMulti = useRef(false);
   const textLayout = project.state.textLayout || 'caption';
@@ -377,16 +409,38 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const allPanelsMissingArt = panelCount > 0 && panelsWithArtCount === 0;
 
   useEffect(() => {
+    // Per comic: until this comic's place has loaded nothing is saved, and an earlier comic's late answer
+    // (or its pending scroll save) never lands on this one.
+    let live = true;
+    positionLoaded.current = false;
+    pendingPlace.current = null;
     loadReaderState(project.id).then((state) => {
+      if (!live) return;
+      // The loaded place is what a close before the next render saves, not the defaults.
+      if (state) {
+        lastPosition.current = {
+          ...lastPosition.current,
+          mode: state.mode,
+          ...(typeof state.pageIndex === 'number' ? { pageIndex: state.pageIndex } : {}),
+          scrollTop: typeof state.scrollTop === 'number' ? state.scrollTop || 0 : lastPosition.current.scrollTop
+        };
+      }
+      positionLoaded.current = true;
+      setSeenBoxes(state?.boxes ?? {});
       if (!state) return;
       setReaderMode(state.mode);
       if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
-      if (typeof state.scrollTop === 'number') {
-        requestAnimationFrame(() => {
-          if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
-        });
+      if (state.mode === 'scroll' && (state.scrollTop || 0) > 0) {
+        pendingPlace.current = { anchor: state.anchor, scrollTop: state.scrollTop || 0 };
+        setPlaceTick((t) => t + 1);
       }
+    }, () => {
+      if (live) positionLoaded.current = true;
     });
+    return () => {
+      live = false;
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
   }, [project.id]);
 
   useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(readerRef.current))), []);
@@ -451,10 +505,20 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   }, [pageIndex, readerMode, pages]);
 
-  useEffect(() => {
-    return () => {
-      persistReaderState();
-    };
+  useLayoutEffect(() => {
+    lastPosition.current = { ...lastPosition.current, projectId: project.id, mode: readerMode, pageIndex };
+  });
+
+  // Closing the reader (or leaving it for another page, such as a legal document) saves where it was,
+  // so opening the comic again shows it as it was left. A layout cleanup runs before the scroll box
+  // is detached; the scroll debounce is cancelled so it can't write a later scrollTop of 0. Nothing is
+  // saved before the stored position has loaded (persistReaderState neither), which would overwrite it
+  // with the defaults: the mount's own save, and both mounts under StrictMode.
+  useLayoutEffect(() => () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    if (!positionLoaded.current) return;
+    const { projectId, mode, pageIndex: page, scrollTop } = lastPosition.current;
+    void saveReaderState({ projectId, mode, pageIndex: page, scrollTop: scrollRef.current?.scrollTop ?? scrollTop, ...placeOf(), updatedAt: Date.now() }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -462,14 +526,40 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   }, [readerMode]);
 
   const persistReaderState = (override?: Partial<{ mode: 'scroll' | 'flip'; pageIndex: number; scrollTop: number }>) => {
+    if (!positionLoaded.current) return;
     const payload = {
       projectId: project.id,
       mode: override?.mode ?? readerMode,
       pageIndex: override?.pageIndex ?? pageIndex,
       scrollTop: override?.scrollTop ?? (scrollRef.current?.scrollTop || 0),
+      ...placeOf(),
       updatedAt: Date.now()
     };
-    saveReaderState(payload);
+    void saveReaderState(payload).catch(() => undefined);
+  };
+
+  // The place to save (scroll mode): the picture at the top of the view and how far into it, so another width or a
+  // changed comic still reopens on it, and the box of each picture shown now (its loaded size, else the one kept), so
+  // boxes of pictures no longer in the comic go.
+  const placeOf = (): Pick<ReaderState, 'anchor' | 'boxes'> => {
+    const el = scrollRef.current;
+    if (!el) return {};
+    const viewTop = el.getBoundingClientRect().top;
+    let anchor: ReaderAnchor | undefined;
+    for (const item of Array.from(el.querySelectorAll<HTMLElement>('[data-panel-key]'))) {
+      const r = item.getBoundingClientRect();
+      if (r.bottom > viewTop + 1) {
+        anchor = { key: item.dataset.panelKey!, frac: r.height > 0 ? Math.max(0, (viewTop - r.top) / r.height) : 0 };
+        break;
+      }
+    }
+    const boxes: Record<string, PanelBox> = {};
+    el.querySelectorAll<HTMLImageElement>('img[data-box-key]').forEach((img) => {
+      const key = img.dataset.boxKey!;
+      const box: PanelBox | undefined = img.complete && img.naturalWidth > 0 ? [img.naturalWidth, img.naturalHeight] : seenBoxesRef.current[key];
+      if (box) boxes[key] = box;
+    });
+    return { anchor, boxes };
   };
 
   // renderPanelText removed — use <PanelDialogue /> component instead
@@ -499,6 +589,11 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   };
 
+  // A centred column shrink-wraps each panel to its picture, so there a picture's box gives its own width (capped at the
+  // column, as the loaded picture is); elsewhere the panel's column sets the width.
+  const shrinkWrap = !isNarrow && getLayoutClass().includes('items-center');
+  const coverKey = project.state.coverImageId || 'cover';
+
   // Only horizontal emphasis (col-span) survives — row-span needs fixed row heights, which
   // we removed, and it was the other half of the distortion. A full-width "splash" panel
   // still reads as a hero shot; the rest flow naturally at their own aspect ratios.
@@ -518,18 +613,34 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   };
 
+  // Also after a stored page loads: the comic may have fewer pages now than when it was saved.
   useEffect(() => {
     if (pageIndex >= pages.length && pages.length > 0) {
       setPageIndex(pages.length - 1);
     }
-  }, [pages.length]);
+  }, [pages.length, pageIndex]);
+
+  // The saved place, applied once, in the render that gives every picture its box (so the comic is near its full height
+  // and the scroll can't clamp): the anchored picture back at the top of the view, as far into it as it was; a record
+  // from before anchors were kept uses its scrollTop. Pictures that load later keep it in view (scroll anchoring).
+  useLayoutEffect(() => {
+    const place = pendingPlace.current;
+    const el = scrollRef.current;
+    if (!place || !el || readerMode !== 'scroll') return;
+    pendingPlace.current = null;
+    const { anchor } = place;
+    const item = anchor && Array.from(el.querySelectorAll<HTMLElement>('[data-panel-key]')).find((n) => n.dataset.panelKey === anchor.key);
+    if (item && anchor) {
+      const r = item.getBoundingClientRect();
+      el.scrollTop += r.top - el.getBoundingClientRect().top + anchor.frac * r.height;
+    } else el.scrollTop = place.scrollTop;
+  }, [placeTick, readerMode]);
 
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;
+    lastPosition.current.scrollTop = scrollRef.current?.scrollTop || 0;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      persistReaderState({ scrollTop: scrollRef.current?.scrollTop || 0 });
-    }, 400);
+    saveTimer.current = window.setTimeout(() => persistReaderState(), 400);
   };
 
   const goNext = () => {
@@ -975,8 +1086,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                 )}
                 {project.state.coverImageUrl && (
                   <div className="p-6 border-b-4 border-black bg-slate-100">
-                    <div className="border-4 border-black rounded-lg overflow-hidden shadow-comic">
-                      <img src={project.state.coverImageUrl} alt={`${project.name} cover`} className="block w-full h-auto animate-fade-in" />
+                    <div className="border-4 border-black rounded-lg overflow-hidden shadow-comic" data-panel-key={coverKey}>
+                      <img src={project.state.coverImageUrl} alt={`${project.name} cover`} width={seenBoxes[coverKey]?.[0]} height={seenBoxes[coverKey]?.[1]} data-box-key={coverKey} className="block w-full h-auto animate-fade-in" />
                     </div>
                   </div>
                 )}
@@ -988,10 +1099,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                  )}
                   {project.state.panels.map((panel, idx) => (
                     <RevealOnScroll key={idx} className={getPanelClass(idx)}>
-                      <div className="border-2 border-black shadow-sm relative">
-                        {panel.imageUrl ? (
-                          <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
-                        ) : (
+                      <div className="border-2 border-black shadow-sm relative" data-panel-key={boxKeyOf(panel, idx)}>
+                        {panel.imageUrl ? (() => {
+                          const key = boxKeyOf(panel, idx);
+                          const box = seenBoxes[key] ?? panelBoxHint(project.state, idx);
+                          return <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" width={box?.[0]} height={box?.[1]} data-box-key={key} className={`block ${shrinkWrap ? 'max-w-full' : 'w-full'} h-auto animate-fade-in`} />;
+                        })() : (
                           <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
                             Image missing for this panel
                           </div>
@@ -1006,17 +1119,21 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                      </div>
 	                    </RevealOnScroll>
 	                  ))}
-	                  {project.state.panels.length === 0 && project.state.pageStudio?.pages?.map((page, idx) => (
+	                  {project.state.panels.length === 0 && project.state.pageStudio?.pages?.map((page, idx) => {
+	                    const key = page.imageId || `page:${page.id || idx}`;
+	                    const box = seenBoxes[key] ?? ratioBox(parseRatio(project.state.pageStudio?.aspectRatio || ''));
+	                    return (
 	                    <RevealOnScroll key={page.id || idx} className="col-span-full">
 	                      {page.imageUrl ? (
-	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" className="mx-auto block h-auto max-w-full animate-fade-in border-2 border-black shadow-sm" />
+	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" width={box?.[0]} height={box?.[1]} data-box-key={key} data-panel-key={key} className="mx-auto block h-auto max-w-full animate-fade-in border-2 border-black shadow-sm" />
 	                      ) : (
-	                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black">
+	                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black" data-panel-key={key}>
 	                          Image missing for this page
 	                        </div>
 	                      )}
 	                    </RevealOnScroll>
-	                  ))}
+	                    );
+	                  })}
 	                  {project.state.panels.length === 0 && (project.state.pageStudio?.pages?.length || 0) === 0 && (
 	                    <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
 	                      This comic hasn't been drawn yet!
@@ -1163,6 +1280,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         onOpenPrivacy={leaveTo(onOpenPrivacy)}
         onOpenTerms={leaveTo(onOpenTerms)}
         onOpenFaq={leaveTo(onOpenFaq)}
+        onOpenLegal={onOpenLegal && ((doc) => leaveTo(() => onOpenLegal(doc))())}
       />
       )}
 
@@ -1174,9 +1292,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             <div className="text-xs uppercase font-bold text-slate-500">DreamStream</div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold text-slate-600">
               <button type="button" onClick={leaveTo(onOpenPrivacy)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
-              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
+              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms of Service</button>
               <button type="button" onClick={leaveTo(onOpenFaq)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
-              <a href="mailto:contact@dreamstreamstudio.ai" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
             </div>
           </div>
         </PhoneSheet>

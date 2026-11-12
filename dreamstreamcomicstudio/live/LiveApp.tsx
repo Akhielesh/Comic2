@@ -53,6 +53,7 @@ import { MfaNudge } from './views/account/MfaNudge';
 import { SignInGate } from './views/account/SignInGate';
 import { gateFor, holdsGuestPass, statusForGate } from './accessGate';
 import { reconcileLegacyAlerts } from './monitor/push';
+import { sweepExpiredGuestPasses } from './monitor/guest';
 
 export type Route =
   | { view: 'dashboard' | 'create' | 'settings' | 'monitor' | 'calls' }
@@ -340,10 +341,12 @@ export function LiveApp() {
   }, [appearance]);
 
   // Account settings follow the user: adopt cloud prefs when they're newer.
-  // Also purge disk copies of recordings that were downloaded a while ago.
+  // Also purge disk copies of recordings that were downloaded a while ago, and guest passes that
+  // can't still work (90 days past their end), whichever nursery they are for.
   useEffect(() => {
     void pullPrefsFromCloud();
     void sweepDiscardedRecordings();
+    sweepExpiredGuestPasses();
   }, []);
 
   useEffect(() => {

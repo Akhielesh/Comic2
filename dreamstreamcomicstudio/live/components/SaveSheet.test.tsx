@@ -189,6 +189,29 @@ describe('SaveSheet — Google Drive', () => {
   });
 });
 
+describe('SaveSheet — Decide later', () => {
+  it('a recording on disk is kept for later, and the toast says where to find it', () => {
+    const { push, onClose } = renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: 'Decide later' }));
+    expect(push).toHaveBeenCalledWith('Kept on this device — find it under “Unsaved recordings” on the dashboard', { icon: 'info', duration: 3600 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a recording held only in memory (the browser had no private file storage for it) is never said to be kept: leaving asks first, and staying keeps the sheet open', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const push = vi.fn();
+    const onClose = vi.fn();
+    render(<SaveSheet rec={{ ...rec(), opfsName: null }} push={push} onClose={onClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Decide later' }));
+    expect(confirm).toHaveBeenCalledWith('This recording is only in this tab, not stored on this device. Close without saving it? It will be lost.');
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalledWith(expect.stringContaining('Kept on this device'), expect.anything());
+    confirm.mockRestore();
+  });
+});
+
 const GB = 1024 ** 3;
 const quotaOf = (usedGb: number, extra: Partial<{ copies: number; nextFreeAt: number | null }> = {}) => ({
   usedBytes: usedGb * GB,

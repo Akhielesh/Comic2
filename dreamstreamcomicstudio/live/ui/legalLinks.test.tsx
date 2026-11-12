@@ -9,11 +9,13 @@ describe('LiveLegalLinks', () => {
     render(<LiveLegalLinks />);
 
     const nav = screen.getByLabelText(/legal and support links/i);
-    expect(within(nav).getByRole('link', { name: /privacy/i })).toHaveAttribute('href', '/?view=privacy');
-    expect(within(nav).getByRole('link', { name: /terms/i })).toHaveAttribute('href', '/?view=terms');
+    expect(within(nav).getByRole('link', { name: /privacy/i })).toHaveAttribute('href', '/privacy');
+    expect(within(nav).getByRole('link', { name: /terms/i })).toHaveAttribute('href', '/terms');
     expect(within(nav).getByRole('link', { name: /support/i })).toHaveAttribute(
       'href',
-      'mailto:contact@dreamstream.com?subject=Stream%20Studio%20support'
+      'mailto:support@dreamstreamstudio.ai?subject=Stream%20Studio%20support'
     );
+    expect(within(nav).getByRole('link', { name: /acceptable use/i })).toHaveAttribute('href', '/acceptable-use');
+    expect(within(nav).getByRole('link', { name: /copyright/i })).toHaveAttribute('href', '/copyright');
   });
 });

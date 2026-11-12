@@ -151,7 +151,7 @@ export const parseSignupInput = (
   if (!dob) return bad('Date of birth is required.');
   const dobError = dobProblem(dob, now);
   if (dobError) return bad(dobError);
-  if (raw.terms_accepted !== true) return bad('You must accept the Terms & Conditions.');
+  if (raw.terms_accepted !== true) return bad('You must accept the Terms of Service.');
   const displayName = text(raw.display_name).replace(/\s+/g, ' ');
   if (displayName.length > 40) return bad('Display name must be 40 characters or fewer.');
 

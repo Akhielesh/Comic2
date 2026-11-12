@@ -43,6 +43,7 @@ import type { Nav } from '../nav';
 import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
 import { accountSettled, getAccount, useAccount } from '../account';
+import { deviceOwner } from '../accountPurge';
 import { MAX_GUESTS, type ChatMsg, type EventKind, type LobbyEntry, type LogEntry, type PersonEntry, type StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
@@ -106,6 +107,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // The setup effect below runs once; it reads the latest name (the account may finish loading after mount).
   const hostNameRef = useRef(hostName);
   hostNameRef.current = hostName;
+  // The account this studio was opened for. Its recordings are tagged with it, and the studio offers
+  // that account's unsaved ones, even after a sign-out elsewhere clears the device's owner while the
+  // stream keeps going (live/recorder.ts DiskRecorder.start).
+  const recOwnerRef = useRef<string | null>(getAccount().userId ?? deviceOwner());
 
   // ------------------------------------------------------------------ refs
   const camRef = useRef<MediaStream | null>(null);          // current camera (video; first one also carries audio)
@@ -553,6 +558,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       // would otherwise announce "Host").
       await accountSettled();
       if (cancelled) return;
+      recOwnerRef.current = getAccount().userId ?? recOwnerRef.current;
       hostNameRef.current = prefs.hostName.trim() || getAccount().name?.trim() || hostNameRef.current;
       openSocket();
       await startMedia(p, takePrimedCamera());
@@ -566,7 +572,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       }
     }, 1000);
     // Recordings that reached disk but were never saved (crash / closed tab).
-    void listUnsavedRecordings().then((list) => !cancelled && setUnsaved(list.filter((r) => r.eventId === eventId)));
+    void listUnsavedRecordings(recOwnerRef.current).then((list) => !cancelled && setUnsaved(list.filter((r) => r.eventId === eventId)));
     // Who's talking: light the speaking ring on cam tiles and, in Spotlight/
     // Sidebar with focus on Auto and no screen on stage, follow the active
     // speaker (2.5 s hysteresis so the stage never ping-pongs mid-sentence).
@@ -902,7 +908,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       localRecRef.current = await DiskRecorder.start(mixed.clone(), mime, Math.round(streamBps * factor), file, {
         eventId,
         title: title || 'Untitled stream',
-      });
+      }, recOwnerRef.current);
       recStartRef.current = Date.now();
       recAlertsRef.current.clear();
       setRecElapsed(0);
@@ -946,7 +952,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
   const closeSaveSheet = () => {
     setPendingSave(null);
-    void listUnsavedRecordings().then((list) => setUnsaved(list.filter((r) => r.eventId === eventId)));
+    void listUnsavedRecordings(recOwnerRef.current).then((list) => setUnsaved(list.filter((r) => r.eventId === eventId)));
     afterSaveRef.current?.();
     afterSaveRef.current = null;
   };

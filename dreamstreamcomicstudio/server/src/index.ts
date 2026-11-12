@@ -49,6 +49,7 @@ import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
+import { adminInterestRouter, interestRouter } from './routes/interest.js';
 import { authEmailRouter } from './routes/authEmail.js';
 import { authHandoffRouter } from './routes/authHandoff.js';
 import { emailRouter } from './routes/email.js';
@@ -154,6 +155,9 @@ const moderationRateLimit = createRateLimit({
 // Auth emails (sign-up confirm / resend / reset / magic link): 10 per 10 minutes per IP. Runs
 // BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
 const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
+// Register interest: 10 per 10 minutes per IP, before optionalAuth so it always keys by IP. The
+// route adds Turnstile and a durable per-recipient throttle on the confirmation email.
+const interestRateLimit = createRateLimit({ scope: 'interest', windowMs: 600_000, maxRequests: 10 });
 
 // Comic Studio v5 per-route limits (contract §14.3). Scoped by user when signed in, else IP.
 // Mounted on their exact paths by routes/comicMounts.ts (never on the whole /api/comic prefix).
@@ -192,8 +196,13 @@ app.use('/api/models', systemRateLimit, modelsRouter);
 // is attached when a valid session is present.
 app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
-// signed-in user's id is attached when present; mounted before requireAuth.
+// signed-in user's id is attached when present; mounted before requireAuth. /subscribe sends the
+// same confirmation email as /api/interest, so it gets the same per-IP limiter (one shared
+// bucket, keyed by IP because it runs before optionalAuth) on top of systemRateLimit.
+app.use('/api/newsletter/subscribe', interestRateLimit);
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
+// Register interest in studios (public, logged-out; double opt-in through the newsletter row).
+app.use('/api/interest', interestRateLimit, optionalAuth, interestRouter);
 // Auth emails sent by the backend instead of Supabase's ~2/hour built-in mailer (public,
 // logged-out — sign-up and password reset happen before there is a session).
 app.use('/api/auth/email', authEmailRateLimit, optionalAuth, authEmailRouter);
@@ -275,6 +284,9 @@ app.use('/api/admin/email', adminRateLimit, requireAdmin, adminEmailRouter);
 // Admin cost centre (cost-benefit dashboard). Admin-only. Already rate-limited by the
 // '/api/admin' mount above (which runs for every /api/admin/* path), so no second limiter.
 app.use('/api/admin/costs', requireAdmin, adminCostsRouter);
+// Interest registrations: counts per studio, never an address. Admin-only; the '/api/admin'
+// mount above already rate-limits it.
+app.use('/api/admin/interest', requireAdmin, adminInterestRouter);
 // Admin model bench — in-app trigger + results for the all-models live test.
 // Benches may be RUN by researchers/analysts as well as admins (requireResearcher
 // includes admins); published DRS scores are readable by everyone via /api/models.

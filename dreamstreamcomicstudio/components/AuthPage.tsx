@@ -133,7 +133,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 if (!normalizedFirstName) throw new Error("First name is required.");
                 if (password.length < 8) throw new Error("Password must be at least 8 characters.");
                 if (password !== confirmPassword) throw new Error("Passwords do not match.");
-                if (!termsAccepted) throw new Error("You must accept the Terms & Conditions.");
+                if (!termsAccepted) throw new Error("You must accept the Terms of Service.");
                 if (!normalizedDob) throw new Error("Date of birth is required.");
 
                 const dobDate = new Date(`${normalizedDob}T00:00:00`);
@@ -532,7 +532,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                     </div>
                                     <input type="checkbox" className="hidden" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} />
                                     <span className="text-xs text-slate-600 font-bold leading-tight group-hover:text-black">
-                                        I accept the <button type="button" onClick={(e) => { e.preventDefault(); onOpenTerms(); }} className="underline">Terms and Conditions</button> and <button type="button" onClick={(e) => { e.preventDefault(); onOpenPrivacy(); }} className="underline">Privacy Policy</button>.
+                                        I accept the <button type="button" onClick={(e) => { e.preventDefault(); onOpenTerms(); }} className="underline">Terms of Service</button> and <button type="button" onClick={(e) => { e.preventDefault(); onOpenPrivacy(); }} className="underline">Privacy Policy</button>.
                                     </span>
                                 </label>
                                 <label className="flex items-start gap-3 cursor-pointer group">
@@ -613,7 +613,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             </div>
 
             <div className="mt-8 text-center text-xs font-mono text-slate-400">
-                &copy; 2026 DreamStream Inc. All rights reserved.
+                &copy; 2026 DreamStream Studio. All rights reserved.
             </div>
         </div>
     );

@@ -88,6 +88,25 @@ export function loadGuest(nid: string): GuestPass | null {
   }
 }
 
+/**
+ * Drop every pass on this device that can't still work (loadGuest's rule: its last known end more
+ * than GUEST_PASS_MAX_MS ago), whichever nursery it is for: loadGuest drops one only when that
+ * nursery is opened, so a pass for a nursery never opened here again (its token, the name typed, the
+ * nursery's and baby's names) would otherwise stay. Stream Studio runs this as it starts (LiveApp),
+ * as the Cookies notice says. A pass it can't read is left as it is.
+ */
+export function sweepExpiredGuestPasses(): void {
+  try {
+    const prefix = key('');
+    const nids: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(prefix)) nids.push(k.slice(prefix.length));
+    }
+    nids.forEach(loadGuest);
+  } catch { /* storage unavailable */ }
+}
+
 /** The room said when this device's pass ends now (its hello, or `guest_pass` after a parent extended the link). */
 export function refreshGuest(nid: string, until: unknown): void {
   if (typeof until !== 'number' || !Number.isFinite(until)) return;

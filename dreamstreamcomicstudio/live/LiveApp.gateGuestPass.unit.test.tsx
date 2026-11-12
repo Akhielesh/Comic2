@@ -127,6 +127,21 @@ describe('a share-link guest watches the nursery, whatever the account says', ()
   }
 });
 
+describe('a pass that can no longer work goes when Stream Studio opens (the Cookies notice says so)', () => {
+  it('opening Stream Studio anywhere, signed out, removes a pass 90 days past its end for a nursery not opened, and keeps one that can still work', async () => {
+    const stale = { ...PASS, token: 'gp-old', until: Date.now() - 200 * 86_400_000 };
+    localStorage.setItem(`ds-monitor-guest-${OTHER}`, JSON.stringify(stale));
+    holdPass(NID);
+    localStorage.setItem('ds-monitor-guest-not-json', '{oops');
+    history.replaceState(null, '', '/live');
+    render(<LiveApp />);
+    await settle();
+    expect(localStorage.getItem(`ds-monitor-guest-${OTHER}`)).toBeNull();
+    expect(JSON.parse(localStorage.getItem(`ds-monitor-guest-${NID}`) || 'null')?.name).toBe('Grandma Jo');
+    expect(localStorage.getItem('ds-monitor-guest-not-json')).toBe('{oops');
+  });
+});
+
 describe('the pass opens only its own nursery’s watch page', () => {
   it('no pass on this device: the watch page still asks for the account', async () => {
     history.replaceState(null, '', `/live#/monitor/${NID}/watch`);

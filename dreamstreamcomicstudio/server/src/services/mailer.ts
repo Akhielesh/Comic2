@@ -7,7 +7,7 @@
 //   3. HARD cost cap — refuses to send past EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH (defaults
 //      sit under Cloudflare's free 3,000/mo), emitting a cost alert to the logs;
 //   4. logs every attempt to email_log (observability + the cost accounting above);
-//   5. builds the working one-click unsubscribe link (marketing) + read-receipt pixel.
+//   5. builds the unsubscribe link (marketing: a page with one button; RFC 8058 One-Click POST) + read-receipt pixel.
 //
 // Template names + their essential/marketing classification come straight from the shared
 // module the worker renders with, so there's a single source of truth and no drift.
@@ -23,7 +23,8 @@ import {
   EMAIL_WORKER_URL
 } from '../config.js';
 import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
-import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { PUBLIC_FORM_EMAIL_TEMPLATES, getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { maskEmail } from './authEmailLinks.js';
 
 export { APP_PUBLIC_URL };
 
@@ -119,7 +120,7 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   if (overMonth || overDay) {
     console.error(
       `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
-        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${to}. ` +
+        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
         `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
     );
     await logSend({ ...baseLog, status: 'rate_limited' });
@@ -145,8 +146,18 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   }
   if (unsubscribeUrl) params.unsubscribeUrl = unsubscribeUrl;
 
-  // (4) log 'queued' first so we have an id for the read-receipt pixel
-  const logId = await logSend({ ...baseLog, status: 'queued' });
+  // (4) log 'queued' first so we have an id for the read-receipt pixel. Public-form mail whose row
+  // can't be written isn't sent: its per-inbox limits, its share of the caps and the hard caps all
+  // count logged sends only, so unlogged ones would let every alias (and every send past a cap) go.
+  // The row's id is chosen here, so a row whose INSERT committed but whose reply was lost is still
+  // closed (a 'queued' row left behind would count against the inbox, as a send, forever).
+  const rowId = crypto.randomUUID();
+  const logId = await logSend({ ...baseLog, id: rowId, status: 'queued' });
+  if (!logId && (PUBLIC_FORM_EMAIL_TEMPLATES as readonly string[]).includes(template)) {
+    console.warn(`[email] Refusing ${template} → ${maskEmail(to)}: its send couldn't be logged, and its limits count logged sends only.`);
+    await patchLog(rowId, { status: 'failed', error: 'not_logged' });
+    return { ok: false, error: 'not_logged' };
+  }
   if (opts.track === false) {
     delete params.pixelUrl;
   } else if (logId && EMAIL_PUBLIC_BASE_URL) {
@@ -172,17 +183,17 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     });
     const json = (await res.json().catch(() => null)) as { ok?: boolean; messageId?: string; error?: string } | null;
     if (res.ok && json?.ok) {
-      if (logId) await patchLog(logId, { status: 'sent', messageId: json.messageId });
+      await patchLog(rowId, { status: 'sent', messageId: json.messageId });
       return { ok: true, messageId: json.messageId };
     }
     const error = json?.error || `worker responded ${res.status}`;
-    if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send failed (${template} → ${to}): ${error}`);
+    await patchLog(rowId, { status: 'failed', error });
+    console.warn(`[email] send failed (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } catch (err) {
     const error = (err as Error)?.message || 'network error';
-    if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send error (${template} → ${to}): ${error}`);
+    await patchLog(rowId, { status: 'failed', error });
+    console.warn(`[email] send error (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } finally {
     clearTimeout(timer);
@@ -195,8 +206,10 @@ const meta = (req?: { userId?: string | null; requestId?: string | null }) => ({
   requestId: req?.requestId ?? null
 });
 
+// No read-receipt pixel on the double opt-in email (like auth mail): it carries a one-time link
+// for someone who hasn't agreed to anything yet, so we don't record whether they opened it.
 export const sendNewsletterConfirm = (email: string, confirmUrl: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
-  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, ...meta(req) });
+  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, track: false, ...meta(req) });
 
 export const sendNewsletterWelcome = (email: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
   sendEmail({ to: email, template: 'newsletter-welcome', params: { firstName }, ...meta(req) });

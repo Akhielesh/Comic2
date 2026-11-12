@@ -3,8 +3,29 @@
  *
  * Signing out — here or in the main DreamStream app — must not leave the last
  * person's name, events, nursery data or alert subscription behind for the
- * next person on a shared device. Device preferences that aren't personal
- * (theme, camera lens, tours seen, guest passes for share links) stay.
+ * next person on a shared device. That includes the guest passes this device
+ * got from nurseries' share links ('ds-monitor-guest-<nursery>'): each is a
+ * working pass to watch that nursery under the name typed for it, so the next
+ * person here could otherwise watch as them. A guest who joined while no one was
+ * signed in keeps theirs across loads with no session (claimDevice(null) purges
+ * nothing on a device no account owns), but not past the next purge: someone who
+ * signs in here later takes the device over without one, so their sign-out (or
+ * any main-app sign-out, or an account switch) removes it, as the Cookies notice
+ * says. Device preferences that aren't personal
+ * (theme, camera lens, tours seen, this device's name for the monitor, the
+ * folder picked for saving recordings) stay.
+ *
+ * What stays, and the Cookies notice and the Privacy Policy say so:
+ *  - recordings that reached the disk but were never saved (live/recorder.ts): they are the host's
+ *    unsaved work, so they stay on the device, each with a note of the account its studio was opened
+ *    for, and only that account is offered it (listUnsavedRecordings). Nothing here touches them, and
+ *    nothing about them depends on who holds the device: a recording an earlier version of Stream
+ *    Studio made carries no account and is never given one;
+ *  - the baby monitor's encryption keys in IndexedDB ('ds-keys': this browser's device keys and its
+ *    copies of nursery keys, live/monitor/keys.ts) and the cameras it has seen encrypt
+ *    ('ds-e2e-cams-<nursery>'), so this device keeps refusing a camera's unencrypted pictures;
+ *  - changes to favourites and blocks the call line hasn't confirmed yet ('ds-call-pending:<account>',
+ *    sent only when that account's line connects again), so a block made offline isn't lost.
  *
  * Only a dependency-free import on purpose: the main app's sign-out calls this too.
  */
@@ -22,14 +43,17 @@ const EXACT = [
   'ds-calls-seen',
   'ds-live-welcome-ticket', // a one-time welcome ticket: redeemed by whoever signs in next
   'ds-live-unconfirmed-revokes', // device sign-outs still to confirm with the nurseries
+  'ds-call-names', // names of people you called or who rang you
+  'ds-calls-ok', // people you confirmed calling outside your nurseries
+  'ds-live-viewer-name', // the name typed to join someone else's event
   OWNER_KEY,
 ];
 /**
- * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue —
- * and this device's usage (live/usage/): a nursery's relay data a parent read, last nights,
- * the month's ledger, hosted meetings, notices shown.
+ * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue, guest
+ * passes from share links — and this device's usage (live/usage/): a nursery's relay data a parent
+ * read, last nights, the month's ledger, hosted meetings, notices shown.
  */
-const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-', 'ds-usage-'];
+const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-monitor-guest-', 'ds-track-queue-', 'ds-usage-'];
 
 export function purgeLiveAccountData(): void {
   try {
@@ -50,6 +74,15 @@ export function purgeLiveAccountData(): void {
       .then((sub) => sub?.unsubscribe())
       .catch(() => undefined);
   } catch { /* no service worker */ }
+}
+
+/** The account whose Stream Studio data is on this device now (null: no one is signed in here). */
+export function deviceOwner(): string | null {
+  try {
+    return localStorage.getItem(OWNER_KEY);
+  } catch {
+    return null;
+  }
 }
 
 /** Remember whose data this device holds; wipe it when someone else (or no one) is signed in. */

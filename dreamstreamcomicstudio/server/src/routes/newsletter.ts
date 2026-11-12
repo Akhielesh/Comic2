@@ -1,6 +1,7 @@
-import { Router, type Request } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { APP_PUBLIC_URL, EMAIL_PUBLIC_BASE_URL } from '../config.js';
 import {
+  mailerConfigured,
   sendAccessRequested,
   sendNewsletterConfirm,
   sendNewsletterWelcome,
@@ -8,11 +9,22 @@ import {
 } from '../services/mailer.js';
 import {
   confirmSubscriber,
+  inspectConfirmLink,
   markUnsubscribed,
   newConfirmToken,
   normalizeEmail,
-  upsertSubscriber
+  upsertSubscriber,
+  type ConfirmLinkState
 } from '../services/emailStore.js';
+import { formatStudioInterestList } from '../../../services/studioInterests.js';
+import {
+  InterestRetryError,
+  InterestUnavailableError,
+  claimAccessReceipt,
+  holdAnswer,
+  noteSentDuration,
+  registerInterest
+} from '../services/interestStore.js';
 import { resendPendingInvite } from '../services/invites.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
@@ -21,45 +33,66 @@ import { verifyTurnstile } from '../services/turnstile.js';
 // optionalAuth BEFORE the global requireAuth (like /api/telemetry), so the marketing site
 // can call it while signed out. Reads/writes go through the service role under the hood;
 // the client never sees tokens or the list.
+//
+// The current frontend registers newsletter interest through POST /api/interest
+// (routes/interest.ts); /subscribe with kind 'updates' stays for tabs still running the previous
+// frontend and shares its service (registerInterest), so both get the same per-recipient
+// confirmation throttle and the same rule: the answer never depends on the address's state.
+// index.ts puts the same per-IP limiter as /api/interest in front of /subscribe.
+// /confirm and /unsubscribe serve both.
+//
+// Confirming takes two steps on purpose: GET /confirm (the link in the email) only checks the
+// link and shows a page with a Confirm button; POST /confirm (that button) subscribes the address
+// and lifts an earlier unsubscribe. Mail-security scanners fetch every link in incoming mail, and
+// such a fetch must never opt anyone in or undo their opt-out. The Unsubscribe link in an email
+// works the same way (GET /unsubscribe shows a page, its button POSTs), so a scanner can't opt
+// anyone out or delete their picks either; the List-Unsubscribe One-Click POST (RFC 8058), which
+// mail providers send only on the person's request, still unsubscribes at once.
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const reqMeta = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
 
-// Prefer the configured public origin; fall back to the request's own origin so confirm
-// links still work before EMAIL_PUBLIC_BASE_URL is set.
-const baseUrl = (req: Request): string =>
-  EMAIL_PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
+// The configured public origin, else the app's. Never the request's Host header: a forged Host
+// would put an attacker's domain into a confirmation email we send to someone else.
+const baseUrl = (): string => EMAIL_PUBLIC_BASE_URL || APP_PUBLIC_URL;
 
 const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter=${encodeURIComponent(status)}`;
 
+const COULD_NOT_SEND = 'We couldn’t send the confirmation email right now. Please try again in a few minutes.';
+
+/** LIKE pattern characters escaped (PostgREST passes the backslashes through to ILIKE). */
+const escapeLike = (value: string) => value.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 /**
- * Does this email already belong to an account (profiles, service role)? Best-effort:
- * any failure (no service role, transient DB error) returns false so the lookup can
- * never block a waitlist capture.
+ * Does this email already belong to an account (profiles, service role)? An exact match, never a
+ * pattern: case-insensitive ILIKE with every pattern character escaped. PostgREST also reads '*'
+ * as '%' and has no escape for it, so an address with a '*' (allowed by EMAIL_REGEX) is compared
+ * with eq instead (stored addresses are lowercase). Otherwise "*@company.com" would say whether
+ * anyone at company.com has an account. Best-effort: any failure (no service role, transient DB
+ * error) returns false so the lookup can never block a waitlist capture.
  */
 const accountExistsForEmail = async (email: string): Promise<boolean> => {
   try {
     const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('profiles')
-      .select('id')
-      .ilike('email', email.replace(/[%_]/g, ''))
-      .limit(1)
-      .maybeSingle();
+    const query = admin.from('profiles').select('id');
+    const exact = email.includes('*') ? query.eq('email', email) : query.ilike('email', escapeLike(email));
+    const { data, error } = await exact.limit(1).maybeSingle();
     return !error && Boolean(data?.id);
   } catch {
     return false;
   }
 };
 
-// POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source?, firstName? }
+// POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source? }
+// No name is taken from the request: the caller is unauthenticated and the email goes to whatever
+// address it names, so a "firstName" would put the caller's words into our mail to a stranger
+// ("Hey <your account is locked, verify at …>,"). Both emails greet "Hey there" (no client sent one).
 newsletterRouter.post('/subscribe', async (req, res, next) => {
   try {
     const email = normalizeEmail(String(req.body?.email ?? ''));
     const kind = req.body?.kind === 'access' ? 'access' : 'updates';
-    const firstName = typeof req.body?.firstName === 'string' ? req.body.firstName.slice(0, 80) : undefined;
     const source = typeof req.body?.source === 'string' ? req.body.source.slice(0, 200) : undefined;
     // Optional intent capture — whitelisted/capped in upsertSubscriber.
     const intent = {
@@ -112,7 +145,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {}, intent);
 
       // Dedupe 2: already on the waitlist — soft success, no duplicate row, no re-email.
-      if (outcome === 'already_registered' || outcome === 'already_confirmed') {
+      if (outcome === 'already_registered') {
         return res.json({
           ok: true,
           status: 'already-registered',
@@ -121,10 +154,16 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         });
       }
 
-      // NEW signup: acknowledge with the access-requested template (essential) —
-      // best-effort and non-blocking; a mailer failure is logged by the mailer and
-      // must never fail the signup itself.
-      void sendAccessRequested(email, firstName, reqMeta(req));
+      // NEW signup: acknowledge with the access-requested template (essential) — best-effort and
+      // non-blocking; a mailer failure is logged by the mailer and must never fail the signup
+      // itself. Every alias of an address makes a new row, so the receipt is limited per INBOX
+      // (one a day) and counts toward the public-form share of the email caps
+      // (interestStore.claimAccessReceipt); the answer is the same whether it goes out or not.
+      const receipt = await claimAccessReceipt(email);
+      if (receipt) {
+        // Let the inbox go once the send is over: by then email_log holds it (or it failed and doesn't count).
+        void sendAccessRequested(email, undefined, reqMeta(req)).catch(() => undefined).finally(receipt);
+      }
       return res.json({
         ok: true,
         status: 'joined',
@@ -133,59 +172,254 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       });
     }
 
-    // Newsletter double opt-in.
-    const token = newConfirmToken();
-    const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
-    if (outcome === 'already_confirmed') {
-      return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
+    // Newsletter double opt-in (same service as POST /api/interest, so the same throttle). Every
+    // valid request gets the same answer, whatever the address's state; failures are about the
+    // service, never the address. (This older client shows an ok:false body as an error.)
+    if (!mailerConfigured()) {
+      // 503: the older client then stores the address with its own direct insert, as before.
+      return res.status(503).json({ ok: false, code: 'interest_unavailable', message: 'Signups are unavailable right now.' });
     }
-    const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
-    void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
+    const startedAt = Date.now();
+    const result = await registerInterest({
+      email,
+      studios: intent.productInterests ?? [],
+      source,
+      feedback: intent.feedback
+    });
+    if (result.outcome === 'budget_exhausted') return res.json({ ok: false, message: COULD_NOT_SEND });
+    if (result.outcome === 'send_confirmation') {
+      const confirmUrl = `${baseUrl()}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${result.token}`;
+      const sent = await sendNewsletterConfirm(email, confirmUrl, undefined, reqMeta(req));
+      if (!sent.ok) {
+        await result.release();
+        return res.json({ ok: false, message: COULD_NOT_SEND });
+      }
+      result.sent();
+      noteSentDuration(startedAt);
+    }
+    // Sent or throttled: the same time either way (see routes/interest.ts).
+    await holdAnswer(startedAt);
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
+    // A database without the interest columns: 503, which the older client answers with its own
+    // direct insert (services/waitlist.ts) — the same as any other backend outage.
+    if (err instanceof InterestUnavailableError) {
+      return res.status(503).json({ ok: false, code: 'interest_unavailable', message: 'Signups are unavailable right now.' });
+    }
+    if (err instanceof InterestRetryError) {
+      return res.json({ ok: false, message: 'We couldn’t save that just now. Please try again in a minute.' });
+    }
     next(err);
   }
 });
 
-// GET /api/newsletter/confirm?e=&t= — completes double opt-in, then bounces to the app.
+const str = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+const escapeHtml = (value: string): string =>
+  value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
+const originOf = (url: string): string => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return '';
+  }
+};
+
+const studioList = (ids: readonly string[]): string => `<strong>${escapeHtml(formatStudioInterestList(ids))}</strong>`;
+
+/**
+ * What pressing Confirm does, in words, so the click is informed: which studios it subscribes the
+ * address to, or, for an address that already gets updates, which studios it adds (picks anyone
+ * may have typed in since, which only this click applies).
+ */
+const confirmSummary = (link: Extract<ConfirmLinkState, { state: 'ready' }>, email: string): string => {
+  const who = `<strong>${escapeHtml(email)}</strong>`;
+  if (!link.subscribed) {
+    return link.adding.length
+      ? `<p>Press Confirm to get DreamStream updates about ${studioList(link.adding)} at ${who}.</p>`
+      : `<p>Press Confirm to get DreamStream updates at ${who}.</p>`;
+  }
+  const already = link.current.length
+    ? `${who} already gets DreamStream updates about ${studioList(link.current)}.`
+    : `${who} already gets DreamStream updates.`;
+  return link.adding.length
+    ? `<p>${already} Pressing Confirm also adds ${studioList(link.adding)}.</p>`
+    : `<p>${already} There is nothing new to add: pressing Confirm keeps them as they are.</p>`;
+};
+
+/**
+ * The page the email link opens: what the click confirms, and one Confirm button that POSTs the
+ * link back, with the studios the page names (field s), so the click applies exactly those
+ * (emailStore.confirmSubscriber). No script, so a scanner that fetches (or even renders) the page
+ * changes nothing. `changed`: shown again because the list changed after the page first opened.
+ */
+const sendConfirmPage = (
+  res: Response,
+  email: string,
+  token: string,
+  link: Extract<ConfirmLinkState, { state: 'ready' }>,
+  changed = false
+) => {
+  const appOrigin = originOf(APP_PUBLIC_URL);
+  res
+    .status(200)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex, nofollow')
+    // same-origin (not the global no-referrer): a form POST under no-referrer carries
+    // `Origin: null`, which the CORS check rejects. Nothing on this page links off-site.
+    .set('Referrer-Policy', 'same-origin')
+    .set(
+      'Content-Security-Policy',
+      `default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'${appOrigin ? ` ${appOrigin}` : ''}`
+    )
+    .send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Confirm your email · DreamStream</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#1a1915;background:#FAF9F5}
+main{max-width:26rem;padding:2rem 1.5rem}
+h1{font-size:1.35rem;line-height:1.3;margin:0 0 .6rem}
+p{margin:.5rem 0}
+.muted{color:#6e6a60;font-size:.85rem}
+button{margin-top:1rem;font:inherit;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem;border:1px solid #1a1915;background:#1a1915;color:#FAF9F5;cursor:pointer}
+button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
+@media (prefers-color-scheme:dark){body{color:#f1efe8;background:#1f1e1b}.muted{color:#a8a397}button{background:#f1efe8;color:#1f1e1b;border-color:#f1efe8}}
+</style></head>
+<body><main>
+<h1>Confirm your DreamStream updates</h1>
+${changed ? '<p><strong>The studios on this page changed after it opened</strong> (someone registered this address for more of them). Nothing has changed yet: check the list below, and press Confirm again only if you want it.</p>' : ''}
+${confirmSummary(link, email)}
+<p>We send occasional emails${link.current.length || link.adding.length ? ' about these studios' : ''}, and every one has an unsubscribe link.</p>
+<form method="post" action="/api/newsletter/confirm">
+<input type="hidden" name="e" value="${escapeHtml(email)}">
+<input type="hidden" name="t" value="${escapeHtml(token)}">
+<input type="hidden" name="s" value="${escapeHtml(link.adding.join(','))}">
+<button type="submit">Confirm</button>
+</form>
+<p class="muted">Didn’t ask for this? Just close this page. Nothing changes unless you press Confirm.</p>
+</main></body></html>`);
+};
+
+// GET /api/newsletter/confirm?e=&t= — the link in the email. Read-only: checks the link, then
+// shows the Confirm page (or bounces straight to the app when there is nothing to confirm).
 newsletterRouter.get('/confirm', async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.query.e ?? ''));
-    const token = String(req.query.t ?? '');
+    const email = normalizeEmail(str(req.query.e));
+    const token = str(req.query.t);
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
-
-    const confirmed = await confirmSubscriber(email, token);
-    if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
-
-    // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqMeta(req));
-    return res.redirect(302, redirectToApp('confirmed'));
+    const link = await inspectConfirmLink(email, token);
+    if (!link) return res.redirect(302, redirectToApp('invalid'));
+    if (link.state === 'already_confirmed') return res.redirect(302, redirectToApp('confirmed'));
+    return sendConfirmPage(res, email, token, link);
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/newsletter/unsubscribe?e=&t= — clicked from an email; verify + bounce to the app.
+// POST /api/newsletter/confirm (form: e, t) — the Confirm button. Completes double opt-in, then
+// bounces to the app.
+newsletterRouter.post('/confirm', express.urlencoded({ extended: false, limit: '4kb' }), async (req, res, next) => {
+  try {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const email = normalizeEmail(str(body.e));
+    const token = str(body.t);
+    if (!email || !token) return res.redirect(303, redirectToApp('invalid'));
+    // The studios the page named (absent on a page from before the field existed).
+    const shown = typeof body.s === 'string' ? body.s.split(',').map((id) => id.trim()).filter(Boolean) : undefined;
+
+    const outcome = await confirmSubscriber(email, token, shown);
+    if (!outcome) return res.redirect(303, redirectToApp('invalid'));
+    if (outcome === 'changed') {
+      // Picks arrived after the page opened: nothing was applied; show what Confirm does now.
+      const link = await inspectConfirmLink(email, token);
+      if (link?.state === 'ready') return sendConfirmPage(res, email, token, link, true);
+      return res.redirect(303, redirectToApp(link ? 'confirmed' : 'invalid'));
+    }
+
+    // Welcome is marketing → only goes out once they've opted in (here), and only on the click
+    // that actually opted them in (not on a later click, or one that only confirmed new picks).
+    if (outcome === 'confirmed') void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    return res.redirect(303, redirectToApp('confirmed'));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * The page the Unsubscribe link in an email opens: one button that POSTs the link back. Like the
+ * Confirm page, no script and nothing happens on the GET, because mail-security scanners fetch
+ * every link in incoming mail (the welcome email reaches a new subscriber moments after they
+ * confirm, and a scanner's fetch must not unsubscribe them and delete their picks).
+ */
+const sendUnsubscribePage = (res: Response, email: string, token: string) => {
+  const appOrigin = originOf(APP_PUBLIC_URL);
+  const action = `/api/newsletter/unsubscribe?e=${encodeURIComponent(email)}&t=${encodeURIComponent(token)}`;
+  res
+    .status(200)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex, nofollow')
+    // same-origin, as on the Confirm page: under no-referrer a form POST carries `Origin: null`,
+    // which the CORS check rejects.
+    .set('Referrer-Policy', 'same-origin')
+    .set(
+      'Content-Security-Policy',
+      `default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'${appOrigin ? ` ${appOrigin}` : ''}`
+    )
+    .send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Unsubscribe · DreamStream</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#1a1915;background:#FAF9F5}
+main{max-width:26rem;padding:2rem 1.5rem}
+h1{font-size:1.35rem;line-height:1.3;margin:0 0 .6rem}
+p{margin:.5rem 0}
+.muted{color:#6e6a60;font-size:.85rem}
+button{margin-top:1rem;font:inherit;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem;border:1px solid #1a1915;background:#1a1915;color:#FAF9F5;cursor:pointer}
+button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
+@media (prefers-color-scheme:dark){body{color:#f1efe8;background:#1f1e1b}.muted{color:#a8a397}button{background:#f1efe8;color:#1f1e1b;border-color:#f1efe8}}
+</style></head>
+<body><main>
+<h1>Unsubscribe from DreamStream updates</h1>
+<p>Press Unsubscribe to stop DreamStream updates to <strong>${escapeHtml(email)}</strong>. The studio picks and any note saved with your updates are deleted too.</p>
+<form method="post" action="${escapeHtml(action)}">
+<input type="hidden" name="via" value="page">
+<button type="submit">Unsubscribe</button>
+</form>
+<p class="muted">Changed your mind? Just close this page. Nothing changes unless you press Unsubscribe.</p>
+</main></body></html>`);
+};
+
+// GET /api/newsletter/unsubscribe?e=&t= — the link in an email. Read-only: checks the link, then
+// shows the Unsubscribe page.
 newsletterRouter.get('/unsubscribe', async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.query.e ?? ''));
-    const token = String(req.query.t ?? '');
+    const email = normalizeEmail(str(req.query.e));
+    const token = str(req.query.t);
     if (!email || !verifyUnsubscribeToken(email, token)) return res.redirect(302, redirectToApp('unsub-invalid'));
-    await markUnsubscribed(email);
-    return res.redirect(302, redirectToApp('unsubscribed'));
+    return sendUnsubscribePage(res, email, token);
   } catch (err) {
     next(err);
   }
 });
 
-// POST /api/newsletter/unsubscribe?e=&t= — RFC 8058 One-Click target (List-Unsubscribe-Post).
-newsletterRouter.post('/unsubscribe', async (req, res, next) => {
+// POST /api/newsletter/unsubscribe?e=&t= — the page's button (form field via=page: bounce to the
+// app) and the RFC 8058 One-Click target (List-Unsubscribe-Post: answers JSON). Mail providers send
+// that POST only when the person chooses to unsubscribe; scanners don't.
+newsletterRouter.post('/unsubscribe', express.urlencoded({ extended: false, limit: '4kb' }), async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.query.e ?? ''));
-    const token = String(req.query.t ?? '');
-    if (!email || !verifyUnsubscribeToken(email, token)) return res.status(400).json({ ok: false });
+    const email = normalizeEmail(str(req.query.e));
+    const token = str(req.query.t);
+    const fromPage = (req.body as Record<string, unknown> | undefined)?.via === 'page';
+    if (!email || !verifyUnsubscribeToken(email, token)) {
+      return fromPage ? res.redirect(303, redirectToApp('unsub-invalid')) : res.status(400).json({ ok: false });
+    }
     await markUnsubscribed(email);
-    return res.json({ ok: true });
+    return fromPage ? res.redirect(303, redirectToApp('unsubscribed')) : res.json({ ok: true });
   } catch (err) {
     next(err);
   }

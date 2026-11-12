@@ -140,6 +140,30 @@ describe('retire', () => {
     expect(b.storage.keys()).toEqual(['dreamstream_auth_token', 'ds-theme']);
   });
 
+  it('account: a guest pass from a share link goes too, as signing out here would remove it', async () => {
+    const b = loadBridge();
+    seed(b.storage);
+    b.storage.setItem(`ds-monitor-guest-${A}`, '{"token":"room-issued","name":"Sam"}');
+    await b.send({ op: 'retire', scope: 'account', uid: 'u1', reason: 'signout' });
+    expect(b.storage.getItem(`ds-monitor-guest-${A}`)).toBeNull();
+  });
+
+  it('account: unsaved recordings, and the record of who made each, stay as they are, as a sign-out in the app leaves them: who each is offered to never depends on who holds the device (live/recorder.ts)', async () => {
+    const b = loadBridge();
+    seed(b.storage);
+    const old = { name: 'ds-rec-old', file: 'old.webm', mime: 'video/webm', eventId: 'e1', title: "X's stream", at: 1, durMs: 1, bytes: 1 };
+    const tagged = { ...old, name: 'ds-rec-tagged', owner: 'u2' };
+    const list = JSON.stringify([old, tagged]);
+    const owners = JSON.stringify({ 'ds-rec-tagged': 'u2' });
+    b.storage.setItem('ds-live-unsaved-recordings', list);
+    b.storage.setItem('ds-live-rec-owners', owners);
+    await b.send({ op: 'retire', scope: 'account', uid: 'u1', reason: 'signout' });
+    expect(b.storage.getItem('ds-live-owner')).toBeNull();
+    expect(b.storage.getItem('ds-live-unsaved-recordings')).toBe(list);
+    expect(b.storage.getItem('ds-live-rec-owners')).toBe(owners);
+    expect(b.storage.getItem('ds-live-legacy-owner')).toBeNull();
+  });
+
   it('never for another account, and never without knowing whose sign-out it is', async () => {
     const b = loadBridge();
     seed(b.storage, 'someone-else');
@@ -169,5 +193,15 @@ describe('kept in step with live/accountPurge.ts', () => {
     expect(PURGE_SRC).toMatch(/OWNER_KEY = 'ds-live-owner'/);
     expect(list(SRC, 'EXACT')).toEqual(list(PURGE_SRC, 'EXACT'));
     expect(list(SRC, 'PREFIXES')).toEqual(list(PURGE_SRC, 'PREFIXES'));
+  });
+
+  it('neither touches unsaved recordings: the bridge names none of their keys, and accountPurge leaves them to live/recorder.ts', () => {
+    for (const key of ['ds-live-unsaved-recordings', 'ds-live-rec-owners', 'ds-live-legacy-owner']) {
+      expect(SRC, key).not.toContain(key);
+      expect(PURGE_SRC, key).not.toContain(key);
+    }
+    expect(SRC).not.toContain('settleUnownedRecordings');
+    expect(PURGE_SRC).not.toContain('settleUnownedRecordings');
+    expect(readFileSync(new URL('../recorder.ts', import.meta.url), 'utf8')).toContain("export const RECORDING_OWNERS_KEY = 'ds-live-rec-owners';");
   });
 });

@@ -50,6 +50,10 @@ export type ReaderState = {
   mode: "scroll" | "flip";
   pageIndex?: number;
   scrollTop?: number;
+  /** Scroll mode: the panel at the top of the view (its box key) and how far into it, so the comic reopens there at any width. */
+  anchor?: { key: string; frac: number };
+  /** The size each picture loaded at here ([width, height], by box key), so the comic has its height before they load again. */
+  boxes?: Record<string, [number, number]>;
   updatedAt: number;
 };
 

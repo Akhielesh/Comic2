@@ -10,7 +10,9 @@
  *            `ds-monitor-push-<nid>` opt-ins), call ringing, and whose data this is;
  *   retire → unsubscribe it (every room drops it at its next alert: the push service answers
  *            410) and clear those opt-ins; scope 'account' also wipes the account's other Stream
- *            Studio data here, exactly as signing out here would have (live/accountPurge.ts).
+ *            Studio data here, exactly as signing out here would have (live/accountPurge.ts). Like
+ *            that, it leaves unsaved recordings and their notes of who made them as they are
+ *            (who each is offered to never depends on who holds the device: live/recorder.ts).
  * It answers only Stream Studio's host (the message's origin and source are checked), only in a
  * frame, never acts for another account (`uid` must match ds-live-owner), and has no UI.
  */
@@ -24,8 +26,8 @@
   var OWNER = 'ds-live-owner';
   // What a Stream Studio account leaves on a device — the same lists as live/accountPurge.ts
   // (a test keeps them in step).
-  var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-unconfirmed-revokes', 'ds-live-owner'];
-  var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-', 'ds-usage-'];
+  var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-unconfirmed-revokes', 'ds-live-viewer-name', 'ds-call-names', 'ds-calls-ok', 'ds-live-owner'];
+  var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-monitor-guest-', 'ds-track-queue-', 'ds-usage-'];
 
   function storage() {
     try {
