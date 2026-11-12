@@ -197,6 +197,21 @@ describe('SVG and canvas draw the same operations (one node tree)', () => {
     ]);
   });
 
+  it('a translucent layer composites ONCE, like its SVG group: fill and stroke go to one offscreen layer drawn at its opacity', () => {
+    const scene = sceneOf([LAYERS.shape]);
+    const svgGroup = composeSvgNodes(scene).find((n) => n.attrs['data-layer-id'] === 'ly_box')!;
+    expect(svgGroup.attrs.opacity).toBe(0.8);
+    const page = fakeContext(1000, scene.H);
+    const layers = fakeLayers();
+    drawComposeScene(page.ctx, scene, 1000, scene.H, { images: new Map(), makePath: fakePath, createLayer: layers.createLayer });
+    expect(layers.made).toHaveLength(1);
+    expect(layers.made[0].draws().map((c) => [c.name, c.state.globalAlpha])).toEqual([
+      ['fill', 1],
+      ['stroke', 1]
+    ]);
+    expect(page.draws().map((c) => [c.name, c.state.globalAlpha])).toEqual([['drawImage', 0.8]]);
+  });
+
   it('effect: the generator’s paths, circles and rects under translate(box) scale(box)', () => {
     const ops = parity(sceneOf([LAYERS.effect]));
     expect(ops.map((o) => o.op)).toEqual(['path:fill', 'circle:fill', 'rect:fill', 'rect:stroke']);
