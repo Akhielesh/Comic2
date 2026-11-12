@@ -332,6 +332,7 @@ export function dialogueFastIntent(ctx: StudioContext, text: string, focus?: Stu
   const label = run.label || 'Dialogue';
   ctx.session.commit(allowed, { origin: 'director', label });
   const chips = run.followUps.filter((s) => !!s?.label && !s.action && (!!s.say || !!s.client));
-  const nextSteps: NextStep[] = [{ label: 'Undo', client: { type: 'undo' } }, ...chips.filter((s) => s.label !== 'Undo')].slice(0, DOC_LIMITS.nextSteps);
+  const undo: NextStep = { label: 'Undo', client: { type: 'undo' } };
+  const nextSteps: NextStep[] = [undo, ...chips.filter((s) => s.label !== 'Undo')].slice(0, DOC_LIMITS.nextSteps);
   return { kind: 'dialogue_fast', reply: `${run.note || 'Done.'} Free — undo is one tap.`, cards: [], nextSteps, ops: allowed.length, label };
 }
