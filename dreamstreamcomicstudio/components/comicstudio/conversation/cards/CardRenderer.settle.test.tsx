@@ -160,6 +160,8 @@ describe('a settled notice', () => {
     const { container } = render(<CardRenderer card={notice} studio={makeFakeStudio({ doc: docWith(notice) })} settle={SETTLED} />);
     expect(container.textContent).toBe('Page 3 holds too much text. · 2 fixes offered');
     expect(container.querySelectorAll(CONTROLS)).toHaveLength(0);
+    // Clamped to 2 lines (settle.md §5.2): an old notice stays one compact log line at 320 px.
+    expect(screen.getByText('Page 3 holds too much text. · 2 fixes offered').className.split(/\s+/)).toContain('line-clamp-2');
   });
 });
 

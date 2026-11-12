@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AssetRef, Card, ComicDoc, Msg } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { buildSettleIndex, settleKey } from '../../../shared/comic/settle';
+import type { PendingUserMessage } from '../studioReducer';
 import { makeQaDoc } from '../testing/qaFixtures';
 import scene, { directorSettledDoc } from '../../../qa/app/scenes/director-settled';
 import { ConversationPane } from './ConversationPane';
@@ -139,6 +140,17 @@ describe('the user bubble’s Assign', () => {
     expect(within(older).queryByRole('button', { name: /assign/i })).toBeNull();
     expect(within(older).getByText('Not filed yet')).toBeInTheDocument();
     expect(within(latest).getAllByRole('button', { name: /assign/i }).length).toBeGreaterThan(0);
+  });
+
+  it('while this tab’s next message is sending, no committed bubble offers it (none is the latest any more)', () => {
+    const doc = makeSampleDoc({ conversation });
+    const pending: PendingUserMessage = { id: 'pm_1', text: 'One more of her in the rain', attachments: [], at: 4, status: 'sending' };
+    const { container } = render(<ConversationPane studio={makeFakeStudio({ doc, caps: ADMIN, pendingMessage: pending, messageBusy: true })} />);
+    const bubbles = [...container.querySelectorAll('[data-role="user"]')] as HTMLElement[];
+    // u1, u2 and the bubble on its way.
+    expect(bubbles).toHaveLength(3);
+    for (const b of bubbles) expect(within(b).queryByRole('button', { name: /assign/i })).toBeNull();
+    expect(within(bubbles[1]).getByText('Not filed yet')).toBeInTheDocument();
   });
 
   it('control: with settled cards off, both bubbles still offer it', () => {

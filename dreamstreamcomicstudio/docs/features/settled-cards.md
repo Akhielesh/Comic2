@@ -224,7 +224,9 @@ behaviour:
     `quiet` one (skipped, declined, closed, replaced); otherwise the card's own icon (options, gate, plan, renders,
     cast, style, recap, versions, photos, translation, publish, share, outage, History, notice).
   - The words from `summaryOf` (`settledSummaryFor` adds a feature card's own `settledSummary` words), 13 px,
-    `--ds-ink`, or `--ds-muted` for a quiet line. They wrap at any width; nothing is clipped at 320 px.
+    `--ds-ink`, or `--ds-muted` for a quiet line. They wrap at any width. A notice's words clamp to 2 lines
+    (`line-clamp-2`, §5.2), so an old error stays a compact log line at 320 px; the words stay whole for screen
+    readers. Every other line wraps whole.
   - **At most one plain link**, for renders and picture cards: "Open the pages", "Open page 3", "Open the cast",
     "Open the style", "Open Assets". It is an `<a>` whose click runs the controller's `runClientAction` (`open_tab`,
     `open_page`): navigation only, never a change. Without a controller to run it, the link is left out.
@@ -237,8 +239,9 @@ behaviour:
     re-announces an old error;
   - **focus on settle:** when focus was inside the live card as it settled (the creator just tapped an option, its
     button is gone), the summary takes focus (`tabIndex=-1`, `preventScroll`), so a screen reader hears "You picked
-    Noir ink" instead of losing focus to the page. A card that mounts already settled, or settles while focus is
-    elsewhere, never takes it;
+    Noir ink" instead of losing focus to the page. It shows `FOCUS_RING` (`:focus-visible` only): a keyboard user who
+    picked with Enter sees where focus went and Tabs on from there (WCAG 2.4.7); a tap never rings it. A card that
+    mounts already settled, or settles while focus is elsewhere, never takes it;
   - no animation on the row; the link's hover ink is `motion-reduce:transition-none`.
 
 ### 8.3 Choosing live or settled (`CardRenderer`)
@@ -251,7 +254,8 @@ behaviour:
 - A card type this client does not know reads "Earlier card": never silent, never interactive.
 - Without a `settle` (SETTLED_CARDS off, older hosts, tests that render a card alone) every card renders live,
   exactly as before.
-- The error boundary starts over when a card settles, so a live card that failed still gets its one line.
+- The error boundary starts over when a card settles (it is keyed on live/settled), so a live card that failed still
+  gets its one line instead of "This card couldn't be shown" for ever.
 
 ### 8.4 The conversation (`ConversationPane`, `MessageItem`)
 
@@ -323,19 +327,28 @@ the question above first". On a reply nobody answered or passed it is exactly A1
   with settled cards off, o1 keeps its tiles and Done); the long chat keeps the open gate, the running renders and
   the open question live, mounts no image in a settled row, and reads the stamped approval, the answer and the
   conflict; the QA scene's history is settled rows only; rows are `aria-live="off"` and stack 4 px apart; Assign only
-  on the latest user message.
+  on the latest user message, and on none while this tab's message is sending.
+- `conversation/ConversationPane.live.test.tsx`: through the pane's own wiring, a waiting "wait and retry" (armed
+  through the retry store) keeps its passed outage card live with "Don't retry", and cancelling it settles the card;
+  the real flow (tap "Wait and retry", then send something else) keeps the cancel; a translation stays live while
+  the director works and settles once it stops.
 - `conversation/cards/CardRenderer.settle.test.tsx`: a settled renders card mounts 0 `<img>` and keeps one link; a
   settled history card makes no `api.list` / `api.compare` call; a settled outage card makes no status request;
-  `role="alert"` only while unsettled; folded breakdowns, unknown types, governed gate lines, feature words.
-- `conversation/cards/SettledCard.test.tsx`: the marks and inks, no control and one link, no animation, and the focus
-  hand-off (to the summary, `preventScroll`; never stolen).
+  `role="alert"` only while unsettled; a notice clamps to 2 lines; folded breakdowns, unknown types, governed gate
+  lines, feature words.
+- `conversation/cards/CardRenderer.boundary.test.tsx`: a live card that threw reads its settled line once the chat
+  moves past it.
+- `conversation/cards/SettledCard.test.tsx`: the marks and inks, no control and one link, no animation, the 28 px row
+  and its 44 px coarse target (row and link), only a notice clamped, and the focus hand-off (to the summary,
+  `preventScroll`, with a focus-visible ring; never stolen).
 - `conversation/cards/OptionsCard.settle.test.tsx`: a tap reads "You picked …" before the server answers; multi-select
   and typed answers; any other message reads "Not answered — you moved on"; with the flag off, today's locked chips.
 - `conversation/cards/GateCard.stamp.test.tsx`: the stamp's past tense; a studio close never says "Not now".
-- `conversation/MessageItem.entrance.test.tsx`: 20 stored messages give 0 animated nodes and a new one gives 1; the
-  server clock decides; no replay on remount; the sent bubble and a streamed reply rise once.
-- `conversation/ConversationPane.memo.test.tsx`: a token delta re-renders only the streaming row (flag on and off); a
-  doc revision still re-renders.
+- `conversation/MessageItem.entrance.test.tsx`: 20 stored messages give 0 animated nodes and a new one gives 1; a
+  fresh row keeps its class when it re-renders mid-animation; the server clock decides; no replay on remount; the
+  sent bubble and a streamed reply rise once.
+- `conversation/ConversationPane.memo.test.tsx`: a token delta re-renders only the streaming row and no user row
+  (flag on and off); a doc revision still re-renders.
 - `messageQueue.test.ts`: a passed card does not hold the queue.
 
 ### 8.9 Decisions recorded here (lead decision D3, CHANGED)
@@ -347,3 +360,7 @@ the question above first". On a reply nobody answered or passed it is exactly A1
 - `OptionsCard`, `NoticeCard` and `ConflictCard` needed no edit: a settled card never mounts them, so the options
   card's locked state, the notice's live region and A3's resolve buttons simply are not there once settled.
 - `GateCard`'s "embedded breakdown only while open" was already true (settle.md V.5).
+- **One test edit outside the row's Owns:** `conversation/registryCards.test.tsx:47` finds a registry card's slot by
+  `[data-card-slot]` instead of `[data-role="assistant"] .studio-reveal`, because MO-2 removes the replaying
+  `studio-reveal` class from card slots. One selector, no assertion changed; no other S2a or S2b package touches the
+  file. Recorded for the S2b integration.

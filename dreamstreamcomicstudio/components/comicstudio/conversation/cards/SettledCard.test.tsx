@@ -6,7 +6,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Card, Msg } from '../../../../shared/comic/doc';
 import type { CardSettle, SettledSummary } from '../../../../shared/comic/settle';
-import { TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_TEXT } from '../../../chat/studioDesign';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
 import { CardRenderer } from './CardRenderer';
 import { SettledCard } from './SettledCard';
@@ -68,6 +68,22 @@ describe('SettledCard', () => {
     expect(screen.getByRole('link').className).toContain('motion-reduce:transition-none');
   });
 
+  it('is one 28 px row that grows to a 44 px target on coarse pointers, and so does its link', () => {
+    const summary: SettledSummary = { text: 'Drew 2 pages', tone: 'plain', link: { label: 'Open the pages', client: { type: 'open_tab', tab: 'pages' } } };
+    const { container } = render(<SettledCard card={card('renders')} summary={summary} onLink={() => undefined} />);
+    const rowClasses = container.querySelector('[data-settled]')!.className.split(/\s+/);
+    expect(rowClasses).toEqual(expect.arrayContaining(['min-h-7', 'coarse:min-h-11']));
+    expect(screen.getByRole('link', { name: 'Open the pages' }).className.split(/\s+/)).toContain('coarse:min-h-11');
+  });
+
+  it('only a notice clamps its words to 2 lines (settle.md §5.2); every other line wraps whole', () => {
+    const long = 'Rendering failed for page 7 because the model stopped answering halfway through the panel set. Nothing was charged, and the page keeps its plan.';
+    const { rerender } = render(<SettledCard card={card('notice')} summary={{ text: long, tone: 'plain' }} />);
+    expect(screen.getByText(long).className.split(/\s+/)).toContain('line-clamp-2');
+    rerender(<SettledCard card={card('options')} summary={{ text: 'You answered “a quiet rooftop at dawn”', tone: 'done' }} />);
+    expect(screen.getByText('You answered “a quiet rooftop at dawn”').className).not.toMatch(/line-clamp/);
+  });
+
   it('a folded line renders nothing', () => {
     const { container } = render(<SettledCard card={card('breakdown')} summary={{ text: '', tone: 'plain', folded: true }} />);
     expect(container.innerHTML).toBe('');
@@ -92,6 +108,18 @@ describe('focus on settle (settle.md §5.8)', () => {
     expect(document.activeElement).toBe(words);
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     focus.mockRestore();
+  });
+
+  it('the summary that takes focus shows a ring to keyboard users (focus-visible only, so a tap never rings it)', () => {
+    render(<SettledCard card={q} summary={{ text: 'You picked Noir ink', tone: 'done' }} takeFocus />);
+    const words = screen.getByText('You picked Noir ink');
+    expect(document.activeElement).toBe(words);
+    const classes = words.className.split(/\s+/);
+    // The ring is the studio's FOCUS_RING (2 px of --ds-focus, :focus-visible); the bare outline-none only drops the
+    // browser's :focus outline, never the visible indicator (WCAG 2.4.7).
+    expect(classes).toEqual(expect.arrayContaining(FOCUS_RING.split(' ')));
+    expect(FOCUS_RING.split(' ').every((c) => c.startsWith('focus-visible:') || c.startsWith('contrast-more:focus-visible:'))).toBe(true);
+    words.blur();
   });
 
   it('never steals focus: a card that settles while focus is elsewhere, or mounts settled, leaves it there', () => {

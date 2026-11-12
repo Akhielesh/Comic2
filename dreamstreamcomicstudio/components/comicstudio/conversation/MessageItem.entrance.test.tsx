@@ -44,6 +44,25 @@ describe('fresh-only entrance', () => {
     expect(animated[0].closest('[data-role="assistant"]')!.textContent).toContain('Here is page 4.');
   });
 
+  it('a fresh message keeps its entrance while its row re-renders (decided once, on mount, never cut short)', () => {
+    const conversation = stored(4);
+    const studio = makeFakeStudio({ doc: makeSampleDoc({ conversation }) });
+    const { container, rerender } = render(<ConversationPane studio={studio} />);
+    const next: Msg = { id: 'a4', role: 'assistant', text: 'Page 2 is drawn.', at: BASE_AT + 4 };
+    const grown = { ...studio, doc: makeSampleDoc({ conversation: [...conversation, next] }) };
+    rerender(<ConversationPane studio={grown} />);
+    const [rising] = [...container.querySelectorAll(ANIMATED)];
+    expect(rising).toBeDefined();
+    // A drafts-only change (a token delta somewhere) and then a change every row reads (the controller): the rows
+    // re-render mid-animation, and the fresh reply keeps its class.
+    rerender(<ConversationPane studio={{ ...grown, drafts: {} }} />);
+    rerender(<ConversationPane studio={{ ...grown, drafts: {}, byok: !grown.byok }} />);
+    const after = [...container.querySelectorAll(ANIMATED)];
+    expect(after).toHaveLength(1);
+    expect(after[0]).toBe(rising);
+    expect(after[0].classList.contains('ds-stagger')).toBe(true);
+  });
+
   it('the server clock decides, not this device’s: a message stamped far in the "past" by a skewed clock still counts as new', () => {
     // The stored messages carry server times; this device thinks it is a day later. Only `at` against `at` counts.
     const conversation = stored(4);

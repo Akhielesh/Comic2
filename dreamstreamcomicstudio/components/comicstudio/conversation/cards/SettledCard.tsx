@@ -7,10 +7,10 @@
 //
 // The row: 28 px (44 px on coarse pointers), no CardShell frame, sitting at the card's place in the column; a 14 px
 // leading mark — a ✓ in TONE_TEXT.success for picked, approved or published, a dot for skipped, declined or closed,
-// the card's own icon otherwise; --ds-ink words, --ds-muted for the quiet ones. aria-live="off", so collapsing old
-// cards when the creator sends is not announced by the conversation log; the summary takes focus (tabIndex −1, no
-// scroll) when the card held focus as it settled, so a screen reader hears "You picked Noir ink" instead of losing
-// focus to the page.
+// the card's own icon otherwise; --ds-ink words, --ds-muted for the quiet ones; a notice's words clamp to 2 lines.
+// aria-live="off", so collapsing old cards when the creator sends is not announced by the conversation log; the
+// summary takes focus (tabIndex −1, no scroll, a focus-visible ring for keyboard users) when the card held focus as it
+// settled, so a screen reader hears "You picked Noir ink" instead of losing focus to the page.
 
 import React, { useLayoutEffect, useRef } from 'react';
 import {
@@ -136,8 +136,13 @@ export const SettledCard: React.FC<SettledCardProps> = ({ card, summary, onLink,
         ref={textRef}
         tabIndex={-1}
         className={cn(
-          'min-w-0 flex-[1_1_12rem] text-[13px] leading-snug [overflow-wrap:anywhere] focus:outline-none',
-          quiet ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]'
+          // Focus handed here after a keyboard pick shows (FOCUS_RING is :focus-visible only, so a tap never rings it).
+          'min-w-0 flex-[1_1_12rem] text-[13px] leading-snug [overflow-wrap:anywhere] focus:outline-none focus-visible:rounded-sm',
+          FOCUS_RING,
+          quiet ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]',
+          // A notice keeps to 2 lines (settle.md §5.2), so an old error stays a compact log line; the words stay whole
+          // for screen readers.
+          card.type === 'notice' && 'line-clamp-2'
         )}
       >
         {summary.text}
