@@ -1181,22 +1181,37 @@ export const ARTIFACT_SLIM_SELECT = ARTIFACT_SLIM_KEYS.map((k) => `${k}:data->${
 export const ARTIFACT_MEMO_TTL_MS = 5 * 60_000;
 
 type Memo<T> = { at: number; value: Promise<T> };
+// Keyed by `${signed-in user id}:${projectId}`: a tab another account signs in to never gets the previous
+// account's artifacts from memory (RLS is checked on every read the memo serves first).
 const artifactMemo = new Map<string, Memo<GenerationArtifact[]>>();
 const artifactCountMemo = new Map<string, Memo<number>>();
 
-/** Forget the memoised artifacts (and count) of one project, or of every project. */
+/** Forget the memoised artifacts (and count) of one project, for every account, or of every project. */
 export const invalidateArtifactMemo = (projectId?: string): void => {
   if (projectId === undefined) {
     artifactMemo.clear();
     artifactCountMemo.clear();
     return;
   }
-  artifactMemo.delete(projectId);
-  artifactCountMemo.delete(projectId);
+  for (const memo of [artifactMemo, artifactCountMemo] as Map<string, unknown>[]) {
+    for (const key of [...memo.keys()]) if (key.endsWith(`:${projectId}`)) memo.delete(key);
+  }
 };
 
-/** The memo entry for `key`, or a new one from `load` (a failed load is never kept). */
-const memoized = <T>(memo: Map<string, Memo<T>>, key: string, load: () => Promise<T>): Promise<T> => {
+/** The memo key for this project and the signed-in user; none without a session (that read is never memoised). */
+const artifactMemoKey = async (projectId: string): Promise<string | null> => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    return userId ? `${userId}:${projectId}` : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The memo entry for `key`, or a new one from `load` (a failed load is never kept; no key, no memo). */
+const memoized = <T>(memo: Map<string, Memo<T>>, key: string | null, load: () => Promise<T>): Promise<T> => {
+  if (key === null) return load();
   const hit = memo.get(key);
   if (hit && Date.now() - hit.at < ARTIFACT_MEMO_TTL_MS) return hit.value;
   const entry: Memo<T> = { at: Date.now(), value: load() };
@@ -1225,7 +1240,7 @@ export const loadArtifactsForProject = async (
     return (data || []).map((row: any) => row.data);
   }
   try {
-    const artifacts = await memoized(artifactMemo, projectId, async () => {
+    const artifacts = await memoized(artifactMemo, await artifactMemoKey(projectId), async () => {
       const { data, error } = await supabase
         .from('artifacts')
         .select(ARTIFACT_SLIM_SELECT)
@@ -1242,7 +1257,8 @@ export const loadArtifactsForProject = async (
 
 /** How many artifacts a project has: a HEAD count (no rows), or the memoised list's length when it is fresh. */
 export const countArtifactsForProject = async (projectId: string): Promise<number> => {
-  const listed = artifactMemo.get(projectId);
+  const key = await artifactMemoKey(projectId);
+  const listed = key === null ? undefined : artifactMemo.get(key);
   if (listed && Date.now() - listed.at < ARTIFACT_MEMO_TTL_MS) {
     try {
       return (await listed.value).length;
@@ -1251,7 +1267,7 @@ export const countArtifactsForProject = async (projectId: string): Promise<numbe
     }
   }
   try {
-    return await memoized(artifactCountMemo, projectId, async () => {
+    return await memoized(artifactCountMemo, key, async () => {
       const { count, error } = await supabase
         .from('artifacts')
         .select('id', { count: 'exact', head: true })

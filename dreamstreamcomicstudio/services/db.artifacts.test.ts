@@ -136,3 +136,40 @@ describe('countArtifactsForProject', () => {
     expect(await countArtifactsForProject('p1')).toBe(3);
   });
 });
+
+describe('the artifact memo belongs to the signed-in account (EGRESS-DB review)', () => {
+  it('another account signed in on the same tab reads again; the first account still gets its memo', async () => {
+    await loadArtifactsForProject('p1');
+    expect(artifactReads()).toHaveLength(1);
+    fakeSupabase.state.userId = 'user-2';
+    await loadArtifactsForProject('p1');
+    expect(await countArtifactsForProject('p1')).toBe(2);
+    expect(artifactReads()).toHaveLength(2);
+    fakeSupabase.state.userId = 'user-1';
+    await loadArtifactsForProject('p1');
+    expect(artifactReads()).toHaveLength(2);
+  });
+
+  it('a read without a session is never kept', async () => {
+    fakeSupabase.state.userId = null;
+    await loadArtifactsForProject('p1');
+    await loadArtifactsForProject('p1');
+    await countArtifactsForProject('p1');
+    await countArtifactsForProject('p1');
+    expect(artifactReads()).toHaveLength(4);
+    fakeSupabase.state.userId = 'user-1';
+    await loadArtifactsForProject('p1');
+    expect(artifactReads()).toHaveLength(5);
+  });
+
+  it('saveArtifact drops the project for every account', async () => {
+    await loadArtifactsForProject('p1');
+    fakeSupabase.state.userId = 'user-2';
+    await loadArtifactsForProject('p1');
+    await saveArtifact(artifact('a3') as never);
+    await loadArtifactsForProject('p1');
+    fakeSupabase.state.userId = 'user-1';
+    await loadArtifactsForProject('p1');
+    expect(artifactReads()).toHaveLength(4);
+  });
+});

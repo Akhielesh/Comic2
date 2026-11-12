@@ -33,6 +33,26 @@ let bootWarm: Promise<void> | null = null;
  */
 export const PREWARM_LIVE_BUDGET_MS = 4_000;
 
+/**
+ * How long a cold request waits for the boot warm-up before it is served from the durable index (the live list
+ * usually answers well within it). It is the warm-up's own fallback read, shared, so the index is still read at
+ * most once per boot; the live list replaces it when it lands.
+ */
+export const COLD_REQUEST_WAIT_MS = 1_200;
+
+/** The boot's one read of the durable index into the memory cache, shared by the warm-up and a cold request. */
+let indexWarm: Promise<void> | null = null;
+const warmFromIndex = (): Promise<void> => {
+  if (!indexWarm) {
+    indexWarm = (async () => {
+      if (cache) return;
+      const persisted = await loadPersistedModels('openrouter');
+      if (persisted.length && !cache) cache = { models: persisted, fetchedAt: 0 };
+    })().catch(() => { /* a failed read leaves the live list to answer */ });
+  }
+  return indexWarm;
+};
+
 export type CatalogResult = {
   models: AnnotatedModel[];
   fetchedAt: number | null;
@@ -99,9 +119,12 @@ const resolvesWithin = (promise: Promise<unknown>, ms: number): Promise<boolean>
  * Never throws — on total failure it returns the last snapshot (or empty) flagged `degraded`.
  */
 export const getCatalog = async (force = false): Promise<CatalogResult> => {
-  // A cold request during the boot warm-up waits for it (its live list, or its one fallback read of the durable
-  // index) rather than reading the index a second time.
-  if (!cache && !force && bootWarm) await bootWarm;
+  // A cold request during the boot warm-up waits for it briefly (its live list); past COLD_REQUEST_WAIT_MS it takes
+  // the warm-up's one fallback read of the durable index (shared, never a second read) instead of waiting out the
+  // whole live budget.
+  if (!cache && !force && bootWarm && !(await resolvesWithin(bootWarm, COLD_REQUEST_WAIT_MS)) && !cache) await warmFromIndex();
+  // Step 3 below reads the index itself only when no warm-up has run (or could read it).
+  const indexTried = indexWarm !== null;
   const fresh = cache && Date.now() - cache.fetchedAt < CATALOG_TTL_MS;
 
   // 1. Fresh memory cache.
@@ -116,7 +139,7 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
   }
 
   // 3. Cold start → hydrate from the durable index and serve immediately, revalidate in background.
-  if (!cache && !force) {
+  if (!cache && !force && !indexTried) {
     const persisted = await loadPersistedModels('openrouter');
     if (persisted.length) {
       cache = { models: persisted, fetchedAt: 0 }; // fetchedAt 0 = treat as stale so it revalidates
@@ -153,8 +176,7 @@ export const prewarmCatalog = (): Promise<void> => {
         if (cache) return;
         if (await resolvesWithin(startRefresh(), PREWARM_LIVE_BUDGET_MS)) return;
         if (cache) return;
-        const persisted = await loadPersistedModels('openrouter');
-        if (persisted.length && !cache) cache = { models: persisted, fetchedAt: 0 };
+        await warmFromIndex();
       } catch {
         /* boot must never fail because the catalog couldn't warm */
       }

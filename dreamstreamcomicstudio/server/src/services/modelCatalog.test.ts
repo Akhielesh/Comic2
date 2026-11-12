@@ -119,24 +119,60 @@ describe('boot warm-up', () => {
     expect(upstream.calls).toBe(1);
   });
 
-  it('a slow live list falls back to one read after the budget, then the live list replaces it', async () => {
+  it('with no request waiting, a slow live list falls back to one read after the budget, then the live list replaces it', async () => {
     vi.useFakeTimers();
     let release!: () => void;
     upstream.gate = new Promise<void>((resolve) => { release = resolve; });
     const catalog = await boot();
     const warming = catalog.prewarmCatalog();
-    const request = catalog.getCatalog();
     await vi.advanceTimersByTimeAsync(catalog.PREWARM_LIVE_BUDGET_MS - 1);
     expect(reads()).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
     await warming;
     expect(reads()).toBe(1);
-    expect((await request).models.map((m) => m.id)).toEqual(['persisted/one']);
+    expect((await catalog.getCatalog()).models.map((m) => m.id)).toEqual(['persisted/one']);
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect((await catalog.getCatalog()).models.map((m) => m.id)).toEqual(['live/one', 'live/two']);
     expect(reads()).toBe(1);
     expect(upstream.calls).toBe(1);
+  });
+
+  it('a cold request waits at most COLD_REQUEST_WAIT_MS for a slow live list, then takes the one index read (no second at the budget)', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    upstream.gate = new Promise<void>((resolve) => { release = resolve; });
+    const catalog = await boot();
+    expect(catalog.COLD_REQUEST_WAIT_MS).toBeLessThan(catalog.PREWARM_LIVE_BUDGET_MS);
+    const warming = catalog.prewarmCatalog();
+    let served: Awaited<ReturnType<typeof catalog.getCatalog>> | undefined;
+    void catalog.getCatalog().then((result) => { served = result; });
+    await vi.advanceTimersByTimeAsync(catalog.COLD_REQUEST_WAIT_MS - 1);
+    expect(served).toBeUndefined();
+    expect(reads()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(served?.models.map((m) => m.id)).toEqual(['persisted/one']);
+    expect(reads()).toBe(1);
+    // The warm-up's own fallback at the budget finds the cache warm: no second read.
+    await vi.advanceTimersByTimeAsync(catalog.PREWARM_LIVE_BUDGET_MS);
+    await warming;
+    expect(reads()).toBe(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await catalog.getCatalog()).models.map((m) => m.id)).toEqual(['live/one', 'live/two']);
+    expect(reads()).toBe(1);
+    expect(upstream.calls).toBe(1);
+  });
+
+  it('when the live list fails and the index is empty, a request reads the index no second time', async () => {
+    upstream.fail = true;
+    store.loadPersistedModels.mockResolvedValue([]);
+    const catalog = await boot();
+    await catalog.prewarmCatalog();
+    expect(reads()).toBe(1);
+    const result = await catalog.getCatalog();
+    expect(result.degraded).toBe(true);
+    expect(reads()).toBe(1);
   });
 
   it('prewarm is one shared warm-up per process', async () => {

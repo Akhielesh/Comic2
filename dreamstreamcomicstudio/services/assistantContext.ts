@@ -114,37 +114,50 @@ export const summarizeProject = async (project: Project, options: { artifacts?: 
   };
 };
 
-export const summarizeAllProjects = async (projects: Project[]): Promise<ProjectSummary[]> => {
-  const summaries: ProjectSummary[] = [];
-  for (const project of projects) {
-    try {
-      summaries.push(await summarizeProject(project, { artifacts: false }));
-    } catch {
-      summaries.push({
-        id: project.id,
-        name: project.name,
-        step: project.state.step,
-        stepLabel: AppStep[project.state.step],
-        updatedAt: project.updatedAt,
-        scenes: project.state.scenes?.length ?? 0,
-        panels: project.state.panels?.length ?? 0,
-        isGenerating: !!project.state.generationStatus?.isActive,
-        generationProgress: project.state.generationStatus?.progress,
-        generationStep: project.state.generationStatus?.currentStepDescription,
-        artifacts: 0,
-        layoutType: project.state.layoutType,
-        textLayout: project.state.textLayout,
-        styleCategory: project.state.styleCategory,
-        styleAspectRatio: project.state.styleAspectRatio,
-        imageResolution: project.state.imageResolution,
-        coverReady: !!project.state.coverImageId,
-        overview: project.state.overview || "",
-        scriptLength: project.state.script?.length ?? 0,
-        lastUpdatedAt: project.updatedAt,
-        comments: { count: project.state.comments?.length || 0, likes: 0, dislikes: 0 }
-      });
-    }
+/** How many summaries (each one artifact HEAD count) run at once: a handful of round trips, never one per comic in turn. */
+export const SUMMARY_CONCURRENCY = 6;
+
+const summarizeOrFallback = async (project: Project): Promise<ProjectSummary> => {
+  try {
+    return await summarizeProject(project, { artifacts: false });
+  } catch {
+    return {
+      id: project.id,
+      name: project.name,
+      step: project.state.step,
+      stepLabel: AppStep[project.state.step],
+      updatedAt: project.updatedAt,
+      scenes: project.state.scenes?.length ?? 0,
+      panels: project.state.panels?.length ?? 0,
+      isGenerating: !!project.state.generationStatus?.isActive,
+      generationProgress: project.state.generationStatus?.progress,
+      generationStep: project.state.generationStatus?.currentStepDescription,
+      artifacts: 0,
+      layoutType: project.state.layoutType,
+      textLayout: project.state.textLayout,
+      styleCategory: project.state.styleCategory,
+      styleAspectRatio: project.state.styleAspectRatio,
+      imageResolution: project.state.imageResolution,
+      coverReady: !!project.state.coverImageId,
+      overview: project.state.overview || "",
+      scriptLength: project.state.script?.length ?? 0,
+      lastUpdatedAt: project.updatedAt,
+      comments: { count: project.state.comments?.length || 0, likes: 0, dislikes: 0 }
+    };
   }
+};
+
+export const summarizeAllProjects = async (projects: Project[]): Promise<ProjectSummary[]> => {
+  const summaries: ProjectSummary[] = new Array(projects.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < projects.length) {
+      const index = next;
+      next += 1;
+      summaries[index] = await summarizeOrFallback(projects[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SUMMARY_CONCURRENCY, projects.length) }, worker));
   return summaries;
 };
 

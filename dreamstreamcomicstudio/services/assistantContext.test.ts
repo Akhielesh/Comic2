@@ -8,7 +8,7 @@ import { fakeSupabase } from './projectRows.testkit';
 vi.mock('./supabase', async () => ({ supabase: (await import('./projectRows.testkit')).fakeSupabase.client }));
 
 const { invalidateArtifactMemo, loadArtifactsForProject, loadProjects } = await import('./db');
-const { buildProjectSnapshot, summarizeAllProjects, summarizeProject } = await import('./assistantContext');
+const { SUMMARY_CONCURRENCY, buildProjectSnapshot, summarizeAllProjects, summarizeProject } = await import('./assistantContext');
 
 const state = (extra: Record<string, unknown> = {}) =>
   ({
@@ -76,6 +76,23 @@ describe('summarizeAllProjects', () => {
     // The active project's count comes from its list; only the other one needs a HEAD count.
     expect(all.map((s) => s.artifacts)).toEqual([2, 1]);
     expect(headCounts()).toHaveLength(1);
+  });
+});
+
+describe('summarizeAllProjects concurrency (EGRESS-DB review)', () => {
+  it('runs its HEAD counts a few at a time, not one per comic in turn, and keeps the order', async () => {
+    const ids = Array.from({ length: 14 }, (_, i) => `q${i}`);
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    fakeSupabase.state.gates.push({ when: (q) => q.table === 'artifacts' && q.head, release: released });
+    const pending = summarizeAllProjects(ids.map((id) => project(id)));
+    await new Promise((r) => setTimeout(r, 30));
+    // Several counts are on the wire at once (one in turn would show 1), never more than the cap.
+    expect(headCounts()).toHaveLength(SUMMARY_CONCURRENCY);
+    release();
+    const summaries = await pending;
+    expect(headCounts()).toHaveLength(ids.length);
+    expect(summaries.map((s) => s.id)).toEqual(ids);
   });
 });
 
