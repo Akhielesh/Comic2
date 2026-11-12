@@ -4,6 +4,7 @@
 // of every value). Static drawing: nothing animates, so reduced motion is respected by construction.
 
 import React from 'react';
+import { hueClass } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 
 const VIEW_W = 100;
@@ -55,9 +56,15 @@ export interface StackedBar {
   total: number;
 }
 
-/** Fill per series id (tokens only). */
-const FILLS = ['fill-[var(--ds-accent)]', 'fill-[var(--ds-info)]', 'fill-[var(--ds-success)]', 'fill-[var(--ds-warning)]', 'fill-[var(--ds-muted)]', 'fill-[var(--ds-hairline)]'];
-const SWATCH = ['bg-[var(--ds-accent)]', 'bg-[var(--ds-info)]', 'bg-[var(--ds-success)]', 'bg-[var(--ds-warning)]', 'bg-[var(--ds-muted)]', 'bg-[var(--ds-hairline)]'];
+/**
+ * Series colours (CL-0 #9): series i takes the colour layer's hue i in its fixed order (hueClass, 0-based; a legend
+ * always names them, and hues are never status). Past the fifth, every series folds into one neutral chart step, the
+ * "Other" step. Before, series 2 read the info token, which is grey outside the skin since CL-0, beside a muted fifth.
+ */
+const OTHER_FILL = 'fill-[var(--ds-chart-3)]';
+const OTHER_SWATCH = 'bg-[var(--ds-chart-3)]';
+export const seriesFill = (i: number): string => hueClass('fill', i) ?? OTHER_FILL;
+export const seriesSwatch = (i: number): string => hueClass('dot', i) ?? OTHER_SWATCH;
 
 export interface StackedBarsProps {
   bars: readonly StackedBar[];
@@ -76,7 +83,7 @@ export const StackedBars: React.FC<StackedBarsProps> = ({ bars, series, label, f
   const step = VIEW_W / Math.max(1, bars.length);
   const barW = step * 0.7;
   const used = series.filter((s) => bars.some((b) => b.segments.some((g) => g.id === s.id && g.value > 0)));
-  const fillOf = (id: string) => FILLS[Math.max(0, series.findIndex((s) => s.id === id)) % FILLS.length];
+  const fillOf = (id: string) => seriesFill(Math.max(0, series.findIndex((s) => s.id === id)));
   return (
     <div className={cx('relative min-w-0', className)}>
       <svg viewBox={`0 0 ${VIEW_W} ${height}`} preserveAspectRatio="none" role="img" aria-label={label} className="block w-full" style={{ height }}>
@@ -100,7 +107,7 @@ export const StackedBars: React.FC<StackedBarsProps> = ({ bars, series, label, f
         <ul className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[10.5px] text-[var(--ds-muted)]" aria-label="Legend">
           {used.map((s) => (
             <li key={s.id} className="inline-flex min-w-0 items-center gap-1">
-              <span className={cx('h-2 w-2 shrink-0 rounded-[var(--ds-radius-sm)]', SWATCH[Math.max(0, series.findIndex((x) => x.id === s.id)) % SWATCH.length])} aria-hidden />
+              <span className={cx('h-2 w-2 shrink-0 rounded-[var(--ds-radius-sm)]', seriesSwatch(Math.max(0, series.findIndex((x) => x.id === s.id))))} aria-hidden />
               <span className="min-w-0 [overflow-wrap:anywhere]">{s.label}</span>
             </li>
           ))}
