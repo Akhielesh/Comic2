@@ -32,11 +32,25 @@ All notable user-facing changes. Format loosely follows
   spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
-- **Legal suite, seventh review (2026-11-12):** in Stream Studio, a kept recording an earlier
-  version had stopped listing now goes to the account whose data the device held when this
-  version first ran there, also when that account signed out or the main app switched accounts
-  first, and a recording whose entry a tab still on the earlier version drops comes back for its
-  own account, never for whoever holds the device then. One whose account can't be told is
+- **Legal suite, eighth review (2026-11-12):** in Stream Studio, an unsaved recording an earlier
+  version made is no longer given to whichever account held the device when this version first
+  ran: that version kept no note of the account, so the one who made it, and anyone else there,
+  is offered it while that version's list names it, as that version offered it, and one it had
+  stopped listing is offered to no one (counted, deletable). A tab still running the earlier
+  version can no longer hand a recording to the next account by rewriting its entry, and a full
+  browser storage changes nothing about who is offered what. Stream Studio removes a share-link
+  guest's pass 90 days past its end when it next opens on that device, whichever nursery it is
+  for. The comic reader keeps a restored place while a tap brings its controls back or a key is
+  typed in a field, keeps it until the images above it have loaded (on phones it landed on a
+  later panel and saved that), and saves where a screen reader or find in page moved you. Moving
+  to another legal document from its navigation or a link in its text moves keyboard focus to the
+  new document's title. The Privacy Policy says when the confirmation email isn't sent, and the
+  Cookies notice that the reader keeps when you last read each comic. Public-form email whose send
+  can't be logged is no longer sent, and the email previews no longer go stale on 1 January.
+- **Legal suite, seventh review (2026-11-12):** in Stream Studio, a recording whose entry a tab
+  still on the earlier version drops comes back for its own account, never for whoever holds the
+  device then (the eighth review, above, changed how an earlier version's own recordings are
+  offered). One whose account can't be told is
   offered to no one: the dashboard shows how many there are and their size, and can delete them.
   A recording you downloaded no longer comes back as "Recovered recording" when the browser can't
   note it for deleting, or can't delete it yet. The comic reader no longer saves page 1 when it

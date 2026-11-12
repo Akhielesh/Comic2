@@ -153,21 +153,27 @@ monitor name stay, when:
 
 A guest who joined while no one was signed in keeps their pass across loads with no
 session (`claimDevice(null)` purges nothing while no account owns the device). It still
-goes: when they leave, when the room turns it down (removed or revoked), 90 days after its
-end (`loadGuest`), when a member of that nursery opens it signed in (`useGuestPass`), and
+goes: when they leave, when the room turns it down (removed or revoked) the next time the
+device connects, the next time Stream Studio opens on the device once 90 days have passed
+since its end (`sweepExpiredGuestPasses` at start-up, and `loadGuest` when that nursery is
+opened), when a member of that nursery opens it signed in (`useGuestPass`), and
 with the purge above: someone who signs in on that device later takes it over with no
 purge (`claimDevice(userId)`), so their sign-out removes it; any main-app sign-out
 (`purgeLocalAccountData`) removes it; and a main-app account switch (`takeOverDevice`)
 purges data no account owns too. The Cookies notice says so.
 
 Unsaved recordings are not purged (they are the host's work): each carries the account it
-was made for, which `live/accountPurge.ts` also records apart from the registry
-(`ds-live-rec-owners`), with the account the device held when this version first ran there
-(`ds-live-legacy-owner`, noted only where an earlier version kept recordings, and cleared
-once every one of those has its own owner). A recording whose entry is lost (a tab still
-running the earlier version keeps only 10 entries; a failed registry write) comes back at
-the next start for that account, or, when its account can't be told, for no one
-(`?unknown`): the dashboard only counts it, with its size, and offers to delete it.
+was made for, which `live/recorder.ts` also records apart from the registry
+(`ds-live-rec-owners`, the first record of a name kept), and that record is what counts
+(`ownerOf`), so an entry a tab still running the earlier version rewrites with no owner keeps
+it. Nothing about them depends on who holds the device: an earlier version kept no owner, so
+its recordings belong to no account (offered to anyone who opens Stream Studio there, as that
+version offered them, while its list names them; `recordListedOwners` notes them as no one's
+at start-up, so they stay that way when that version drops them from its list). A recording
+whose entry is lost (a tab still running the earlier version keeps only 10 entries; a failed
+registry write) comes back at the next start for its recorded account, or, when its account
+can't be told (an earlier version had stopped listing it before this version found it), for no
+one (`?unknown`): the dashboard only counts it, with its size, and offers to delete it.
 
 A sign-out in another tab now also drops a Stream Studio tab's own session copy
 (sessionStorage, when "Remember me" was off), and `www.dreamstreamstudio.ai` (and since

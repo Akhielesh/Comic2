@@ -186,8 +186,8 @@ interface LegalDocumentProps extends LegalPageProps {
 /**
  * Land on the URL's #fragment once the (lazily loaded) page is in the DOM, focus included (landOn):
  * a link to a section of another document unmounts the link that was clicked, which would otherwise
- * leave focus on <body>. Otherwise start at the top, with focus left on a control still on the page
- * (the shared footer's link) moved to the title (landOnTop).
+ * leave focus on <body>. Otherwise start at the top, with focus moved to the title after a move inside
+ * the app, whether its link is still on the page (the shared footer) or gone (landOnTop).
  */
 const useLandOnFragment = () => {
     useEffect(() => {

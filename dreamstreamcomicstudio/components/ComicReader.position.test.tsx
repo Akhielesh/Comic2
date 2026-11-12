@@ -249,8 +249,8 @@ describe('the classic reader keeps its place when it closes', () => {
 
   describe('a scroll position restored before the comic is tall enough (lazy images take their height as they load)', () => {
     /** The browser clamps scrollTop to what the content allows, and a scroll that moved fires a scroll event. */
-    const clampScroll = (el: HTMLElement) => {
-      const box = { max: 300, top: 0 };
+    const clampScroll = (el: HTMLElement, max = 300) => {
+      const box = { max, top: 0 };
       Object.defineProperty(el, 'scrollTop', {
         configurable: true,
         get: () => box.top,
@@ -263,14 +263,15 @@ describe('the classic reader keeps its place when it closes', () => {
       });
       return box;
     };
-    const openWithPendingLoad = async (scrollTop: number) => {
+    const openWithPendingLoad = async (scrollTop: number, opts: { max?: number; prepare?: (el: HTMLElement) => void } = {}) => {
       store.set(project.id, { projectId: project.id, mode: 'scroll', pageIndex: 0, scrollTop, updatedAt: 1 });
       const db = await import('../services/db');
       let resolve!: (s: Saved) => void;
       vi.mocked(db.loadReaderState).mockImplementationOnce(() => new Promise<Saved>((r) => (resolve = r)) as ReturnType<typeof db.loadReaderState>);
       render(<Host />);
       const el = scrollBox()!;
-      const box = clampScroll(el);
+      const box = clampScroll(el, opts.max);
+      opts.prepare?.(el);
       resolve(store.get(project.id)!);
       await tick(40);
       return { el, box };
@@ -300,6 +301,101 @@ describe('the classic reader keeps its place when it closes', () => {
       await leaveForCookies();
       await tick(30);
       expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 900 });
+    });
+
+    const loadImage = (el: HTMLElement, i = 0) =>
+      act(() => {
+        el.querySelectorAll('img')[i].dispatchEvent(new Event('load'));
+      });
+
+    it('a tap or a click on the art while it is held (phones send a mouse down after every tap), or a space typed in a field, moves nothing: it stays held, and the place is kept', async () => {
+      const { el, box } = await openWithPendingLoad(900);
+      expect(el.scrollTop).toBe(300);
+      const img = el.querySelector('img')!;
+      fireEvent.touchStart(img, { touches: [{ clientX: 50, clientY: 50 }] });
+      fireEvent.touchEnd(img);
+      fireEvent.mouseDown(img);
+      fireEvent.mouseUp(img);
+      fireEvent.click(img);
+      const field = document.body.appendChild(document.createElement('textarea'));
+      field.focus();
+      fireEvent.keyDown(field, { key: ' ' });
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      field.remove();
+      box.max = 2000;
+      loadImage(el);
+      expect(el.scrollTop).toBe(900);
+      await leaveForCookies();
+      await tick(30);
+      expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 900 });
+    });
+
+    it('moved with no input event while it is held (a screen reader, find in page), the reader keeps and saves where it went, and the next image load doesn\'t move them back', async () => {
+      const { el, box } = await openWithPendingLoad(900, { max: 600 });
+      expect(el.scrollTop).toBe(600);
+      el.scrollTop = 100;
+      await tick(500);
+      expect(store.get(project.id)?.scrollTop).toBe(100);
+      box.max = 700;
+      loadImage(el);
+      expect(el.scrollTop).toBe(100);
+    });
+
+    it('reachable before the images above it have loaded (on a phone the text under each panel makes the comic tall at once): held, with the browser\'s scroll anchoring off, until they have, so it isn\'t carried to a later panel and that place saved', async () => {
+      const loaded = new Set<number>();
+      // The panel images as laid out: 250 px apart from 100 px down; those loaded are complete.
+      const layOut = (el: HTMLElement) => {
+        Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 });
+        el.querySelectorAll('img').forEach((img, i) => {
+          Object.defineProperty(img, 'complete', { configurable: true, get: () => loaded.has(i) });
+          img.getBoundingClientRect = () => ({ top: 100 + i * 250 - el.scrollTop }) as DOMRect;
+        });
+      };
+      const { el, box } = await openWithPendingLoad(900, { max: 2000, prepare: layOut });
+      expect(el.scrollTop).toBe(900);
+      expect(el.style.overflowAnchor).toBe('none');
+      // An image above loads. With scroll anchoring on, the browser would keep what is shown (a later panel)
+      // in view, scrolling the box by the height the image gained.
+      const anImageAboveLoads = (i: number) => {
+        loaded.add(i);
+        if (el.style.overflowAnchor !== 'none') el.scrollTop = box.top + 400;
+        loadImage(el, i);
+      };
+      anImageAboveLoads(0);
+      anImageAboveLoads(1);
+      await tick(500);
+      expect(el.scrollTop).toBe(900);
+      expect(store.get(project.id)?.scrollTop).toBe(900);
+      // Every image above the view at 900 (and in it) has loaded: the hold ends, anchoring is the browser's again.
+      for (const i of [2, 3, 4]) anImageAboveLoads(i);
+      expect(el.style.overflowAnchor).toBe('none');
+      anImageAboveLoads(5);
+      expect(el.style.overflowAnchor).toBe('');
+      await tick(500);
+      expect(el.scrollTop).toBe(900);
+      expect(store.get(project.id)?.scrollTop).toBe(900);
+      // And the reader's own scrolling is saved again.
+      el.scrollTop = 1100;
+      await tick(500);
+      expect(store.get(project.id)?.scrollTop).toBe(1100);
+    });
+
+    it('is held at most 20 seconds: an image that loads after that no longer moves the reader', async () => {
+      const { el, box } = await openWithPendingLoad(900);
+      expect(el.scrollTop).toBe(300);
+      const start = Date.now();
+      const now = vi.spyOn(Date, 'now').mockReturnValue(start + 21_000);
+      try {
+        box.max = 350;
+        loadImage(el); // the last try: to the clamp, then let go
+        expect(el.scrollTop).toBe(350);
+        expect(el.style.overflowAnchor).toBe('');
+        box.max = 2000;
+        loadImage(el, 1);
+        expect(el.scrollTop).toBe(350);
+      } finally {
+        now.mockRestore();
+      }
     });
 
     it('scrolled by hand while it is held, the reader keeps (and saves) where they scrolled to', async () => {

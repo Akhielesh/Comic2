@@ -110,16 +110,21 @@ export const landOn = (target: HTMLElement): void => {
 };
 
 /**
- * Start at the top of the document shown. Keyboard focus left on a control that is still on the page
- * (the shared footer's link that was used, or a link further down the document) moves to the
- * document's title, so the next Tab carries on from the top instead of scrolling back down to that
- * control. Focus on <body> (a page loaded cold, or a link that is gone) stays there.
+ * Start at the top of the document shown, with keyboard focus on the document's title after any move
+ * inside the app: focus left on a control that is still on the page (the shared footer's link that
+ * was used, or a link further down the document) moves there, so the next Tab carries on from the top
+ * instead of scrolling back down to that control; and so does focus on <body> after a move whose link
+ * is gone (the legal navigation's pills and the links in a document's text: the next document replaces
+ * the page, link and all), so a screen reader announces the document as it does a section a link
+ * lands on (landOn). A page loaded cold, or an entry no move in this visit marked
+ * (legalBackGoesBack), leaves focus on <body> as the browser put it.
  */
 export const landOnTop = (): void => {
   (document.scrollingElement ?? document.documentElement)?.scrollTo?.({ top: 0 });
   const title = document.getElementById(LEGAL_TITLE_ID);
   const active = document.activeElement;
-  if (!title || !active || active === document.body || active === title) return;
+  if (!title || !active || active === title) return;
+  if (active === document.body && !legalBackGoesBack()) return;
   title.focus?.({ preventScroll: true });
 };
 

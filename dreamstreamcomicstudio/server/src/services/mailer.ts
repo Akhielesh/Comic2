@@ -23,7 +23,7 @@ import {
   EMAIL_WORKER_URL
 } from '../config.js';
 import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
-import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { PUBLIC_FORM_EMAIL_TEMPLATES, getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
 import { maskEmail } from './authEmailLinks.js';
 
 export { APP_PUBLIC_URL };
@@ -146,8 +146,14 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   }
   if (unsubscribeUrl) params.unsubscribeUrl = unsubscribeUrl;
 
-  // (4) log 'queued' first so we have an id for the read-receipt pixel
+  // (4) log 'queued' first so we have an id for the read-receipt pixel. Public-form mail whose row
+  // can't be written isn't sent: its per-inbox limits, its share of the caps and the hard caps all
+  // count logged sends only, so unlogged ones would let every alias (and every send past a cap) go.
   const logId = await logSend({ ...baseLog, status: 'queued' });
+  if (!logId && (PUBLIC_FORM_EMAIL_TEMPLATES as readonly string[]).includes(template)) {
+    console.warn(`[email] Refusing ${template} → ${maskEmail(to)}: its send couldn't be logged, and its limits count logged sends only.`);
+    return { ok: false, error: 'not_logged' };
+  }
   if (opts.track === false) {
     delete params.pixelUrl;
   } else if (logId && EMAIL_PUBLIC_BASE_URL) {

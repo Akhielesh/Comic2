@@ -284,7 +284,9 @@ export const checkConfirmThrottle = async (
 /**
  * True once public-form mail (confirmations and early-access receipts) has used its share of today's
  * or this month's email cap. A global state (never about one address). An unreadable log doesn't
- * block: the mailer's own hard caps still apply to every send.
+ * block here: with the log unreadable no confirmation or receipt is sent anyway (checkConfirmThrottle
+ * and claimAccessReceipt fail closed on the same log), and the mailer's own hard caps, which count
+ * only what the log shows, don't hold then.
  */
 export const confirmBudgetExhausted = async (now = Date.now()): Promise<boolean> => {
   const share = (cap: number) => (cap > 0 ? Math.max(1, Math.floor(cap * CONFIRM_EMAIL_BUDGET_SHARE)) : 0);

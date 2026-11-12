@@ -279,7 +279,7 @@ describe('Privacy Policy', () => {
         const interest = item('Updates and interest registrations (double opt-in):');
         expect(interest).toContain('if you sign up for updates or register interest in a studio');
         // "No updates", not "nothing else": a service announcement can reach any address we hold.
-        expect(interest).toContain('We then email you a confirmation link, and no updates until you press Confirm (service announcements, above, can still reach the address).');
+        expect(interest).toContain("We then email you a confirmation link (none while our record of the emails we send can't be read; registering again once it can sends it), and no updates until you press Confirm (service announcements, above, can still reach the address).");
         expect(interest).not.toContain('nothing else until you press Confirm');
         // A repeat registration (anyone can type the address) re-sends it, within the throttle...
         expect(interest).toContain(
@@ -410,12 +410,14 @@ describe('Cookies & Local Storage', () => {
 
     it('the "Your work" row names the reading place the comic reader keeps for every comic read on the device', () => {
         const row = [...renderDoc('cookies').main.querySelectorAll('tr')].find((tr) => tr.textContent?.includes('dreamstream_local_cache'));
-        expect(row?.textContent).toContain("and where you were in each comic you've read here (page, reading mode and scroll position), kept in IndexedDB and local storage.");
-        // The reader saves exactly that, per comic, into the reader_state store of dreamstream_local_cache.
+        expect(row?.textContent).toContain("and where you were in each comic you've read here (page, reading mode, scroll position and when you last read it), kept in IndexedDB and local storage.");
+        // The reader saves exactly that, per comic, into the reader_state store of dreamstream_local_cache:
+        // every save (a page turn, a mode change, a scroll, the close) stamps updatedAt with the time.
         expect(read('services/db.ts')).toContain('const DB_NAME = "dreamstream_local_cache";');
         expect(read('services/db.ts')).toContain('const READER_STATE_STORE = "reader_state";');
         expect(read('types.ts')).toMatch(/export type ReaderState = \{\s*projectId: string;\s*mode: "scroll" \| "flip";\s*pageIndex\?: number;\s*scrollTop\?: number;\s*updatedAt: number;\s*\};/);
         expect(read('components/ComicReader.tsx')).toContain('void saveReaderState({ projectId, mode, pageIndex: page, scrollTop:');
+        expect(read('components/ComicReader.tsx').match(/updatedAt: Date\.now\(\)/g)).toHaveLength(2);
     });
 
     it('names the third parties the pages load', () => {
@@ -503,10 +505,11 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(privacy).toContain('service announcements our team writes and sends by hand');
         // Sign-out and unsaved recordings: who is offered one, including ones no account made, and
         // what another account at the device can see and do (live/recorder.unit.test.ts checks it).
-        // One left from an earlier version goes to the account whose data the device held when this version
-        // first ran there (settleUnownedRecordings), not to whoever was signing in at that moment; one whose
-        // account can't be told (UNKNOWN_OWNER) is offered to no one, only counted (recorder.ts).
-        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them, with a note of the account each was made for. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there. If there was none, one that version still listed is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in, and one it had stopped listing is offered to no one. So is any other recording whose account can't be told, such as one recorded in a tab still running the earlier version and dropped from its list before this version listed it. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.");
+        // One an earlier version made carries no account, and none is guessed from who holds the device
+        // (recorder.ts ownerOf): offered to anyone while that version's list names it, as it was, and to no
+        // one (UNKNOWN_OWNER, only counted) once that version had stopped listing it.
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them, with a note of the account each was made for. Each is offered only to the account its studio was opened for; one made while no one was signed in is offered to anyone who opens Stream Studio on that device. An earlier version of Stream Studio kept no such note, so a recording made with it, also in a tab still running it, belongs to no account: one this version finds on that version's list is offered to anyone who opens Stream Studio on that device, as that version offered it, and one that version had already stopped listing is offered to no one. So is any other recording whose account can't be told. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.");
+        for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('when this version first ran there');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('first ran there or, if there was none, is offered to anyone');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('goes to the account signed in there when this version first ran');
         expect(privacy).not.toContain('only the account that made them is offered them');
@@ -523,16 +526,19 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         const cookiesMain = renderDoc('cookies').main;
         const cookies = textOf(cookiesMain.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
-        expect(cookies).toContain("One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there. If there was none, one that version still listed is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in, and one it had stopped listing is offered to no one.");
+        expect(cookies).toContain("An earlier version of Stream Studio kept no such note, so a recording made with it, also in a tab still running it, belongs to no account: one this version finds on that version's list is offered to anyone who opens Stream Studio on that device, as that version offered it, and one that version had already stopped listing is offered to no one.");
         expect(cookies).toContain('anyone there sees the same for recordings offered to no one.');
         // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
         // Guest passes from share links go with the account (accountPurge PREFIXES), and the list of what
         // stays no longer claims to be three things: device settings stay too.
         expect(cookies).toContain("nursery data, guest passes from a nursery's share link, call settings, the names of people you called and the name you used as a viewer) and ends its alert subscription.");
-        // A signed-out guest's pass: every way it goes (leave, the room's refusal, 90 days past its end, and
-        // any sign-out or account switch on that device, or a member opening it: live/accountPurge.unit.test.ts).
-        expect(cookies).toContain('A guest who joined with a share link while no one was signed in keeps their pass on that device until they leave, the nursery turns it down (a parent ended it or removed them) or 90 days after its end, unless someone signs out of Stream Studio or DreamStream on that device, the device switches to another account, or a member of that nursery opens it there signed in: then it goes too. These stay after a sign-out.');
+        // A signed-out guest's pass: every way it goes (leave, the room's refusal at its next connection, Stream
+        // Studio opening 90 days past its end: LiveApp.gateGuestPass.unit.test.tsx; and any sign-out or account
+        // switch on that device, or a member opening it: live/accountPurge.unit.test.ts).
+        expect(cookies).toContain('A guest who joined with a share link while no one was signed in keeps their pass on that device until they leave, the nursery turns it down when that device next connects to it (a parent ended it or removed them), or Stream Studio opens on that device once 90 days have passed since its end, unless someone signs out of Stream Studio or DreamStream on that device, the device switches to another account, or a member of that nursery opens it there signed in: then it goes too. These stay after a sign-out.');
         expect(cookies).not.toContain('keeps their pass on that device until it ends or a parent ends it');
+        expect(cookies).not.toContain('or 90 days after its end, unless');
+        expect(read('live/LiveApp.tsx')).toMatch(/void sweepDiscardedRecordings\(\);\s*sweepExpiredGuestPasses\(\);\s*\}, \[\]\);/);
         expect(cookies).not.toContain('Three things stay');
         expect(cookies).toContain("This browser's baby-monitor encryption data stays: its own keys, its copies of nursery keys, the counters its encryption uses, and which cameras it has seen encrypt");
         expect(cookies).toContain('Device settings stay too: your preferences (theme, camera lens, tours seen, the tracker\'s units and similar), the name this device goes by in the baby monitor, and the folder you picked for saving recordings.');
@@ -540,7 +546,7 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         for (const kept of ['ds-monitor-device', 'ds-relay-seq-']) expect(read('live/accountPurge.ts'), kept).not.toContain(`'${kept}`);
         expect(textOf(cookiesMain.querySelector('#what-we-store') as HTMLElement)).toContain('guest passes for nurseries you joined with a share link');
         expect(cookies).toContain("Changes to your call favourites and blocks that haven't reached our server yet stay, for your account only, until they do.");
-        expect(cookies).toContain('Each is offered only to the account its studio was opened for.');
+        expect(cookies).toContain('Each is offered only to the account its studio was opened for; one made while no one was signed in is offered to anyone who opens Stream Studio on that device.');
         expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.');
         expect(cookies).not.toContain('only the account that made them is offered them');
     });
@@ -1045,6 +1051,50 @@ describe('Back from a legal page shows the view the entry names (App routing in 
             fireEvent.click(terms);
             const title = await screen.findByRole('heading', { level: 1, name: 'Terms of Service' });
             await waitFor(() => expect(document.activeElement).toBe(title));
+        } finally {
+            (el as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
+        }
+    });
+
+    it('the legal navigation, or a link in the text, used from the keyboard: the link is gone with the page, and the next document starts at its title (a section link lands on its section)', async () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        const el = document.scrollingElement ?? document.documentElement;
+        const scrollTo = (el as HTMLElement & { scrollTo?: unknown }).scrollTo;
+        (el as HTMLElement & { scrollTo: unknown }).scrollTo = vi.fn();
+        // As App renders them: each document in its own slot, so the page that was shown unmounts.
+        const Docs: React.FC = () => {
+            const [doc, setDoc] = React.useState<LegalDocId>('privacy');
+            return (
+                <div>
+                    {doc === 'privacy' && <PrivacyPolicy onBack={vi.fn()} onOpenDoc={setDoc} />}
+                    {doc === 'terms' && <TermsOfService onBack={vi.fn()} onOpenDoc={setDoc} />}
+                </div>
+            );
+        };
+        try {
+            window.history.replaceState({}, '', '/privacy');
+            render(<Docs />);
+            await screen.findByRole('heading', { level: 1, name: 'Privacy Policy' });
+            expect(document.activeElement).toBe(document.body); // loaded cold: left alone
+            const pill = within(screen.getByRole('navigation', { name: 'Legal documents' })).getByRole('link', { name: 'Terms of Service' });
+            pill.focus();
+            fireEvent.click(pill);
+            const terms = await screen.findByRole('heading', { level: 1, name: 'Terms of Service' });
+            await waitFor(() => expect(document.activeElement).toBe(terms));
+            expect(legalBackGoesBack()).toBe(true);
+            // A link in the text to the top of another document.
+            const main = () => document.querySelector('main') as HTMLElement;
+            const inText = [...main().querySelectorAll('a[href="/privacy"]')].find((a) => !a.closest('nav')) as HTMLElement;
+            inText.focus();
+            fireEvent.click(inText);
+            const privacy = await screen.findByRole('heading', { level: 1, name: 'Privacy Policy' });
+            await waitFor(() => expect(document.activeElement).toBe(privacy));
+            // And one to a section of another document lands on that section, as before.
+            const toSection = main().querySelector('a[href="/terms#youtube"]') as HTMLElement;
+            toSection.focus();
+            fireEvent.click(toSection);
+            await screen.findByRole('heading', { level: 1, name: 'Terms of Service' });
+            await waitFor(() => expect(document.activeElement?.id).toBe('youtube'));
         } finally {
             (el as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
         }

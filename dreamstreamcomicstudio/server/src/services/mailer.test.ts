@@ -19,6 +19,7 @@ vi.mock('./emailStore.js', async (importOriginal) => ({
 }));
 
 const { sendEmail } = await import('./mailer.js');
+const { logSend } = await import('./emailStore.js');
 
 const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ ok: true, messageId: 'm1' })));
 vi.stubGlobal('fetch', fetchMock);
@@ -55,5 +56,16 @@ describe('sendEmail → email Worker', () => {
     const { body } = lastRequest();
     expect(body.brand).toBe('stream-studio');
     expect(body.params).toEqual({ actionUrl: 'https://dreamstreamstudio.ai/live?token_hash=h&type=signup' });
+  });
+
+  it('public-form mail (the confirmation, the early-access receipt) whose send can\'t be logged is not sent: every limit on it counts logged sends only; other mail still goes', async () => {
+    for (const template of ['newsletter-confirm', 'access-requested'] as const) {
+      vi.mocked(logSend).mockResolvedValueOnce(null);
+      expect(await sendEmail({ to: 'victim+1@gmail.com', template, params: { confirmUrl: 'https://api.test/c' } })).toEqual({ ok: false, error: 'not_logged' });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.mocked(logSend).mockResolvedValueOnce(null);
+    expect(await sendEmail({ to: 'ada@example.com', template: 'auth-confirm-signup', params: { actionUrl: 'https://dreamstreamstudio.ai/x' }, track: false })).toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

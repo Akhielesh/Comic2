@@ -78,9 +78,11 @@ const emailUnavailable = (res: Response) =>
   fail(res, 503, 'email_unavailable', 'We couldn’t send the confirmation email right now. Please try again in a few minutes.');
 
 /**
- * The one answer every valid request gets, whatever the address's state. True in every case: a
- * link went out now, or one did within the throttle window (at most one every 10 minutes and
- * three a day), or the address is already subscribed and the link confirms these picks.
+ * The one answer every valid request gets, whatever the address's state: a link went out now, or
+ * one did within the throttle window (at most one every 10 minutes and three a day), or the address
+ * is already subscribed and the link confirms these picks. One case sends nothing and gets this
+ * answer too: while email_log can't be read the throttle fails closed (checkConfirmThrottle), and
+ * the address's next request once it can be read sends the link. The Privacy Policy says so.
  */
 const pendingAnswer = (studios: StudioInterestId[]) => ({
   ok: true,

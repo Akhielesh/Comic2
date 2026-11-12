@@ -11,20 +11,9 @@
  * a recoverable file. Browsers without OPFS fall back to the in-memory path.
  */
 
-import {
-  UNKNOWN_OWNER,
-  UNSAVED_RECORDINGS_KEY,
-  deviceOwner,
-  forgetRecordingOwners,
-  noteRecordingOwner,
-  legacyRecordingsOwner,
-  readRecordingOwners,
-  recoveredRecordingOwner,
-  retireLegacyOwner,
-  settleUnownedRecordings,
-} from './accountPurge';
+import { deviceOwner } from './accountPurge';
 
-const UNSAVED_KEY = UNSAVED_RECORDINGS_KEY;
+const UNSAVED_KEY = 'ds-live-unsaved-recordings';
 const PREFIX = 'ds-rec-';
 
 export interface UnsavedRecording {
@@ -40,10 +29,12 @@ export interface UnsavedRecording {
    * The Stream Studio account the studio that recorded it was opened for (null: no account was
    * signed in on this device then). Signing out leaves unsaved recordings on the device (they are
    * the host's work), so a recording with an owner is offered only to that account: never the next
-   * person who signs in here. One with no owner (null, or missing on an entry from before recordings
-   * carried one) is offered to whoever opens Stream Studio here (unsavedRecordingsOf). UNKNOWN_OWNER:
-   * a recording listed again whose account can't be told, offered to no one (sweepOrphanRecordings).
-   * The owner is also recorded apart from this list (accountPurge RECORDING_OWNERS_KEY).
+   * person who signs in here. One with no owner is offered to whoever opens Stream Studio here
+   * (unsavedRecordingsOf). Missing on an entry an earlier version of Stream Studio wrote: that version
+   * recorded no account, and none is ever guessed for it (it counts as no account's, null).
+   * UNKNOWN_OWNER: a recording listed again whose account can't be told, offered to no one
+   * (sweepOrphanRecordings). The owner is also recorded apart from this list (RECORDING_OWNERS_KEY),
+   * and that record is the one that counts (ownerOf).
    */
   owner?: string | null;
 }
@@ -298,6 +289,98 @@ async function readOpfsFile(name: string, mime: string): Promise<Blob> {
 
 /* ------------------------------------------------------ unsaved registry */
 
+/**
+ * Who made each unsaved recording, by its disk name ({name: account or null}), kept apart from the
+ * registry: written with every entry this version adds, and the first record of a name is the one
+ * kept. A Stream Studio tab still running an earlier version never touches it, though it drops
+ * registry entries (it kept only the 10 newest) and rewrites its own entry with no owner every few
+ * seconds while it records; so a recording that loses its entry that way, or to a registry write that
+ * failed, is listed again for the account it was made for, and an entry rewritten that way keeps its
+ * owner (ownerOf). Never purged: the recordings it describes stay too.
+ */
+export const RECORDING_OWNERS_KEY = 'ds-live-rec-owners';
+
+/**
+ * The owner of an unsaved recording whose account can't be told: a disk copy no list names and no
+ * record says who made it (an earlier version made it and stopped listing it before this version saw
+ * it listed, or the records couldn't be written). It is offered to no one; anyone here sees it
+ * counted, with its size, and can delete it (otherAccountsUnsaved).
+ */
+export const UNKNOWN_OWNER = '?unknown';
+
+type Owner = string | null;
+const isOwner = (v: unknown): v is Owner => v === null || typeof v === 'string';
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+/** RECORDING_OWNERS_KEY as stored ({} when absent), or null when it can't be read. */
+export function readRecordingOwners(): Record<string, Owner> | null {
+  try {
+    const raw = localStorage.getItem(RECORDING_OWNERS_KEY);
+    const map = raw ? (JSON.parse(raw) as unknown) : {};
+    return map && typeof map === 'object' && !Array.isArray(map) ? (map as Record<string, Owner>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRecordingOwners(map: Record<string, Owner>): void {
+  try {
+    localStorage.setItem(RECORDING_OWNERS_KEY, JSON.stringify(map));
+  } catch { /* storage unavailable */ }
+}
+
+/** Remember who made the recording on disk as `name`; a record already there is kept (it was first). */
+function noteRecordingOwner(name: string, owner: Owner): void {
+  const map = readRecordingOwners();
+  if (!map || hasOwn(map, name)) return;
+  writeRecordingOwners({ ...map, [name]: owner });
+}
+
+/** Forget the owners of recordings whose disk copies are gone. */
+function forgetRecordingOwners(names: Iterable<string>): void {
+  const map = readRecordingOwners();
+  if (!map) return;
+  let changed = false;
+  for (const name of names) {
+    if (hasOwn(map, name)) {
+      delete map[name];
+      changed = true;
+    }
+  }
+  if (changed) writeRecordingOwners(map);
+}
+
+/**
+ * Who `r` is for: the owner recorded apart from the list (the first record of it), else the entry's
+ * own, else no account (null: an entry an earlier version wrote, which carries none). Never the
+ * device's owner: nothing tells whose an earlier version's recording is (that version's sign-out left
+ * its recordings for whoever signed in next, and offered them to everyone).
+ */
+function ownerOf(r: UnsavedRecording, owners: Record<string, Owner> | null): Owner {
+  if (owners && hasOwn(owners, r.name) && isOwner(owners[r.name])) return owners[r.name];
+  return isOwner(r.owner) ? r.owner : null;
+}
+
+/**
+ * Record, apart from the list, the owner of every listed entry that has no record yet: its own, or no
+ * account (null) for an entry an earlier version wrote. So a recording that version still listed
+ * stays offered to anyone here, as that version offered it, once that version's tab drops it from
+ * the list, and one whose record failed to write when it was added keeps its account. The start-up
+ * sweep runs it before it reads the disk.
+ */
+export function recordListedOwners(): void {
+  const list = readUnsavedOrNull();
+  const owners = list && readRecordingOwners();
+  if (!list || !owners) return;
+  let added = false;
+  for (const r of list) {
+    if (!r || typeof r.name !== 'string' || hasOwn(owners, r.name)) continue;
+    owners[r.name] = isOwner(r.owner) ? r.owner : null;
+    added = true;
+  }
+  if (added) writeRecordingOwners(owners);
+}
+
 /** The registry as stored, or null when it can't be read (storage blocked, not JSON, not a list). */
 function readUnsavedOrNull(): UnsavedRecording[] | null {
   try {
@@ -327,9 +410,9 @@ function writeUnsaved(list: UnsavedRecording[]): void {
 }
 
 /**
- * Add or replace an entry. Its owner is recorded first, apart from the list (accountPurge
- * noteRecordingOwner), so a file whose entry is lost (a write here that fails, or a tab still running
- * an earlier version that drops entries) is listed again for the same account.
+ * Add or replace an entry. Its owner is recorded first, apart from the list (noteRecordingOwner), so a
+ * file whose entry is lost (a write here that fails, or a tab still running an earlier version that
+ * drops entries) is listed again for the same account.
  */
 function upsertUnsaved(r: UnsavedRecording): void {
   if (r.owner !== undefined) noteRecordingOwner(r.name, r.owner);
@@ -344,18 +427,24 @@ export function removeUnsaved(name: string): void {
   writeUnsaved(readUnsaved().filter((x) => x.name !== name));
 }
 
-/** An entry no account made: recorded with no one signed in here, or left from before entries carried an owner. */
-const unowned = (r: UnsavedRecording) => r.owner == null;
+/** The registry's entries with who each is for (ownerOf). */
+const withOwners = (): Array<{ r: UnsavedRecording; owner: Owner }> => {
+  const owners = readRecordingOwners();
+  return readUnsaved()
+    .filter((r) => !!r && typeof r === 'object' && typeof r.name === 'string')
+    .map((r) => ({ r, owner: ownerOf(r, owners) }));
+};
 
 /**
  * The unsaved recordings `owner` may be offered: the ones recorded for that account, and the ones no
- * account made (offered to whoever opens Stream Studio here, as every entry was before recordings
- * carried an owner). An entry from before then is given an owner only when the account that held
- * the device signs out or is replaced (accountPurge), never by whoever happens to list it first. One
- * whose account can't be told (UNKNOWN_OWNER) is offered to no one.
+ * account made (recorded with no one signed in here, or by an earlier version of Stream Studio, which
+ * offered every one to whoever opened it here). One whose account can't be told (UNKNOWN_OWNER) is
+ * offered to no one.
  */
 export function unsavedRecordingsOf(owner: string | null): UnsavedRecording[] {
-  return readUnsaved().filter((r) => unowned(r) || (r.owner === owner && owner !== UNKNOWN_OWNER));
+  return withOwners()
+    .filter((x) => x.owner === null || (x.owner === owner && owner !== UNKNOWN_OWNER))
+    .map((x) => x.r);
 }
 
 /**
@@ -421,14 +510,19 @@ export async function discardOpfsRecording(name: string | null): Promise<boolean
  * their titles or events. The dashboard offers to delete them, so the person at a shared device can
  * free the space.
  */
+const othersOf = (owner: string | null): UnsavedRecording[] =>
+  withOwners()
+    .filter((x) => x.owner !== null && x.owner !== owner)
+    .map((x) => x.r);
+
 export function otherAccountsUnsaved(owner: string | null = deviceOwner()): { count: number; bytes: number } {
-  const others = readUnsaved().filter((r) => !unowned(r) && r.owner !== owner);
+  const others = othersOf(owner);
   return { count: others.length, bytes: others.reduce((sum, r) => sum + (Number(r.bytes) || 0), 0) };
 }
 
 /** Delete the recordings otherAccountsUnsaved counts (the person at this device asked). Returns how many went. */
 export async function discardOtherAccountsUnsaved(owner: string | null = deviceOwner()): Promise<number> {
-  const others = readUnsaved().filter((r) => !unowned(r) && r.owner !== owner);
+  const others = othersOf(owner);
   let n = 0;
   for (const r of others) if (await discardOpfsRecording(r.name)) n++;
   return n;
@@ -441,20 +535,13 @@ const ORPHAN_AFTER_MS = 60 * 60_000;
 const DISK_NAME = /^ds-rec-(\d{10,})-(.+)$/;
 const FILE_NAME = /^streamstudio-(.+)-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(?:-part\d+)?\.(webm|mp4)$/;
 
-/** When the recording on disk as `name` started (its disk name says), or null. */
-const startedAtOf = (name: string): number | null => {
-  const m = DISK_NAME.exec(name);
-  return m ? Number(m[1]) : null;
-};
-
 /**
  * An entry for a disk copy no list names, rebuilt from its name (when it started, the event, the file
  * name) and the file (its size; its last write, for a duration). Its owner is the one recorded for it
- * apart from the lists, else, for a recording from before this version first ran on the device, the
- * account whose data the device held then, else UNKNOWN_OWNER (accountPurge recoveredRecordingOwner):
- * never whoever holds the device when the sweep runs.
+ * apart from the lists, else UNKNOWN_OWNER: never whoever holds the device when the sweep runs.
  */
 function recoveredEntry(name: string, f: File): UnsavedRecording {
+  const owners = readRecordingOwners();
   const m = DISK_NAME.exec(name);
   const file = m ? m[2] : name.slice(PREFIX.length) || name;
   const at = m ? Number(m[1]) : f.lastModified;
@@ -469,7 +556,7 @@ function recoveredEntry(name: string, f: File): UnsavedRecording {
     at,
     durMs: Math.max(0, f.lastModified - at),
     bytes: f.size,
-    owner: recoveredRecordingOwner(name, m ? at : null),
+    owner: owners && hasOwn(owners, name) && isOwner(owners[name]) ? owners[name] : UNKNOWN_OWNER,
   };
 }
 
@@ -485,12 +572,11 @@ function recoveredEntry(name: string, f: File): UnsavedRecording {
  * registry). A file written in the last hour is left alone (another tab may be recording into it),
  * and when either list can't be read nothing is touched. Entries whose disk copy is gone are dropped,
  * and so are their recorded owners. A recording listed again goes to its own account, or to none
- * (recoveredEntry); entries left from before recordings carried an owner are settled first
- * (accountPurge settleUnownedRecordings), as before any change of the device's owner.
+ * (recoveredEntry); the owners of the listed entries are recorded first (recordListedOwners).
  */
 export async function sweepOrphanRecordings(discardLater: () => readonly string[] | null = () => []): Promise<void> {
   if (!opfsSupported()) return;
-  settleUnownedRecordings();
+  recordListedOwners();
   try {
     const root = await navigator.storage.getDirectory();
     const names = (root as unknown as { keys?: () => AsyncIterable<string> }).keys?.();
@@ -532,18 +618,6 @@ export async function sweepOrphanRecordings(discardLater: () => readonly string[
       writeUnsaved(readUnsaved().filter((r) => !gone.has(r.name)));
     }
     if (ownersBefore) forgetRecordingOwners(Object.keys(ownersBefore).filter((name) => !onDisk.has(name)));
-    // Once every recording from before this version first ran here has its own owner (or is on a
-    // list), the account that held the device then isn't needed any more.
-    const legacy = legacyRecordingsOwner();
-    const owners = legacy?.owner ? readRecordingOwners() : null;
-    const listed = owners && namedNow();
-    if (legacy && owners && listed) {
-      const unsettled = (name: string) => {
-        const at = startedAtOf(name);
-        return at != null && at < legacy.at && !Object.prototype.hasOwnProperty.call(owners, name) && !listed.has(name);
-      };
-      if (![...onDisk].some(unsettled)) retireLegacyOwner();
-    }
   } catch {
     /* storage unavailable */
   }

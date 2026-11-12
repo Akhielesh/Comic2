@@ -207,6 +207,9 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         // The mailer counts only rows logged as sent, at send time.
         expect(read('server/src/services/emailStore.ts')).toMatch(/export const getUsage[\s\S]{0,800}\.eq\('status', 'sent'\)/);
         expect(read('server/src/services/mailer.ts')).toContain('const usage = await getUsage();');
+        // Public-form mail that can't be logged isn't sent (mailer.test.ts), and SECURITY.md says so.
+        expect(read('server/src/services/mailer.ts')).toContain("if (!logId && (PUBLIC_FORM_EMAIL_TEMPLATES as readonly string[]).includes(template)) {");
+        expect(read('docs/email/SECURITY.md')).toContain("Nor is one sent when its `queued` row can't be written to `email_log`");
         const doc = read('docs/email/SECURITY.md');
         expect(doc).toContain('the 95th percentile of the sends in the last hour (`SENT_SAMPLE_WINDOW_MS`, at most 50 of them, and the newest send however old it is)');
         expect(doc).toContain("an hour with no sends doesn't drop the hold back to the floor");
@@ -233,9 +236,12 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         // An unreadable log skips it too (fails closed, like the confirmation's throttle), and SECURITY.md says both.
         expect(store).toContain('if (budget || capped || recent === null || recent.length > 0) return null;');
         expect(store).toContain("if (sends === null) return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };");
+        // So the Privacy Policy's "we then email you a confirmation link" says when it doesn't, and what sends it then.
+        expect(read('components/PrivacyPolicy.tsx')).toContain("We then email you a confirmation link (none while our record of the emails we send can't be read; registering again once it can sends it)");
+        expect(read('server/src/routes/interest.ts')).not.toContain('True in every case: a\n * link went out now');
         const security = read('docs/email/SECURITY.md');
         expect(security).toContain("If `email_log` can't be read, no confirmation email is sent until it can");
-        expect(security).toContain("and not at all while public-form mail has used its share or the mailer is capped, or while `email_log` can't be read;");
+        expect(security).toContain("and not at all while public-form mail has used its share or the mailer is capped, or while `email_log` can't be read or its row can't be written;");
         expect(store).not.toContain('neither\n * a lagging nor an unreadable log means "unlimited"');
         // "Counting the +tag and Gmail dot spellings as the same address", and nothing more: those two
         // fold together, other spellings of one mailbox don't (the page claims no more than this).

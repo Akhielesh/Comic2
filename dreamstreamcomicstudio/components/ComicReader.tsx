@@ -33,6 +33,8 @@ import {
 // phones and tablets; the width test covers narrow desktop windows.
 const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
 const CHROME_AUTO_HIDE_MS = 2500;
+/** The longest a restored scroll position is held while the images above it load (ComicReader restoreScroll). */
+const RESTORE_HOLD_MS = 20_000;
 // Page Flip on phones: the dialogue goes UNDER the art (never beside it, where it ran off-screen) and the art gets
 // the rest of the page region. The dialogue may take at most this share of the region's height (less in landscape,
 // so the art stays large), and scrolls inside itself beyond that.
@@ -378,9 +380,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   // would see only the first render's mode and page, and by then the scroll box is already detached.
   const lastPosition = useRef({ projectId: project.id, mode: readerMode, pageIndex, scrollTop: 0 });
   const positionLoaded = useRef(false);
-  // A restored scroll position, held until the comic is tall enough to reach it: the panel images are lazy and
-  // take their height only as they load, so a scrollTop set at once is clamped (and that clamped one was saved).
+  // A restored scroll position, held until the comic is tall enough to reach it and the images above it have their
+  // height: the panel images are lazy and take their height only as they load, so a scrollTop set at once is
+  // clamped, or shows a later panel (and either one was saved).
   const restoringScroll = useRef<number | null>(null);
+  // Where the held restore last put the scroll box (read back, so clamped), and when the hold began.
+  const restoreWrote = useRef<number | null>(null);
+  const restoreSince = useRef(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const touchMulti = useRef(false);
   const textLayout = project.state.textLayout || 'caption';
@@ -393,7 +399,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     // (or its pending scroll save) never lands on this one.
     let live = true;
     positionLoaded.current = false;
-    restoringScroll.current = null;
+    endRestore();
     loadReaderState(project.id).then((state) => {
       if (!live) return;
       // The loaded place is what a close before the next render saves, not the defaults.
@@ -411,6 +417,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
       if (typeof state.scrollTop === 'number') {
         restoringScroll.current = state.mode === 'scroll' && state.scrollTop > 0 ? state.scrollTop : null;
+        restoreSince.current = Date.now();
         requestAnimationFrame(() => {
           if (restoringScroll.current !== null) restoreScroll();
           else if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
@@ -572,48 +579,56 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   }, [pages.length, pageIndex]);
 
-  // Scrolls to the held position; done once it is reached, or once every image in the comic has loaded or failed.
+  // Ends a held restore: the browser's scroll anchoring (off while it is held) is on again.
+  const endRestore = () => {
+    restoringScroll.current = null;
+    restoreWrote.current = null;
+    if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
+  };
+
+  // Scrolls to the held position, with the browser's scroll anchoring off, so an image loading above can't carry
+  // the view to another panel. Done once it is reached and every image above the view there has loaded or failed
+  // (before that the same scrollTop shows a later panel), once every image in the comic has (the comic may be
+  // shorter now), or at the first try after RESTORE_HOLD_MS (an image the browser never loads).
   const restoreScroll = () => {
     const el = scrollRef.current;
     const target = restoringScroll.current;
     if (!el || target === null) return;
+    el.style.overflowAnchor = 'none';
     el.scrollTop = target;
-    if (Math.abs(el.scrollTop - target) <= 1 || Array.from(el.querySelectorAll('img')).every((img) => img.complete)) restoringScroll.current = null;
+    restoreWrote.current = el.scrollTop;
+    const images = Array.from(el.querySelectorAll('img'));
+    const contentTop = el.getBoundingClientRect().top - el.scrollTop;
+    const settled = (img: HTMLImageElement) => img.complete || img.getBoundingClientRect().top - contentTop >= target + el.clientHeight;
+    const reached = Math.abs(el.scrollTop - target) <= 1 && images.every(settled);
+    if (reached || images.every((img) => img.complete) || Date.now() - restoreSince.current > RESTORE_HOLD_MS) endRestore();
   };
 
-  // While a restore is held: try again each time the comic grows (an image loads), and let go once the reader
-  // scrolls by hand (wheel, touch, the scrollbar, the keyboard).
+  // While a restore is held: try again each time the comic grows (an image loads).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const letGo = () => {
-      restoringScroll.current = null;
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(e.key)) letGo();
-    };
     const content = el.firstElementChild;
     const grows = typeof ResizeObserver === 'function' && content ? new ResizeObserver(() => restoreScroll()) : null;
     if (grows && content) grows.observe(content);
     el.addEventListener('load', restoreScroll, true);
-    el.addEventListener('wheel', letGo, { passive: true });
-    el.addEventListener('touchmove', letGo, { passive: true });
-    el.addEventListener('mousedown', letGo);
-    window.addEventListener('keydown', onKey, true);
     return () => {
-      restoringScroll.current = null;
+      endRestore();
       grows?.disconnect();
       el.removeEventListener('load', restoreScroll, true);
-      el.removeEventListener('wheel', letGo);
-      el.removeEventListener('touchmove', letGo);
-      el.removeEventListener('mousedown', letGo);
-      window.removeEventListener('keydown', onKey, true);
     };
   }, [readerMode]);
 
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;
-    if (restoringScroll.current !== null) return; // the restore's own scroll, maybe clamped: not a place to save
+    // While a restore is held, its own scroll (maybe clamped) is not a place to save. Any other is the reader's (a
+    // wheel, a touch, the scrollbar, a key, find in page, a screen reader), told apart by where it left the box: a
+    // tap, or a key typed in a field, moves nothing. That ends the hold and is saved.
+    if (restoringScroll.current !== null) {
+      const top = scrollRef.current?.scrollTop ?? 0;
+      if (restoreWrote.current !== null && Math.abs(top - restoreWrote.current) <= 1) return;
+      endRestore();
+    }
     lastPosition.current.scrollTop = scrollRef.current?.scrollTop || 0;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
