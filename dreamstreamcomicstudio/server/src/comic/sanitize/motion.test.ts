@@ -140,6 +140,42 @@ describe('one clip', () => {
     expect(sanitize(doc, [motionOp('mc_f', { ...three, id: undefined })])).toHaveLength(1);
   });
 
+  it('refuses a position outside the page\'s clip list and a start panel that is not on the page', () => {
+    const doc = fixture({ clips: [{ id: 'mc_old', ...pop() } as MotionClip] });
+    rejects(() => sanitize(doc, [{ ...motionOp('mc_a', pop()), index: -1 }]), 400, /animation position/);
+    rejects(() => sanitize(doc, [{ ...motionOp('mc_a', pop()), index: 2 }]), 400, /animation position/);
+    rejects(() => sanitize(doc, [{ ...motionOp('mc_a', pop()), index: 0.5 }]), 400, /animation position/);
+    expect(applyOps(doc, sanitize(doc, [{ ...motionOp('mc_a', pop()), index: 0 }])).pages[0].motion!.clips.map((c) => c.id)).toEqual(['mc_a', 'mc_old']);
+    expect(applyOps(doc, sanitize(doc, [{ ...motionOp('mc_a', pop()), index: 1 }])).pages[0].motion!.clips.map((c) => c.id)).toEqual(['mc_old', 'mc_a']);
+    // A start panel elsewhere (pn_2_1 is on page 2) is refused; one of this page is accepted.
+    rejects(() => sanitize(doc, [motionOp('mc_a', pop({ at: { anchor: 'panel', panelId: 'pn_2_1', ms: 0 } }))]), 400, /starts with a panel that is no longer on the page/);
+    rejects(() => sanitize(doc, [motionOp('mc_old', { at: { anchor: 'panel', panelId: 'pn_2_1', ms: 0 } })]), 400, /starts with a panel/);
+    expect(sanitize(doc, [motionOp('mc_a', pop({ at: { anchor: 'panel', panelId: 'pn_1_3', ms: 0 } }))])).toHaveLength(1);
+  });
+
+  it('a stored clip over 3 Hz (a newer build wrote it) may be edited while it flashes no faster; an edit that speeds it up is refused', () => {
+    const fast = flicker('mc_f', 8, 2000);
+    expect(clipFlashHz(fast)).toBe(4);
+    const doc = fixture({ clips: [fast] });
+    expect(clipFlashHz({ ...fast, dur: 2100 })).toBe(4);
+    expect(sanitize(doc, [motionOp('mc_f', { dur: 2100 })])).toEqual([{ op: 'motion', pageId: 'pg_1', id: 'mc_f', patch: { dur: 2100 } }]);
+    expect(sanitize(doc, [motionOp('mc_f', { at: { anchor: 'reveal', ms: 300 } })])).toHaveLength(1);
+    // The clip's own check speaks first (the page check alone would say "Together, …").
+    rejects(() => sanitize(doc, [motionOp('mc_f', { dur: 1000 })]), 400, /^That animation would flash 8 times a second/);
+    rejects(() => sanitize(doc, [motionOp('mc_f', { params: { flashes: 8, depth: 0.8 }, repeat: 2, dur: 1000 })]), 400, /^That animation would flash/);
+  });
+
+  it("a stored ease from a newer build is kept when the client re-sends it; a different ease this build doesn't know is refused", () => {
+    const doc = fixture({ clips: [{ id: 'mc_e', ...pop(), ease: 'future-bounce' } as unknown as MotionClip] });
+    expect(doc.pages[0].motion!.clips[0].ease).toBe('future-bounce');
+    const ops = sanitize(doc, [motionOp('mc_e', { ease: 'future-bounce', dur: 500 })]);
+    expect(applyOps(doc, ops).pages[0].motion!.clips[0]).toMatchObject({ ease: 'future-bounce', dur: 500 });
+    rejects(() => sanitize(doc, [motionOp('mc_e', { ease: 'future-wobble' })]), 400, /easing isn't available/);
+    rejects(() => sanitize(doc, [motionOp('mc_new', pop({ ease: 'future-bounce' }))]), 400, /easing isn't available/);
+    // Clearing it back to the preset's own ease is fine.
+    expect(sanitize(doc, [motionOp('mc_e', { ease: null })])[0]).toMatchObject({ patch: { ease: null } });
+  });
+
   it('refuses more than 12 keyframes per clip and more than 48 clips per page', () => {
     const doc = fixture();
     const keys = Array.from({ length: MOTION_LIMITS.keysPerClip + 1 }, (_, i) => ({ t: i / 20, x: 0.01 }));
@@ -150,6 +186,21 @@ describe('one clip', () => {
     rejects(() => sanitize(full, [motionOp('mc_new', pop())]), 409, /up to 48 animations/);
     // An edit of a clip that is there, and a delete, still pass.
     expect(sanitize(full, [motionOp('mc_3', { at: { anchor: 'reveal', ms: 200 } }), motionOp('mc_4', null)])).toHaveLength(2);
+    // The count is the batch's (shakes here: 48 entrances on one balloon would also count as flashes on the page).
+    const shake = (over: Record<string, unknown> = {}) => pop({ role: 'emphasis', preset: 'shake', ...over });
+    const shakes = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `mc_${i}`, ...shake() }) as MotionClip);
+    // Two new clips on a page with room for one are refused (each alone would fit).
+    const roomForOne = fixture({ clips: shakes(47) });
+    expect(sanitize(roomForOne, [motionOp('mc_new', shake())])).toHaveLength(1);
+    rejects(() => sanitize(roomForOne, [motionOp('mc_new', shake()), motionOp('mc_new2', shake())]), 409, /up to 48 animations/);
+    // Deleting one clip of a full page and adding another in the same batch keeps it at 48, and its undo passes too.
+    const fullShakes = fixture({ clips: shakes(48) });
+    const swap = sanitize(fullShakes, [motionOp('mc_4', null), motionOp('mc_new', shake())]);
+    const swapped = applyOps(fullShakes, swap);
+    expect(swapped.pages[0].motion!.clips).toHaveLength(48);
+    expect(swapped.pages[0].motion!.clips.map((c) => c.id)).toContain('mc_new');
+    const undo = sanitize(swapped, inverseOps(fullShakes, swap));
+    expect(applyOps(swapped, undo).pages[0]).toEqual(fullShakes.pages[0]);
   });
 });
 
@@ -170,11 +221,36 @@ describe('the batch, as it will be stored', () => {
   });
 
   it('a clip that already has a target keeps working when that target is gone (an edit of a dangling clip is not refused)', () => {
-    const doc = fixture({ clips: [{ id: 'mc_old', ...pop() } as MotionClip] });
-    const gone = applyOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: null }]);
+    const doc = fixture({ clips: [{ id: 'mc_old', ...pop({ at: { anchor: 'panel', panelId: 'pn_1_3', ms: 0 } }) } as MotionClip] });
+    const gone = applyOps(doc, [
+      { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: null },
+      { op: 'panel_remove', pageId: 'pg_1', id: 'pn_1_3' } as DocOp
+    ]);
+    expect(gone.pages[0].panels.map((p) => p.id)).not.toContain('pn_1_3');
     expect(gone.pages[0].motion!.clips).toHaveLength(1); // ops never prune (undo brings the balloon back)
     expect(sanitize(gone, [motionOp('mc_old', { dur: 500 })])).toHaveLength(1);
-    rejects(() => sanitize(gone, [motionOp('mc_old', { target: { k: 'line', id: 'ln_1_2' } })]), 400, /no longer on the page/);
+    // The editor's spread of the stored clip re-sends its target and start as they are: not a re-aim.
+    const stored = gone.pages[0].motion!.clips[0];
+    expect(sanitize(gone, [motionOp('mc_old', { target: stored.target, at: { ...stored.at, ms: 250 }, dur: 600 })])).toHaveLength(1);
+    // Re-aiming at something that is not on the page, or a new start panel that is not, is refused.
+    rejects(() => sanitize(gone, [motionOp('mc_old', { target: { k: 'line', id: 'ln_ghost' } })]), 400, /no longer on the page/);
+    rejects(() => sanitize(gone, [motionOp('mc_old', { target: { k: 'panel', id: 'pn_1_3' } })]), 400, /no longer on the page/);
+    rejects(() => sanitize(gone, [motionOp('mc_old', { at: { anchor: 'panel', panelId: 'pn_2_1', ms: 0 } })]), 400, /starts with a panel/);
+    // Re-aiming it at something on the page brings it back to life.
+    expect(sanitize(gone, [motionOp('mc_old', { target: { k: 'panel', id: 'pn_1_1' } })])).toHaveLength(1);
+  });
+
+  it('dangling (S2 integration, carry note 11): re-creating a deleted clip whose target is already gone is a new clip and is refused today', () => {
+    // Delete the balloon (its clip stays, inert), then the clip; the undo of the clip delete re-creates a clip aimed at
+    // nothing on the page. The server cannot tell that undo from a new clip, so it is refused. With "prune in the
+    // deleting op" this state cannot arise (the clip goes with its balloon, and that undo restores both); with
+    // "tolerate", the S2 integration flips this expectation (wave note 8).
+    const doc = fixture({ clips: [{ id: 'mc_c', ...pop() } as MotionClip] });
+    const gone = applyOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: null }]);
+    const del = sanitize(gone, [motionOp('mc_c', null)]);
+    const cleared = applyOps(gone, del);
+    expect(cleared.pages[0].motion).toBeUndefined();
+    rejects(() => sanitize(cleared, inverseOps(gone, del)), 400, /no longer on the page/);
   });
 
   it('two clips that each flash 2 Hz on one balloon flash 4 Hz together: the second is refused', () => {
@@ -199,7 +275,83 @@ describe('the batch, as it will be stored', () => {
     while (pageMotionBytes({ motion: { clips: [...clips, heavy(n)] } }) <= MOTION_LIMITS.pageBytes) clips.push(heavy(n++));
     const doc = fixture({ clips });
     expect(doc.pages[0].motion!.clips).toHaveLength(clips.length);
-    rejects(() => sanitize(doc, [motionOp('mc_more', { ...pop(), keys })]), 409, /limit/);
+    rejects(() => sanitize(doc, [motionOp('mc_more', { ...pop(), keys })]), 409, /size limit/);
+  });
+
+  describe('a page just under 16 KB: the op would push out a later, untouched clip, so the batch is refused', () => {
+    const KEY = { x: 0.1234, y: -0.6543, s: 1.2345, r: 123.4567, o: 0.9876 };
+    const keysOf = (n: number) => Array.from({ length: n }, (_, i) => ({ t: Math.round((i / 12) * 10000) / 10000, ...KEY }));
+    /** Clips of 9 keys, then plain ones, until the page is within ~60 bytes of the budget. */
+    const nearFull = (): ComicDoc => {
+      const clips: MotionClip[] = [];
+      const fits = (c: MotionClip) => pageMotionBytes({ motion: { clips: [...clips, c] } }) <= MOTION_LIMITS.pageBytes;
+      for (let i = 0; fits({ id: `mc_s${i}`, ...pop(), keys: keysOf(9) } as MotionClip); i += 1) clips.push({ id: `mc_s${i}`, ...pop(), keys: keysOf(9) } as MotionClip);
+      for (let i = 0; fits({ id: `mc_p${i}`, ...pop() } as MotionClip); i += 1) clips.push({ id: `mc_p${i}`, ...pop() } as MotionClip);
+      const doc = fixture({ clips });
+      expect(doc.pages[0].motion!.clips).toHaveLength(clips.length);
+      const bytes = pageMotionBytes(doc.pages[0]);
+      expect(bytes).toBeLessThanOrEqual(MOTION_LIMITS.pageBytes);
+      expect(bytes).toBeGreaterThan(MOTION_LIMITS.pageBytes - 120);
+      return doc;
+    };
+    const ids = (doc: ComicDoc) => doc.pages[0].motion!.clips.map((c) => c.id);
+
+    it('an insert at the front (applied raw, the op would drop the last clip instead of the new one)', () => {
+      const doc = nearFull();
+      const op = { ...motionOp('mc_new', pop()), index: 0 } as DocOp;
+      const raw = applyOps(doc, [op]);
+      expect(ids(raw)[0]).toBe('mc_new');
+      expect(ids(raw)).not.toContain(ids(doc).at(-1)); // the precondition: an untouched clip is silently lost
+      rejects(() => sanitize(doc, [op]), 409, /size limit/);
+      // At the end it is the new clip that would not fit: refused the same way.
+      rejects(() => sanitize(doc, [motionOp('mc_new', pop())]), 409, /size limit/);
+    });
+
+    it('an edit that grows an early clip with keyframes', () => {
+      const doc = nearFull();
+      const op = motionOp('mc_s0', { keys: keysOf(12) }) as DocOp;
+      expect(ids(applyOps(doc, [op]))).not.toContain(ids(doc).at(-1));
+      rejects(() => sanitize(doc, [op]), 409, /size limit/);
+      // The same edit after deleting another clip in the same batch fits, and every other clip stays.
+      const ok = sanitize(doc, [motionOp('mc_s1', null), op]);
+      const after = applyOps(doc, ok);
+      expect(ids(after)).toEqual(ids(doc).filter((id) => id !== 'mc_s1'));
+      expect(after.pages[0].motion!.clips[0].keys).toHaveLength(12);
+    });
+
+    it('camera moves that do not fit', () => {
+      const doc = nearFull();
+      const op = { op: 'page_motion', pageId: 'pg_1', patch: { camera: [{ panelId: 'pn_1_1', move: 'push' }, { panelId: 'pn_1_2', move: 'pull' }, { panelId: 'pn_1_3', move: 'push' }] } } as DocOp;
+      expect(ids(applyOps(doc, [op]))).not.toContain(ids(doc).at(-1));
+      rejects(() => sanitize(doc, [op]), 409, /size limit/);
+    });
+
+    it('a delete and a shrink always pass', () => {
+      const doc = nearFull();
+      expect(sanitize(doc, [motionOp('mc_s3', null)])).toHaveLength(1);
+      expect(sanitize(doc, [motionOp('mc_s0', { keys: null })])).toHaveLength(1);
+    });
+
+    it('a page the session holds past 16 KB (a page_duplicate copy, renamed without a trim) still takes a delete; an insert is refused', () => {
+      const over = nearFull();
+      const heavy = over.pages[0].motion!.clips[0];
+      for (let i = 0; i < 4; i += 1) over.pages[0].motion!.clips.push({ ...heavy, id: `mc_over${i}` });
+      expect(JSON.stringify(over.pages[0].motion).length).toBeGreaterThan(MOTION_LIMITS.pageBytes + 2000);
+      // The op trims the end as the load would; the delete itself is accepted.
+      const ops = sanitize(over, [motionOp('mc_s1', null)]);
+      expect(ids(applyOps(over, ops))).not.toContain('mc_s1');
+      expect(ids(applyOps(over, ops))).not.toContain('mc_over3');
+      rejects(() => sanitize(over, [{ ...motionOp('mc_new', pop()), index: 0 }]), 409, /size limit/);
+    });
+  });
+
+  it('counts the page in UTF-8 bytes too: text a newer build stored can pass 16 KB where the load reads fewer characters', () => {
+    const wide = { id: 'mc_w', target: { k: 'line', id: 'ln_1_2' }, role: 'emphasis', preset: 'future-glyphs', at: { anchor: 'reveal', ms: 0 }, params: { label: '漢'.repeat(6000) } } as unknown as MotionClip;
+    const doc = fixture({ clips: [wide] });
+    expect(JSON.stringify(doc.pages[0].motion).length).toBeLessThan(MOTION_LIMITS.pageBytes);
+    expect(pageMotionBytes(doc.pages[0])).toBeGreaterThan(MOTION_LIMITS.pageBytes);
+    rejects(() => sanitize(doc, [motionOp('mc_a', pop())]), 409, /size limit/);
+    expect(sanitize(doc, [motionOp('mc_w', null)])).toHaveLength(1);
   });
 
   it('refuses a clip that takes the document past 256 KB; a delete on a full document passes', () => {
@@ -247,6 +399,18 @@ describe('page_motion: camera and hold', () => {
     rejects(() => sanitize(doc, [{ op: 'page_motion', pageId: 'pg_1', patch: { camera: [{ panelId: 'pn_1_1', move: 'push' }, { panelId: 'pn_1_1', move: 'pull' }] } }]), 400, /one camera move/);
     rejects(() => sanitize(doc, [{ op: 'page_motion', pageId: 'pg_1', patch: { hold: 'long' } }]), 400, /must be a number/);
     expect(sanitize(doc, [{ op: 'page_motion', pageId: 'pg_1', patch: { camera: [] } }])[0]).toEqual({ op: 'page_motion', pageId: 'pg_1', patch: { camera: null } });
+  });
+
+  it('after a panel is removed its camera move stays (inert): re-sending the stored list with a new move is accepted', () => {
+    const doc = fixture({ clips: [], camera: [{ panelId: 'pn_1_3', move: 'push' }] });
+    const removed = applyOps(doc, [{ op: 'panel_remove', pageId: 'pg_1', id: 'pn_1_3' } as DocOp]);
+    expect(removed.pages[0].panels.map((p) => p.id)).not.toContain('pn_1_3');
+    expect(removed.pages[0].motion!.camera).toEqual([{ panelId: 'pn_1_3', move: 'push' }]);
+    const ops = sanitize(removed, [{ op: 'page_motion', pageId: 'pg_1', patch: { camera: [...removed.pages[0].motion!.camera!, { panelId: 'pn_1_1', move: 'pull' }] } }]);
+    expect(applyOps(removed, ops).pages[0].motion!.camera).toEqual([{ panelId: 'pn_1_3', move: 'push' }, { panelId: 'pn_1_1', move: 'pull' }]);
+    // A changed move for the removed panel, or a move for a panel elsewhere, is still refused.
+    rejects(() => sanitize(removed, [{ op: 'page_motion', pageId: 'pg_1', patch: { camera: [{ panelId: 'pn_1_3', move: 'pull' }] } }]), 400, /no longer on the page/);
+    rejects(() => sanitize(removed, [{ op: 'page_motion', pageId: 'pg_1', patch: { camera: [{ panelId: 'pn_1_3', move: 'push' }, { panelId: 'pn_2_1', move: 'push' }] } }]), 400, /no longer on the page/);
   });
 });
 

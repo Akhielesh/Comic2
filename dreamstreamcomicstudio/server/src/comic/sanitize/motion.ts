@@ -23,9 +23,13 @@
 // not apply the motion ops to the batch's working doc): ≤ MOTION_LIMITS.clipsPerPage clips, ≤ pageBytes per page,
 // ≤ docBytes for the document (trash included: budget.ts docMotionBytes), the page's flash check (pageFlashCheck: per
 // drawn target and per panel area), and every clip the batch creates or re-aims names a line, panel or overlay that is
-// on its page once the batch is applied (so "add a balloon, then animate it" in one batch works). A budget refuses
-// only what the batch makes worse: deleting or shrinking motion on a page that is already over (a newer build's data)
-// is always accepted.
+// on its page once the batch is applied (so "add a balloon, then animate it" in one batch works). The ops themselves
+// never refuse a budget: applyMotion skips a 49th clip and normalizePageMotion drops clips from the END of a page past
+// 16 KB, so the screen refuses any batch that would lose a clip it did not delete (an insert at the front or a grown
+// early clip would otherwise push out a later, untouched one). A budget refuses only what the batch makes worse: a
+// batch that only deletes is always accepted, even on a page already over (a newer build's flashes; a page_duplicate
+// copy whose renamed ids pushed it past 16 KB, which the op trims from the end as the load would), and a value the
+// batch did not add or change (a clip or camera move whose target is gone: inert) is never checked again.
 
 import { LAYER_ID_RE, isOpaqueLayer, normalizeMotionClip, type ComicDoc, type Page } from '../../../../shared/comic/doc.js';
 import { MOTION_LIMITS } from '../../../../shared/comic/limits.js';
@@ -234,7 +238,8 @@ const motionSanitizer: OpSanitizer<MotionOp> = {
     if (op.patch === null || op.patch === undefined) return { op: 'motion', pageId: page.id, id: op.id, patch: null };
     if (!isObject(op.patch)) throw bad('Invalid animation change.');
     if (jsonBytes(op.patch) > L.pageBytes) throw bad('That animation is too large.');
-    if (!existing && clips.length >= L.clipsPerPage) throw limit(`A page can hold up to ${L.clipsPerPage} animations — remove one first.`);
+    // The clip count (≤ MOTION_LIMITS.clipsPerPage) is the batch's, checked by motionPatchScreen: a batch may delete one
+    // clip of a full page and add another.
     const patch = clipPatchOf(op.patch, existing);
     if (!Object.keys(patch).length) throw bad('Nothing to change in that animation.');
     const clip = mergedClip(existing, op.id, patch);
@@ -303,14 +308,27 @@ const hasTarget = (page: Page, target: MotionClip['target']): boolean => {
   return (page.layers ?? []).some((l) => l.id === target.id && !isOpaqueLayer(l));
 };
 
-/** The page check: clips, bytes and flashes, refusing only what the batch made worse than it was. */
-const checkPage = (before: Page | undefined, after: Page): void => {
-  const clipsNow = after.motion?.clips.length ?? 0;
-  if (clipsNow > L.clipsPerPage && clipsNow > (before?.motion?.clips.length ?? 0)) throw limit(`A page can hold up to ${L.clipsPerPage} animations — remove one first.`);
-  const bytesNow = pageMotionBytes(after);
-  if (bytesNow > L.pageBytes && bytesNow > (before ? pageMotionBytes(before) : 0)) {
-    throw limit("That page's animation is at its size limit — remove a clip or some keyframes first.");
+const SIZE_LIMIT_MESSAGE = "That page's animation is at its size limit — remove a clip or some keyframes first.";
+
+/**
+ * The page check: clips, bytes and flashes, refusing only what the batch made worse than it was. `meant` is every clip
+ * the batch means the page to hold (what it held, less the batch's deletes, plus its upserts). The ops never refuse
+ * loudly: applyMotion skips a clip past MOTION_LIMITS.clipsPerPage, and normalizePageMotion drops clips from the END
+ * until the page fits MOTION_LIMITS.pageBytes, so an insert at the front or a grown early clip would silently push out
+ * a later, untouched one. A meant clip missing after the batch is therefore refused here, whichever clip went. A batch
+ * that only deletes or clears never loses a clip this way, except on a page already past the budget (page_duplicate
+ * renames ids without trimming), which the load trims the same way; such a batch is accepted (a page can always shrink).
+ */
+const checkPage = (before: Page | undefined, after: Page, meant: ReadonlySet<string>, grows: boolean): void => {
+  const kept = new Set((after.motion?.clips ?? []).map((c) => c.id));
+  if (grows && [...meant].some((id) => !kept.has(id))) {
+    if (meant.size > L.clipsPerPage) throw limit(`A page can hold up to ${L.clipsPerPage} animations — remove one first.`);
+    throw limit(SIZE_LIMIT_MESSAGE);
   }
+  // UTF-8 bytes (pageMotionBytes) can pass the budget where the load's JSON length does not (text in a newer build's
+  // params): the same rule, read in bytes.
+  const bytesNow = pageMotionBytes(after);
+  if (bytesNow > L.pageBytes && bytesNow > (before ? pageMotionBytes(before) : 0)) throw limit(SIZE_LIMIT_MESSAGE);
   const flash = pageFlashCheck(after);
   if (!flash.ok && flash.hz > (before ? pageFlashCheck(before).hz : 0)) {
     throw bad(`Together, the animations on this page would flash ${flash.hz} times a second. Keep flashing to ${L.flashHzMax} times a second or less, so it stays safe to watch.`);
@@ -320,7 +338,14 @@ const checkPage = (before: Page | undefined, after: Page): void => {
 /**
  * The batch-wide motion check (after the per-op sanitizers): the batch applied to the doc, then every page a motion op
  * touched against the page budgets and the flash rule, the targets of every clip the batch creates or re-aims, the
- * panels its camera moves name, and the document's motion budget. Returns the ops unchanged.
+ * panels its new camera moves name, and the document's motion budget. Returns the ops unchanged.
+ *
+ * Only what the batch adds or changes must be on the page (master plan §2.3: a dangling target is inert, and ops never
+ * prune): an edit of a clip whose balloon was deleted, or a camera list re-sent with the move of a removed panel, is
+ * accepted; re-aiming a clip, a new start panel or a new camera move is checked. A NEW clip must name something on its
+ * page once the batch is applied ("add a balloon, then animate it" in one batch works). The re-creation of a deleted
+ * clip whose target is already gone (the undo of that delete) is a new clip to the server and is refused: the S2
+ * integration's dangling-motion decision settles it (carry note 11; see motion.test.ts "dangling").
  */
 export const motionPatchScreen: PatchScreen = (doc, ops) => {
   const motionOps = ops.filter(isMotionOp);
@@ -331,25 +356,36 @@ export const motionPatchScreen: PatchScreen = (doc, ops) => {
     const before = doc.pages.find((p) => p.id === pageId);
     const now = after.pages.find((p) => p.id === pageId);
     if (!now) continue; // the batch deleted the page: its motion went with it
-    checkPage(before, now);
-    const stored = new Set((before?.motion?.clips ?? []).map((c) => c.id));
+    const stored = new Map((before?.motion?.clips ?? []).map((c) => [c.id, c] as const));
     // Each clip as the batch leaves it: only its last op counts (an upsert then a delete leaves nothing to check).
+    const meant = new Set(stored.keys());
     const last = new Map<string, MotionOp>();
-    for (const op of motionOps) if (op.op === 'motion' && op.pageId === pageId) last.set(op.id, op);
+    let grows = false;
     for (const op of motionOps) {
       if (op.pageId !== pageId) continue;
-      if (op.op === 'motion' && last.get(op.id) !== op) continue;
       if (op.op === 'page_motion') {
-        for (const move of op.patch?.camera ?? []) {
-          if (!now.panels.some((p) => p.id === move.panelId)) throw bad('A camera move names a panel that is no longer on the page.');
-        }
+        if (op.patch) grows = true;
         continue;
       }
+      if (op.patch) {
+        meant.add(op.id);
+        grows = true;
+      } else meant.delete(op.id);
+      last.set(op.id, op);
+    }
+    checkPage(before, now, meant, grows);
+    for (const op of last.values()) {
       if (!op.patch) continue;
-      const clip = now.motion?.clips.find((c) => c.id === op.id);
-      if (!clip) throw limit("That page's animations are at their limit — remove one first.");
-      if ((!stored.has(op.id) || hasOwn(op.patch, 'target')) && !hasTarget(now, clip.target)) throw bad('That animation is aimed at something that is no longer on the page.');
-      if (hasOwn(op.patch, 'at') && clip.at.panelId && !now.panels.some((p) => p.id === clip.at.panelId)) throw bad('That animation starts with a panel that is no longer on the page.');
+      const clip = now.motion!.clips.find((c) => c.id === op.id)!; // checkPage: every meant clip is on the page
+      const was = stored.get(op.id);
+      if ((!was || !sameJson(clip.target, was.target)) && !hasTarget(now, clip.target)) throw bad('That animation is aimed at something that is no longer on the page.');
+      const atPanel = clip.at.panelId;
+      if (atPanel && atPanel !== was?.at.panelId && !now.panels.some((p) => p.id === atPanel)) throw bad('That animation starts with a panel that is no longer on the page.');
+    }
+    const storedMoves = before?.motion?.camera ?? [];
+    for (const move of now.motion?.camera ?? []) {
+      if (storedMoves.some((m) => m.panelId === move.panelId && m.move === move.move)) continue; // as stored: inert if dangling
+      if (!now.panels.some((p) => p.id === move.panelId)) throw bad('A camera move names a panel that is no longer on the page.');
     }
   }
   const docNow = docMotionBytes(after);
