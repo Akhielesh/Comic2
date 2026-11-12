@@ -2,7 +2,7 @@
 // snippet, status copy and in-app-browser detection. No React, no network.
 
 import type { AspectRatio, ComicDoc } from '../../../shared/comic/doc';
-import { buildShareUrl, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
+import { buildShareUrl, type PublicationMirror, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
 import { COMICS_ORIGIN } from '../../../services/productHost';
 
 export type IntentChannel = Extract<ShareChannel, 'whatsapp' | 'x' | 'telegram' | 'email' | 'facebook'>;
@@ -58,11 +58,20 @@ export function embedSnippet(url: string, title: string, aspect: AspectRatio | s
   return `<iframe src="${escAttr(src)}" title="${escAttr(title)}" loading="lazy" allow="fullscreen" style="width:100%;max-width:560px;aspect-ratio:${ratio};border:0;border-radius:12px"></iframe>`;
 }
 
-/** "Private" / "Published · Link only" / "Published · In the Library + link" / "Paused". */
-export function statusLine(view: PublicationOwnerView | null | undefined): { label: string; tone: 'muted' | 'public' | 'unlisted' | 'warn' } {
-  if (!view || view.visibility === 'private' || !view.slug) return { label: 'Private — only you can see it', tone: 'muted' };
-  if (view.status === 'suspended') return { label: 'Paused by review — readers see “This link isn’t active”', tone: 'warn' };
-  return view.visibility === 'public' ? { label: 'Published · In the Library + link', tone: 'public' } : { label: 'Published · Link only', tone: 'unlisted' };
+/**
+ * "Private" / "Published · Link only" / "Published · In the Library + link" / "Paused".
+ * The owner view decides. Until it arrives (or when it could not be fetched) the doc's own `publication` mirror
+ * does, as the header's Share button already reads it: a published comic never reads "Private" while it loads.
+ * No view and no mirror is private (the server writes the mirror; absent = private).
+ */
+export function statusLine(
+  view: PublicationOwnerView | null | undefined,
+  mirror?: PublicationMirror | null
+): { label: string; tone: 'muted' | 'public' | 'unlisted' | 'warn' } {
+  const known = view ? (view.visibility === 'private' || !view.slug ? null : { visibility: view.visibility, status: view.status }) : mirror || null;
+  if (!known) return { label: 'Private — only you can see it', tone: 'muted' };
+  if (known.status === 'suspended') return { label: 'Paused by review — readers see “This link isn’t active”', tone: 'warn' };
+  return known.visibility === 'public' ? { label: 'Published · In the Library + link', tone: 'public' } : { label: 'Published · Link only', tone: 'unlisted' };
 }
 
 /**

@@ -221,6 +221,65 @@ describe('PublishPanel — a published edition that went stale, and the readers\
   });
 });
 
+// AH-1 (HONEST-PUBLISH): the panel never says the opposite of the truth while the owner view is on its way or
+// could not be fetched. "Draw at least one page" is said only when it is true.
+describe('PublishPanel — honest while the comic is being checked (AH-1)', () => {
+  it('while the owner view is on its way the button reads "Checking your comic…" and nothing says "Draw at least one page"', () => {
+    const onPublish = vi.fn();
+    render(<PublishPanel doc={makeSampleDoc()} view={null} visibility="unlisted" check="loading" onPublish={onPublish} />);
+    const checking = screen.getByRole('button', { name: 'Checking your comic…' });
+    expect(checking).toBeDisabled();
+    expect(checking).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+    expect(screen.queryByText(/Draw at least one page/)).toBeNull();
+    // The row above says the doc's own count (1 of 3), and nothing under the button contradicts it.
+    expect(screen.getByText('1 of 3 pages drawn — undrawn pages are left out')).toBeInTheDocument();
+    fireEvent.click(checking);
+    expect(onPublish).not.toHaveBeenCalled();
+  });
+
+  it('a failed check says what happened and offers Try again; Publish waits for it', () => {
+    const onRetry = vi.fn();
+    const onPublish = vi.fn();
+    render(<PublishPanel doc={makeSampleDoc()} view={null} visibility="unlisted" check="error" onRetry={onRetry} onPublish={onPublish} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Couldn’t check your comic.');
+    expect(screen.queryByText(/Draw at least one page/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    expect(retry.className).toContain('min-h-[44px]');
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onPublish).not.toHaveBeenCalled();
+  });
+
+  it('with no owner view the drawn count is the doc’s own, the same number the readiness row shows', () => {
+    const onPublish = vi.fn();
+    const { unmount } = render(<PublishPanel doc={makeSampleDoc()} view={null} visibility="unlisted" onPublish={onPublish} />);
+    expect(screen.getByText('1 of 3 pages drawn — undrawn pages are left out')).toBeInTheDocument();
+    expect(screen.queryByText(/Draw at least one page/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    unmount();
+    // A comic with nothing drawn: the message is true, so it stays.
+    const blank = makeSampleDoc();
+    blank.pages = blank.pages.map((p) => ({ ...p, render: { status: 'none', history: [] } }));
+    render(<PublishPanel doc={blank} view={null} visibility="unlisted" onPublish={onPublish} />);
+    expect(screen.getByText('Draw at least one page to publish.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+  });
+
+  it('when the server says no page is drawn, today’s message is unchanged (its count wins over the doc’s)', () => {
+    const view = unpublishedView([{ lang: 'en', publishable: true, blocking: [], requested: true }]);
+    view.readiness = { ...view.readiness, ok: false, drawnPages: 0 };
+    render(<PublishPanel doc={makeSampleDoc()} view={view} visibility="unlisted" onPublish={vi.fn()} />);
+    expect(screen.getByText('Draw at least one page to publish.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Checking your comic…' })).toBeNull();
+  });
+});
+
 describe('PublishPanel', () => {
   it('shows the outside-image cover line in the readiness list, marked as needing attention', () => {
     const doc = makeSampleDoc();

@@ -20,7 +20,7 @@ import { DIALOG_TITLE, FOCUS_RING, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from 
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
-import { PublishPanel, Toggle } from './PublishPanel';
+import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
@@ -67,6 +67,9 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [dragY, setDragY] = useState(0);
+  // Where the fetch of the owner view stands, so the sheet never guesses: on its way, here, or failed.
+  const [check, setCheck] = useState<'loading' | 'ok' | 'error'>('loading');
+  const checkSeq = useRef(0);
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const dragStart = useRef<number | null>(null);
@@ -88,13 +91,29 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     return () => window.removeEventListener('resize', update);
   }, [open]);
 
+  // Fetch the owner view and record how it went (only the latest fetch counts). A failure is said, with Try again,
+  // instead of leaving the sheet on what it would say for a comic that was never published.
+  const checkComic = () => {
+    const seq = (checkSeq.current += 1);
+    setCheck('loading');
+    studio.refreshPublication().then(
+      () => seq === checkSeq.current && setCheck('ok'),
+      () => seq === checkSeq.current && setCheck('error')
+    );
+  };
+
   // Fresh owner view each time the sheet opens (stats load after it opens).
   useEffect(() => {
     if (!open) return;
     setError(null);
     setConfirm(null);
     setFallbackUrl(null);
-    studio.refreshPublication().catch(() => undefined);
+    checkComic();
+    return () => {
+      // Closed: an answer still on its way no longer counts, and the next open starts from "checking".
+      checkSeq.current += 1;
+      setCheck('loading');
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -142,7 +161,11 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
 
   const after = useCallback(
     async (next: PublicationOwnerView | null) => {
-      await studio.refreshPublication().catch(() => undefined);
+      // A fetch that lands also answers an earlier failed check.
+      await studio.refreshPublication().then(
+        () => setCheck('ok'),
+        () => undefined
+      );
       // The server committed the doc mirror (and a notice): pull them in.
       await studio.refresh().catch(() => undefined);
       return next;
@@ -175,10 +198,16 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
 
   const title = comicTitle(doc);
   const live = !!view?.slug && view.status === 'live';
-  const suspended = view?.status === 'suspended';
-  const status = statusLine(view);
+  // Until the owner view arrives (or when it could not be fetched), the doc's own mirror says whether the comic is
+  // published, as the header's Share button reads it: a published comic never shows as "Private" in between.
+  const mirror = view ? null : doc.publication || null;
+  const suspended = view ? view.status === 'suspended' : mirror?.status === 'suspended';
+  const published = live || mirror?.status === 'live';
+  const checking = !view && (check === 'loading' || !!studio.publicationLoading);
+  const checkFailed = !view && !checking && check === 'error';
+  const status = statusLine(view, mirror);
   const url = shareLinkFor(view) || '';
-  const current: 'private' | 'unlisted' | 'public' = live || suspended ? (view!.visibility as 'unlisted' | 'public') : 'private';
+  const current: 'private' | 'unlisted' | 'public' = view && (live || suspended) ? (view.visibility as 'unlisted' | 'public') : mirror ? mirror.visibility : 'private';
   // Languages can only change through a republish (the snapshot must carry the edition): the panel.
   const hasEditions = Object.keys(doc.i18n?.editions || {}).length > 0 || (view?.languages.length ?? 0) > 1;
 
@@ -189,7 +218,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       return setPublishAs(null);
     }
     if (v === 'private') return setConfirm('unpublish');
-    if (!live) return setPublishAs(v);
+    if (!published) return setPublishAs(v);
     // Listing a live comic in the public gallery is a privacy step (kids' comics): ask first.
     if (v === 'public') return setConfirm('public');
     setConfirm(null);
@@ -386,7 +415,17 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       )}
       {(confirm === 'unpublish' || confirm === 'public') && confirmBox}
       {publishAs ? (
-        <PublishPanel doc={doc} view={view} visibility={publishAs} busy={busy} error={error} onPublish={publish} onCancel={() => setPublishAs(null)} />
+        <PublishPanel
+          doc={doc}
+          view={view}
+          visibility={publishAs}
+          busy={busy}
+          error={error}
+          check={checking ? 'loading' : checkFailed ? 'error' : undefined}
+          onRetry={checkComic}
+          onPublish={publish}
+          onCancel={() => setPublishAs(null)}
+        />
       ) : (
         <>
           {live && view?.behind && (
@@ -431,9 +470,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
               )}
             </section>
           )}
-          {!live && !suspended && (
+          {!live && !suspended && !mirror && (
             <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.</p>
           )}
+          {mirror && checking && (
+            <p role="status" className="m-0 text-[13px] text-[var(--ds-muted)]">
+              Checking your comic…
+            </p>
+          )}
+          {checkFailed && <CheckFailed onRetry={checkComic} />}
           {error && (
             <p role="alert" className="m-0 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
               {error}

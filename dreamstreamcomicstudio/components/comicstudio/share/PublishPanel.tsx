@@ -9,7 +9,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
 import type { PublicationOwnerView, PublishReadiness, PublishRequest } from '../../../shared/comic/publication';
-import { OVERLINE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE, RADIUS_CONTROL, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx, plural } from '../conversation/ui';
 import { pageIdsFor } from './shareModel';
 
@@ -19,6 +19,14 @@ export interface PublishPanelProps {
   visibility: 'unlisted' | 'public';
   busy?: boolean;
   error?: string | null;
+  /**
+   * Where the owner view stands when there is none to show: 'loading' while it is on its way ("Checking your
+   * comic…"), 'error' when it could not be fetched (an alert with Try again). Absent = the view is here, or the
+   * comic has none; the panel then works from the doc.
+   */
+  check?: 'loading' | 'error';
+  /** Fetch the owner view again (the failed check's Try again). */
+  onRetry?(): void;
   onPublish(request: PublishRequest): void;
   onCancel?(): void;
 }
@@ -47,6 +55,21 @@ export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; 
   </label>
 );
 
+/** The owner view could not be fetched: what happened, and the one next step (the Share sheet and the panel share it). */
+export const CheckFailed: React.FC<{ onRetry?(): void }> = ({ onRetry }) => (
+  <div role="alert" className={cx('flex min-w-0 flex-wrap items-center justify-between gap-2 border px-3 py-1 text-[13px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.error)}>
+    <span className="min-w-0 py-1">Couldn’t check your comic.</span>
+    {onRetry && (
+      <button type="button" onClick={onRetry} className={cx('min-h-[44px] px-3 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] touch-manipulation', RADIUS_CONTROL, FOCUS_RING)}>
+        Try again
+      </button>
+    )}
+  </div>
+);
+
+/** Pages with art that can be published, counted from the doc itself: what the panel shows until the server's count arrives. */
+const drawnPagesOf = (doc: ComicDoc): number => doc.pages.filter((p) => p.render?.asset && (p.render.status === 'ready' || p.render.status === 'stale')).length;
+
 /**
  * The server's readiness words for a cover that has NO publishable art yet (publication.ts STATUS_WORD).
  * Any other word on a cover entry describes art that exists but that publishing would refuse — today
@@ -58,7 +81,7 @@ const NO_COVER_ART_WORDS: ReadonlySet<string> = new Set(['not drawn yet', 'waiti
 export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): Array<{ ok: boolean | 'warn'; text: string }> {
   const rows: Array<{ ok: boolean | 'warn'; text: string }> = [];
   const planned = r?.plannedPages ?? doc.pages.length;
-  const drawn = r?.drawnPages ?? doc.pages.filter((p) => p.render?.asset && (p.render.status === 'ready' || p.render.status === 'stale')).length;
+  const drawn = r?.drawnPages ?? drawnPagesOf(doc);
   rows.push({ ok: drawn > 0 && drawn === planned ? true : drawn > 0 ? 'warn' : false, text: `${drawn} of ${plural(planned, 'page')} drawn${drawn < planned && drawn > 0 ? ' — undrawn pages are left out' : ''}` });
   const missingPages = (r?.missing || []).filter((m) => m.kind === 'page');
   for (const m of missingPages.slice(0, 4)) rows.push({ ok: 'warn', text: `Page ${m.n}: ${m.status}` });
@@ -80,7 +103,7 @@ export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): A
   return rows;
 }
 
-export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibility, busy, error, onPublish, onCancel }) => {
+export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibility, busy, error, check, onRetry, onPublish, onCancel }) => {
   const source = doc.format?.language || 'en';
   const editions = useMemo(() => Object.keys(doc.i18n?.editions || {}), [doc.i18n]);
   const readiness = view?.readiness;
@@ -97,7 +120,9 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
   const [showCreator, setShowCreator] = useState(view?.showCreator ?? false);
   const blocked = readiness?.safety.status === 'blocked' ? readiness.safety.blockedPages : [];
   const live = !!view?.slug && view.status === 'live';
-  const drawn = readiness?.drawnPages ?? 0;
+  // The same count the readiness row shows: the server's when its view is here, else the doc's own. Never 0 only
+  // because the view has not arrived ("7 of 12 pages drawn" over "Draw at least one page to publish").
+  const drawn = readiness?.drawnPages ?? drawnPagesOf(doc);
 
   const startInId = useId();
   const sent = [source, ...languages.filter((l) => l !== source)];
@@ -204,6 +229,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           {error}
         </p>
       )}
+      {check === 'error' && <CheckFailed onRetry={onRetry} />}
       <div className="flex flex-wrap items-center justify-end gap-2">
         {onCancel && (
           <button type="button" onClick={onCancel} className="min-h-[44px] rounded-xl px-4 text-[14px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
@@ -213,7 +239,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         {blocked.length > 0 && (
           <button
             type="button"
-            disabled={busy || drawn <= blocked.length}
+            disabled={busy || !!check || drawn <= blocked.length}
             onClick={() => onPublish(request(blocked))}
             className="min-h-[44px] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 text-[14px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-45"
           >
@@ -222,15 +248,16 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         )}
         <button
           type="button"
-          disabled={busy || drawn === 0 || blocked.length > 0}
-          aria-busy={busy || undefined}
+          disabled={busy || !!check || drawn === 0 || blocked.length > 0}
+          aria-busy={busy || check === 'loading' || undefined}
           onClick={() => onPublish(request())}
           className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-5 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45"
         >
-          {busy ? 'Publishing…' : live ? 'Update published version' : 'Publish'}
+          {busy ? 'Publishing…' : check === 'loading' ? 'Checking your comic…' : live ? 'Update published version' : 'Publish'}
         </button>
       </div>
-      {drawn === 0 && <p className="text-right text-[12px] text-[var(--ds-muted)]">Draw at least one page to publish.</p>}
+      {/* Said only when it is known: never while the comic is still being checked, or when the check failed. */}
+      {drawn === 0 && !check && <p className="text-right text-[12px] text-[var(--ds-muted)]">Draw at least one page to publish.</p>}
     </div>
   );
 };
