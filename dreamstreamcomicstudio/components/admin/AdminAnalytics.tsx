@@ -9,6 +9,7 @@ import {
   type TelemetryEventRow,
   type FeedbackRow
 } from '../../services/adminAnalytics';
+import { ContactMessages } from './ContactMessages';
 
 const fmt = (iso?: string | null) => {
   if (!iso) return '—';
@@ -48,7 +49,7 @@ const Chips: React.FC<{ title: string; data: Record<string, number> }> = ({ titl
   );
 };
 
-type Tab = 'overview' | 'events' | 'feedback';
+type Tab = 'overview' | 'events' | 'feedback' | 'contact';
 
 export const AdminAnalytics: React.FC = () => {
   const [days, setDays] = useState(7);
@@ -106,8 +107,8 @@ export const AdminAnalytics: React.FC = () => {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {(['overview', 'events', 'feedback'] as Tab[]).map((t) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {(['overview', 'events', 'feedback', 'contact'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -262,6 +263,8 @@ export const AdminAnalytics: React.FC = () => {
           </div>
         </div>
       )}
+
+      {tab === 'contact' && <ContactMessages />}
 
       {tab === 'feedback' && (
         <div className="space-y-2">
