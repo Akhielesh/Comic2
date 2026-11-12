@@ -109,22 +109,26 @@ describe('DashboardView live-worker readiness gate', () => {
     expect(takeStudioIntent('ev9')).toBe('meeting');
   }, 15_000);
 
-  it('shows how many unsaved recordings here aren\'t this account\'s to open (another account\'s, or one whose account isn\'t known) and their size, never their titles, and deletes them on request', async () => {
+  it('shows how many unsaved recordings here other accounts made and their size, never their titles, with no way to delete them; deletes exactly the ones offered to no one that the confirm named', async () => {
     vi.mocked(probeLiveWorker).mockResolvedValue(reachableProbe);
     const rec = (name: string, owner: string, bytes: number) => ({ name, file: `${name}.webm`, mime: 'video/webm', eventId: 'e1', title: `Secret ${name}`, at: 1, durMs: 1000, bytes, owner });
     localStorage.setItem('ds-live-owner', 'u1');
-    // One another account made, one recovered whose account can't be told (UNKNOWN_OWNER), one of u1's.
-    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-x', 'u-other', 1024), rec('ds-rec-y', '?unknown', 1024), rec('ds-rec-mine', 'u1', 10)]));
+    // Two another account made, one recovered whose account can't be told (UNKNOWN_OWNER), one of u1's.
+    const listed = [rec('ds-rec-x', 'u-other', 1024), rec('ds-rec-x2', 'u-other', 1024), rec('ds-rec-y', '?unknown', 1024), rec('ds-rec-mine', 'u1', 10)];
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(listed));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const push = vi.fn();
     render(<DashboardView nav={createNav()} push={push} />);
-    expect(await screen.findByText(/^2 unsaved recordings on this device aren't yours to open: they were made for other accounts, or their account isn't known\. They use .+\.$/)).toBeInTheDocument();
+    expect(await screen.findByText("2 unsaved recordings here belong to other accounts (2 KB). Only they can open or delete them.")).toBeInTheDocument();
+    expect(screen.getByText("1 unsaved recording here is offered to no one: its account isn't known (1 KB).")).toBeInTheDocument();
     expect(screen.queryByText(/Secret ds-rec-x|Secret ds-rec-y/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Delete them' }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/^Delete the 2 unsaved recordings on this device that aren't yours to open \(/));
-    await waitFor(() => expect(screen.queryByText(/aren't yours to open/)).toBeNull());
-    expect(JSON.parse(localStorage.getItem('ds-live-unsaved-recordings') || '[]').map((r: { name: string }) => r.name)).toEqual(['ds-rec-mine']);
-    expect(push).toHaveBeenCalledWith('Deleted 2 recordings', { icon: 'check' });
+    expect(screen.getAllByRole('button', { name: /^Delete/ }).map((b) => b.textContent)).toEqual(['Delete it']);
+    // Another recording offered to no one turns up after the confirm was drawn (the start-up sweep lists one again).
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([...listed, rec('ds-rec-z', '?unknown', 1024)]));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete it' }));
+    expect(confirm).toHaveBeenCalledWith('Delete the unsaved recording on this device that no one is offered (1 KB)? This cannot be undone.');
+    await waitFor(() => expect(push).toHaveBeenCalledWith('Deleted 1 recording', { icon: 'check' }));
+    expect(JSON.parse(localStorage.getItem('ds-live-unsaved-recordings') || '[]').map((r: { name: string }) => r.name)).toEqual(['ds-rec-x', 'ds-rec-x2', 'ds-rec-mine', 'ds-rec-z']);
     confirm.mockRestore();
   }, 15_000);
 

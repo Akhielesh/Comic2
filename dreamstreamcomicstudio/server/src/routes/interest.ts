@@ -142,7 +142,7 @@ interestRouter.post('/', async (req, res, next) => {
         // Give the slot back so a retry isn't throttled (failed and capped sends don't count).
         await result.release();
         if (sent.skipped === 'not_configured') return unavailable(res);
-        console.warn('[interest] confirmation email not sent', { reason: sent.skipped || 'send_failed', requestId: req.requestId });
+        console.warn('[interest] confirmation email not sent', { reason: sent.skipped || sent.error || 'send_failed', requestId: req.requestId });
         return emailUnavailable(res);
       }
       result.sent();

@@ -173,7 +173,10 @@ at start-up, so they stay that way when that version drops them from its list). 
 whose entry is lost (a tab still running the earlier version keeps only 10 entries; a failed
 registry write) comes back at the next start for its recorded account, or, when its account
 can't be told (an earlier version had stopped listing it before this version found it), for no
-one (`?unknown`): the dashboard only counts it, with its size, and offers to delete it.
+one (`?unknown`): the dashboard only counts it, with its size, and offers to delete it
+(`orphanUnsaved`; `discardOrphanUnsaved` deletes only the names the confirm showed that are still
+offered to no one). Another signed-in account's recordings are only counted, with their size
+(`otherAccountsUnsaved`): no one else can open or delete them.
 
 A sign-out in another tab now also drops a Stream Studio tab's own session copy
 (sessionStorage, when "Remember me" was off), and `www.dreamstreamstudio.ai` (and since

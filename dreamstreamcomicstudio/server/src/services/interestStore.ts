@@ -249,6 +249,15 @@ const sentAtOf = (value: string | null | undefined, now: number): number => {
 
 export type ConfirmThrottle = { code: 'too_soon' | 'too_many'; retryAfterS: number };
 
+/** When the operator was last told that public-form mail is held (at most once a minute: every request can hit it). */
+let heldWarnedAt = -Infinity;
+const HELD_WARN_INTERVAL_MS = 60_000;
+const warnHeld = (now: number) => {
+  if (now - heldWarnedAt < HELD_WARN_INTERVAL_MS) return;
+  heldWarnedAt = now;
+  console.warn('[interest] confirmation held: email_log unreadable');
+};
+
 /**
  * May we send this address another confirmation email now? Counted per inbox, so aliases of one
  * address (+tags, Gmail dots) can't each get their own allowance. The cooldown runs from the later of
@@ -267,7 +276,10 @@ export const checkConfirmThrottle = async (
   // One read covers both limits: every send to this inbox (any alias of it) in the last day.
   const sends = await recentConfirmEmailsToInbox(email, iso(now - DAY_MS));
   // Unreadable log: fail closed (the routes answer a throttled request the same way as a sent one).
-  if (sends === null) return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };
+  if (sends === null) {
+    warnHeld(now);
+    return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };
+  }
   const lastDay = sends.length;
   const latest = Math.max(timeOf(sends[0]), sentAtOf(confirmSentAt, now));
   const waitMs = INTEREST_CONFIRM_THROTTLE.minIntervalMs - (now - latest);
@@ -327,6 +339,7 @@ export const claimAccessReceipt = async (email: string, now = Date.now()): Promi
     mailerCapReached(),
     recentConfirmEmailsToInbox(email, iso(now - ACCESS_RECEIPT_INTERVAL_MS), ACCESS_REQUESTED_TEMPLATE)
   ]);
+  if (recent === null) warnHeld(now);
   if (budget || capped || recent === null || recent.length > 0) return null;
   return claimInbox('access', email);
 };

@@ -32,6 +32,19 @@ All notable user-facing changes. Format loosely follows
   spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
+- **Legal suite, ninth review (2026-11-12):** Stream Studio's unsaved recordings now really go
+  to the browser's private file storage as you record: a check for something browsers offer
+  only to background workers kept every recording in memory, so "Decide later" lost it while
+  saying it was kept. A recording the browser can't store asks before its save screen closes.
+  Another account at the device can no longer delete your unsaved recordings: it sees only how
+  many there are and their size. Anyone there can delete the ones offered to no one, and only
+  the ones the confirmation named. The comic reader gives each picture the size it last loaded
+  at here (or the shape it was made in) before it loads, and reopens on the panel you were on,
+  as far into it, whatever the screen width (on phones it reopened several panels late, or at
+  the end of a long comic). Settings → Contact keeps keyboard focus on Send while it sends, ties
+  each label to its field, and clears the message once it is sent. A confirmation whose send
+  record was written but not acknowledged no longer counts against the inbox, and a held
+  confirmation is logged for us.
 - **Legal suite, eighth review (2026-11-12):** in Stream Studio, an unsaved recording an earlier
   version made is no longer given to whichever account held the device when this version first
   ran: that version kept no note of the account, so the one who made it, and anyone else there,
@@ -42,7 +55,8 @@ All notable user-facing changes. Format loosely follows
   guest's pass 90 days past its end when it next opens on that device, whichever nursery it is
   for. The comic reader keeps a restored place while a tap brings its controls back or a key is
   typed in a field, keeps it until the images above it have loaded (on phones it landed on a
-  later panel and saved that), and saves where a screen reader or find in page moved you. Moving
+  later panel and saved that), and saves where a screen reader or find in page moved you (the
+  ninth review, above, replaced this with pictures that have their size before they load). Moving
   to another legal document from its navigation or a link in its text moves keyboard focus to the
   new document's title. The Privacy Policy says when the confirmation email isn't sent, and the
   Cookies notice that the reader keeps when you last read each comic. Public-form email whose send
@@ -64,8 +78,8 @@ All notable user-facing changes. Format loosely follows
   start: a kept recording an earlier version dropped from its list (it kept only the 10 newest)
   is listed again under Unsaved recordings as "Recovered recording", and only empty files are
   deleted. Signing out of Stream Studio or DreamStream now also removes guest passes from
-  nurseries' share links, and a sign-out on Stream Studio's own host settles older unsaved
-  recordings first, as one in the app does. The comic reader keeps your page, mode and scroll
+  nurseries' share links (since the eighth review, neither sign-out touches unsaved recordings).
+  The comic reader keeps your page, mode and scroll
   position when you open a legal document from it and come back. A link to a section of another
   legal document moves keyboard focus to that section, and a link to the document already shown
   goes to its top without adding a history entry. The Privacy Policy now says what turning memory

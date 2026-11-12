@@ -462,9 +462,12 @@ export function SaveSheet({
     return true;
   };
 
+  // Only a recording on disk (opfsName) is kept for later. One the browser couldn't write to its private file storage
+  // is only in this tab's memory and goes with the sheet, so leaving without saving it asks first.
   const keepForLater = () => {
     if (!okToLeave()) return;
-    if (!saved.length) push('Kept on this device — find it under “Unsaved recordings” on the dashboard', { icon: 'info', duration: 3600 });
+    if (!saved.length && !rec.opfsName && !window.confirm('This recording is only in this tab, not stored on this device. Close without saving it? It will be lost.')) return;
+    if (!saved.length && rec.opfsName) push('Kept on this device — find it under “Unsaved recordings” on the dashboard', { icon: 'info', duration: 3600 });
     onClose();
   };
 

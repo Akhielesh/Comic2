@@ -19,7 +19,7 @@ vi.mock('./emailStore.js', async (importOriginal) => ({
 }));
 
 const { sendEmail } = await import('./mailer.js');
-const { logSend } = await import('./emailStore.js');
+const { logSend, patchLog } = await import('./emailStore.js');
 
 const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ ok: true, messageId: 'm1' })));
 vi.stubGlobal('fetch', fetchMock);
@@ -67,5 +67,29 @@ describe('sendEmail → email Worker', () => {
     vi.mocked(logSend).mockResolvedValueOnce(null);
     expect(await sendEmail({ to: 'ada@example.com', template: 'auth-confirm-signup', params: { actionUrl: 'https://dreamstreamstudio.ai/x' }, track: false })).toMatchObject({ ok: true });
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('a public-form send whose log INSERT committed but whose reply was lost (logSend null) closes that row as failed, so it never counts against the inbox', async () => {
+    const rows = new Map<string, { status: string; error?: string }>();
+    vi.mocked(logSend).mockImplementationOnce(async (entry) => {
+      rows.set(entry.id!, { status: entry.status });
+      return null;
+    });
+    vi.mocked(patchLog).mockImplementation(async (id, fields) => {
+      const row = rows.get(id);
+      if (row) rows.set(id, { ...row, ...fields } as { status: string; error?: string });
+    });
+    expect(await sendEmail({ to: 'victim@gmail.com', template: 'newsletter-confirm', params: { confirmUrl: 'https://api.test/c' } })).toEqual({ ok: false, error: 'not_logged' });
+    expect([...rows.values()]).toEqual([{ status: 'failed', error: 'not_logged' }]);
+    expect([...rows.keys()][0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Other mail whose reply was lost still goes, and its row is still closed as sent.
+    vi.mocked(logSend).mockImplementationOnce(async (entry) => {
+      rows.set(entry.id!, { status: entry.status });
+      return null;
+    });
+    expect(await sendEmail({ to: 'ada@example.com', template: 'welcome' })).toMatchObject({ ok: true });
+    expect([...rows.values()].at(-1)).toMatchObject({ status: 'sent' });
+    vi.mocked(patchLog).mockReset();
   });
 });

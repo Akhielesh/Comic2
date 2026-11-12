@@ -89,25 +89,21 @@ export function loadGuest(nid: string): GuestPass | null {
 }
 
 /**
- * Drop every pass on this device that can't still work (its last known end more than
- * GUEST_PASS_MAX_MS ago), whichever nursery it is for: loadGuest drops one only when that nursery
- * is opened, so a pass for a nursery never opened here again (its token, the name typed, the
+ * Drop every pass on this device that can't still work (loadGuest's rule: its last known end more
+ * than GUEST_PASS_MAX_MS ago), whichever nursery it is for: loadGuest drops one only when that
+ * nursery is opened, so a pass for a nursery never opened here again (its token, the name typed, the
  * nursery's and baby's names) would otherwise stay. Stream Studio runs this as it starts (LiveApp),
  * as the Cookies notice says. A pass it can't read is left as it is.
  */
-export function sweepExpiredGuestPasses(now = Date.now()): void {
+export function sweepExpiredGuestPasses(): void {
   try {
-    const keys: string[] = [];
+    const prefix = key('');
+    const nids: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(key(''))) keys.push(k);
+      if (k?.startsWith(prefix)) nids.push(k.slice(prefix.length));
     }
-    for (const k of keys) {
-      try {
-        const g = JSON.parse(localStorage.getItem(k) || 'null') as Partial<GuestPass> | null;
-        if (g && typeof g.until === 'number' && g.until && g.until + GUEST_PASS_MAX_MS < now) localStorage.removeItem(k);
-      } catch { /* not a pass we can read: left as it is */ }
-    }
+    nids.forEach(loadGuest);
   } catch { /* storage unavailable */ }
 }
 

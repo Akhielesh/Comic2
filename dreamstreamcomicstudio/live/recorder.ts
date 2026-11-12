@@ -78,14 +78,18 @@ onmessage = async (e) => {
 };
 `;
 
+/**
+ * Whether this page can try the disk path. Not whether a sync access handle exists: createSyncAccessHandle is exposed
+ * only in dedicated workers, never on a page's FileSystemFileHandle, so a check for it here is false in every browser.
+ * The worker finds out (it posts 'error' when it can't open one), and the recording falls back to memory.
+ */
 export function opfsSupported(): boolean {
   return (
     typeof navigator !== 'undefined' &&
     !!navigator.storage &&
     typeof navigator.storage.getDirectory === 'function' &&
     typeof Worker !== 'undefined' &&
-    typeof FileSystemFileHandle !== 'undefined' &&
-    'createSyncAccessHandle' in FileSystemFileHandle.prototype
+    typeof FileSystemFileHandle !== 'undefined'
   );
 }
 
@@ -304,7 +308,7 @@ export const RECORDING_OWNERS_KEY = 'ds-live-rec-owners';
  * The owner of an unsaved recording whose account can't be told: a disk copy no list names and no
  * record says who made it (an earlier version made it and stopped listing it before this version saw
  * it listed, or the records couldn't be written). It is offered to no one; anyone here sees it
- * counted, with its size, and can delete it (otherAccountsUnsaved).
+ * counted, with its size, and can delete it (orphanUnsaved, discardOrphanUnsaved).
  */
 export const UNKNOWN_OWNER = '?unknown';
 
@@ -505,26 +509,25 @@ export async function discardOpfsRecording(name: string | null): Promise<boolean
 }
 
 /**
- * Unsaved recordings on this device `owner` isn't offered: other accounts' and those whose account
- * can't be told (UNKNOWN_OWNER). How many, and how much space they take (as last recorded); never
- * their titles or events. The dashboard offers to delete them, so the person at a shared device can
- * free the space.
+ * Unsaved recordings on this device that other signed-in accounts made: how many, and how much space they take (as
+ * last recorded); never their titles or events. Only those accounts can open or delete them.
  */
-const othersOf = (owner: string | null): UnsavedRecording[] =>
-  withOwners()
-    .filter((x) => x.owner !== null && x.owner !== owner)
-    .map((x) => x.r);
-
 export function otherAccountsUnsaved(owner: string | null = deviceOwner()): { count: number; bytes: number } {
-  const others = othersOf(owner);
-  return { count: others.length, bytes: others.reduce((sum, r) => sum + (Number(r.bytes) || 0), 0) };
+  const others = withOwners().filter((x) => x.owner !== null && x.owner !== UNKNOWN_OWNER && x.owner !== owner);
+  return { count: others.length, bytes: others.reduce((sum, x) => sum + (Number(x.r.bytes) || 0), 0) };
 }
 
-/** Delete the recordings otherAccountsUnsaved counts (the person at this device asked). Returns how many went. */
-export async function discardOtherAccountsUnsaved(owner: string | null = deviceOwner()): Promise<number> {
-  const others = othersOf(owner);
+/** Unsaved recordings offered to no one (UNKNOWN_OWNER): their names, for the delete anyone here may confirm, and their size. */
+export function orphanUnsaved(): { names: string[]; bytes: number } {
+  const orphans = withOwners().filter((x) => x.owner === UNKNOWN_OWNER).map((x) => x.r);
+  return { names: orphans.map((r) => r.name), bytes: orphans.reduce((sum, r) => sum + (Number(r.bytes) || 0), 0) };
+}
+
+/** Deletes the confirmed names that are still offered to no one (never one that has an owner by then). Returns how many went. */
+export async function discardOrphanUnsaved(names: readonly string[]): Promise<number> {
+  const still = new Set(orphanUnsaved().names);
   let n = 0;
-  for (const r of others) if (await discardOpfsRecording(r.name)) n++;
+  for (const name of names) if (still.has(name) && (await discardOpfsRecording(name))) n++;
   return n;
 }
 

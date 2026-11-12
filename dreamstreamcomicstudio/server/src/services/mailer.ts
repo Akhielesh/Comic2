@@ -149,9 +149,13 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   // (4) log 'queued' first so we have an id for the read-receipt pixel. Public-form mail whose row
   // can't be written isn't sent: its per-inbox limits, its share of the caps and the hard caps all
   // count logged sends only, so unlogged ones would let every alias (and every send past a cap) go.
-  const logId = await logSend({ ...baseLog, status: 'queued' });
+  // The row's id is chosen here, so a row whose INSERT committed but whose reply was lost is still
+  // closed (a 'queued' row left behind would count against the inbox, as a send, forever).
+  const rowId = crypto.randomUUID();
+  const logId = await logSend({ ...baseLog, id: rowId, status: 'queued' });
   if (!logId && (PUBLIC_FORM_EMAIL_TEMPLATES as readonly string[]).includes(template)) {
     console.warn(`[email] Refusing ${template} → ${maskEmail(to)}: its send couldn't be logged, and its limits count logged sends only.`);
+    await patchLog(rowId, { status: 'failed', error: 'not_logged' });
     return { ok: false, error: 'not_logged' };
   }
   if (opts.track === false) {
@@ -179,16 +183,16 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     });
     const json = (await res.json().catch(() => null)) as { ok?: boolean; messageId?: string; error?: string } | null;
     if (res.ok && json?.ok) {
-      if (logId) await patchLog(logId, { status: 'sent', messageId: json.messageId });
+      await patchLog(rowId, { status: 'sent', messageId: json.messageId });
       return { ok: true, messageId: json.messageId };
     }
     const error = json?.error || `worker responded ${res.status}`;
-    if (logId) await patchLog(logId, { status: 'failed', error });
+    await patchLog(rowId, { status: 'failed', error });
     console.warn(`[email] send failed (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } catch (err) {
     const error = (err as Error)?.message || 'network error';
-    if (logId) await patchLog(logId, { status: 'failed', error });
+    await patchLog(rowId, { status: 'failed', error });
     console.warn(`[email] send error (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } finally {

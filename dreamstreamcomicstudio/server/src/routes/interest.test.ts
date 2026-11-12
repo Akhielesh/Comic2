@@ -855,7 +855,11 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
 
   it('a failed send does not count: the visitor is told, and may retry at once', async () => {
     h.state.sendOutcome = 'failed';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const failed = await register();
+    // The log names why (the mailer's error, e.g. not_logged), not just "send_failed".
+    expect(warn).toHaveBeenCalledWith('[interest] confirmation email not sent', expect.objectContaining({ reason: 'worker responded 500' }));
+    warn.mockRestore();
     expect(failed.status).toBe(503);
     expect(failed.body.code).toBe('email_unavailable');
     expect(rows()).toHaveLength(1); // picks saved
@@ -877,8 +881,9 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(4);
   });
 
-  it('when email_log is unreadable, no confirmation email is sent until it can be read (the answer is the same)', async () => {
+  it('when email_log is unreadable, no confirmation email is sent until it can be read (the answer is the same), and the operator is told', async () => {
     await register();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     h.state.fail = { table: 'email_log', op: 'select', code: '57014', message: 'statement timeout' };
     const res = await register();
     expect(res.body.status).toBe('pending');
@@ -888,6 +893,12 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
     expect((await register()).body.status).toBe('pending');
     expect((await register({ email: 'grace@example.com' })).body.status).toBe('pending');
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    // Every failed read is warned (its code, never the address); the hold itself once a minute at most
+    // (this is the file's first unreadable-log test, so none was warned in the last minute).
+    expect(warn).toHaveBeenCalledWith('[email] email_log read failed', { code: '57014' });
+    expect(warn.mock.calls.filter(([m]) => m === '[interest] confirmation held: email_log unreadable')).toHaveLength(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/ada@|grace@/);
+    warn.mockRestore();
     h.state.fail = null;
     expect((await register()).body.status).toBe('pending');
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(2);

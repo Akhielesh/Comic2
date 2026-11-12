@@ -218,7 +218,10 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         // The cap-boundary residual is stated per cap, in the configured caps, not a default day's count.
         expect(doc).toContain('so at least half of `EMAIL_MAX_PER_DAY` in other mail that day (100 by default) or, at the month\'s boundary, at least half of `EMAIL_MAX_PER_MONTH` in other mail that month (1,250 by default, however little was sent that day)');
         expect(doc).toContain('That can hit several requests at one boundary, and the count at their check need only be within the number of sends then finishing, not exactly one under');
-        expect(doc).toContain('so the count can end a few over a cap (by at most the sends in flight together)');
+        expect(doc).toContain('so the count can end a few over a cap (by at most the sends in flight together, while the log can be counted)');
+        // ...and that the caps don't hold while the log can't be counted: getUsage reads a failed count as 0.
+        expect(read('server/src/services/emailStore.ts')).toMatch(/export const getUsage[\s\S]{0,900}return c \?\? 0;\s*\} catch \{\s*return 0;/);
+        expect(doc).toContain("While `email_log` can't be counted, the usage reads as 0 (`emailStore.getUsage`), so the hard caps don't hold for other mail then and nothing is alerted; confirmations and early-access receipts are held while the log can't be read at all (above).");
         for (const stale of ['a send never answers later than a throttled request at that moment', 'so at least 100 other emails that day', 'at most once per boundary', 'over-cap sends are skipped + alerted, never delivered']) expect(doc).not.toContain(stale);
         expect(store).not.toContain('Only a send slower than all of that still answers later.');
         expect(store).not.toContain('a slow send is never told apart from a throttled');
@@ -235,14 +238,12 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         // "None while the allowance is used up": the receipt is skipped on the budget share or the cap.
         // An unreadable log skips it too (fails closed, like the confirmation's throttle), and SECURITY.md says both.
         expect(store).toContain('if (budget || capped || recent === null || recent.length > 0) return null;');
-        expect(store).toContain("if (sends === null) return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };");
+        expect(store).toMatch(/if \(sends === null\) \{\s*warnHeld\(now\);\s*return \{ code: 'too_many', retryAfterS: Math\.ceil\(INTEREST_CONFIRM_THROTTLE\.minIntervalMs \/ 1000\) \};/);
         // So the Privacy Policy's "we then email you a confirmation link" says when it doesn't, and what sends it then.
         expect(read('components/PrivacyPolicy.tsx')).toContain("We then email you a confirmation link (none while our record of the emails we send can't be read; registering again once it can sends it)");
-        expect(read('server/src/routes/interest.ts')).not.toContain('True in every case: a\n * link went out now');
         const security = read('docs/email/SECURITY.md');
         expect(security).toContain("If `email_log` can't be read, no confirmation email is sent until it can");
         expect(security).toContain("and not at all while public-form mail has used its share or the mailer is capped, or while `email_log` can't be read or its row can't be written;");
-        expect(store).not.toContain('neither\n * a lagging nor an unreadable log means "unlimited"');
         // "Counting the +tag and Gmail dot spellings as the same address", and nothing more: those two
         // fold together, other spellings of one mailbox don't (the page claims no more than this).
         expect(inboxKey('Vic.Tim+news@googlemail.com')).toBe(inboxKey('victim@gmail.com'));

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { UserPrivateProfile, UserProfile } from '../types';
 import { supabase } from '../services/supabase';
 import {
@@ -28,6 +28,7 @@ import { getAdminAccess, getBillingSummary } from '../services/billing';
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { AdminConsole } from './admin/AdminConsole';
+import { TONE_TEXT } from './chat/studioDesign';
 import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
@@ -66,12 +67,16 @@ export const ContactSection = () => {
     const [sendError, setSendError] = useState<string | null>(null);
     // A send that didn't go through points to the support mailbox (the form has nowhere else to send it).
     const [sendFailed, setSendFailed] = useState(false);
+    // While it sends, Send stays focusable (aria-disabled, not disabled, which would drop keyboard focus to the page)
+    // and the ref, not the render, stops a second send.
     const [sending, setSending] = useState(false);
+    const sendingRef = useRef(false);
+    const fieldId = useId();
     const words = normalizeText(msg) ? normalizeText(msg).split(/\s+/).length : 0;
 
     const send = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (sending) return;
+        if (sendingRef.current) return;
         setSendError(null);
         setSendFailed(false);
         if (words > 300) return;
@@ -83,6 +88,7 @@ export const ContactSection = () => {
             return;
         }
         const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\n\n${normalizedMessage}` : normalizedMessage;
+        sendingRef.current = true;
         setSending(true);
         let saved = false;
         try {
@@ -90,10 +96,14 @@ export const ContactSection = () => {
         } catch {
             saved = false;
         } finally {
+            sendingRef.current = false;
             setSending(false);
         }
-        if (saved) setSent(true);
-        else setSendFailed(true);
+        if (saved) {
+            setMsg('');
+            setPhone('');
+            setSent(true);
+        } else setSendFailed(true);
     };
 
     if (sent) {
@@ -104,7 +114,7 @@ export const ContactSection = () => {
                 </div>
                 <h3 className="font-display text-2xl">Message Sent!</h3>
                 <p className="font-comic text-slate-600 mt-2">Thanks — we'll reply by email.</p>
-                <button onClick={() => setSent(false)} className="mt-8 text-sm font-bold underline">Send another</button>
+                <button onClick={() => setSent(false)} className="mt-8 inline-flex items-center coarse:min-h-[44px] text-sm font-bold underline">Send another</button>
             </div>
         );
     }
@@ -121,8 +131,9 @@ export const ContactSection = () => {
             </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
-                    <label className="font-bold text-xs uppercase">Your Email</label>
+                    <label htmlFor={`${fieldId}-email`} className="font-bold text-xs uppercase">Your Email</label>
                     <input
+                        id={`${fieldId}-email`}
                         type="email"
                         required
                         value={contactEmail}
@@ -131,8 +142,9 @@ export const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Phone Number (Optional)</label>
+                    <label htmlFor={`${fieldId}-phone`} className="font-bold text-xs uppercase">Phone Number (Optional)</label>
                     <input
+                        id={`${fieldId}-phone`}
                         type="tel"
                         value={phone}
                         onChange={e => setPhone(e.target.value)}
@@ -140,8 +152,9 @@ export const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Message (300 words max)</label>
+                    <label htmlFor={`${fieldId}-message`} className="font-bold text-xs uppercase">Message (300 words max)</label>
                     <textarea
+                        id={`${fieldId}-message`}
                         required
                         rows={6}
                         value={msg}
@@ -154,11 +167,11 @@ export const ContactSection = () => {
                 </div>
                 {sendError && <div className="text-xs font-bold text-red-600">{sendError}</div>}
                 {sendFailed && (
-                    <div role="alert" className="text-xs font-bold text-red-600">
-                        We couldn't send that. Please email <a href={`mailto:${SUPPORT_EMAIL}`} className="underline">{SUPPORT_EMAIL}</a> instead.
+                    <div role="alert" className={`text-xs font-bold ${TONE_TEXT.danger}`}>
+                        We couldn't send that. Please email <a href={`mailto:${SUPPORT_EMAIL}`} className="inline-flex items-center coarse:min-h-[44px] underline">{SUPPORT_EMAIL}</a> instead.
                     </div>
                 )}
-                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300 || sending}>{sending ? 'Sending…' : 'Send Message'}</Button>
+                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300} aria-disabled={sending || undefined} aria-busy={sending || undefined}>{sending ? 'Sending…' : 'Send Message'}</Button>
             </form>
         </div>
     );

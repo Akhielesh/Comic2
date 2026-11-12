@@ -247,168 +247,78 @@ describe('the classic reader keeps its place when it closes', () => {
     third.unmount();
   });
 
-  describe('a scroll position restored before the comic is tall enough (lazy images take their height as they load)', () => {
-    /** The browser clamps scrollTop to what the content allows, and a scroll that moved fires a scroll event. */
-    const clampScroll = (el: HTMLElement, max = 300) => {
-      const box = { max, top: 0 };
-      Object.defineProperty(el, 'scrollTop', {
-        configurable: true,
-        get: () => box.top,
-        set: (v: number) => {
-          const next = Math.max(0, Math.min(v, box.max));
-          if (next === box.top) return;
-          box.top = next;
-          setTimeout(() => el.dispatchEvent(new Event('scroll')), 0);
-        }
-      });
-      return box;
-    };
-    const openWithPendingLoad = async (scrollTop: number, opts: { max?: number; prepare?: (el: HTMLElement) => void } = {}) => {
-      store.set(project.id, { projectId: project.id, mode: 'scroll', pageIndex: 0, scrollTop, updatedAt: 1 });
+  describe('a scroll place reopens on the picture it was on: every picture has its box before it loads, and the place is an anchor', () => {
+    type Place = Saved & { anchor?: { key: string; frac: number }; boxes?: Record<string, [number, number]> };
+    /** Opens `p` with `place` stored, the load answered once `prepare` has laid out the scroll box. */
+    const openAt = async (place: Partial<Place>, opts: { p?: Project; prepare?: (el: HTMLElement) => void } = {}) => {
+      const p = opts.p ?? project;
+      store.set(p.id, { projectId: p.id, mode: 'scroll', pageIndex: 0, scrollTop: 0, updatedAt: 1, ...place } as Saved);
       const db = await import('../services/db');
       let resolve!: (s: Saved) => void;
       vi.mocked(db.loadReaderState).mockImplementationOnce(() => new Promise<Saved>((r) => (resolve = r)) as ReturnType<typeof db.loadReaderState>);
-      render(<Host />);
+      const view = render(
+        <ComicReader project={p} onClose={vi.fn()} onUpdateProject={vi.fn()} onNavigate={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />
+      );
       const el = scrollBox()!;
-      const box = clampScroll(el, opts.max);
       opts.prepare?.(el);
-      resolve(store.get(project.id)!);
-      await tick(40);
-      return { el, box };
+      await act(async () => resolve(store.get(p.id)!));
+      return { el, view };
     };
-
-    it('is held and applied again as images load until it is reached, and the clamped position is never saved', async () => {
-      const { el, box } = await openWithPendingLoad(900);
-      expect(el.scrollTop).toBe(300); // clamped: the comic isn't tall enough yet
-      await tick(500); // past the scroll debounce
-      expect(store.get(project.id)?.scrollTop).toBe(900);
-      box.max = 2000;
-      act(() => {
-        el.querySelector('img')!.dispatchEvent(new Event('load'));
+    /** The panels as a browser lays them out: `height` px each from 100 px down (the box's top is 0). */
+    const layOut = (height: number) => (el: HTMLElement) =>
+      el.querySelectorAll<HTMLElement>('[data-panel-key]').forEach((item, i) => {
+        item.getBoundingClientRect = () => ({ top: 100 + i * height - el.scrollTop, bottom: 100 + (i + 1) * height - el.scrollTop, height }) as DOMRect;
       });
-      expect(el.scrollTop).toBe(900);
-      await tick(500);
-      expect(store.get(project.id)?.scrollTop).toBe(900);
-      // Once reached, the reader's own scrolling is saved again.
-      el.scrollTop = 1200;
-      await tick(500);
-      expect(store.get(project.id)?.scrollTop).toBe(1200);
+    const imgs = () => [...document.querySelectorAll('img')];
+    const box = (img: HTMLImageElement) => [img.getAttribute('width'), img.getAttribute('height')];
+
+    it('each picture gets the box this browser saw it at, else the ratio it was made at (a custom crop, its layout slot, the style ratio; a Page Studio page: the studio\'s), as width and height', async () => {
+      const panels = [1, 2, 3, 4].map(panel);
+      panels[1] = { ...panels[1], imageId: 'img-2' };
+      const seen: Partial<Place> = { boxes: { 'img-2': [800, 1200], cover: [1200, 800] } };
+      const comic = (state: Partial<Project['state']>): Project => ({ ...project, id: `c-box-${Object.keys(state).join('-')}`, state: { ...project.state, panels, ...state } });
+
+      const first = await openAt(seen, { p: comic({ coverImageUrl: 'data:image/svg+xml,cover' }) });
+      expect(imgs().map(box)).toEqual([['1200', '800'], ['1000', '1000'], ['800', '1200'], ['1000', '1000'], ['1000', '1000']]);
+      first.view.unmount();
+      const custom = await openAt(seen, { p: comic({ customAspectRatioEnabled: true, customAspectRatio: '16:9' }) });
+      expect(imgs().map(box)).toEqual([['1000', '563'], ['800', '1200'], ['1000', '563'], ['1000', '563']]);
+      custom.view.unmount();
+      const grid = await openAt(seen, { p: comic({ gridTemplateId: 'portrait-hero-2-insets' }) });
+      expect(imgs().map(box)).toEqual([['1000', '667'], ['800', '1200'], ['1000', '1000'], ['1000', '667']]);
+      grid.view.unmount();
+      const pageStudio = { aspectRatio: '2:3', pages: [{ id: 'pg1', prompt: '', imageUrl: 'data:image/svg+xml,pg1', edits: [], createdAt: 1 }] } as unknown as Project['state']['pageStudio'];
+      await openAt({}, { p: comic({ panels: [], pageStudio }) });
+      expect(imgs().map(box)).toEqual([['1000', '1500']]);
     });
 
-    it('closed while it is still held, it saves the held position', async () => {
-      const { el } = await openWithPendingLoad(900);
-      expect(el.scrollTop).toBe(300);
-      await leaveForCookies();
-      await tick(30);
-      expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 900 });
+    it('reopens on the anchored panel, as far into it, where the saved scrollTop now shows another (another width, or pictures of another size)', async () => {
+      const { el } = await openAt({ scrollTop: 900, anchor: { key: 'p6:5', frac: 0.5 } }, { prepare: layOut(300) });
+      expect(el.scrollTop).toBe(100 + 5 * 300 + 150);
     });
 
-    const loadImage = (el: HTMLElement, i = 0) =>
-      act(() => {
-        el.querySelectorAll('img')[i].dispatchEvent(new Event('load'));
-      });
-
-    it('a tap or a click on the art while it is held (phones send a mouse down after every tap), or a space typed in a field, moves nothing: it stays held, and the place is kept', async () => {
-      const { el, box } = await openWithPendingLoad(900);
-      expect(el.scrollTop).toBe(300);
-      const img = el.querySelector('img')!;
-      fireEvent.touchStart(img, { touches: [{ clientX: 50, clientY: 50 }] });
-      fireEvent.touchEnd(img);
-      fireEvent.mouseDown(img);
-      fireEvent.mouseUp(img);
-      fireEvent.click(img);
-      const field = document.body.appendChild(document.createElement('textarea'));
-      field.focus();
-      fireEvent.keyDown(field, { key: ' ' });
-      fireEvent.keyDown(field, { key: 'ArrowDown' });
-      field.remove();
-      box.max = 2000;
-      loadImage(el);
-      expect(el.scrollTop).toBe(900);
-      await leaveForCookies();
-      await tick(30);
-      expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 900 });
+    it('a place saved before anchors were kept (or one whose panel is gone) reopens at its scrollTop', async () => {
+      const old = await openAt({ scrollTop: 900 }, { prepare: layOut(300) });
+      expect(old.el.scrollTop).toBe(900);
+      old.view.unmount();
+      const gone = await openAt({ scrollTop: 700, anchor: { key: 'not-here', frac: 0.2 } }, { prepare: layOut(300) });
+      expect(gone.el.scrollTop).toBe(700);
     });
 
-    it('moved with no input event while it is held (a screen reader, find in page), the reader keeps and saves where it went, and the next image load doesn\'t move them back', async () => {
-      const { el, box } = await openWithPendingLoad(900, { max: 600 });
-      expect(el.scrollTop).toBe(600);
-      el.scrollTop = 100;
+    it('both saves (the scroll save and the close) write the anchor and the boxes, pruned to the pictures in the comic now', async () => {
+      const { el, view } = await openAt({ scrollTop: 0, boxes: { 'p2:1': [800, 1200], 'gone-img': [10, 10] } }, { prepare: layOut(300) });
+      const loaded = imgs()[2];
+      for (const [k, v] of [['complete', true], ['naturalWidth', 640], ['naturalHeight', 480]] as const) Object.defineProperty(loaded, k, { configurable: true, value: v });
+      el.scrollTop = 1750;
+      fireEvent.scroll(el);
       await tick(500);
-      expect(store.get(project.id)?.scrollTop).toBe(100);
-      box.max = 700;
-      loadImage(el);
-      expect(el.scrollTop).toBe(100);
-    });
-
-    it('reachable before the images above it have loaded (on a phone the text under each panel makes the comic tall at once): held, with the browser\'s scroll anchoring off, until they have, so it isn\'t carried to a later panel and that place saved', async () => {
-      const loaded = new Set<number>();
-      // The panel images as laid out: 250 px apart from 100 px down; those loaded are complete.
-      const layOut = (el: HTMLElement) => {
-        Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 });
-        el.querySelectorAll('img').forEach((img, i) => {
-          Object.defineProperty(img, 'complete', { configurable: true, get: () => loaded.has(i) });
-          img.getBoundingClientRect = () => ({ top: 100 + i * 250 - el.scrollTop }) as DOMRect;
-        });
-      };
-      const { el, box } = await openWithPendingLoad(900, { max: 2000, prepare: layOut });
-      expect(el.scrollTop).toBe(900);
-      expect(el.style.overflowAnchor).toBe('none');
-      // An image above loads. With scroll anchoring on, the browser would keep what is shown (a later panel)
-      // in view, scrolling the box by the height the image gained.
-      const anImageAboveLoads = (i: number) => {
-        loaded.add(i);
-        if (el.style.overflowAnchor !== 'none') el.scrollTop = box.top + 400;
-        loadImage(el, i);
-      };
-      anImageAboveLoads(0);
-      anImageAboveLoads(1);
-      await tick(500);
-      expect(el.scrollTop).toBe(900);
-      expect(store.get(project.id)?.scrollTop).toBe(900);
-      // Every image above the view at 900 (and in it) has loaded: the hold ends, anchoring is the browser's again.
-      for (const i of [2, 3, 4]) anImageAboveLoads(i);
-      expect(el.style.overflowAnchor).toBe('none');
-      anImageAboveLoads(5);
-      expect(el.style.overflowAnchor).toBe('');
-      await tick(500);
-      expect(el.scrollTop).toBe(900);
-      expect(store.get(project.id)?.scrollTop).toBe(900);
-      // And the reader's own scrolling is saved again.
-      el.scrollTop = 1100;
-      await tick(500);
-      expect(store.get(project.id)?.scrollTop).toBe(1100);
-    });
-
-    it('is held at most 20 seconds: an image that loads after that no longer moves the reader', async () => {
-      const { el, box } = await openWithPendingLoad(900);
-      expect(el.scrollTop).toBe(300);
-      const start = Date.now();
-      const now = vi.spyOn(Date, 'now').mockReturnValue(start + 21_000);
-      try {
-        box.max = 350;
-        loadImage(el); // the last try: to the clamp, then let go
-        expect(el.scrollTop).toBe(350);
-        expect(el.style.overflowAnchor).toBe('');
-        box.max = 2000;
-        loadImage(el, 1);
-        expect(el.scrollTop).toBe(350);
-      } finally {
-        now.mockRestore();
-      }
-    });
-
-    it('scrolled by hand while it is held, the reader keeps (and saves) where they scrolled to', async () => {
-      const { el, box } = await openWithPendingLoad(900);
-      fireEvent.wheel(el, { deltaY: -100 });
-      el.scrollTop = 120;
-      await tick(500);
-      expect(store.get(project.id)?.scrollTop).toBe(120);
-      box.max = 2000;
-      act(() => {
-        el.querySelector('img')!.dispatchEvent(new Event('load'));
-      });
-      expect(el.scrollTop).toBe(120);
+      const expected = { anchor: { key: 'p6:5', frac: 0.5 }, boxes: { 'p2:1': [800, 1200], 'p3:2': [640, 480] } };
+      expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 1750, ...expected });
+      expect(Object.keys((store.get(project.id) as Place).boxes!).sort()).toEqual(['p2:1', 'p3:2']);
+      el.scrollTop = 100 + 2 * 300 + 30;
+      store.clear();
+      view.unmount();
+      expect(store.get(project.id)).toMatchObject({ mode: 'scroll', scrollTop: 730, anchor: { key: 'p3:2', frac: 0.1 }, boxes: expected.boxes });
     });
   });
 

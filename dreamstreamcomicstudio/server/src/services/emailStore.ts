@@ -26,6 +26,8 @@ const adminOrNull = () => {
 };
 
 export interface EmailLogEntry {
+  /** The row's id, when the caller chose it (mailer.sendEmail does, to close a row whose INSERT reply was lost). */
+  id?: string;
   toEmail: string;
   template: string;
   kind: EmailKind;
@@ -44,6 +46,7 @@ export const logSend = async (entry: EmailLogEntry): Promise<string | null> => {
     const { data, error } = await db
       .from('email_log')
       .insert({
+        id: entry.id, // undefined (omitted from the body): the column's default
         to_email: normalizeEmail(entry.toEmail),
         template: entry.template,
         kind: entry.kind,
@@ -217,8 +220,10 @@ export const latestAuthEmailAt = async (email: string): Promise<string | null> =
 // ── Per-recipient newsletter-confirm throttle (services/interestStore.ts) ───────────
 // Same idea as the auth throttle above, for the double opt-in email (security finding
 // abuse-ops-11: re-subscribing used to re-send it on every request). Unlike the auth helpers,
-// these report a log they couldn't read (undefined / null) instead of 0, so the caller can fall
-// back to the subscriber row's own confirm_sent_at rather than silently allowing a send.
+// these report a log they couldn't read as null instead of 0 (and warn): the per-inbox throttle
+// and the early-access receipt then fail closed (interestStore checkConfirmThrottle,
+// claimAccessReceipt: nothing is sent), and the public-form budget check treats it as not used up
+// (confirmBudgetExhausted).
 
 export const NEWSLETTER_CONFIRM_TEMPLATE = 'newsletter-confirm';
 
@@ -287,13 +292,19 @@ export const recentConfirmEmailsToInbox = async (
       .gte('created_at', sinceIso)
       .order('created_at', { ascending: false })
       .limit(INBOX_LOOKUP_LIMIT);
-    if (error) return null;
+    if (error) return logReadFailed(error);
     return ((data as Array<{ to_email?: string; created_at?: string }> | null) ?? [])
       .filter((r) => typeof r.to_email === 'string' && typeof r.created_at === 'string' && inboxKey(r.to_email) === key)
       .map((r) => r.created_at as string);
-  } catch {
-    return null;
+  } catch (err) {
+    return logReadFailed(err);
   }
+};
+
+/** A read of email_log that failed: warned (the code only, never an address), and reported as null. */
+const logReadFailed = (err: unknown): null => {
+  console.warn('[email] email_log read failed', { code: (err as { code?: string } | null)?.code });
+  return null;
 };
 
 /**
@@ -310,10 +321,10 @@ export const countPublicFormEmailsSince = async (sinceIso: string): Promise<numb
       .in('template', [...PUBLIC_FORM_EMAIL_TEMPLATES])
       .in('status', AUTH_EMAIL_COUNTED_STATUSES)
       .gte('created_at', sinceIso);
-    if (error) return null;
+    if (error) return logReadFailed(error);
     return count ?? 0;
-  } catch {
-    return null;
+  } catch (err) {
+    return logReadFailed(err);
   }
 };
 

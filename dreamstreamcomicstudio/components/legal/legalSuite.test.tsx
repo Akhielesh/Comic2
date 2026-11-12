@@ -410,12 +410,14 @@ describe('Cookies & Local Storage', () => {
 
     it('the "Your work" row names the reading place the comic reader keeps for every comic read on the device', () => {
         const row = [...renderDoc('cookies').main.querySelectorAll('tr')].find((tr) => tr.textContent?.includes('dreamstream_local_cache'));
-        expect(row?.textContent).toContain("and where you were in each comic you've read here (page, reading mode, scroll position and when you last read it), kept in IndexedDB and local storage.");
+        expect(row?.textContent).toContain("and where you were in each comic you've read here (page, reading mode, scroll position and when you last read it) and the size of each picture you've seen here, so the comic reopens without jumping, kept in IndexedDB and local storage.");
         // The reader saves exactly that, per comic, into the reader_state store of dreamstream_local_cache:
-        // every save (a page turn, a mode change, a scroll, the close) stamps updatedAt with the time.
+        // every save (a page turn, a mode change, a scroll, the close) stamps updatedAt with the time, and in
+        // scroll mode adds the panel at the top of the view and the pictures' sizes (placeOf).
         expect(read('services/db.ts')).toContain('const DB_NAME = "dreamstream_local_cache";');
         expect(read('services/db.ts')).toContain('const READER_STATE_STORE = "reader_state";');
-        expect(read('types.ts')).toMatch(/export type ReaderState = \{\s*projectId: string;\s*mode: "scroll" \| "flip";\s*pageIndex\?: number;\s*scrollTop\?: number;\s*updatedAt: number;\s*\};/);
+        expect(read('types.ts')).toMatch(/export type ReaderState = \{\s*projectId: string;\s*mode: "scroll" \| "flip";\s*pageIndex\?: number;\s*scrollTop\?: number;\s*(?:\/\*\*[^\n]*\*\/\s*)?anchor\?: \{ key: string; frac: number \};\s*(?:\/\*\*[^\n]*\*\/\s*)?boxes\?: Record<string, \[number, number\]>;\s*updatedAt: number;\s*\};/);
+        expect(read('components/ComicReader.tsx').match(/\.\.\.placeOf\(\),/g)).toHaveLength(2);
         expect(read('components/ComicReader.tsx')).toContain('void saveReaderState({ projectId, mode, pageIndex: page, scrollTop:');
         expect(read('components/ComicReader.tsx').match(/updatedAt: Date\.now\(\)/g)).toHaveLength(2);
     });
@@ -508,7 +510,8 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         // One an earlier version made carries no account, and none is guessed from who holds the device
         // (recorder.ts ownerOf): offered to anyone while that version's list names it, as it was, and to no
         // one (UNKNOWN_OWNER, only counted) once that version had stopped listing it.
-        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them, with a note of the account each was made for. Each is offered only to the account its studio was opened for; one made while no one was signed in is offered to anyone who opens Stream Studio on that device. An earlier version of Stream Studio kept no such note, so a recording made with it, also in a tab still running it, belongs to no account: one this version finds on that version's list is offered to anyone who opens Stream Studio on that device, as that version offered it, and one that version had already stopped listing is offered to no one. So is any other recording whose account can't be told. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.");
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them, with a note of the account each was made for. Each is offered only to the account its studio was opened for; one made while no one was signed in is offered to anyone who opens Stream Studio on that device. An earlier version of Stream Studio kept no such note, so a recording made with it, also in a tab still running it, belongs to no account: one this version finds on that version's list is offered to anyone who opens Stream Studio on that device, as that version offered it, and one that version had already stopped listing is offered to no one. So is any other recording whose account can't be told. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use; they can't open or delete them. Anyone there can delete recordings offered to no one.");
+        for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('how much space they use, and can delete them');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('when this version first ran there');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('first ran there or, if there was none, is offered to anyone');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('goes to the account signed in there when this version first ran');
@@ -527,7 +530,6 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         const cookies = textOf(cookiesMain.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
         expect(cookies).toContain("An earlier version of Stream Studio kept no such note, so a recording made with it, also in a tab still running it, belongs to no account: one this version finds on that version's list is offered to anyone who opens Stream Studio on that device, as that version offered it, and one that version had already stopped listing is offered to no one.");
-        expect(cookies).toContain('anyone there sees the same for recordings offered to no one.');
         // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
         // Guest passes from share links go with the account (accountPurge PREFIXES), and the list of what
         // stays no longer claims to be three things: device settings stay too.
@@ -547,7 +549,7 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(textOf(cookiesMain.querySelector('#what-we-store') as HTMLElement)).toContain('guest passes for nurseries you joined with a share link');
         expect(cookies).toContain("Changes to your call favourites and blocks that haven't reached our server yet stay, for your account only, until they do.");
         expect(cookies).toContain('Each is offered only to the account its studio was opened for; one made while no one was signed in is offered to anyone who opens Stream Studio on that device.');
-        expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.');
+        expect(cookies).toContain("sees only how many of your unsaved recordings there are and how much space they use; they can't open or delete them. Anyone there can delete recordings offered to no one.");
         expect(cookies).not.toContain('only the account that made them is offered them');
     });
 
