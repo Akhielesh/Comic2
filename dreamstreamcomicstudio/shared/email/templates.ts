@@ -159,11 +159,13 @@ const textToParagraphs = (text: string): string =>
 // Two steps, like the route (routes/newsletter.ts): the link opens a page that says what Confirm
 // does, and only its Confirm button subscribes the address. Anyone can type an address in, and
 // each new registration can send this email again (at most 3 a day, interestStore.ts
-// INTEREST_CONFIRM_THROTTLE), so the copy never promises "you won't hear from us again".
+// INTEREST_CONFIRM_THROTTLE), so the copy never promises "you won't hear from us again". Nor does it
+// say "nothing happens": the address is already stored, and service announcements can reach any
+// address we hold (the Privacy Policy says so), so it says what ignoring it does and how to be removed.
 export const NEWSLETTER_CONFIRM_MAX_PER_DAY = 3;
 const newsletterConfirm: Renderer = (params, brand) => {
   const url = params.confirmUrl || brand.appUrl;
-  const ignore = `Didn't sign up? Ignore this email: nothing happens unless you open the link and press Confirm. If someone keeps entering your address, you may get up to ${NEWSLETTER_CONFIRM_MAX_PER_DAY} of these a day.`;
+  const ignore = `Didn't sign up? You can ignore this email: you won't get updates unless you open the link and press Confirm. If someone keeps entering your address, you may get up to ${NEWSLETTER_CONFIRM_MAX_PER_DAY} of these a day. To have your address removed from our list, write to ${brand.supportEmail}.`;
   return {
     subject: `Confirm your subscription to ${brand.productName}`,
     preheader: 'Open the confirmation page to start getting updates.',

@@ -54,6 +54,11 @@ describe('email templates', () => {
       expect(part).not.toMatch(/won.t hear from us again|One click to confirm|lock in your spot/i);
       expect(part).toMatch(/press Confirm/);
       expect(part).toContain('you may get up to 3 of these a day');
+      // Ignoring it means no updates, not that nothing happens: the address is already stored, and a
+      // service announcement can still reach it (the Privacy Policy's emails section says so).
+      expect(part).not.toMatch(/nothing happens/i);
+      expect(part).toMatch(/you won(?:'|&#39;)t get updates unless you open the link and press Confirm/);
+      expect(part).toContain('To have your address removed from our list, write to support@dreamstreamstudio.ai.');
     }
     expect(out.html).toContain('Confirm your email');
     expect(out.html).toContain('Open the confirmation page');

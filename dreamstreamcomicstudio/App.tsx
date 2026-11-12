@@ -429,10 +429,13 @@ const App: React.FC = () => {
     }
     setCurrentView(entry.view as AppView);
   };
-  // A legal link inside the comic reader (its footer and phone sheet): the reader has left its
-  // back-stack layer when this runs, so the document gets its own entry above the reader's (Back
-  // shows the comic again, and a /share/<token> address is never overwritten).
-  const openLegalFromReader = (doc: LegalDocId) => () => {
+  // A legal link that isn't the shared footer (which pushes its own entry): the comic reader's footer
+  // and phone sheet (the reader has left its back-stack layer when this runs), the home page's and
+  // the Comics landing's footers, and the sign-up form's consent links. The document gets its own
+  // entry above the page's, so Back (the browser's, or the document's own button) shows that page
+  // again (the comic, Home, the sign-up form) instead of skipping it or leaving the site, and a
+  // /share/<token> address is never overwritten.
+  const openLegal = (doc: LegalDocId) => () => {
     pushLegalPath(doc);
     setCurrentView(doc);
   };
@@ -1192,15 +1195,15 @@ const App: React.FC = () => {
               onRequestAccess={() => goToAuth('request-access')}
               onOpenComics={() => handleNavigate('dashboard')}
               onBrowseGallery={() => handleNavigate('gallery')}
-              onOpenPrivacy={() => setCurrentView('privacy')}
-              onOpenTerms={() => setCurrentView('terms')}
+              onOpenPrivacy={openLegal('privacy')}
+              onOpenTerms={openLegal('terms')}
             />
           ) : (
             <HomePage
               onEnterStudio={() => (user ? setCurrentView('dashboard') : setCurrentView('auth'))}
               onViewComics={() => setCurrentView('gallery')}
-              onOpenPrivacy={() => setCurrentView('privacy')}
-              onOpenTerms={() => setCurrentView('terms')}
+              onOpenPrivacy={openLegal('privacy')}
+              onOpenTerms={openLegal('terms')}
               onNavigate={handleNavigate}
             />
           ))}
@@ -1218,8 +1221,8 @@ const App: React.FC = () => {
                 }
                 setCurrentView('dashboard');
               }}
-              onOpenPrivacy={() => setCurrentView('privacy')}
-              onOpenTerms={() => setCurrentView('terms')}
+              onOpenPrivacy={openLegal('privacy')}
+              onOpenTerms={openLegal('terms')}
             />
           )}
 
@@ -1349,8 +1352,8 @@ const App: React.FC = () => {
               onUpdateProject={updateProject}
               isReadOnly={!!publicProject}
               onNavigate={handleNavigate}
-              onOpenPrivacy={openLegalFromReader('privacy')}
-              onOpenTerms={openLegalFromReader('terms')}
+              onOpenPrivacy={openLegal('privacy')}
+              onOpenTerms={openLegal('terms')}
               onOpenFaq={handleOpenFaq}
             />
           )}
@@ -1403,8 +1406,8 @@ const App: React.FC = () => {
             <SharedViewer
               shareToken={shareToken}
               onNavigate={handleNavigate}
-              onOpenPrivacy={openLegalFromReader('privacy')}
-              onOpenTerms={openLegalFromReader('terms')}
+              onOpenPrivacy={openLegal('privacy')}
+              onOpenTerms={openLegal('terms')}
               onOpenFaq={handleOpenFaq}
             />
           )}

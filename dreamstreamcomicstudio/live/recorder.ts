@@ -11,9 +11,9 @@
  * a recoverable file. Browsers without OPFS fall back to the in-memory path.
  */
 
-import { deviceOwner } from './accountPurge';
+import { UNSAVED_RECORDINGS_KEY, deviceOwner } from './accountPurge';
 
-const UNSAVED_KEY = 'ds-live-unsaved-recordings';
+const UNSAVED_KEY = UNSAVED_RECORDINGS_KEY;
 const PREFIX = 'ds-rec-';
 
 export interface UnsavedRecording {
@@ -26,9 +26,11 @@ export interface UnsavedRecording {
   durMs: number;
   bytes: number;
   /**
-   * The Stream Studio account signed in on this device when the recording started (null: no one).
-   * Signing out leaves unsaved recordings on the device (they are the host's work), so only the
-   * account that made one is offered it: never the next person who signs in here.
+   * The Stream Studio account the studio that recorded it was opened for (null: no account was
+   * signed in on this device then). Signing out leaves unsaved recordings on the device (they are
+   * the host's work), so a recording with an owner is offered only to that account: never the next
+   * person who signs in here. One with no owner (null, or missing on an entry from before recordings
+   * carried one) is offered to whoever opens Stream Studio here (unsavedRecordingsOf).
    */
   owner?: string | null;
 }
@@ -143,7 +145,7 @@ export class DiskRecorder {
     readonly file: string,
     private meta: { eventId: string; title: string },
     sink: OpfsSink | null,
-    private readonly owner: string | null = deviceOwner(),
+    private readonly owner: string | null,
   ) {
     this.sink = sink;
     this.onDisk = !!sink;
@@ -163,13 +165,19 @@ export class DiskRecorder {
     };
   }
 
-  /** Opens the disk sink (when available) and starts recording. */
+  /**
+   * Opens the disk sink (when available) and starts recording. `owner`: the account the studio was
+   * opened for (StudioView passes it), not whoever owns the device when Record is pressed: a sign-out
+   * in another tab clears the device's owner while the stream keeps going, and a part recorded after
+   * that must still be offered to the host.
+   */
   static async start(
     stream: MediaStream,
     mime: string,
     videoBps: number,
     file: string,
     meta: { eventId: string; title: string },
+    owner: string | null = deviceOwner(),
   ): Promise<DiskRecorder> {
     let sink: OpfsSink | null = null;
     if (opfsSupported()) {
@@ -182,7 +190,7 @@ export class DiskRecorder {
         sink = null;
       }
     }
-    const r = new DiskRecorder(stream, mime, videoBps, file, meta, sink);
+    const r = new DiskRecorder(stream, mime, videoBps, file, meta, sink, owner);
     r.startedAt = Date.now();
     r.rec.start(1000);
     r.touchUnsaved();
@@ -277,19 +285,29 @@ async function readOpfsFile(name: string, mime: string): Promise<Blob> {
 
 /* ------------------------------------------------------ unsaved registry */
 
-function readUnsaved(): UnsavedRecording[] {
+/** The registry as stored, or null when it can't be read (storage blocked, not JSON, not a list). */
+function readUnsavedOrNull(): UnsavedRecording[] | null {
   try {
     const raw = localStorage.getItem(UNSAVED_KEY);
     const arr = raw ? (JSON.parse(raw) as UnsavedRecording[]) : [];
-    return Array.isArray(arr) ? arr : [];
+    return Array.isArray(arr) ? arr : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
+function readUnsaved(): UnsavedRecording[] {
+  return readUnsavedOrNull() ?? [];
+}
+
+/**
+ * Every entry stays until its recording is saved or discarded, or its file is gone: no cap on the
+ * count, since an entry pushed off the list would leave its file on disk with nothing that names it
+ * (the browser's quota, and the studio's low-storage warning, bound the files themselves).
+ */
 function writeUnsaved(list: UnsavedRecording[]): void {
   try {
-    localStorage.setItem(UNSAVED_KEY, JSON.stringify(list.slice(-10)));
+    localStorage.setItem(UNSAVED_KEY, JSON.stringify(list));
   } catch {
     /* storage unavailable */
   }
@@ -307,22 +325,23 @@ export function removeUnsaved(name: string): void {
   writeUnsaved(readUnsaved().filter((x) => x.name !== name));
 }
 
+/** An entry no account made: recorded with no one signed in here, or left from before entries carried an owner. */
+const unowned = (r: UnsavedRecording) => r.owner == null;
+
 /**
- * The unsaved recordings `owner` may be offered: the ones recorded while that account (or, for
- * null, no one) was signed in on this device. An entry from before recordings carried an owner
- * is given to whoever lists it first, which is what this device did with every entry until then.
+ * The unsaved recordings `owner` may be offered: the ones recorded for that account, and the ones no
+ * account made (offered to whoever opens Stream Studio here, as every entry was before recordings
+ * carried an owner). An entry from before then is given an owner only when the account that held
+ * the device signs out or is replaced (accountPurge), never by whoever happens to list it first.
  */
 export function unsavedRecordingsOf(owner: string | null): UnsavedRecording[] {
-  const list = readUnsaved();
-  if (list.some((r) => r.owner === undefined)) {
-    writeUnsaved(list.map((r) => (r.owner === undefined ? { ...r, owner } : r)));
-  }
-  return list.filter((r) => (r.owner === undefined ? owner : r.owner) === owner);
+  return readUnsaved().filter((r) => unowned(r) || r.owner === owner);
 }
 
 /**
  * Recordings that reached disk but were never saved (crash, closed tab, dismissed sheet) and that
- * belong to the account signed in on this device now (unsavedRecordingsOf).
+ * the account signed in on this device now may be offered (unsavedRecordingsOf). The studio passes
+ * the account it was opened for instead.
  */
 export async function listUnsavedRecordings(owner: string | null = deviceOwner()): Promise<UnsavedRecording[]> {
   const list = unsavedRecordingsOf(owner);
@@ -359,6 +378,70 @@ export async function discardOpfsRecording(name: string | null): Promise<void> {
     await root.removeEntry(name);
   } catch {
     /* already gone */
+  }
+}
+
+/**
+ * Unsaved recordings other accounts left on this device: how many, and how much space they take (as
+ * last recorded). Never their titles or events: only their own account is offered those. The
+ * dashboard offers to delete them, so the person at a shared device can free the space.
+ */
+export function otherAccountsUnsaved(owner: string | null = deviceOwner()): { count: number; bytes: number } {
+  const others = readUnsaved().filter((r) => !unowned(r) && r.owner !== owner);
+  return { count: others.length, bytes: others.reduce((sum, r) => sum + (Number(r.bytes) || 0), 0) };
+}
+
+/** Delete the recordings otherAccountsUnsaved counts (the person at this device asked). Returns how many. */
+export async function discardOtherAccountsUnsaved(owner: string | null = deviceOwner()): Promise<number> {
+  const others = readUnsaved().filter((r) => !unowned(r) && r.owner !== owner);
+  for (const r of others) await discardOpfsRecording(r.name);
+  return others.length;
+}
+
+/** A disk copy no list names, and nothing has written for this long, is an orphan. */
+const ORPHAN_AFTER_MS = 60 * 60_000;
+
+/**
+ * Run on app start (SaveSheet's sweepDiscardedRecordings calls it): delete disk copies of recordings
+ * that no list names any more, and forget entries whose disk copy is gone. Orphans come from before
+ * the registry kept every entry (it kept only the 10 newest and dropped the rest without their
+ * files), from a recording whose disk copy couldn't be read back, and from a crash between creating
+ * the file and listing it. A file is left alone while it may still be in use: `keep` names the ones
+ * another list still holds (SaveSheet deletes those itself, after a download had time to read them),
+ * one written in the last hour is spared, and one another tab is still recording into is locked
+ * (its removal fails).
+ */
+export async function sweepOrphanRecordings(keep: readonly string[] = []): Promise<void> {
+  if (!opfsSupported()) return;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const names = (root as unknown as { keys?: () => AsyncIterable<string> }).keys?.();
+    if (!names) return;
+    // The list first: a recording another tab starts meanwhile is on disk but not in this read, so it
+    // is never taken for a missing entry, and its fresh file is spared below. A list that can't be
+    // read names nothing reliably: then no file is touched.
+    const listed = readUnsavedOrNull();
+    if (!listed) return;
+    const onDisk = new Set<string>();
+    for await (const name of names) if (name.startsWith(PREFIX)) onDisk.add(name);
+    const named = new Set([...listed.map((r) => r.name), ...keep]);
+    for (const name of onDisk) {
+      if (named.has(name)) continue;
+      try {
+        const f = await (await root.getFileHandle(name)).getFile();
+        if (Date.now() - f.lastModified > ORPHAN_AFTER_MS) await root.removeEntry(name);
+      } catch {
+        /* in use (another tab is recording into it) or already gone */
+      }
+    }
+    // Entries whose disk copy is gone (whoever made them) are dropped, re-reading the list so an
+    // entry another tab added meanwhile stays.
+    if (listed.some((r) => !onDisk.has(r.name))) {
+      const gone = new Set(listed.filter((r) => !onDisk.has(r.name)).map((r) => r.name));
+      writeUnsaved(readUnsaved().filter((r) => !gone.has(r.name)));
+    }
+  } catch {
+    /* storage unavailable */
   }
 }
 

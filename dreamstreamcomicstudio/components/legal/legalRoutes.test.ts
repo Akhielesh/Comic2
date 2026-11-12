@@ -98,7 +98,7 @@ describe('legal routes', () => {
 
   it('is wired into App.tsx: Back from a legal page restores the view the entry names, and header navigation adds one entry', () => {
     const app = read('../../App.tsx');
-    const restore = app.slice(app.indexOf('const restoreViewFromHistory = () => {'), app.indexOf('const openLegalFromReader'));
+    const restore = app.slice(app.indexOf('const restoreViewFromHistory = () => {'), app.indexOf('const openLegal = '));
     expect(restore).toContain('RESTORABLE_VIEWS.has(v as AppView) ||');
     expect(restore).toContain("(v === 'auth' && !user) ||");
     // A reader entry reopens its comic, a workspace entry its project, a profile entry the profile.
@@ -108,11 +108,23 @@ describe('legal routes', () => {
     expect(restore).toContain('if (entry.id === activeProjectId) setCurrentView(workspace);');
     expect(restore).toContain("else setPendingStudioTarget({ id: entry.id, view: workspace, source: 'id' });");
     expect(restore).toContain("(v === 'profile' && !!viewedProfile)");
-    // The reader's legal links push the document's entry once the reader has left its layer (a
-    // /share/<token> entry is never rewritten to /privacy), in ComicReader and in SharedViewer.
-    expect(app).toMatch(/const openLegalFromReader = \(doc: LegalDocId\) => \(\) => \{\s*pushLegalPath\(doc\);\s*setCurrentView\(doc\);/);
-    expect(app.match(/onOpenPrivacy=\{openLegalFromReader\('privacy'\)\}/g)).toHaveLength(2);
-    expect(app.match(/onOpenTerms=\{openLegalFromReader\('terms'\)\}/g)).toHaveLength(2);
+    // Legal links outside the shared footer push the document's own entry: the reader's, once it has
+    // left its layer (a /share/<token> entry is never rewritten to /privacy), in ComicReader and in
+    // SharedViewer, and the Comics landing's, the home page's and the sign-up form's consent links
+    // (legalEntryPoints.test.tsx renders those). None opens a document in place any more.
+    expect(app).toMatch(/const openLegal = \(doc: LegalDocId\) => \(\) => \{\s*pushLegalPath\(doc\);\s*setCurrentView\(doc\);/);
+    for (const component of ['ComicsLanding', 'HomePage', 'AuthPage', 'ComicReader', 'SharedViewer']) {
+      const start = app.indexOf(`<${component}\n`);
+      const props = app.slice(start, app.indexOf('/>', start));
+      expect(start, component).toBeGreaterThan(-1);
+      expect(props, component).toContain("onOpenPrivacy={openLegal('privacy')}");
+      expect(props, component).toContain("onOpenTerms={openLegal('terms')}");
+    }
+    expect(app.match(/onOpenPrivacy=\{openLegal\('privacy'\)\}/g)).toHaveLength(5);
+    expect(app.match(/onOpenTerms=\{openLegal\('terms'\)\}/g)).toHaveLength(5);
+    // Only the shared footer, which pushes the entry itself (LegalMicroLinks), still gets the bare setter.
+    expect(app.match(/onOpenPrivacy=\{\(\) => setCurrentView\('privacy'\)\}/g)).toHaveLength(1);
+    expect(app.match(/onOpenTerms=\{\(\) => setCurrentView\('terms'\)\}/g)).toHaveLength(1);
     // The address sync keeps a legal entry's mark (the page's Back button reads it).
     expect(app).toContain("window.history.replaceState(keepLegalEntryMark(window.history.state), '', url);")
     for (const page of ['PrivacyPolicy', 'TermsOfService', 'AcceptableUsePolicy', 'CopyrightPolicy', 'CookiesNotice', 'SubprocessorsPage']) {

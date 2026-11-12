@@ -13,6 +13,8 @@ import { sanitizeAssistantContext } from '../../server/src/ai/assistantPolicy';
 import { buildProjectSnapshot } from '../../services/assistantContext';
 import { assistantChrome } from '../../services/assistantChrome';
 import { FAIR_USE } from '../../shared/stream/usage';
+import { IMAGE_MODELS } from '../../services/imageModels';
+import { inboxKey } from '../../server/src/services/emailStore';
 import { TOOL_SERVICES } from './SubprocessorsPage';
 import {
     ASSISTANT_SCRIPT_PREVIEW_CHARS,
@@ -28,6 +30,7 @@ import {
     MIN_SIGNUP_AGE_YEARS,
     PEOPLE_SEARCH,
     PRIVACY_EMAIL,
+    QUICK_FINDER,
     RECENT_CALLS_KEPT,
     RETENTION,
     SECURITY_ADVISORY_URL,
@@ -192,7 +195,18 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         const newsletter = read('server/src/routes/newsletter.ts');
         const access = newsletter.slice(newsletter.indexOf("if (kind === 'access') {"), newsletter.indexOf('// Newsletter double opt-in'));
         expect(access).toMatch(/const receipt = await claimAccessReceipt\(email\);\s*if \(receipt\) \{/);
-        expect(read('components/PrivacyPolicy.tsx')).toContain('otherwise it emails you to confirm we received it (at most one such email a day to one inbox');
+        // "None while the allowance is used up": the receipt is skipped on the budget share or the cap.
+        expect(store).toContain('if (budget || capped || (recent && recent.length > 0)) return null;');
+        // "Counting the +tag and Gmail dot spellings as the same address", and nothing more: those two
+        // fold together, other spellings of one mailbox don't (the page claims no more than this).
+        expect(inboxKey('Vic.Tim+news@googlemail.com')).toBe(inboxKey('victim@gmail.com'));
+        expect(inboxKey('vic+x@proton.me')).toBe('vic@proton.me');
+        expect(inboxKey('vic@proton.me')).not.toBe(inboxKey('vic@protonmail.com'));
+        expect(inboxKey('v.ic@proton.me')).not.toBe(inboxKey('vic@proton.me'));
+        expect(inboxKey('a@vic.fastmail.com')).not.toBe(inboxKey('b@vic.fastmail.com'));
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("otherwise it usually emails you to confirm we received it: at most one such email a day to one address, counting the +tag and Gmail dot spellings of an address as the same address, and none while that day's or month's allowance for these emails is used up.");
+        expect(policy).not.toContain('however the address is written');
     });
 });
 
@@ -264,20 +278,94 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(read('components/PrivacyPolicy.tsx')).toContain("is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
     });
 
-    it(`memory notes are written by the app-wide provider pick, not the chat's: no source is sent, and the model is ${MEMORY_NOTE_MODEL.id}`, () => {
+    it('turning memory off stops memory search and saving notes, but not the requests that write them or the in-app list (the page says which)', () => {
+        const memory = read('server/src/services/userMemory.ts');
+        const block = memory.slice(memory.indexOf('export const buildUserMemoryBlock'));
+        // Off: nothing is searched (no Gemini embedding) and no saved note is sent.
+        expect(block).toMatch(/^export const buildUserMemoryBlock[^\n]*\n\s*if \(!\(await isMemoryEnabled\(userId\)\)\) return null;\s*const rows = await retrieveUserMemories/);
+        // Off: a written note is dropped only after the model wrote it.
+        const remember = memory.slice(memory.indexOf('export const rememberUserMemories'), memory.indexOf('export const retrieveUserMemories'));
+        expect(remember).toContain('if (!(await isMemoryEnabled(userId))) return 0;');
+        // Neither write path asks first.
+        const route = read('server/src/routes/chat.ts');
+        const handler = route.slice(route.indexOf("chatRouter.post('/memory'"), route.indexOf("chatRouter.get('/memory/list'"));
+        const auto = route.slice(route.indexOf('const maybeAutoRemember'), route.indexOf('const maybeAutoRemember') + 2500);
+        for (const path of [handler, auto]) expect(path).not.toContain('isMemoryEnabled');
+        // The in-app list is the browser's own and goes with every request.
+        expect(read('components/chat/AIChatPlatform.tsx')).toContain('composeSystemPrompt(getChatMemory(');
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain('Once it is turned off, no notes are saved to your account or sent with your requests, and your messages are no longer sent to Gemini to search them; the requests that write notes still go out (their result is not saved), and the list in Settings → Memory in Chat Studio is still kept in your browser and sent with your requests.');
+        expect(policy).toContain('whichever provider you choose (unless memory is turned off for your account)');
+    });
+
+    it(`the quick-finder sends the selected text (first ${QUICK_FINDER.selectionChars} characters) to Chat Studio's backend on every page but ${QUICK_FINDER.hiddenOn.join(', ')}, so memory search, connected-account context and memory notes apply`, () => {
+        const app = read('App.tsx');
+        const show = /const showQuickFinder = ([^;]+);/.exec(app)?.[1] ?? '';
+        expect([...show.matchAll(/effectiveView !== '([a-z-]+)'/g)].map((m) => m[1]).sort()).toEqual([...QUICK_FINDER.hiddenOn].sort());
+        expect(show.replace(/effectiveView !== '[a-z-]+'/g, '').replace(/&&|\s/g, '')).toBe('');
+        const finder = read('components/QuickFinder.tsx');
+        expect(Number(/const Q = \(t: string\) => `[^`]*?\.slice\(0, (\d+)\)/.exec(finder)?.[1])).toBe(QUICK_FINDER.selectionChars);
+        expect(finder).toMatch(/await sendChatMessageStream\(\s*\{ messages: \[\{ role: 'user', content: prompt \}\], \.\.\.\(clientContext \? \{ clientContext \} : \{\}\) \},/);
+        expect(finder).not.toMatch(/\bsource:/);
+        expect(read('services/chatApi.ts')).toContain("const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });");
+        // Every signed-in chat turn searches memory and adds connected-account context, and the
+        // three turn handlers (/, /stream, /swarm) write memory notes after the answer.
+        const route = read('server/src/routes/chat.ts');
+        expect(route).toContain('userMemory: Boolean(p.userId),');
+        expect(route).toContain('connectorContext: Boolean(p.userId),');
+        expect(route.match(/maybeAutoRemember\(req, p, result\.text \|\| ''\);/g)).toHaveLength(3);
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain('<li><strong>The quick-finder:</strong> when you select text on a page while signed in');
+        expect(policy).toContain('It works on every page except the sign-in pages and shared or public comic pages');
+        expect(policy).toContain('and so can the quick-finder (the Explain, Summarize and similar actions offered when you select text on a page');
+        expect(policy).toContain('the text of each message you send in Chat Studio or through the quick-finder while signed in');
+        expect(read('components/legal/SubprocessorsPage.tsx')).toContain('the text of each message you send in Chat Studio or through the quick-finder while signed in');
+    });
+
+    it(`memory notes are written two ways: after an answer through that turn's provider and key, and from Chat Studio through the app-wide pick; on OpenRouter by ${MEMORY_NOTE_MODEL.id}, or ${MEMORY_NOTE_MODEL.fallbackId} when it fails`, () => {
+        const route = read('server/src/routes/chat.ts');
+        // After an answer (at most every 5 minutes): the provider and key the turn used, which is the
+        // chat's own source before the app-wide header.
+        const auto = route.slice(route.indexOf('const maybeAutoRemember'), route.indexOf('const maybeAutoRemember') + 2500);
+        expect(route).toContain('const AUTO_MEMORY_THROTTLE_MS = 5 * 60_000;');
+        expect(auto).toContain('if (Date.now() - last < AUTO_MEMORY_THROTTLE_MS) return;');
+        expect(auto).toContain("const model = p.resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;");
+        expect(auto).toMatch(/runChat\(\{\s*provider: p\.resolved\.provider,\s*apiKey: p\.resolved\.apiKey,/);
+        expect(auto).toContain("fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,");
+        expect(route).toContain('const resolved = resolveChatProvider(req, body.source);');
+        expect(route).toContain("const source = String(requestedSource || req.header('X-Text-Source') || '').trim().toLowerCase();");
+        // From Chat Studio: no source, so the app-wide pick (X-Text-Source) or the first key, OpenRouter.
         const api = read('services/chatApi.ts');
         const update = api.slice(api.indexOf('export const updateChatMemory'), api.indexOf('export const updateChatMemory') + 450);
         expect(update).toContain('{ messages, memory },');
         expect(update).not.toMatch(/\bsource\b/);
-        const route = read('server/src/routes/chat.ts');
         const handler = route.slice(route.indexOf("chatRouter.post('/memory'"), route.indexOf("chatRouter.get('/memory/list'"));
-        expect(handler).toContain('const resolved = resolveChatProvider(req, body.source);');
         expect(handler).toContain("const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;");
-        expect(route).toContain("const source = String(requestedSource || req.header('X-Text-Source') || '').trim().toLowerCase();");
+        expect(handler).toContain("fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,");
         expect(route).toMatch(/const AUTO_PROVIDER_ORDER: AIProviderId\[\] = \[\s*'openrouter',/);
+        // The models the page names.
         expect(read('server/src/config.ts')).toContain(`export const OPENROUTER_TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || '${MEMORY_NOTE_MODEL.id}';`);
+        expect(read('server/src/ai/autoRouter.ts')).toContain(`export const TEXT_FALLBACK = '${MEMORY_NOTE_MODEL.fallbackId}';`);
         expect(read('api-proxy/wrangler.jsonc')).not.toContain('OPENROUTER_TEXT_MODEL');
-        expect(read('components/PrivacyPolicy.tsx')).toContain('chosen by your settings for all of DreamStream, not by the chat');
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("after an answer (at most once every five minutes), through the provider that answered it, with the same key, which can be your own; and from Chat Studio, through the provider you picked under Settings → API &amp; Models or, if you haven't picked one, OpenRouter.");
+        expect(policy).toContain('Through OpenRouter the model is one DreamStream picks, today {MEMORY_NOTE_MODEL.label}, or {MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
+        expect(policy).not.toContain('not by the chat');
+        expect(read('components/legal/SubprocessorsPage.tsx')).toContain('today by ${MEMORY_NOTE_MODEL.label}, or ${MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
+    });
+
+    it("in the classic editor and Page Studio an image step without references can fall back to Ideogram, which the server runs only on the user's own key or for an account with access; the page says so", () => {
+        const ideogram = IMAGE_MODELS.filter((m) => (m.provider as string) === 'ideogram');
+        expect(ideogram.length).toBeGreaterThan(0);
+        expect(ideogram.every((m) => !m.supportsReferences)).toBe(true);
+        const service = read('services/imageService.ts');
+        expect(service).toMatch(/let fallbackOrder = IMAGE_MODELS\s*\.filter\(\(model\) => model\.id !== primaryModel\.id\);\s*if \(hasReferences \|\| requiresReferenceCapableModel\) \{\s*fallbackOrder = fallbackOrder\.filter\(\(model\) => model\.supportsReferences\);/);
+        expect(service).toMatch(/if \(provider === "ideogram"\) \{[\s\S]{0,200}generateIdeogramImage\(/);
+        const route = read('server/src/routes/image.ts');
+        const gate = route.slice(route.indexOf('const assertIdeogramModelAllowed'), route.indexOf('const assertIdeogramModelAllowed') + 700);
+        expect(gate).toContain("if (hasByokForProvider(req, 'ideogram')) return;");
+        expect(gate).toContain('if (!pro) {');
+        expect(read('components/PrivacyPolicy.tsx')).toContain('In the classic editor and Page Studio, which older projects open in, an image step that uses no reference images can also go to Ideogram: when the Gemini image models fail, or when settings saved earlier chose an Ideogram model, and only with your own Ideogram key or an account that has access to it.');
     });
 
     it('team-written announcements are service mail: no suppression check, no unsubscribe link, and the console sends them to any pasted address', () => {

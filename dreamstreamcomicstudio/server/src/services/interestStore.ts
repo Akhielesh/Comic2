@@ -16,8 +16,8 @@
 //     an existing row's free-text note is never replaced;
 //   * picks are written with a conditional update on what was read (savePicks), so parallel
 //     requests for one address keep every request's picks, sent or throttled;
-//   * a per-inbox throttle on the confirmation email (security finding abuse-ops-11; aliases of one
-//     address count together): none within 10 minutes of the last one, at most 3 a day. Before
+//   * a per-inbox throttle on the confirmation email (security finding abuse-ops-11; an address's
+//     +tag and Gmail dot spellings count together, emailStore.inboxKey): none within 10 minutes of the last one, at most 3 a day. Before
 //     mailing, a request claims the INBOX until its send is logged (claimInbox: in this backend
 //     instance, synchronously, so of parallel requests for victim+1@, victim+2@… exactly one
 //     wins) and then the row (a conditional update on confirm_sent_at), so parallel requests send
@@ -26,8 +26,9 @@
 //     of the daily and monthly email caps, so they can never crowd out sign-in, recovery and invite
 //     mail; and once the mailer's own hard cap is reached, every address gets the same answer
 //     (mailerCapReached is checked before anything about the address);
-//   * an answer that sent nothing takes about as long as one that sent the email
-//     (padToSentDuration), so response time doesn't say which it was;
+//   * an answer that sent nothing and one that sent the email are held to the same time
+//     (holdAnswer: at least ANSWER_FLOOR_MS, or longer while recent sends took longer), so response
+//     time doesn't say which it was, also right after this instance starts;
 //   * tokens are signed (services/confirmToken.ts): only one this server issued for this address
 //     is ever re-sent or accepted, and re-sending one never extends its lifetime;
 //   * a missing column/table (server/sql/register_interest_2026_11.sql or email_system.sql not
@@ -36,7 +37,7 @@
 //
 // Service role only: the client never reads the list, a token, or anyone's address.
 
-import { EMAIL_MAX_PER_DAY, EMAIL_MAX_PER_MONTH } from '../config.js';
+import { EMAIL_MAX_PER_DAY, EMAIL_MAX_PER_MONTH, EMAIL_REQUEST_TIMEOUT_MS } from '../config.js';
 import { getSupabaseAdmin } from './supabase.js';
 import { confirmTokenExpired, confirmTokenIssuedAt, confirmTokensAvailable, issueConfirmToken } from './confirmToken.js';
 import {
@@ -44,6 +45,7 @@ import {
   PENDING_INTERESTS_KEY,
   countPublicFormEmailsSince,
   getUsage,
+  guardOnRead,
   inboxKey,
   normalizeEmail,
   recentConfirmEmailsToInbox
@@ -104,33 +106,47 @@ const claimInbox = (scope: 'confirm' | 'access', email: string): (() => void) | 
 // ── Answer timing ───────────────────────────────────────────────────────────────
 
 /**
- * How long recent requests that sent a confirmation email took (ms, newest last), so a request that
- * sent nothing (throttled) can take about as long: otherwise the response time would say whether the
- * address got a link in the last 10 minutes. Per instance, in memory; DEFAULT until the first send.
+ * Every answer to a valid registration, whether it sent the confirmation email or nothing (throttled),
+ * is held to the same time: otherwise the response time would say whether the address got a link in
+ * the last 10 minutes or three today. That time is ANSWER_FLOOR_MS, above what a send usually takes
+ * (a few database round trips and the email worker), or, while recent sends took longer (a slow
+ * email worker), the 95th percentile of the last SENT_SAMPLES of them. The floor holds from the
+ * first request, so an instance that just started (the backend sleeps when idle and restarts on
+ * every deploy) answers like a warm one. Durations count up to the mailer's own timeout, plus its
+ * round trips. Per instance, in memory. Only a send slower than all of that still answers later.
  */
 const sentDurations: number[] = [];
 const SENT_SAMPLES = 50;
-const MAX_PAD_MS = 3_000;
-let defaultSentMs = 400;
+/** The longest a send can take and still go out: the mailer's timeout and its database round trips. */
+const MAX_SAMPLE_MS = EMAIL_REQUEST_TIMEOUT_MS + 5_000;
+/** The least time any answer takes. */
+export const ANSWER_FLOOR_MS = 2_000;
+let answerFloorMs = ANSWER_FLOOR_MS;
 
 /** Record how long a request that sent the confirmation email took, from `startedAt`. */
 export const noteSentDuration = (startedAt: number, now = Date.now()): void => {
-  sentDurations.push(Math.min(MAX_PAD_MS, Math.max(0, now - startedAt)));
+  sentDurations.push(Math.min(MAX_SAMPLE_MS, Math.max(0, now - startedAt)));
   if (sentDurations.length > SENT_SAMPLES) sentDurations.shift();
 };
 
-/** Wait until a request that sent nothing has taken as long as one recent request that sent the email. */
-export const padToSentDuration = async (startedAt: number): Promise<void> => {
-  const target = sentDurations.length ? sentDurations[Math.floor(Math.random() * sentDurations.length)] : defaultSentMs;
-  const wait = target - (Date.now() - startedAt);
+/** The time every answer is held to now (see above). */
+export const answerTargetMs = (): number => {
+  if (!sentDurations.length) return answerFloorMs;
+  const sorted = [...sentDurations].sort((a, b) => a - b);
+  return Math.max(answerFloorMs, sorted[Math.ceil(sorted.length * 0.95) - 1]);
+};
+
+/** Wait until this answer, sent or not, has taken answerTargetMs() since `startedAt`. */
+export const holdAnswer = async (startedAt: number): Promise<void> => {
+  const wait = answerTargetMs() - (Date.now() - startedAt);
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
 };
 
 /** Tests only: forget the in-memory claims and timings (one test's sends must not throttle the next). */
-export const resetInterestGuardsForTests = (opts: { defaultSentMs?: number } = {}): void => {
+export const resetInterestGuardsForTests = (opts: { answerFloorMs?: number } = {}): void => {
   inboxClaims.clear();
   sentDurations.length = 0;
-  defaultSentMs = opts.defaultSentMs ?? 400;
+  answerFloorMs = opts.answerFloorMs ?? ANSWER_FLOOR_MS;
 };
 
 /** The database lacks what registering interest needs; answer 503 interest_unavailable. */
@@ -403,10 +419,6 @@ const picksUpdate = (row: InterestRow, picked: readonly StudioInterestId[]): Rec
   return fields;
 };
 
-/** A Postgres text[] literal with every element quoted, so any stored value round-trips in a filter. */
-const textArrayLiteral = (values: readonly unknown[]): string =>
-  `{${values.map((v) => `"${String(v).replace(/[\\"]/g, (c) => `\\${c}`)}"`).join(',')}}`;
-
 const loadRowById = async (id: string): Promise<InterestRow | null> => {
   const { data, error } = await adminOrUnavailable().from(TABLE).select(ROW_COLUMNS).eq('id', id).limit(1).maybeSingle();
   if (error) raise(error, 'read');
@@ -414,23 +426,6 @@ const loadRowById = async (id: string): Promise<InterestRow | null> => {
 };
 
 const SAVE_PICKS_ATTEMPTS = 3;
-
-/** The waiting picks inside metadata, as a PostgREST JSON path (metadata->'pending_interests'). */
-const PENDING_PATH = `metadata->${PENDING_INTERESTS_KEY}`;
-
-/**
- * Picks small enough to compare in the guarded update's filter, which travels in the request's
- * URL: a short list of short strings. The server writes each studio id at most once (the SQL CHECK
- * holds product_interests to that); twice as many leaves room for an older row with repeats.
- * Anything else was planted through the old
- * all-column client INSERT grant, or as metadata (which clients can still insert), and is not
- * compared: a planted list of thousands of strings would otherwise make every guarded update fail
- * on its URL length, and the address could never register. The update that skips the comparison
- * writes the cleaned list in its place whenever it writes that field.
- */
-const MAX_COMPARED_PICKS = 2 * STUDIO_INTERESTS.length;
-const comparablePicks = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.length <= MAX_COMPARED_PICKS && value.every((id) => typeof id === 'string' && id.length <= 64);
 
 /**
  * Write this request's picks into an existing row without losing a parallel request's. The
@@ -448,30 +443,15 @@ const savePicks = async (initial: InterestRow, picked: readonly StudioInterestId
     if (!row) throw new InterestRetryError('row removed while saving picks');
     const fields = picksUpdate(row, picked);
     if (!Object.keys(fields).length) return row;
-    let query = adminOrUnavailable().from(TABLE).update(fields).eq('id', row.id).eq('confirmed', row.confirmed);
-    query = row.unsubscribed_at == null ? query.is('unsubscribed_at', null) : query.not('unsubscribed_at', 'is', null);
-    if (comparablePicks(row.product_interests)) {
-      const picks = textArrayLiteral(row.product_interests);
-      query = query.filter('product_interests', 'cs', picks).filter('product_interests', 'cd', picks);
-    } else if (row.product_interests == null) {
-      query = query.is('product_interests', null);
-    }
-    // (Picks that aren't comparablePicks, e.g. a NULL element or thousands of entries only the old
+    // emailStore.guardOnRead: the subscribed state, the picks and the waiting picks as read. (Picks
+    // that aren't comparablePicks, e.g. a NULL element or thousands of entries only the old
     // all-column client insert could plant, aren't compared: whenever this update writes the
-    // picks, it writes the cleaned list in their place.)
-    // Of the metadata, only the waiting picks: the one part picksUpdate decides from. Never the
-    // whole object: a client can insert any metadata, and a value JavaScript can't hold exactly
-    // (a 20-digit number) never compares equal after the round trip, so every guarded update
-    // missed and the address got 503 for good. The waiting picks are compared only while they
-    // are comparablePicks (exact both ways, and short); anything else there is planted, and this
-    // update replaces or removes it whenever it writes the metadata.
-    const waiting = plainObject(row.metadata)[PENDING_INTERESTS_KEY];
-    if (waiting === undefined) {
-      query = query.is(PENDING_PATH, null);
-    } else if (comparablePicks(waiting)) {
-      const json = JSON.stringify(waiting);
-      query = query.filter(PENDING_PATH, 'cs', json).filter(PENDING_PATH, 'cd', json);
-    }
+    // picks, it writes the cleaned list in their place. Of the metadata, only the waiting picks,
+    // the one part picksUpdate decides from: a client can insert any metadata, and a value
+    // JavaScript can't hold exactly (a 20-digit number) never compares equal after the round trip,
+    // so every guarded update missed and the address got 503 for good. Planted waiting picks are
+    // replaced or removed whenever this update writes the metadata.)
+    const query = guardOnRead(adminOrUnavailable().from(TABLE).update(fields).eq('id', row.id), row);
     const { data, error } = await query.select(ROW_COLUMNS);
     if (error) raise(error, 'update');
     const written = Array.isArray(data) ? (data[0] as InterestRow | undefined) : undefined;

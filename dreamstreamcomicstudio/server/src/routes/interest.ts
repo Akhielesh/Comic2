@@ -6,8 +6,8 @@ import {
   InterestRetryError,
   InterestUnavailableError,
   getInterestSummary,
+  holdAnswer,
   noteSentDuration,
-  padToSentDuration,
   registerInterest
 } from '../services/interestStore.js';
 import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
@@ -25,8 +25,8 @@ import { formatStudioInterestList, sanitizeStudioInterests, type StudioInterestI
 //   Anyone can type anyone's address, so a valid request ALWAYS gets the same answer:
 //   200 {ok, status:'pending', studios, message} with `studios` echoing only what this request
 //   picked. Whether the address was new, pending, already subscribed, unsubscribed or throttled
-//   is never told, nothing stored is ever echoed, and a request that sent nothing takes about as
-//   long as one that sent the email (padToSentDuration). Other answers are about the request or the
+//   is never told, nothing stored is ever echoed, and a request that sent nothing takes as long
+//   as one that sent the email (holdAnswer holds both). Other answers are about the request or the
 //   service, never the address: 400 invalid_email | invalid_studios | captcha_required |
 //   captcha_failed; 503 email_unavailable (public-form mail has used its share of the email budget,
 //   or the mailer is at its hard cap: both checked before anything about the address, so every
@@ -145,10 +145,9 @@ interestRouter.post('/', async (req, res, next) => {
       }
       result.sent();
       noteSentDuration(startedAt);
-    } else {
-      // Throttled: nothing was sent, so take about as long as a request that sent the email.
-      await padToSentDuration(startedAt);
     }
+    // Sent or throttled, the answer takes the same time (holdAnswer), so it doesn't say which.
+    await holdAnswer(startedAt);
 
     // 6) Sent now, or throttled: the same answer (see the header).
     return res.json(pendingAnswer(studios));

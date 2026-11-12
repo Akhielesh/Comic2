@@ -430,6 +430,63 @@ export const upsertSubscriber = async (
 /** Studio picks a confirmed subscriber asked for that wait for their next confirm click. */
 export const PENDING_INTERESTS_KEY = 'pending_interests';
 
+/** The waiting picks inside metadata, as a PostgREST JSON path (metadata->'pending_interests'). */
+export const PENDING_INTERESTS_PATH = `metadata->${PENDING_INTERESTS_KEY}`;
+
+/** A Postgres text[] literal with every element quoted, so any stored value round-trips in a filter. */
+export const textArrayLiteral = (values: readonly unknown[]): string =>
+  `{${values.map((v) => `"${String(v).replace(/[\\"]/g, (c) => `\\${c}`)}"`).join(',')}}`;
+
+/**
+ * Picks small enough to compare in a guarded update's filter, which travels in the request's
+ * URL: a short list of short strings. The server writes each studio id at most once (the SQL CHECK
+ * holds product_interests to that); twice as many leaves room for an older row with repeats.
+ * Anything else was planted through the old all-column client INSERT grant, or as metadata (which
+ * clients can still insert), and is not compared: a planted list of thousands of strings would
+ * otherwise make every guarded update fail on its URL length, and the address could never register
+ * or confirm. The update that skips the comparison writes the cleaned list in its place whenever it
+ * writes that field.
+ */
+const MAX_COMPARED_PICKS = 2 * STUDIO_INTEREST_IDS.length;
+export const comparablePicks = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= MAX_COMPARED_PICKS && value.every((id) => typeof id === 'string' && id.length <= 64);
+
+/**
+ * Narrow an update on a waitlist_signups row to the row as it was read: the same subscribed state,
+ * the same picks and the same waiting picks (metadata.pending_interests), each compared only while
+ * it has the shape the server writes (comparablePicks; mutual containment is equality for these sets
+ * of studio ids). Never the rest of the client-writable metadata (a value JavaScript can't hold
+ * exactly never compares equal after the round trip). A write that lands has seen exactly what the
+ * caller decided from; a miss means a parallel request changed one of them.
+ */
+export const guardOnRead = <Q extends {
+  eq: (col: string, v: unknown) => Q;
+  is: (col: string, v: null) => Q;
+  not: (col: string, op: string, v: null) => Q;
+  filter: (col: string, op: string, v: string) => Q;
+}>(
+  query: Q,
+  row: { confirmed: boolean; unsubscribed_at?: string | null; product_interests?: unknown; metadata?: unknown }
+): Q => {
+  let q = query.eq('confirmed', row.confirmed);
+  q = row.unsubscribed_at == null ? q.is('unsubscribed_at', null) : q.not('unsubscribed_at', 'is', null);
+  if (comparablePicks(row.product_interests)) {
+    const picks = textArrayLiteral(row.product_interests);
+    q = q.filter('product_interests', 'cs', picks).filter('product_interests', 'cd', picks);
+  } else if (row.product_interests == null) {
+    q = q.is('product_interests', null);
+  }
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? (row.metadata as Record<string, unknown>) : {};
+  const waiting = metadata[PENDING_INTERESTS_KEY];
+  if (waiting === undefined) {
+    q = q.is(PENDING_INTERESTS_PATH, null);
+  } else if (comparablePicks(waiting)) {
+    const json = JSON.stringify(waiting);
+    q = q.filter(PENDING_INTERESTS_PATH, 'cs', json).filter(PENDING_INTERESTS_PATH, 'cd', json);
+  }
+  return q;
+};
+
 export type ConfirmOutcome =
   /** This click opted the address in (new, or back after unsubscribing): send the welcome. */
   | 'confirmed'
@@ -535,9 +592,11 @@ export const inspectConfirmLink = async (email: string, token: string): Promise<
  * `shown` is what the Confirm page said the click subscribes the address to, or adds (its hidden
  * field). Registrations for this address keep arriving while the page is open, and a stranger can
  * send them, so the click applies exactly what was shown: when the row's plan differs now, nothing
- * changes and the answer is 'changed' (the route shows the page again), and the studios written
- * are the shown ones, never a pick that arrived between this read and the write. Without `shown`
- * (a page from before this check), the plan as read here applies.
+ * changes and the answer is 'changed' (the route shows the page again). The write is guarded on the
+ * row as read (guardOnRead, as registerInterest's savePicks is), so a pick that lands between this
+ * read and the write is neither confirmed nor lost: the write misses, the row is read again, and
+ * while this link still holds it the answer is 'changed' too (the page then names that pick). Without
+ * `shown` (a page from before this check), the plan as read here applies.
  */
 export const confirmSubscriber = async (email: string, token: string, shown?: readonly string[]): Promise<ConfirmOutcome | null> => {
   const db = adminOrNull();
@@ -563,18 +622,24 @@ export const confirmSubscriber = async (email: string, token: string, shown?: re
     delete metadata[PENDING_INTERESTS_KEY];
     fields.metadata = metadata;
   }
-  const { data: updated, error } = await db
-    .from('waitlist_signups')
-    .update(fields)
-    .eq('id', row.id)
-    .eq('confirm_token', token)
-    .select('id');
+  // (The rest of the metadata is written back as read: only pending_interests ever changes on a row
+  // the server already holds, through savePicks and markUnsubscribed, and the guard pins it.)
+  const { data: updated, error } = await guardOnRead(
+    db.from('waitlist_signups').update(fields).eq('id', row.id).eq('confirm_token', token),
+    row
+  ).select('id');
   if (error) {
     console.warn('[email] confirmSubscriber update failed', error.message);
     return null;
   }
-  // Another click used this token a moment ago, and it is confirmed now.
-  if (!Array.isArray(updated) || updated.length === 0) return 'already_confirmed';
+  if (!Array.isArray(updated) || updated.length === 0) {
+    // Picks changed since the read (a registration landed in between) while this link still holds
+    // the row: nothing applied, show the page again. Otherwise another click used this token a
+    // moment ago, and the row is confirmed now (or the link is gone).
+    const again = await loadConfirmTarget(db, normalized, token);
+    if (again?.matches) return 'changed';
+    return again && isSubscribedRow(again.row) ? 'already_confirmed' : null;
+  }
   try {
     await db.from('email_suppressions').delete().eq('email', normalized).eq('scope', 'marketing');
   } catch (err) {

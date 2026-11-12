@@ -34,7 +34,12 @@ const h = vi.hoisted(() => {
     raceOnInsert: false,
     isAdmin: false,
     /** Delay every query by this much (0 = synchronous). */
-    latencyMs: 0
+    latencyMs: 0,
+    /**
+     * Runs just before an update is applied (after its latency), so a test can land a parallel
+     * request's write between another request's read and its write. Returns true once it acted.
+     */
+    beforeUpdate: null as null | ((table: string, payload: Row) => boolean)
   };
   const tables: Record<string, Row[]> = { waitlist_signups: [], email_log: [], email_suppressions: [] };
   let seq = 0;
@@ -86,6 +91,7 @@ const h = vi.hoisted(() => {
         else rows.push({ created_at: new Date().toISOString(), ...r });
         return { data: null, error: null, count: null };
       }
+      if (op === 'update' && state.beforeUpdate?.(table, payload as Row)) state.beforeUpdate = null;
       let matched = rows.filter((r) => filters.every((f) => f(r)));
       if (op === 'update') {
         for (const r of matched) Object.assign(r, structuredClone(payload));
@@ -282,7 +288,16 @@ vi.mock('../services/rbac.js', () => ({
 const { interestRouter, adminInterestRouter } = await import('./interest.js');
 const { newsletterRouter } = await import('./newsletter.js');
 const { requireAdmin } = await import('../middleware/requireAdmin.js');
-const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE, checkConfirmThrottle, resetInterestGuardsForTests } = await import('../services/interestStore.js');
+const {
+  ANSWER_FLOOR_MS,
+  CONFIRM_EMAIL_BUDGET_SHARE,
+  INTEREST_CONFIRM_THROTTLE,
+  answerTargetMs,
+  checkConfirmThrottle,
+  holdAnswer,
+  noteSentDuration,
+  resetInterestGuardsForTests
+} = await import('../services/interestStore.js');
 const { WAITLIST_PRODUCTS, inboxKey } = await import('../services/emailStore.js');
 const { STUDIO_INTEREST_IDS } = await import('../../../services/studioInterests.js');
 
@@ -318,13 +333,14 @@ beforeEach(() => {
     rpcMissing: false,
     raceOnInsert: false,
     isAdmin: false,
-    latencyMs: 0
+    latencyMs: 0,
+    beforeUpdate: null
   });
   h.tables.waitlist_signups = [];
   h.tables.email_log = [];
   h.tables.email_suppressions = [];
-  // In-memory per-inbox claims and answer timings (interestStore.ts): fresh per test, no padding.
-  resetInterestGuardsForTests({ defaultSentMs: 0 });
+  // In-memory per-inbox claims and answer timings (interestStore.ts): fresh per test, no floor.
+  resetInterestGuardsForTests({ answerFloorMs: 0 });
   h.sendNewsletterConfirm.mockClear();
   h.sendNewsletterWelcome.mockClear();
   h.sendAccessRequested.mockClear();
@@ -936,14 +952,48 @@ describe('POST /api/interest — per-inbox claim, the mailer cap, and answer tim
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it('an answer that sent nothing (throttled) takes about as long as one that sent the email', async () => {
-    resetInterestGuardsForTests({ defaultSentMs: 250 });
-    h.logSend('ada@example.com', 'newsletter-confirm', 'sent'); // a link went out a moment ago
-    const started = Date.now();
-    const res = await register();
-    expect(res.body.status).toBe('pending');
-    expect(h.sendNewsletterConfirm).not.toHaveBeenCalled();
-    expect(Date.now() - started).toBeGreaterThanOrEqual(230);
+  it('an answer that sent the email and one that sent nothing (throttled) are held to the same time, also before any send on this instance', async () => {
+    resetInterestGuardsForTests({ answerFloorMs: 250 });
+    const timed = async (over: Record<string, unknown>) => {
+      const started = Date.now();
+      const res = await register(over);
+      return { ms: Date.now() - started, body: res.body };
+    };
+    // Nothing sent yet on this instance (just started): both are held to the floor.
+    h.logSend('recent@example.com', 'newsletter-confirm', 'sent'); // a link went out a moment ago
+    const throttled = await timed({ email: 'recent@example.com' });
+    const sent = await timed({ email: 'fresh@example.com' });
+    expect([throttled.body.status, sent.body.status]).toEqual(['pending', 'pending']);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    for (const t of [throttled, sent]) expect(t.ms).toBeGreaterThanOrEqual(240);
+    expect(Math.abs(throttled.ms - sent.ms)).toBeLessThan(120);
+  });
+
+  it('the time every answer is held to: the floor (from the first request), or longer while recent sends took longer, up to the mailer\'s timeout', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    try {
+      resetInterestGuardsForTests(); // production settings
+      expect(ANSWER_FLOOR_MS).toBeGreaterThanOrEqual(1500);
+      expect(answerTargetMs()).toBe(ANSWER_FLOOR_MS);
+      let done = false;
+      void holdAnswer(Date.now()).then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(ANSWER_FLOOR_MS - 50);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(done).toBe(true);
+      // A slow email worker: a send took 9 s. Every answer now takes that long (not 3 s).
+      noteSentDuration(Date.now() - 9_000);
+      expect(answerTargetMs()).toBe(9_000);
+      done = false;
+      void holdAnswer(Date.now()).then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(8_900);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      resetInterestGuardsForTests({ answerFloorMs: 0 });
+    }
   });
 });
 
@@ -1169,6 +1219,46 @@ describe('POST /api/interest — rows planted, links re-sent, parallel picks, in
     expect(res.status).toBe(200);
     expect(row()).toMatchObject({ confirmed: false });
     expect(await res.text()).toContain('Press Confirm to get DreamStream updates about <strong>Comic Studio and Stream Studio</strong>');
+  });
+
+  it('a pick that lands between the click\'s read and its write is neither confirmed nor lost: the page is shown again with it', async () => {
+    await register({ studios: ['comic_studio'] });
+    const page = await (await openLink('ada@example.com', tokenFromLastEmail())).text();
+    // A parallel (throttled) registration for Stream Studio saves its pick just before the click's
+    // write lands, as savePicks would: the click read the row before that.
+    h.state.beforeUpdate = (table, payload) => {
+      if (table !== 'waitlist_signups' || payload.confirmed !== true) return false;
+      row().product_interests = ['comic_studio', 'stream_studio'];
+      return true;
+    };
+    const res = await pressConfirmOnPage(page);
+    expect(res.status).toBe(200);
+    const shownAgain = await res.text();
+    expect(shownAgain).toContain('The studios on this page changed after it opened');
+    expect(shownAgain).toContain('Press Confirm to get DreamStream updates about <strong>Comic Studio and Stream Studio</strong>');
+    expect(row()).toMatchObject({ confirmed: false, product_interests: ['comic_studio', 'stream_studio'] });
+    // The link still works, and confirming that page subscribes both.
+    expect((await pressConfirmOnPage(shownAgain)).status).toBe(303);
+    expect(row()).toMatchObject({ confirmed: true, product_interests: ['comic_studio', 'stream_studio'] });
+  });
+
+  it('the same for a subscriber: a pick waiting for this click that arrives mid-click stays waiting, and the page names it', async () => {
+    await register({ studios: ['comic_studio'] });
+    await pressConfirmOnPage(await (await openLink('ada@example.com', tokenFromLastEmail())).text());
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    await register({ studios: ['stream_studio'] });
+    const page = await (await openLink('ada@example.com', tokenFromLastEmail())).text();
+    expect(page).toContain('Pressing Confirm also adds <strong>Stream Studio</strong>.');
+    h.state.beforeUpdate = (table, payload) => {
+      if (table !== 'waitlist_signups' || payload.confirmed !== true) return false;
+      row().metadata = { ...(row().metadata as Row), pending_interests: ['stream_studio', 'chat_studio'] };
+      return true;
+    };
+    const res = await pressConfirmOnPage(page);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/Pressing Confirm also adds <strong>[^<]*Chat Studio[^<]*<\/strong>\./);
+    expect(row().product_interests).toEqual(['comic_studio']);
+    expect((row().metadata as Row).pending_interests).toEqual(['stream_studio', 'chat_studio']);
   });
 
   it('the Confirm page escapes what it shows', async () => {

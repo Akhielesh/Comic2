@@ -159,21 +159,43 @@ export const DIRECT_AI_PROVIDERS = [
 ] as const;
 
 /**
- * Chat Studio's memory notes are written by POST /api/chat/memory (server/src/routes/chat.ts). The
- * client sends no source with it (services/chatApi.ts updateChatMemory), so the provider comes from
- * the X-Text-Source header (the app-wide pick under Settings → API & Models) or, with none, the
- * first key in AUTO_PROVIDER_ORDER (OpenRouter), and the model is OPENROUTER_TEXT_MODEL (default in
- * server/src/config.ts; no override in api-proxy/wrangler.jsonc). Not the chat's own model.
+ * Chat Studio's memory notes are written two ways (server/src/routes/chat.ts), both sending the
+ * latest messages and the answer to a model:
+ *  - after an answer, by the server (maybeAutoRemember: at most every 5 minutes per account, not on
+ *    a free-models-only turn), through the provider and key that turn used (p.resolved: the chat's
+ *    own source, body.source, before the X-Text-Source header);
+ *  - from the app, by POST /api/chat/memory (services/chatApi.ts updateChatMemory sends no source),
+ *    through the X-Text-Source header (the app-wide pick under Settings → API & Models) or, with
+ *    none, the first key in AUTO_PROVIDER_ORDER (OpenRouter).
+ * On OpenRouter both use OPENROUTER_TEXT_MODEL (default in server/src/config.ts; no override in
+ * api-proxy/wrangler.jsonc), with TEXT_FALLBACK (server/src/ai/autoRouter.ts) when it fails; on
+ * NVIDIA its own text model. The quick-finder's requests are chat turns too (see QUICK_FINDER).
  */
-export const MEMORY_NOTE_MODEL = { id: 'google/gemini-2.5-flash', label: "Google's Gemini 2.5 Flash" } as const;
+export const MEMORY_NOTE_MODEL = {
+    id: 'google/gemini-2.5-flash',
+    label: "Google's Gemini 2.5 Flash",
+    fallbackId: 'openai/gpt-4o-mini',
+    fallbackLabel: "OpenAI's GPT-4o mini"
+} as const;
 
 /**
- * Every signed-in Chat Studio turn embeds the last user message with Google's Gemini embedding API
- * to search memory (server/src/ai/chat.ts → buildUserMemoryBlock → retrieveUserMemories →
- * embedText(query, 'RETRIEVAL_QUERY'), server/src/services/userMemory.ts), whatever provider answers;
- * embedText sends at most this many characters.
+ * Every signed-in chat turn (Chat Studio, and the quick-finder, which posts to the same
+ * /api/chat/stream) embeds the last user message with Google's Gemini embedding API to search memory
+ * (server/src/ai/chat.ts → buildUserMemoryBlock → retrieveUserMemories → embedText(query,
+ * 'RETRIEVAL_QUERY'), server/src/services/userMemory.ts), whatever provider answers, unless memory is
+ * turned off for the account (buildUserMemoryBlock returns before any of it); embedText sends at
+ * most this many characters.
  */
 export const MEMORY_SEARCH_MAX_CHARS = 8000;
+
+/**
+ * The quick-finder (components/QuickFinder.tsx): select text on any page App shows it on (every view
+ * but the ones in hiddenOn: App.tsx showQuickFinder) and pick Explain, Define, Summarize and so on.
+ * It sends up to selectionChars characters of the selection, with the client context, to Chat
+ * Studio's backend (sendChatMessageStream → /api/chat/stream, signed in only), so memory search,
+ * connected-account context and memory notes apply as for a Chat Studio message.
+ */
+export const QUICK_FINDER = { selectionChars: 4000, hiddenOn: ['auth-callback', 'auth', 'shared', 'publiccomic'] } as const;
 
 /** Production keeps Stripe billing off (api-proxy/wrangler.jsonc BILLING_ENABLED "false"). */
 export const BILLING_LIVE = false;

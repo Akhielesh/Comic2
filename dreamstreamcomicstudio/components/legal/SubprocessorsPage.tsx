@@ -39,14 +39,14 @@ export const CORE: Subprocessor[] = [
 export const AI_PROVIDERS: Subprocessor[] = [
     {
         name: 'OpenRouter',
-        purpose: `Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it, and Chat Studio's memory notes are written through it (today by ${MEMORY_NOTE_MODEL.label}) unless you picked another provider under Settings → API & Models.`,
+        purpose: `Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it. Chat Studio's memory notes are written through it whenever the chat, or your pick under Settings → API & Models, uses OpenRouter (with no pick, it does): today by ${MEMORY_NOTE_MODEL.label}, or ${MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.`,
         data: `What a request needs: your prompt and conversation, attached files, memory notes, your approximate location, timezone and language, items from connected accounts included in it, and Comic Studio project content. For the site-wide assistant: what you type, the page you're on and, if you're signed in, your username, masked email, plan and a summary of your Comic Studio projects, plus, for the project you have open, its story overview, the first ${ASSISTANT_SCRIPT_PREVIEW_CHARS} characters of its script and its style, layout and cover prompts.`,
         where: 'OpenRouter, and the model provider it routes to'
     },
     {
         name: 'Google (Gemini API)',
         purpose: 'Text, image and vision models for Comic Studio and Chat Studio, and making memory notes searchable and searching them.',
-        data: 'The same request content as above when a Gemini model does the work; the text of each memory note; and the text of each Chat Studio message you send while signed in (to search your memory notes), whichever model answers it.',
+        data: 'The same request content as above when a Gemini model does the work; the text of each memory note; and the text of each message you send in Chat Studio or through the quick-finder while signed in (to search your memory notes, unless memory is turned off for your account), whichever model answers it.',
         where: PROVIDER_LOCATION
     },
     {
@@ -57,7 +57,7 @@ export const AI_PROVIDERS: Subprocessor[] = [
     },
     {
         name: 'Ideogram, Pixazo (Flux)',
-        purpose: 'Image generation when you choose these image models.',
+        purpose: 'Image generation when you choose these image models. In the classic editor and Page Studio, Ideogram also when the Gemini image models fail, with your own Ideogram key or an account that has access to it.',
         data: 'Your image prompt and settings.',
         where: PROVIDER_LOCATION
     }

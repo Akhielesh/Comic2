@@ -126,14 +126,55 @@ describe('legal suite: every document renders as a complete page', () => {
         fireEvent.click(aup, { metaKey: true });
         expect(onOpenDoc).not.toHaveBeenCalled();
 
-        // A link to a section of another page is a real load, so the browser lands on the anchor.
+        // A link to a section of another page opens it in the app too, on its own marked entry that
+        // names the section (the page lands on it once mounted), so its Back button returns here.
         onOpenDoc.mockClear();
+        window.history.replaceState(legalEntryState(), '', '/privacy');
+        const before = window.history.length;
         const privacy = renderDoc('privacy', onOpenDoc).main;
         const youtubeTerms = privacy.querySelector('#google-user-data a[href="/terms#youtube"]') as HTMLAnchorElement;
         expect(youtubeTerms).toHaveTextContent('Terms of Service');
-        fireEvent.click(youtubeTerms);
+        fireEvent.click(youtubeTerms, { ctrlKey: true });
         expect(onOpenDoc).not.toHaveBeenCalled();
+        fireEvent.click(youtubeTerms);
+        expect(onOpenDoc).toHaveBeenCalledWith('terms');
+        expect(`${window.location.pathname}${window.location.hash}`).toBe('/terms#youtube');
+        expect(window.history.length).toBe(before + 1);
+        expect(window.history.state).toEqual(legalEntryState());
         document.removeEventListener('click', swallow);
+    });
+
+    it('a jump to a section of the page shown (the table of contents, a link in the text) stays on the same history entry and keeps its mark', () => {
+        const scroll = vi.fn();
+        Element.prototype.scrollIntoView = scroll;
+        for (const [id, pick] of [
+            ['privacy', (main: HTMLElement) => within(within(main).getByRole('navigation', { name: 'On this page' })).getAllByRole('link')[0]],
+            ['acceptable-use', (main: HTMLElement) => main.querySelector('a[href="#enforcement"]') as HTMLAnchorElement],
+            ['terms', (main: HTMLElement) => within(within(main).getByRole('navigation', { name: 'On this page' })).getAllByRole('link').at(-1) as HTMLElement]
+        ] as const) {
+            window.history.replaceState(legalEntryState(), '', legalPath(id));
+            const before = window.history.length;
+            const { main, unmount } = renderDoc(id);
+            const link = pick(main);
+            const section = (link.getAttribute('href') as string).slice(1);
+            scroll.mockClear();
+            fireEvent.click(link);
+            expect(`${window.location.pathname}${window.location.hash}`, id).toBe(`${legalPath(id)}#${section}`);
+            expect(window.history.length, id).toBe(before);
+            expect(window.history.state, id).toEqual(legalEntryState());
+            expect(scroll.mock.contexts[0], id).toHaveProperty('id', section);
+            expect(document.activeElement, id).toHaveProperty('id', section);
+            unmount();
+        }
+        // A modified click is the browser's (a new tab, a copied link).
+        window.history.replaceState(legalEntryState(), '', '/privacy');
+        const { main } = renderDoc('privacy');
+        const first = within(within(main).getByRole('navigation', { name: 'On this page' })).getAllByRole('link')[0];
+        const swallow = (e: MouseEvent) => e.preventDefault();
+        document.addEventListener('click', swallow);
+        fireEvent.click(first, { metaKey: true });
+        document.removeEventListener('click', swallow);
+        expect(window.location.hash).toBe('');
     });
 
     it('drops the old #fragment when it opens another document, so the next one starts at the top', () => {
@@ -235,7 +276,9 @@ describe('Privacy Policy', () => {
         const item = (label: string) => items.find((t) => t.startsWith(label)) ?? '';
         const interest = item('Updates and interest registrations (double opt-in):');
         expect(interest).toContain('if you sign up for updates or register interest in a studio');
-        expect(interest).toContain('We then email you a confirmation link, and nothing else until you press Confirm.');
+        // "No updates", not "nothing else": a service announcement can reach any address we hold.
+        expect(interest).toContain('We then email you a confirmation link, and no updates until you press Confirm (service announcements, above, can still reach the address).');
+        expect(interest).not.toContain('nothing else until you press Confirm');
         // A repeat registration (anyone can type the address) re-sends it, within the throttle...
         expect(interest).toContain(
             `If the address is registered again, by you or by anyone who types it in, we send the confirmation email again, at most once every ${CONFIRM_EMAIL_LIMITS.minIntervalMinutes} minutes and ${CONFIRM_EMAIL_LIMITS.maxPerDay} times in any 24 hours.`
@@ -251,7 +294,7 @@ describe('Privacy Policy', () => {
         expect(interest).not.toMatch(/confirm we received it|pending invitation/);
         const access = item('Early access requests:');
         expect(access).toContain('When our server handles the request, it first checks whether your address already has an account, a pending invitation or an earlier request');
-        expect(access).toContain('otherwise it emails you to confirm we received it');
+        expect(access).toContain('otherwise it usually emails you to confirm we received it');
         // services/waitlist.ts falls back to a direct insert when the backend doesn't answer normally.
         expect(access).toContain('your browser saves the request directly instead, without that email or check');
         const unsub = item('Unsubscribing');
@@ -440,24 +483,35 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
     it('Privacy and Subprocessors: memory search and memory notes, NVIDIA in Comic Studio, announcements, sign-out and the new retention rows', () => {
         const privacyMain = renderDoc('privacy').main;
         const privacy = textOf(privacyMain);
-        expect(privacy).toContain("the text of each message you send in Chat Studio while signed in (up to the first 8,000 characters) is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
-        expect(privacy).toContain("a model DreamStream picks, today Google's Gemini 2.5 Flash through OpenRouter");
-        expect(privacy).toContain("each message you send is also sent to Google's Gemini API to search your memory notes, whichever provider you choose");
+        expect(privacy).toContain("the text of each message you send in Chat Studio or through the quick-finder while signed in (up to the first 8,000 characters) is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
+        expect(privacy).toContain("Through OpenRouter the model is one DreamStream picks, today Google's Gemini 2.5 Flash, or OpenAI's GPT-4o mini when that one is unavailable.");
+        expect(privacy).toContain('after an answer (at most once every five minutes), through the provider that answered it, with the same key');
+        expect(privacy).toContain("each message you send is also sent to Google's Gemini API to search your memory notes, whichever provider you choose (unless memory is turned off for your account)");
         expect(privacy).toContain("Google's Gemini API, NVIDIA, or a model reached through OpenRouter");
         expect(privacy).toContain('service announcements our team writes and sends by hand');
-        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or discard them, and only the account that made them is offered them.");
+        // Sign-out and unsaved recordings: who is offered one, including ones no account made, and
+        // what another account at the device can see and do (live/recorder.unit.test.ts checks it).
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account signed in there when this version first ran or, if none was, is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them.");
+        expect(privacy).not.toContain('only the account that made them is offered them');
         expect(privacy).not.toContain('the Stream Studio data on that device is removed');
         const retention = textOf(privacyMain.querySelector('#retention') as HTMLElement);
         expect(retention).toContain("Invitations you send (the invitee's address, who invited them and how many times)");
         expect(retention).toContain('Usage and cost records');
         const subs = renderDoc('subprocessors').main;
         const gemini = AI_PROVIDERS.find((p) => p.name === 'Google (Gemini API)')!;
-        expect(gemini.data).toContain('the text of each Chat Studio message you send while signed in (to search your memory notes), whichever model answers it');
-        expect(AI_PROVIDERS.find((p) => p.name === 'OpenRouter')!.purpose).toContain("Chat Studio's memory notes are written through it");
+        expect(gemini.data).toContain('the text of each message you send in Chat Studio or through the quick-finder while signed in (to search your memory notes, unless memory is turned off for your account), whichever model answers it');
+        expect(AI_PROVIDERS.find((p) => p.name === 'OpenRouter')!.purpose).toContain("Chat Studio's memory notes are written through it whenever the chat, or your pick under Settings → API & Models, uses OpenRouter");
+        expect(AI_PROVIDERS.find((p) => p.name === 'Ideogram, Pixazo (Flux)')!.purpose).toContain('In the classic editor and Page Studio, Ideogram also when the Gemini image models fail');
         expect(textOf(subs.querySelector('#ai-models') as HTMLElement)).toContain("NVIDIA also does Comic Studio's writing steps");
         const cookies = textOf(renderDoc('cookies').main.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
-        expect(cookies).toContain("Recordings you made but haven't saved stay on the device until you save or discard them, and only the account that made them is offered them.");
+        // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
+        expect(cookies).toContain('the names of people you called and the name you used as a viewer) and ends its alert subscription. Three things stay.');
+        expect(cookies).toContain("This browser's baby-monitor encryption keys stay: its own keys, its copies of nursery keys, and which cameras it has seen encrypt");
+        expect(cookies).toContain("Changes to your call favourites and blocks that haven't reached our server yet stay, for your account only, until they do.");
+        expect(cookies).toContain('Each is offered only to the account its studio was opened for.');
+        expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them.');
+        expect(cookies).not.toContain('only the account that made them is offered them');
     });
 
     it('Privacy: API keys, the assistant, usage events, location, images, emails, events and sign-in records', () => {
@@ -810,6 +864,55 @@ describe('Back from a legal page shows the view the entry names (App routing in 
         pageBack();
         await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
         expect(address()).toBe('/?view=gallery');
+    });
+
+    it('Gallery → footer Privacy Policy → a table-of-contents entry → the page\'s Back button → Gallery, at /?view=gallery with no #section left', async () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        window.history.replaceState({}, '', '/?view=gallery');
+        const before = window.history.length;
+        render(<Shell initial="gallery" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        const toc = within(screen.getByRole('navigation', { name: 'On this page' })).getAllByRole('link');
+        fireEvent.click(toc[0]);
+        fireEvent.click(toc[3]);
+        expect(window.location.hash).toBe(toc[3].getAttribute('href'));
+        // The jumps stayed on the document's entry (one entry above Gallery's), so Back lands on Gallery.
+        expect(window.history.length).toBe(before + 1);
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(window.location.href).toBe(`${window.location.origin}/?view=gallery`);
+    });
+
+    it('Gallery → footer Terms → a link to a section of the Privacy Policy → Back button → Terms → Back button → Gallery', async () => {
+        const scroll = vi.fn();
+        Element.prototype.scrollIntoView = scroll;
+        window.history.replaceState({}, '', '/?view=gallery');
+        render(<Shell initial="gallery" />);
+        clickFooter('Terms of Service');
+        await heading('Terms of Service');
+        fireEvent.click(screen.getByRole('link', { name: 'Children section of the Privacy Policy' }));
+        await heading('Privacy Policy');
+        // It opened in the app on the section, on an entry of its own.
+        expect(`${window.location.pathname}${window.location.hash}`).toBe('/privacy#children');
+        expect(scroll.mock.contexts.at(-1)).toHaveProperty('id', 'children');
+        pageBack();
+        await heading('Terms of Service');
+        expect(`${window.location.pathname}${window.location.hash}`).toBe('/terms');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(address()).toBe('/?view=gallery');
+    });
+
+    it('a document loaded cold, then a table-of-contents entry: the Back button goes to the Dashboard, and its address keeps no #section', () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        window.history.replaceState({}, '', '/privacy');
+        render(<Shell initial="privacy" />);
+        fireEvent.click(within(screen.getByRole('navigation', { name: 'On this page' })).getAllByRole('link')[0]);
+        expect(window.location.hash).not.toBe('');
+        pageBack();
+        expect(screen.getByText('View: dashboard')).toBeInTheDocument();
+        expect(window.location.href).toBe(`${window.location.origin}/?view=dashboard`);
     });
 
     it('a document loaded cold (nothing in this visit opened it): the Back button stays in the app (Dashboard, or Home signed out)', () => {

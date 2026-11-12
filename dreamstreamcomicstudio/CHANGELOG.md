@@ -26,21 +26,38 @@ All notable user-facing changes. Format loosely follows
 
 - **Register interest (2026-11):** the home page's "stay updated" form lets you pick the studios
   you want to hear about (Comic, Stream, Chat, Atlas, future studios). It is the updates double
-  opt-in: one email with a link that opens a Confirm page, and nothing else until you press
+  opt-in: one email with a link that opens a Confirm page, and no updates until you press
   Confirm there. Anyone can type any address, so every request gets the same answer, at most one
-  confirmation email goes to an inbox every 10 minutes (3 a day, all aliases of the address
-  counted together), and a subscriber's picks change only when they press Confirm.
+  confirmation email goes to an inbox every 10 minutes (3 a day, the address's +tag and Gmail dot
+  spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
+- **Legal suite and register interest, fifth review (2026-11-12):** a legal page's Back button
+  now returns to the page that opened it after you use its table of contents or a link to a
+  section (those jumps stay on the same history entry, and a link to a section of another
+  document opens it in the app), and the home page's and Comics landing's footers and the sign-up
+  form's consent links now give the document its own history entry, so Back returns there
+  instead of leaving the site. The Privacy Policy now describes both ways memory notes are written
+  (after an answer, through the provider that answered; from Chat Studio, through your pick under
+  Settings → API & Models), OpenAI's GPT-4o mini as the fallback model, what turning memory off
+  does and doesn't stop, the quick-finder (selected text goes to Chat Studio's AI on every page
+  but sign-in and shared comics), Ideogram in the classic editor, and the early-access receipt's
+  real limits. The confirmation email no longer says "nothing happens" if you ignore it, and says
+  how to have your address removed. A Confirm click that races a new registration shows the page
+  again instead of dropping the new pick, and a throttled answer now takes as long as a sent one
+  from the first request after the backend wakes. In Stream Studio, a recording started after a
+  sign-out elsewhere still belongs to the host, unsaved recordings are never pushed off the list
+  (and old orphaned copies are deleted on start), another account's leftover recordings can be
+  deleted from the dashboard without seeing them, older untagged recordings no longer go to
+  whoever lists them first, and signing out also removes the names of people you called.
 - **Legal suite and register interest, final review (2026-11-12):** the Privacy Policy now says
   that each Chat Studio message you send while signed in also goes to Google's Gemini API to
-  search your memory notes, whichever model answers, and that memory notes are written by the
-  provider you picked for all of DreamStream (or Gemini 2.5 Flash through OpenRouter), not the
-  chat's. Comic Studio's writing steps name NVIDIA, Supabase is listed among the services your
+  search your memory notes, whichever model answers, and describes how memory notes are written
+  (corrected in the fifth review). Comic Studio's writing steps name NVIDIA, Supabase is listed among the services your
   browser loads, team announcements are named as service email without an unsubscribe link, and
   invitations and usage records have retention rows. Signing out of Stream Studio now also
   removes the name you used as a viewer, and recordings you never saved are offered only to the
-  account that made them. A legal page's own Back button now does what the browser's Back does
+  account they were made for. A legal page's own Back button now does what the browser's Back does
   (back to Settings on its Legal tab, the gallery, a shared comic, the reader, the editor or a
   profile). The register-interest and early-access emails can't be multiplied with address
   aliases or parallel requests, early-access receipts go once a day per inbox and share the

@@ -125,20 +125,40 @@ const entryHasBackLayers = (): boolean => {
  * /models, a comic in the reader, the project open in a workspace), and only an entry that names no
  * view App can show falls back to Dashboard or Home. The entry is marked (legalEntryState), so the
  * page's own Back button does the same as the browser's Back. The new entry carries no #fragment, so
- * the document starts at its top. Back and Forward onto it reopen the document (followLegalHistory).
+ * the document starts at its top, unless `section` names one to land on (a link to a section of
+ * another document: LegalDocument lands on it once that page is in the DOM). Back and Forward onto it
+ * reopen the document (followLegalHistory).
  *
  * Not on an entry a back-stack layer owns: the reader leaves its layer first, which pops that
  * layer's entry, and App's address sync then puts the document's path on the entry under it. A new
  * entry here would hide the layer's entry from that leave and strand it in the history.
  */
-export const pushLegalPath = (id: LegalDocId): void => {
+export const pushLegalPath = (id: LegalDocId, section?: string): void => {
   try {
     if (entryHasBackLayers()) return;
     const path = legalPath(id);
-    if (window.location.pathname === path && !window.location.hash && !window.location.search) return;
-    window.history.pushState(legalEntryState(), '', path);
+    const fragment = section ? `#${section}` : '';
+    if (window.location.pathname === path && window.location.hash === fragment && !window.location.search) return;
+    window.history.pushState(legalEntryState(), '', `${path}${fragment}`);
   } catch {
     clearFragment();
+  }
+};
+
+/**
+ * A move to a #section of the document already shown puts that fragment on the CURRENT history
+ * entry, with the entry's state as it is. The browser's own fragment navigation (a plain
+ * <a href="#id">) would add an entry with no state: that loses the mark (legalEntryState), so the
+ * page's Back button would no longer know this visit opened the document and would leave for the
+ * Dashboard instead of the page the reader came from, and it and the browser's Back would disagree.
+ * Returns false when history can't be written (the caller then lets the browser move).
+ */
+export const replaceLegalFragment = (section: string): boolean => {
+  try {
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#${section}`);
+    return true;
+  } catch {
+    return false;
   }
 };
 

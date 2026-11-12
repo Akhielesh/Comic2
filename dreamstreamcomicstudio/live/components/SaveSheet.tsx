@@ -44,7 +44,7 @@ import { CLOUD_COPY_DRIVE_TIP, CLOUD_COPY_HEAD, FREE_CHIP, allowanceLevel, cloud
 import { addSave, type SaveDest } from '../usage/ledger';
 import { fmtBytes, fmtDuration } from '../metrics';
 import { cloudCopyNoticePending, loadPrefs, markCloudCopyNoticeSeen, savePrefs, type StudioPrefs } from '../prefs';
-import { discardOpfsRecording, removeUnsaved, type FinishedRecording } from '../recorder';
+import { discardOpfsRecording, removeUnsaved, sweepOrphanRecordings, type FinishedRecording } from '../recorder';
 import {
   DRIVE_UPLOAD_URL,
   canPickFolder,
@@ -74,17 +74,25 @@ function discardLater(name: string | null): void {
   } catch { /* storage unavailable */ }
 }
 
-/** Run on app start: purge disk copies of recordings downloaded >1 h ago. */
+/**
+ * Run on app start: purge disk copies of recordings downloaded >1 h ago, then any disk copy no list
+ * names any more (recorder.ts sweepOrphanRecordings; the ones still waiting here are spared).
+ */
 export async function sweepDiscardedRecordings(): Promise<void> {
+  const keep: { name: string; at: number }[] = [];
   try {
     const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as { name: string; at: number }[];
-    const keep: typeof list = [];
     for (const item of list) {
       if (Date.now() - item.at > 60 * 60_000) await discardOpfsRecording(item.name);
       else keep.push(item);
     }
     localStorage.setItem(DISCARD_KEY, JSON.stringify(keep));
-  } catch { /* storage unavailable */ }
+  } catch {
+    // Storage unavailable or unreadable: without this list nothing can tell an orphan from a
+    // download in progress, so no disk copy is touched.
+    return;
+  }
+  await sweepOrphanRecordings(keep.map((item) => item.name));
 }
 
 type Target = StudioPrefs['saveTarget'];

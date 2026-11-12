@@ -97,23 +97,27 @@ describe('unsaved recordings after a sign-out (the Cookies notice and Privacy Po
     purgeLiveAccountData(); // u-a signs out
     // The host's unsaved work isn't deleted...
     expect(JSON.parse(localStorage.getItem('ds-live-unsaved-recordings') || '[]')).toHaveLength(3);
-    // ...but the next person to sign in here is never offered it, nor is a signed-out visitor.
-    expect(unsavedRecordingsOf('u-b').map((r) => r.name)).toEqual(['ds-rec-b']);
+    // ...but the next person to sign in here is never offered A's, nor is a signed-out visitor; one
+    // no account made is offered to anyone (live/recorder.unit.test.ts has the rest).
+    expect(unsavedRecordingsOf('u-b').map((r) => r.name)).toEqual(['ds-rec-b', 'ds-rec-anon']);
     expect(unsavedRecordingsOf(null).map((r) => r.name)).toEqual(['ds-rec-anon']);
-    expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-a']);
+    expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-a', 'ds-rec-anon']);
   });
 
-  it('an entry from before recordings carried an owner goes to whoever lists it first, and stays theirs', () => {
-    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-old')]));
-    expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-old']);
-    expect(unsavedRecordingsOf('u-b')).toEqual([]);
-    expect(unsavedRecordingsOf('u-a').map((r) => r.owner)).toEqual(['u-a']);
-  });
-
-  it('a new recording is tagged with the account signed in when it starts', () => {
+  it('a new recording is tagged with the account it was made for, and the dashboard re-reads on sign-in and sign-out', () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'recorder.ts'), 'utf8');
-    expect(src).toContain('private readonly owner: string | null = deviceOwner(),');
     expect(src).toMatch(/upsertUnsaved\(\{[\s\S]*?owner: this\.owner,\s*\}\);/);
     expect(read('live/views/DashboardView.tsx')).toContain('}, [saving, account.userId, account.status]);');
+  });
+
+  it('removes the names of people you called and the room capabilities it remembered; keeps the monitor\'s encryption keys and unconfirmed call-list changes (the Cookies notice says so)', () => {
+    localStorage.setItem('ds-call-names', '{"u-x":"Sam"}');
+    localStorage.setItem('ds-calls-ok', '["u-x"]');
+    localStorage.setItem('ds-monitor-caps-n1', '["e2e1"]');
+    localStorage.setItem('ds-e2e-cams-n1', '{"cam":"dev"}');
+    localStorage.setItem('ds-call-pending:u-a', '[{"t":"block","uid":"u-x","name":"Sam","on":true}]');
+    purgeLiveAccountData();
+    for (const k of ['ds-call-names', 'ds-calls-ok', 'ds-monitor-caps-n1']) expect(localStorage.getItem(k), k).toBeNull();
+    for (const k of ['ds-e2e-cams-n1', 'ds-call-pending:u-a']) expect(localStorage.getItem(k), k).not.toBeNull();
   });
 });

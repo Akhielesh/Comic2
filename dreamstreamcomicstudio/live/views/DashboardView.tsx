@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { probeLiveWorker, type LiveWorkerProbeResult } from '../api';
 import { addMyEvent, findMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
 import { SaveSheet } from '../components/SaveSheet';
-import { listUnsavedRecordings, openUnsavedRecording, type FinishedRecording, type UnsavedRecording } from '../recorder';
+import { discardOtherAccountsUnsaved, listUnsavedRecordings, openUnsavedRecording, otherAccountsUnsaved, type FinishedRecording, type UnsavedRecording } from '../recorder';
 import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
@@ -145,13 +145,28 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   // Re-read on sign-in / sign-out: the last account's events must not linger.
   const recordings = useMemo(listMyRecordings, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
+  // Unsaved recordings other accounts left here: a count and their size only (recorder.ts).
+  const [others, setOthers] = useState({ count: 0, bytes: 0 });
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
   const quick = useQuickStart(nav);
 
   // Only the signed-in account's own unsaved recordings (recorder.ts), so re-read on sign-in / sign-out too.
   useEffect(() => {
     void listUnsavedRecordings().then(setUnsaved).catch(() => undefined);
+    setOthers(otherAccountsUnsaved());
   }, [saving, account.userId, account.status]);
+
+  const deleteOthers = () => {
+    const one = others.count === 1;
+    const what = one ? 'the unsaved recording' : `the ${others.count} unsaved recordings`;
+    if (!window.confirm(`Delete ${what} another account left on this device (${fmtBytes(others.bytes)})? Only that account could save ${one ? 'it' : 'them'}. This cannot be undone.`)) return;
+    void discardOtherAccountsUnsaved()
+      .then((n) => {
+        setOthers(otherAccountsUnsaved());
+        push(n === 1 ? 'Deleted 1 recording' : `Deleted ${n} recordings`, { icon: 'check' });
+      })
+      .catch(() => undefined);
+  };
 
   const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
     setCheckingBackend(true);
@@ -425,6 +440,14 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+          {others.count > 0 && (
+            <div className="card card-pad">
+              <p className="faint" style={{ margin: '0 0 8px' }}>
+                {others.count === 1 ? '1 unsaved recording' : `${others.count} unsaved recordings`} from another account on this device {others.count === 1 ? 'uses' : 'use'} {fmtBytes(others.bytes)}. Only that account can save {others.count === 1 ? 'it' : 'them'}.
+              </p>
+              <Btn variant="ghost" size="sm" icon="trash" onClick={deleteOthers}>Delete {others.count === 1 ? 'it' : 'them'}</Btn>
             </div>
           )}
           <button className="card card-pad monitor-promo" onClick={() => nav.monitor()}>

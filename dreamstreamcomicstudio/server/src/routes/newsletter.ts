@@ -21,8 +21,8 @@ import {
   InterestRetryError,
   InterestUnavailableError,
   claimAccessReceipt,
+  holdAnswer,
   noteSentDuration,
-  padToSentDuration,
   registerInterest
 } from '../services/interestStore.js';
 import { resendPendingInvite } from '../services/invites.js';
@@ -196,10 +196,9 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       }
       result.sent();
       noteSentDuration(startedAt);
-    } else {
-      // Throttled: as long as a request that sent the email (see routes/interest.ts).
-      await padToSentDuration(startedAt);
     }
+    // Sent or throttled: the same time either way (see routes/interest.ts).
+    await holdAnswer(startedAt);
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
     // A database without the interest columns: 503, which the older client answers with its own

@@ -1,6 +1,16 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { LEGAL_LAST_UPDATED, OPERATOR_NAME } from './legalFacts';
-import { LEGAL_DOCS, followLegalHistory, legalBackGoesBack, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
+import {
+    LEGAL_DOCS,
+    clearFragment,
+    followLegalHistory,
+    legalBackGoesBack,
+    legalDoc,
+    legalDocForPath,
+    pushLegalPath,
+    replaceLegalFragment,
+    type LegalDocId
+} from './legalRoutes';
 
 // The shared frame of every legal page: title, date, the legal navigation, a table of contents and
 // numbered sections with stable #anchors. Theme tokens only (--ds-*, see index.css), so every page
@@ -10,10 +20,37 @@ export const LINK = 'font-medium text-[var(--ds-ink)] underline decoration-[var(
 export const LIST = 'list-disc space-y-2 pl-5';
 export const NUMBERED = 'list-decimal space-y-2 pl-5';
 
-/** Opens another legal document inside the app (App passes setCurrentView); absent = a normal link. */
-const OpenDocContext = createContext<((id: LegalDocId) => void) | undefined>(undefined);
+/**
+ * The document shown, and how to open another one inside the app (App passes setCurrentView;
+ * absent = a normal link).
+ */
+const DocNavContext = createContext<{ doc: LegalDocId | null; open?: (id: LegalDocId) => void }>({ doc: null });
 
 const plainClick = (e: React.MouseEvent) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+
+/** A fragment from an href or the address (#%E0%A4 and other mangled ones kept as they are). */
+const decodeFragment = (raw: string): string => {
+    try {
+        return decodeURIComponent(raw);
+    } catch {
+        return raw;
+    }
+};
+
+/**
+ * Jump to a section of the page already shown without a new history entry (replaceLegalFragment
+ * says why): scroll to it, put its #fragment on the current entry, and move focus there as the
+ * browser's own fragment navigation would, so Tab carries on from the section. False when the
+ * section isn't on this page or history can't be written: the caller then leaves the click alone.
+ */
+const showSection = (id: string): boolean => {
+    const target = id ? document.getElementById(id) : null;
+    if (!target || !replaceLegalFragment(id)) return false;
+    target.scrollIntoView?.();
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus?.({ preventScroll: true });
+    return true;
+};
 
 export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer" className={LINK}>
@@ -28,19 +65,28 @@ export const MailLink: React.FC<{ email: string; subject?: string }> = ({ email,
     </a>
 );
 
-/** A link to another legal document (or a section of one): SPA navigation on a plain click. */
+/**
+ * A link to another legal document (or a section of one): SPA navigation on a plain click. A section
+ * of the page already shown is a jump on the current entry (showSection); another document, with or
+ * without a section, gets its own marked entry (pushLegalPath), and lands on the section once it is
+ * in the DOM (useLandOnFragment), so its Back button returns here.
+ */
 export const DocLink: React.FC<{ to: LegalDocId; hash?: string; children?: React.ReactNode }> = ({ to, hash, children }) => {
-    const open = useContext(OpenDocContext);
+    const { doc: shown, open } = useContext(DocNavContext);
     const doc = legalDoc(to);
     return (
         <a
             href={`${doc.path}${hash ? `#${hash}` : ''}`}
             className={LINK}
             onClick={(e) => {
-                // A section of another page needs a real load to land on its anchor.
-                if (!open || hash || !plainClick(e)) return;
+                if (!plainClick(e)) return;
+                if (to === shown && hash) {
+                    if (showSection(hash)) e.preventDefault();
+                    return;
+                }
+                if (!open) return;
                 e.preventDefault();
-                pushLegalPath(to);
+                pushLegalPath(to, hash);
                 open(to);
             }}
         >
@@ -146,13 +192,7 @@ const useLandOnFragment = () => {
             return;
         }
         // A mangled shared link (e.g. #%) must not take the whole page down.
-        let id = raw;
-        try {
-            id = decodeURIComponent(raw);
-        } catch {
-            /* keep the raw fragment */
-        }
-        const target = document.getElementById(id);
+        const target = document.getElementById(decodeFragment(raw));
         if (target) target.scrollIntoView?.();
         else top();
     }, []);
@@ -197,15 +237,28 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
     useLegalHistory(doc, onHistoryBack ?? onBack, onOpenDoc);
     // Opened from another page of this visit: the button and the browser's Back agree (popstate then
     // shows that page, through useLegalHistory). In the app only: without onOpenDoc nothing listens.
+    // Moves between sections stay on that entry (onSectionLink), so its mark is still there. Otherwise
+    // the page left for keeps no #section of this one in its address.
     const goBack = () => {
         if (onOpenDoc && legalBackGoesBack()) window.history.back();
-        else onBack();
+        else {
+            clearFragment();
+            onBack();
+        }
+    };
+    // Every same-page link (the table of contents, "see Enforcement" in the text): a jump on the
+    // current history entry instead of a new entry with no state (showSection).
+    const onSectionLink = (e: React.MouseEvent<HTMLElement>) => {
+        if (e.defaultPrevented || !plainClick(e)) return;
+        const href = (e.target as Element | null)?.closest?.('a')?.getAttribute('href');
+        if (!href || !href.startsWith('#') || href.length < 2) return;
+        if (showSection(decodeFragment(href.slice(1)))) e.preventDefault();
     };
 
     return (
-        <OpenDocContext.Provider value={onOpenDoc}>
+        <DocNavContext.Provider value={{ doc, open: onOpenDoc }}>
             <div className="min-h-screen bg-[var(--ds-canvas)] font-sans text-[var(--ds-ink)]">
-                <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-12">
+                <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-12" onClick={onSectionLink}>
                     <div className="mb-3 flex items-start justify-between gap-4">
                         <h1 className="text-3xl font-semibold tracking-tight text-[var(--ds-ink)]">{title}</h1>
                         <button
@@ -268,7 +321,7 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
                         </nav>
 
                         {sections.map((s, i) => (
-                            <section key={s.id} id={s.id} aria-labelledby={`${s.id}-title`} className="mt-10 scroll-mt-24 space-y-3">
+                            <section key={s.id} id={s.id} aria-labelledby={`${s.id}-title`} className="mt-10 scroll-mt-24 space-y-3 focus:outline-none">
                                 <h2 id={`${s.id}-title`} className="text-lg font-semibold text-[var(--ds-ink)]">
                                     {i + 1}. {s.title}
                                 </h2>
@@ -282,6 +335,6 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
                     </p>
                 </main>
             </div>
-        </OpenDocContext.Provider>
+        </DocNavContext.Provider>
     );
 };
