@@ -15,6 +15,13 @@ describe('launch legal copy', () => {
     expect(screen.getByText(/replay segments are designed to expire after about 24 hours/i)).toBeInTheDocument();
   });
 
+  it('names OpenRouter, which routes every Comic Studio image request, among the providers', () => {
+    render(<PrivacyPolicy onBack={vi.fn()} />);
+
+    const item = screen.getByText('OpenRouter:').closest('li');
+    expect(item).toHaveTextContent('OpenRouter: Routes Comic Studio image requests to the model you pick.');
+  });
+
   it('sets launch-safe Stream Studio terms for private links, beta limits, and billing approval', () => {
     render(<TermsOfService onBack={vi.fn()} />);
 
