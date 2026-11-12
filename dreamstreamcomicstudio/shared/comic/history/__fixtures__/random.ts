@@ -247,6 +247,27 @@ const randomOp = (doc: ComicDoc, r: Rng, nm: Namer, allowBusy: boolean): DocOp |
   }
 };
 
+/**
+ * `doc` with page motion (Pro Edit, PE-0): on each page, an entrance on some of its lines, an emphasis on some of its
+ * panels, a camera move and a hold, so the history property tests cover a page's animation (S2 integration, PE-0 wave
+ * note 11). Clips are aimed at what the page holds, so nothing dangles until an edit deletes a target. randomBook stays
+ * motion-free: its normalized hashes are pinned (proEdit.contract.test.ts).
+ */
+export const withRandomMotion = (doc: ComicDoc, seed: number): ComicDoc => {
+  const r = rngOf(seed);
+  const pages = doc.pages.map((p): Page => {
+    const lines = p.panels.flatMap((pn) => pn.lines).filter(() => chance(r, 0.7));
+    const clips = [
+      ...lines.map((l, i) => ({ id: `mc_${l.id}`, target: { k: 'line', id: l.id }, role: 'enter', preset: 'pop', at: { anchor: 'reveal', ms: i * 120 } })),
+      ...p.panels.filter(() => chance(r, 0.5)).map((pn) => ({ id: `mc_${pn.id}`, target: { k: 'panel', id: pn.id }, role: 'emphasis', preset: 'shake', at: { anchor: 'reveal', ms: int(r, 0, 900) }, ...(chance(r, 0.3) ? { repeat: int(r, 1, 3) } : {}) }))
+    ].slice(0, 24);
+    if (!clips.length) return p;
+    const motion = { clips, ...(p.panels.length && chance(r, 0.6) ? { camera: [{ panelId: p.panels[0].id, move: 'push' }] } : {}), ...(chance(r, 0.5) ? { hold: int(r, 200, 1200) } : {}) };
+    return { ...p, motion } as unknown as Page;
+  });
+  return normalizeDoc({ ...doc, pages });
+};
+
 /** `doc` after `steps` random real edits (each through applyOp, like the session commits them). */
 export const evolveBook = (doc: ComicDoc, seed: number, steps: number, opts: { allowBusy?: boolean } = {}): ComicDoc => {
   const r = rngOf(seed);
