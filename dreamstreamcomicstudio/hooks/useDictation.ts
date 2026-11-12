@@ -39,9 +39,11 @@ export type DictationStatus = 'idle' | 'starting' | 'recording' | 'transcribing'
 export type LiveEngine = 'whisper' | 'browser-cloud';
 /**
  * Why a take ended. 'user' is Done (the mic tapped again, or the finish button); 'escape' is Esc; 'hidden' is
- * the tab going to the background; 'limit' is the take limit; 'engine' is the browser ending its own dictation
- * (after a pause, a network drop or its session limit). 'silence', 'no-speech' and 'device' are reserved for the
- * endpointer and device watch that come later; nothing produces them yet.
+ * the tab going to the background; 'limit' is the take limit; 'device' is the browser ending the microphone
+ * itself (permission revoked, the device unplugged); 'engine' is the browser ending its own dictation (after a
+ * pause, a network drop or its session limit), or never ending it after our stop, so we ended it: either way it
+ * did not confirm its last words, so the take is not a clean Done. 'silence' and 'no-speech' are reserved for the
+ * endpointer that comes later; nothing produces them yet.
  */
 export type TakeEnd = 'user' | 'escape' | 'silence' | 'no-speech' | 'limit' | 'hidden' | 'device' | 'engine';
 
@@ -100,6 +102,8 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
   const [download, setDownload] = useState<WhisperLoadProgress | null>(null);
   const [settings, setSettingsState] = useState<DictationSettings>(loadDictationSettings);
   const [liveEngine, setLiveEngine] = useState<LiveEngine | null>(null);
+  /** True only while the browser opens the mic after the download (it may ask): the mic is no longer "off". */
+  const [openingMic, setOpeningMic] = useState(false);
 
   const statusRef = useRef<DictationStatus>('idle');
   const setStatus = useCallback((next: DictationStatus) => {
@@ -118,8 +122,8 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
   const contextRef = useRef<AudioContext | null>(null);
   /** Web Speech: why our own stop ended the take (null until we stop it). */
   const speechEndRef = useRef<TakeEnd | null>(null);
-  /** Web Speech: ends the live take and delivers its words (the end event, or the watchdog). */
-  const speechCompleteRef = useRef<(() => void) | null>(null);
+  /** Web Speech: ends the live take and delivers its words (the end event, or the watchdog with `cut`). */
+  const speechCompleteRef = useRef<((cut?: boolean) => void) | null>(null);
   const partialBusyRef = useRef(false);
   const timersRef = useRef<number[]>([]);
   const cleanupsRef = useRef<Array<() => void>>([]);
@@ -176,6 +180,7 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     setStatus('idle');
     setErrorInfo(null);
     setDownload(null);
+    setOpeningMic(false);
     setLiveEngine(null);
     resetMeters();
   }, [release, setStatus]);
@@ -185,6 +190,7 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     takeRef.current += 1; // nothing from this take may land after its error
     release();
     setDownload(null);
+    setOpeningMic(false);
     setLiveEngine(null);
     resetMeters();
     setErrorInfo(info);
@@ -261,14 +267,24 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
       }
       if (!isLive(take)) return; // cancelled during the download: the mic never opens
       setDownload(null);
+      setOpeningMic(true); // from here the bar no longer says the mic stays off: the browser is opening it
 
       let recorder: PcmRecorder;
       const context = contextRef.current;
       contextRef.current = null; // the recorder owns it now, and closes it on stop or failure
       try {
-        recorder = await startPcmRecorder((l) => {
-          if (isLive(take)) setLevel(l);
-        }, { context });
+        recorder = await startPcmRecorder(
+          (l) => {
+            if (isLive(take)) setLevel(l);
+          },
+          {
+            context,
+            // The browser took the mic away mid-take: stop saying "Listening" and keep what was captured.
+            onEnded: () => {
+              if (isLive(take)) finishRef.current(take, 'device');
+            }
+          }
+        );
       } catch (e) {
         fail(take, fromMediaError(e));
         return;
@@ -278,6 +294,7 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
         return;
       }
       recorderRef.current = recorder;
+      setOpeningMic(false);
       setStatus('recording');
 
       // Live-ish partials: re-transcribe the take so far, skipping if a pass is
@@ -345,6 +362,10 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     rec.interimResults = true;
     rec.lang = navigator.language || 'en-US';
     let finalText = '';
+    // The words the browser has heard but not finalized yet (the bar shows them too). Kept so a take the browser
+    // never finishes still delivers everything the person saw, not a shorter, different instruction.
+    let interimText = '';
+    const heardSoFar = () => (finalText + interimText).trim();
     speechEndRef.current = null;
     rec.onresult = (e: any) => {
       if (!isLive(take)) return;
@@ -354,29 +375,31 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
         if (r.isFinal) finalText += r[0].transcript;
         else interim += r[0].transcript;
       }
-      cbRef.current.onPartial?.((finalText + interim).trim());
+      interimText = interim;
+      cbRef.current.onPartial?.(heardSoFar());
     };
     rec.onerror = (e: any) => {
       if (!isLive(take)) return;
       const info = fromSpeechError(e?.error, { prefixedOnly });
       if (!info) return; // 'aborted' after our own stop: the end event follows
-      const said = finalText.trim();
+      const said = heardSoFar();
       // Words already heard are kept (the browser ended the take, so they wait for the person).
       if (said) cbRef.current.onFinal(said, { end: 'engine', engine: 'browser-cloud' });
       fail(take, info); // clears the clock too, so no timer outlives the error
     };
-    const complete = () => {
+    /** `cut`: the browser never ended after our stop, so we did; its last words were never confirmed. */
+    const complete = (cut = false) => {
       if (!isLive(take)) return;
-      const end = speechEndRef.current ?? 'engine';
+      const end: TakeEnd = cut ? 'engine' : (speechEndRef.current ?? 'engine');
       recognitionRef.current = null;
       takeRef.current += 1;
       release();
       resetMeters();
       setStatus('idle');
       setLiveEngine(null);
-      cbRef.current.onFinal(finalText.trim(), { end, engine: 'browser-cloud' });
+      cbRef.current.onFinal(heardSoFar(), { end, engine: 'browser-cloud' });
     };
-    rec.onend = complete;
+    rec.onend = () => complete();
     speechCompleteRef.current = complete;
     recognitionRef.current = rec;
     setLiveEngine('browser-cloud');
@@ -398,7 +421,8 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     } catch {
       /* the watchdog below finishes it */
     }
-    // If the browser never says it ended, end the take ourselves so its mic cannot stay on.
+    // If the browser never says it ended, end the take ourselves so its mic cannot stay on. The words still being
+    // heard are kept, and the take ends as 'engine', never a clean Done, so it never sends by itself.
     const watchdog = window.setTimeout(() => {
       if (!isLive(take) || recognitionRef.current !== rec) return;
       try {
@@ -406,7 +430,7 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
       } catch {
         /* already ended */
       }
-      speechCompleteRef.current?.();
+      speechCompleteRef.current?.(true);
     }, SPEECH_END_WAIT_MS);
     cleanupsRef.current.push(() => window.clearTimeout(watchdog));
   };
@@ -460,6 +484,8 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     error: errorInfo?.message ?? null,
     errorInfo,
     download,
+    /** True while the browser opens the mic after the download: the bar must not say it stays off. */
+    openingMic,
     settings,
     setSettings,
     liveEngine,

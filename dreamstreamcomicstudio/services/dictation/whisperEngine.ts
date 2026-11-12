@@ -4,7 +4,10 @@
 //
 // Where the weights come from: the first use downloads them once from Hugging Face
 // (huggingface.co), and transformers.js keeps them in the browser's Cache API, so later
-// takes start from the cache and work offline. Our own origin is never asked for model
+// takes start from the cache and work offline. The ONNX runtime it runs on comes from
+// jsDelivr (cdn.jsdelivr.net): transformers.js 4.2.0 sets that default when it is imported
+// and this file leaves it alone, so the copy names both hosts (serving the runtime from our
+// own origin is a later, spike-gated change). Our own origin is never asked for model
 // files. `public/models/` holds no Whisper weights, and the site's SPA fallback answers a
 // missing file there with index.html (HTTP 200, text/html, cached as immutable), which
 // transformers.js would parse as JSON and then fail on, every time (see loadWhisper).

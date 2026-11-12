@@ -12,8 +12,13 @@ const mic = vi.hoisted(() => ({
     align?: string;
     showHeard?: boolean;
     disabled?: boolean;
+    sendsOnDone?: boolean;
+    stackAboveRef?: { current: HTMLElement | null };
+    onEngineChange?: (engine: 'whisper' | 'webspeech') => void;
   },
-  webSpeech: true
+  webSpeech: true,
+  /** The engine stored in the mic's settings (ds.dictation.v1). */
+  engine: 'webspeech' as 'whisper' | 'webspeech'
 }));
 vi.mock('../../chat/DictationButton', () => ({
   DictationButton: (props: NonNullable<typeof mic.props>) => {
@@ -21,7 +26,11 @@ vi.mock('../../chat/DictationButton', () => ({
     return <button type="button">mock-mic</button>;
   }
 }));
-vi.mock('../../../hooks/useDictation', () => ({ voiceInputSupported: () => true, webSpeechSupported: () => mic.webSpeech }));
+vi.mock('../../../hooks/useDictation', () => ({
+  voiceInputSupported: () => true,
+  webSpeechSupported: () => mic.webSpeech,
+  loadDictationSettings: () => ({ engine: mic.engine, model: 'base' })
+}));
 // jsdom can't decode images: the shared refs pipeline is stubbed to "prepared as is" (its own tests cover it).
 vi.mock('../refs/downscale', async (importOriginal) => {
   const real = await importOriginal<typeof import('../refs/downscale')>();
@@ -196,6 +205,7 @@ describe('StudioComposer — voice', () => {
   beforeEach(() => {
     mic.props = null;
     mic.webSpeech = true;
+    mic.engine = 'webspeech';
     setLanguage('en-US');
   });
 
@@ -298,6 +308,46 @@ describe('StudioComposer — voice', () => {
     render(<StudioComposer studio={makeFakeStudio()} />);
     expect(screen.getByRole('button', { name: 'Send when I tap Done' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText(/stop talking/i)).toBeNull();
+  });
+
+  it('the send setting shows only while browser dictation is the chosen engine, and follows a change in the mic’s settings', () => {
+    mic.engine = 'whisper'; // the default: the private voice model, which never sends by itself
+    chooseAutoSend();
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(screen.queryByRole('button', { name: 'Send when I tap Done' })).toBeNull();
+    expect(mic.props?.sendsOnDone).toBe(false);
+    act(() => mic.props!.onEngineChange!('webspeech'));
+    expect(screen.getByRole('button', { name: 'Send when I tap Done' })).toHaveAttribute('aria-pressed', 'true');
+    expect(mic.props?.sendsOnDone).toBe(true);
+    act(() => mic.props!.onEngineChange!('whisper'));
+    expect(screen.queryByRole('button', { name: 'Send when I tap Done' })).toBeNull();
+  });
+
+  it('the mic is told Done sends exactly when it will: the setting on, browser dictation, English, ready to send', () => {
+    const off = render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(mic.props?.sendsOnDone).toBe(false);
+    off.unmount();
+
+    chooseAutoSend();
+    const on = render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(mic.props?.sendsOnDone).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Send when I tap Done' })); // turned off again
+    expect(mic.props?.sendsOnDone).toBe(false);
+    on.unmount();
+
+    chooseAutoSend();
+    setLanguage('es-ES');
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(mic.props?.sendsOnDone).toBe(false);
+  });
+
+  it('the mic keeps its boxes clear of the composer box: they open above the box that holds the text area', () => {
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    const box = mic.props?.stackAboveRef?.current;
+    expect(box).toBeInstanceOf(HTMLElement);
+    expect(box).toHaveAttribute('data-composer-box');
+    expect(box!.contains(textarea())).toBe(true);
+    expect(box!.contains(screen.getByText('mock-mic'))).toBe(true);
   });
 
   it('the toggle is hidden where browser dictation does not exist (it could never act)', () => {

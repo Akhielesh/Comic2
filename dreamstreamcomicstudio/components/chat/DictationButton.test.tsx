@@ -16,33 +16,42 @@ const state = vi.hoisted(() => ({
   status: 'idle' as string,
   errorInfo: null as null | Record<string, unknown>,
   engine: 'whisper' as string,
+  liveEngine: null as null | string,
+  openingMic: false,
+  /** The options the button gave the hook (its onPartial feeds the words heard). */
+  opts: null as null | { onPartial?: (t: string) => void; onFinal: (t: string, i: unknown) => void },
   start: null as unknown as ReturnType<typeof vi.fn>,
   stop: null as unknown as ReturnType<typeof vi.fn>,
   cancel: null as unknown as ReturnType<typeof vi.fn>,
-  dismissError: null as unknown as ReturnType<typeof vi.fn>
+  dismissError: null as unknown as ReturnType<typeof vi.fn>,
+  setSettings: null as unknown as ReturnType<typeof vi.fn>
 }));
 vi.mock('../../hooks/useDictation', () => ({
   voiceInputSupported: () => true,
   webSpeechSupported: () => true,
-  useDictation: () => ({
-    status: state.status,
-    level: 0,
-    elapsed: 3,
-    error: (state.errorInfo?.message as string) ?? null,
-    errorInfo: state.errorInfo,
-    download: null,
-    settings: { engine: state.engine, model: 'base' },
-    setSettings: vi.fn(),
-    liveEngine: null,
-    start: state.start,
-    stop: state.stop,
-    cancel: state.cancel,
-    dismissError: state.dismissError
-  })
+  useDictation: (opts: NonNullable<typeof state.opts>) => {
+    state.opts = opts;
+    return {
+      status: state.status,
+      level: 0,
+      elapsed: 3,
+      error: (state.errorInfo?.message as string) ?? null,
+      errorInfo: state.errorInfo,
+      download: null,
+      openingMic: state.openingMic,
+      settings: { engine: state.engine, model: 'base' },
+      setSettings: state.setSettings,
+      liveEngine: state.liveEngine,
+      start: state.start,
+      stop: state.stop,
+      cancel: state.cancel,
+      dismissError: state.dismissError
+    };
+  }
 }));
 
 import { DictationButton } from './DictationButton';
-import { placeVoiceBox } from './dictationPlacement';
+import { placeVoiceBox, placeVoiceBoxClearOf } from './dictationPlacement';
 
 /** Tailwind width/height classes → px for the sizes this control uses. */
 const px = (cls: string, prefix: string): number => {
@@ -57,6 +66,10 @@ beforeEach(() => {
   state.status = 'idle';
   state.errorInfo = null;
   state.engine = 'whisper';
+  state.liveEngine = null;
+  state.openingMic = false;
+  state.opts = null;
+  state.setSettings = vi.fn();
   state.start = vi.fn();
   state.stop = vi.fn();
   state.cancel = vi.fn();
@@ -126,11 +139,11 @@ describe('DictationButton: true copy and design tokens', () => {
     expect(mic.getAttribute('title')).not.toMatch(/on-device/);
   });
 
-  it('the settings give the true one-time download and say the voice model comes from Hugging Face', () => {
+  it('the settings give the true one-time download and name both hosts it comes from (the model from Hugging Face, its runtime from jsDelivr)', () => {
     render(<DictationButton onFinal={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Dictation settings' }));
     const group = screen.getByRole('group', { name: 'Dictation settings' });
-    expect(group).toHaveTextContent(/Hugging Face \(up to about \d+ MB\)/);
+    expect(group).toHaveTextContent(/from Hugging Face and jsDelivr \(up to about \d+ MB\)/);
     expect(group).not.toHaveTextContent(/~\s*(40|80|250) MB/);
     expect(group).toHaveTextContent(/Your browser may send your voice to its speech service/);
   });
@@ -174,12 +187,14 @@ describe('DictationButton: errors', () => {
     expect(state.start).toHaveBeenCalledTimes(1);
   });
 
-  it('a blocked mic offers "Allow microphone"; a page that turns voice off offers "Type instead"; Dismiss closes it', () => {
+  it('a blocked mic says where to allow it and offers "Try again"; a page that turns voice off offers "Type instead"; Dismiss closes it', () => {
     state.status = 'error';
     state.errorInfo = { ...dictationError('mic-blocked') };
     const first = render(<DictationButton onFinal={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Allow microphone' }));
-    expect(state.start).toHaveBeenCalledTimes(1); // the browser asks again where it still can
+    expect(screen.getByRole('alert')).toHaveTextContent("allow the microphone for this site in your browser's settings, then try again.");
+    expect(screen.queryByRole('button', { name: 'Allow microphone' })).toBeNull(); // a tap cannot unblock a blocked site
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(state.start).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(state.dismissError).toHaveBeenCalledTimes(1);
     first.unmount();
@@ -213,6 +228,170 @@ describe('DictationButton: Esc and the words heard', () => {
     render(<DictationButton onFinal={vi.fn()} showHeard />);
     const heard = screen.getByText('Speak now…');
     expect(heard).toHaveAttribute('aria-live', 'off');
+  });
+});
+
+describe('DictationButton: review fixes (the bar tells the truth about this take)', () => {
+  it('a second take never shows the first take’s words as just heard (browser dictation goes straight to Listening)', () => {
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    const view = render(<DictationButton onFinal={vi.fn()} showHeard />);
+    act(() => state.opts!.onPartial?.('first take words'));
+    expect(screen.getByText('first take words')).toBeInTheDocument();
+    // Done: the take ends and the bar closes.
+    state.status = 'idle';
+    state.liveEngine = null;
+    view.rerender(<DictationButton onFinal={vi.fn()} showHeard />);
+    // Tap the mic again: browser dictation goes idle → recording with no 'starting' in between.
+    fireEvent.click(screen.getByRole('button', { name: 'Start voice dictation' }));
+    expect(state.start).toHaveBeenCalledTimes(1);
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    view.rerender(<DictationButton onFinal={vi.fn()} showHeard />);
+    expect(screen.queryByText('first take words')).toBeNull();
+    expect(screen.getByText('Speak now…')).toBeInTheDocument();
+  });
+
+  it('a long take shows its newest words, not its first two lines', () => {
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    render(<DictationButton onFinal={vi.fn()} showHeard />);
+    const words = Array.from({ length: 60 }, (_, i) => `word${i + 1}`).join(' ');
+    act(() => state.opts!.onPartial?.(words));
+    const heard = screen.getByText((_, el) => el?.getAttribute('aria-live') === 'off' && /word60$/.test(el.textContent ?? ''));
+    expect(heard.textContent).toMatch(/^…/);
+    expect(heard.textContent).not.toMatch(/\bword1\b/);
+    expect(heard.textContent!.length).toBeLessThanOrEqual(141);
+  });
+
+  it('with "Send when I tap Done" armed (browser dictation), Done and the mic say Send; the private model never reads Send', () => {
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    const view = render(<DictationButton onFinal={vi.fn()} sendsOnDone />);
+    const send = screen.getByRole('button', { name: 'Send the message' });
+    expect(send.getAttribute('title')).toMatch(/^Send/);
+    expect(screen.queryByRole('button', { name: 'Finish and insert text' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Finish and send' })).toHaveAttribute('title', 'Send the message');
+    fireEvent.click(send);
+    expect(state.stop).toHaveBeenCalledWith();
+
+    state.liveEngine = 'whisper'; // its final pass can add words never said: it always waits
+    view.rerender(<DictationButton onFinal={vi.fn()} sendsOnDone />);
+    expect(screen.queryByRole('button', { name: 'Send the message' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Finish and insert text' })).toHaveAttribute('title', 'Done: add the words to your message');
+
+    state.liveEngine = 'browser-cloud';
+    view.rerender(<DictationButton onFinal={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Finish and insert text' })).toBeInTheDocument();
+  });
+
+  it('while the mic opens after the download, the bar no longer says it stays off', () => {
+    state.status = 'starting';
+    state.liveEngine = 'whisper';
+    state.openingMic = true;
+    render(<DictationButton onFinal={vi.fn()} />);
+    expect(screen.getByText('Opening your microphone…')).toBeInTheDocument();
+    expect(screen.queryByText("Your microphone stays off until it's ready.")).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel voice typing' })).toBeInTheDocument();
+  });
+
+  it('on any width the bar says browser dictation is online (no hidden-only label, no idle meter)', () => {
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    const { container } = render(<DictationButton onFinal={vi.fn()} />);
+    const bar = container.querySelector('[data-voice-bar]') as HTMLElement;
+    const mark = Array.from(bar.querySelectorAll('span')).find((el) => el.textContent === 'online');
+    expect(mark, 'a short "online" mark').toBeTruthy();
+    for (let el: HTMLElement | null = mark as HTMLElement; el && el !== bar; el = el.parentElement) {
+      expect(el.className, 'never hidden at some width').not.toMatch(/(?:^|\s)hidden(?:\s|$)/);
+    }
+    expect(bar.querySelector('.h-5[aria-hidden]'), 'no level meter: the online engine gives us no level').toBeNull();
+  });
+
+  it('Esc while the words are written down is held (a sheet underneath never closes), and Discard is there', () => {
+    state.status = 'transcribing';
+    const sheetEsc = vi.fn();
+    document.addEventListener('keydown', sheetEsc, true);
+    render(<DictationButton onFinal={vi.fn()} />);
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    expect(sheetEsc).not.toHaveBeenCalled();
+    expect(state.stop).not.toHaveBeenCalled(); // ignored: the words then land
+    expect(state.cancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard what you said' }));
+    expect(state.cancel).toHaveBeenCalledTimes(1);
+    document.removeEventListener('keydown', sheetEsc, true);
+  });
+
+  it('the open settings, bar and error box come after the mic in tab order (they are placed absolutely, so nothing moves)', () => {
+    const view = render(<DictationButton onFinal={vi.fn()} />);
+    const caret = screen.getByRole('button', { name: 'Dictation settings' });
+    fireEvent.click(caret);
+    const group = screen.getByRole('group', { name: 'Dictation settings' });
+    expect(caret.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    view.unmount();
+
+    state.status = 'error';
+    state.errorInfo = { ...dictationError('no-mic') };
+    const err = render(<DictationButton onFinal={vi.fn()} />);
+    const mic = screen.getByRole('button', { name: 'Start voice dictation' });
+    expect(mic.compareDocumentPosition(screen.getByRole('alert')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    err.unmount();
+
+    state.status = 'recording';
+    state.errorInfo = null;
+    const { container } = render(<DictationButton onFinal={vi.fn()} />);
+    const bar = container.querySelector('[data-voice-bar]') as HTMLElement;
+    expect(screen.getByRole('button', { name: 'Finish dictation' }).compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('choosing how it listens tells the caller (Comic Studio shows its send setting only where it can act)', () => {
+    const onEngineChange = vi.fn();
+    render(<DictationButton onFinal={vi.fn()} onEngineChange={onEngineChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dictation settings' }));
+    fireEvent.click(screen.getByRole('button', { name: /Browser dictation, online/ }));
+    expect(state.setSettings).toHaveBeenCalledWith({ engine: 'webspeech', model: 'base' });
+    expect(onEngineChange).toHaveBeenCalledWith('webspeech');
+  });
+
+  it('with a box to keep clear (the composer the words go into), the bar opens above that box, lined up with the mic', () => {
+    const rects: Record<string, DOMRect> = {
+      box: { left: 0, right: 400, top: 500, bottom: 700, width: 400, height: 200, x: 0, y: 500, toJSON: () => ({}) } as DOMRect,
+      mic: { left: 60, right: 104, top: 640, bottom: 684, width: 44, height: 44, x: 60, y: 640, toJSON: () => ({}) } as DOMRect
+    };
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-composer-box')) return rects.box;
+      if (this.hasAttribute('data-voice-root')) return rects.mic;
+      return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    // jsdom reports no overflow at all; a browser reports 'visible' for the composer box, which clips nothing.
+    const realStyle = window.getComputedStyle.bind(window);
+    const styleSpy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element) => {
+      const cs = realStyle(el);
+      return new Proxy(cs, { get: (t, k) => (k === 'overflowX' || k === 'overflowY' ? 'visible' : (t as unknown as Record<string | symbol, unknown>)[k]) });
+    });
+    const Composer = () => {
+      const boxRef = React.useRef<HTMLDivElement>(null);
+      return (
+        <div ref={boxRef} data-composer-box>
+          <textarea aria-label="draft" />
+          <DictationButton onFinal={vi.fn()} align="start" stackAboveRef={boxRef} />
+        </div>
+      );
+    };
+    // The composer is on screen first; then the person taps the mic and the take starts.
+    const { container, rerender } = render(<Composer />);
+    state.status = 'recording';
+    state.liveEngine = 'browser-cloud';
+    rerender(<Composer />);
+    const bar = container.querySelector('[data-voice-bar]') as HTMLElement;
+    expect(bar.dataset.side).toBe('top');
+    // Above the whole box (top 500, gap 8), not just above the mic (top 640), and starting at the mic's left edge.
+    expect(bar.style.top).toBe(`${500 - 8 - 640}px`);
+    expect(bar.style.left).toBe('0px');
+    spy.mockRestore();
+    styleSpy.mockRestore();
   });
 });
 
@@ -251,5 +430,68 @@ describe('placeVoiceBox: next to the mic, never off screen', () => {
     expect(p.side).toBe('bottom');
     expect(p.top + Math.min(120, p.maxHeight)).toBeLessThanOrEqual(844 - 8);
     expect(p.left + p.width).toBeLessThanOrEqual(390 - 8);
+  });
+});
+
+describe('placeVoiceBoxClearOf: above the box the words go into, when it fits', () => {
+  const viewport = { left: 0, top: 0, right: 390, bottom: 844 };
+  const mic = { left: 60, top: 760, right: 104, bottom: 804 };
+  const composer = { left: 8, top: 680, right: 382, bottom: 820 };
+
+  it('opens above the composer box, lined up with the mic', () => {
+    const p = placeVoiceBoxClearOf(mic, composer, { width: 336, height: 72 }, viewport, 'start');
+    expect(p.side).toBe('top');
+    expect(p.top + 72).toBe(680 - 8);
+    expect(p.left).toBe(46); // the mic's left edge, pulled in so the box stays 8 px inside the screen
+  });
+
+  it('falls back to the mic when there is no room above the composer (a short screen)', () => {
+    const short = { left: 0, top: 0, right: 390, bottom: 844 };
+    const tallBox = { left: 8, top: 40, right: 382, bottom: 820 };
+    const p = placeVoiceBoxClearOf(mic, tallBox, { width: 336, height: 72 }, short, 'start');
+    expect(p).toEqual(placeVoiceBox(mic, { width: 336, height: 72 }, short, 'start'));
+  });
+
+  it('reads a real DOMRect (its edges are getters, which a spread would drop)', () => {
+    // What getBoundingClientRect returns: the edges live on the prototype, not on the object.
+    class RectLike {
+      constructor(private readonly r: { left: number; top: number; right: number; bottom: number }) {}
+      get left() {
+        return this.r.left;
+      }
+      get top() {
+        return this.r.top;
+      }
+      get right() {
+        return this.r.right;
+      }
+      get bottom() {
+        return this.r.bottom;
+      }
+    }
+    const p = placeVoiceBoxClearOf(new RectLike(mic), new RectLike(composer), { width: 336, height: 72 }, viewport, 'start');
+    expect(Number.isFinite(p.left)).toBe(true);
+    expect(p.left).toBe(46);
+    expect(p.left + p.width).toBeLessThanOrEqual(390 - 8);
+    expect(p.top + 72).toBe(680 - 8);
+  });
+
+  it('stays within the composer column in a side pane (it never spills into the pane next to it, which paints over it)', () => {
+    // iPad mini portrait, measured in Chromium: the chat pane is 0–302 px of a 744 px screen, the composer box 16–286.
+    const ipad = { left: 0, top: 0, right: 744, bottom: 1133 };
+    const micInPane = { left: 79, top: 1055, right: 169, bottom: 1101 };
+    const paneBox = { left: 16, top: 1001, right: 286, bottom: 1113 };
+    const p = placeVoiceBoxClearOf(micInPane, paneBox, { width: 336, height: 83 }, ipad, 'start');
+    expect(p.side).toBe('top');
+    expect(p.left).toBeGreaterThanOrEqual(16 - 8);
+    expect(p.left + p.width).toBeLessThanOrEqual(286 + 8);
+    expect(p.top + 83).toBe(1001 - 8);
+    // The fallback beside the mic keeps to the column too.
+    const tall = placeVoiceBoxClearOf(micInPane, { ...paneBox, top: 20 }, { width: 336, height: 83 }, ipad, 'start');
+    expect(tall.left + tall.width).toBeLessThanOrEqual(286 + 8);
+  });
+
+  it('with nothing to keep clear it is the plain mic placement', () => {
+    expect(placeVoiceBoxClearOf(mic, null, { width: 336, height: 72 }, viewport, 'start')).toEqual(placeVoiceBox(mic, { width: 336, height: 72 }, viewport, 'start'));
   });
 });

@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Mic, Check, X, Loader2, ChevronDown, ShieldCheck, Globe, CircleAlert } from 'lucide-react';
+import { Mic, Check, X, Loader2, ChevronDown, ShieldCheck, Globe, CircleAlert, ArrowUp } from 'lucide-react';
 import {
   useDictation,
   voiceInputSupported,
@@ -28,7 +28,7 @@ import {
   STATUS_EDGE,
   Z
 } from './studioDesign';
-import { placeVoiceBox, visibleBoundsOf } from './dictationPlacement';
+import { columnBounds, placeVoiceBox, placeVoiceBoxClearOf, visibleBoundsOf } from './dictationPlacement';
 
 // Voice dictation control for a composer. Idle: a quiet mic and a settings caret. While a take runs: a bar with
 // the live level, the timer, Discard and Done. Private on-device Whisper is the default; browser dictation is
@@ -36,7 +36,9 @@ import { placeVoiceBox, visibleBoundsOf } from './dictationPlacement';
 //
 // Every box this control opens (settings, the recording bar, an error) sits next to the mic on the side the
 // caller names (`align`), flips below the mic when there is no room above (a header pinned to the top), and is
-// clamped inside what the person can see — never off screen (dictationPlacement.ts).
+// clamped inside what the person can see — never off screen (dictationPlacement.ts). A caller whose mic sits
+// under its text box (Comic Studio) names that box (`stackAboveRef`), and the boxes open above it, so the words
+// and the caret stay in view during a take. The boxes come after the mic in the DOM, so Tab reaches them next.
 
 interface DictationButtonProps {
   disabled?: boolean;
@@ -52,13 +54,24 @@ interface DictationButtonProps {
   showHeard?: boolean;
   /** The error's "Type instead": move the person to the text box. */
   onTypeInstead?: () => void;
+  /**
+   * The caller sends a browser-dictation take that ends with Done (Comic Studio's "Send when I tap Done" is on and
+   * can act). Done then reads Send, so a send is never a surprise. The private voice model never sends, so it
+   * never reads Send.
+   */
+  sendsOnDone?: boolean;
+  /** A box to keep in view (the composer the words go into): the boxes open above it rather than over it. */
+  stackAboveRef?: React.RefObject<HTMLElement | null>;
+  /** The person chose how it listens in the settings (the caller can show what depends on it). */
+  onEngineChange?: (engine: DictationEngine) => void;
 }
 
 const ENGINE_OPTIONS: { id: DictationEngine; label: string; hint: (mb: number) => string; icon: React.ReactNode; available: () => boolean }[] = [
   {
     id: 'whisper',
     label: 'Private, on this device',
-    hint: (mb) => `Your voice stays on this device. The first use downloads the voice model once from Hugging Face (up to about ${mb} MB), then it works offline.`,
+    // Both hosts the first use contacts: the weights from Hugging Face, the ONNX runtime from jsDelivr (whisperEngine.test).
+    hint: (mb) => `Your voice stays on this device. The first use downloads the voice model once from Hugging Face and jsDelivr (up to about ${mb} MB), then it works offline.`,
     icon: <ShieldCheck className="h-3.5 w-3.5" />,
     available: () => true
   },
@@ -82,11 +95,30 @@ const BOX_WIDTH = { menu: 256, bar: 336, error: 320 } as const;
 
 const formatClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
+/** About two lines of the bar at its widest: the words heard show their newest part, never their first lines. */
+export const HEARD_TAIL_CHARS = 140;
+
+/** The newest part of the words heard: the whole text when short, else "…" and the last words (at a word start). */
+export const heardTail = (text: string, max = HEARD_TAIL_CHARS): string => {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const tail = t.slice(t.length - (max - 1)); // one character is the ellipsis
+  const cut = tail.indexOf(' ');
+  return `…${cut > 0 && cut < 24 ? tail.slice(cut + 1) : tail}`;
+};
+
 /**
  * Keep an open box next to the mic and inside the visible area. It writes the position straight onto the box
  * (before paint, and again on resize, scroll, the keyboard and the box's own size changes).
  */
-const usePlacedBox = (open: boolean, anchorRef: React.RefObject<HTMLElement | null>, boxRef: React.RefObject<HTMLElement | null>, width: number, align: 'start' | 'end') => {
+const usePlacedBox = (
+  open: boolean,
+  anchorRef: React.RefObject<HTMLElement | null>,
+  boxRef: React.RefObject<HTMLElement | null>,
+  width: number,
+  align: 'start' | 'end',
+  stackRef?: React.RefObject<HTMLElement | null>
+) => {
   useLayoutEffect(() => {
     if (!open || typeof window === 'undefined') return;
     const place = () => {
@@ -94,11 +126,12 @@ const usePlacedBox = (open: boolean, anchorRef: React.RefObject<HTMLElement | nu
       const box = boxRef.current;
       if (!anchor || !box) return;
       const a = anchor.getBoundingClientRect();
+      const keepClear = stackRef?.current?.getBoundingClientRect() ?? null;
       const bounds = visibleBoundsOf(anchor);
       // Fit the width first (the height depends on how the words wrap), then place by the real height.
-      box.style.width = `${placeVoiceBox(a, { width, height: 0 }, bounds, align).width}px`;
+      box.style.width = `${placeVoiceBox(a, { width, height: 0 }, columnBounds(bounds, keepClear), align).width}px`;
       box.style.maxHeight = '';
-      const p = placeVoiceBox(a, { width, height: box.offsetHeight }, bounds, align);
+      const p = placeVoiceBoxClearOf(a, keepClear, { width, height: box.offsetHeight }, bounds, align);
       box.style.left = `${p.left - a.left}px`;
       box.style.top = `${p.top - a.top}px`;
       box.style.maxHeight = `${p.maxHeight}px`;
@@ -111,6 +144,8 @@ const usePlacedBox = (open: boolean, anchorRef: React.RefObject<HTMLElement | nu
     window.visualViewport?.addEventListener('scroll', place);
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => place()) : null;
     if (boxRef.current) ro?.observe(boxRef.current);
+    // The text box grows as the person types during a take: the box above it moves with it.
+    if (stackRef?.current) ro?.observe(stackRef.current);
     return () => {
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
@@ -118,7 +153,7 @@ const usePlacedBox = (open: boolean, anchorRef: React.RefObject<HTMLElement | nu
       window.visualViewport?.removeEventListener('scroll', place);
       ro?.disconnect();
     };
-  }, [open, anchorRef, boxRef, width, align]);
+  }, [open, anchorRef, boxRef, width, align, stackRef]);
 };
 
 /** A floating box's frame: absolutely placed against the mic's root, on the popover layer, scrolling if it must. */
@@ -192,7 +227,18 @@ const Waveform: React.FC<{ level: number }> = ({ level }) => {
 /** The recording bar's small square actions: 28 px with a mouse, 44 px on touch. */
 const RECORD_BTN = `grid h-7 w-7 shrink-0 place-items-center ${RADIUS_CONTROL} coarse:h-11 coarse:w-11 ${TRANSITION}`;
 
-export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPartial, onFinal, onStart, align = 'end', showHeard = false, onTypeInstead }) => {
+export const DictationButton: React.FC<DictationButtonProps> = ({
+  disabled,
+  onPartial,
+  onFinal,
+  onStart,
+  align = 'end',
+  showHeard = false,
+  onTypeInstead,
+  sendsOnDone = false,
+  stackAboveRef,
+  onEngineChange
+}) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [heard, setHeard] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -206,7 +252,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
   // says expanded/collapsed and which element it controls, never aria-haspopup (that announces a menu).
   const menuId = useId();
   const detailsId = useId();
-  const { status, level, elapsed, errorInfo, download, settings, setSettings, liveEngine, start, stop, cancel, dismissError } = useDictation({
+  const { status, level, elapsed, errorInfo, download, openingMic, settings, setSettings, liveEngine, start, stop, cancel, dismissError } = useDictation({
     onPartial: (text) => {
       if (showHeard) setHeard(text);
       onPartial?.(text);
@@ -217,9 +263,9 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
   const busy = status === 'starting' || status === 'recording' || status === 'transcribing';
   const showError = status === 'error' && !!errorInfo;
 
-  usePlacedBox(menuOpen, rootRef, menuRef, BOX_WIDTH.menu, align);
-  usePlacedBox(busy, rootRef, barRef, BOX_WIDTH.bar, align);
-  usePlacedBox(showError, rootRef, errorRef, BOX_WIDTH.error, align);
+  usePlacedBox(menuOpen, rootRef, menuRef, BOX_WIDTH.menu, align, stackAboveRef);
+  usePlacedBox(busy, rootRef, barRef, BOX_WIDTH.bar, align, stackAboveRef);
+  usePlacedBox(showError, rootRef, errorRef, BOX_WIDTH.error, align, stackAboveRef);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -244,13 +290,15 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
 
   // Esc belongs to the take while it runs: it stops listening and keeps the words (never sends, never discards).
   // A window listener in the capture phase runs before a sheet's own Esc, so the sheet under the composer stays.
+  // While the words are written down Esc is held and does nothing: the words then land (closing a sheet then
+  // could take the composer, and the words, with it). Discard in the bar drops them.
   useEffect(() => {
-    if (status !== 'starting' && status !== 'recording') return;
+    if (status !== 'starting' && status !== 'recording' && status !== 'transcribing') return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       e.preventDefault();
       e.stopPropagation();
-      stop('escape');
+      if (status !== 'transcribing') stop('escape');
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -265,6 +313,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
 
   const startTake = () => {
     setMenuOpen(false);
+    setHeard(''); // a new take never shows the last take's words (browser dictation goes straight to Listening)
     onStart?.();
     start();
   };
@@ -276,23 +325,61 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
       onTypeInstead?.();
       return;
     }
-    startTake(); // Try again, or Allow microphone (the browser asks again where it still can)
+    startTake(); // Try again (after the person allowed the mic in the browser's settings, this one works)
   };
 
   const onDevice = (liveEngine ?? settings.engine) === 'whisper';
-  const micLabel = status === 'starting' ? 'Cancel voice dictation' : busy ? 'Finish dictation' : 'Start voice dictation';
+  // Done sends only for browser dictation the caller will send (never the private model): then it says Send.
+  const doneSends = sendsOnDone && liveEngine === 'browser-cloud';
+  const micLabel = status === 'starting' ? 'Cancel voice dictation' : busy ? (doneSends ? 'Finish and send' : 'Finish dictation') : 'Start voice dictation';
   const micTitle =
     status === 'starting'
       ? 'Cancel'
       : busy
-        ? 'Finish and add the words'
+        ? doneSends
+          ? 'Send the message'
+          : 'Finish and add the words'
         : settings.engine === 'webspeech'
           ? 'Voice typing · browser dictation, online'
           : 'Voice typing · private, on this device';
   const tone = errorInfo?.tone ?? 'error';
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div ref={rootRef} data-voice-root className="relative shrink-0">
+      {/* Split control: the mic and its settings caret. Each is its own target — ≥ 24 px with a mouse
+          (WCAG 2.5.8; the caret was 21 px) and 44 px on touch (the mic was 36, the caret 21–26). */}
+      <div className={`flex items-stretch ${HAIRLINE} ${RADIUS_CONTROL} bg-[var(--ds-surface-soft)] ${TRANSITION} ${busy ? 'ring-1 ring-[var(--ds-ring)]' : ''}`}>
+        <button
+          ref={micRef}
+          type="button"
+          onClick={() => {
+            if (busy) stop(); // Done while listening; while preparing this cancels, so the mic never opens later
+            else startTake();
+          }}
+          disabled={disabled && !busy}
+          aria-pressed={status === 'recording'}
+          className={`grid place-items-center p-2.5 coarse:min-h-11 coarse:min-w-11 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[var(--ds-ink)]`}`}
+          title={micTitle}
+          aria-label={micLabel}
+        >
+          <Mic className="h-4 w-4" aria-hidden />
+        </button>
+        <button
+          ref={caretRef}
+          type="button"
+          onClick={() => setMenuOpen((v) => !v)}
+          disabled={busy}
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
+          className={`grid min-w-6 place-items-center border-l border-[var(--ds-hairline-soft)] px-1.5 coarse:min-h-11 coarse:min-w-11 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
+          title="Dictation settings"
+          aria-label="Dictation settings"
+          data-dictation-settings
+        >
+          <ChevronDown className="h-3 w-3" aria-hidden />
+        </button>
+      </div>
+
       {/* Engine / model settings */}
       {menuOpen && (
         <div
@@ -314,7 +401,10 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             <button
               key={o.id}
               type="button"
-              onClick={() => setSettings({ ...settings, engine: o.id })}
+              onClick={() => {
+                setSettings({ ...settings, engine: o.id });
+                onEngineChange?.(o.id);
+              }}
               aria-pressed={settings.engine === o.id}
               className={`flex w-full items-start gap-2 px-3 py-2 text-left coarse:min-h-11 ${TRANSITION} ${settings.engine === o.id ? ACCENT_SOFT_BG : 'hover:bg-[var(--ds-hover)]'}`}
             >
@@ -360,21 +450,33 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
       {/* The take's bar: preparing, listening, writing it down. */}
       {busy && (
         <div ref={barRef} data-voice-bar className={cn(BOX, OVERLAY, 'px-3.5 py-2')} style={{ width: BOX_WIDTH.bar }}>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {status === 'transcribing' ? (
               <>
                 <Loader2 className={`h-4 w-4 shrink-0 animate-spin ${ACCENT_TEXT}`} aria-hidden />
                 <span className="flex-1 truncate text-[12px] font-medium text-[var(--ds-ink)]">Writing down what you said…</span>
+                {/* Drops the words when this step finishes (the mic is already off). */}
+                <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Discard what you said" aria-label="Discard what you said">
+                  <X className="h-4 w-4" aria-hidden />
+                </button>
               </>
             ) : status === 'starting' ? (
               <>
                 <Loader2 className={`h-4 w-4 shrink-0 animate-spin ${ACCENT_TEXT}`} aria-hidden />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-medium text-[var(--ds-ink)]">
-                    Getting voice typing ready…{download ? ` ${Math.round(download.progress * 100)}%` : ''}
+                {openingMic ? (
+                  // The download is done and the browser is opening the mic (it may ask first): it is no longer "off".
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium text-[var(--ds-ink)]">Opening your microphone…</span>
+                    <span className={`block text-[11px] ${MUTED}`}>Allow it if your browser asks.</span>
                   </span>
-                  <span className={`block text-[11px] ${MUTED}`}>Your microphone stays off until it's ready.</span>
-                </span>
+                ) : (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-medium text-[var(--ds-ink)]">
+                      Getting voice typing ready…{download ? ` ${Math.round(download.progress * 100)}%` : ''}
+                    </span>
+                    <span className={`block text-[11px] ${MUTED}`}>Your microphone stays off until it's ready.</span>
+                  </span>
+                )}
                 <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Cancel" aria-label="Cancel voice typing">
                   <X className="h-4 w-4" aria-hidden />
                 </button>
@@ -385,27 +487,38 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                   <LiveDot className="h-2 w-2" />
                   Listening
                 </span>
-                <Waveform level={onDevice ? level : 0} />
-                <span className="flex-1 text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]">{formatClock(elapsed)}</span>
-                <span className={`hidden text-[11px] sm:block ${MUTED}`}>{onDevice ? 'on this device' : 'browser dictation'}</span>
-                <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Discard what you said" aria-label="Discard recording">
-                  <X className="h-4 w-4" aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => stop()}
-                  className={`${RECORD_BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}
-                  title="Done: add the words to your message"
-                  aria-label="Finish and insert text"
-                >
-                  <Check className="h-4 w-4" aria-hidden />
-                </button>
+                {/* The level meter only where we hear the level (the private model); the online engine gives us none. */}
+                {onDevice && <Waveform level={level} />}
+                <span className="text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]">{formatClock(elapsed)}</span>
+                {onDevice ? (
+                  <span className={`hidden text-[11px] sm:block ${MUTED}`}>on this device</span>
+                ) : (
+                  // Where the voice goes, at every width (a phone shows no tooltip). One short word: the bar can be
+                  // narrow on a wide screen too (a side pane), and Done must never be pushed out of it.
+                  <span className={`shrink-0 text-[11px] ${MUTED}`}>online</span>
+                )}
+                {/* Discard and Done stay together at the right; in a narrow bar they wrap under the status, never out of it. */}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                  <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Discard what you said" aria-label="Discard recording">
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stop()}
+                    className={`${RECORD_BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}
+                    title={doneSends ? 'Send: your words go in the box and send' : 'Done: add the words to your message'}
+                    aria-label={doneSends ? 'Send the message' : 'Finish and insert text'}
+                  >
+                    {doneSends ? <ArrowUp className="h-4 w-4" aria-hidden /> : <Check className="h-4 w-4" aria-hidden />}
+                  </button>
+                </span>
               </>
             )}
           </div>
           {showHeard && status === 'recording' && (
-            <p aria-live="off" className={`mt-1 line-clamp-2 text-[12px] leading-snug [overflow-wrap:anywhere] ${MUTED}`}>
-              {heard || 'Speak now…'}
+            // The newest words, two lines at most, pinned to the bottom so the latest stay in view as the take grows.
+            <p aria-live="off" className={`mt-1 flex max-h-[2.75em] flex-col justify-end overflow-hidden text-[12px] leading-snug [overflow-wrap:anywhere] ${MUTED}`}>
+              {heard ? heardTail(heard) : 'Speak now…'}
             </p>
           )}
         </div>
@@ -442,40 +555,6 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
           )}
         </div>
       )}
-
-      {/* Split control: the mic and its settings caret. Each is its own target — ≥ 24 px with a mouse
-          (WCAG 2.5.8; the caret was 21 px) and 44 px on touch (the mic was 36, the caret 21–26). */}
-      <div className={`flex items-stretch ${HAIRLINE} ${RADIUS_CONTROL} bg-[var(--ds-surface-soft)] ${TRANSITION} ${busy ? 'ring-1 ring-[var(--ds-ring)]' : ''}`}>
-        <button
-          ref={micRef}
-          type="button"
-          onClick={() => {
-            if (busy) stop(); // Done while listening; while preparing this cancels, so the mic never opens later
-            else startTake();
-          }}
-          disabled={disabled && !busy}
-          aria-pressed={status === 'recording'}
-          className={`grid place-items-center p-2.5 coarse:min-h-11 coarse:min-w-11 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[var(--ds-ink)]`}`}
-          title={micTitle}
-          aria-label={micLabel}
-        >
-          <Mic className="h-4 w-4" aria-hidden />
-        </button>
-        <button
-          ref={caretRef}
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          disabled={busy}
-          aria-expanded={menuOpen}
-          aria-controls={menuOpen ? menuId : undefined}
-          className={`grid min-w-6 place-items-center border-l border-[var(--ds-hairline-soft)] px-1.5 coarse:min-h-11 coarse:min-w-11 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
-          title="Dictation settings"
-          aria-label="Dictation settings"
-          data-dictation-settings
-        >
-          <ChevronDown className="h-3 w-3" aria-hidden />
-        </button>
-      </div>
     </div>
   );
 };

@@ -33,7 +33,9 @@
 //    sends by itself unless the person turned on "Send when I tap Done", and even then only a Done tap
 //    with browser dictation in English sends (services/dictation/autoSend.ts): never a pause, the time
 //    limit, a hidden tab or Esc, never the private voice model, never a message that asks to remove
-//    something. The mic sits at the left of the toolbar, so its boxes line up with its left edge.
+//    something. That setting shows only while browser dictation is the chosen engine (the only one it acts
+//    for), and then the mic's Done reads Send. The mic sits at the left of the toolbar under the text box,
+//    so its boxes line up with its left edge and open above the whole composer box, keeping the text in view.
 //  - Gemini-style option chips (format · style · quality) open anchored panels above the
 //    composer; changes there are instant doc patches.
 //  - While a director turn streams the send button becomes Stop ("Stop the director"). Once its
@@ -59,7 +61,7 @@ import { UploadQueue } from '../refs/UploadQueue';
 import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
-import { voiceInputSupported, webSpeechSupported, type FinalInfo } from '../../../hooks/useDictation';
+import { loadDictationSettings, voiceInputSupported, webSpeechSupported, type DictationEngine, type FinalInfo } from '../../../hooks/useDictation';
 import { isEnglish, voiceAutoSend } from '../../../services/dictation/autoSend';
 import { CONTROL_BTN, FOCUS_RING, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
@@ -409,6 +411,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** The composer box (text area and toolbar): the mic's boxes open above it, never over the words. */
+  const composerBoxRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -1036,14 +1040,24 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   // ── Voice ──────────────────────────────────────────────────────────────────
 
   const voiceLang = typeof navigator === 'undefined' ? 'en-US' : navigator.language || 'en-US';
-  // "Send when I tap Done" can only ever act for browser dictation in English, so it shows only where it can.
-  const [voiceSendOk] = useState<boolean>(() => {
+  // "Send when I tap Done" can only ever act for browser dictation in English, so it shows only where it can:
+  // the browser has dictation, the language is English, and browser dictation is the engine the person chose
+  // (the mic tells us when they change it in its settings).
+  const [voiceSendPossible] = useState<boolean>(() => {
     try {
       return webSpeechSupported() && isEnglish(voiceLang);
     } catch {
       return false;
     }
   });
+  const [voiceEngine, setVoiceEngine] = useState<DictationEngine>(() => {
+    try {
+      return loadDictationSettings().engine;
+    } catch {
+      return 'whisper';
+    }
+  });
+  const voiceSendOk = voiceSendPossible && voiceEngine === 'webspeech';
 
   const onDictationFinal = (spoken: string, info: FinalInfo) => {
     const said = (spoken || '').trim();
@@ -1326,6 +1340,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       )}
 
       <div
+        ref={composerBoxRef}
+        data-composer-box
         className={cx(
           `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
           dragOver && 'border-[#D97757]/60 ring-2 ring-[#D97757]/30'
@@ -1546,6 +1562,10 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                     showHeard
                     onFinal={onDictationFinal}
                     onTypeInstead={focusEnd}
+                    stackAboveRef={composerBoxRef}
+                    onEngineChange={setVoiceEngine}
+                    // Done reads Send exactly when a Done take will send (the mic also checks it is browser dictation).
+                    sendsOnDone={autoSend && voiceSendOk && ready && (!locked || queueMode)}
                   />
                 </span>
                 {showVoiceToggleInline && voiceSendOk && (

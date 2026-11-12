@@ -55,6 +55,42 @@ export const placeVoiceBox = (
   return { left: Math.round(left), top: Math.round(top), width: Math.round(width), maxHeight: Math.round(maxHeight), side };
 };
 
+/**
+ * The bounds cut to the column of `keepClear` (the composer box): a box never reaches past the composer's own
+ * edges (by more than the gutter), so in a side pane it never spills into the pane next to it, which can paint
+ * over it (the composer is its own stacking context).
+ */
+export const columnBounds = (bounds: Rect, keepClear: Rect | null, gutter = VOICE_BOX_GUTTER): Rect =>
+  keepClear
+    ? {
+        left: Math.max(bounds.left, keepClear.left - gutter),
+        top: bounds.top,
+        right: Math.min(bounds.right, keepClear.right + gutter),
+        bottom: bounds.bottom
+      }
+    : bounds;
+
+/**
+ * Like placeVoiceBox, but keeping `keepClear` (the composer box the words go into) visible: the box opens above
+ * that whole box, still lined up with the mic's own edge, so the person can see and type in it during a take.
+ * Where it does not fit there (a short screen, the keyboard up), it goes next to the mic as usual. Either way it
+ * stays within the composer's column (columnBounds).
+ */
+export const placeVoiceBoxClearOf = (
+  anchor: Rect,
+  keepClear: Rect | null,
+  size: { width: number; height: number },
+  visible: Rect,
+  align: 'start' | 'end'
+): BoxPlacement => {
+  const bounds = columnBounds(visible, keepClear);
+  const plain = () => placeVoiceBox(anchor, size, bounds, align);
+  if (!keepClear || keepClear.top >= anchor.top) return plain();
+  // Read each edge (a DOMRect keeps them as getters, so spreading one copies nothing).
+  const above = placeVoiceBox({ left: anchor.left, right: anchor.right, top: keepClear.top, bottom: anchor.bottom }, size, bounds, align);
+  return above.side === 'top' && size.height <= above.maxHeight ? above : plain();
+};
+
 const intersect = (a: Rect, b: Rect): Rect => ({
   left: Math.max(a.left, b.left),
   top: Math.max(a.top, b.top),

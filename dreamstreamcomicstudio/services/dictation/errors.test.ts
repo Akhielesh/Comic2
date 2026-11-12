@@ -10,7 +10,7 @@ describe('dictation errors', () => {
       expect(copy.message, code).not.toMatch(/[$¢]|https?:|error|exception|whisper|onnx|webgpu|wasm/i);
       expect(Object.keys(DICTATION_ACTION_LABEL), code).toContain(copy.action);
     }
-    expect(Object.values(DICTATION_ACTION_LABEL)).toEqual(['Try again', 'Allow microphone', 'Type instead']);
+    expect(Object.values(DICTATION_ACTION_LABEL)).toEqual(['Try again', 'Type instead']);
   });
 
   it('maps each getUserMedia failure by its DOMException name', () => {
@@ -23,7 +23,13 @@ describe('dictation errors', () => {
     expect(name('SecurityError')).toBe('mic-off-here');
     expect(name('SomethingElse')).toBe('generic');
     expect(fromMediaError(new DictationError('audio-suspended')).code).toBe('audio-suspended');
-    expect(fromMediaError(new DOMException('x', 'NotAllowedError')).action).toBe('allow-mic');
+  });
+
+  it('a blocked mic says where to allow it and offers "Try again": once the site is blocked, no button of ours can allow it', () => {
+    const blocked = fromMediaError(new DOMException('x', 'NotAllowedError'));
+    expect(blocked.action).toBe('retry');
+    expect(DICTATION_ACTION_LABEL[blocked.action]).toBe('Try again');
+    expect(blocked.message).toBe("To talk, allow the microphone for this site in your browser's settings, then try again.");
   });
 
   it('maps SpeechRecognition codes; our own abort shows nothing; service-not-allowed is Siri only on prefixed-only browsers', () => {

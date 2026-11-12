@@ -5,7 +5,9 @@
 //
 // The microphone is never left on: if anything after getUserMedia fails (the audio
 // graph, a context that will not start), every track is stopped before the error is
-// thrown, and stop() always stops every track and closes the context.
+// thrown, and stop() always stops every track and closes the context. When the browser
+// ends a track itself (permission revoked, the device unplugged), `onEnded` says so,
+// so the take never keeps saying "Listening" with nothing captured.
 
 import { DictationError } from './errors';
 
@@ -66,6 +68,11 @@ const resumeContext = async (ctx: AudioContext): Promise<void> => {
 export interface PcmRecorderOptions {
   /** A context made in the tap (createAudioContext). The recorder owns it from here and closes it on stop. */
   context?: AudioContext | null;
+  /**
+   * The browser ended the microphone on its own (permission revoked in site settings, the device unplugged):
+   * capture has stopped, so the take must end too. Never called for our own stop().
+   */
+  onEnded?: () => void;
 }
 
 /**
@@ -91,14 +98,32 @@ export const startPcmRecorder = async (onLevel?: (level: number) => void, opts: 
     closeContext();
     throw e;
   }
-  const stopTracks = () =>
-    stream.getTracks().forEach((t) => {
+  const tracks = stream.getTracks();
+  // The track's own `ended`: fired by the browser only, never by our stop() (and removed before it anyway).
+  let endedFired = false;
+  const onTrackEnded = () => {
+    if (endedFired) return;
+    endedFired = true;
+    opts.onEnded?.();
+  };
+  const unwatchTracks = () =>
+    tracks.forEach((t) => {
+      try {
+        t.removeEventListener?.('ended', onTrackEnded);
+      } catch {
+        /* nothing to remove */
+      }
+    });
+  const stopTracks = () => {
+    unwatchTracks();
+    tracks.forEach((t) => {
       try {
         t.stop();
       } catch {
         /* already ended */
       }
     });
+  };
   let source: MediaStreamAudioSourceNode;
   try {
     ctx ??= new AudioContext();
@@ -141,6 +166,13 @@ export const startPcmRecorder = async (onLevel?: (level: number) => void, opts: 
     }
   };
   source.connect(proc);
+  for (const t of tracks) {
+    try {
+      t.addEventListener?.('ended', onTrackEnded);
+    } catch {
+      /* a track without events: the take still ends on Done, the limit or a hidden tab */
+    }
+  }
   // Keep the node pulling samples without echoing the mic to the speakers.
   sink.gain.value = 0;
   proc.connect(sink);

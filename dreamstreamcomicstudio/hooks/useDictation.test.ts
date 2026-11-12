@@ -24,14 +24,26 @@ vi.mock('../services/dictation/whisperEngine', () => ({
 }));
 
 import { TAKE_LIMIT_MS, useDictation, type FinalInfo } from './useDictation';
+import { voiceAutoSend } from '../services/dictation/autoSend';
 
 // ---- Fake microphone --------------------------------------------------------
 
-class FakeTrack {
+class FakeTrack extends EventTarget {
   stopped = false;
+  readyState: 'live' | 'ended' = 'live';
+  onended: ((e: Event) => void) | null = null;
   stop = vi.fn(() => {
+    // Like a real track, our own stop() never fires `ended`.
     this.stopped = true;
+    this.readyState = 'ended';
   });
+  /** The browser ends the track itself: permission revoked in site settings, the device unplugged. */
+  endByBrowser() {
+    this.readyState = 'ended';
+    const e = new Event('ended');
+    this.onended?.(e);
+    this.dispatchEvent(e);
+  }
 }
 
 const mic = {
@@ -270,14 +282,15 @@ describe('useDictation: the microphone is never left on', () => {
     expect(liveTracks()).toHaveLength(0);
   });
 
-  it('a blocked microphone says what to do and offers "Allow microphone"', async () => {
+  it('a blocked microphone says what to do and offers "Try again" (a button cannot unblock it)', async () => {
     model.ready = true;
     mic.mode = 'deny';
     const { result } = setup();
     act(() => result.current.start());
     await flush();
     expect(result.current.status).toBe('error');
-    expect(result.current.errorInfo).toMatchObject({ code: 'mic-blocked', action: 'allow-mic', tone: 'error' });
+    expect(result.current.errorInfo).toMatchObject({ code: 'mic-blocked', action: 'retry', tone: 'error' });
+    expect(result.current.errorInfo?.message).toBe("To talk, allow the microphone for this site in your browser's settings, then try again.");
     expect(result.current.errorInfo?.detail).toBe('mic-blocked · NotAllowedError: Permission denied');
     expect(openContexts()).toHaveLength(0);
   });
@@ -326,8 +339,88 @@ describe('useDictation: browser dictation', () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
     expect(rec.abort).toHaveBeenCalled();
-    expect(onFinal).toHaveBeenLastCalledWith('add a cat', { end: 'user', engine: 'browser-cloud' });
+    // The browser never confirmed its last words, so the take is not a clean Done: it waits for the person.
+    expect(onFinal).toHaveBeenLastCalledWith('add a cat', { end: 'engine', engine: 'browser-cloud' });
     expect(result.current.status).toBe('idle');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('when the browser never ends after Done, the words still being heard are kept and nothing can send by itself', async () => {
+    const { result, onFinal } = setup('webspeech');
+    act(() => result.current.start());
+    const rec = recognisers[0];
+    rec.stop.mockImplementation(() => undefined); // the browser never answers our stop with `end`
+    rec.abort.mockImplementation(() => undefined);
+    act(() => {
+      // Final "make the cover blue", still-interim " but not page two" (the bar shows both as heard).
+      rec.onresult?.({
+        resultIndex: 0,
+        results: [
+          Object.assign([{ transcript: 'make the cover blue' }], { isFinal: true }),
+          Object.assign([{ transcript: ' but not page two' }], { isFinal: false })
+        ]
+      });
+    });
+    act(() => result.current.stop()); // Done
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    const [text, info] = onFinal.mock.calls.at(-1)!;
+    // The person saw "make the cover blue but not page two": the box never gets a shorter, different instruction.
+    expect(text).toBe('make the cover blue but not page two');
+    expect(info).toEqual({ end: 'engine', engine: 'browser-cloud' });
+    // With "Send when I tap Done" on, a take the browser never finished still waits.
+    expect(voiceAutoSend({ chosen: true, info, text, lang: 'en-US' })).toBe('wait');
+  });
+});
+
+describe('useDictation: the bar never says Listening once the microphone is gone', () => {
+  it('the browser ends the track mid-take (permission revoked, device unplugged): the take ends, marked "device", and the words are kept', async () => {
+    model.ready = true;
+    const { result, onFinal } = setup('whisper');
+    act(() => result.current.start());
+    await flush();
+    expect(result.current.status).toBe('recording');
+    act(() => mic.tracks[0].endByBrowser());
+    expect(result.current.status).not.toBe('recording');
+    await flush();
+    expect(result.current.status).toBe('idle');
+    expect(openContexts()).toHaveLength(0);
+    expect(onFinal).toHaveBeenCalledWith('make it rain', { end: 'device', engine: 'whisper' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('our own stop never counts as the device going away', async () => {
+    model.ready = true;
+    const { result, onFinal } = setup('whisper');
+    act(() => result.current.start());
+    await flush();
+    act(() => result.current.stop());
+    await flush();
+    mic.tracks[0].endByBrowser(); // a late `ended` after the take is over changes nothing
+    await flush();
+    expect(onFinal).toHaveBeenCalledTimes(1);
+    expect(onFinal).toHaveBeenLastCalledWith('make it rain', { end: 'user', engine: 'whisper' });
+  });
+});
+
+describe('useDictation: "the microphone stays off" is true while it is said', () => {
+  it('openingMic is false during the download and true only while the browser opens the mic', async () => {
+    mic.mode = 'manual';
+    const { result } = setup('whisper');
+    act(() => result.current.start());
+    expect(result.current.status).toBe('starting');
+    expect(result.current.openingMic).toBe(false); // downloading: the mic is off
+    await act(async () => model.loads[0].resolve(async () => ({ text: 'x' })));
+    await flush();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe('starting');
+    expect(result.current.openingMic).toBe(true); // the browser is opening it (and may ask)
+    await act(async () => mic.waiting[0]());
+    await flush();
+    expect(result.current.status).toBe('recording');
+    expect(result.current.openingMic).toBe(false);
+    act(() => result.current.cancel());
+    expect(result.current.openingMic).toBe(false);
   });
 });

@@ -19,8 +19,12 @@ export type DictationErrorCode =
   | 'transcribe'
   | 'generic';
 
-/** The one thing the person can do next: try the take again, let the browser ask for the mic, or type. */
-export type DictationErrorAction = 'retry' | 'allow-mic' | 'type';
+/**
+ * The one thing the person can do next: try the take again, or type. (There is no "Allow microphone": once a site
+ * is blocked the browser rejects at once and asks nothing, so a button of ours cannot allow it; the message says
+ * where to allow it, and "Try again" works once they have.)
+ */
+export type DictationErrorAction = 'retry' | 'type';
 
 export interface DictationErrorInfo {
   code: DictationErrorCode;
@@ -35,12 +39,11 @@ export interface DictationErrorInfo {
 
 export const DICTATION_ACTION_LABEL: Record<DictationErrorAction, string> = {
   retry: 'Try again',
-  'allow-mic': 'Allow microphone',
   type: 'Type instead'
 };
 
 export const DICTATION_ERROR_COPY: Record<DictationErrorCode, Pick<DictationErrorInfo, 'message' | 'tone' | 'action'>> = {
-  'mic-blocked': { message: "To talk, allow the microphone for this site in your browser's settings.", tone: 'error', action: 'allow-mic' },
+  'mic-blocked': { message: "To talk, allow the microphone for this site in your browser's settings, then try again.", tone: 'error', action: 'retry' },
   'no-mic': { message: 'No microphone was found on this device.', tone: 'error', action: 'retry' },
   'mic-busy': { message: 'Another app is using the microphone right now.', tone: 'error', action: 'retry' },
   'mic-off-here': { message: 'Voice typing is turned off on this page.', tone: 'error', action: 'type' },
