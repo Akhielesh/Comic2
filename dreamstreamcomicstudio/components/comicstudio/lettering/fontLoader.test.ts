@@ -151,7 +151,12 @@ describe('script faces (self-hosted Noto slices)', () => {
     }
   });
 
-  it('a CJK face registers only the asked weight (124 slices, not 744) and loads by sample, once', async () => {
+  // ensureFonts imports a face's table lazily, inside its 5 s per-face deadline. Here vitest transforms
+  // fontTables/noto-sans-jp.ts (744 `?url` slice imports) on that first import: about 4 s alone on a busy 4-core
+  // machine and past 5 s in the full suite, so the face timed out as failed and no slice was registered. The table is
+  // imported once up front (the module cache then answers ensureFonts at once), and the test's budget covers that.
+  it('a CJK face registers only the asked weight (124 slices, not 744) and loads by sample, once', { timeout: 30_000 }, async () => {
+    await import('./fontTables/noto-sans-jp');
     const made: string[] = [];
     let loads = 0;
     vi.stubGlobal(
