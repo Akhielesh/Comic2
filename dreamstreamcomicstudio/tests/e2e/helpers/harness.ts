@@ -145,6 +145,21 @@ export class QaHarness {
     });
   }
 
+  /**
+   * Hold every fixture image (`/qa-assets/<seed>-<w>x<h>.png`) for `delay(url)` ms, then hand it to the harness's own
+   * route, which serves it. CDP network throttling never sees the harness's fulfilled images, so a spec that needs a
+   * slow link delays them here (RD-A #11; reader.turns.spec.ts). The harness route is registered first and this
+   * handler after it: Playwright runs the newest handler first, and route.fallback() passes the request on.
+   */
+  async delayImages(delay: (url: URL) => number): Promise<void> {
+    await this.route();
+    await this.page.route(/\/qa-assets\/.*\.png$/, async (route) => {
+      const ms = Math.max(0, delay(new URL(route.request().url())));
+      if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+      await route.fallback();
+    });
+  }
+
   /** Open the QA entry with these query parameters and wait until it is ready. */
   async open(q: QaQuery = {}, opts: OpenOptions = {}): Promise<void> {
     await this.route();

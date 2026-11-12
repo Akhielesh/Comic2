@@ -25,15 +25,10 @@ test.describe('page turns never land on a blank page', () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
-    // Registered AFTER the harness's own route (Playwright runs the newest handler first), so every fixture image
-    // waits here for its "download", then falls back to the harness, which serves it.
-    await (qa as unknown as { route(): Promise<void> }).route();
-    await page.route(/\/qa-assets\/.*\.png$/, async (route) => {
-      const m = QA_IMAGE_RE.exec(new URL(route.request().url()).pathname);
-      const w = m ? Number(m[2]) : 1000;
-      const h = m ? Number(m[3]) : 1500;
-      await new Promise((r) => setTimeout(r, delayFor(w, h)));
-      await route.fallback();
+    // Every fixture image waits for its "download", then the harness serves it (QaHarness.delayImages).
+    await qa.delayImages((url) => {
+      const m = QA_IMAGE_RE.exec(url.pathname);
+      return delayFor(m ? Number(m[2]) : 1000, m ? Number(m[3]) : 1500);
     });
     await qa.open({ surface: 'reader', fixture: 'heist-12p', page: 1, still: false }, { settle: 4_000 });
     const reader = page.locator('[data-testid="immersive-reader"]');

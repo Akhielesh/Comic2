@@ -22,6 +22,34 @@ const serve = async (page: Page, body: string, head = ''): Promise<void> => {
 };
 
 test.describe('app harness probes', () => {
+  test('delayImages: a fixture image waits for its delay, then the harness serves it; others are untouched (RD-A #11)', async ({ page }, testInfo) => {
+    const qa = harness(page, testInfo);
+    await qa.delayImages((url) => (url.pathname.includes('/qa-assets/slow-') ? 700 : 0));
+    // The harness only serves fixture images on the QA origin (the project's baseURL): serve the page there too, after
+    // the harness route so this handler answers the page itself.
+    const origin = new URL(testInfo.project.use.baseURL || 'http://127.0.0.1:4179').origin;
+    await page.route(`${origin}/delay-images`, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: html('<main>images</main>') }));
+    await page.goto(`${origin}/delay-images`);
+    const load = (src: string) =>
+      page.evaluate(
+        (s) =>
+          new Promise<{ ms: number; width: number }>((resolve) => {
+            const t0 = performance.now();
+            const img = new Image();
+            img.onload = () => resolve({ ms: performance.now() - t0, width: img.naturalWidth });
+            img.onerror = () => resolve({ ms: performance.now() - t0, width: 0 });
+            img.src = s;
+          }),
+        src
+      );
+    const slow = await load('/qa-assets/slow-120x160.png');
+    const fast = await load('/qa-assets/fast-120x160.png');
+    expect(slow.width, 'the delayed image is still the harness fixture').toBe(120);
+    expect(slow.ms).toBeGreaterThanOrEqual(650);
+    expect(fast.width).toBe(120);
+    expect(fast.ms).toBeLessThan(650);
+  });
+
   test('legacyClasses: variant, important and opacity forms of the legacy kit; the token face is not legacy', async ({ page }, testInfo) => {
     const qa = harness(page, testInfo);
     await page.setContent(html(`<main><div class="md:shadow-comic hover:border-black/50 bg-brand-yellow/40 md:!font-comic ds-font-display p-2">legacy</div></main>`));
