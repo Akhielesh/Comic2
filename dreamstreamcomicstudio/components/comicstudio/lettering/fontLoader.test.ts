@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { estimateMeasure } from '../../../shared/comic/lettering/layout';
 import { FONT_FILES } from './fontFiles';
-import { ensureFonts, filesFor, fontFaceCss, fontLoadGeneration, isFontReady, resetFontLoaderForTests, subscribeFontLoads } from './fontLoader';
+import { ensureFonts, filesFor, fontFaceCss, fontLoadGeneration, isFontReady, preloadFontFiles, resetFontLoaderForTests, subscribeFontLoads } from './fontLoader';
 import { createMeasure, parseFont } from './measure';
 
 afterEach(() => {
@@ -31,14 +31,21 @@ describe('self-hosted lettering faces', () => {
     expect(filesFor('bangers', 400, true).every((f) => f.style === 'normal')).toBe(true);
   });
 
-  it('print CSS: @font-face for the used faces only, private DSL families, absolute URLs, no Google CSS for Latin', () => {
+  it('print CSS: @font-face for the used faces only, private DSL families, absolute URLs, never a Google stylesheet', async () => {
     const css = fontFaceCss(['bangers', 'noto-sans-telugu'], 'https://comics.example');
     expect(css).toContain('font-family:"DSL Bangers"');
     expect(css).not.toContain('Comic Neue');
-    expect(css).not.toContain('fonts.googleapis.com');
-    expect(css).not.toContain('Noto Sans Telugu');
+    expect(css).not.toMatch(/googleapis|gstatic/);
     expect(css).toMatch(/src:url\("https:\/\/comics\.example\//);
-    expect(css.match(/@font-face/g)!.length).toBe(FONT_FILES.bangers.length);
+    // A script face's table loads on first use; once it has, the print CSS declares its self-hosted slices too.
+    expect(css).not.toContain('Noto Sans Telugu');
+    await preloadFontFiles(['noto-sans-telugu', 'bungee']);
+    const full = fontFaceCss(['bangers', 'noto-sans-telugu', 'bungee'], 'https://comics.example', [700]);
+    expect(full.match(/font-family:"DSL Bangers"/g)!.length).toBe(FONT_FILES.bangers.length);
+    expect(full.match(/font-family:"Noto Sans Telugu";font-style:normal;font-weight:700;/g)!.length).toBe(3); // telugu, latin, latin-ext
+    expect(full).not.toMatch(/font-family:"Noto Sans Telugu";font-style:normal;font-weight:400;/);
+    expect(full).toContain('font-family:"DSL Bungee"');
+    expect(full).not.toMatch(/googleapis|gstatic/);
   });
 });
 
@@ -86,7 +93,7 @@ describe('ensureFonts', () => {
   });
 });
 
-describe('script faces (Google CSS2)', () => {
+describe('script faces (self-hosted Noto slices)', () => {
   it('are measurable only once a face of the family has really loaded (check() alone is true for unknown families)', () => {
     const faces: { family: string; status: string }[] = [];
     const fonts = { check: () => true, forEach: (cb: (f: { family: string; status: string }) => void) => faces.forEach(cb), addEventListener: vi.fn() };
@@ -103,25 +110,90 @@ describe('script faces (Google CSS2)', () => {
     }
   });
 
-  it('wait for the stylesheet before loading, and report a face that never arrives as failed (never rejects)', async () => {
+  it('never request fonts.googleapis.com: the slices of the asked weight are registered from our origin and the sample loads them', async () => {
+    const made: { family: string; src: string; weight?: string; range?: string; display?: string; loads: number }[] = [];
+    class FakeFace {
+      rec: (typeof made)[number];
+      constructor(family: string, src: string, d: FontFaceDescriptors) {
+        this.rec = { family, src, weight: d.weight, range: d.unicodeRange, display: d.display, loads: 0 };
+        made.push(this.rec);
+      }
+      load() {
+        this.rec.loads += 1;
+        return Promise.resolve(this);
+      }
+    }
+    vi.stubGlobal('FontFace', FakeFace);
+    const load = vi.fn(async () => [{}] as unknown as FontFace[]);
+    const added: unknown[] = [];
+    Object.defineProperty(document, 'fonts', { value: { load, add: (f: unknown) => added.push(f), check: () => true, forEach: () => undefined, addEventListener: vi.fn() }, configurable: true });
+    const appended = vi.spyOn(document.head, 'appendChild');
+    try {
+      const r = await ensureFonts(['noto-sans-telugu'], { weights: [700], sample: 'నమస్తే' });
+      expect(r).toEqual({ loaded: ['noto-sans-telugu'], failed: [] });
+      expect(appended).not.toHaveBeenCalled(); // no <link rel="stylesheet"> of any kind
+      expect(document.head.querySelector('link[href*="googleapis"], link[href*="gstatic"]')).toBeNull();
+      expect(made.map((f) => f.family)).toEqual(['Noto Sans Telugu', 'Noto Sans Telugu', 'Noto Sans Telugu']);
+      for (const f of made) {
+        expect(f.src).toMatch(/noto-sans-telugu-(telugu|latin|latin-ext)-700-normal.*\.woff2/);
+        expect(f.src).not.toMatch(/googleapis|gstatic|https?:/);
+        expect(f.weight).toBe('700');
+        expect(f.range).toMatch(/^U\+/);
+        expect(f.display).toBe('swap');
+        expect(f.loads).toBe(0); // registered, not fetched: the browser fetches only the slices the text needs
+      }
+      expect(added).toHaveLength(3);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledWith(expect.stringMatching(/^700 16px "Noto Sans Telugu", /), 'నమస్తే');
+    } finally {
+      appended.mockRestore();
+      delete (document as unknown as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it('a CJK face registers only the asked weight (124 slices, not 744) and loads by sample, once', async () => {
+    const made: string[] = [];
+    let loads = 0;
+    vi.stubGlobal(
+      'FontFace',
+      class {
+        constructor(_family: string, src: string) {
+          made.push(src);
+        }
+        load() {
+          loads += 1;
+          return Promise.resolve(this);
+        }
+      }
+    );
+    const load = vi.fn(async () => [{}] as unknown as FontFace[]);
+    Object.defineProperty(document, 'fonts', { value: { load, add: vi.fn(), check: () => true, forEach: () => undefined, addEventListener: vi.fn() }, configurable: true });
+    try {
+      await ensureFonts(['noto-sans-jp'], { weights: [400], sample: '月まで' });
+      expect(made.length).toBe(124);
+      expect(made.every((u) => /noto-sans-jp-[a-z0-9-]+-400-normal/.test(u))).toBe(true);
+      expect(loads).toBe(0);
+      await ensureFonts(['noto-sans-jp'], { weights: [400], sample: '月まで' });
+      expect(made.length).toBe(124);
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as unknown as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it('report a face that never arrives as failed (never rejects)', async () => {
     vi.useFakeTimers();
-    vi.stubGlobal('FontFace', class {});
-    const load = vi.fn(async () => [] as FontFace[]);
-    Object.defineProperty(document, 'fonts', { value: { load, check: () => true, forEach: () => undefined, addEventListener: vi.fn() }, configurable: true });
+    vi.stubGlobal('FontFace', class { load() { return new Promise(() => undefined); } });
+    const load = vi.fn(() => new Promise<FontFace[]>(() => undefined));
+    Object.defineProperty(document, 'fonts', { value: { load, add: vi.fn(), check: () => true, forEach: () => undefined, addEventListener: vi.fn() }, configurable: true });
     try {
       const pending = ensureFonts(['noto-sans-telugu'], { weights: [400], sample: 'నమస్తే', timeoutMs: 1000 });
-      const link = document.head.querySelector<HTMLLinkElement>('link[data-ds-lettering-fonts]')!;
-      expect(link.href).toContain('fonts.googleapis.com/css2?family=Noto+Sans+Telugu');
-      await vi.advanceTimersByTimeAsync(10);
-      expect(load).not.toHaveBeenCalled(); // the @font-face rules are not there yet
-      link.dispatchEvent(new Event('load'));
       await vi.advanceTimersByTimeAsync(10);
       expect(load).toHaveBeenCalledWith(expect.stringContaining('Noto Sans Telugu'), 'నమస్తే');
       await vi.advanceTimersByTimeAsync(1000);
       await expect(pending).resolves.toEqual({ loaded: [], failed: ['noto-sans-telugu'] });
     } finally {
       vi.useRealTimers();
-      document.head.querySelectorAll('link[data-ds-lettering-fonts]').forEach((l) => l.remove());
       delete (document as unknown as { fonts?: unknown }).fonts;
     }
   });
