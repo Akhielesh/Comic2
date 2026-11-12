@@ -30,8 +30,39 @@ const DIRECT_SOURCES: AIProviderId[] = TEXT_PROVIDER_IDS.filter((id) => id !== '
 // public models page stays populated. The OpenAI-compatible / Anthropic providers ship a
 // curated seed, so they're populated even keyless; a key augments them with live ids. We never
 // store keys — only public model metadata is cached.
+// EGRESS-DB E4: the cached NVIDIA rows change only when a keyed fetch harvests them, so a catalog request reads
+// them (and their callability) at most every 10 minutes per process, and a keyed list tops the cache up at most
+// hourly. An empty answer (nothing cached, or Supabase unreachable) is never kept.
+export const NVIDIA_CACHE_TTL_MS = 10 * 60_000;
+export const NVIDIA_PERSIST_INTERVAL_MS = 60 * 60_000;
+
+const memoNonEmpty = <T extends { size: number } | { length: number }>(ttlMs: number, load: () => Promise<T>) => {
+  let entry: { at: number; value: Promise<T> } | null = null;
+  return {
+    get: (): Promise<T> => {
+      if (entry && Date.now() - entry.at < ttlMs) return entry.value;
+      const current = { at: Date.now(), value: load() };
+      entry = current;
+      const forget = () => { if (entry === current) entry = null; };
+      current.value.then((v) => { if (('size' in v ? v.size : v.length) === 0) forget(); }, forget);
+      return current.value;
+    },
+    reset: () => { entry = null; }
+  };
+};
+const nvidiaCallabilityMemo = memoNonEmpty(NVIDIA_CACHE_TTL_MS, () => loadCallabilityMap('nvidia'));
+const nvidiaPersistedMemo = memoNonEmpty(NVIDIA_CACHE_TTL_MS, () => loadPersistedModels('nvidia'));
+let nvidiaPersistedAt = 0;
+
+/** Forget the per-process catalog memos (tests). */
+export const resetModelsRouteCaches = (): void => {
+  nvidiaCallabilityMemo.reset();
+  nvidiaPersistedMemo.reset();
+  nvidiaPersistedAt = 0;
+};
+
 const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
-  const nvidiaCallability = await loadCallabilityMap('nvidia').catch(() => new Map<string, boolean>());
+  const nvidiaCallability = await nvidiaCallabilityMemo.get().catch(() => new Map<string, boolean>());
   const attachCallability = (models: AnnotatedModel[], map: Map<string, boolean>): AnnotatedModel[] =>
     models.map((m) => (map.has(m.id) ? { ...m, apiCallable: map.get(m.id) } : m));
 
@@ -41,8 +72,11 @@ const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): P
       const key = (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
       let models = await getProviderModels(id, key);
       if (id === 'nvidia') {
-        if (!models.length) models = await loadPersistedModels('nvidia');
-        else void persistHarvestedModels('nvidia', models); // fire-and-forget cache top-up
+        if (!models.length) models = await nvidiaPersistedMemo.get();
+        else if (Date.now() - nvidiaPersistedAt >= NVIDIA_PERSIST_INTERVAL_MS) {
+          nvidiaPersistedAt = Date.now();
+          void persistHarvestedModels('nvidia', models); // fire-and-forget cache top-up, at most hourly
+        }
         models = attachCallability(models, nvidiaCallability);
       }
       return models;

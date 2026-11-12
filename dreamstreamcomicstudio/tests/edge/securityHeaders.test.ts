@@ -14,8 +14,11 @@ import {
   HSTS,
   INDEX_INLINE_SCRIPT_HASHES,
   LIVE_WORKER_DEV_ORIGIN,
+  MAIN_PERMISSIONS_POLICY,
+  SHARE_PERMISSIONS_POLICY,
   SUPABASE_ORIGIN,
   createOnRequest,
+  isSharePath,
   liveCsp,
   mainCsp,
   onRequest,
@@ -216,6 +219,46 @@ describe('the comic / chat app (everything else)', () => {
     expect(allowsUrl(p, 'frame-src', 'https://www.youtube-nocookie.com/embed/x', self)).toBe(true);
     expect(allowsUrl(p, 'frame-src', 'https://preview.sandpack-static-server.codesandbox.io/', self)).toBe(true);
     expect(allowsUrl(p, 'img-src', 'https://images.example/cover.png', self)).toBe(true);
+  });
+});
+
+describe('shared comic pages (/c/<slug>)', () => {
+  // The share Function sets its own block; the middleware sets every header but CSP on the way out,
+  // so before this rule MAIN_PERMISSIONS_POLICY replaced it and a shared page could ask for the mic.
+  const shareResponse = () =>
+    new Response('<!doctype html>', {
+      headers: { 'content-type': 'text/html; charset=utf-8', 'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()' },
+    });
+
+  it('keep the camera, microphone, speech recognition, location and screen capture off on both hosts', async () => {
+    const { go, next } = harness();
+    next.mockImplementation(async () => shareResponse());
+    for (const u of [
+      'https://dreamstreamstudio.ai/c/the-lake',
+      'https://dreamstreamstudio.ai/c/the-lake/embed',
+      'https://comics.dreamstreamstudio.ai/c/the-lake',
+      'https://dreamstreamstudio.ai/c',
+    ]) {
+      const pp = (await go(u)).headers.get('permissions-policy')!;
+      expect(pp, u).toBe(SHARE_PERMISSIONS_POLICY);
+      for (const f of ['camera=()', 'microphone=()', 'on-device-speech-recognition=()', 'geolocation=()', 'display-capture=()']) expect(pp, u).toContain(f);
+    }
+  });
+
+  it('only /c and its children: the studio, /comics and /cast keep the main policy', async () => {
+    const { go } = harness();
+    for (const u of ['https://dreamstreamstudio.ai/', 'https://dreamstreamstudio.ai/comics', 'https://dreamstreamstudio.ai/cast']) {
+      expect((await go(u)).headers.get('permissions-policy'), u).toBe(MAIN_PERMISSIONS_POLICY);
+    }
+    expect(isSharePath('/c')).toBe(true);
+    expect(isSharePath('/c/x')).toBe(true);
+    expect(isSharePath('/comics')).toBe(false);
+    expect(isSharePath('/cast')).toBe(false);
+  });
+
+  it('a share response a test builds directly gets the same block', () => {
+    const out = withSecurityHeaders(shareResponse(), new URL('https://dreamstreamstudio.ai/c/the-lake'));
+    expect(out.headers.get('permissions-policy')).toBe(SHARE_PERMISSIONS_POLICY);
   });
 });
 

@@ -11,7 +11,7 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import express from 'express';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const roles = vi.hoisted(() => ({ fail: false }));
 
@@ -53,7 +53,9 @@ vi.mock('../services/modelStats.js', () => ({
   loadScoreMap: vi.fn(async () => new Map())
 }));
 
-const { modelsRouter } = await import('./models.js');
+const { modelsRouter, resetModelsRouteCaches, NVIDIA_CACHE_TTL_MS, NVIDIA_PERSIST_INTERVAL_MS } = await import('./models.js');
+const catalogStore = await import('../services/modelCatalogStore.js');
+const catalogService = await import('../services/modelCatalog.js');
 
 const PLATFORM = {
   OPENROUTER_API_KEY: 'sk-or-PLATFORM-secret',
@@ -150,5 +152,62 @@ describe('GET /api/models/verify — platform-key telemetry is for admins only',
     const r = await verify(null);
     expect(r.status).toBe(401);
     expect(upstream).toEqual([]);
+  });
+});
+
+// EGRESS-DB E4: the public catalog reads the cached NVIDIA rows and their callability at most every 10 minutes per
+// process (never keeping an empty answer), and a keyed NVIDIA list tops the cache up at most hourly.
+describe('GET /api/models/catalog — NVIDIA cache reads', () => {
+  const NV = [{ id: 'nv/one', source: 'nvidia' }];
+  const catalog = async () => {
+    const res = await fetch(`${base}/api/models/catalog`);
+    expect(res.status).toBe(200);
+    return (await res.json()) as { models: Array<{ id: string; apiCallable?: boolean }> };
+  };
+
+  beforeEach(() => {
+    resetModelsRouteCaches();
+    vi.mocked(catalogStore.loadCallabilityMap).mockReset().mockResolvedValue(new Map([['nv/one', true]]));
+    vi.mocked(catalogStore.loadPersistedModels).mockReset().mockResolvedValue(NV as never);
+    vi.mocked(catalogStore.persistHarvestedModels).mockReset().mockResolvedValue(undefined);
+    vi.mocked(catalogService.getProviderModels).mockReset().mockResolvedValue([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('two catalog requests within 10 min make one callability read and one cached-list read', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+    const first = await catalog();
+    expect(first.models.find((m) => m.id === 'nv/one')?.apiCallable).toBe(true);
+    await catalog();
+    expect(catalogStore.loadCallabilityMap).toHaveBeenCalledTimes(1);
+    expect(catalogStore.loadPersistedModels).toHaveBeenCalledTimes(1);
+    expect(catalogStore.loadPersistedModels).toHaveBeenCalledWith('nvidia');
+    vi.setSystemTime(new Date(Date.parse('2026-11-12T00:00:00Z') + NVIDIA_CACHE_TTL_MS));
+    await catalog();
+    expect(catalogStore.loadCallabilityMap).toHaveBeenCalledTimes(2);
+    expect(catalogStore.loadPersistedModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('never keeps an empty answer (nothing cached yet, or the database unreachable)', async () => {
+    vi.mocked(catalogStore.loadCallabilityMap).mockResolvedValue(new Map());
+    vi.mocked(catalogStore.loadPersistedModels).mockResolvedValue([]);
+    await catalog();
+    await catalog();
+    expect(catalogStore.loadCallabilityMap).toHaveBeenCalledTimes(2);
+    expect(catalogStore.loadPersistedModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('a keyed NVIDIA list tops the cache up at most hourly', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T00:00:00Z'));
+    vi.mocked(catalogService.getProviderModels).mockImplementation(async (id: string) => (id === 'nvidia' ? (NV as never) : []));
+    await catalog();
+    await catalog();
+    expect(vi.mocked(catalogStore.persistHarvestedModels).mock.calls.filter(([source]) => source === 'nvidia')).toHaveLength(1);
+    expect(catalogStore.loadPersistedModels).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date(Date.parse('2026-11-12T00:00:00Z') + NVIDIA_PERSIST_INTERVAL_MS));
+    await catalog();
+    expect(vi.mocked(catalogStore.persistHarvestedModels).mock.calls.filter(([source]) => source === 'nvidia')).toHaveLength(2);
   });
 });

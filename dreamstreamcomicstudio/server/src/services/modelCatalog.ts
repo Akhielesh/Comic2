@@ -23,6 +23,35 @@ type CatalogSnapshot = {
 
 let cache: CatalogSnapshot | null = null;
 let inflight: Promise<AnnotatedModel[]> | null = null;
+/** The boot warm-up (prewarmCatalog), shared: a cold request during it waits for it instead of reading again. */
+let bootWarm: Promise<void> | null = null;
+
+/**
+ * How long the boot warm-up waits for the live list before it reads the durable index (EGRESS-DB E4). The live
+ * OpenRouter list is public and anonymous, so warming from it costs no Supabase egress; the ~0.9 MB index read
+ * was paid on every container wake.
+ */
+export const PREWARM_LIVE_BUDGET_MS = 4_000;
+
+/**
+ * How long a cold request waits for the boot warm-up before it is served from the durable index (the live list
+ * usually answers well within it). It is the warm-up's own fallback read, shared, so the index is still read at
+ * most once per boot; the live list replaces it when it lands.
+ */
+export const COLD_REQUEST_WAIT_MS = 1_200;
+
+/** The boot's one read of the durable index into the memory cache, shared by the warm-up and a cold request. */
+let indexWarm: Promise<void> | null = null;
+const warmFromIndex = (): Promise<void> => {
+  if (!indexWarm) {
+    indexWarm = (async () => {
+      if (cache) return;
+      const persisted = await loadPersistedModels('openrouter');
+      if (persisted.length && !cache) cache = { models: persisted, fetchedAt: 0 };
+    })().catch(() => { /* a failed read leaves the live list to answer */ });
+  }
+  return indexWarm;
+};
 
 export type CatalogResult = {
   models: AnnotatedModel[];
@@ -56,13 +85,29 @@ const refresh = async (): Promise<AnnotatedModel[]> => {
   return models;
 };
 
-/** Kick a live refresh without awaiting it; swallows errors so callers stay responsive. */
-const refreshInBackground = (): void => {
+/** The live refresh in flight, or a new one (one at a time). */
+const startRefresh = (): Promise<AnnotatedModel[]> => {
   if (!inflight) {
     inflight = refresh().finally(() => { inflight = null; });
   }
-  inflight.catch(() => { /* logged elsewhere; stale data already served */ });
+  return inflight;
 };
+
+/** Kick a live refresh without awaiting it; swallows errors so callers stay responsive. */
+const refreshInBackground = (): void => {
+  startRefresh().catch(() => { /* logged elsewhere; stale data already served */ });
+};
+
+/** True when `promise` resolves within `ms`; false when it rejects or takes longer (it keeps running). */
+const resolvesWithin = (promise: Promise<unknown>, ms: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    timer.unref?.();
+    promise.then(
+      () => { clearTimeout(timer); resolve(true); },
+      () => { clearTimeout(timer); resolve(false); }
+    );
+  });
 
 /**
  * Returns the annotated catalog with a stale-while-revalidate strategy so the Model Library is
@@ -74,6 +119,12 @@ const refreshInBackground = (): void => {
  * Never throws — on total failure it returns the last snapshot (or empty) flagged `degraded`.
  */
 export const getCatalog = async (force = false): Promise<CatalogResult> => {
+  // A cold request during the boot warm-up waits for it briefly (its live list); past COLD_REQUEST_WAIT_MS it takes
+  // the warm-up's one fallback read of the durable index (shared, never a second read) instead of waiting out the
+  // whole live budget.
+  if (!cache && !force && bootWarm && !(await resolvesWithin(bootWarm, COLD_REQUEST_WAIT_MS)) && !cache) await warmFromIndex();
+  // Step 3 below reads the index itself only when no warm-up has run (or could read it).
+  const indexTried = indexWarm !== null;
   const fresh = cache && Date.now() - cache.fetchedAt < CATALOG_TTL_MS;
 
   // 1. Fresh memory cache.
@@ -88,7 +139,7 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
   }
 
   // 3. Cold start → hydrate from the durable index and serve immediately, revalidate in background.
-  if (!cache && !force) {
+  if (!cache && !force && !indexTried) {
     const persisted = await loadPersistedModels('openrouter');
     if (persisted.length) {
       cache = { models: persisted, fetchedAt: 0 }; // fetchedAt 0 = treat as stale so it revalidates
@@ -98,11 +149,8 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
   }
 
   // 4. Nothing to serve (or a forced refresh): we must await a live fetch.
-  if (!inflight) {
-    inflight = refresh().finally(() => { inflight = null; });
-  }
   try {
-    const models = await inflight;
+    const models = await startRefresh();
     return { models, fetchedAt: cache?.fetchedAt ?? Date.now(), degraded: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load model catalog.';
@@ -116,19 +164,25 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
 };
 
 /**
- * Warm the in-memory catalog at server boot so the very first request is instant. Tries the durable
- * index first (fast), then kicks a background live refresh. Safe to call unconditionally; never throws.
+ * Warm the in-memory catalog at server boot so the very first request is instant. The live (public, anonymous)
+ * list comes first; the durable index is read only when the live list fails or takes longer than
+ * PREWARM_LIVE_BUDGET_MS, and then the live refresh keeps going and replaces it. One warm-up per process, shared
+ * with the cold path of getCatalog. Safe to call unconditionally; never throws.
  */
-export const prewarmCatalog = async (): Promise<void> => {
-  try {
-    if (!cache) {
-      const persisted = await loadPersistedModels('openrouter');
-      if (persisted.length) cache = { models: persisted, fetchedAt: 0 };
-    }
-    refreshInBackground();
-  } catch {
-    /* boot must never fail because the catalog couldn't warm */
+export const prewarmCatalog = (): Promise<void> => {
+  if (!bootWarm) {
+    bootWarm = (async () => {
+      try {
+        if (cache) return;
+        if (await resolvesWithin(startRefresh(), PREWARM_LIVE_BUDGET_MS)) return;
+        if (cache) return;
+        await warmFromIndex();
+      } catch {
+        /* boot must never fail because the catalog couldn't warm */
+      }
+    })();
   }
+  return bootWarm;
 };
 
 /** Start a periodic in-process refresh so the catalog stays warm without depending on traffic. */

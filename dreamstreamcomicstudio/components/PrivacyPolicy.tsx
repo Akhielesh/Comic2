@@ -12,7 +12,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                 <header className="mb-8 sm:mb-10">
                     <p className={OVERLINE_DISPLAY}>Legal</p>
                     <h1 className={cn(DISPLAY_SECTION, 'mt-4 text-[var(--ds-ink)]')}>Privacy Policy</h1>
-                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: June 24, 2026</p>
+                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: November 12, 2026</p>
                 </header>
                 <div className={cn(SECTION_CARD, 'p-6 sm:p-8')}>
                 <div className={LEGAL_PROSE}>
@@ -48,6 +48,7 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                         <li><strong>Supabase:</strong> Authentication, database tables, and cloud storage.</li>
                         <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
                         <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
+                        <li><strong>OpenRouter:</strong> Routes Comic Studio image requests to the model you pick.</li>
                         <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
                         <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
                     </ul>

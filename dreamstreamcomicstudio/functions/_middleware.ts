@@ -117,6 +117,17 @@ export const LIVE_PERMISSIONS_POLICY =
   'camera=(self), microphone=(self), display-capture=(self), screen-wake-lock=(self), fullscreen=(self), picture-in-picture=(self), geolocation=(), payment=(), usb=(), serial=(), hid=()';
 /** The comic / chat app: only what it never uses is switched off (it uses mic, location, embeds). */
 export const MAIN_PERMISSIONS_POLICY = 'payment=(), usb=(), serial=(), hid=()';
+/**
+ * A shared comic (/c/<slug>, /c/<slug>/embed) is read-only for anyone with the link: it never needs
+ * the camera, the microphone, speech recognition, location or screen capture, so all are off. The
+ * share Function sets its own block too, but every header except CSP is ours on the way out, so the
+ * block has to live here or MAIN_PERMISSIONS_POLICY replaces it.
+ */
+export const SHARE_PERMISSIONS_POLICY =
+  'camera=(), microphone=(), on-device-speech-recognition=(), geolocation=(), display-capture=(), payment=(), usb=(), serial=(), hid=()';
+
+/** The share reader's paths: /c and everything under it. */
+export const isSharePath = (pathname: string): boolean => pathname === '/c' || pathname.startsWith('/c/');
 
 export interface SecurityEnv {
   /** The build's Supabase URL, when the Pages project exposes it to Functions too. */
@@ -285,7 +296,7 @@ export const pageKindFor = (url: URL): PageKind =>
   isStreamHost(url.hostname) || isLegacyLivePath(url.pathname) ? 'live' : 'main';
 
 /** Headers for an HTML page of `kind`. */
-export function documentSecurityHeaders(kind: PageKind, input: PolicyInput & { enforceLive?: boolean }): Record<string, string> {
+export function documentSecurityHeaders(kind: PageKind, input: PolicyInput & { enforceLive?: boolean; pathname?: string }): Record<string, string> {
   const headers: Record<string, string> = {
     ...baseSecurityHeaders(input.origin),
     'Reporting-Endpoints': `${CSP_REPORT_GROUP}="${new URL(CSP_REPORT_PATH, input.origin).toString()}"`,
@@ -309,7 +320,7 @@ export function documentSecurityHeaders(kind: PageKind, input: PolicyInput & { e
     headers['X-Frame-Options'] = 'DENY';
   } else {
     headers['Content-Security-Policy-Report-Only'] = mainCsp(input);
-    headers['Permissions-Policy'] = MAIN_PERMISSIONS_POLICY;
+    headers['Permissions-Policy'] = input.pathname !== undefined && isSharePath(input.pathname) ? SHARE_PERMISSIONS_POLICY : MAIN_PERMISSIONS_POLICY;
   }
   return headers;
 }
@@ -337,7 +348,7 @@ function isDocument(res: Response, pathname: string): boolean {
  */
 export function withSecurityHeaders(res: Response, url: URL, opts: { env?: SecurityEnv; enforceLive?: boolean } = {}): Response {
   const headers = isDocument(res, url.pathname)
-    ? documentSecurityHeaders(pageKindFor(url), { origin: url.origin, env: opts.env, enforceLive: opts.enforceLive })
+    ? documentSecurityHeaders(pageKindFor(url), { origin: url.origin, env: opts.env, enforceLive: opts.enforceLive, pathname: url.pathname })
     : baseSecurityHeaders(url.origin);
   let out: Response;
   try {
