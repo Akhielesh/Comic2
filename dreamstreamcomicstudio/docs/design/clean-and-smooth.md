@@ -53,8 +53,29 @@ production PR (PROGRAM3 §3.9).
   6 px or more.
 - **Name an action once.** When one action has more than one control, give each the same `data-action` id. This
   is how the probe finds duplicates; the rubric expects exactly one visible per viewport. The ids are `read`,
-  `share`, `history`, `media`, `quality` and `mode` (Easy/Pro). Add new ids in kebab case. DC-1 adds them to
-  today's duplicated controls.
+  `share`, `history`, `media`, `quality` and `mode` (Easy/Pro). Add new ids in kebab case. Where they are now (DC-1
+  and the S2b integration):
+  - `read`: the header Read (only while the board is out of sight), the Read tab's "Read full screen", the reader's
+    full-screen entry and its browser full-screen button (`reader/ComicReaderView.tsx`), and the ⋯ "Read the comic"
+    row on phones;
+  - `quality`: the header chip below 1024, the composer chip from 1024 (`conversation/StudioComposer.tsx`, which
+    reads "{Tier} · {Model}" with the lock glyph; lead decision D10), and the ⋯ Quality row wherever the header has
+    no chip;
+  - `media`: the board's Assets tab (`board/BoardPane.tsx`) and the timeline's Assets link, which hides while that
+    tab is on screen;
+  - `share`: the Read tab's "Share & export";
+  - `history`: the ⋯ History row on narrow headers;
+  - `mode`: both forms of the Easy | Pro switch (`mobile/ModeToggle.tsx`).
+  Pending (lead decision D20): `share` on the header Share (`share/ShareButton.tsx`, DC-1 #6) and `history` on the
+  header History icon and the timeline History link (`history/HistoryButton.tsx`, `history/EntryLinks.tsx`, DC-1 #7).
+  Each would make its desk scene read duplicateActions 1 (studio-read and studio-history), and baselines only go
+  down, so they wait until DC-3 / DS-R5 / DS-R12 remove the duplicate entries (the Read tab's button becomes
+  "Export"; never two History entries in one viewport). The board's History tab gets its id only with #7. A ⋯ row's
+  id counts only while the menu is open.
+- **Announce a transient toast politely, once.** The header's savings slot (`mobile/SavingsChip.tsx`) keeps an
+  always-mounted, visually hidden live region (`role="status"`) and only changes its text; the visible toast is
+  `aria-hidden`, so the words are read once. A region inserted already holding its words is often not announced.
+  Use this pattern for any transient toast.
 - **Mark user content.** Put `data-user-content` on text the user wrote or named, such as a title or a character
   name. It may truncate; a control's own label may not. No control carries the attribute yet, so today every cut
   label counts. The first candidates are the character name on the cast card's button
@@ -65,6 +86,9 @@ production PR (PROGRAM3 §3.9).
   and the pulse guard counts it either way (§3.2).
 - **Price once.** Use the spend action's own label ("Draw 6 pages · ≈2%"). Do not add a second price chip or a
   second usage sentence beside it. Governed users still never see `$` or `¢` (`shared/comic/costText.ts`).
+- **"Free" only beside something that costs (C5).** Free editing and navigation carry no lowercase "free" either:
+  not in a toast ("Title page added — made by software"), a dialog title (the plate dialog is just its name), a menu
+  hint ("Look back and restore") or the Reader look. The add tiles on the timeline say nothing about price.
 
 ## 3. The instruments
 
@@ -273,8 +297,9 @@ editor's toolbar also cuts "Mark up" and "Lettering" (`mobile/editor/EditorToolb
 
 **What moves these numbers next:**
 
-- **DC-1 (S2):** the studio header loses its duplicate Read, Quality and "Saved". The Read tab gets one full-screen
-  control. The `data-action` ids go on.
+- ~~**DC-1 (S2):** the studio header loses its duplicate Read, Quality and "Saved". The Read tab gets one full-screen
+  control. The `data-action` ids go on.~~ Done in S2b: header Read and Quality each have one home, no "Saved" in the
+  header, one full-screen entry on the Read tab, no "Free" on the add tiles, and the ids are on (see "After S2b").
 - **SETTLE-UI (S2):** settled cards collapse, so the transcript and C5 counts fall.
 - **DC-2 (S3):** the breakdown card goes from depth 3 to depth 2, and a held page's note appears once.
 - **DC-3 (S3):** one primary while a gate is open, and a static board chip. The pulse guard's last two unguarded
@@ -306,6 +331,32 @@ the report's duplicate-name groups are the reviewer's lead). The phone render-ga
 deferred to DC-3 or the gate's owner, and the page editor's "Mark up" / "Lettering" cut at 320 px to PE-SHELL. The
 calendar batch subtitles now wrap to two lines at 320 px instead of truncating (CHAT-0).
 
+### After S2b (DC-1 and the S2b integration, 2026-11-12)
+
+DC-1 merged last of the S2b UI packages, so its numbers were checked against every earlier merge. The loop ran with
+`UPDATE_BASELINES=1` (lowering only) and nothing rose. In `desk-light` and `desk-dark` the C5 `freeWords` fell by 4
+in each of these scenes (the four timeline add tiles): board-pages 5 → 1, editor-easy and editor-pro 15 → 11,
+kit-timeline 4 → 0, studio-busy 12 → 8, studio-cast 13 → 9, studio-chat 14 → 10, studio-empty 1 → 0,
+studio-history 14 → 10, studio-media 13 → 9, studio-pages 14 → 10, studio-story 13 → 9, studio-streaming 12 → 8
+and studio-style 15 → 11. Phone and narrow views did not move (the dock is collapsed below 1024). C2
+`duplicateActions` is 0 in every scene, now that the ids exist (§2). The terracotta and z-ladder baselines dropped
+`SavingsChip.tsx`'s chip colour and its `z-30`.
+
+Lead decisions recorded here:
+
+- **D10:** the S2b integration applied DC-1 #3 to the frozen composer: its quality chip carries
+  `data-action="quality"` and, when roomy, reads "{Tier} · {Model}" with the lock glyph and the screen-reader words
+  ", locked for this comic". It names a tier and a model, never a price, and takes no spark. So at 1024 px and up a
+  locked comic shows its lock on screen, not only inside the closed ⋯ › Quality row, and the probe now checks C2 for
+  Quality at desk too (ComicStudio.test.tsx 'the quality cut is 1024' still pins the header side).
+- **D20:** DC-1 #6 and #7 (ids on the header Share and History) are held, as in §2, because each would be the first
+  rise in a desk C2 entry.
+
+Still red in the loop, for their owners (new scenes the baseline does not list, so they are held to the targets and
+were not added): `app-ds-content` C3 depth 4 (DS-R1's content-kit scene: a ComicCard's chip inside the scene's own
+section card), `app-shell` C9 live pulses 8 at desk and 3 on phones (DS-2's header skeleton shimmer) and
+`app-landing` C1 primaries 2 (DS-3: the header's ink "Sign in" plus the hero's spark CTA, by design).
+
 ## 7. Limits (what the probe does not see)
 
 - A primary drawn without the primary tokens (a hand-rolled fill) is not counted. Build controls from the
@@ -314,8 +365,8 @@ calendar batch subtitles now wrap to two lines at 320 px instead of truncating (
   measured at 360 and 1280.
 - Text inside `<input>`, `<textarea>` and `<select>` is not a label to the probe, so a cut title in a text field or
   a cut `<option>` is not counted.
-- C2 counts only controls that carry `data-action`. Until DC-1 adds the ids, the duplicate-name groups in the
-  report are the reviewer's lead.
+- C2 counts only controls that carry `data-action`. The header Share and History carry none yet (D20, §2), so a
+  duplicate there shows only in the report's duplicate-name groups, which stay the reviewer's lead.
 - C4 (one number, one definition) and C10 (same role, same control) are review-only. C4 also has unit tests on the
   shared count helpers, in the packages that own them.
 - CLS during a state change (C9's "nothing moves the user") is not measured yet. It needs a motion-on scene per

@@ -39,6 +39,9 @@ import { ReaderTab } from './ReaderTab';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 import { teluguEdition } from '../export/__fixtures__/books';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { computeAccessibleName } from 'dom-accessibility-api';
+import { QA_NOW, makeQaDoc } from '../testing/qaFixtures';
+import { pageProgress } from './boardModel';
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -280,5 +283,80 @@ describe('ReaderTab in phone landscape (compact height)', () => {
     );
     expect(screen.getByRole('toolbar', { name: 'Reader actions' })).toBeInTheDocument();
     expect(within(screen.getByTestId('reader-toolbar')).queryByRole('button', { name: 'Read full screen' })).toBeNull();
+  });
+});
+
+// Declutter DC-1 (F1; clean-and-smooth.md C2): "Read full screen" is the Read tab's one full-screen entry. The inline
+// reader's browser full-screen icon did a different thing with the same icon, and the Share & export sheet repeated it.
+describe('ReaderTab: one full-screen entry', () => {
+  const FULL_SCREEN = /^(Read full screen|Full screen|Exit full screen)\b/i;
+  const fullScreenControls = () => screen.getAllByRole('button').filter((b) => FULL_SCREEN.test(computeAccessibleName(b)));
+
+  it.each([
+    ['a regular height (1280 × 800)', formFactorFor({ w: 1280, h: 800 })],
+    ['a compact height (phone landscape)', formFactorFor({ w: 734, h: 343, coarse: true })]
+  ])('at %s: exactly one full-screen control, with the Share & export sheet closed or open', (_label, ff) => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={ff}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    expect(fullScreenControls()).toHaveLength(1);
+    const [only] = fullScreenControls();
+    expect(computeAccessibleName(only)).toBe('Read full screen');
+    expect(only).toHaveAttribute('data-action', 'read');
+    expect(screen.getByRole('button', { name: 'Share & export' })).toHaveAttribute('data-action', 'share');
+    const sheet = openSheet();
+    expect(within(sheet).queryByRole('button', { name: /^Read full screen/ })).toBeNull();
+    expect(fullScreenControls()).toHaveLength(1);
+  });
+
+  it('the inline reader is told to keep its browser full-screen icon off at every height', () => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1280, h: 800 })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    expect(within(screen.getByTestId('reader-toolbar')).queryByRole('button', { name: /^(Full screen|Exit full screen)$/ })).toBeNull();
+    // "Read full screen" still opens the immersive reader.
+    fireEvent.click(screen.getByRole('button', { name: 'Read full screen' }));
+    expect(screen.getByTestId('immersive-reader')).toBeInTheDocument();
+  });
+});
+
+// Declutter F9 / rubric C5 (DC-1): an editing row carries no price word when nothing beside it costs.
+describe('ReaderTab: the Reader look panel says no price word', () => {
+  it('neither the Reader look toggle nor its panel says "free"', () => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1280, h: 800 })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    const toggle = screen.getByRole('button', { name: 'Reader look' });
+    expect(toggle.getAttribute('title') || '').not.toMatch(/\bfree\b/i);
+    fireEvent.click(toggle);
+    const panel = screen.getByRole('region', { name: 'Reader look' });
+    expect(panel).toHaveTextContent('Readers can still change it for themselves');
+    expect(panel.textContent || '').not.toMatch(/\bfree\b/i);
+  });
+});
+
+// PROGRAM3 B25 / collisions C-15 (RD-A built the one "drawn" definition; DC-1 verifies it on the loop's fixture): the
+// Read tab and the Pages tab badge say the same number on heist-12p (the reader used to say 7 against the badge's 6).
+describe('ReaderTab: the reader and the Pages badge agree on heist-12p', () => {
+  it('"6 of 12 pages drawn · 1 out of date" beside a Pages badge of 6/12', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(QA_NOW);
+    const doc = makeQaDoc('heist-12p');
+    const { ready, total } = pageProgress(doc);
+    expect(`${ready}/${total}`).toBe('6/12');
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1280, h: 800 })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByTestId('reader-drawn')).toHaveTextContent(`${ready} of ${total} pages drawn · 1 out of date`);
   });
 });

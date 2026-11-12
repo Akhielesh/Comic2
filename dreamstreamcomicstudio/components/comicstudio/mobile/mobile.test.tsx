@@ -11,7 +11,7 @@ import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetF
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
 import { ModeToggle, MODE_HINT } from './ModeToggle';
-import { SAVINGS_COPY, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
+import { SAVINGS_COPY, SavingsBreakdown, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
 import { FormFactorProvider, formFactorFor } from './useFormFactor';
 import { HEADER_BANNER_MIN_ORDER, HEADER_SLOT_ORDER } from './headerSlots';
 import { feature } from './index';
@@ -521,6 +521,13 @@ describe('SavingsChip (decisions-final #6)', () => {
   beforeEach(() => showDollarPrices());
   afterEach(() => resetUsageStatus());
 
+  /** The visible toast (aria-hidden, so it has no role to find it by); throws until it is there, for waitFor. */
+  const savingsToast = (): HTMLElement => {
+    const toast = document.querySelector<HTMLElement>('[data-savings-toast]');
+    if (!toast) throw new Error('no savings toast');
+    return toast;
+  };
+
   const docWithSavings = (saved: number): ComicDoc => {
     const doc = makeSampleDoc();
     return {
@@ -542,39 +549,65 @@ describe('SavingsChip (decisions-final #6)', () => {
         <SavingsChip studio={{ doc: makeSampleDoc() }} />
       </FormFactorProvider>
     );
-    expect(container).toBeEmptyDOMElement();
+    // Only the silent live region: no text, no toast.
+    expect(container.textContent).toBe('');
+    expect(container.querySelectorAll('*')).toHaveLength(1);
+    expect(document.querySelector('[data-savings-toast]')).toBeNull();
   });
 
-  it('a quiet chip that opens the breakdown with the copy', () => {
-    render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Saved \$0\.30 by software/ }));
-    expect(screen.getByRole('dialog', { name: 'Saved by software' })).toHaveTextContent(SAVINGS_COPY);
+  it('draws no header chip at any width: "Saved" in the header means the save state only (declutter F3)', () => {
+    for (const ff of [DESKTOP, formFactorFor({ w: 900, h: 700 }), PHONE]) {
+      const { container, unmount } = render(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+        </FormFactorProvider>
+      );
+      // First sight never flashes, and there is no chip to show instead: no toast, a silent live region, no button.
+      expect(container.textContent).toBe('');
+      expect(document.querySelector('[data-savings-toast]')).toBeNull();
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(document.body.textContent || '').not.toMatch(/\bSaved\b/);
+      unmount();
+    }
+  });
+
+  it('the breakdown (shown in the Spending sheet at every width) carries the copy and the savings', () => {
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(screen.getByText('Saved by software')).toBeInTheDocument();
+    expect(screen.getByText('$0.30')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(SAVINGS_COPY))).toBeInTheDocument();
     expect(screen.getByText('Moved 3 balloons')).toBeInTheDocument();
   });
 
-  it('governed users read the saving as a share of their usage — never dollars, also before the status loads', () => {
+  it('governed users read the breakdown as a share of their usage — never dollars, also before the status loads', () => {
     showUsagePrices(1);
-    const { unmount } = render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    const chip = screen.getByRole('button', { name: /^Saved (≈[\d.]+%|<0\.1%) of your usage by software/ });
-    expect(chip.textContent).not.toMatch(/\$/);
-    fireEvent.click(chip);
-    expect(screen.getByRole('dialog', { name: 'Saved by software' }).textContent).not.toMatch(/\$/);
+    const { unmount } = render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).toMatch(/Saved (≈[\d.]+%|<0\.1%) of your usage/);
+    expect(document.body.textContent).not.toMatch(/\$/);
     unmount();
     resetUsageStatus();
-    render(
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).not.toMatch(/\$/);
+  });
+
+  it('desktops and tablets: a new saving shows the same calm toast under the header (the chip that flashed is gone)', async () => {
+    const { rerender } = render(
       <FormFactorProvider value={DESKTOP}>
         <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
       </FormFactorProvider>
     );
-    expect(screen.getByRole('button', { name: /^Saved some of your usage by software/ }).textContent).toBe('Saved');
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
+      </FormFactorProvider>
+    );
+    const toast = await waitFor(savingsToast);
+    expect(toast).toHaveTextContent(SAVINGS_COPY);
+    expect(toast.parentElement).toBe(document.body);
+    // No phone override on a desktop: the root's own header height (56 px) applies.
+    expect(toast.style.getPropertyValue('--header-h')).toBe('');
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('phones: no header chip; a new saving shows the copy as a calm toast', async () => {
@@ -589,7 +622,7 @@ describe('SavingsChip (decisions-final #6)', () => {
         <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
       </FormFactorProvider>
     );
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(SAVINGS_COPY));
+    await waitFor(() => expect(savingsToast()).toHaveTextContent(SAVINGS_COPY));
   });
 
   it('the phone toast is portalled outside the shell, so it carries the phone header size itself (it sat 4 px low)', async () => {
@@ -604,7 +637,7 @@ describe('SavingsChip (decisions-final #6)', () => {
           <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
         </FormFactorProvider>
       );
-      const toast = await waitFor(() => screen.getByRole('status'));
+      const toast = await waitFor(savingsToast);
       const out = { parent: toast.parentElement, header: toast.style.getPropertyValue('--header-h'), top: toast.style.top };
       unmount();
       return out;
@@ -616,6 +649,34 @@ describe('SavingsChip (decisions-final #6)', () => {
     // Phones in landscape keep index.css's compact-height header (no override).
     const landscape = await toastFor(formFactorFor({ w: 852, h: 393, coarse: true }));
     expect(landscape.header).toBe('');
+  });
+
+  it('screen readers hear a new saving from a live region that is there before it lands (the toast itself is aria-hidden)', async () => {
+    for (const ff of [DESKTOP, PHONE]) {
+      const { rerender, unmount } = render(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+        </FormFactorProvider>
+      );
+      // Mounted, polite and silent before the total grows: a region inserted already holding its words is often
+      // not announced, so it must exist first and only change its text.
+      const region = screen.getByRole('status');
+      expect(region).toHaveAttribute('aria-live', 'polite');
+      expect(region).toBeEmptyDOMElement();
+      expect(region.parentElement).not.toBe(document.body);
+      rerender(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
+        </FormFactorProvider>
+      );
+      await waitFor(() => expect(region).toHaveTextContent(SAVINGS_COPY));
+      // The same node took the words, and it is the only status: the visible toast is hidden from the reader.
+      expect(screen.getAllByRole('status')).toEqual([region]);
+      const toast = savingsToast();
+      expect(toast).toHaveAttribute('aria-hidden', 'true');
+      expect(toast).not.toHaveAttribute('role');
+      unmount();
+    }
   });
 });
 

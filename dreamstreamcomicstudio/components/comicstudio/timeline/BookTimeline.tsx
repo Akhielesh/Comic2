@@ -3,13 +3,17 @@
 // (long-press on touch so scrolling never turns into a move), open with a tap, and edit through a
 // clip menu or the keyboard. Every edit here is FREE and optimistic, answered by an undo toast.
 //
-// Dock: a 36 px summary bar ("Book · Cover ✓ · 2/3 pages drawn · 7 versions · $0.55 spent") that
-// expands to the strip; collapsed by default below `lg` (phones/tablets keep their board space),
-// remembered per device; hidden in the Read tab. `compact` is the 64 px strip for the page editor.
+// Dock: a 36 px summary bar ("Book · Cover ✓ · 7 versions · $0.55 spent") that expands to the strip;
+// collapsed by default below `lg` (phones/tablets keep their board space), remembered per device; hidden
+// in the Read tab. `compact` is the 64 px strip for the page editor.
+//
+// Declutter (DC-1, F7/F9/F11): the summary leaves the page count to the Pages tab badge; its Assets and
+// History links show only where this board offers no such tab (one home per action, C2); the add tiles,
+// the software pages, their undo toast and their editor's title carry no "free" (nothing beside them costs).
 
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronUp, Images } from 'lucide-react';
-import { newId, renderTargetKey, type RenderTarget } from '../../../shared/comic/doc';
+import { newId, renderTargetKey, type ComicDoc, type RenderTarget } from '../../../shared/comic/doc';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { useCostFormat } from '../conversation/cost';
 import { keepRefusedInComposer } from '../conversation/composerBus';
@@ -120,6 +124,47 @@ export const stripScrollDelta = (view: { left: number; right: number }, clip: { 
   return 0;
 };
 
+/** "3/12 pages drawn" — dockSummary's page-count part (bookModel.ts). */
+const PAGE_COUNT_PART = /^\d+\/\d+ pages? drawn$/;
+
+/**
+ * The dock's summary line: dockSummary without its "Book" lead (the toggle beside it says Book) and without the
+ * page count (declutter F7: the Pages tab badge and the Pages heading already say "6/12"; one count, one place).
+ * "Cover ✓ · 7 versions · $0.55 spent". An empty book keeps "no pages yet" (no badge shows a count then).
+ * `money` prints for the viewer (governed users never see dollars).
+ */
+export const timelineSummary = (doc: ComicDoc, money?: (usd: number) => string): string =>
+  dockSummary(doc, money)
+    .split(' · ')
+    .filter((part, i) => i > 0 && !PAGE_COUNT_PART.test(part))
+    .join(' · ');
+
+/** The summary row's destinations, by their board tab id. */
+type DockLink = 'media' | 'history';
+
+/**
+ * Which of the summary row's destinations this timeline's own board already offers as a tab (declutter F11, rubric
+ * C2: one home per action). The dock sits under the board's tab strip, where Assets and History are tabs, so a link
+ * there is a second home within a few hundred pixels. A host without a tab strip (or with it hidden) keeps the
+ * links. It reads BoardPane's markup (`[data-board]` › `[data-tab-strip]` › `#board-tab-<id>`) after every commit
+ * (two lookups, no listener), so a tab that appears with the first image is seen in the same frame. If that markup
+ * ever changes, the links come back: it fails toward a duplicate, never toward a lost way in.
+ */
+const useBoardOffers = (ref: React.RefObject<HTMLElement | null>): Record<DockLink, boolean> => {
+  const [offers, setOffers] = useState<Record<DockLink, boolean>>({ media: true, history: true });
+  useLayoutEffect(() => {
+    const board = ref.current?.closest('[data-board]');
+    const offered = (id: DockLink) => {
+      const tab = board?.querySelector(`[data-tab-strip] #board-tab-${id}`);
+      return !!tab && !tab.closest('[hidden]');
+    };
+    const media = offered('media');
+    const history = offered('history');
+    setOffers((cur) => (cur.media === media && cur.history === history ? cur : { media, history }));
+  });
+  return offers;
+};
+
 /** Index the dragged clip lands on: how many other page clips' centres lie left of its centre. */
 export const dropIndex = (slots: { left: number; width: number }[], from: number, dx: number): number => {
   const f = slots[from];
@@ -155,6 +200,8 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const suppressUntil = useRef(0);
   const stripId = useId();
   const hintId = useId();
+  const sectionRef = useRef<HTMLElement>(null);
+  const boardOffers = useBoardOffers(sectionRef);
 
   const clips = useMemo(() => (doc ? bookClips(doc) : []), [doc]);
   const pageKeys = useMemo(() => clips.filter((c) => c.kind === 'page').map((c) => c.key), [clips]);
@@ -341,7 +388,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const activateItem = (item: Item) => {
     if (item.kind === 'clip') return openClip(item.clip);
     if (item.kind === 'add') return insertAfter(pages.length);
-    edit.commit([{ op: 'book', patch: item.ghost.patch }], `${item.ghost.label} added — free, made by software`, { label: 'Change book pages' });
+    edit.commit([{ op: 'book', patch: item.ghost.patch }], `${item.ghost.label} added — made by software`, { label: 'Change book pages' });
     focusItem(item.ghost.kind);
   };
   const undo = () => {
@@ -521,7 +568,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const summary = dockSummary(doc, cost.exact).replace(/^Book · /, '');
+  const summary = timelineSummary(doc, cost.exact);
   const menuClip = menu ? clips.find((c) => c.key === menu.key) ?? null : null;
   const pageIdx = menuClip ? pageIndex(menuClip.key) : -1;
   const menuItems = menuClip
@@ -558,7 +605,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
               <AddClip
                 key={item.key}
                 label="Add page"
-                hint={full ? `this comic is at its ${maxPages}-page limit` : 'a blank page, free'}
+                hint={full ? `this comic is at its ${maxPages}-page limit` : 'a blank page'}
                 disabled={full}
                 compact={compact}
                 tabIndex={tabIndex}
@@ -575,7 +622,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
                 key={item.key}
                 ghost
                 label={item.ghost.label}
-                hint="made by software, free"
+                hint="made by software"
                 compact={compact}
                 tabIndex={tabIndex}
                 itemRef={ref}
@@ -627,6 +674,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Book timeline"
       className={cx('relative w-full min-w-0 max-w-full shrink-0 overflow-hidden', !compact && 'border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)]')}
       // The dock sits on the screen's bottom edge on tablets and desktops: keep its controls out of the
@@ -651,15 +699,18 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           <p className="min-w-0 flex-1 truncate text-[11.5px] tabular-nums text-[var(--ds-muted)]" title={notice || summary} role={notice ? 'status' : undefined}>
             {notice || summary}
           </p>
-          {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off. */}
-          <TimelineHistoryLink studio={studio} />
-          {/* The Assets tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
-          {hasMedia(doc) && (
+          {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off,
+              nor while this board already shows its History tab (one home per action). */}
+          {!boardOffers.history && <TimelineHistoryLink studio={studio} />}
+          {/* The Assets tab exists once the comic has an image (feature tab `visible`); no dead button before that,
+              and none while the board's own Assets tab is on screen. */}
+          {hasMedia(doc) && !boardOffers.media && (
             <button
               type="button"
               onClick={() => studio.setTab('media')}
               className={SUMMARY_ACTION}
               aria-label="Open Assets: every image in this comic"
+              data-action="media"
             >
               <Images className="h-3.5 w-3.5" aria-hidden />
               <span className="hidden sm:inline">Assets</span>
@@ -689,7 +740,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
       >
         {dialog?.kind === 'versions' && <VersionStack key={renderTargetKey(dialog.target)} studio={studio} target={dialog.target} initialCompare={dialog.compare} />}
       </TimelineDialog>
-      <TimelineDialog open={dialog?.kind === 'plate'} onClose={() => setDialog(null)} title={dialog?.kind === 'plate' ? `${PLATE_LABEL[dialog.plate]} · free` : ''}>
+      <TimelineDialog open={dialog?.kind === 'plate'} onClose={() => setDialog(null)} title={dialog?.kind === 'plate' ? PLATE_LABEL[dialog.plate] : ''}>
         {dialog?.kind === 'plate' && (
           <PlateEditor
             doc={doc}

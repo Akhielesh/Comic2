@@ -265,6 +265,15 @@ describe('BoardPane feature tabs and dock (wave 2)', () => {
     expect(within(screen.getByRole('tabpanel')).getByText('Languages panel')).toBeInTheDocument();
   });
 
+  it('the Assets tab (id media) carries data-action="media"; the built-in tabs carry none (declutter C2; DC-1 #5)', () => {
+    mocks.tabs = [{ ...languages, id: 'media', label: 'Assets', visible: () => true }];
+    render(<BoardPane studio={makeStudio()} />);
+    const assets = screen.getByRole('tab', { name: /Assets/ });
+    expect(assets).toHaveAttribute('data-action', 'media');
+    expect(assets).toHaveAttribute('id', 'board-tab-media');
+    expect(screen.getByRole('tab', { name: /Read/ })).not.toHaveAttribute('data-action');
+  });
+
   it('a visibility check that throws never breaks the board', () => {
     mocks.tabs = [{ ...languages, visible: () => { throw new Error('boom'); } }];
     render(<BoardPane studio={makeStudio()} />);

@@ -5,6 +5,8 @@
 // affordance; keyboard users press M / the context-menu key) and its name is its own content — the
 // full description for screen readers, the short visible label hidden from them — so no aria-label
 // can drift from the visible text. Money is printed for the viewer (governed users: no dollars).
+// Declutter (DC-1, F9; rubric C5): "Free" appears only beside something that costs. Add tiles and software
+// pages are free to add and edit, and nothing beside them costs, so they carry no price word at all.
 
 import React from 'react';
 import { AlertTriangle, Info, LoaderCircle, MoreHorizontal, Plus } from 'lucide-react';
@@ -53,7 +55,7 @@ const ringFor = (clip: ClipVM): string => {
  */
 export const clipAriaLabel = (clip: ClipVM, money?: (usd: number) => string): string => {
   const parts = [clip.label];
-  if (clip.plate) parts.push('made by software, free');
+  if (clip.plate) parts.push('made by software');
   else parts.push(STATUS_TEXT[clip.status].toLowerCase());
   if (clip.versions > 1) parts.push(plural(clip.versions, 'version'));
   if (clip.spentUsd > 0 && money) parts.push(`${amountInSentence(money(clip.spentUsd))} spent`);
@@ -116,7 +118,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   const money = cost?.exact;
   // The tiny label under the thumb only fits a dollar amount; a governed share lives in the title and name.
   const spentTiny = clip.spentUsd > 0 && cost && !cost.governed ? cost.exact(clip.spentUsd) : '';
-  const title = [clip.label, clip.plate ? 'Free — made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 && money ? `${amountInSentence(money(clip.spentUsd))} spent` : '', nextPrice || '']
+  const title = [clip.label, clip.plate ? 'Made by software' : STATUS_TEXT[clip.status], clip.versions > 1 ? `v${clip.versions}` : '', clip.spentUsd > 0 && money ? `${amountInSentence(money(clip.spentUsd))} spent` : '', nextPrice || '']
     .filter(Boolean)
     .join(' · ');
 
@@ -219,7 +221,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
         <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: w + 8 }} aria-hidden>
           <p className="truncate text-[10.5px] font-semibold text-[var(--ds-ink)]">{short}</p>
           <p className="truncate text-[10px] tabular-nums text-[var(--ds-muted)]">
-            {clip.plate ? 'Free' : [clip.versions > 1 ? `v${clip.versions}` : '', spentTiny].filter(Boolean).join(' · ') || ' '}
+            {clip.plate ? ' ' : [clip.versions > 1 ? `v${clip.versions}` : '', spentTiny].filter(Boolean).join(' · ') || ' '}
           </p>
         </div>
       )}
@@ -227,7 +229,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   );
 };
 
-/** "+ Add page" and "+ Title page" options (free). */
+/** "+ Add page" and "+ Title page" options. No price word (F9): adding one costs nothing, and nothing beside it does. */
 export const AddClip: React.FC<{
   label: string;
   hint: string;
@@ -269,7 +271,8 @@ export const AddClip: React.FC<{
       {!compact && (
         <div className="w-full min-w-0 text-center leading-tight" style={{ maxWidth: ghost ? 64 : 52 }} aria-hidden>
           <p className="truncate text-[10.5px] font-semibold text-[var(--ds-ink)]">{label}</p>
-          <p className="truncate text-[10px] text-[var(--ds-muted)]">Free</p>
+          {/* An empty second line keeps the tile's label on the clips' baseline. */}
+          <p className="truncate text-[10px] text-[var(--ds-muted)]"> </p>
         </div>
       )}
     </div>

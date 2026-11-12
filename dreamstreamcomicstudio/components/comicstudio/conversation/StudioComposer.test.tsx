@@ -42,6 +42,7 @@ import { prepareImageFile } from '../refs/downscale';
 import { deleteInboxRef } from '../studioApi';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
+import { TIER_PRESETS, getImageModel, resolveImageJob } from '../../../shared/comic/models';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { labelInName } from '../mobile/testing/labelInName';
 import { enterAction, selectionLabel, sendArgs } from './StudioComposer';
@@ -129,6 +130,33 @@ describe('StudioComposer — option chips', () => {
     expect(within(panel).getByRole('radio', { name: /Draft/ })).toHaveTextContent('$0.05/page');
     fireEvent.click(within(panel).getByRole('radio', { name: /Pro/ }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'settings', patch: { quality: 'pro' } }]);
+  });
+
+  // DC-1 wave note 3 (lead D10): from 1024 the composer chip is quality's on-screen home (the header has none there).
+  it('the quality chip is one home of the quality action and reads "{Tier} · {Model}" when roomy, never a price', () => {
+    const studio = makeFakeStudio();
+    render(<StudioComposer studio={studio} />);
+    const chip = screen.getByRole('button', { name: /^Quality:/ });
+    expect(chip).toHaveAttribute('data-action', 'quality');
+    const doc = studio.doc!;
+    const model = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec.nickname;
+    expect(chip).toHaveTextContent(`${TIER_PRESETS[doc.settings.quality]!.label} · ${model}`);
+    expect(chip.textContent).not.toMatch(/[$¢]/);
+    expect(within(chip).queryByTestId('composer-quality-lock')).toBeNull();
+    // The other chips carry no action id.
+    expect(screen.getByRole('button', { name: /^Format/ })).not.toHaveAttribute('data-action');
+  });
+
+  it('a locked comic shows the locked model, the lock glyph and the words ", locked for this comic"', () => {
+    const doc = makeSampleDoc();
+    // Lock to the Pro tier's model (the registry names it; no model id spelled out here).
+    const locked = resolveImageJob('page', 'pro').spec;
+    doc.imageModel = { modelId: locked.id, lockedAt: 1, origin: 'user_change' };
+    render(<StudioComposer studio={makeFakeStudio({ doc })} />);
+    const chip = screen.getByRole('button', { name: /^Quality:/ });
+    expect(chip).toHaveTextContent(`· ${getImageModel(locked.id)!.nickname}`);
+    expect(within(chip).getByTestId('composer-quality-lock')).toBeInTheDocument();
+    expect(chip).toHaveAccessibleName(expect.stringContaining(', locked for this comic'));
   });
 
   it('Style panel: a preset drafts the style; exploring directions runs the spend action', () => {

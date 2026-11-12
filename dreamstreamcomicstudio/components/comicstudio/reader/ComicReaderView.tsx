@@ -984,17 +984,19 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           </IconButton>
         )}
         <ReaderMenu label="More" items={menuItems} />
+        {/* data-action="read": the one full-screen reading entry in this view (declutter C2; DC-1 wave note 4). */}
         {immersiveEntry ? (
           <button
             type="button"
             onClick={openImmersive}
+            data-action="read"
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-[44px]"
           >
             <Expand className="h-4 w-4" aria-hidden />
             <span className={cx(narrow && 'sr-only')}>{t('fullScreen')}</span>
           </button>
         ) : fullscreenControl ? (
-          <IconButton label={fullscreen ? t('exitFullScreen') : t('fullScreen')} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+          <IconButton label={fullscreen ? t('exitFullScreen') : t('fullScreen')} aria-pressed={fullscreen} onClick={toggleFullscreen} data-action="read">
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </IconButton>
         ) : null}
