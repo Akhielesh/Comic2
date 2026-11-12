@@ -1,13 +1,18 @@
 // StudioErrorBoundary (enterprise hardening): catches render-time crashes anywhere in the studio
-// tree and shows a themed, recoverable panel instead of a white screen. "Try again" re-mounts the
+// tree and shows a recoverable panel instead of a white screen. "Try again" re-mounts the
 // subtree; "Reload" does a hard refresh; "Back" exits the studio. Errors are logged for debugging.
 //
-// React error boundaries must be class components; the fallback is a function child so it can use
-// the studio theme hook.
+// Built on the DS ErrorBoundary (components/ds) with the DS state look: the error tile, the title
+// and words of ErrorState, the DS buttons and the page canvas in both themes. Unlike the DS
+// default it can show the error's message behind "Show details", for a creator reporting a bug.
 
 import React from 'react';
-import { AlertTriangle, RotateCcw, RefreshCw, ArrowLeft, ChevronRight } from 'lucide-react';
-import { useStudioTheme } from './themeStore';
+import { AlertCircle, ArrowLeft, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react';
+import { cn } from '../../../lib/utils';
+import { FOCUS_RING, RADIUS_PANEL, STATUS_SURFACE } from '../../chat/studioDesign';
+import { Button } from '../../ds/Button';
+import { ErrorBoundary as DsErrorBoundary } from '../../ds/ErrorBoundary';
+import { STATE_DESCRIPTION, STATE_TITLE, StateIconTile } from '../../ds/stateParts';
 
 const StudioErrorFallback: React.FC<{
   error: Error;
@@ -15,55 +20,46 @@ const StudioErrorFallback: React.FC<{
   onBack?: () => void;
   label?: string;
 }> = ({ error, onReset, onBack, label }) => {
-  const t = useStudioTheme();
   const [showDetail, setShowDetail] = React.useState(false);
   return (
-    <div className={`min-h-screen ${t.bg} ${t.text} flex items-center justify-center p-6`} role="alert">
-      <div className={`w-full max-w-md rounded-2xl border ${t.edge} ${t.panel} p-6 text-center`}>
-        <div className={`mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border ${t.edge} ${t.panelAlt}`}>
-          <AlertTriangle className="h-7 w-7 text-amber-500" />
-        </div>
-        <h2 className={`font-display text-xl tracking-wide ${t.text}`}>{label ?? 'Something went wrong'}</h2>
-        <p className={`mt-2 text-sm ${t.textDim}`}>
+    <div data-slot="studio-error" className="flex min-h-screen items-center justify-center bg-[var(--ds-canvas)] p-6 text-[var(--ds-ink)]" role="alert">
+      <div className={cn('flex w-full max-w-md flex-col items-center border px-6 py-10 text-center', RADIUS_PANEL, STATUS_SURFACE.error)}>
+        <StateIconTile tone="error">
+          <AlertCircle />
+        </StateIconTile>
+        <h2 className={STATE_TITLE}>{label ?? 'Something went wrong'}</h2>
+        <p className={cn(STATE_DESCRIPTION, 'mt-2')}>
           The studio hit an unexpected error. Your work in this session may be unsaved — try again, or
           reload to recover.
         </p>
 
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-          <button
-            onClick={onReset}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-bold ${t.accentText} ${t.accentBg} ${t.accentBgHover} ${t.focusRing}`}
-          >
-            <RotateCcw className="h-3.5 w-3.5" /> Try again
-          </button>
-          <button
-            onClick={() => { if (typeof window !== 'undefined') window.location.reload(); }}
-            className={`inline-flex items-center gap-1.5 rounded-full border ${t.edgeStrong} px-3 py-1.5 text-sm font-semibold ${t.textDim} ${t.hover} ${t.focusRing}`}
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> Reload
-          </button>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={onReset}>
+            <RotateCcw aria-hidden="true" /> Try again
+          </Button>
+          <Button variant="outline" onClick={() => { if (typeof window !== 'undefined') window.location.reload(); }}>
+            <RefreshCw aria-hidden="true" /> Reload
+          </Button>
           {onBack && (
-            <button
-              onClick={onBack}
-              className={`inline-flex items-center gap-1.5 rounded-full border ${t.edge} px-3 py-1.5 text-sm font-semibold ${t.textDim} ${t.hover} ${t.focusRing}`}
-            >
-              <ArrowLeft className="h-3.5 w-3.5" /> Back
-            </button>
+            <Button variant="ghost" onClick={onBack}>
+              <ArrowLeft aria-hidden="true" /> Back
+            </Button>
           )}
         </div>
 
         {error?.message && (
-          <div className="mt-4 text-left">
+          <div className="mt-5 w-full text-left">
             <button
+              type="button"
               onClick={() => setShowDetail((v) => !v)}
-              className={`inline-flex items-center gap-1 text-[11px] font-semibold ${t.textFaint} ${t.hover} rounded px-1`}
+              className={`inline-flex items-center gap-1 rounded-[var(--ds-radius-sm,0.25rem)] px-1 text-[11px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] coarse:min-h-[var(--ds-density-touch)] ${FOCUS_RING}`}
               aria-expanded={showDetail}
             >
-              <ChevronRight className={`h-3 w-3 transition-transform ${showDetail ? 'rotate-90' : ''}`} />
+              <ChevronRight aria-hidden="true" className={cn('h-3 w-3 transition-transform duration-[var(--ds-motion-fast,120ms)] motion-reduce:transition-none', showDetail && 'rotate-90')} />
               {showDetail ? 'Hide details' : 'Show details'}
             </button>
             {showDetail && (
-              <pre className={`mt-2 max-h-40 overflow-auto rounded-lg border ${t.edge} ${t.panelAlt} p-2.5 text-[11px] ${t.textDim} whitespace-pre-wrap break-words`}>
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-[var(--ds-radius-control,0.75rem)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-2.5 text-[11px] text-[var(--ds-muted)]">
                 {error.message}
               </pre>
             )}
@@ -80,35 +76,20 @@ interface StudioErrorBoundaryProps {
   label?: string;
 }
 
-interface StudioErrorBoundaryState {
-  error: Error | null;
-}
+const logStudioError = (error: Error, info: React.ErrorInfo): void => {
+  // eslint-disable-next-line no-console
+  console.error('[studio] render error:', error, info?.componentStack);
+};
 
-export class StudioErrorBoundary extends React.Component<StudioErrorBoundaryProps, StudioErrorBoundaryState> {
-  state: StudioErrorBoundaryState = { error: null };
-
-  static getDerivedStateFromError(error: Error): StudioErrorBoundaryState {
-    return { error };
-  }
-
-  componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    // eslint-disable-next-line no-console
-    console.error('[studio] render error:', error, info?.componentStack);
-  }
-
-  reset = (): void => this.setState({ error: null });
-
+export class StudioErrorBoundary extends React.Component<StudioErrorBoundaryProps> {
   render(): React.ReactNode {
-    if (this.state.error) {
-      return (
-        <StudioErrorFallback
-          error={this.state.error}
-          onReset={this.reset}
-          onBack={this.props.onBack}
-          label={this.props.label}
-        />
-      );
-    }
-    return this.props.children;
+    return (
+      <DsErrorBoundary
+        onError={logStudioError}
+        fallback={({ error, reset }) => <StudioErrorFallback error={error} onReset={reset} onBack={this.props.onBack} label={this.props.label} />}
+      >
+        {this.props.children}
+      </DsErrorBoundary>
+    );
   }
 }

@@ -488,6 +488,19 @@ CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3
 
 ## Changelog
 
+### S2b — the app shell (DS-2, 2026-11-12)
+
+- DS-2 (S2): index.html's body and #app-splash read --ds-canvas/--ds-ink with the skin values as fallbacks (appShell.test.ts
+  pins them); the body text stays the light ink for the legacy pages. The site header is AppHeader. The App root reads the
+  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab).
+- Lead decision D8: the browser chrome colour (both `theme-color` metas and `public/app.webmanifest` theme_color) is the
+  Atlas paper, #ffffff light and #0a0a0a dark, pinned to the `[data-ds-skin="atlas"]` --ds-canvas by appShell.test.ts. The
+  default skin's #FAF9F5 / #262624 read as a warm band above the dark Atlas page. Not changed: the manifests'
+  background_color, `public/comics.webmanifest` and the QA page `qa/comic-qa.html`.
+- Lead decision D9: the shell's Contact link, the home page and the studio-access refusal write to the one support
+  address, `SUPPORT_EMAIL` (components/legal/contacts.ts, Atlas #263's constant). ComicReader's footer address (Atlas #263
+  owns that line) and Stream Studio (live/**, owner to confirm) are unchanged.
+
 ### S2a — the colour layer (Atlas `292b17b6`, design files = `0677199b`, 2026-11-12)
 
 - The 12 colour-layer tokens and the two develop tokens, as DreamStream extensions (above). Their values ship as CL-0

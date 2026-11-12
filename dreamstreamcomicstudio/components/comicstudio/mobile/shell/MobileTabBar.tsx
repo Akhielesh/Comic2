@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RADIUS_PILL } from '../../../chat/studioDesign';
+import { navItemName } from '../../../ds/TabBar';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -66,26 +67,11 @@ const DisabledHint: React.FC<{ text: string; rect: DOMRect; orientation: 'bar' |
   );
 };
 
-/** Lower-case words, as WCAG 2.5.3 tools compare names ("6/12" → "6 12"). */
-const words = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
-
 /**
- * The item's accessible name. It starts with exactly what the item shows — the label, then the badge —
- * so a voice-control user can say what they see (WCAG 2.5.3 label in name), then adds what the badge and
- * the dot mean ("Board, 6 of 12 pages ready, drawing"). When the spoken badge already begins with the
- * visible one ("6 of 12" → "6 of 12 pages ready") it is not repeated.
+ * The item's accessible name: one rule for the studio and the app shell, from components/ds/TabBar (DS-2). It starts
+ * with exactly what the item shows (the label, then the badge), then says what the badge and the dot mean.
  */
-export const navItemName = (item: Pick<StudioNavItem, 'label' | 'badge' | 'badgeLabel' | 'dot' | 'disabled' | 'disabledReason'>): string => {
-  const badgeSpoken = !!item.badge && !!item.badgeLabel && words(item.badgeLabel).startsWith(words(item.badge));
-  const head = item.badge && !badgeSpoken ? `${item.label} ${item.badge}` : item.label;
-  return [head, item.badgeLabel, item.dot === 'amber' ? 'waiting for your approval' : item.dot === 'accent' ? 'new reply' : item.dot === 'pulse' ? 'drawing' : null, item.disabled ? item.disabledReason : null]
-    .filter(Boolean)
-    .join(', ');
-};
+export { navItemName };
 
 export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' | 'rail' }> = ({ item, orientation }) => {
   const [hint, setHint] = useState<DOMRect | null>(null);

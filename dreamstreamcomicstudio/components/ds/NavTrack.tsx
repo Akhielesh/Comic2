@@ -15,7 +15,7 @@
  * Ink only: no spark anywhere in navigation (sparkGuard).
  */
 import React, { useRef } from 'react';
-import { navItemName } from '../comicstudio/mobile/shell/MobileTabBar';
+import { navItemName } from './TabBar';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING_FLUSH, SEGMENTED_ACTIVE_FILL, SEGMENTED_PILL, STATUS_DOT } from './recipes';
 import { isRtl, nextRovingIndex } from './roving';

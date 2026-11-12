@@ -200,6 +200,10 @@ export const LIFT =
  * put `ds-stagger` on the parent instead: its children rise --ds-motion-stagger apart.
  */
 export const RISE_IN = 'ds-rise-in';
+/** The overlay entrance (DS-2): fade and grow from 96 % over --ds-motion-enter-quick (280 ms); still under reduced motion. */
+export const SCALE_IN = 'ds-scale-in';
+/** A plain fade over --ds-motion-enter-quick (DS-2: the tab hint); still under reduced motion. */
+export const FADE_IN = 'ds-fade-in';
 
 /** Press feedback: dips while pressed and springs back (index.css; motion-safe, skin only). */
 export const PRESS = 'ds-press';

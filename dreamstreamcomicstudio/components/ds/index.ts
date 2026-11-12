@@ -37,6 +37,11 @@ export { StateIconTile, STATE_DESCRIPTION, STATE_TITLE, type StateAction, type S
 export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from './Skeleton';
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';
 
+// Shell (DS-2; redesign plan §11.3 M1c)
+export { AppHeader, AppHeaderSkeleton, HEADER_GRID, HEADER_INNER, HEADER_REGION, useScrolledPast, type AppHeaderProps, type AppHeaderSkeletonProps, type HeaderRegion } from './AppHeader';
+export { TabBar, TabItemButton, navItemName, NAV_MOTION, TAB_BADGE, TAB_BAR, TAB_BAR_ROW, TAB_DOT, TAB_DOT_PLACE, TAB_HINT, TAB_HINT_MS, TAB_ITEM, TAB_ITEM_CURRENT, TAB_ITEM_DISABLED, TAB_ITEM_IDLE, TAB_ITEM_ORIENTATION, TAB_PILL, TAB_PILL_CURRENT, TAB_PILL_IDLE, type TabBarItem, type TabBarProps, type TabDot, type TabItemButtonProps } from './TabBar';
+export { NavRail, NAV_RAIL, NAV_RAIL_DIVIDER, type NavRailBack, type NavRailProps } from './NavRail';
+
 // Overlays (DS-1c: Radix, lead decision D6) and the app's one toast slot
 export { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, dialogMotion, DIALOG_CLOSE, DIALOG_DESCRIPTION, DIALOG_FOOTER, DIALOG_HEADER, DIALOG_LAYER, DIALOG_PANEL, DIALOG_SCRIM, DIALOG_SIZE, DIALOG_TITLE_CLASSES, type DialogContentProps, type DialogProps, type DialogSize } from './Dialog';
 export { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger, ALERT_DIALOG_HEADER, type AlertDialogActionProps, type AlertDialogActionVariant, type AlertDialogContentProps, type AlertDialogProps } from './AlertDialog';

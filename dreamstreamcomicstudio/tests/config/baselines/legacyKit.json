@@ -2,9 +2,8 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 774, "brand-blue": 211, "brand-red": 51, "brand-yellow": 223, "font-comic": 98, "font-display": 223, "shadow-comic": 138 },
+  "totals": { "border-black": 748, "brand-blue": 206, "brand-red": 47, "brand-yellow": 211, "font-comic": 96, "font-display": 214, "shadow-comic": 128 },
   "files": {
-    "App.tsx": { "border-black": 5, "brand-yellow": 3, "font-display": 3, "shadow-comic": 5 },
     "components/AccountSettings.tsx": { "border-black": 32, "brand-blue": 5, "brand-yellow": 3, "font-comic": 2, "font-display": 18, "shadow-comic": 5 },
     "components/AgentStageShell.tsx": { "border-black": 4, "brand-blue": 1, "brand-yellow": 1, "font-comic": 1, "font-display": 1, "shadow-comic": 2 },
     "components/AuthPage.tsx": { "border-black": 14, "brand-blue": 18, "brand-yellow": 4, "font-comic": 2, "font-display": 8, "shadow-comic": 2 },
@@ -19,7 +18,6 @@
     "components/LearnHub.tsx": { "border-black": 3, "font-comic": 2, "font-display": 2, "shadow-comic": 1 },
     "components/MessageCard.tsx": { "border-black": 2, "brand-blue": 2, "brand-red": 2, "brand-yellow": 2 },
     "components/ModelLibrary.tsx": { "border-black": 72, "brand-blue": 25, "brand-red": 4, "brand-yellow": 20, "font-display": 4, "shadow-comic": 10 },
-    "components/NotificationBell.tsx": { "border-black": 5, "brand-blue": 3, "brand-red": 3, "brand-yellow": 3, "font-comic": 1, "font-display": 1, "shadow-comic": 2 },
     "components/PanelDialogue.tsx": { "border-black": 7, "brand-blue": 4, "brand-yellow": 1, "font-comic": 4, "font-display": 4 },
     "components/PrivacyPolicy.tsx": { "font-display": 1 },
     "components/ProjectDashboard.tsx": { "border-black": 25, "brand-blue": 5, "brand-red": 1, "brand-yellow": 10, "font-comic": 5, "font-display": 8, "shadow-comic": 6 },
@@ -42,13 +40,7 @@
     "components/admin/ProductAccessPanel.tsx": { "border-black": 8, "brand-yellow": 2, "font-display": 1 },
     "components/chat/CodeBlock.tsx": { "brand-blue": 1 },
     "components/chat/MediaPanel.tsx": { "border-black": 2 },
-    "components/common/ErrorBoundary.tsx": { "border-black": 1, "font-comic": 1, "font-display": 1, "shadow-comic": 1 },
-    "components/common/InfoTooltip.tsx": { "border-black": 1, "shadow-comic": 1 },
     "components/feedback/FeedbackButtons.tsx": { "border-black": 2, "brand-red": 1, "brand-yellow": 2 },
-    "components/feedback/FeedbackWidget.tsx": { "border-black": 7, "brand-red": 1, "brand-yellow": 4, "font-display": 1 },
-    "components/layout/BrandLockup.tsx": { "border-black": 1, "brand-blue": 1, "brand-yellow": 1, "font-display": 2 },
-    "components/layout/NavDropdown.tsx": { "border-black": 1, "brand-blue": 1, "shadow-comic": 1 },
-    "components/layout/StaticSiteHeader.tsx": { "border-black": 5, "brand-yellow": 1 },
     "components/modals/BubbleEditorModal.tsx": { "border-black": 1, "brand-blue": 3, "shadow-comic": 1 },
     "components/modals/CharacterLibraryModal.tsx": { "border-black": 3, "brand-blue": 5, "font-comic": 1, "font-display": 2 },
     "components/modals/HistoryModal.tsx": { "border-black": 2, "font-display": 1, "shadow-comic": 1 },
@@ -76,7 +68,6 @@
     "components/steps/ReviewExport.tsx": { "border-black": 23, "brand-blue": 3, "brand-red": 1, "brand-yellow": 5, "font-comic": 4, "font-display": 7, "shadow-comic": 3 },
     "components/steps/ScriptInput.tsx": { "border-black": 28, "brand-blue": 4, "brand-red": 1, "brand-yellow": 12, "font-comic": 7, "font-display": 9, "shadow-comic": 2 },
     "components/steps/StyleSelection.tsx": { "border-black": 40, "brand-blue": 24, "brand-red": 6, "brand-yellow": 13, "font-comic": 5, "font-display": 21, "shadow-comic": 4 },
-    "components/studio/kit/ErrorBoundary.tsx": { "font-display": 1 },
     "components/studio/kit/theme.ts": { "border-black": 3, "brand-blue": 4, "brand-yellow": 2, "shadow-comic": 1 }
   }
 }
