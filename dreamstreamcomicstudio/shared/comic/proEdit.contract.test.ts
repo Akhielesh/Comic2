@@ -654,6 +654,17 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
       expect(apply(after, inverseOps(doc, [op])).letterStyle, JSON.stringify(op)).toEqual(doc.letterStyle);
     }
   });
+
+  it("a newer build's look (kept on load) and its patches come back through the op's own inverse (a reset, then the look)", () => {
+    const d = json(v5());
+    (d as unknown as { letterStyle: unknown }).letterStyle = { presetId: 'future_look', base: { sizeScale: 1.2 }, kinds: { shout: { weight: 800 } } };
+    const doc = normalizeDoc(d);
+    expect(doc.letterStyle?.presetId).toBe('future_look');
+    for (const op of [{ op: 'letter_style', patch: { base: { sizeScale: 1.4 } } }, { op: 'letter_style', patch: { presetId: 'manga' } }, { op: 'letter_style', patch: null }] as DocOp[]) {
+      const after = applyOp(doc, op);
+      expect(apply(after, inverseOps(doc, [op])).letterStyle, JSON.stringify(op)).toEqual(doc.letterStyle);
+    }
+  });
 });
 
 describe('Pro Edit contract (PE-0): opaque layers through frames and panel removal', () => {

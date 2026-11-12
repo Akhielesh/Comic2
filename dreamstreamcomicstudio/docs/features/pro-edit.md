@@ -199,6 +199,12 @@ source scan (TypeScript AST) proves `components/comicstudio/editor/**` (and `com
 - **Undo after a rollback: mostly closed by PE-SERVER (re-assert).** Still lossy: re-adding a deleted Pro-styled line
   or a deleted effect/sticker overlay, undoing a lettering reset or a `line_style` replace that dropped the Pro keys,
   and (switch off) undoing `panel_remove` of a styled panel.
+- **Undo of a lettering edit on a newer build's look (fixed at S2b-INT):** every `letter_style` inverse is a reset, then
+  the stored look with its base, kinds and speakers. The shared op used to drop that restore when the look was an id this
+  build does not know (kept on load), so one undo after a rollback reset the comic's whole lettering to classic. The op
+  now applies any well-formed stored look id (`isStoredLookId`, `lettering/style.ts`); which look a client may send stays
+  the server's call (a pickable look, or the doc's own stored one re-asserted). Pinned by `proEdit.contract.test.ts` and
+  `server/src/comic/sanitize/lettering.pro.test.ts`.
 - **Named styles (PE-LETTER):** trashed lines that use a deleted named style keep the link (and draw without it if
   restored). `Line.styleId` was not kept by the server `line` op or by the publication on PE-LETTER's branch (its notes
   19-20); PE-SERVER and the S2b integration close both: the `line` op keeps a link to a saved style while the switch is

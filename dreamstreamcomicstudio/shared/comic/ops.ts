@@ -120,8 +120,7 @@ import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, MAX_BALLOON_SNAPSHOT, MO
 import { panelPointMap, type PointMap } from './panelize/space.js';
 import {
   MAX_SAFE_MARGIN,
-  isLetteringPresetId,
-  isProLetteringPresetId,
+  isStoredLookId,
   mergeNamedStyles,
   mergeStylePatch,
   type LetteringStyle,
@@ -1039,7 +1038,9 @@ const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): C
   const cur = letterStyleOf(doc);
   const next: LetteringStyle = { ...cur };
   if (patch.presetId !== undefined && patch.presetId !== null) {
-    if (!isLetteringPresetId(patch.presetId) && !isProLetteringPresetId(patch.presetId)) return doc;
+    // A base or Pro look, or a newer build's look the doc stored (kept on load, PE-0): the undo of a restyle after a
+    // rollback restores it with its patches instead of dropping the whole op (the reset before it would wipe them).
+    if (!isStoredLookId(patch.presetId)) return doc;
     if (patch.presetId !== cur.presetId) {
       next.presetId = patch.presetId;
       if (!patch.keepOverrides) {

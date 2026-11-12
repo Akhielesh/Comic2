@@ -860,6 +860,14 @@ const STORED_PRESET_ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
 /** A named style's key ('st_…' or any short id) as stored. */
 const NAMED_STYLE_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+/**
+ * A well-formed look id as the load keeps it: a base or Pro look, or one a newer build added (C-8). The shared
+ * letter_style op applies such a look, so the undo of a restyle (a reset, then the stored look with its base, kinds and
+ * speakers) gives a rolled-back comic its lettering back. Which look a CLIENT may send stays the server's call
+ * (sanitize/lettering.ts: a pickable look, or the doc's own stored one re-asserted); an unknown look draws as classic.
+ */
+export const isStoredLookId = (v: unknown): v is LetteringPresetId =>
+  isLetteringPresetId(v) || isProLetteringPresetId(v) || (typeof v === 'string' && STORED_PRESET_ID_RE.test(v) && !UNSAFE_KEYS.has(v));
 const finiteNum = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : undefined);
 const nonNegNum = (v: unknown): number | undefined => {
   const n = finiteNum(v);

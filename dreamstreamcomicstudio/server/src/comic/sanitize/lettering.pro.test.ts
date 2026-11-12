@@ -236,6 +236,20 @@ describe("PE-LETTER's opt-in, wired (collisions B-3): accepted with the switch o
     rejects(() => sanitize(doc, [{ op: 'letter_style', patch: { presetId: 'robot' } }]), 400, /Unknown lettering preset/);
   });
 
+  it("letter_style: a newer build's look (kept on load) survives the undo of a base edit with the switch off — the reset does not wipe it", () => {
+    sw.on = false;
+    const raw = JSON.parse(JSON.stringify(plannedDoc())) as ComicDoc;
+    raw.letterStyle = JSON.parse(JSON.stringify({ presetId: 'future_look', base: { sizeScale: 1.2 }, kinds: { shout: { weight: 800 } } }));
+    const doc = normalizeDoc(raw);
+    expect(doc.letterStyle?.presetId).toBe('future_look');
+    const { undo, back } = undoRoundTrip(doc, [{ op: 'letter_style', patch: { base: { sizeScale: 1.4 } } }]);
+    expect(undo[0]).toEqual({ op: 'letter_style', patch: null });
+    expect(undo[1]).toMatchObject({ op: 'letter_style', patch: { presetId: 'future_look', keepOverrides: true } });
+    expect(back.letterStyle).toEqual(doc.letterStyle);
+    // Only the doc's own stored look re-asserts: another unknown look is still refused.
+    rejects(() => sanitize(doc, [{ op: 'letter_style', patch: { presetId: 'other_look' } }]), 400, /Unknown lettering preset/);
+  });
+
   it('letter_style `named`: a save and a delete apply, and their undo puts the saved styles back exactly', () => {
     const doc = stored();
     const save = undoRoundTrip(doc, [{ op: 'letter_style', patch: { named: { st_hero: { name: 'Hero', patch: { italic: true, textColor: '#0000ff' } } } } }]);
