@@ -103,8 +103,10 @@ trash included (`pruneDanglingMotion`).
 - Both sit in `PRO_EDIT_OPS`, behind `PRO_EDIT_OPS_PATCHABLE = false`, and are in `INVERTIBLE_OPS` and `KNOWN_DOC_OPS`
   from day one (an old tab that receives one refetches). Each has an exact inverse in `undo.ts`.
 - **Server gate (PE-SERVER):** `motion` / `page_motion` go through `server/src/comic/sanitize/motion.ts` (registry ids
-  and schemas, clamps, 12 keys, 48 clips, 16 KB page, 256 KB doc, ≤ 3 Hz per clip and per page), and the whole batch is
-  checked as it will be stored (`motionPatchScreen`). A batch that would lose a clip it did not delete (the op's
+  and schemas, clamps, 12 keys, 48 clips, 16 KB page, 256 KB doc, ≤ 3 Hz per clip and per page). A batch that holds a
+  motion op is checked as it will be stored (`motionPatchScreen`), but only on the pages its motion ops touch and only
+  against the page-wide maximum; a batch without a motion op is not screened at all (§7, "The flash and size screen").
+  A batch that would lose a clip it did not delete (the op's
   49th-clip skip or `normalizePageMotion`'s 16 KB trim from the end) is refused; only targets, start panels and camera
   moves the batch adds or changes must be on the page (dangling stored values are inert).
 - `'motion'` is in `PAGE_OBJECT_KEYS`: the generic `page` op strips it.
@@ -205,6 +207,20 @@ source scan (TypeScript AST) proves `components/comicstudio/editor/**` (and `com
   now applies any well-formed stored look id (`isStoredLookId`, `lettering/style.ts`); which look a client may send stays
   the server's call (a pickable look, or the doc's own stored one re-asserted). Pinned by `proEdit.contract.test.ts` and
   `server/src/comic/sanitize/lettering.pro.test.ts`.
+- **The flash and size screen sees only motion batches (latent; for the package that flips the switch).**
+  `motionPatchScreen` returns early when a batch has no `motion` / `page_motion` op, and checks only the pages those ops
+  touch. But a page's flash count also depends on non-motion state: a line's panel (`line_move`, `panel_remove`'s
+  `linesTo`), chain heads (`balloon` / `balloons` `linkTo`) and an overlay's clip panel (`layer` clip), and
+  `page_duplicate` copies a page's motion, so repeated duplicates can pass the 256 KB doc budget. `checkPage` also
+  compares only the page-wide maximum, so on a page already over 3 Hz (a newer build's motion) a batch can push a second
+  target or panel area past the limit. The S2b review confirmed both gaps with the switch flipped as `motion.test.ts`
+  does it. Today nothing can store motion (`PRO_EDIT_OPS_PATCHABLE` is false and the screen is not registered), and every
+  player holds opacity over 3 Hz at draw time. **On the flip package's checklist, next to D3:** drop the early return;
+  for every page with motion in the doc before or after the batch, compare `pageFlashCheck` before and after and refuse
+  when any target or region over the limit afterwards flashes faster than before (the `targets` and `regions` lists,
+  not the page maximum); always run the `docMotionBytes` check; return the screen from `patchScreens()` whatever the
+  switch says (it is not a sanitizer); tests in `motion.test.ts` for `line_move`, balloon `linkTo`, `layer` clip and
+  `page_duplicate`.
 - **Named styles (PE-LETTER):** trashed lines that use a deleted named style keep the link (and draw without it if
   restored). `Line.styleId` was not kept by the server `line` op or by the publication on PE-LETTER's branch (its notes
   19-20); PE-SERVER and the S2b integration close both: the `line` op keeps a link to a saved style while the switch is
@@ -238,8 +254,30 @@ pinned by `board/PageEditor.flagOff.test.tsx`).
   flag is on, so the Easy path and the reader download no Pro editor code.
 - `PRO_EDIT_OPS_PATCHABLE` is unaffected: the shell writes no Pro field.
 - **Lead decision D17 (S2b):** PE-SHELL's Easy-path budget is accepted for S2b. PE-SHELL measured the PageEditor chunk
-  at +3.2 KB gz (within the 5 KB budget) and the studio route at +8.3 KB gz with the flag off; the S2b verify step
-  re-measures it after the merges, and the remaining work goes to PE-SHELL-2 (S3), with PE-QA pinning the numbers.
+  at +3.2 KB gz (within the 5 KB budget) and the studio route at +8.3 KB gz with the flag off; the remaining work goes
+  to PE-SHELL-2 (S3), with PE-QA pinning the numbers.
+- **The S2b re-measure (verify step, production build of 85ac6bca against 99b870c4, gzip -9):**
+  - eager first load (the entry's static closure, 3 files): 278,505 → 301,800 B gz, **+23.3 KB** (+77.8 KB min). It is
+    not PE-SHELL's: tailwind-merge (in the lazy DictationButton chunk at 99b870c4) and 17 `components/ds` modules moved
+    onto the critical path through `App.tsx` (`cn`, Button, EmptyState, ErrorState, LoadingState, ToastHost), DS-3's
+    eager AuthPage and DS-2's StaticSiteHeader. D17 does not cover it; it is **for the lead as D17b** (accept and pin,
+    or cut: AuthPage lazy, ToastHost and Toast through a dynamic import, AppLoader on plain classes, clsx-only `cx` in
+    eager chrome). The S2b integration pinned a ceiling at today's number (`tests/config/platformChunks.test.ts`), so
+    nothing grows it unseen in the meantime;
+  - the ComicStudio chunk: 160,381 → 152,941 B gz, **−7.4 KB** (studioDesign moved into the eager chunks);
+  - the ComicStudio route beyond the first load: 702,517 → 736,218 B gz, **+33.7 KB**, 62 → 72 files. Of the 82.6 KB of
+    new rendered modules on the route, `editor/*` is 13.5 KB, compose 17.1 KB, `panelize/compose` 13.0 KB and settle
+    24.7 KB; PE-SHELL's own share is the `editor/*` part plus ProModeSwitch;
+  - the public reader route (PublicComicReader beyond the first load): 290,382 → 307,337 B gz, **+17.0 KB**
+    (ComicPageView +16.9 KB gz), 28 → 32 files. No budget covers it.
+  PE-QA (S3) pins an Easy-route budget and a reader-route budget in `tests/config/platformChunks.test.ts`.
+- **The reader chunk keeps a little editor glue (accepted, option (a) of the S2b review).** BalloonLayer is in every
+  reader's first load through ComicPageView, and it keeps the rotate and height commit glue (`commitOne`,
+  `commitRotate`, `naturalHeight`, the drag state) and the Tab / Cmd+A cycling (`editor/readingCycle.ts`, 264 B). It
+  holds no Pro field, no motion engine and no effect generator; only the transform kit (`editor/balloonTransform.tsx`)
+  is lazy. So the string 'Reset balloon height' is in PublicComicReader and ComicReaderView. PE-QA's reader marker
+  check points at 'rotate-handle', 'ProWorkspace', 'data-pro-tool', 'easeOutBack' and 'camera_push' (all 0 in the
+  reader today), not at 'Reset balloon height'. Moving the glue into the kit (option (b)) is PE-SHELL-2's.
 
 ## 9. The docked inspector and Layers (PE-INSPECT)
 
@@ -264,7 +302,8 @@ pinned by `board/PageEditor.flagOff.test.tsx`).
 - **D2 (a):** page motion is published only while `COMIC_READER_MOTION` is `all`; the flag stays `off` until
   PE-READER-MOTION (S4) (`docs/infrastructure/ENV_MATRIX.md`, Pro Edit).
 - **D3 (a):** dangling motion is pruned in the deleting op, built by the package that flips the switch (§7).
-- **D4 (a):** the flash rule as built (§7, amendment 3).
+- **D4 (a):** the flash rule as built (§7, amendment 3). Where the server screens it is not yet complete (§7, "The flash
+  and size screen"); that is on the flip package's checklist.
 - **D5 (a):** the invented numbers and designs are confirmed for S2b. None is writable while the switch is off.
   **To review before the flip** (in the package that flips `PRO_EDIT_OPS_PATCHABLE`):
   - PE-MOTION-ENGINE build amendment 11: the preset defaults and the flashing defaults (≤ 3 Hz);

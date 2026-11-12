@@ -22,6 +22,7 @@
 // points it at another build directory.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
 const APP = path.resolve(__dirname, '../..');
@@ -60,6 +61,17 @@ const PRO_ONLY: ProOnly[] = [
   { name: 'motion engine', markers: ['7.5625', '2654435761'] },
 ];
 
+/**
+ * The first-load ceiling per HTML entry: the gzip -9 bytes of its module scripts, modulepreloads and their static imports
+ * (what every visitor pays before first paint, the public share reader and the comics landing included). S2b grew the
+ * site entry from 279,251 B (99b870c4) to 303,837 B (the S2b integration): tailwind-merge and 17 components/ds modules
+ * moved onto the critical path (App.tsx's cn and DS primitives, DS-3's eager AuthPage, DS-2's StaticSiteHeader). No lead
+ * decision accepts that yet (D17 covers only PE-SHELL's Easy route; this is D17b, docs/features/pro-edit.md §8), so the
+ * ceiling holds today's number plus ~2 KB for zlib and build noise: nothing grows it unseen. A cut lowers it here; a
+ * reviewed rise raises it with the lead's decision named beside it.
+ */
+const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 306_000, 'live.html': 316_500 };
+
 /** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
 const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;
 
@@ -90,10 +102,10 @@ const callersOf = (r: Renderer, sources: string[]): string[] =>
 const STATIC_IMPORT = /\bfrom\s*["']\.\/([\w.-]+\.js)["']|\bimport\s*["']\.\/([\w.-]+\.js)["']/g;
 
 /** The chunks a page loads before any `import()`: its module scripts and modulepreloads, and their static imports. */
-const eagerChunks = (assets: string): Set<string> => {
+const eagerChunks = (assets: string, entries: string[] = HTML_ENTRIES): Set<string> => {
   const seen = new Set<string>();
   const queue: string[] = [];
-  for (const html of HTML_ENTRIES) {
+  for (const html of entries) {
     const file = path.join(DIST, html);
     if (!existsSync(file)) continue;
     const text = readFileSync(file, 'utf8');
@@ -128,6 +140,15 @@ describe('platform renderers stay out of the entry chunk (real build)', () => {
       expect(eager.size).toBeGreaterThan(1); // the entry imports at least the React vendor chunk
       expect(lazy.length).toBeGreaterThan(0);
     });
+
+    for (const [html, ceiling] of Object.entries(EAGER_GZ_CEILING)) {
+      it(`${html}: the first load stays under its gzip ceiling (${ceiling.toLocaleString('en')} B)`, () => {
+        const files = [...eagerChunks(assets, [html])];
+        expect(files.length, `${html} loads no module script`).toBeGreaterThan(0);
+        const gz = files.reduce((sum, f) => sum + gzipSync(readFileSync(path.join(assets, f)), { level: 9 }).length, 0);
+        expect(gz, `${html} first load is ${gz} B gz (${files.join(', ')}); lower EAGER_GZ_CEILING after a cut, or raise it with a lead decision`).toBeLessThanOrEqual(ceiling);
+      });
+    }
 
     it('the comic pitch deck calls the PowerPoint renderer, so its markers must be in the build', () => {
       expect(callersOf(RENDERERS.find((r) => r.name === 'pptx')!, sources)).toContain(path.join('components', 'comicstudio', 'export', 'pitchDeck.ts'));
