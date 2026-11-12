@@ -49,6 +49,13 @@ afterEach(() => {
 });
 
 const host = () => document.querySelector<HTMLElement>('[data-slot="toast-host"]');
+const status = () => document.querySelector<HTMLElement>('[data-slot="toast-host"] > [data-slot="toast-status"]');
+/** The live regions around an element (itself excluded). */
+const liveAncestors = (el: Element) => {
+  const out: Element[] = [];
+  for (let at = el.parentElement; at; at = at.parentElement) if (at.matches('[role="status"],[role="alert"],[aria-live]')) out.push(at);
+  return out;
+};
 const cards = () => Array.from(document.querySelectorAll<HTMLElement>('[data-slot="toast"]'));
 
 describe('the one slot (claimToast; the timeline re-exports it as claimUndoToast)', () => {
@@ -80,6 +87,17 @@ describe('the one slot (claimToast; the timeline re-exports it as claimUndoToast
     expect(cards()).toHaveLength(0); // gone at once: no exit animation overlapping the newer toast
     expect(lost).toHaveBeenCalledTimes(1);
     expect(dismissed).not.toHaveBeenCalled();
+  });
+
+  it('a dismissed toast lets go of the slot: a later claim never tells it it was lost', () => {
+    const onLost = vi.fn();
+    const onDismiss = vi.fn();
+    const handle = toast({ title: 'Copied the link', onLost, onDismiss });
+    handle.dismiss();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    claimToast();
+    act(() => void toast({ title: 'Saved' }));
+    expect(onLost).not.toHaveBeenCalled();
   });
 
   it('useToastSlot follows the slot live, and listeners can unsubscribe', () => {
@@ -124,14 +142,20 @@ describe('ToastHost', () => {
     expect(restoreLost).toHaveBeenCalledTimes(1);
   });
 
-  it('sits above the phone tab bar and the safe area, on the toast layer, in a polite status region', () => {
+  it('sits above the phone tab bar and the safe area, on the toast layer; its polite status region is there while idle', () => {
     render(<ToastHost />);
     const el = host()!;
     expect(el.parentElement).toBe(document.body); // portalled: no sheet transform can move or clip it
     expectClasses(el, TOAST_HOST, Z.toast);
     expect(el.className).toContain('bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)]');
-    expect(el).toHaveAttribute('role', 'status');
-    expect(el).toHaveAttribute('aria-live', 'polite');
+    // The host itself is no live region (an error card inside it would nest one in another).
+    expect(el).not.toHaveAttribute('role');
+    expect(el).not.toHaveAttribute('aria-live');
+    const region = status()!;
+    expect(region.parentElement).toBe(el);
+    expect(region).toHaveAttribute('role', 'status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toBeEmptyDOMElement(); // in the page before any toast, so the first one is heard
   });
 
   it('the position compiles to calc(--tabbar-h + --sa-bottom-eff + 12px) under this app’s Tailwind', async () => {
@@ -158,13 +182,22 @@ describe('ToastHost', () => {
     expectClasses(bar, TOAST_COUNTDOWN, STATUS_DOT.healthy);
     expect(bar.style.getPropertyValue('--ds-toast-duration')).toBe(`${TOAST_DURATION_MS}ms`);
     expect(card).not.toHaveAttribute('role'); // polite, through the host's status region
+    expect(liveAncestors(card)).toEqual([status()]);
   });
 
-  it('an error is announced at once (role alert); a toast that stays has no time-left bar', () => {
+  it('an error is announced at once (role alert), outside the polite region (live regions never nest); a toast that stays has no time-left bar', () => {
     render(<ToastHost />);
     act(() => void toast({ title: 'That invite has expired', tone: 'error', duration: 0 }));
-    expect(screen.getByRole('alert')).toHaveTextContent('That invite has expired');
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('That invite has expired');
+    expect(alert).toBe(cards()[0]);
+    expect(liveAncestors(alert)).toEqual([]);
+    expect(status()).toBeEmptyDOMElement();
     expect(cards()[0].querySelector('[data-toast-countdown]')).toBeNull();
+    // A polite toast that replaces it lands back in the region.
+    act(() => void toast({ title: 'Invite accepted' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(status()).toHaveTextContent('Invite accepted');
   });
 
   it('dismisses itself after its duration; the clock holds while hovered or focused and resumes with what was left', () => {

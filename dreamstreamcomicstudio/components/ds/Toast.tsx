@@ -18,6 +18,10 @@
  * scene or a test can mount one without doubling the app's. Under reduced motion it neither enters nor leaves with
  * an animation (the hook drops the classes; the skin's CSS stops them as well). Timers exist only while a toast is
  * on screen: an idle page runs none.
+ *
+ * Announcements. The host keeps one polite status region in the page (TOAST_STATUS, present while idle too, so a
+ * reader hears the toast that lands in it); an error card is an alert of its own beside that region, never inside it,
+ * so it is announced once, at once (live regions do not nest).
  */
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -208,7 +212,9 @@ export function resetToastsForTests(): void {
 // ---------------------------------------------------------------------------------------------------------------
 
 /** Where the host sits: above the phone tab bar and the safe area, on the toast layer, centred. */
-export const TOAST_HOST = `pointer-events-none fixed inset-x-0 ${Z.toast} flex justify-center px-4 bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)]`;
+export const TOAST_HOST = `pointer-events-none fixed inset-x-0 ${Z.toast} flex flex-col items-center px-4 bottom-[calc(var(--tabbar-h,56px)+var(--sa-bottom-eff,0px)+12px)]`;
+/** The host's polite status region (always in the page): ordinary toasts land in it. */
+export const TOAST_STATUS = 'flex w-full justify-center';
 /** The card's width and its content column. */
 export const TOAST_CARD_WIDTH = 'w-full max-w-[420px]';
 export const TOAST_BODY = 'min-w-0 flex-1';
@@ -272,7 +278,8 @@ export const ToastCard = /* @__PURE__ */ React.forwardRef<HTMLDivElement, ToastC
       data-tone={tone}
       data-paused={paused ? '' : undefined}
       data-state={leaving ? 'closed' : 'open'}
-      // Errors are announced at once; everything else politely, through the host's status region.
+      // An error is an alert of its own (announced at once); everything else is read politely from the host's status
+      // region, which the card sits in (a static card is announced by nothing).
       role={tone === 'error' ? 'alert' : undefined}
       className={cn(TOAST, TOAST_CARD_WIDTH, !reduce && (leaving ? TOAST_EXIT : TOAST_ENTER), className)}
       onPointerEnter={() => setHovered(true)}
@@ -378,21 +385,26 @@ export function ToastHost({ className }: ToastHostProps): React.ReactElement | n
   const dismiss = useCallback((id: number) => void dismissToast(id), []);
   if (first !== me || typeof document === 'undefined') return null;
   const shown = current ?? exiting;
+  const card = shown ? (
+    <ToastCard
+      key={shown.id}
+      title={shown.title}
+      message={shown.message}
+      tone={shown.tone}
+      action={shown.action}
+      duration={shown.duration}
+      leaving={!current}
+      onDismiss={current ? () => dismiss(shown.id) : undefined}
+      onExited={() => finishExit(shown.id)}
+    />
+  ) : null;
+  const alert = shown?.tone === 'error';
   return createPortal(
-    <div data-slot="toast-host" role="status" aria-live="polite" className={cn(TOAST_HOST, className)}>
-      {shown ? (
-        <ToastCard
-          key={shown.id}
-          title={shown.title}
-          message={shown.message}
-          tone={shown.tone}
-          action={shown.action}
-          duration={shown.duration}
-          leaving={!current}
-          onDismiss={current ? () => dismiss(shown.id) : undefined}
-          onExited={() => finishExit(shown.id)}
-        />
-      ) : null}
+    <div data-slot="toast-host" className={cn(TOAST_HOST, className)}>
+      <div data-slot="toast-status" role="status" aria-live="polite" aria-atomic="true" className={TOAST_STATUS}>
+        {alert ? null : card}
+      </div>
+      {alert ? card : null}
     </div>,
     document.body
   );
