@@ -2,7 +2,7 @@
   "guard": "zLadder",
   "test": "tests/config/zLadderGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/zLadderGuard.test.ts lowers it (see README.md).",
-  "totals": { "-z-0": 1, "-z-10": 3, "z-10": 30, "z-20": 22, "z-30": 21, "z-40": 13, "z-50": 21, "z-[1000]": 1, "z-[100]": 4, "z-[115]": 1, "z-[1200]": 1, "z-[120]": 2, "z-[1]": 5, "z-[200]": 5, "z-[20]": 1, "z-[250]": 1, "z-[2]": 2, "z-[30]": 1, "z-[31]": 1, "z-[32]": 1, "z-[3]": 4, "z-[40]": 1, "z-[41]": 1, "z-[44]": 1, "z-[45]": 1, "z-[4]": 4, "z-[55]": 1, "z-[58]": 1, "z-[5]": 4, "z-[60]": 8, "z-[6]": 5, "z-[70]": 11, "z-[71]": 1, "z-[7]": 3, "z-[80]": 6, "z-[85]": 5, "z-[86]": 3, "z-[8]": 1, "z-[90]": 4, "z-[95]": 1 },
+  "totals": { "-z-0": 1, "-z-10": 3, "z-10": 30, "z-20": 22, "z-30": 21, "z-40": 13, "z-50": 21, "z-[1000]": 1, "z-[100]": 4, "z-[115]": 1, "z-[1200]": 1, "z-[120]": 2, "z-[1]": 5, "z-[200]": 5, "z-[20]": 1, "z-[250]": 1, "z-[2]": 2, "z-[30]": 1, "z-[31]": 1, "z-[32]": 1, "z-[3]": 4, "z-[40]": 1, "z-[41]": 1, "z-[44]": 1, "z-[45]": 1, "z-[4]": 4, "z-[55]": 1, "z-[58]": 1, "z-[5]": 4, "z-[60]": 7, "z-[6]": 5, "z-[70]": 11, "z-[71]": 1, "z-[7]": 3, "z-[80]": 6, "z-[85]": 5, "z-[86]": 3, "z-[8]": 1, "z-[90]": 4, "z-[95]": 1 },
   "files": {
     "components/AccountSettings.tsx": { "z-10": 2, "z-30": 1, "z-[250]": 1 },
     "components/ComicEditor.tsx": { "z-50": 1 },
@@ -76,7 +76,6 @@
     "components/comicstudio/lettering/FontPicker.tsx": { "z-20": 1 },
     "components/comicstudio/lettering/LetteringInspector.tsx": { "z-[85]": 2 },
     "components/comicstudio/lettering/SnapGuides.tsx": { "z-[7]": 1 },
-    "components/comicstudio/mobile/SavingsChip.tsx": { "z-[60]": 1 },
     "components/comicstudio/mobile/editor/EditorToolsSheet.tsx": { "z-[6]": 1 },
     "components/comicstudio/mobile/sheets/BottomSheet.tsx": { "z-[85]": 1, "z-[86]": 1 },
     "components/comicstudio/mobile/sheets/SideSheet.tsx": { "z-[85]": 1, "z-[86]": 1 },

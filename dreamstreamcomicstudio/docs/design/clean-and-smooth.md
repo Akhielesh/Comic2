@@ -72,10 +72,11 @@ production PR (PROGRAM3 §3.9).
   down, so they wait until DC-3 / DS-R5 / DS-R12 remove the duplicate entries (the Read tab's button becomes
   "Export"; never two History entries in one viewport). The board's History tab gets its id only with #7. A ⋯ row's
   id counts only while the menu is open.
-- **Announce a transient toast politely, once.** The header's savings slot (`mobile/SavingsChip.tsx`) keeps an
-  always-mounted, visually hidden live region (`role="status"`) and only changes its text; the visible toast is
-  `aria-hidden`, so the words are read once. A region inserted already holding its words is often not announced.
-  Use this pattern for any transient toast.
+- **Announce a transient toast politely, once, in the one slot.** A transient toast is an app toast
+  (`toast()` in `components/ds/Toast.tsx`, DS-1c): it takes the one slot, so it never stacks with the timeline's
+  Undo toast or another app toast, and the host's always-mounted polite status region announces it (a region
+  inserted already holding its words is often not announced). The header's savings slot (`mobile/SavingsChip.tsx`)
+  does this since the S2b integration; it used to portal a private pill with its own hidden live region.
 - **Mark user content.** Put `data-user-content` on text the user wrote or named, such as a title or a character
   name. It may truncate; a control's own label may not. No control carries the attribute yet, so today every cut
   label counts. The first candidates are the character name on the cast card's button
