@@ -723,8 +723,9 @@ describe('Pro Edit contract (PE-0): flags and seams', () => {
     for (const key of ['proMotion', 'proStickers', 'readerMotion']) expect(key in DEFAULT_CAPS, key).toBe(false);
   });
 
-  it('the stubs carry their final names and do nothing yet: no generator, no font, no part ready', () => {
-    expect(FX_GENERATORS).toEqual([]);
+  it('the stubs carry their final names and do nothing yet: no effect drawn, no font, no part ready', () => {
+    // PE-FX filled the registry (14 generators); nothing draws until fx/generators.ts is loaded, which this file never imports.
+    expect(FX_GENERATORS.map((g) => `${g.gen}@${g.v}`)).toHaveLength(14);
     expect(renderFx(FX, { aspect: 1 })).toEqual([]);
     expect(fxParamsOf({ params: { n: { kind: 'number', min: 0, max: 1, default: 0.5 }, c: { kind: 'color', default: '#000000' } } }, { n: 4, c: 'red', x: 1 })).toEqual({ n: 1, c: '#000000' });
     expect(MOTION_PRESET_IDS).toHaveLength(30);
