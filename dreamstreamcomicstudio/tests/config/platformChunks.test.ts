@@ -43,6 +43,26 @@ const RENDERERS: Renderer[] = [
   { name: 'markdown', markers: ['The rest of this document was too long to include.'], callers: /\b(?:exportMarkdownDocx|loadMarkdown|loadPlatformRender)\s*\(/ },
 ];
 
+/**
+ * Pro code the reader and the first paint never load (master plan §2.8: the Pro chunk is lazy, never in the reader's
+ * first load). Each marker is a literal that survives minification and that only this code holds; none may be in an
+ * eagerly loaded chunk or in the reader's own chunk (ComicReaderView-*). PE-QA (S3) extends this list (effect
+ * generators, font tables, the Pro editor); the scan below stays the same.
+ */
+interface ProOnly {
+  name: string;
+  markers: string[];
+}
+
+const PRO_ONLY: ProOnly[] = [
+  // PE-MOTION-ENGINE wave note 8: Penner's bounce constant and the seeded hash's multiplier (0x9e3779b1, as minified),
+  // the same markers shared/comic/motion/chunks.test.ts checks on an esbuild bundle.
+  { name: 'motion engine', markers: ['7.5625', '2654435761'] },
+];
+
+/** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
+const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;
+
 /** App source that ships to the browser: no tests, no server, no packages (the renderers themselves), no build output. */
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-qa', 'server', 'packages', 'tests', 'qa', 'scripts', 'docs', 'public', 'api-proxy', 'live-worker', 'email-worker', 'data-egress', 'comics-edge', 'functions', 'deploy', '.git']);
 const LOADER = path.join(APP, 'services', 'platformExport.ts');
@@ -112,6 +132,17 @@ describe('platform renderers stay out of the entry chunk (real build)', () => {
     it('the comic pitch deck calls the PowerPoint renderer, so its markers must be in the build', () => {
       expect(callersOf(RENDERERS.find((r) => r.name === 'pptx')!, sources)).toContain(path.join('components', 'comicstudio', 'export', 'pitchDeck.ts'));
     });
+
+    for (const pro of PRO_ONLY) {
+      it(`${pro.name}: never in an eagerly loaded chunk or in the reader's chunk`, () => {
+        const reader = chunks.filter((c) => READER_CHUNK.test(c));
+        expect(reader.length, 'no ComicReaderView-* chunk in the build: the reader chunk was renamed or merged').toBeGreaterThan(0);
+        const scanned = [...new Set([...eager, ...reader])];
+        for (const marker of pro.markers) {
+          expect(scanned.filter((c) => read(c).includes(marker)), `"${marker}" (${pro.name}) is in the reader or an eagerly loaded chunk`).toEqual([]);
+        }
+      });
+    }
 
     for (const r of RENDERERS) {
       it(`${r.name}: markers are never eagerly loaded, and are in a lazy chunk whenever the app calls it`, () => {
