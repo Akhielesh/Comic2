@@ -181,6 +181,12 @@ export interface StudioController {
    * opts.width picks the smallest variant ≥ width × min(dpr, 2); no opts ⇒ original (back-compat).
    */
   urlFor(asset?: AssetRef | string | null, opts?: { width?: number }): string | undefined;
+  /**
+   * The signer gave up on this storage path (PF-2 #7): the server declined it, or it failed MAX_SIGN_ATTEMPTS times —
+   * the same test urlFor uses to skip a variant. Chat tiles read it to show "Preview unavailable" instead of waiting.
+   * Optional (added after the contract froze): absent = never given up on.
+   */
+  isUnsignable?(path: string): boolean;
 
   /**
    * Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. The live controller

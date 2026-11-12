@@ -38,6 +38,10 @@
 //   - sendNow(id): with caps.liveAgent.steer and a steer function, the note joins the running turn
 //     (studioApi.steerStudio, A2; injectable through UseStudioDeps); otherwise Stop the director, then send (D2).
 //   - The queue is saved per project in sessionStorage (messageQueue.ts), every access in try/catch.
+//
+// Live agent, presence (agent-editor plan §3 A2 "Presence", wave 2 A4): `presence` is where the director is working
+// right now, from the `where` of an activity start (studioReducer presenceOf). It clears on that activity's end, on its
+// stream's done or error, and on Stop. No event carries `where` → it stays null and nothing else changes. No timer.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
@@ -91,6 +95,7 @@ import {
   isTargetRendering,
   isTurnLocked,
   needsRefresh,
+  presenceOf,
   queueOf,
   renderingCount,
   studioReducer,
@@ -1153,6 +1158,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   /** <img> load failures per path within IMG_ERROR_WINDOW_MS (a broken file vs. an expired link). */
   const loadErrorsRef = useRef(new Map<string, { n: number; first: number }>());
   const signTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped when the signer gives up on a path, so isUnsignable readers render again (no state of its own). */
+  const [unsignableSeq, bumpUnsignable] = useReducer((n: number) => n + 1, 0);
 
   const flushSigning = useCallback(async () => {
     signTimerRef.current = null;
@@ -1171,11 +1178,17 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       if (generation !== generationRef.current) return;
       guarded(generation)({ type: 'urls_merge', urls: signed, now: Date.now() });
       Object.keys(signed).forEach((p) => signAttemptsRef.current.delete(p));
+      let declined = false;
       paths.forEach((p) => {
-        if (!signed[p]) unsignableRef.current.add(p);
+        if (signed[p] || unsignableRef.current.has(p)) return;
+        unsignableRef.current.add(p);
+        declined = true;
       });
+      if (declined && mountedRef.current) bumpUnsignable();
     } catch {
       /* the placeholder stays; the next render or image error asks again (bounded) */
+      // The last allowed try failed: that path is given up on (isUnsignable), so its readers render again.
+      if (generation === generationRef.current && mountedRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS)) bumpUnsignable();
     } finally {
       paths.forEach((p) => signingRef.current.delete(p));
     }
@@ -1253,6 +1266,17 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [urls, requestSign, assetWithVariants]
   );
 
+  /**
+   * The signer gave up on this path (PF-2 #7): the server declined it, MAX_SIGN_ATTEMPTS signing tries failed, or the
+   * image kept failing to load — the same test urlFor uses to skip a variant. Cards show "Preview unavailable" instead
+   * of waiting forever. Its identity changes when a path is given up on, so the panes reading it render again.
+   */
+  const isUnsignable = useCallback(
+    (path: string): boolean => unsignableRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the refs are read live; the count only renews the identity
+    [unsignableSeq]
+  );
+
   // An <img> anywhere in the studio failed to load one of our URLs: it expired or was
   // revoked — re-sign that path (capture phase: image errors don't bubble).
   useEffect(() => {
@@ -1274,8 +1298,10 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       dispatch({ type: 'urls_invalidate', paths: [path] });
       if (rec.n > MAX_SIGN_ATTEMPTS) {
         // Stop re-signing it; urlFor falls back from a broken variant to its original.
+        const fresh = !unsignableRef.current.has(path);
         unsignableRef.current.add(path);
         signAttemptsRef.current.set(path, MAX_SIGN_ATTEMPTS);
+        if (fresh) bumpUnsignable();
         return;
       }
       requestSign(path);
@@ -1659,6 +1685,9 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [sendQueued, cancel, say]
   );
 
+  /** Where the director is working (activity.where), or null: the same object while it lasts. */
+  const presence = presenceOf(state);
+
   return useMemo(
     () => ({
       doc,
@@ -1671,6 +1700,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       errorCode: state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,
@@ -1712,6 +1742,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       refreshPublication,
       readerRequest,
       ...(state.lastHistoryVersion ? { lastHistoryVersion: state.lastHistoryVersion } : {}),
+      // Live agent, presence (A4): where the director is editing right now, or null.
+      presence,
       // Live queue (plan §3 A1): present only while caps.liveAgent.queue is on (absent = today's behaviour).
       ...(queueOn
         ? {
@@ -1742,6 +1774,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,
@@ -1783,6 +1816,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       refreshPublication,
       readerRequest,
       state.lastHistoryVersion,
+      presence,
       queueOn,
       queueNotes,
       queueHold,

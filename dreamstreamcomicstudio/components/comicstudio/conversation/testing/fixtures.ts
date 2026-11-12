@@ -98,6 +98,7 @@ export const makeFakeStudio = (overrides: Partial<ComicStudioController> = {}): 
       const path = typeof asset === 'string' ? asset : asset?.path;
       return path ? `https://cdn.test/${path}` : undefined;
     },
+    isUnsignable: () => false,
     send: vi.fn(async () => undefined),
     act: vi.fn(async () => undefined),
     patch: vi.fn(async () => undefined),
