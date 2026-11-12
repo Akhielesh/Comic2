@@ -131,7 +131,10 @@ describe('tools.ts: dialogue_edit and offer_next (filled by wave 2 B-TOOL)', () 
     const ctx = testContext(newSession(plannedDoc()));
     const turn = createDirectorTurn({ userText: 'make it a whisper', focus: { pageId: 'pg_1', lineIds: ['ln_1_2'] } });
     expect(RESERVED_CORE_TOOLS).toEqual([]);
-    expect(buildDirectorTools(ctx, turn).map((t) => t.spec.function.name)).toEqual(expect.arrayContaining(['dialogue_edit', 'offer_next']));
+    const core = buildDirectorTools(ctx, turn).map((t) => t.spec.function.name);
+    expect(core).toContain('dialogue_edit');
+    // offer_next is not core: it takes a seat the feature groups leave free (buildTurnToolset), so it never trims one.
+    expect(core).not.toContain('offer_next');
     const tool = dialogueEditTool(ctx, turn);
     expect(tool.spec.function.name).toBe('dialogue_edit');
     expect(tool.cost).toBe('free');
@@ -163,16 +166,21 @@ describe('tools.ts: dialogue_edit and offer_next (filled by wave 2 B-TOOL)', () 
     // LineRef (B1): the narrowing fields the director uses, plus the plural marker (`which` is read when sent).
     const ref = params.properties.target.properties!;
     expect(Object.keys(ref).sort()).toEqual(['all', 'kind', 'line_ids', 'nth', 'page', 'panel', 'selected', 'speaker', 'text_contains'].sort());
-    expect(params.properties.second.type).toBe('object');
-    // Placement (B1) and the style are named in their descriptions (every key and value the engine reads), not typed key
-    // by key: dialogue_edit is core, and the golden prompt cap (golden/scenarios.test.ts) has no room for both schemas.
-    const place = params.properties.place;
-    expect(place.type).toBe('object');
-    for (const word of ['frame', 'panel|page', 'cell', ...POS9, 'edge', 'near', 'relation', 'between', 'and', 'nudge', 'amount', 'bit|lot']) expect(place.description).toContain(word);
-    for (const key of ['font', 'size', 'bold', 'italic', 'text_color', 'fill_color', 'shape', 'tail']) {
-      expect(params.properties.style.description).toContain(key);
-      expect(LETTERING_STYLE_ARGS_SCHEMA.properties).toHaveProperty(key);
-    }
+    // The other line is named in words (its [id], its speaker or words from it): no second object schema in the core.
+    expect(params.properties.second.type).toBe('string');
+    // Placement (B1) and the style are typed key by key (bare, for the golden prompt cap): a validator may refuse an
+    // object without properties, and a model fills declared keys most reliably.
+    const place = params.properties.place.properties!;
+    expect(Object.keys(place).sort()).toEqual(['amount', 'and', 'cell', 'edge', 'frame', 'near', 'nudge', 'relation'].sort());
+    expect(place.frame.enum).toEqual(['panel', 'page']);
+    expect(place.cell.enum).toEqual([...POS9]);
+    expect(place.edge.enum).toEqual(['top', 'bottom']);
+    expect(place.relation.enum).toEqual(['above', 'below', 'left', 'right', 'near', 'between']);
+    expect(place.nudge.enum).toEqual(['up', 'down', 'left', 'right']);
+    expect(place.amount.enum).toEqual(['bit', 'lot']);
+    const style = params.properties.style.properties!;
+    expect(Object.keys(style).sort()).toEqual(['bold', 'fill_color', 'font', 'italic', 'shape', 'size', 'tail', 'text_color']);
+    for (const key of Object.keys(style)) expect(LETTERING_STYLE_ARGS_SCHEMA.properties).toHaveProperty(key);
   });
 });
 

@@ -36,9 +36,13 @@ const CORE_TOOL_NAMES = [
   'update_brief', 'add_notes', 'set_format', 'save_source', 'upsert_character', 'remove_character', 'upsert_place', 'remove_place',
   'set_style', 'propose_styles', 'render_character_sheets', 'plan_pages', 'revise_pages', 'read_pages', 'edit_panel_text', 'set_line',
   'render_pages', 'edit_page', 'render_cover', 'set_settings', 'ask_user',
-  // Wave 2 B-TOOL (agent-editor plan §3 A4, B3): core, so dialogue never depends on GROUP_HINTS.
-  'dialogue_edit', 'offer_next'
+  // Wave 2 B-TOOL (agent-editor plan §3 B3): core, so dialogue never depends on GROUP_HINTS.
+  'dialogue_edit'
 ];
+/** Not core: buildTurnToolset gives it a seat the feature groups left free, last of all (agent-editor plan §3 A4). */
+const SEAT_FILLER = 'offer_next';
+/** Core + the groups' tools, then offer_next exactly when the groups left a seat. */
+const withFiller = (names: string[]) => (names.length < MAX_TOOLS_PER_TURN ? [...names, SEAT_FILLER] : names);
 
 const fakeTool = (name: string, cost: DirectorTool['cost'] = 'free'): DirectorTool => defineTool(name, cost, `${name} tool`, { type: 'object', properties: {} }, () => `${name} ok`);
 const group = (g: Partial<ToolGroup> & Pick<ToolGroup, 'id' | 'priority'>): ToolGroup => ({ tools: () => [], ...g });
@@ -87,7 +91,8 @@ describe('tool registry', () => {
       expect(directorToolNames(buildDirectorTools(ctx, turn))).toEqual(CORE_TOOL_NAMES);
       const priorities = set.groups.map((id) => toolGroupById(id)!.priority);
       expect([...priorities].sort((a, b) => a - b)).toEqual(priorities);
-      const expected = [...CORE_TOOL_NAMES, ...set.groups.flatMap((id) => directorToolNames(toolGroupById(id)!.tools(ctx, turn)))];
+      // offer_next only ever fills a seat the groups left: there exactly when one was free, and last.
+      const expected = withFiller([...CORE_TOOL_NAMES, ...set.groups.flatMap((id) => directorToolNames(toolGroupById(id)!.tools(ctx, turn)))]);
       expect(names).toEqual(expected);
       expect(new Set(names).size).toBe(names.length);
       expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
@@ -150,7 +155,7 @@ describe('buildTurnToolset (core + groups)', () => {
       group({ id: 'breakdown', priority: 10, tools: () => [fakeTool('show_pages')], activity: { show_pages: 'Laying out the pages' } }),
       group({ id: 'publish', priority: 40, when: () => false, tools: () => [fakeTool('publish_comic')], promptRules: () => 'NEVER SHOWN' })
     ]);
-    expect(directorToolNames(set.tools)).toEqual([...CORE_TOOL_NAMES, 'show_pages', 'set_chapter']);
+    expect(directorToolNames(set.tools)).toEqual([...CORE_TOOL_NAMES, 'show_pages', 'set_chapter', SEAT_FILLER]);
     expect(set.groups).toEqual(['breakdown', 'reader']);
     expect(set.promptRules).toEqual(['READER RULE']);
     expect(set.summaryLines).toEqual(['Reader: paper turn']);
@@ -164,7 +169,8 @@ describe('buildTurnToolset (core + groups)', () => {
       group({ id: 'timeline', priority: 30, tools: () => Array.from({ length: room + 1 }, (_, i) => fakeTool(`tl_${i}`)) }),
       group({ id: 'reader', priority: 70, tools: () => [fakeTool('set_reader_options')] })
     ]);
-    expect(set.tools).toHaveLength(CORE_TOOL_NAMES.length + 1);
+    // reader fits; offer_next takes a seat the groups left (it never makes a group skip).
+    expect(directorToolNames(set.tools).slice(CORE_TOOL_NAMES.length)).toEqual(['set_reader_options', SEAT_FILLER]);
     expect(set.groups).toEqual(['reader']);
     expect(set.tools.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
   });

@@ -24,8 +24,6 @@ import { coverNeedsDraw, pageTargets, quoteRenderPages, unitPrice } from '../../
 import { costFormatter, type CostFormatter } from './costText.js';
 import { drawnBookLine, nothingNextSteps } from './replies.js';
 import { breakdownCardFor } from './tools/breakdown.js';
-import { guardUserEdits } from './conflictGuard.js';
-import { createDirectorTurn } from './tools.js';
 import { sanitizeLetteringOps } from './tools/lettering.js';
 import type { StudioContext } from './types.js';
 
@@ -303,9 +301,14 @@ const FAST_DIALOGUE_MAX_CHARS = 300;
  * The free dialogue fast path: with caps.dialogueFast on (COMIC_DIALOGUE_FAST; off by default, admins when on), a
  * sentence the grammar is sure of, whose every intent resolves to exactly one line (an add: one panel) and compiles to
  * free dialogue ops, is applied right here: no model call, $0. `confirmed` is never passed (a big plural always goes to
- * the director, which asks). The ops pass the lettering sanitizers and the conflict guard; if the guard would hold any
- * part back, or anything is uncertain, nothing is committed and it returns null so the director takes the sentence.
- * Never on an open spend gate. Callers skip it for attachments and for messages the screen annotated.
+ * the director, which asks). The ops pass the lettering sanitizers; if anything is uncertain, nothing is committed and it
+ * returns null so the director takes the sentence. Never on an open spend gate. Callers skip it for attachments and for
+ * messages the screen annotated.
+ *
+ * No conflict guard here, and none is needed: the edit is compiled from the doc the creator sees right now and committed
+ * in the same synchronous step (no await in between, so no edit of theirs can land in the middle), and the stream route
+ * refuses a message BUSY while a director turn runs, so no director edit is in flight to collide with either. The guard
+ * protects edits made WHILE a turn works; this path never spans one.
  */
 export function dialogueFastIntent(ctx: StudioContext, text: string, focus?: StudioFocus): DialogueFastIntent | null {
   if (!dialogueFastOn(ctx.caps)) return null;
@@ -325,14 +328,10 @@ export function dialogueFastIntent(ctx: StudioContext, text: string, focus?: Stu
   } catch {
     return null;
   }
-  // The creator's edit wins here too (A3): any held-back part sends the whole sentence to the director, never half of it.
-  const turn = createDirectorTurn({ userText: sentence, startRev: doc.rev, ...(focus ? { focus } : {}) });
-  const { allowed, blocked } = guardUserEdits(ctx, turn, ops);
-  if (blocked.length || allowed.length !== ops.length) return null;
   const label = run.label || 'Dialogue';
-  ctx.session.commit(allowed, { origin: 'director', label });
+  ctx.session.commit(ops, { origin: 'director', label });
   const chips = run.followUps.filter((s) => !!s?.label && !s.action && (!!s.say || !!s.client));
   const undo: NextStep = { label: 'Undo', client: { type: 'undo' } };
   const nextSteps: NextStep[] = [undo, ...chips.filter((s) => s.label !== 'Undo')].slice(0, DOC_LIMITS.nextSteps);
-  return { kind: 'dialogue_fast', reply: `${run.note || 'Done.'} Free — undo is one tap.`, cards: [], nextSteps, ops: allowed.length, label };
+  return { kind: 'dialogue_fast', reply: `${run.note || 'Done.'} Free — undo is one tap.`, cards: [], nextSteps, ops: ops.length, label };
 }

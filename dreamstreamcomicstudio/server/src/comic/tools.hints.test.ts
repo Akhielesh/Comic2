@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { LAKE_MODEL, makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic.js';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import type { ComicDoc } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
 import { MAX_TOOLS_PER_TURN } from './extensions.js';
@@ -199,6 +200,29 @@ describe('page actions on a drawn book with a 7-tool timeline (lettering yields)
       expect(names, say).toContain('arrange_balloons');
     }
   });
+});
+
+describe('lettering AND a page action in one sentence, on a drawn unlocked book (B-TOOL review)', () => {
+  // plannedDoc grown to 4 drawn pages, model not locked: its timeline group is 5 tools. Core (22, dialogue_edit in it)
+  // + lettering 3 + timeline 5 = 30 exactly; a 23rd core tool (offer_next, before the fix) trimmed the whole timeline.
+  const drawnFourPages = () => {
+    const doc = plannedDoc();
+    const extra = JSON.parse(JSON.stringify(doc.pages[2]).replace(/_3(?=["_])/g, '_4'));
+    extra.n = 4;
+    doc.pages.push(extra);
+    for (const p of doc.pages) p.render = { ...p.render, status: 'ready', asset: { path: `${p.id}.png` } } as typeof p.render;
+    return doc;
+  };
+  for (const say of ['delete page 4 and fix the speech bubble', 'swap pages 2 and 3 and move the balloon up', 'move page 2 after page 3 and make the caption bigger']) {
+    it(`"${say}" offers both the timeline and lettering`, () => {
+      const ctx = testContext(newSession(drawnFourPages()), { caps: { ...DEFAULT_CAPS, admin: true } });
+      const set = buildTurnToolset(ctx, createDirectorTurn({ userText: say }), toolGroups());
+      const names = set.tools.map((t) => t.spec.function.name);
+      expect(set.groups, say).toEqual(expect.arrayContaining(['timeline', 'lettering']));
+      expect(names, say).toEqual(expect.arrayContaining(['delete_page', 'move_page', 'arrange_balloons', 'restyle_balloons', 'dialogue_edit']));
+      expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
+    });
+  }
 });
 
 describe('reserved core slot for dialogue_edit (plan §3 B3)', () => {

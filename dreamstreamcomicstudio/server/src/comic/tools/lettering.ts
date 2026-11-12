@@ -10,7 +10,7 @@
 // Results are honest sentences: what changed (counts, pages), what was kept and why, and — when a
 // target matched nothing — what actually exists ("No whisper balloons; page 1 has speech ×2, caption ×3").
 
-import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
+import { findPage, resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
 import { applyOps, type DocOp } from '../../../../shared/comic/ops.js';
 import { placeLine } from '../../../../shared/comic/dialogue/placement.js';
 import type { Placement } from '../../../../shared/comic/dialogue/types.js';
@@ -401,15 +401,169 @@ export interface GuardedCommit {
 }
 
 /**
- * Every director line, balloon and style write goes through here (A3 fixer wave note 6): guardUserEdits splits the
- * planned ops, the allowed part commits with origin 'director', recordConflicts keeps the held part for the one
- * conflict card (right after the guard, so the next call on the same entity builds on it), and `note` goes into the
- * tool result. Without a turn (a caller outside the director loop) everything commits as before.
+ * How a guarded write's ops hang together beyond what the guard sees (commitGuarded). The guard splits ops by entity;
+ * some ops only make sense next to another one, so when that one is held they are held with it.
  */
-export function commitGuarded(ctx: StudioContext, turn: DirectorTurn | undefined, ops: DocOp[], label?: string): GuardedCommit {
+export interface GuardDeps {
+  /**
+   * Ops that stand or fall together: the same key is one unit, so holding any op of it holds them all (edit_panel_text:
+   * a panel's new, removed and moved lines; dialogue_edit: a reorder or a swap). Undefined = no unit.
+   */
+  unitOf?: (op: DocOp) => string | undefined;
+  /**
+   * Ops that follow from a part of the write, built AFTER the guard so they match what really happens: for the part
+   * that commits (`held` false, against the doc as it stands; guarded too) and for each held item (`held` true, against
+   * the doc after the commit, so "Use the director's" brings them along). set_line and edit_panel_text add a new
+   * speaker to the panel's cast this way, so a held line never leaves a cast change (and a stale page) behind.
+   */
+  follow?: (ops: readonly DocOp[], doc: ComicDoc, held: boolean) => DocOp[];
+}
+
+/** The line ids an op names (a line, its move, its balloon, its own style). */
+export const lineIdsOfOp = (op: DocOp): string[] =>
+  op.op === 'line' || op.op === 'line_move' ? [op.id] : op.op === 'balloon' ? [op.lineId] : op.op === 'line_style' ? [...op.lineIds] : [];
+
+const clipWords = (s: string, max: number): string => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
+};
+
+/**
+ * What the ops carried over to a held item add to its "The director's" words, so the card shows everything "Use the
+ * director's" would apply ("Add “Hello”. Add ARJUN to the panel's cast.").
+ */
+function carriedWords(doc: ComicDoc, ops: readonly DocOp[]): string[] {
+  const out: string[] = [];
+  const textOf = (id: string) => doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).find((l) => l.id === id)?.text;
+  let reorder = false;
+  for (const op of ops) {
+    if (op.op === 'line') {
+      if (op.patch === null) {
+        const t = textOf(op.id);
+        out.push(t ? `Remove “${clipWords(t, 60)}”` : 'Remove a line');
+      } else if (typeof op.index === 'number') out.push(`Add “${clipWords(op.patch.text ?? '', 60)}”`);
+      else if (typeof op.patch.text === 'string') out.push(`Make “${clipWords(textOf(op.id) ?? '', 40)}” read “${clipWords(op.patch.text, 60)}”`);
+    } else if (op.op === 'line_move') reorder = true;
+    else if (op.op === 'panel' && Array.isArray(op.patch?.castIds)) {
+      const before = new Set(findPage(doc, op.pageId)?.panels.find((p) => p.id === op.id)?.castIds ?? []);
+      const names = op.patch.castIds.filter((id) => !before.has(id)).map((id) => doc.cast.find((c) => c.id === id)?.name || 'a speaker');
+      if (names.length) out.push(`Add ${names.join(' and ')} to the panel's cast`);
+    }
+  }
+  if (reorder) out.push("Reorder the panel's lines");
+  return [...new Set(out)];
+}
+
+/**
+ * The guard's split, with the hold carried over to the ops that depend on a held one (agent-editor plan §3 A3.1, B-TOOL
+ * review): a `balloon`, `line_style` or `line_move` on a line whose `line` op (create, patch or delete) is held, and
+ * every op of a unit (`deps.unitOf`) any of whose ops is held. The carried ops join the held item of their line (else of
+ * their unit, else the first item), in plan order, and its words say what they add. Without a held op, nothing moves.
+ */
+function carryHold(doc: ComicDoc, planned: readonly DocOp[], allowed: DocOp[], blocked: BlockedEdit[], unitOf?: GuardDeps['unitOf']): { allowed: DocOp[]; blocked: BlockedEdit[] } {
+  if (!blocked.length || !allowed.length) return { allowed, blocked };
+  const anchors = new Set<string>();
+  const units = new Set<string>();
+  const mark = (op: DocOp) => {
+    if (op.op === 'line') anchors.add(op.id);
+    const u = unitOf?.(op);
+    if (u) units.add(u);
+  };
+  for (const b of blocked) b.proposed.forEach(mark);
+  if (!anchors.size && !units.size) return { allowed, blocked };
+  let rest = allowed;
+  const carried: DocOp[] = [];
+  for (let changed = true; changed; ) {
+    changed = false;
+    const next: DocOp[] = [];
+    for (const op of rest) {
+      const u = unitOf?.(op);
+      if (u && units.has(u)) {
+        carried.push(op);
+        mark(op);
+        changed = true;
+        continue;
+      }
+      if (op.op === 'line_style' && op.lineIds.some((id) => anchors.has(id))) {
+        // A restyle of several lines: only the held lines' part waits with them.
+        const keep = op.lineIds.filter((id) => !anchors.has(id));
+        carried.push(keep.length ? { ...op, lineIds: op.lineIds.filter((id) => anchors.has(id)) } : op);
+        if (keep.length) next.push({ ...op, lineIds: keep });
+        changed = true;
+        continue;
+      }
+      if ((op.op === 'balloon' || op.op === 'line_move') && lineIdsOfOp(op).some((id) => anchors.has(id))) {
+        carried.push(op);
+        mark(op);
+        changed = true;
+        continue;
+      }
+      next.push(op);
+    }
+    rest = next;
+  }
+  if (!carried.length) return { allowed, blocked };
+  const items = blocked.map((b) => ({ ...b, proposed: [...b.proposed] }));
+  const extra = new Map<number, DocOp[]>();
+  for (const op of carried) {
+    const ids = lineIdsOfOp(op);
+    let at = items.findIndex((b) => ids.some((id) => b.where.lineId === id || b.proposed.some((p) => p.op === 'line' && p.id === id)));
+    const u = unitOf?.(op);
+    if (at < 0 && u) at = items.findIndex((b) => b.proposed.some((p) => unitOf?.(p) === u));
+    if (at < 0) at = 0;
+    extra.set(at, [...(extra.get(at) ?? []), op]);
+  }
+  // Plan order inside each item (a balloon after the line it belongs to); an op the guard split keeps its neighbour's place.
+  const order = new Map(planned.map((op, i) => [op, i]));
+  for (const [at, ops] of extra) {
+    const item = items[at];
+    let last = -1;
+    const ranked = [...item.proposed, ...ops].map((op, k) => {
+      const i = order.get(op);
+      if (i !== undefined) last = i;
+      return { op, rank: i ?? last + 0.5, k };
+    });
+    ranked.sort((a, b) => a.rank - b.rank || a.k - b.k);
+    const words = carriedWords(doc, ops);
+    const end = (s: string) => (!s || /[.!?…]$/.test(s) ? s : `${s}.`);
+    items[at] = { ...item, proposed: ranked.map((r) => r.op), theirs: words.length ? `${end(item.theirs)} ${words.join('. ')}.`.trim() : item.theirs };
+  }
+  return { allowed: rest, blocked: items };
+}
+
+/**
+ * Every director line, balloon and style write goes through here (A3 fixer wave note 6): guardUserEdits splits the
+ * planned ops; the hold is carried over to the ops that depend on a held one (carryHold) and `deps.follow` builds the
+ * follow-up ops for what really commits; the allowed part commits with origin 'director' as one step; recordConflicts
+ * keeps the held part for the one conflict card (right after the guard, so the next call on the same entity builds on
+ * it), and `note` goes into the tool result. Without a turn (a caller outside the director loop) everything commits as
+ * before. Callers word their result from `allowed`, never from what they planned.
+ */
+export function commitGuarded(ctx: StudioContext, turn: DirectorTurn | undefined, ops: DocOp[], label?: string, deps: GuardDeps = {}): GuardedCommit {
   if (!ops.length) return { after: ctx.session.doc, allowed: [], blocked: [], note: '' };
-  const { allowed, blocked } = turn ? guardUserEdits(ctx, turn, ops) : { allowed: ops, blocked: [] as BlockedEdit[] };
-  const after = allowed.length ? ctx.session.commit(allowed, { origin: 'director', ...(label ? { label } : {}) }) : ctx.session.doc;
+  const doc = ctx.session.doc;
+  const split = turn ? guardUserEdits(ctx, turn, ops) : { allowed: ops, blocked: [] as BlockedEdit[] };
+  let { allowed, blocked } = carryHold(doc, ops, split.allowed, split.blocked, deps.unitOf);
+  const heldItems = blocked.length;
+  if (deps.follow && allowed.length) {
+    const more = deps.follow(allowed, doc, false);
+    if (more.length) {
+      // A follow-up the creator collided with (they changed the panel's cast mid-turn) is held like any other op.
+      const g = turn ? guardUserEdits(ctx, turn, more) : { allowed: more, blocked: [] as BlockedEdit[] };
+      allowed = [...allowed, ...g.allowed];
+      blocked = [...blocked, ...g.blocked];
+    }
+  }
+  const after = allowed.length ? ctx.session.commit(allowed, { origin: 'director', ...(label ? { label } : {}) }) : doc;
+  if (deps.follow && heldItems) {
+    blocked = blocked.map((b, i) => {
+      if (i >= heldItems) return b;
+      const more = deps.follow!(b.proposed, after, true);
+      if (!more.length) return b;
+      const words = carriedWords(after, more);
+      return { ...b, proposed: [...b.proposed, ...more], theirs: words.length ? `${/[.!?…]$/.test(b.theirs) ? b.theirs : `${b.theirs}.`} ${words.join('. ')}.` : b.theirs };
+    });
+  }
   if (turn) recordConflicts(turn, blocked);
   return { after, allowed, blocked, note: conflictToolNote(blocked) };
 }
@@ -418,15 +572,10 @@ export function commitGuarded(ctx: StudioContext, turn: DirectorTurn | undefined
 const withNote = (text: string, note: string): string => (note ? `${text} ${note}`.trim() : text);
 
 /** The line ids a held-back edit names (its proposed ops), for honest counts. */
-const blockedLineIds = (blocked: readonly BlockedEdit[]): Set<string> =>
-  new Set(
-    blocked.flatMap((b) => [
-      ...(b.where.lineId ? [b.where.lineId] : []),
-      ...b.proposed.flatMap((op) => (op.op === 'line_style' ? op.lineIds : op.op === 'balloon' ? [op.lineId] : op.op === 'line' || op.op === 'line_move' ? [op.id] : []))
-    ])
-  );
+export const blockedLineIds = (blocked: readonly BlockedEdit[]): Set<string> =>
+  new Set(blocked.flatMap((b) => [...(b.where.lineId ? [b.where.lineId] : []), ...b.proposed.flatMap(lineIdsOfOp)]));
 
-const USER_ASKED_LETTERING_RE =/\b(font|letter(?:ing)?|balloon|bubble|text|caption|style|preset|manga|storybook|noir|webtoon|pulp|handwritten|minimal|classic)\b/i;
+const USER_ASKED_LETTERING_RE = /\b(font|letter(?:ing)?|balloon|bubble|text|caption|style|preset|manga|storybook|noir|webtoon|pulp|handwritten|minimal|classic)\b/i;
 
 // ── set_lettering_style ──────────────────────────────────────────────────────
 
@@ -475,12 +624,13 @@ export const TARGET_SCHEMA = {
 
 /**
  * The core line tools' target (set_line, edit_panel_text; agent-editor plan §3 B3): the four ways to name a line
- * without counting — its id from read_pages, the user's selection, its speaker, or words from it. Compact on purpose:
- * it sits in every director prompt (golden/scenarios.test.ts measures the core).
+ * without counting — its id from read_pages, the user's selection, its speaker, or words from it. Typed (a validator may
+ * refuse an object without properties) and bare: it sits in every director prompt (golden/scenarios.test.ts measures
+ * the core).
  */
 export const LINE_TARGET_SCHEMA = {
   type: 'object',
-  description: 'Or name the line: line_ids (read_pages), selected, speaker or text_contains.'
+  properties: { line_ids: { type: 'array', items: { type: 'string' } }, selected: { type: 'boolean' }, speaker: { type: 'string' }, text_contains: { type: 'string' } }
 };
 
 const currentScopeStyle = (doc: ComicDoc, scope: 'comic' | 'kind' | 'speaker', kind?: LineKind, speakerId?: string): LetterStyle =>
