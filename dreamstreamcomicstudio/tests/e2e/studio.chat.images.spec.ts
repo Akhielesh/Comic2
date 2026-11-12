@@ -1,15 +1,15 @@
 // studio.chat.images.spec.ts (PF-2, perf F2; pixel-8 only): opening a studio chat must not pull full-size
-// originals into 40–200 px tiles. The heist-12p chat reaches 7 drawn pages, the cover, a character sheet and a
-// style board through its renders, style, cast, breakdown and recap cards (≈ the production f8312c86 shape);
-// the harness serves each as a ≈ 190 KB original plus 480w / 1080w variants. Chrome DevTools Protocol counts
+// originals into 40–200 px tiles. The chat-14 fixture is the production f8312c86 shape (PF-2 #8): its renders,
+// style, cast, breakdown and recap cards reach 9 drawn pages, the cover and 4 drawn character sheets (14 objects),
+// plus the style board; the harness serves each as a ≈ 190 KB original plus 480w / 1080w variants. Chrome DevTools Protocol counts
 // the bytes every image in the conversation log really transferred, after the log is scrolled end to end so
 // every lazy tile had its chance to load: ≤ 0.6 MB, every decoded image ≤ 480 px wide, no `data-heavy-img`.
 // (Before PF-2 the renders card alone pulled ≈ 1.7 MB of originals here; in production ≈ 4.6 MB.)
 // Memory (perf F2 "decoded memory"): the decoded pixels of every image in the log (w × h × 4 bytes, what the
 // browser holds per bitmap) stay ≤ 24 MB — 14 tiles at 480w are ≈ 16 MB, the same 14 originals 90–190 MB. When the
 // page is cross-origin isolated, performance.measureUserAgentSpecificMemory() is recorded beside it (annotation).
-// The fixture is heist-12p (10 images), not the 14-object f8312c86 shape: that one is the jsdom half
-// (cards/chatThumbs.test.tsx) until the harness gains an f8312c86-shaped fixture (PF-2 wave note).
+// cards/chatThumbs.test.tsx is the jsdom half of the same shape. To get a real measureUserAgentSpecificMemory number the
+// harness page would also need cross-origin isolation (COOP/COEP); until then the decoded pixel bytes are the measure.
 
 import { test, expect } from './helpers/harness';
 
@@ -40,7 +40,7 @@ test.describe('chat images on a mid-range phone', () => {
       if (sizes) bodyBytes.set(req.url(), Math.max(bodyBytes.get(req.url()) ?? 0, sizes.responseBodySize));
     });
 
-    await qa.open({ surface: 'studio', fixture: 'heist-12p' }, { settle: 800 });
+    await qa.open({ surface: 'studio', fixture: 'chat-14' }, { settle: 800 });
     await qa.toChat();
     const log = page.locator('[role="log"]').first();
     await expect(log, 'the conversation log').toBeVisible();
@@ -114,7 +114,7 @@ test.describe('chat images on a mid-range phone', () => {
     });
 
     // Something must have loaded, or "small and few" would pass on an empty (or broken) log.
-    expect(urls.length, 'the chat shows decoded art').toBeGreaterThanOrEqual(8);
+    expect(urls.length, 'the chat shows decoded art: all 14 objects of the f8312c86 shape').toBeGreaterThanOrEqual(14);
     expect(urls.filter((u) => bytesOf(u) === 0), 'every image was measured').toEqual([]);
     expect(art.filter((i) => i.heavy).map((i) => i.src), 'no full-size original in the chat').toEqual([]);
     expect(files.filter((f) => !(f.w > 0 && f.h > 0)).map((f) => f.src), 'every file was sized').toEqual([]);

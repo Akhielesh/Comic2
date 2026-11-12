@@ -115,6 +115,26 @@ describe('fixtures', () => {
     expect(makeQaDoc('heist-12p', { rtl: true }).format.readingDirection).toBe('rtl');
   });
 
+  it('chat-14 is the production chat-image shape: 9 drawn pages, the cover and 4 drawn sheets, each with 480w and 1080w, all in the chat (PF-2 #8)', () => {
+    const doc = makeQaDoc('chat-14');
+    const assets = [...doc.pages.map((p) => p.render), doc.cover.render, ...doc.cast.map((c) => c.sheet)];
+    expect(doc.pages).toHaveLength(9);
+    expect(doc.cast).toHaveLength(4);
+    expect(assets).toHaveLength(14);
+    for (const r of assets) {
+      expect(r.status).toBe('ready');
+      expect(r.asset?.variants?.map((v) => v.w)).toEqual([480, 1080]);
+    }
+    // The chat's renders card reaches every one of them (the studio.chat.images e2e floor is 14 images).
+    const renders = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.type === 'renders') as Extract<Card, { type: 'renders' }>;
+    const targets = new Set(renders.targets.map((t) => (t.kind === 'cover' ? 'cover' : `${t.kind}:${'id' in t ? t.id : ''}`)));
+    for (const p of doc.pages) expect(targets.has(`page:${p.id}`), p.id).toBe(true);
+    for (const c of doc.cast) expect(targets.has(`sheet:${c.id}`), c.id).toBe(true);
+    expect(targets.has('cover')).toBe(true);
+    // Nothing to draw: no open gate.
+    expect(doc.gate).toBeNull();
+  });
+
   it('cast roles are free text, never the tier words the chips already show (DC-0 #6)', () => {
     for (const name of QA_FIXTURES) {
       const roles = makeQaDoc(name).cast.map((c) => c.role);

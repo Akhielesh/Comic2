@@ -7,7 +7,7 @@
 //
 //   /qa/comic-qa.html?surface=studio|board|editor|reader|classic-reader|public|kit
 //                    &kit=breakdown|refs|refs-drawer|timeline|art     (surface=kit; qa/KitScenes.tsx)
-//                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
+//                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty|chat-14
 //                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…|queued|conflict
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
 //                    &share=live|live-public  (a published comic, Link only / Library + link: the studio's Share sheet

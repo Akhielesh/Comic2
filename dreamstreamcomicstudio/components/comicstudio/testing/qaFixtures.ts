@@ -17,6 +17,8 @@
 //   stress       visualqa's stress doc: 160-char title, unbroken words, 12 long-named cast members,
 //                54-char model id, $1234.56 spend, notices with long URLs, 20 pages
 //   empty        a brand-new comic (nothing planned yet)
+//   chat-14      the production chat-image shape (PF-2 #8): 9 drawn pages, the cover and 4 drawn character sheets,
+//                every one with its 480w and 1080w variants, all reached by the chat's cards (renders, cast, recap)
 //
 // Images are referenced by path `qa/<seed>-<w>x<h>.png`; the harness serves them (sharp-generated PNGs
 // under Playwright, SVG data URLs when opened by hand). Each page/cover asset carries 480w and 1080w
@@ -49,7 +51,7 @@ import type { PublicationMirror, PublicationOwnerView } from '../../../shared/co
 export const QA_NOW = 1_760_000_000_000;
 export const QA_PROJECT_ID = 'proj_qa';
 
-export const QA_FIXTURES = ['lake-1p', 'heist-12p', 'deep-40p', 'webtoon-20p', 'stress', 'empty'] as const;
+export const QA_FIXTURES = ['lake-1p', 'heist-12p', 'deep-40p', 'webtoon-20p', 'stress', 'empty', 'chat-14'] as const;
 export type QaFixtureName = (typeof QA_FIXTURES)[number];
 export const isQaFixture = (v: unknown): v is QaFixtureName => typeof v === 'string' && (QA_FIXTURES as readonly string[]).includes(v);
 
@@ -110,8 +112,8 @@ const STRESS_CAST = [
   'Supercalifragilisticexpialidocious Otter'
 ];
 
-const sheetState = (i: number, stress: boolean, seed: string): RenderState => {
-  switch (i % 4) {
+const sheetState = (i: number, stress: boolean, seed: string, allReady = false): RenderState => {
+  switch (allReady ? 0 : i % 4) {
     case 0:
       return { status: 'ready', history: [qaAsset(`${seed}-sheet${i}-old`, 1536, 1024)], asset: qaAsset(`${seed}-sheet${i}`, 1536, 1024), updatedAt: QA_NOW };
     case 1:
@@ -133,7 +135,7 @@ const sheetState = (i: number, stress: boolean, seed: string): RenderState => {
  */
 const FREE_ROLES = ['Getaway driver', 'Safecracker', 'Lookout on the water tower', 'Fence who knows everyone', 'Night-shift guard', 'Rival thief'] as const;
 
-const makeCast = (names: string[], density: Density, seed: string, roles: readonly string[] = FREE_ROLES): Character[] =>
+const makeCast = (names: string[], density: Density, seed: string, roles: readonly string[] = FREE_ROLES, sheetsReady = false): Character[] =>
   names.map((name, i) => ({
     id: `ch_${i}`,
     name,
@@ -149,7 +151,7 @@ const makeCast = (names: string[], density: Density, seed: string, roles: readon
     },
     ...(density === 'stress' ? { voice: 'Speaks in breathless run-on sentences, mixes up animal names, giggles mid-word' } : {}),
     refs: [],
-    sheet: sheetState(i, density === 'stress', seed),
+    sheet: sheetState(i, density === 'stress', seed, sheetsReady),
     ...(i === 3 ? { kind: 'animal' as const, count: 3 } : {})
   }));
 
@@ -458,6 +460,8 @@ interface DocOpts {
   castNames: string[];
   /** Each character's free-text role (cycled); FREE_ROLES when absent. */
   castRoles?: readonly string[];
+  /** Every character sheet drawn (otherwise they cycle ready / drawing / failed / none). */
+  sheetsReady?: boolean;
   statuses: RenderState['status'][];
   panels: (i: number) => number;
   balloons: 'edge' | 'tidy' | 'none';
@@ -527,7 +531,7 @@ const buildDoc = (o: DocOpts): ComicDoc => {
           savedUsd: 0.12
         }
   };
-  doc.cast = makeCast(o.castNames, o.density, o.seed, o.castRoles);
+  doc.cast = makeCast(o.castNames, o.density, o.seed, o.castRoles, o.sheetsReady);
   doc.pages = makePages({
     count: o.pages,
     density: o.density,
@@ -660,6 +664,25 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
       break;
     case 'empty':
       doc = normalizeDoc(createEmptyDoc(QA_PROJECT_ID, 'Untitled comic', QA_NOW));
+      break;
+    case 'chat-14':
+      doc = buildDoc({
+        title: 'Monsoon Courier',
+        kind: 'comic',
+        aspect: '2:3',
+        pages: 9,
+        density: 'normal',
+        seed: 'chat14',
+        castNames: ['Maya', 'Arjun', 'Vendor', 'Pigeons'],
+        castRoles: ['Courier on a bicycle', 'Rival courier', 'Tea stall owner', 'Flock on the wires'],
+        sheetsReady: true,
+        statuses: ['ready'],
+        panels: (i) => 3 + (i % 3),
+        balloons: 'tidy',
+        conversation: true,
+        gate: false,
+        logline: 'A courier races the monsoon across the city with one parcel.'
+      });
       break;
     case 'heist-12p':
     default:
