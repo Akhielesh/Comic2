@@ -14,7 +14,9 @@
 //     does (start/end follow the direction); glyph runs (`<tspan x y rotate>`) are drawn per glyph;
 //   - `<defs>` (PE-LETTER) are read, never painted: a `fill` / `stroke` of `url(#id)` naming a `<linearGradient>`
 //     (userSpaceOnUse, as svgMarkup writes them) becomes a CanvasGradient in the current user space, exactly where
-//     SVG puts it; `clip-path="url(#id)"` naming a `<clipPath>` clips the element (after its own transform, as SVG
+//     SVG puts it. A glyph `<tspan rotate>` keeps its text element's user space in SVG, but the canvas draws that glyph
+//     in its own turned frame, so the gradient's end points are mapped into the frame (gradientInFrame) and every glyph
+//     takes the colour SVG gives it there; `clip-path="url(#id)"` naming a `<clipPath>` clips the element (after its own transform, as SVG
 //     does) to the union of the clip's paths, rects and circles. Typewriter and wipe reveals (PE-MOTION-EXPORT) use
 //     the same clip. A reference to nothing paints nothing (fill) or clips nothing (clip-path).
 // Layers are sized to the group's bounds (not the whole page) so a phone never allocates a full-page
@@ -22,7 +24,7 @@
 // (strokes may show through a translucent fill — the only degradation).
 
 import type { LetterPlan } from '../../../shared/comic/lettering/layout';
-import { letteringNodes, planOutline, type SvgNode } from '../lettering/svgMarkup';
+import { glyphFrame, gradientInFrame, letteringNodes, planOutline, type Affine, type SvgNode } from '../lettering/svgMarkup';
 
 export type PathFactory = (d: string) => Path2D;
 export interface CanvasLayer {
@@ -263,9 +265,10 @@ const withOpacity = (color: string, opacity: number): string => {
 /**
  * A paint value as a canvas fill/stroke style: a colour as is, `url(#id)` as a CanvasGradient built in the current user
  * space (the gradient's userSpaceOnUse end points), null when it names nothing drawable. Without createLinearGradient
- * (or for objectBoundingBox units) the first stop's colour stands in.
+ * (or for objectBoundingBox units) the first stop's colour stands in. `frame` (local → the gradient's user space) is set
+ * when the canvas draws in a frame SVG does not have (a rotated glyph): the end points are mapped into it.
  */
-function paintStyle(ctx: CanvasRenderingContext2D, env: Env, value: string): string | CanvasGradient | null {
+function paintStyle(ctx: CanvasRenderingContext2D, env: Env, value: string, frame?: Affine): string | CanvasGradient | null {
   const id = refOf(value);
   if (!id) return value;
   const g = env.gradients.get(id);
@@ -277,7 +280,9 @@ function paintStyle(ctx: CanvasRenderingContext2D, env: Env, value: string): str
   const user = str(g.attrs.gradientUnits) === 'userSpaceOnUse';
   if (!user || typeof ctx.createLinearGradient !== 'function') return stops[0].color;
   try {
-    const grad = ctx.createLinearGradient(num(g.attrs.x1, 0), num(g.attrs.y1, 0), num(g.attrs.x2, 0), num(g.attrs.y2, 0));
+    const line = { x1: num(g.attrs.x1, 0), y1: num(g.attrs.y1, 0), x2: num(g.attrs.x2, 0), y2: num(g.attrs.y2, 0) };
+    const at = frame ? gradientInFrame(line, frame) : line;
+    const grad = ctx.createLinearGradient(at.x1, at.y1, at.x2, at.y2);
     for (const st of stops) grad.addColorStop(st.offset, st.color);
     return grad;
   } catch {
@@ -362,10 +367,10 @@ function drawText(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pai
   ctx.textAlign = canvasAlign(p.textAnchor);
   ctx.textBaseline = 'alphabetic';
   if ('direction' in ctx) (ctx as CanvasRenderingContext2D & { direction: CanvasDirection }).direction = p.direction;
-  const paintText = (text: string, x: number, y: number, tp: Paint) => {
+  const paintText = (text: string, x: number, y: number, tp: Paint, frame?: Affine) => {
     if (!text) return;
-    const strokeStyle = painted(tp.stroke) && tp.strokeWidth > 0 && tp.strokeOpacity > 0 ? paintStyle(ctx, env, tp.stroke) : null;
-    const fillStyle = painted(tp.fill) && tp.fillOpacity > 0 ? paintStyle(ctx, env, tp.fill) : null;
+    const strokeStyle = painted(tp.stroke) && tp.strokeWidth > 0 && tp.strokeOpacity > 0 ? paintStyle(ctx, env, tp.stroke, frame) : null;
+    const fillStyle = painted(tp.fill) && tp.fillOpacity > 0 ? paintStyle(ctx, env, tp.fill, frame) : null;
     const stroke = !!strokeStyle;
     const fill = !!fillStyle;
     const doStroke = () => {
@@ -404,10 +409,11 @@ function drawText(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pai
     y = span.attrs.y !== undefined ? num(span.attrs.y, y) : y + num(span.attrs.dy, 0);
     const rotate = num(span.attrs.rotate, 0);
     if (rotate) {
+      // The glyph is drawn in its own turned frame; SVG fills it in the text element's user space (frame → that space).
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate((rotate * Math.PI) / 180);
-      paintText(span.text ?? '', 0, 0, sp);
+      paintText(span.text ?? '', 0, 0, sp, glyphFrame(x, y, rotate));
       ctx.restore();
     } else paintText(span.text ?? '', x, y, sp);
   }

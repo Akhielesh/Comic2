@@ -247,6 +247,117 @@ describe('SVG / canvas parity for each Pro lettering feature', () => {
     expect(plans[0].geometry.bounds.h).toBeGreaterThanOrEqual(0.25 * 1500 - 0.05);
   });
 
+  describe('gradient text on per-glyph runs: each glyph takes the colour SVG gives it there', () => {
+    type M = number[];
+    const mul = (m: M, n: M): M => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+    const apply = (m: M, x: number, y: number) => ({ x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] });
+    const invert = (m: M): M => {
+      const det = m[0] * m[3] - m[1] * m[2];
+      return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+    };
+    const about = (cx: number, cy: number, inner: M): M => mul(mul([1, 0, 0, 1, cx, cy], inner), [1, 0, 0, 1, -cx, -cy]);
+    /** The text element's user space on the page: the balloon's turn, then the italic / SFX skew (svgMarkup texts()). */
+    const textSpace = (p: LetterPlan): M => {
+      const t = p.transform;
+      if (!t) return [1, 0, 0, 1, 0, 0];
+      const r = ((t.rotate || 0) * Math.PI) / 180;
+      const rot = about(t.cx, t.cy, [Math.cos(r), Math.sin(r), -Math.sin(r), Math.cos(r), 0, 0]);
+      const skew = about(t.cx, t.cy, [1, 0, Math.tan(((t.skewX || 0) * Math.PI) / 180), 1, 0, 0]);
+      return mul(rot, skew);
+    };
+    /** The gradient parameter t of a point (pad spread: clamped), for the line x1 y1 → x2 y2. */
+    const tAt = (q: { x: number; y: number }, at: number[]) => {
+      const vx = at[2] - at[0];
+      const vy = at[3] - at[1];
+      return Math.min(1, Math.max(0, ((q.x - at[0]) * vx + (q.y - at[1]) * vy) / (vx * vx + vy * vy)));
+    };
+    /**
+     * Every gradient-filled glyph draw on the canvas, checked at points of its own frame mapped back through the recorded
+     * transform: the canvas's t equals SVG's (the userSpaceOnUse line across the text box, in the text element's user
+     * space). Returns the t of each glyph's middle, so a caller can see the glyphs are not all one end stop.
+     */
+    const glyphTs = (plans: LetterPlan[]): number[] => {
+      const p = plans[0];
+      const { nodes, texts } = parity(plans);
+      const grad = find(nodes, (n) => n.tag === 'linearGradient' && n.attrs.id === 'ex0-t0-0-grad')[0];
+      expect(grad).toBeDefined();
+      const line = [grad.attrs.x1, grad.attrs.y1, grad.attrs.x2, grad.attrs.y2].map(Number);
+      const toText = invert(mul([1, 0, 0, 1, 0, 0], textSpace(p)));
+      const fills = texts.filter((c) => c.name === 'fillText' && (c.state.fillStyle as unknown as FakeGradient).kind === 'gradient');
+      const glyphs = p.runs.reduce((n, r) => n + [...r.text].length, 0);
+      expect(fills.length).toBe(glyphs);
+      const fs = p.fontSize;
+      return fills.map((c) => {
+        const at = (c.state.fillStyle as unknown as FakeGradient).at;
+        const x = Number(c.args[1]);
+        const y = Number(c.args[2]);
+        let mid = 0;
+        for (const [dx, dy] of [[0, 0], [0.3 * fs, -0.35 * fs], [0.6 * fs, -0.7 * fs], [-0.2 * fs, 0.1 * fs]]) {
+          const local = { x: x + dx, y: y + dy };
+          const device = apply(c.state.matrix, local.x, local.y);
+          const inText = apply(toText, device.x, device.y);
+          const want = tAt(inText, line);
+          expect(Math.abs(tAt(local, at) - want), `${c.args[0]} at ${dx},${dy}`).toBeLessThan(0.01);
+          if (dx === 0.3 * fs) mid = want;
+        }
+        return mid;
+      });
+    };
+    const spread = (ts: number[]) => Math.max(...ts) - Math.min(...ts);
+    const grad = (angle: number) => ({ from: '#ff0000', to: '#0000ff', angle });
+
+    it('fillGradient with every warp (arc, wave, rise, flag turn each glyph; bulge scales it)', () => {
+      for (const warp of ['arc', 'wave', 'rise', 'flag', 'bulge']) {
+        const plans = styled('pg_1_l4', pro({ fillGradient: grad(0), warp, warpAmount: 0.6 }));
+        expect(plans[0].runs.some((r) => r.rotates?.some((d) => d !== 0) || r.scales?.length), warp).toBe(true);
+        expect(spread(glyphTs(plans)), warp).toBeGreaterThan(0.3);
+      }
+      // A vertical gradient on an arc (the review's probe) and on a bulge.
+      glyphTs(styled('pg_1_l4', pro({ fillGradient: grad(90), warp: 'arc', warpAmount: 0.6 })));
+      glyphTs(styled('pg_1_l4', pro({ fillGradient: grad(90), warp: 'bulge', warpAmount: 0.8 })));
+      // An angled one on a wave.
+      expect(spread(glyphTs(styled('pg_1_l4', pro({ fillGradient: grad(35), warp: 'wave', warpAmount: 0.8 }))))).toBeGreaterThan(0.2);
+    });
+
+    it('SFX: a gradient on wobble, arched and pop glyphs, and the SFX gradient effect on warped glyphs', () => {
+      expect(spread(glyphTs(styled('pg_1_l5', pro({ fillGradient: grad(0), sfxEffect: 'wobble' }))))).toBeGreaterThan(0.15);
+      expect(spread(glyphTs(styled('pg_1_l5', pro({ fillGradient: grad(0), sfxEffect: 'arched', arc: 0.5 }))))).toBeGreaterThan(0.15);
+      expect(spread(glyphTs(styled('pg_1_l5', pro({ fillGradient: grad(0), sfxEffect: 'pop' }))))).toBeGreaterThan(0.15);
+      // The SFX 'gradient' effect runs top to bottom, so on a wave each glyph sits at its own height in it.
+      for (const warp of ['wave', 'bulge', 'arc']) glyphTs(styled('pg_1_l5', pro({ sfxEffect: 'gradient', warp, warpAmount: 0.9 })));
+      expect(spread(glyphTs(styled('pg_1_l5', pro({ sfxEffect: 'gradient', warp: 'wave', warpAmount: 1 }))))).toBeGreaterThan(0.05);
+    });
+  });
+
+  it('a turned linked pair (the head’s rot): one neck, centre to centre, joining both turned bodies, on both renderers', () => {
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l2' ? { ...b, rot: 30 } : b.lineId === 'pg_1_l3' ? { ...b, linkTo: 'pg_1_l2' } : b));
+    });
+    const plans = plansOf(doc).filter((p) => p.lineId === 'pg_1_l2' || p.lineId === 'pg_1_l3');
+    expect(plans.map((p) => p.transform?.rotate)).toEqual([30, 30]);
+    const { nodes, f } = parity(plans);
+    const group = find(nodes, (n) => n.attrs['data-link-group'] !== undefined);
+    expect(group).toHaveLength(1);
+    // The neck is drawn outside the members' turned groups (its fat stroke, then its fill over the body edges): one path.
+    const necks = (group[0].children || []).filter((n) => n.tag === 'path');
+    expect(necks.length).toBeGreaterThan(0);
+    const ds = [...new Set(necks.map((n) => String(n.attrs.d)))];
+    expect(ds).toHaveLength(1);
+    // Its two ends are the members' turn centres, which a turn about that centre never moves: it reaches into both bodies.
+    const v = (ds[0].match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const ends = [{ x: (v[0] + v[11]) / 2, y: (v[1] + v[12]) / 2 }, { x: (v[2] + v[9]) / 2, y: (v[3] + v[10]) / 2 }];
+    const byId = new Map(plans.map((p) => [p.lineId, p]));
+    for (const [end, id] of [[ends[0], 'pg_1_l3'], [ends[1], 'pg_1_l2']] as const) {
+      const t = byId.get(id)!.transform!;
+      expect(end.x, id).toBeCloseTo(t.cx, 1);
+      expect(end.y, id).toBeCloseTo(t.cy, 1);
+    }
+    // The canvas fills and strokes that same neck, untransformed (page space), as SVG does.
+    const neckDraws = f.calls.filter((c) => (c.name === 'fill' || c.name === 'stroke') && pathD(c) === ds[0]);
+    expect(neckDraws.length).toBeGreaterThanOrEqual(2);
+    for (const c of neckDraws) expect(c.state.matrix).toEqual([1, 0, 0, 1, 0, 0]);
+  });
+
   it('a Pro look on the page: every line draws in parity (robot: radio balloons, lightning tails, outline stack)', () => {
     const plans = plansOf(makeSampleDoc((d) => (d.letterStyle = { presetId: 'robot' as never })));
     expect(plans.some((p) => p.style.shape === ('radio' as never))).toBe(true);

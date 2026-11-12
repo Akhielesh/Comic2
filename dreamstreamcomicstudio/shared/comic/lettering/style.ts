@@ -1071,14 +1071,17 @@ const storedPresetId = (v: unknown, keep: boolean, pro: boolean): LetteringPrese
  * Missing/invalid → DEFAULT_LETTERING (no auto). `{keepStoredPro: true}` (normalizeDoc only) also keeps the Pro keys in
  * base, kinds and speakers, `named`, and a Pro look or a well-formed look id this build does not know WITH its patches
  * (C-8: before PE-LETTER an unknown look reset the doc's lettering, so a rolled-back build would wipe it; it now draws as
- * classic and the next newer build draws it again).
+ * classic and the next newer build draws it again). `{allowPro: true}` (a client's whole lettering style, behind
+ * PRO_EDIT_OPS_PATCHABLE) accepts a Pro look, the Pro keys and ids in base, kinds and speakers within the write bounds,
+ * and `named` under the same rules as a `letter_style {named}` write (writeNamedStyles; a bad entry drops `named`).
  */
 export function sanitizeLetteringStyle(raw: unknown, opts?: LetterSanitizeOptions): LetteringStyle {
   if (!isObj(raw)) return { ...DEFAULT_LETTERING };
   const keepOn = opts?.keepStoredPro === true;
-  const presetId = storedPresetId(raw.presetId, keepOn, opts?.allowPro === true);
+  const proOn = !keepOn && opts?.allowPro === true;
+  const presetId = storedPresetId(raw.presetId, keepOn, proOn);
   if (!presetId) return { ...DEFAULT_LETTERING };
-  const keep: LetterSanitizeOptions | undefined = keepOn ? { keepStoredPro: true } : undefined;
+  const keep: LetterSanitizeOptions | undefined = keepOn ? { keepStoredPro: true } : proOn ? { allowPro: true } : undefined;
   const out: LetteringStyle = { presetId };
   if (typeof raw.auto === 'boolean') out.auto = raw.auto;
   const base = sanitizeLetterStylePatch(raw.base, keep);
@@ -1091,6 +1094,9 @@ export function sanitizeLetteringStyle(raw: unknown, opts?: LetterSanitizeOption
   if (margin !== undefined) out.safeMargin = margin;
   if (keepOn) {
     const named = storedNamedStyles(raw.named);
+    if (named) out.named = named;
+  } else if (proOn && raw.named !== undefined) {
+    const named = mergeNamedStyles(undefined, writeNamedStyles(raw.named, { allowPro: true }) ?? undefined);
     if (named) out.named = named;
   }
   return out;
@@ -1249,12 +1255,19 @@ export interface FoldedLine {
   pageId: string;
   lineId: string;
   style: LetterStylePatch | undefined;
+  /**
+   * The folded style is over the line-style cap (2 KB serialized, server LINE_STYLE_MAX_BYTES): a named entry and a line's
+   * own style may each be up to 2 KB, so their fold can be larger and its `line_style {mode: 'replace'}` would be refused.
+   * The editor refuses the deletion calmly instead (foldRefusal) and sends nothing.
+   */
+  tooBig: boolean;
 }
 
 /**
  * Deleting saved style `styleId`: every line on a live page that links to it, with the style it keeps (foldedLineStyle).
  * The editor sends, in one undo entry, a `line_style` replace per line, the `line {styleId: null}` unlinks and
- * `letter_style {named: {[styleId]: null}}` (PE-INSPECT / styleOps). A trashed page's lines keep the link and draw
+ * `letter_style {named: {[styleId]: null}}` (PE-INSPECT / styleOps), or nothing at all, saying foldRefusal's sentence,
+ * when a folded style would be past the line-style cap (FoldedLine.tooBig). A trashed page's lines keep the link and draw
  * without the style if restored after the deletion (no op edits a trashed page).
  */
 export function foldNamedStyle(doc: Pick<ComicDoc, 'letterStyle' | 'pages'>, styleId: string): FoldedLine[] {
@@ -1265,11 +1278,24 @@ export function foldNamedStyle(doc: Pick<ComicDoc, 'letterStyle' | 'pages'>, sty
     for (const panel of page.panels || []) {
       for (const line of panel.lines || []) {
         if (line.styleId !== styleId) continue;
-        out.push({ pageId: page.id, lineId: line.id, style: foldedLineStyle(ls, line) });
+        const style = foldedLineStyle(ls, line);
+        out.push({ pageId: page.id, lineId: line.id, style, tooBig: tooBig(style) });
       }
     }
   }
   return out;
+}
+
+/**
+ * The calm one-sentence refusal when a named style cannot be deleted because folding it would make some balloons' own
+ * styles too large (FoldedLine.tooBig), naming how many; undefined when the deletion can go ahead.
+ */
+export function foldRefusal(folded: readonly FoldedLine[]): string | undefined {
+  const n = folded.filter((f) => f.tooBig).length;
+  if (!n) return undefined;
+  return n === 1
+    ? "This style can't be folded into 1 balloon; shorten its own style first."
+    : `This style can't be folded into ${n} balloons; shorten their own styles first.`;
 }
 
 // ── Resolution ───────────────────────────────────────────────────────────────

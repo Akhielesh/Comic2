@@ -14,7 +14,9 @@
 //   6. text: shadow copy, then fill with an optional outline (paint-order: stroke).
 //      Pro text styling (PE-LETTER) draws in the same step, back to front: glow (stacked round strokes, never a filter,
 //      so canvas matches), the shadow or the SFX 3D extrusion, the stacked outlines (`strokes`, outermost first; they
-//      supersede `textStroke`), then the fill (a <linearGradient> for `fillGradient` or the SFX 'gradient' effect).
+//      supersede `textStroke`), then the fill (a <linearGradient> for `fillGradient` or the SFX 'gradient' effect: one
+//      userSpaceOnUse line across the text box; a scaled glyph, drawn in its own <text transform> frame, gets that line
+//      mapped into the frame, so a warped line shades exactly like the straight one would at every point).
 //      SFX 'shatter' draws that whole stack twice, clipped (<clipPath>) above and below a seeded crack and pulled apart.
 //      Gradients and clip paths sit in a <defs> inside the balloon's text group, with ids from `idPrefix`.
 // Translucent or transparent fills (alpha < 1 or 'none'): every shape is stroked at 2× through a mask
@@ -284,7 +286,7 @@ const proTextOf = (plan: LetterPlan): ProText | null => {
 };
 
 /** userSpaceOnUse end points of a two-stop gradient across the text box at `angle` degrees (0 = left to right). */
-const gradientLine = (plan: LetterPlan, angle: number) => {
+const gradientLine = (plan: LetterPlan, angle: number): GradientLine => {
   const rad = (angle * Math.PI) / 180;
   const cx = plan.x + plan.w / 2;
   const cy = plan.y + plan.h / 2;
@@ -292,13 +294,67 @@ const gradientLine = (plan: LetterPlan, angle: number) => {
   return { x1: r2(cx - half * Math.cos(rad)), y1: r2(cy - half * Math.sin(rad)), x2: r2(cx + half * Math.cos(rad)), y2: r2(cy + half * Math.sin(rad)) };
 };
 
-const gradientNode = (id: string, plan: LetterPlan, g: FillGradient): SvgNode => {
+/** A linear gradient's end points (userSpaceOnUse). */
+export interface GradientLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+/** An affine map, SVG matrix(a b c d e f) order: x' = a·x + c·y + e, y' = b·x + d·y + f. */
+export interface Affine {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+/** translate(x y) rotate(deg) scale(1 sy), composed as SVG composes that transform list (the per-glyph frame). */
+export const glyphFrame = (x: number, y: number, deg: number, sy = 1): Affine => {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { a: cos, b: sin, c: -sin * sy, d: cos * sy, e: x, f: y };
+};
+
+/**
+ * A gradient line drawn in frame `m` (local → the gradient's user space) mapped INTO that frame, so every point keeps
+ * the colour the user-space gradient gives it. With v = p2 − p1 and u = Mᵀv (M the linear part of m): q1 = m⁻¹·p1 and
+ * q2 = q1 + u·|v|²/|u|². The parameter t of any local point q then equals t of m·q, for any affine m (isolines stay
+ * perpendicular to the gradient). svgMarkup uses it for scaled glyphs (one <text transform> each) and the canvas for
+ * rotated glyph <tspan>s, where it draws each glyph in its own frame.
+ */
+export const gradientInFrame = (g: GradientLine, m: Affine): GradientLine => {
+  const det = m.a * m.d - m.b * m.c;
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return g;
+  const px = g.x1 - m.e;
+  const py = g.y1 - m.f;
+  const q1x = (m.d * px - m.c * py) / det;
+  const q1y = (-m.b * px + m.a * py) / det;
+  const vx = g.x2 - g.x1;
+  const vy = g.y2 - g.y1;
+  const ux = m.a * vx + m.b * vy;
+  const uy = m.c * vx + m.d * vy;
+  const uu = ux * ux + uy * uy;
+  const k = uu > 1e-12 ? (vx * vx + vy * vy) / uu : 0;
+  return { x1: q1x, y1: q1y, x2: q1x + ux * k, y2: q1y + uy * k };
+};
+
+const gradientStops = (g: FillGradient): SvgNode[] => {
   const stop = (offset: number, c: string): SvgNode => {
     const p = paintOf(c)!;
     return { tag: 'stop', attrs: { offset, 'stop-color': p.color, 'stop-opacity': p.opacity < 1 ? p.opacity : undefined } };
   };
-  return { tag: 'linearGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', ...gradientLine(plan, g.angle) }, children: [stop(0, g.from), stop(1, g.to)] };
+  return [stop(0, g.from), stop(1, g.to)];
 };
+
+const gradientNode = (id: string, line: GradientLine, g: FillGradient): SvgNode => ({
+  tag: 'linearGradient',
+  attrs: { id, gradientUnits: 'userSpaceOnUse', x1: r2(line.x1), y1: r2(line.y1), x2: r2(line.x2), y2: r2(line.y2) },
+  children: gradientStops(g)
+});
 
 /** SFX 'shatter': a seeded crack across the text box; the two clip polygons above and below it (plan units). */
 const shatterClips = (plan: LetterPlan): { top: string; bottom: string } => {
@@ -338,6 +394,21 @@ function textNodes(plan: LetterPlan, idBase = 'lt'): SvgNode[] {
     'font-style': parsed?.italic ? 'italic' : undefined,
     direction: rtl ? 'rtl' : undefined
   };
+  const defs: SvgNode[] = [];
+  // The fill gradient (Pro): one userSpaceOnUse line across the text box. A glyph drawn in its own frame (a scaled
+  // glyph is a <text transform>, whose user space is that frame) gets the same line mapped into the frame, so the
+  // colour at every point of the page is the one the unwarped text would have there (canvas draws the same nodes).
+  const gradId = `${idBase}-grad`;
+  const gradPaint = `url(#${gradId})`;
+  const gradLine = pro?.gradient ? gradientLine(plan, pro.gradient.angle) : null;
+  let glyphK = 0;
+  const glyphPaint = (paint: SvgNode['attrs'], frame: Affine): SvgNode['attrs'] => {
+    if (!gradLine || !pro?.gradient || paint.fill !== gradPaint) return paint;
+    const id = `${gradId}-g${glyphK}`;
+    glyphK += 1;
+    defs.push(gradientNode(id, gradientInFrame(gradLine, frame), pro.gradient));
+    return { ...paint, fill: `url(#${id})` };
+  };
   const runNodes = (paint: SvgNode['attrs']): SvgNode[] =>
     plan.runs.map((run) => {
       if (run.scales?.length && run.xs?.length) {
@@ -345,18 +416,25 @@ function textNodes(plan: LetterPlan, idBase = 'lt'): SvgNode[] {
         return {
           tag: 'g',
           attrs: {},
-          children: gs.map((g, i) => ({
-            tag: 'text',
-            attrs: {
-              ...base,
-              ...paint,
-              'text-anchor': 'start',
-              transform: `translate(${r2(run.xs![i] ?? run.x)} ${r2(run.ys?.[i] ?? run.y)})${run.rotates?.[i] ? ` rotate(${r2(run.rotates[i])})` : ''} scale(1 ${r2(run.scales![i] ?? 1)})`,
-              x: 0,
-              y: 0
-            },
-            text: g
-          }))
+          children: gs.map((g, i) => {
+            const gx = r2(run.xs![i] ?? run.x);
+            const gy = r2(run.ys?.[i] ?? run.y);
+            const turned = !!run.rotates?.[i];
+            const gr = turned ? r2(run.rotates![i]) : 0;
+            const gsy = r2(run.scales![i] ?? 1);
+            return {
+              tag: 'text',
+              attrs: {
+                ...base,
+                ...glyphPaint(paint, glyphFrame(gx, gy, gr, gsy)),
+                'text-anchor': 'start',
+                transform: `translate(${gx} ${gy})${turned ? ` rotate(${gr})` : ''} scale(1 ${gsy})`,
+                x: 0,
+                y: 0
+              },
+              text: g
+            };
+          })
         };
       }
       if (run.xs?.length) {
@@ -394,7 +472,6 @@ function textNodes(plan: LetterPlan, idBase = 'lt'): SvgNode[] {
       })
     });
   } else {
-    const defs: SvgNode[] = [];
     // 1. Glow: four round strokes, widest and faintest first (no filter: canvas draws the same strokes).
     if (pro.glow) {
       const steps = 4;
@@ -440,10 +517,9 @@ function textNodes(plan: LetterPlan, idBase = 'lt'): SvgNode[] {
     }
     // 4. The fill: a gradient or the text colour, with the line's outline only when no stack supersedes it.
     let fillPaint: string = fill.color;
-    if (pro.gradient) {
-      const id = `${idBase}-grad`;
-      defs.push(gradientNode(id, plan, pro.gradient));
-      fillPaint = `url(#${id})`;
+    if (pro.gradient && gradLine) {
+      defs.push(gradientNode(gradId, gradLine, pro.gradient));
+      fillPaint = gradPaint;
     }
     const strokeW = !stack && plan.style.textStroke && strokeP ? r2(plan.style.textStroke.width * fs) : 0;
     out.push({

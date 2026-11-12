@@ -23,6 +23,7 @@ import {
   PRO_SFX_EFFECTS,
   SFX_EFFECTS,
   foldNamedStyle,
+  foldRefusal,
   foldedLineStyle,
   isDrawnShape,
   isDrawnSfxEffect,
@@ -158,6 +159,37 @@ describe('client acceptance of Pro lettering: only with {allowPro: true} (behind
   });
 });
 
+describe('sanitizeLetteringStyle {allowPro}: a whole lettering style with a Pro look, its Pro patches and named styles', () => {
+  it('accepts the Pro look, the Pro keys in base / kinds / speakers within the write bounds, and named under the write rules', () => {
+    const raw = {
+      presetId: 'robot',
+      auto: false,
+      base: { glow: { color: '#fff', size: 9 }, italic: true },
+      kinds: { sfx: { sfxEffect: 'wobble' }, shout: { shape: 'monster' } },
+      speakers: { c1: { strokes: [{ color: '#000', w: 0.1 }] } },
+      named: { st_a: { name: ' Radio ', patch: { shape: 'radio', warp: 'arc' } }, st_gone: null }
+    };
+    expect(sanitizeLetteringStyle(raw, PRO)).toEqual({
+      presetId: 'robot',
+      auto: false,
+      base: { italic: true, glow: { color: '#ffffff', size: PRO_LETTER_LIMITS.glowSizeMax } },
+      kinds: { sfx: { sfxEffect: 'wobble' }, shout: { shape: 'monster' } },
+      speakers: { c1: { strokes: [{ color: '#000000', w: 0.1 }] } },
+      named: { st_a: { name: 'Radio', patch: { shape: 'radio', warp: 'arc' } } }
+    });
+    // Without the option, exactly as before: a Pro look resets to classic; a base look keeps no Pro key and no named.
+    expect(sanitizeLetteringStyle(raw)).toEqual({ presetId: 'classic' });
+    expect(sanitizeLetteringStyle({ ...raw, presetId: 'noir' })).toEqual({ presetId: 'noir', auto: false, base: { italic: true } });
+    // halftone_fill is never a client write; a look id this build does not know is refused (only the load keeps one).
+    expect(sanitizeLetteringStyle({ presetId: 'classic', kinds: { sfx: { sfxEffect: 'halftone_fill' } } }, PRO)).toEqual({ presetId: 'classic' });
+    expect(sanitizeLetteringStyle({ presetId: 'future_look', base: { italic: true } }, PRO)).toEqual({ presetId: 'classic' });
+    // A bad named entry drops `named` (the rest is kept); the write cap applies.
+    expect(sanitizeLetteringStyle({ presetId: 'classic', named: { 'bad key': { name: 'X', patch: {} } } }, PRO)).toEqual({ presetId: 'classic' });
+    const many = Object.fromEntries(Array.from({ length: PRO_LETTER_LIMITS.namedStyles + 1 }, (_v, i) => [`st_${i}`, { name: `S${i}`, patch: {} }]));
+    expect(sanitizeLetteringStyle({ presetId: 'classic', named: many }, PRO).named).toBeUndefined();
+  });
+});
+
 describe('load keep: a stored Pro id or look survives load and draws', () => {
   const stored = (): ComicDoc => {
     const d = json(makeQaDoc('lake-1p'));
@@ -289,6 +321,37 @@ describe('named styles: the cascade, the fold-back on delete, the merge', () => 
     expect(foldedLineStyle(ls, { style: { weight: 400 } })).toEqual({ weight: 400 });
     expect(foldedLineStyle(ls, { styleId: 'gone' })).toBeUndefined();
     expect(foldNamedStyle({ letterStyle: ls, pages: [] }, 'gone')).toEqual([]);
+  });
+
+  it('a fold past the 2 KB line-style cap is flagged tooBig, and the deletion is refused calmly with the count', () => {
+    // A named entry and a line's own style may each be up to 2 KB, so their fold can be larger than one line style may be.
+    const pad = (n: number) => 'x'.repeat(n);
+    const named = { st: { name: 'Big', patch: { font: pad(900), textColor: '#ff0000' } as unknown as LetterStylePatch } };
+    const doc = createEmptyDoc('d', 'D', 1);
+    doc.letterStyle = { presetId: 'classic', named };
+    doc.pages = [
+      {
+        ...(normalizeDoc(json(makeQaDoc('lake-1p'))).pages[0]),
+        id: 'p1',
+        panels: [
+          {
+            ...(normalizeDoc(json(makeQaDoc('lake-1p'))).pages[0].panels[0]),
+            lines: [
+              { id: 'big1', kind: 'speech', text: 'A', styleId: 'st', style: { shadow: { color: '#000000', dx: 0.1, dy: 0.1 }, border: pad(1300) } as unknown as LetterStylePatch },
+              { id: 'big2', kind: 'speech', text: 'B', styleId: 'st', style: { border: pad(1300) } as unknown as LetterStylePatch },
+              { id: 'small', kind: 'speech', text: 'C', styleId: 'st', style: { italic: true } }
+            ]
+          }
+        ]
+      }
+    ];
+    const folded = foldNamedStyle(doc, 'st');
+    expect(folded.map((f) => [f.lineId, f.tooBig])).toEqual([['big1', true], ['big2', true], ['small', false]]);
+    for (const f of folded) expect(f.tooBig).toBe(JSON.stringify(f.style).length > 2048);
+    expect(foldRefusal(folded)).toBe("This style can't be folded into 2 balloons; shorten their own styles first.");
+    expect(foldRefusal(folded.slice(1))).toBe("This style can't be folded into 1 balloon; shorten its own style first.");
+    expect(foldRefusal(folded.slice(2))).toBeUndefined();
+    expect(foldRefusal([])).toBeUndefined();
   });
 
   it('mergeNamedStyles: upsert replaces a style whole, null deletes, a new one past the cap is not added', () => {

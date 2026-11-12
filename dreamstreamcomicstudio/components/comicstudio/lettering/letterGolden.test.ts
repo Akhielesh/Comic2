@@ -7,8 +7,11 @@
 // canvas defs / gradients / clip paths) may change a byte of any of them.
 //
 // Re-record (only on an intentional change of the old drawing): LETTER_GOLDEN_WRITE=1 npx vitest run <this file>.
+// Nothing else ever writes the fixture: a missing or renamed golden FAILS (it is never re-recorded from the engine under
+// test, which would lock in whatever that engine draws).
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { hashString } from '../../../shared/comic/hash';
@@ -23,6 +26,22 @@ import { letteringSvgMarkup } from './svgMarkup';
 
 const GOLDEN = join(__dirname, '__fixtures__', 'letterGolden.json');
 const WRITE = process.env.LETTER_GOLDEN_WRITE === '1';
+const GOLDEN_MISSING = 'golden missing: re-record on the pre-change engine with LETTER_GOLDEN_WRITE=1';
+type PageHashes = Record<string, { plans: string; markup: string; canvas: string }>;
+
+/**
+ * The recorded golden at `path`. Only an explicit `write` (LETTER_GOLDEN_WRITE=1) records `now` first; a missing file
+ * otherwise fails, so a deleted or renamed golden can never be re-recorded from the engine under test.
+ */
+const loadGolden = (path: string, now: () => PageHashes, write: boolean): PageHashes => {
+  if (write) {
+    writeFileSync(
+      path,
+      `${JSON.stringify({ note: 'The lettering engine before PE-LETTER (756b5a70): hashString of JSON.stringify(planLettering(...)), letteringSvgMarkup(plans, {widthPx: 1000, idPrefix: "gold"}) and JSON.stringify of the canvas exporter\'s recorded calls (fakeCanvas), per page, estimateMeasure. Every QA fixture and its rtl edition, the sample doc, and the 8 base looks on heist-12p and lake-1p.', pages: now() }, null, 1)}\n`
+    );
+  } else if (!existsSync(path)) throw new Error(GOLDEN_MISSING);
+  return (JSON.parse(readFileSync(path, 'utf8')) as { pages: PageHashes }).pages;
+};
 
 /** Every doc the golden covers, by a stable name. */
 const goldenDocs = (): [string, ComicDoc][] => {
@@ -66,17 +85,31 @@ const computeAll = (): Record<string, { plans: string; markup: string; canvas: s
 describe('old balloons draw byte-identically (PE-LETTER golden over every QA fixture)', () => {
   it('plans, SVG markup and canvas draw calls equal the engine before PE-LETTER, page by page', () => {
     const now = computeAll();
-    if (WRITE || !existsSync(GOLDEN)) {
-      writeFileSync(
-        GOLDEN,
-        `${JSON.stringify({ note: 'The lettering engine before PE-LETTER (756b5a70): hashString of JSON.stringify(planLettering(...)), letteringSvgMarkup(plans, {widthPx: 1000, idPrefix: "gold"}) and JSON.stringify of the canvas exporter\'s recorded calls (fakeCanvas), per page, estimateMeasure. Every QA fixture and its rtl edition, the sample doc, and the 8 base looks on heist-12p and lake-1p.', pages: now }, null, 1)}\n`
-      );
-    }
-    const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as { pages: Record<string, { plans: string; markup: string; canvas: string }> };
+    const golden = { pages: loadGolden(GOLDEN, () => now, WRITE) };
     expect(Object.keys(now).sort()).toEqual(Object.keys(golden.pages).sort());
     const diff = Object.keys(now).filter((k) => JSON.stringify(now[k]) !== JSON.stringify(golden.pages[k]));
     expect(diff).toEqual([]);
     // A golden that covers nothing proves nothing: every fixture has pages with lettering.
     expect(Object.keys(now).length).toBeGreaterThan(150);
   }, 120_000);
+
+  it('a missing golden fails and is never re-recorded from the engine under test (only LETTER_GOLDEN_WRITE=1 writes)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'letter-golden-'));
+    try {
+      const path = join(dir, 'letterGolden.json');
+      let computed = 0;
+      const now = () => {
+        computed += 1;
+        return { p: { plans: 'a', markup: 'b', canvas: 'c' } };
+      };
+      expect(() => loadGolden(path, now, false)).toThrow(GOLDEN_MISSING);
+      expect(existsSync(path)).toBe(false);
+      expect(computed).toBe(0);
+      // The explicit re-record writes, and reads back what it wrote.
+      expect(loadGolden(path, now, true)).toEqual({ p: { plans: 'a', markup: 'b', canvas: 'c' } });
+      expect(loadGolden(path, () => ({}), false)).toEqual({ p: { plans: 'a', markup: 'b', canvas: 'c' } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

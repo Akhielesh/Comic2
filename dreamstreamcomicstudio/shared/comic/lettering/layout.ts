@@ -538,6 +538,45 @@ const rotatedBox = (b: Box, deg: number, cx: number, cy: number): Box => {
 };
 
 /**
+ * The head of a line's linked chain (master plan §2.4: a chain is styled and animated as one unit keyed by its head):
+ * follow `linkOf` while it names another line `has` knows; a cycle's head is its smallest id, the same for every member.
+ * A line in no chain is its own head.
+ */
+const chainHead = (id: string, linkOf: (id: string) => unknown, has: (id: string) => boolean): string => {
+  const seen: string[] = [];
+  let cur = id;
+  while (!seen.includes(cur)) {
+    seen.push(cur);
+    const next = linkOf(cur);
+    if (typeof next !== 'string' || next === cur || !has(next)) return cur;
+    cur = next;
+  }
+  return [...seen.slice(seen.indexOf(cur))].sort()[0];
+};
+
+/**
+ * The line whose Balloon.rot turns `lineId`'s linked chain on `page` (the layout draws every member with its head's
+ * turn). For the editor: a rotate edit on any member of a chain writes the head's balloon (transform.ts rotateEdit).
+ */
+export function chainHeadOf(page: Pick<Page, 'balloons' | 'panels'>, lineId: string): string {
+  const stored = new Map<string, Balloon>();
+  for (const b of page.balloons || []) if (validBalloon(b) && !stored.has(b.lineId)) stored.set(b.lineId, b);
+  const lines = new Set((page.panels || []).flatMap((pn) => (pn.lines || []).map((l) => l.id)));
+  return chainHead(lineId, (id) => stored.get(id)?.linkTo, (id) => lines.has(id));
+}
+
+/**
+ * A plan's outline box as drawn, plan units: the shape's bounds at (x, y), turned by `transform.rotate` about the text
+ * box's centre when the balloon is turned (the box around the turned outline). For the editor's safe-area fix and any
+ * hit test that must match the drawing (styleOps outlineFractions / fixSafeAreaOps, PE-INSPECT).
+ */
+export function turnedOutlineBox(plan: Pick<LetterPlan, 'x' | 'y' | 'w' | 'h' | 'geometry' | 'transform'>): Box {
+  const rot = plan.transform?.rotate ?? 0;
+  const g = rot ? rotatedBox(plan.geometry.bounds, rot, plan.w / 2, plan.h / 2) : plan.geometry.bounds;
+  return { x: plan.x + g.x, y: plan.y + g.y, w: g.w, h: g.h };
+}
+
+/**
  * The text-box height whose outline is at least `minOutline` tall (plan units): the box grows (a secant search over the
  * shape's real bounds, three steps at most) and the text is centred in it. `h` itself when the outline is tall enough.
  */
@@ -1158,7 +1197,7 @@ function planAtDensity(
     h: number;
     t: ReturnType<typeof layoutText>;
     g0: BubbleGeometry;
-    /** Balloon.rot (0: none); `ob` the outline box relative to the text box as drawn (rotated: the turned outline's box). */
+    /** Balloon.rot of its chain head (0: none); `ob` the outline box relative to the text box as drawn (rotated: the turned outline’s box). */
     rot: number;
     ob: Box;
     /** Absolute tail tip (plan units) or null; `tipFollows` when it is the default one derived from the box. */
@@ -1177,6 +1216,8 @@ function planAtDensity(
   const capSame = new Set<string>();
   /** Pinned balloons drawn wider than stored so no word breaks (FX6), by line. */
   const widened = new Set<string>();
+  /** The head of a line's linked chain on this page (chainHead: the stored balloons' linkTo, this page's lines). */
+  const headOf = (id: string): string => chainHead(id, (x) => stored.get(x)?.linkTo, (x) => lineIds.has(x));
   const preOf = ({ line, panelIndex, panelN }: (typeof items)[number], order: number, wordFit: boolean): Pre | undefined => {
     const fallback = !stored.has(line.id);
     const again = repacks(line.id) && placed.has(line.id);
@@ -1206,7 +1247,9 @@ function planAtDensity(
     const own = stored.get(line.id);
     const minH = minHOf(own);
     const h = minH ? grownHeight(setup, w, t.h, minH * H) : t.h;
-    const rot = rotOf(own);
+    // A linked chain turns as one: every member by its head's Balloon.rot, each about its own centre, so the necks
+    // (drawn centre to centre, and a centre stays put under its own turn) still join the turned bodies.
+    const rot = rotOf(stored.get(headOf(line.id)));
 
     // Render-time page fit on the real outline (stored values untouched); a rotated balloon on its turned outline.
     const g0Key = `${line.id}|${setup.baseSize}|${r2(w)}|${r2(h)}`;
@@ -1439,7 +1482,10 @@ function planAtDensity(
       const geometry = geometryFor(setup, w, h, tipLocal);
 
       const skewX = line.kind === 'sfx' && setup.style.sfxEffect === 'skewed' ? -12 : setup.synthItalic ? -10 : 0;
-      const outline = { x: x + geometry.bounds.x, y: y + geometry.bounds.y, w: geometry.bounds.w, h: geometry.bounds.h };
+      // A balloon turned by Balloon.rot is judged by its turned outline's box, as the page fit, the settle and the
+      // over-text check see it (a style tilt alone keeps the unturned judgement it always had).
+      const ob = rot ? rotatedBox(geometry.bounds, rotate, w / 2, h / 2) : geometry.bounds;
+      const outline = { x: x + ob.x, y: y + ob.y, w: ob.w, h: ob.h };
       const eps = 0.5;
       const outOfSafeArea =
         outline.x < safe.x - eps || outline.y < safe.y - eps || outline.x + outline.w > safe.x + safe.w + eps || outline.y + outline.h > safe.y + safe.h + eps;

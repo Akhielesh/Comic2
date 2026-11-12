@@ -78,6 +78,41 @@ describe('Pro text styling in the SVG tree', () => {
     expect(text(big)).toBe(text(capped));
   });
 
+  it('a gradient on scaled glyphs (warp bulge, SFX pop): each glyph’s own <linearGradient>, mapped into its frame', () => {
+    // A scaled glyph is one <text transform="translate rotate scale">, whose user space is that frame: the line across
+    // the text box is mapped into it (gradientInFrame), so every point keeps the colour the unwarped text gives it.
+    const tAt = (x: number, y: number, a: SvgNode['attrs']) => {
+      const [x1, y1, x2, y2] = [a.x1, a.y1, a.x2, a.y2].map(Number);
+      return ((x - x1) * (x2 - x1) + (y - y1) * (y2 - y1)) / ((x2 - x1) ** 2 + (y2 - y1) ** 2);
+    };
+    for (const style of [pro({ fillGradient: { from: '#ff0000', to: '#0000ff', angle: 20 }, warp: 'bulge', warpAmount: 0.8 }), pro({ fillGradient: { from: '#ff0000', to: '#0000ff', angle: 0 }, sfxEffect: 'pop' })]) {
+      const id = 'warp' in (style as object) ? 'pg_1_l4' : 'pg_1_l5';
+      const plans = plansOf(styledDoc({ [id]: style })).filter((p) => p.lineId === id);
+      const tree = all(letteringNodes(plans, { aspect: ASPECT, idPrefix: 'gx' }));
+      const grads = new Map(tree.filter((n) => n.tag === 'linearGradient').map((n) => [String(n.attrs.id), n]));
+      const baseGrad = [...grads.values()].find((n) => String(n.attrs.id).endsWith('-grad'))!;
+      const glyphs = tree.filter((n) => n.tag === 'text' && /scale\(/.test(String(n.attrs.transform)) && /^url\(#/.test(String(n.attrs.fill)));
+      expect(glyphs.length).toBe(plans[0].runs.reduce((k, r) => k + [...r.text].length, 0));
+      const refs = glyphs.map((g) => /^url\(#(.+)\)$/.exec(String(g.attrs.fill))![1]);
+      expect(new Set(refs).size).toBe(refs.length);
+      const ts: number[] = [];
+      glyphs.forEach((g, i) => {
+        const own = grads.get(refs[i])!;
+        expect(own, refs[i]).toBeDefined();
+        expect(own.attrs.gradientUnits).toBe('userSpaceOnUse');
+        const [tx, ty, deg, sy] = /translate\(([-\d.]+) ([-\d.]+)\)(?: rotate\(([-\d.]+)\))? scale\(1 ([-\d.]+)\)/.exec(String(g.attrs.transform))!.slice(1).map((v) => Number(v ?? 0));
+        const r = (deg * Math.PI) / 180;
+        for (const [lx, ly] of [[0, 0], [8, -10], [20, -25]]) {
+          const px = tx + Math.cos(r) * lx - Math.sin(r) * sy * ly;
+          const py = ty + Math.sin(r) * lx + Math.cos(r) * sy * ly;
+          expect(Math.abs(tAt(lx, ly, own.attrs) - tAt(px, py, baseGrad.attrs))).toBeLessThan(0.005);
+        }
+        ts.push(tAt(tx, ty, baseGrad.attrs));
+      });
+      expect(Math.max(...ts) - Math.min(...ts)).toBeGreaterThan(0.15);
+    }
+  });
+
   it('user text in a Pro-styled balloon is escaped like any other', () => {
     const doc = styledDoc({ pg_1_l4: { ...GRADIENT, glow: { color: '#ffffff', size: 0.1 } } as LetterStylePatch });
     doc.pages[0].panels[2].lines[1].text = '<script>alert(1)</script> & co';
