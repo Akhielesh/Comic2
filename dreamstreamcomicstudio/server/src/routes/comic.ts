@@ -62,7 +62,7 @@ import { createStudioContext, signAssetPaths, type OrchestratorContext, type Stu
 import { notAvailableError } from '../comic/extensions.js';
 import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
 import { recordOptionAnswer, runDirectorTurn, type OptionAnswerRef } from '../comic/director.js';
-import { canFastPath, parseIntent, routeIntent } from '../comic/intents.js';
+import { canFastPath, dialogueFastIntent, parseIntent, routeIntent } from '../comic/intents.js';
 import { ASPECT_RATIOS, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { loadPublicByProjectId } from '../comic/publication/index.js';
@@ -1630,6 +1630,20 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           { op: 'message', msg: reply }
         ]);
         logger.info('comic_intent_routed', { requestId: req.requestId, projectId: ctx.projectId, kind: routed.kind });
+        return;
+      }
+      // B-TOOL (COMIC_DIALOGUE_FAST → caps.dialogueFast, off by default): one clear dialogue edit is applied by the
+      // deterministic engine, free and with no model call. The turn reserved at the BUSY check is held until this
+      // message ends, and the edit is compiled from the live doc and committed in one synchronous step (keep it free
+      // of awaits), so no other edit can land in between: that is why it needs no conflict guard (intents.ts).
+      const fast = dialogueFastIntent(ctx, text, prepared.focus);
+      if (fast) {
+        const at = Date.now();
+        session.commit([
+          { op: 'message', msg: { id: newId('msg'), role: 'user', text, at } },
+          { op: 'message', msg: { id: newId('msg'), role: 'assistant', text: governDollars(fast.reply, costFormatterFor(ctx).view), at: at + 1, nextSteps: fast.nextSteps } }
+        ]);
+        logger.info('comic_dialogue_fast', { requestId: req.requestId, projectId: ctx.projectId, ops: fast.ops });
         return;
       }
       // Phase 2 (COMIC_FAST_INTENTS): an unambiguous structural edit runs its one FREE tool, no model call.

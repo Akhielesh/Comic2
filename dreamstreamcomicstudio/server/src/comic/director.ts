@@ -38,7 +38,7 @@ import {
   wantsRecap
 } from './replies.js';
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
-import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
+import { activityWhere, buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { conflictCardFor, conflictCardText } from './conflictGuard.js';
 import { CONFLICT_PROMPT_LINE, decidedLine } from './decided.js';
 import { LONG_MESSAGE_CHARS, openSteerOf, takeSteerOf, type SteerNote } from './session.js';
@@ -153,7 +153,7 @@ HOW TO USE TOOLS
 - "Error: …" → fix the arguments once, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
 - A long pasted script: save_source (no arguments if the message says it was already saved, else useMessage:true), then offer the next step.
-- Dialogue: read_pages, then edit_panel_text or set_line. A drawn page's art: edit_page; its script: revise_pages.
+- Dialogue: dialogue_edit (asks which line itself); whole panels: edit_panel_text. A drawn page's art: edit_page; its script: revise_pages.
 
 ATTACHMENTS
 Images are numbered "Attached image 1, 2, …" (earlier unassigned images continue the numbering) and you can see them. Do what the user says they are for: a person or drawing for a character (attach_refs — keep every photo of them), a look to follow (set_style), or a location (upsert_place). If unclear, ask ("Is this Maya, or a style to follow?"). Also write what you see into the look fields. A SAFETY, IP or CARE NOTE after the message is from the studio: follow it.
@@ -392,6 +392,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   read_pages: 'Reading the plan',
   edit_panel_text: 'Editing dialogue',
   set_line: 'Editing a line',
+  dialogue_edit: 'Editing dialogue',
   render_pages: 'Preparing pages',
   edit_page: 'Preparing the edit',
   render_cover: 'Preparing the cover',
@@ -863,7 +864,9 @@ async function directorTurnBody(
           const label = TOOL_ACTIVITY[call.name] ?? toolset.activity[call.name];
           // The badge follows THIS call: insert_page is free, but with write:true it runs the (paid) writer.
           const badge = call.name === 'insert_page' && args.write === true ? 'text' : tool.cost === 'paid' ? 'image' : tool.cost;
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: badge });
+          // Presence (plan §3 A2/A4): the page and balloons this call works on, so the editor can outline them.
+          const where = label ? activityWhere(ctx, turn, call.name, args) : undefined;
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: badge, ...(where ? { where } : {}) });
           let committed = 0;
           const unsubscribe = session.subscribe((e) => {
             if (e.type === 'ops') committed += e.ops.length;
@@ -874,7 +877,7 @@ async function directorTurnBody(
             unsubscribe();
           }
           const ok = !/^(Error|Refused)\b/.test(output);
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok, cost: badge });
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok, cost: badge, ...(where ? { where } : {}) });
           turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });

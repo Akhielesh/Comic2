@@ -7,6 +7,7 @@ import {
   composeTurnReply,
   contradictionsOf,
   detectNamedIp,
+  dialogueTargetGap,
   drawIntentInContext,
   drawIntentOf,
   limitWords,
@@ -495,5 +496,41 @@ describe('next steps and helpers', () => {
 
   it('limitWords keeps whole sentences', () => {
     expect(limitWords('One two three. Four five six. Seven.', 4)).toBe('One two three.');
+  });
+});
+
+describe('the dialogue_target gap (plan §3 A3.2; built in wave 2 B-TOOL on resolveLineRef / whichLineChoices)', () => {
+  const ON = { contradictions: true } as const;
+
+  it('a dialogue request that matches several lines asks through dialogue_edit, quoting each candidate', () => {
+    const gap = dialogueTargetGap(plannedDoc(), "make Maya's line a whisper")!;
+    expect(gap.gap).toBe('dialogue_target');
+    expect(gap.choices.map((c) => c.visual)).toEqual([
+      { kind: 'balloon', pageId: 'pg_1', lineId: 'ln_1_2' },
+      { kind: 'balloon', pageId: 'pg_2', lineId: 'ln_2_2' }
+    ]);
+    expect(gap.text).toBe(
+      `the request could mean 2 lines (${gap.choices.map((c) => c.label).join('; ')}) — call dialogue_edit with the user's words and let it ask "Which line?" (it shows each balloon); never change all of them unless the user said all / every / both.`
+    );
+    expect(materialGaps(plannedDoc(), "make Maya's line a whisper", ON)).toEqual(['dialogue_target']);
+    expect(openQuestionsLine(plannedDoc(), "make Maya's line a whisper", ON)).toBe(`OPEN QUESTIONS: ${gap.text}`);
+  });
+
+  it('silent when it is clear: one match, the selection, a plural, or not about dialogue; and only behind the flag', () => {
+    const doc = plannedDoc();
+    expect(dialogueTargetGap(doc, "make Arjun's line a shout")).toBeUndefined();
+    expect(dialogueTargetGap(doc, 'make it a whisper', { pageId: 'pg_2', lineIds: ['ln_2_2'] })).toBeUndefined();
+    expect(dialogueTargetGap(doc, "make all of Maya's lines whispers")).toBeUndefined();
+    expect(dialogueTargetGap(doc, 'draw page 2 again')).toBeUndefined();
+    expect(dialogueTargetGap(doc, `${'make it a whisper '.repeat(40)}`)).toBeUndefined();
+    expect(materialGaps(doc, "make Maya's line a whisper")).toEqual([]);
+    expect(openQuestionsLine(doc, "make Maya's line a whisper")).toBe('');
+  });
+
+  it('a contradiction still comes first', () => {
+    const approved: ComicDoc = { ...plannedDoc(), planStatus: 'approved' };
+    const gaps = materialGaps(approved, "make it 5 pages and make Maya's line a whisper", ON);
+    expect(gaps[0]).toBe('contradiction_pages');
+    expect(openQuestionsLine(approved, "make it 5 pages and make Maya's line a whisper", ON)).toMatch(/^OPEN QUESTIONS: the user asked for 5 pages/);
   });
 });
