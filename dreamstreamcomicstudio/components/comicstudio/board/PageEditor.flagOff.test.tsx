@@ -4,6 +4,10 @@
 // The snapshots in __snapshots__/PageEditor.flagOff.test.tsx.snap were written on the base (756b5a70), BEFORE the
 // PE-SHELL code existed, and committed first: any change the shell makes to the flag-off tree fails here. Desktop
 // (1280 × 800, fine pointer), tablet portrait and phone (coarse), in Easy and in Pro, with and without a selection.
+//
+// One change is deliberate and flag-independent: DC-0 #10 (the phone toolbar sizes its buttons to their labels so
+// "Mark up" and "Lettering" read in full at 320 px). `asBase` maps exactly those class tokens back to the base's, so
+// the snapshot stays the base's byte for byte and nothing else may differ.
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +41,13 @@ const DESKTOP = formFactorFor({ w: 1280, h: 800 });
 const TABLET = formFactorFor({ w: 768, h: 1024, coarse: true });
 const PHONE = formFactorFor({ w: 360, h: 740, coarse: true });
 
+/** DC-0 #10's two class swaps on the phone toolbar, mapped back to the base (see the header). */
+const DC0_10: ReadonlyArray<[string, string]> = [
+  ['h-12 min-w-[44px] flex-auto px-0.5', 'h-12 min-w-[44px] flex-1 px-1'],
+  ['min-w-0 flex-auto gap-0.5', 'min-w-0 flex-[2] gap-0.5']
+];
+const asBase = (html: string): string => DC0_10.reduce((h, [now, base]) => h.split(now).join(base), html);
+
 /** The flag explicitly off (the server sends false to every non-admin, and DEFAULT_CAPS leaves it unset). */
 const FLAG_OFF = { ...DEFAULT_CAPS, proEditorV2: false };
 
@@ -53,7 +64,7 @@ const editorHtml = (ff: ReturnType<typeof formFactorFor>, mode: StudioMode, sele
       <PageEditor studio={studio} doc={doc} pageId="pg_1" />
     </FormFactorProvider>
   );
-  return document.body.innerHTML;
+  return asBase(document.body.innerHTML);
 };
 
 describe('flag off: the page editor is exactly today', () => {
@@ -83,7 +94,7 @@ describe('flag off: the Pages tab and the toolbars are exactly today', () => {
         <PagesTab studio={studio} doc={doc} />
       </FormFactorProvider>
     );
-    expect(container.innerHTML).toMatchSnapshot();
+    expect(asBase(container.innerHTML)).toMatchSnapshot();
   });
   it('the lettering toolbar keeps its Easy | Pro switch', () => {
     const { container } = render(
@@ -103,7 +114,7 @@ describe('flag off: the Pages tab and the toolbars are exactly today', () => {
         canPro
       />
     );
-    expect(container.innerHTML).toMatchSnapshot();
+    expect(asBase(container.innerHTML)).toMatchSnapshot();
   });
   it('the phone toolbar', () => {
     const { container } = render(
@@ -119,6 +130,6 @@ describe('flag off: the Pages tab and the toolbars are exactly today', () => {
         tools={{ open: false, onToggle: () => undefined }}
       />
     );
-    expect(container.innerHTML).toMatchSnapshot();
+    expect(asBase(container.innerHTML)).toMatchSnapshot();
   });
 });

@@ -55,7 +55,18 @@ import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
-import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, STATUS_SURFACE, TONE_CHIP, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, OVERLAY, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, SCRIM, STATUS_SURFACE, TONE_CHIP, TONE_TEXT, TRANSITION, Z } from '../../chat/studioDesign';
+import { IN_ART_LETTERING_NOTE, MADE_IN_PRO_CHIP, PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
+import { PRO_BUBBLE_SHAPES, PRO_SFX_EFFECTS, PRO_STYLE_KEYS } from '../../../shared/comic/lettering/style';
+import { NUDGE as ENGINE_NUDGE, moveEdit } from '../../../shared/comic/editor/transform';
+import { resolveDrop } from '../../../shared/comic/editor/drop';
+import { BalloonEditorExtrasContext, NO_BALLOON_EXTRAS, type BalloonEditorExtras } from './BalloonLayer';
+import { useProEditor, type ProEditorState, type ProPanelProps } from '../editor/useProEditor';
+import { ProTopBar } from '../editor/ProTopBar';
+import { ToolRail } from '../editor/ToolRail';
+import { ProCoach, ProDock, ProLayersSheet, ProPanelFrame, ProWorkspace, ShortcutSheet, type DockTab, type DockTabId } from '../editor/ProWorkspace';
+import { TOOL_LINE_KIND, isEditableTarget, isLetteringTool, selectionHoldsArrows, shellShortcut, toolSpec, type ProTool } from '../editor/shortcuts';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
@@ -114,6 +125,7 @@ import {
   editorImageWidth,
   editorLayoutFor,
   isEditionLang,
+  proWorkspaceFor,
   readFlag,
   selectionOutOfView,
   swipeTurn,
@@ -211,12 +223,24 @@ export const lineKindOps = (page: Page, panel: Panel, line: Line, kind: LineKind
   return [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch }];
 };
 
-const isEditableTarget = (el: EventTarget | null) => {
-  const node = el as HTMLElement | null;
-  if (!node || !node.tagName) return false;
-  const tag = node.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable;
-};
+/**
+ * A line or balloon carries something only the Pro view edits (rotation, a set height, a named style, a Pro text
+ * effect or a Pro shape): Easy shows it as one "Made in Pro · Open in Pro" chip (zero-confusion rule 2). Pure.
+ */
+export const madeInPro = (page: Page, lineIds: readonly string[]): boolean =>
+  lineIds.some((id) => {
+    const b = page.balloons.find((x) => x.lineId === id);
+    if (b && ((typeof b.rot === 'number' && b.rot !== 0) || (typeof b.minH === 'number' && b.minH > 0))) return true;
+    const line = page.panels.flatMap((p) => p.lines).find((l) => l.id === id);
+    if (!line) return false;
+    if (line.styleId) return true;
+    const st = (line.style || {}) as Record<string, unknown>;
+    return (
+      PRO_STYLE_KEYS.some((k) => st[k] !== undefined) ||
+      (typeof st.shape === 'string' && (PRO_BUBBLE_SHAPES as readonly string[]).includes(st.shape)) ||
+      (typeof st.sfxEffect === 'string' && (PRO_SFX_EFFECTS as readonly string[]).includes(st.sfxEffect))
+    );
+  });
 
 const SELECT_CLS =
   'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-50 coarse:h-11';
@@ -650,9 +674,13 @@ interface EditorBodyProps {
   onEdition(lang: string | null): void;
   tools: ToolsState;
   onTools(patch: Partial<ToolsState>): void;
+  /** The Pro shell (useProEditor in the page editor): the view, the tool and the mounted parts. */
+  pro: ProEditorState;
+  /** The stage's zoom, for the Pro top bar. */
+  onZoom?(zoom: number): void;
 }
 
-const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, layout, edition, onEdition, tools, onTools }) => {
+const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, layout, edition, onEdition, tools, onTools, pro, onZoom }) => {
   const [mode, setMode] = useState<Mode>('move');
   const [region, setRegion] = useState<Box | null>(null);
   const [instruction, setInstruction] = useState('');
@@ -798,8 +826,21 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // ── Lettering: plans, selection, inspector ──────────────────────────────
   const canPro = studio.caps?.proEditor !== false;
-  const viewMode: StudioMode = canPro ? studio.mode ?? 'easy' : 'easy';
-  const setViewMode = (m: StudioMode) => studio.setMode?.(m);
+  // Flag off: exactly today (studio.mode). Flag on: the shell's view (D7 on phones), switched through the shell.
+  const viewMode: StudioMode = pro.on ? pro.view : canPro ? studio.mode ?? 'easy' : 'easy';
+  const setViewMode = (m: StudioMode) => (pro.on ? pro.setView(m) : studio.setMode?.(m));
+  // ── The Pro workspace (PE-SHELL): docked from 1024 px, a tool row on tablets, today's layout on phones ──
+  const ws = proWorkspaceFor(layout, ff.width);
+  const docked = pro.pro && ws.kind === 'docked';
+  const toolRow = pro.pro && ws.kind === 'tool-row';
+  const railed = docked || toolRow;
+  const tool: ProTool = pro.pro ? pro.tool : 'select';
+  const proRef = useRef(pro);
+  proRef.current = pro;
+  const dockRef = useRef<HTMLElement>(null);
+  const [dockTab, setDockTab] = useState<DockTabId>('properties');
+  const [leftTab, setLeftTab] = useState<'layers' | 'assets'>('layers');
+  const [layersSheet, setLayersSheet] = useState(false);
   const { plans, placements, measure, H } = useLetterPlans(vDoc, page, aspect);
   const validIds = useMemo(() => page.panels.flatMap((p) => p.lines.map((l) => l.id)), [page.panels]);
   const panelOf = useCallback((id: string) => page.panels.find((p) => p.lines.some((l) => l.id === id))?.n, [page.panels]);
@@ -822,7 +863,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const selectedLine = selection.primary;
   const selectionKey = selection.ids.join('|');
   useEffect(() => setInspectorClosed(false), [selectionKey]);
-  const letteringEditable = mode === 'move' && overlayLettering && !busy && artOk;
+  // The Hand tool pans and the Shapes tool places a shape: the balloons stay put under them.
+  const letteringEditable = mode === 'move' && overlayLettering && !busy && artOk && !(pro.pro && (tool === 'hand' || tool === 'shapes'));
   const tidy = useMemo(() => (overlayLettering ? tidyOps(vDoc, page, aspect, measure) : []), [overlayLettering, vDoc, page, aspect, measure]);
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
   // The drawn plans say which balloons are crowded (the editor's own placement may flag a line the drawn
@@ -857,9 +899,74 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     apply(withText, { label: `Add ${LINE_KIND_LABEL[kind].toLowerCase()}` });
     setAddKind(null);
     setTrayOpen(false);
+    if (pro.pro && isLetteringTool(pro.tool)) settleTool('select');
     selection.select(id);
     setEditingLineId(id);
   };
+
+  // ── Pro: the tool drives today's mode and "add" state (one engine; the rail is another way in) ──
+  /** The tool the editor last applied (a change from elsewhere, a key or the rail, is applied once). */
+  const appliedTool = useRef<ProTool | null>(null);
+  /** The editor finished with a tool (a balloon placed, Esc, a mark-up sent): back to Select, without re-applying. */
+  const settleTool = (t: ProTool) => {
+    appliedTool.current = t;
+    proRef.current.setTool(t);
+  };
+  useEffect(() => {
+    if (!pro.pro) {
+      appliedTool.current = null;
+      return;
+    }
+    if (appliedTool.current === pro.tool) return;
+    appliedTool.current = pro.tool;
+    const t = pro.tool;
+    if (t === 'markup') {
+      if (!artOk || busy) return;
+      setMode('markup');
+      setAddKind(null);
+      setTrayOpen(false);
+      return;
+    }
+    setMode('move');
+    if (isLetteringTool(t)) {
+      if (lang || !overlayLettering) {
+        chooseAddKind(TOOL_LINE_KIND[t]);
+        settleTool('select');
+        return;
+      }
+      setAddKind(TOOL_LINE_KIND[t]);
+      return;
+    }
+    setAddKind(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pro.pro, pro.tool]);
+
+  // ⌘A (Pro): every balloon on the page, from anywhere in the editor but a field (a focused balloon handles it itself).
+  useEffect(() => {
+    if (!pro.pro || typeof document === 'undefined') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isEditableTarget(e.target) || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || (e.key !== 'a' && e.key !== 'A')) return;
+      if (!letteringEditable) return;
+      e.preventDefault();
+      selection.set(plans.map((p) => p.lineId).filter((id) => validIds.includes(id)).sort((a, b) => validIds.indexOf(a) - validIds.indexOf(b)));
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pro.pro, letteringEditable, plans, validIds, selection]);
+
+  // Presence (A4): the balloons on this page the director is editing right now.
+  const presence = studio.presence;
+  const presenceKey = presence ? presence.lineIds.join('|') : '';
+  const presenceIds = useMemo(() => {
+    if (!presence || (presence.pageId && presence.pageId !== sourcePage.id)) return undefined;
+    const ids = presence.lineIds.filter((id) => validIds.includes(id));
+    return ids.length ? new Set(ids) : undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presenceKey, presence?.pageId, sourcePage.id, validIds]);
+  const balloonExtras: BalloonEditorExtras = useMemo(
+    () => (pro.pro || presenceIds ? { transform: pro.pro, keyboard: pro.pro, presenceLineIds: presenceIds } : NO_BALLOON_EXTRAS),
+    [pro.pro, presenceIds]
+  );
 
   // Inspector anchor: the selection's outline bounds on screen (recomputed on resize/scroll/zoom).
   const [anchor, setAnchor] = useState<Rect | null>(null);
@@ -902,7 +1009,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // in every other layout inside the layout root (phone landscape: below the header, not under it).
   const foldSplit = layout.kind === 'fold-book' || layout.kind === 'fold-tabletop' ? layout.split : undefined;
   useLayoutEffect(() => {
-    const root = foldSplit ? foldGridRef.current : layoutRootRef.current;
+    // Pro, docked: the lettering panel (until the inspector part docks itself) stays in the dock column, never over the page.
+    const root = foldSplit ? foldGridRef.current : docked ? dockRef.current : layoutRootRef.current;
     if (!root || !inspectorOpen || layout.compactInspector) {
       setInspectorBounds((cur) => (cur === null ? cur : null));
       return;
@@ -915,7 +1023,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom }
         : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
     setInspectorBounds((cur) => (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom ? cur : next));
-  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick, docked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
   // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
@@ -971,6 +1079,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         e.preventDefault();
         e.stopPropagation();
         setAddKind(null);
+        if (proRef.current.pro && isLetteringTool(proRef.current.tool)) settleTool('select');
       } else if (trayOpen && !isEditableTarget(e.target)) {
         e.preventDefault();
         e.stopPropagation();
@@ -984,6 +1093,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [addKind, editingLineId, selection, trayOpen, menu]);
+
+  // The top bar shows the stage's zoom (Pro).
+  useEffect(() => {
+    onZoom?.(zoom);
+  }, [zoom, onZoom]);
 
   // A transient notice clears itself (no network; a local timer only).
   useEffect(() => {
@@ -1004,6 +1118,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     setMode(m);
     setAddKind(null);
     if (m === 'markup') setTrayOpen(false);
+    if (pro.pro && railed) settleTool(m === 'markup' ? 'markup' : 'select');
   };
 
   const canEdit = artOk && !busy && instruction.trim().length > 0;
@@ -1014,8 +1129,21 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     setInstruction('');
     clearRegion();
     setMode('move');
+    if (pro.pro && tool === 'markup') settleTool('select');
+  };
+  /** Pro, the Shapes tool: a rectangle overlay where the page was clicked (B9 resolveDrop; kept in the panel it lands in). */
+  const placeShape = (point: { x: number; y: number }) => {
+    const r = resolveDrop(doc, sourcePage, { kind: 'shape', shape: 'rect' }, { point });
+    if (r.ok === false) {
+      setNotice((r as { reason: string }).reason);
+      return;
+    }
+    // Overlays belong to every language (the art is shared), so this is never an edition edit.
+    void studio.patch(r.ops, { undo: true, label: r.label });
+    settleTool('select');
   };
   const pickVersions = () => {
+    if (docked) setDockTab('ai');
     if (layout.tools === 'sheet') onTools({ open: true, detent: 'full' });
     if (layout.tools === 'side') onTools({ side: true });
     requestAnimationFrameSafe(() => {
@@ -1152,6 +1280,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             : 'The balloons already sit clear of the busy parts of the art.'
       );
     });
+  // Easy, flag on: a balloon made in Pro folds its advanced settings into one chip (zero-confusion rule 2).
+  const madeChip = pro.on && !pro.pro && letteringEditable && lettering && selection.ids.length > 0 && madeInPro(sourcePage, selection.ids);
   const chips = (
     <>
       {letteringEditable && lettering && crowdedIds.length > 0 && (
@@ -1192,6 +1322,17 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </button>
       )}
       {letteringEditable && lettering && tooMuchText && <TooMuchTextChip plans={plans} onSelect={(ids) => selection.set(ids)} />}
+      {madeChip && (
+        <button
+          type="button"
+          data-testid="made-in-pro-chip"
+          onClick={() => pro.setView('pro')}
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}
+          title="This balloon uses Pro settings (rotation, height or a named style). Easy keeps them as they are; open Pro to change them."
+        >
+          <span className="truncate">{MADE_IN_PRO_CHIP}</span>
+        </button>
+      )}
       {letteringEditable && lettering && placementFix && (
         <PlacementFixChip
           price={cost(recheckUsd)}
@@ -1243,6 +1384,17 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </div>
   );
 
+  // Pro tips: in the dock when docked (nothing moves over the page), above the stage elsewhere.
+  const proCoachEl = pro.coach.open ? (
+    <ProCoach
+      cards={pro.coach.cards}
+      onDismiss={pro.coach.dismiss}
+      samples={pro.parts.samples}
+      onSamples={() => (ws.leftRailW > 0 && pro.parts.assets ? setLeftTab('assets') : setDockTab('assets'))}
+      className={docked ? 'mx-3 mt-3' : 'basis-full'}
+    />
+  ) : null;
+  const proCoachInBanners = !!proCoachEl && !docked;
   const banners = (
     <>
       {lang && (
@@ -1257,6 +1409,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </p>
       )}
       {coachInBanners && coachEl}
+      {pro.pro && !overlayLettering && (
+        <p data-testid="in-art-note" role="note" className="min-w-0 basis-full text-[12px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">
+          {IN_ART_LETTERING_NOTE}
+        </p>
+      )}
+      {proCoachInBanners && proCoachEl}
     </>
   );
 
@@ -1271,16 +1429,18 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const modeRow = (
     // gap-y-3: a wrapped line of chips keeps its 44 px ::after areas clear of the toolbar's above it.
     <div className={cx('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-3', layout.kind === 'fold-tabletop' && 'pb-2')} data-testid="editor-mode-row">
-      <Segmented<Mode>
-        label="Editing mode"
-        size="xs"
-        value={mode}
-        onChange={changeMode}
-        options={[
-          { value: 'move', label: (<><MousePointer2 className="h-3 w-3" aria-hidden /> {overlayLettering ? 'Lettering' : 'View'}</>) },
-          { value: 'markup', label: (<><SquareDashed className="h-3 w-3" aria-hidden /> Mark up</>), disabled: !artOk }
-        ]}
-      />
+      {!railed && (
+        <Segmented<Mode>
+          label="Editing mode"
+          size="xs"
+          value={mode}
+          onChange={changeMode}
+          options={[
+            { value: 'move', label: (<><MousePointer2 className="h-3 w-3" aria-hidden /> {overlayLettering ? 'Lettering' : 'View'}</>) },
+            { value: 'markup', label: (<><SquareDashed className="h-3 w-3" aria-hidden /> Mark up</>), disabled: !artOk }
+          ]}
+        />
+      )}
       {region && (
         <GhostButton size="xs" onClick={clearRegion}>
           <X className="h-3 w-3" aria-hidden /> Clear mark
@@ -1307,10 +1467,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           mode={viewMode}
           onModeChange={setViewMode}
           canPro={canPro}
+          // Flag on: the header's Easy | Pro switch is the one switch (the toolbar's duplicate goes). Pro with the rail:
+          // adding lives on the rail and undo with its label in the top bar.
+          showMode={!pro.on}
+          showAdd={!railed}
+          showUndo={!railed}
         />
       )}
-      {!(letteringEditable && lettering) && undoPill /* Undo / redo stay one tap away in every mode. */}
-      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0 || tooMuchText || placementFix) && (
+      {!(letteringEditable && lettering) && !railed && undoPill /* Undo / redo stay one tap away in every mode. */}
+      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0 || tooMuchText || placementFix || madeChip) && (
         // The status chips move as one line (they shrink and truncate, never stack): a chip wrapped under
         // another put each one's 44 px area on its neighbour's (fold5 dense page).
         <span className="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-group">
@@ -1320,11 +1485,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       {languageRow}
       <span className="ml-auto hidden text-[11px] text-[var(--ds-muted)] xl:inline">
         {hint ??
-          (overlayLettering
-            ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge · right-click for more'
-            : 'Lettering is drawn into the art on this comic.')}
+          (railed
+            ? `${toolSpec(tool).label}: ${toolSpec(tool).hint} · Tab walks the balloons · ? lists every shortcut`
+            : overlayLettering
+              ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge · right-click for more'
+              : 'Lettering is drawn into the art on this comic.')}
       </span>
-      {(lang || notice || coachInBanners) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
+      {(lang || notice || coachInBanners || proCoachInBanners || (pro.pro && !overlayLettering)) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
     </div>
   );
 
@@ -1334,7 +1501,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // balloon re-fitted — shrank — the page, so the balloon no longer sat under the finger (iPhone 15: a
   // 60 px drag measured 52 px). The chips never wrap there; they shrink and truncate instead.
   const chipLine = letteringEditable && lettering;
-  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || chipLine);
+  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || chipLine || proCoachInBanners || (pro.pro && !overlayLettering));
   const phoneRow = phoneRowNeeded ? (
     <div className={cx('flex min-w-0 shrink-0 flex-wrap items-center gap-x-1.5 px-3', chipLine ? 'pt-0.5' : 'gap-y-1.5 pt-2')} data-testid="editor-phone-row">
       {languageRow}
@@ -1373,11 +1540,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           resetKey={String(zoomReset)}
           onZoomChange={setZoom}
           suspendOneFinger={mode === 'markup'}
-          controls={zoom > 1.01}
+          controls={zoom > 1.01 || (pro.pro && tool === 'zoom')}
+          // Pro: the Hand tool pans with one finger or the mouse at any zoom; the Zoom tool zooms on any wheel.
+          oneFingerPan={pro.pro && tool === 'hand' ? 'always' : undefined}
+          wheel={pro.pro && tool === 'zoom' ? 'always' : undefined}
           label={`Page ${sourcePage.n} — pinch or use + and − to zoom`}
         >
           <div className="absolute inset-3 flex min-w-0 items-center justify-center coarse:inset-6 sm:inset-6">
-            <div ref={pageBoxRef} style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+            <div ref={pageBoxRef} style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className={pro.on ? 'shadow-[shadow:var(--ds-shadow-overlay)]' : 'shadow-[0_10px_40px_rgba(0,0,0,0.25)]'}>
+              <BalloonEditorExtrasContext.Provider value={balloonExtras}>
               <ComicPageView
                 doc={vDoc}
                 page={page}
@@ -1416,7 +1587,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 }
               >
                 <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} onRegion={markRegion} />
+                {pro.pro && tool === 'shapes' && pro.parts.compose && <ShapePlaceLayer onPlace={placeShape} />}
               </ComicPageView>
+              </BalloonEditorExtrasContext.Provider>
             </div>
           </div>
         </TouchCanvas>
@@ -1441,8 +1614,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </div>
   );
 
-  // ── Tools ──
-  const toolsContent = (
+  // ── Tools ── (one section each, so the Pro dock can place them; today's tools sheet and aside keep this order)
+  const aiSection = (
     <>
       {/* Edit with AI (peek) */}
       <section aria-labelledby="pe-ai">
@@ -1518,6 +1691,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </p>
       </section>
 
+    </>
+  );
+  const actionsSection = (
+    <>
       {/* Page actions (half): another take, or pick a version you already have (free) */}
       <section aria-label="Page actions" className="space-y-2">
         <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={drawn ? 'Another take or a saved version' : 'Draw this page'}>
@@ -1564,6 +1741,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         )}
       </section>
 
+    </>
+  );
+  const qcSection = (
+    <>
       {/* QC */}
       {qc && (
         <section aria-labelledby="pe-qc">
@@ -1591,6 +1772,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </section>
       )}
 
+    </>
+  );
+  const versionsSection = (
+    <>
       {/* Versions (VersionStack: use any saved version for free, star, compare) */}
       {drawn && (
         <section ref={versionsRef} aria-labelledby="pe-versions" className="scroll-mt-2">
@@ -1601,6 +1786,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </section>
       )}
 
+    </>
+  );
+  const filmstripToolsSection = (
+    <>
       {layout.filmstrip === 'tools' && (
         <section aria-label="Pages">
           <SectionTitle>Pages</SectionTitle>
@@ -1608,6 +1797,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </section>
       )}
 
+    </>
+  );
+  const letteringStyleSection = (
+    <>
       {/* Lettering style (whole comic) */}
       {overlayLettering && (
         <section aria-labelledby="pe-lettering" className="space-y-2">
@@ -1631,6 +1824,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </section>
       )}
 
+    </>
+  );
+  const scriptSection = (
+    <>
       {/* Script (full) */}
       <section aria-labelledby="pe-script" className="space-y-2">
         <SectionTitle id="pe-script" icon={<MessageSquare className="h-3.5 w-3.5" />}>
@@ -1683,8 +1880,26 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       </section>
     </>
   );
+  const toolsContent = (
+    <>
+      {aiSection}
+      {actionsSection}
+      {qcSection}
+      {versionsSection}
+      {filmstripToolsSection}
+      {letteringStyleSection}
+      {scriptSection}
+      {pro.pro && phone && pro.coach.cards.length > 0 && !pro.coach.open && (
+        <button type="button" data-testid="pro-tips-again" onClick={pro.coach.reopen} className={cx('tap-target self-start px-2 py-1 text-[12px] font-semibold text-[var(--ds-ink)] underline decoration-[var(--ds-hairline)] underline-offset-2 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11', RADIUS_CONTROL)}>
+          Show the Pro tips again
+        </button>
+      )}
+    </>
+  );
 
-  const inspector = inspectorOpen && (
+  // Pro, docked, with the inspector part ready: the Properties tab IS the inspector (nothing floats).
+  const dockInspector = docked && !!pro.parts.inspector;
+  const inspector = inspectorOpen && !dockInspector && (
     <div ref={inspectorHostRef} className="contents">
       <LetteringInspector
         doc={vDoc}
@@ -1764,6 +1979,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           } else onTools({ open: !tools.open });
         }
       }}
+      layers={pro.pro && pro.parts.layers ? { open: layersSheet, onToggle: () => setLayersSheet((v) => !v) } : undefined}
       tray={
         trayAvailable && trayOpen && !inspectorOpen
           ? {
@@ -1800,6 +2016,120 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </EditorToolsSheet>
   );
 
+  // ── Pro: what the mounted parts get, the rail, the phone Layers sheet and the docked workspace ──
+  const panelProps: ProPanelProps = {
+    studio,
+    doc: vDoc,
+    sourceDoc: doc,
+    page,
+    sourcePage,
+    aspect,
+    H,
+    plans,
+    placements,
+    selection: { ids: selection.ids, set: selection.set, clear: selection.clear },
+    apply,
+    onEditText: (id) => {
+      selection.select(id);
+      startEditing(id);
+    },
+    editionLang: lang,
+    mode: viewMode,
+    layout: layout.kind,
+    presence: studio.presence ?? null,
+    footer: PRO_FREE_FOOTER
+  };
+  const LayersPart = pro.parts.layers;
+  const layersSheetEl =
+    pro.pro && LayersPart && layersSheet && (layout.kind === 'phone' || layout.kind === 'phone-landscape') ? (
+      <ProLayersSheet onClose={() => setLayersSheet(false)}>
+        <LayersPart {...panelProps} />
+      </ProLayersSheet>
+    ) : null;
+  const rail = railed ? (
+    <ToolRail tool={tool} onTool={pro.setTool} tools={pro.tools} disabled={pro.disabled} orientation={docked ? 'vertical' : 'horizontal'} />
+  ) : null;
+
+  if (docked) {
+    const InspectorPart = pro.parts.inspector;
+    const AssetsPart = pro.parts.assets;
+    const AnimatePart = pro.parts.animate;
+    const leftRailOn = ws.leftRailW > 0 && !!(LayersPart || AssetsPart);
+    const properties = (
+      <div className="flex min-w-0 flex-col gap-4">
+        {InspectorPart ? <InspectorPart {...panelProps} /> : letteringStyleSection}
+        {scriptSection}
+      </div>
+    );
+    const tabs: DockTab[] = [
+      { id: 'properties', label: 'Properties', content: properties, free: true },
+      ...(!leftRailOn && LayersPart ? [{ id: 'layers' as const, label: 'Layers', content: <LayersPart {...panelProps} />, free: true }] : []),
+      ...(!leftRailOn && AssetsPart ? [{ id: 'assets' as const, label: 'Assets', content: <AssetsPart {...panelProps} />, free: true }] : []),
+      {
+        id: 'ai',
+        label: 'AI',
+        content: (
+          <div className="flex min-w-0 flex-col gap-4">
+            {aiSection}
+            {actionsSection}
+            {qcSection}
+            {versionsSection}
+          </div>
+        ),
+        free: false
+      }
+    ];
+    const leftTabs = [
+      ...(LayersPart ? [{ id: 'layers' as const, label: 'Layers', node: <LayersPart {...panelProps} /> }] : []),
+      ...(AssetsPart ? [{ id: 'assets' as const, label: 'Assets', node: <AssetsPart {...panelProps} /> }] : [])
+    ];
+    const leftValue = leftTabs.some((t) => t.id === leftTab) ? leftTab : leftTabs[0]?.id;
+    const leftRail =
+      leftRailOn && leftValue ? (
+        <Tabs value={leftValue} onValueChange={(v) => setLeftTab(v as 'layers' | 'assets')} className="min-h-0 flex-1 gap-0">
+          <div className="shrink-0 border-b border-[var(--ds-hairline)] px-3 py-2">
+            <TabsList label="Layers and assets" size="sm" fullWidth>
+              {leftTabs.map((t) => (
+                <TabsTrigger key={t.id} value={t.id}>
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
+          {leftTabs.map((t) => (
+            <TabsContent key={t.id} value={t.id} className="flex min-h-0 flex-1 flex-col focus-visible:outline-none">
+              <ProPanelFrame>{t.node}</ProPanelFrame>
+            </TabsContent>
+          ))}
+        </Tabs>
+      ) : undefined;
+    return (
+      <ProWorkspace
+        layout={ws}
+        rootRef={layoutRootRef}
+        bodyRef={bodyRef}
+        rail={rail}
+        leftRail={leftRail}
+        main={
+          <>
+            {modeRow}
+            {stageEl}
+            {AnimatePart && (
+              <div className="shrink-0 border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)]" data-testid="pro-timeline">
+                <AnimatePart {...panelProps} />
+              </div>
+            )}
+            {filmstrip}
+          </>
+        }
+        dock={<ProDock ref={dockRef} tabs={tabs} value={dockTab} onChange={setDockTab} width={ws.dockW} top={proCoachEl} />}
+      >
+        {inspector}
+        {contextMenu}
+      </ProWorkspace>
+    );
+  }
+
   // ── Layouts ──
   if (layout.kind === 'fold-book' || layout.kind === 'fold-tabletop') {
     const split = layout.split!;
@@ -1835,6 +2165,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         {toolsSheet}
         {inspector}
         {contextMenu}
+        {layersSheetEl}
       </div>
     );
   }
@@ -1844,6 +2175,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     return (
       <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
         <div ref={bodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
+          {toolRow && rail}
           {phone ? phoneRow : modeRow}
           {stageEl}
           {toolsSheet}
@@ -1851,6 +2183,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         {toolbar}
         {inspector}
         {contextMenu}
+        {layersSheetEl}
       </div>
     );
   }
@@ -1869,6 +2202,23 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </div>
   );
 };
+
+/** Pro, the Shapes tool: one press on the page places a rectangle there (the B9 drop of a shape). */
+const ShapePlaceLayer: React.FC<{ onPlace(point: { x: number; y: number }): void }> = ({ onPlace }) => (
+  <div
+    aria-hidden
+    data-testid="shape-place-layer"
+    className="absolute inset-0 cursor-crosshair"
+    style={{ zIndex: 3 }}
+    onPointerDown={(e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      if (!(r.width > 0) || !(r.height > 0)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onPlace({ x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) });
+    }}
+  />
+);
 
 const requestAnimationFrameSafe = (fn: () => void) => {
   if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(() => fn());
@@ -1903,6 +2253,19 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   useDialogA11y(true, close);
   useFocusTrap(rootRef, true);
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
+  // The Pro shell (PE-SHELL): flag, view (D7), tool, coach, shortcut sheet and the mounted parts.
+  const phoneLayout = layout.kind === 'phone' || layout.kind === 'phone-landscape';
+  const pageArtOk = !!page && hasImage(page.render) && canServeToOwner(page.render.asset);
+  const pro = useProEditor(studio, {
+    pageId,
+    phone: phoneLayout,
+    inArt: doc.format.lettering !== 'overlay',
+    markupOff: pageArtOk ? undefined : 'Mark up needs a drawing: render this page first.'
+  });
+  const [stageZoom, setStageZoom] = useState(1);
+  const proWs = proWorkspaceFor(layout, ff.width);
+  // Tool keys work where the rail is (docked or the tablet tool row), never on phones.
+  const keyTools = useMemo(() => new Set<ProTool>(pro.pro && proWs.kind !== 'phone' ? pro.tools : []), [pro.pro, proWs.kind, pro.tools]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1920,9 +2283,50 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
         studio.redo?.();
         return;
       }
+      // The Pro shell's keys (flag on): Shift+P, ?, and in Pro the tool keys.
+      const shortcut = shellShortcut(e, { flag: pro.on, pro: pro.pro, tools: keyTools });
+      if (shortcut?.kind === 'toggle-mode') {
+        e.preventDefault();
+        pro.toggleView();
+        return;
+      }
+      if (shortcut?.kind === 'help') {
+        e.preventDefault();
+        pro.help.toggle();
+        return;
+      }
+      if (shortcut?.kind === 'tool') {
+        if (!pro.disabled[shortcut.tool]) {
+          e.preventDefault();
+          pro.setTool(shortcut.tool);
+        }
+        return;
+      }
       if (e.altKey || mod) return;
-      // Never turn the page while balloons are selected (arrows nudge them instead).
-      if (studio.selection && studio.selection.lineIds.length > 0) return;
+      // Never turn the page while anything on it is selected (graft 4): balloons, overlays or panels. A selected
+      // overlay is nudged instead (one engine move per press; a run of presses is one undo entry).
+      const sel = studio.selection;
+      if (selectionHoldsArrows(sel)) {
+        const dirs: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+        const d = dirs[e.key];
+        const layerIds = sel?.layerIds ?? [];
+        const on = page && sel && sel.pageId === page.id ? page : undefined;
+        if (d && on && layerIds.length) {
+          e.preventDefault();
+          const step = e.shiftKey ? ENGINE_NUDGE.big : ENGINE_NUDGE.step;
+          const ops: DocOp[] = [];
+          let label = '';
+          for (const id of layerIds) {
+            const r = moveEdit(doc, on, { kind: 'overlay', id }, d[0] * step, d[1] * step);
+            if (r.ok) {
+              ops.push(...r.ops);
+              label = label ? 'Move overlays' : r.label;
+            }
+          }
+          if (ops.length) void studio.patch(ops, { undo: true, label, coalesce: `layer:move:${on.id}:${layerIds.join(',')}` });
+        }
+        return;
+      }
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       const forward = (e.key === 'ArrowRight') !== rtl;
       const to = forward ? next : prev;
@@ -1932,7 +2336,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [prev, next, studio, rtl]);
+  }, [prev, next, studio, rtl, pro, keyTools, page, doc]);
 
   if (!page) return null;
   const status = pageVisualStatus(doc, page);
@@ -1972,7 +2376,12 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   return (
     <ModalPortal>
       <div
-        className={cx('fixed inset-x-0 top-0 z-[70] h-[var(--app-h,100dvh)]', layout.fullBleed ? 'bg-[var(--ds-canvas)]' : 'bg-black/45 p-4 backdrop-blur-sm')}
+        className={
+          pro.on
+            ? // Flag on: the editor's layer and its backdrop come from the ladder and the recipes (§2.7 chrome rules).
+              cx('fixed inset-x-0 top-0 h-[var(--app-h,100dvh)]', Z.editor, layout.fullBleed ? 'bg-[var(--ds-canvas)]' : cx(SCRIM, 'p-4'))
+            : cx('fixed inset-x-0 top-0 z-[70] h-[var(--app-h,100dvh)]', layout.fullBleed ? 'bg-[var(--ds-canvas)]' : 'bg-black/45 p-4 backdrop-blur-sm')
+        }
         onPointerDown={layout.fullBleed ? undefined : (e) => e.target === e.currentTarget && close()}
         data-editor-layout={layout.kind}
       >
@@ -1982,10 +2391,11 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
           aria-modal="true"
           aria-label={`Page ${page.n} editor`}
           tabIndex={-1}
-          className={cx(
-            'flex h-full w-full flex-col overflow-hidden bg-[var(--ds-canvas)] shadow-2xl focus:outline-none',
-            !layout.fullBleed && 'rounded-2xl border border-[var(--ds-hairline)]'
-          )}
+          className={
+            pro.on
+              ? cx('flex h-full w-full flex-col overflow-hidden bg-[var(--ds-canvas)] focus:outline-none', !layout.fullBleed && OVERLAY)
+              : cx('flex h-full w-full flex-col overflow-hidden bg-[var(--ds-canvas)] shadow-2xl focus:outline-none', !layout.fullBleed && 'rounded-2xl border border-[var(--ds-hairline)]')
+          }
           style={
             layout.fullBleed
               ? {
@@ -2010,14 +2420,32 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
             {rtl ? nextButton : prevButton}
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                <h2 className="shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]">
-                  Page {page.n} <span className="font-normal text-[var(--ds-muted)]">of {pages.length}</span>
+                <h2 className={pro.on ? 'min-w-0 truncate whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]' : 'shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]'}>
+                  Page {page.n}{' '}
+                  {/* Flag on, phones: the header also holds the Easy | Pro switch, so "of n" goes below 360 px. */}
+                  <span className={pro.on ? 'hidden font-normal text-[var(--ds-muted)] min-[360px]:inline' : 'font-normal text-[var(--ds-muted)]'}>of {pages.length}</span>
                 </h2>
                 <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} className="min-w-0" />
               </div>
               {page.summary && <p className="truncate text-[12px] text-[var(--ds-muted)]">{page.summary}</p>}
             </div>
             {rtl ? prevButton : nextButton}
+            {pro.on && (
+              <ProTopBar
+                mode={pro.view}
+                onModeChange={pro.setView}
+                canPro={pro.canPro}
+                variant={proWs.kind === 'docked' ? 'full' : proWs.kind === 'tool-row' ? 'tablet' : 'phone'}
+                canUndo={!!studio.canUndo}
+                canRedo={!!studio.canRedo}
+                undoLabel={studio.undoLabel}
+                onUndo={() => studio.undo?.()}
+                onRedo={() => studio.redo?.()}
+                zoom={stageZoom}
+                helpOpen={pro.help.open}
+                onHelp={pro.help.toggle}
+              />
+            )}
             <IconButton label="Close editor" onClick={close}>
               <X className="h-4 w-4" />
             </IconButton>
@@ -2032,7 +2460,10 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
             onEdition={setEdition}
             tools={tools}
             onTools={onTools}
+            pro={pro}
+            onZoom={pro.on ? setStageZoom : undefined}
           />
+          {pro.help.open && <ShortcutSheet onClose={pro.help.close} onTips={pro.coach.cards.length ? () => { pro.coach.reopen(); pro.help.close(); } : undefined} />}
         </div>
       </div>
     </ModalPortal>
