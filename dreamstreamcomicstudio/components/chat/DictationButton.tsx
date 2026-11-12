@@ -226,8 +226,20 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setMenuOpen(false);
     };
+    // Esc closes the settings wherever focus is (the caret keeps it after a click), before a sheet underneath.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenuOpen(false);
+      caretRef.current?.focus();
+    };
     window.addEventListener('pointerdown', onDown);
-    return () => window.removeEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey, true);
+    };
   }, [menuOpen]);
 
   // Esc belongs to the take while it runs: it stops listening and keeps the words (never sends, never discards).
@@ -408,10 +420,13 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
           className={cn(BOX, 'border bg-[var(--ds-raised)] px-3 py-2.5 shadow-[shadow:var(--ds-shadow-overlay)]', RADIUS_PANEL, STATUS_EDGE[tone])}
           style={{ width: BOX_WIDTH.error }}
         >
-          <p className="flex items-start gap-2 text-[12.5px] leading-snug text-[var(--ds-ink)]">
+          <div className="flex items-start gap-2">
             <CircleAlert className={`mt-0.5 h-4 w-4 shrink-0 ${STATUS_INK[tone]}`} aria-hidden />
-            <span className="min-w-0 [overflow-wrap:anywhere]">{errorInfo.message}</span>
-          </p>
+            <p className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{errorInfo.message}</p>
+            <button type="button" onClick={dismissError} aria-label="Dismiss" title="Dismiss" className={cn('-mr-1.5 -mt-1', RECORD_BTN, MUTED, 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]')}>
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-6">
             <Button type="button" size="sm" variant="outline" onClick={onErrorAction}>
               {DICTATION_ACTION_LABEL[errorInfo.action]}
@@ -419,9 +434,6 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             <Button type="button" size="sm" variant="ghost" className={MUTED} aria-expanded={detailsOpen} aria-controls={detailsOpen ? detailsId : undefined} onClick={() => setDetailsOpen((v) => !v)}>
               {detailsOpen ? 'Hide details' : 'Show details'}
             </Button>
-            <button type="button" onClick={dismissError} aria-label="Dismiss" title="Dismiss" className={cn('ml-auto', RECORD_BTN, MUTED, 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]')}>
-              <X className="h-4 w-4" aria-hidden />
-            </button>
           </div>
           {detailsOpen && (
             <p id={detailsId} className={`mt-1.5 pl-6 font-mono text-[11px] leading-snug [overflow-wrap:anywhere] ${MUTED}`}>
