@@ -764,6 +764,45 @@ describe('Send now', () => {
     expect(result.current.queue).toHaveLength(1);
   });
 
+  // A4 (wave 2) verified the steer path against its refusal table; these two cases were not covered yet.
+  it('steering on, a note with photos: a steer carries text only, so the director stops and the note goes next (D2)', async () => {
+    const { result } = await setup(STEER_ON);
+    act(() => void result.current.send('go'));
+    const s1 = lastStream();
+    await act(async () => void (await result.current.send('add this cat', { inboxPaths: ['u/x/inbox/cat.webp'] })));
+    const id = result.current.queue![0].id;
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(id);
+    });
+    expect(outcome).toBe('queued');
+    expect(api.steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).toHaveBeenCalledTimes(1);
+    expect(result.current.queueSendingNow).toBe(id);
+    reply(s1, 'Stopped.');
+    await waitFor(() => expect(messages()).toHaveLength(2));
+    const sent = lastStream().req;
+    expect(sent.kind === 'message' && sent.attachments).toEqual([{ inboxPath: 'u/x/inbox/cat.webp' }]);
+  });
+
+  it('steering on during a plan_pages run: Send now neither steers nor stops it — the note goes the moment the plan is in', async () => {
+    const { result } = await setup(STEER_ON);
+    act(() => void result.current.act({ type: 'plan_pages' } as never));
+    const plan = lastStream();
+    await act(async () => void (await result.current.send('use six pages')));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(result.current.queue![0].id);
+    });
+    expect(outcome).toBe('queued');
+    expect(api.steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+    expect(messages()).toHaveLength(0);
+    await close(plan);
+    await waitFor(() => expect(messages()).toHaveLength(1));
+    expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} use six pages`);
+  });
+
   it('when only a hold keeps the queue (the turn is free), Send now sends at once', async () => {
     window.sessionStorage.setItem(QUEUE_STORAGE_PREFIX + 'proj_1', JSON.stringify({ v: 1, notes: [{ id: 'n1', text: 'make it rain', at: 1 }] }));
     const { result } = await setup();

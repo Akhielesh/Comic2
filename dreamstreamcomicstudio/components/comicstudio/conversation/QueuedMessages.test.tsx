@@ -148,10 +148,25 @@ describe('QueuedMessages', () => {
 
     rerender(
       <FormFactorProvider value={DESKTOP}>
-        <QueuedMessages studio={queueStudio({ queueSendingNow: 'n1' })} />
+        <QueuedMessages studio={queueStudio({ queueSendingNow: 'n1', cancelling: true })} />
       </FormFactorProvider>
     );
     expect(screen.getByRole('button', { name: /Stopping, then sending/ })).toBeDisabled();
+  });
+
+  it('a steer refused NOT_RUNNING, BUSY or LIMIT goes next without a Stop: the button never says "Stopping"', () => {
+    // useStudio.sendNow put the note first (queue_express) and did not stop the director (no cancel in flight).
+    const { rerender } = renderAt(queueStudio({ queueSteers: true, queueSendingNow: 'n1', cancelling: false }));
+    const waiting = screen.getByRole('button', { name: 'Goes next, after this step' });
+    expect(waiting).toBeDisabled();
+    expect(screen.queryByText(/Stopping/)).toBeNull();
+    // The step ended on its own: the note is on its way.
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <QueuedMessages studio={queueStudio({ queueSteers: true, queueSendingNow: 'n1', messageBusy: false, turnLocked: false })} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('button', { name: 'Sending next…' })).toBeDisabled();
   });
 
   it("Send now's tooltip says what it will really do: steer, stop first, wait for the plan, or send", () => {
