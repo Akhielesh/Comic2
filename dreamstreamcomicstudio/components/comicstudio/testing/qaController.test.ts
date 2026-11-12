@@ -9,7 +9,7 @@ import { quoteRenderPages } from '../../../shared/comic/plan';
 import { noticeChipState, noticeChips } from '../conversation/cards/NoticeCard';
 import { QA_FIXTURES, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
 import { SLUG_RE } from '../../../shared/comic/publication';
-import { clearQaOps, makeQaUrlFor, parseQaParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
+import { clearQaOps, makeQaUrlFor, parseQaParams, qaDocFromParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
 import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
 
 const setDpr = (v: number) => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: v });
@@ -28,7 +28,7 @@ describe('parseQaParams', () => {
 
   it('reads every documented parameter and rejects junk', () => {
     const p = parseQaParams('?surface=editor&fixture=deep-40p&tab=cast&page=7&lang=te&theme=dark&state=streaming&mode=pro&rtl=1&public=not-found&img=png&still=1');
-    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false });
+    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true });
     const bad = parseQaParams('?surface=admin&fixture=../../etc&tab=x&page=-3&lang=<script>&state=boom&kit=<img src=x>');
     expect(bad).toMatchObject({ surface: 'studio', fixture: 'heist-12p', tab: 'pages', page: null, lang: null, state: 'idle', kit: null });
     expect(parseQaParams('?surface=kit&kit=refs-drawer')).toMatchObject({ surface: 'kit', kit: 'refs-drawer' });
@@ -36,6 +36,36 @@ describe('parseQaParams', () => {
     expect(parseQaParams('?surface=reader&share=1').share).toBe(true);
     expect(parseQaParams('?surface=reader&share=yes').share).toBe(false);
     expect(parseQaParams('?p=4').page).toBe(4);
+  });
+});
+
+describe('variants=0 (pages and cover stored without variants, RD-A #12)', () => {
+  it('only an exact `variants=0` turns the variants off', () => {
+    expect(parseQaParams('?surface=reader&variants=0').variants).toBe(false);
+    for (const q of ['', '?surface=reader', '?variants=1', '?variants=no', '?variants=']) expect(parseQaParams(q).variants, q).toBe(true);
+  });
+
+  it('strips asset.variants from every page and the cover of the chosen fixture; sheets and the style board keep theirs', () => {
+    const plain = qaDocFromParams(parseQaParams('?fixture=heist-12p'));
+    const bare = qaDocFromParams(parseQaParams('?fixture=heist-12p&variants=0'));
+    const drawn = (d: typeof plain) => d.pages.filter((p) => p.render.asset);
+    expect(drawn(plain).length).toBeGreaterThan(3);
+    expect(drawn(plain).every((p) => (p.render.asset?.variants?.length ?? 0) > 0)).toBe(true);
+    expect(drawn(bare).map((p) => p.id)).toEqual(drawn(plain).map((p) => p.id));
+    expect(drawn(bare).filter((p) => p.render.asset && 'variants' in p.render.asset)).toEqual([]);
+    expect(plain.cover.render.asset?.variants?.length).toBeGreaterThan(0);
+    expect(bare.cover.render.asset && 'variants' in bare.cover.render.asset).toBe(false);
+    // Everything else, the originals included, is the same fixture.
+    expect(bare.cast).toEqual(plain.cast);
+    expect(bare.style).toEqual(plain.style);
+    expect(drawn(bare).map((p) => p.render.asset?.path)).toEqual(drawn(plain).map((p) => p.render.asset?.path));
+    expect(qaImagePaths(bare).filter((path) => /-p\d+-480x/.test(path))).toEqual([]);
+  });
+
+  it('every surface builds its doc through it: the scene (studio, board, editor, readers) has no page variants', () => {
+    const scene = qaSceneFromParams(parseQaParams('?surface=reader&fixture=heist-12p&page=1&variants=0'));
+    expect(scene.doc?.pages.some((p) => p.render.asset?.variants)).toBe(false);
+    expect(qaSceneFromParams(parseQaParams('?surface=reader&fixture=heist-12p')).doc?.pages.some((p) => p.render.asset?.variants)).toBe(true);
   });
 });
 

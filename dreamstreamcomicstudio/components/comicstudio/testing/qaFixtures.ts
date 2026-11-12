@@ -685,6 +685,20 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
   return doc;
 };
 
+/**
+ * The doc with no stored variants on any page or on the cover (`variants=0`, RD-A #12): a comic stored before the
+ * server kept 480w / 1080w variants, so the reader has no stand-in and stands on its toned paper instead. Character
+ * sheets, the style board and options keep theirs.
+ */
+export const withoutVariants = (doc: ComicDoc): ComicDoc => {
+  const strip = (r: RenderState): RenderState => {
+    if (!r.asset?.variants) return r;
+    const { variants: _drop, ...asset } = r.asset;
+    return { ...r, asset };
+  };
+  return { ...doc, pages: doc.pages.map((p) => ({ ...p, render: strip(p.render) })), cover: { ...doc.cover, render: strip(doc.cover.render) } };
+};
+
 /** Every image path a fixture references (originals and variants), for pre-generation and tests. */
 export const qaImagePaths = (doc: ComicDoc): string[] => {
   const out = new Set<string>();

@@ -14,6 +14,8 @@
 //                                   opens on its link-first block; the link is on this origin, the preview has no picture)
 //                    &history=1    (Comic History on: caps.history, and the studio surface answers History offline
 //                                   from the fake HistoryApi over the synthetic 'v5' history fixture; absent: unchanged)
+//                    &variants=0   (the fixture's pages and cover carry no stored 480w/1080w variants, as comics stored
+//                                   before the server kept them: the reader has no stand-in; every surface, RD-A #12)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
 //                                   the studio and reader roots carry the attribute regardless)
 //   /qa/comic-qa.html?surface=app[&scene=<id>]&theme=light|dark&skin=atlas|none
@@ -40,11 +42,11 @@ import { BoardPane } from '../components/comicstudio/board/BoardPane';
 import { ComicReaderView } from '../components/comicstudio/reader/ComicReaderView';
 import { PublicComicReader } from '../components/comicstudio/PublicComicReader';
 import { ImmersiveReader } from '../components/comicstudio/immersive/ImmersiveReader';
-import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
+import { QA_PROJECT_ID, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
 import { HistoryApiProvider } from '../components/comicstudio/history/historyApi';
 import { createFakeHistoryApi } from '../components/comicstudio/history/historyApi.fake';
 import { historyFixture } from '../components/comicstudio/history/__scenes__/historyFixtures';
-import { parseQaParams, QA_SURFACES, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams, type QaRuntimeInfo } from '../components/comicstudio/testing/qaController';
+import { parseQaParams, QA_SURFACES, qaDocFromParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams, type QaRuntimeInfo } from '../components/comicstudio/testing/qaController';
 import { bootDsSkin } from '../services/dsSkin';
 import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
@@ -91,7 +93,7 @@ const isStudioParams = (p: QaHarnessParams): p is QaParams => p.surface !== 'app
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 const publicPayload = (params: Omit<QaParams, 'surface'>) => {
-  const doc = makeQaDoc(params.fixture, { rtl: params.rtl });
+  const doc = qaDocFromParams(params);
   const urls: Record<string, string> = {};
   for (const path of qaImagePaths(doc)) {
     const url = qaImageUrl(path, params.img);
@@ -299,7 +301,7 @@ export interface QaBootState {
 export const qaBootState = (params: QaHarnessParams): QaBootState => {
   const state: QaBootState = { dark: params.theme === 'dark', still: params.still, atlasSkin: params.skin === 'atlas' };
   if (isStudioParams(params)) {
-    const doc = params.state === 'loading' || params.state === 'load-error' ? null : makeQaDoc(params.fixture, { rtl: params.rtl });
+    const doc = params.state === 'loading' || params.state === 'load-error' ? null : qaDocFromParams(params);
     state.qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
   }
   return state;

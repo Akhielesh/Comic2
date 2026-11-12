@@ -24,6 +24,7 @@ import {
   parseQaImagePath,
   qaPublicationView,
   withQaConflict,
+  withoutVariants,
   withQaPublication,
   type QaFixtureName
 } from './qaFixtures';
@@ -73,6 +74,11 @@ export interface QaParams {
   live: 'unlisted' | 'public' | null;
   /** `history=1`: Comic History on (caps.history), answered offline by the fake HistoryApi (qa/ComicQaApp.tsx). */
   history: boolean;
+  /**
+   * `variants=0`: the fixture's pages and cover carry no stored 480w / 1080w variants (withoutVariants), as comics
+   * stored before the server kept them (RD-A #12: the reader's never-white paper path). Default true.
+   */
+  variants: boolean;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
@@ -102,8 +108,15 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     allowDownload: q.get('download') !== '0',
     share: ['1', 'live', 'live-public'].includes(q.get('share') || ''),
     live: q.get('share') === 'live' ? 'unlisted' : q.get('share') === 'live-public' ? 'public' : null,
-    history: q.get('history') === '1'
+    history: q.get('history') === '1',
+    variants: q.get('variants') !== '0'
   };
+};
+
+/** The fixture doc a URL names, as every surface (studio, readers, the public payload, window.__qa) builds it. */
+export const qaDocFromParams = (p: Pick<QaParams, 'fixture' | 'rtl' | 'variants'>): ComicDoc => {
+  const doc = makeQaDoc(p.fixture, { rtl: p.rtl });
+  return p.variants ? doc : withoutVariants(doc);
 };
 
 export { QA_FIXTURES };
@@ -263,7 +276,7 @@ export interface QaSceneInit {
 
 /** The scene a URL describes (fixture doc + tab/page/state), shared by every surface. */
 export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
-  let doc = p.state === 'loading' || p.state === 'load-error' ? null : makeQaDoc(p.fixture, { rtl: p.rtl });
+  let doc = p.state === 'loading' || p.state === 'load-error' ? null : qaDocFromParams(p);
   if (doc && p.live) doc = withQaPublication(doc, p.live);
   if (doc && p.state === 'conflict') doc = withQaConflict(doc);
   const pageId = p.page && doc ? doc.pages.find((pg) => pg.n === p.page)?.id ?? null : null;
