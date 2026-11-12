@@ -251,4 +251,12 @@ describe('package.json (P0-E dependencies and scripts)', () => {
     expect(pkg.scripts['qa:build']).toContain('dist-qa');
     for (const s of ['qa:mobile', 'qa:mobile:update', 'test:layout', 'gen:icons']) expect(pkg.scripts[s], s).toBeTruthy();
   });
+
+  it('typechecks the client with a 4 GB heap: one tsc program over ~3,260 files needs ~2.4 GB, past Node 22’s ~2 GB default', () => {
+    // At Node's default heap (2,096 MB on a 16 GB machine) `tsc -p tsconfig.json` ran out of memory after S2a
+    // (3,211 → 3,260 files, linear growth: no type blow-up), so CI's "Typecheck (client + server)" step would fail.
+    const m = /^node --max-old-space-size=(\d+) node_modules\/typescript\/bin\/tsc -p tsconfig\.json --noEmit$/.exec(pkg.scripts.typecheck);
+    expect(m, pkg.scripts.typecheck).not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(4096);
+  });
 });
