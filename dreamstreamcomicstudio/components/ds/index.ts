@@ -6,7 +6,7 @@
 export * from './recipes';
 
 // Controls
-export { Button, buttonClasses, BUTTON_BASE, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
+export { Button, buttonClasses, BUTTON_BASE, BUTTON_EXTENSION_VARIANTS, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { IconButton, ICON_BUTTON_SIZE, type IconButtonProps, type IconButtonSize } from './IconButton';
 export { Field, useField, useFieldControl, FIELD_DESCRIPTION, FIELD_ERROR, FIELD_LABEL, type FieldContextValue, type FieldControlProps, type FieldProps } from './Field';
 export { Input, Textarea, INPUT_CLASSES, TEXTAREA_CLASSES, type InputProps, type TextareaProps } from './Input';
@@ -15,7 +15,7 @@ export { Segmented, SEGMENTED_ITEM_EDGE, SEGMENTED_SIZE, type SegmentedOption, t
 export { Tabs, TabsContent, TabsList, TabsTrigger, type TabsContentProps, type TabsListProps, type TabsProps, type TabsTriggerProps } from './Tabs';
 export { Switch, SWITCH_HIT_AREA, SWITCH_THUMB, SWITCH_TRACK, type SwitchProps } from './Switch';
 export { Slider, SLIDER_CLASSES, snapToStep, type SliderProps } from './Slider';
-export { Progress, PROGRESS_BAR, PROGRESS_SIZE, PROGRESS_TRACK, type ProgressProps, type ProgressSize } from './Progress';
+export { Progress, PROGRESS_BAR, PROGRESS_MAKING, PROGRESS_SIZE, PROGRESS_TRACK, type ProgressProps, type ProgressSize, type ProgressTone } from './Progress';
 export { Checkbox, CHECKBOX_BOX, CHECKBOX_CHECK, CHECKBOX_CONTROL, CHECKBOX_DASH, CHECKBOX_DESCRIPTION, CHECKBOX_INPUT, CHECKBOX_LABEL, CHECKBOX_ROW, type CheckboxProps, type CheckedState } from './Checkbox';
 
 // Labels

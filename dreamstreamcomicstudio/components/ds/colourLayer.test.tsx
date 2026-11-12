@@ -6,12 +6,30 @@
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import * as studioDesign from '../chat/studioDesign';
 import { Button, BUTTON_EXTENSION_VARIANTS, BUTTON_VARIANT, BUTTON_VARIANTS, buttonClasses } from './Button';
 import { IconButton } from './IconButton';
-import { Progress, PROGRESS_BAR, PROGRESS_MAKING } from './Progress';
+import { Progress, PROGRESS_BAR, PROGRESS_MAKING, type ProgressTone } from './Progress';
 import { FOCUS_RING, SHADOW_SOFT, SPARK_FILL, STATUS_DOT } from './recipes';
+import * as recipes from './recipes';
+import * as ds from './index';
 import { expectClasses } from './ds.testkit';
+
+describe('the colour layer reaches the components/ds barrel (CL-0 #1, #2)', () => {
+  it('Button’s extension variants and Progress’s making bar and tone come through components/ds', () => {
+    expect(ds.BUTTON_EXTENSION_VARIANTS).toBe(BUTTON_EXTENSION_VARIANTS);
+    expect(ds.PROGRESS_MAKING).toBe(PROGRESS_MAKING);
+    expectTypeOf<ds.ProgressTone>().toEqualTypeOf<ProgressTone>();
+  });
+
+  it('recipes re-exports the three hand-written colour-layer classes (and so does the barrel), identical to studioDesign', () => {
+    for (const name of ['BENDAY', 'MAKING_SWEEP', 'MAKING_TEXT'] as const) {
+      expect(recipes[name], name).toBe(studioDesign[name]);
+      expect(ds[name], name).toBe(studioDesign[name]);
+    }
+  });
+});
 
 describe('Button `create` — the spark fill, beside Atlas’s six', () => {
   it('renders the spark fill with its label token, the focus outline and data-variant="create"', () => {

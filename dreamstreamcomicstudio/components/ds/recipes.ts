@@ -12,9 +12,9 @@
  * and their tests assert every recipe class survives. Class strings never use the Tailwind 3 aliases
  * tailwind-merge cannot dedupe against their modern names (components/ds/cnAliases.test.ts).
  *
- * The colour layer "Ink & Spark" (SPARK_*, MAKING_DOT, HUE_*, ART_*) is a DreamStream extension, not from Atlas: the
- * spark marks creation only and never sits on a price (tests/config/sparkGuard.test.ts). Its three hand-written CSS
- * classes (MAKING_SWEEP, MAKING_TEXT, BENDAY: styles/ds-motion.css) are imported from studioDesign directly.
+ * The colour layer "Ink & Spark" (SPARK_*, MAKING_*, HUE_*, ART_*, BENDAY) is a DreamStream extension, not from Atlas:
+ * the spark marks creation only and never sits on a price (tests/config/sparkGuard.test.ts). MAKING_SWEEP, MAKING_TEXT
+ * and BENDAY are hand-written CSS classes (styles/ds-motion.css), named in ds.hygiene.test.ts HAND_WRITTEN_CLASSES.
  */
 
 export {
@@ -23,6 +23,7 @@ export {
   ACCENT_TEXT,
   ART_GLOW,
   ART_PLACEHOLDER,
+  BENDAY,
   CHIP,
   CHIP_VARIANT,
   DANGER_FILL,
@@ -40,6 +41,8 @@ export {
   hueIndex,
   LIFT,
   MAKING_DOT,
+  MAKING_SWEEP,
+  MAKING_TEXT,
   ON_ACCENT_TEXT,
   OVERLINE,
   RADIUS_CONTROL,
