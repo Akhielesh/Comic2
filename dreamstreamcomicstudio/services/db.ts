@@ -1165,15 +1165,100 @@ export const saveArtifact = async (artifact: GenerationArtifact): Promise<void> 
     data: artifact, // Store the whole JSON object
     created_at: new Date().toISOString()
   });
+  invalidateArtifactMemo(artifact.projectId);
 };
 
-export const loadArtifactsForProject = async (projectId: string): Promise<GenerationArtifact[]> => {
-  const { data } = await supabase
-    .from('artifacts')
-    .select('data')
-    .eq('project_id', projectId);
+// EGRESS-DB E5: the cost panels and the assistant read artifacts without `responseText` (a third of the table's
+// bytes, rendered by none of them), memoised per project for 5 minutes in this tab; saveArtifact drops the entry.
+// An export (and anything else that needs the response text) passes { withResponse: true }.
+const ARTIFACT_SLIM_KEYS = ['id', 'projectId', 'timestamp', 'type', 'provider', 'model', 'prompt', 'inputImageIds', 'outputImageId',
+  'referenceCount', 'fallbackOccurred', 'fallbackFromModel', 'fallbackToModel', 'styleLockUsed', 'meta', 'stage', 'success', 'error',
+  'aspectRatio', 'resolution', 'timings', 'usage', 'cost'] as const;
+export const ARTIFACT_SLIM_SELECT = ARTIFACT_SLIM_KEYS.map((k) => `${k}:data->${k}`).join(',');
+export const ARTIFACT_MEMO_TTL_MS = 5 * 60_000;
 
-  return (data || []).map((row: any) => row.data);
+type Memo<T> = { at: number; value: Promise<T> };
+const artifactMemo = new Map<string, Memo<GenerationArtifact[]>>();
+const artifactCountMemo = new Map<string, Memo<number>>();
+
+/** Forget the memoised artifacts (and count) of one project, or of every project. */
+export const invalidateArtifactMemo = (projectId?: string): void => {
+  if (projectId === undefined) {
+    artifactMemo.clear();
+    artifactCountMemo.clear();
+    return;
+  }
+  artifactMemo.delete(projectId);
+  artifactCountMemo.delete(projectId);
+};
+
+/** The memo entry for `key`, or a new one from `load` (a failed load is never kept). */
+const memoized = <T>(memo: Map<string, Memo<T>>, key: string, load: () => Promise<T>): Promise<T> => {
+  const hit = memo.get(key);
+  if (hit && Date.now() - hit.at < ARTIFACT_MEMO_TTL_MS) return hit.value;
+  const entry: Memo<T> = { at: Date.now(), value: load() };
+  memo.set(key, entry);
+  entry.value.catch(() => {
+    if (memo.get(key) === entry) memo.delete(key);
+  });
+  return entry.value;
+};
+
+const slimArtifactOf = (row: Record<string, unknown>): GenerationArtifact => {
+  const artifact: Record<string, unknown> = {};
+  for (const key of ARTIFACT_SLIM_KEYS) if (row[key] !== null && row[key] !== undefined) artifact[key] = row[key];
+  return artifact as unknown as GenerationArtifact;
+};
+
+export const loadArtifactsForProject = async (
+  projectId: string,
+  options: { withResponse?: boolean } = {}
+): Promise<GenerationArtifact[]> => {
+  if (options.withResponse) {
+    const { data } = await supabase
+      .from('artifacts')
+      .select('data')
+      .eq('project_id', projectId);
+    return (data || []).map((row: any) => row.data);
+  }
+  try {
+    const artifacts = await memoized(artifactMemo, projectId, async () => {
+      const { data, error } = await supabase
+        .from('artifacts')
+        .select(ARTIFACT_SLIM_SELECT)
+        .eq('project_id', projectId);
+      if (error) throw error;
+      return ((data || []) as unknown as Record<string, unknown>[]).map(slimArtifactOf);
+    });
+    // A copy per caller: some sort the list in place.
+    return artifacts.slice();
+  } catch {
+    return [];
+  }
+};
+
+/** How many artifacts a project has: a HEAD count (no rows), or the memoised list's length when it is fresh. */
+export const countArtifactsForProject = async (projectId: string): Promise<number> => {
+  const listed = artifactMemo.get(projectId);
+  if (listed && Date.now() - listed.at < ARTIFACT_MEMO_TTL_MS) {
+    try {
+      return (await listed.value).length;
+    } catch {
+      /* fall through to the count */
+    }
+  }
+  try {
+    return await memoized(artifactCountMemo, projectId, async () => {
+      const { count, error } = await supabase
+        .from('artifacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId);
+      if (error) throw error;
+      return count ?? 0;
+    });
+  } catch {
+    return 0;
+  }
 };
 
 
@@ -1331,7 +1416,8 @@ export const exportProject = async (projectId: string): Promise<any> => {
     const { data: project, error } = await supabase.from('projects').select('*').eq('id', projectId).single();
     if (error || !project) throw new Error("Project not found");
 
-    const artifacts = await loadArtifactsForProject(projectId);
+    // An export carries every artifact whole, response text included.
+    const artifacts = await loadArtifactsForProject(projectId, { withResponse: true });
 
     // For MVP, we don't download all images to blob yet, but we return structure so UI doesn't crash.
     return { project, images: {}, artifacts };

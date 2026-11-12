@@ -1,6 +1,6 @@
 import { AppStep, Project } from "../types";
 import { buildProjectReport } from "./reporting";
-import { loadArtifactsForProject } from "./db";
+import { countArtifactsForProject, loadArtifactsForProject } from "./db";
 
 const collectImageIds = (project: Project) => {
   const ids = new Set<string>();
@@ -61,8 +61,14 @@ export type ProjectSummary = {
   comments: { count: number; likes: number; dislikes: number };
 };
 
-export const summarizeProject = async (project: Project): Promise<ProjectSummary> => {
-  const artifacts = await loadArtifactsForProject(project.id);
+/**
+ * A project's summary for the assistant. With `artifacts: false` (EGRESS-DB E5: every project but the active one)
+ * no artifact is read: the count comes from a HEAD count and the cost, which needs the artifacts, is left out.
+ */
+export const summarizeProject = async (project: Project, options: { artifacts?: boolean } = {}): Promise<ProjectSummary> => {
+  const withArtifacts = options.artifacts !== false;
+  const artifacts = withArtifacts ? await loadArtifactsForProject(project.id) : [];
+  const artifactCount = withArtifacts ? artifacts.length : await countArtifactsForProject(project.id);
   const report = await buildProjectReport(project, artifacts, {}, project.state.pricingConfig);
   const comments = project.state.comments || [];
   const likes = comments.reduce((acc, c) => acc + (c.likes || 0), 0);
@@ -80,12 +86,14 @@ export const summarizeProject = async (project: Project): Promise<ProjectSummary
     isGenerating: !!project.state.generationStatus?.isActive,
     generationProgress: project.state.generationStatus?.progress,
     generationStep: project.state.generationStatus?.currentStepDescription,
-    cost: {
-      currency: report.cost_summary.currency,
-      totalCost: report.cost_summary.totalCost,
-      estimatedArtifacts: report.cost_summary.estimatedArtifactCount
-    },
-    artifacts: report.ai_usage.totalArtifacts,
+    cost: withArtifacts
+      ? {
+          currency: report.cost_summary.currency,
+          totalCost: report.cost_summary.totalCost,
+          estimatedArtifacts: report.cost_summary.estimatedArtifactCount
+        }
+      : undefined,
+    artifacts: artifactCount,
     layoutType: project.state.layoutType,
     textLayout: project.state.textLayout,
     styleCategory: project.state.styleCategory,
@@ -99,7 +107,7 @@ export const summarizeProject = async (project: Project): Promise<ProjectSummary
       imageCount: report.storage.imageCount || imageIds.size,
       imageBytes: report.storage.imageBytes || undefined,
       panelsCount: report.storage.panelsCount,
-      artifactsCount: report.storage.artifactsCount,
+      artifactsCount: artifactCount,
       indexedDb: report.storage.indexedDb
     },
     comments: { count: comments.length, likes, dislikes }
@@ -110,7 +118,7 @@ export const summarizeAllProjects = async (projects: Project[]): Promise<Project
   const summaries: ProjectSummary[] = [];
   for (const project of projects) {
     try {
-      summaries.push(await summarizeProject(project));
+      summaries.push(await summarizeProject(project, { artifacts: false }));
     } catch {
       summaries.push({
         id: project.id,
