@@ -606,31 +606,35 @@ const iciclePath = (w: number, h: number, seed: number, inset: TextInset): strin
   return `${d}L0 ${fmt(r)}Q0 0 ${fmt(r)} 0Z`;
 };
 
-/** The classic heart curve (x = 16 sin³t, y = −(13 cos t − 5 cos 2t − 2 cos 3t − cos 4t)), y down. */
+/** The classic heart curve (x = 16 sin³t, y = −(13 cos t − 5 cos 2t − 2 cos 3t − cos 4t)), y down: lobes at y ≈ −12,
+ *  the dip between them at −5, the tip at 17. */
 const HEART: Pt[] = Array.from({ length: 48 }, (_v, i) => {
   const t = (2 * Math.PI * i) / 48;
   return { x: 16 * Math.sin(t) ** 3, y: -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) };
 });
-/** The heart's widest band (the text sits there), in curve units. */
-const HEART_TEXT_Y = -4;
+/** The text rectangle the curve holds with room to spare (half sizes, curve units), centred below the dip at y = 1. */
+const HEART_TEXT = { a: 8, b: 5, y: 1 };
 
-/** Heart: the curve scaled (grown 4 % at a time) until the text block's edge (corners and the dip between the lobes
- *  included: 16 points round it) sits inside it. */
+/**
+ * Heart: the text block mapped onto HEART_TEXT (8 % breathing room; the curve never stretched past 3:1), then grown
+ * 4 % at a time while any of 16 points round the text block's edge is still outside (never needed for usual boxes).
+ */
 const heartPoints = (w: number, h: number, inset: TextInset): Pt[] => {
-  const x0 = inset.x;
-  const x1 = w - inset.x;
-  const y0 = inset.y;
-  const y1 = h - inset.y;
-  const corners: Pt[] = [];
+  const x0 = Math.min(w / 2, Math.max(0, inset.x));
+  const y0 = Math.min(h / 2, Math.max(0, inset.y));
+  const edge: Pt[] = [];
   for (let k = 0; k < 4; k += 1) {
     const f = k / 4;
-    corners.push({ x: x0 + (x1 - x0) * f, y: y0 }, { x: x1, y: y0 + (y1 - y0) * f }, { x: x1 - (x1 - x0) * f, y: y1 }, { x: x0, y: y1 - (y1 - y0) * f });
+    edge.push({ x: x0 + (w - 2 * x0) * f, y: y0 }, { x: w - x0, y: y0 + (h - 2 * y0) * f }, { x: w - x0 - (w - 2 * x0) * f, y: h - y0 }, { x: x0, y: h - y0 - (h - 2 * y0) * f });
   }
-  let sx = (w / 2 / 16) * 1.12;
-  let sy = (h / 2 / 9) * 1.12;
-  const at = (fx: number, fy: number) => HEART.map((p) => ({ x: w / 2 + p.x * fx, y: h / 2 + (p.y - HEART_TEXT_Y) * fy }));
+  // Wide enough to cover the box, tall enough above the centre (13 curve units) to cover its top.
+  let sx = Math.max(((w / 2 - x0) / HEART_TEXT.a) * 1.08, w / 32);
+  let sy = Math.max(((h / 2 - y0) / HEART_TEXT.b) * 1.08, h / 26);
+  sy = Math.max(sy, sx / 3);
+  sx = Math.max(sx, sy / 3);
+  const at = (fx: number, fy: number) => HEART.map((p) => ({ x: w / 2 + p.x * fx, y: h / 2 + (p.y - HEART_TEXT.y) * fy }));
   let pts = at(sx, sy);
-  for (let k = 0; k < 40 && !corners.every((c) => insidePolygon(pts, c)); k += 1) {
+  for (let k = 0; k < 24 && !edge.every((c) => insidePolygon(pts, c)); k += 1) {
     sx *= 1.04;
     sy *= 1.04;
     pts = at(sx, sy);
@@ -654,11 +658,11 @@ const stickyParts = (w: number, h: number, inset: TextInset, rtl: boolean) => {
  * is at hand; shapes.pro.test.ts checks the real outline stays within it, like SHAPE_BLEED for the base shapes).
  */
 export const PRO_SHAPE_BLEED: Record<ProBubbleShape, { x: number; y: number }> = {
-  radio: { x: 0.2, y: 0.32 },
-  monster: { x: 0.24, y: 0.85 },
-  telepathic: { x: 0.36, y: 0.46 },
+  radio: { x: 0.18, y: 0.24 },
+  monster: { x: 0.18, y: 0.66 },
+  telepathic: { x: 0.28, y: 0.36 },
   icicle: { x: 0, y: 0.6 },
-  heart: { x: 0.6, y: 1.6 },
+  heart: { x: 0.52, y: 1.25 },
   sticky: { x: 0, y: 0 }
 };
 

@@ -12,6 +12,11 @@
 //   4. tail and neck fills over the body edge (so the joins merge seamlessly)
 //   5. the `inner` outline (double border, explosion core, scroll curls)
 //   6. text: shadow copy, then fill with an optional outline (paint-order: stroke).
+//      Pro text styling (PE-LETTER) draws in the same step, back to front: glow (stacked round strokes, never a filter,
+//      so canvas matches), the shadow or the SFX 3D extrusion, the stacked outlines (`strokes`, outermost first; they
+//      supersede `textStroke`), then the fill (a <linearGradient> for `fillGradient` or the SFX 'gradient' effect).
+//      SFX 'shatter' draws that whole stack twice, clipped (<clipPath>) above and below a seeded crack and pulled apart.
+//      Gradients and clip paths sit in a <defs> inside the balloon's text group, with ids from `idPrefix`.
 // Translucent or transparent fills (alpha < 1 or 'none'): every shape is stroked at 2× through a mask
 // that hides the inside of the shapes, then the fills are drawn in one layer at the fill's alpha. The
 // border stays crisp and opaque, nothing shows through the fill, and tails still merge with the body.
@@ -19,7 +24,9 @@
 
 import type { LineKind } from '../../../shared/comic/doc';
 import type { LetterPlan } from '../../../shared/comic/lettering/layout';
-import { borderDashArray, EXTRA_SHADE, linkNeck, shadeColor, type BubbleGeometry } from '../../../shared/comic/lettering/shapes';
+import { borderDashArray, EXTRA_SHADE, hashSeed, linkNeck, shadeColor, type BubbleGeometry } from '../../../shared/comic/lettering/shapes';
+import { proLetterOf, type FillGradient, type StrokeLayer } from '../../../shared/comic/lettering/style';
+import { PRO_LETTER_LIMITS } from '../../../shared/comic/limits';
 import { languageSpec } from '../../../shared/comic/languages';
 import { graphemes } from '../../../shared/comic/textLayout';
 import { fontFamilyStack } from '../../../shared/comic/lettering/fonts';
@@ -231,14 +238,99 @@ function artNodes(members: Member[], necks: { d: string; owner: Member }[], mask
 const anchorFor = (align: LetterPlan['style']['align'], rtl: boolean): 'start' | 'middle' | 'end' =>
   align === 'center' ? 'middle' : align === 'left' ? (rtl ? 'end' : 'start') : rtl ? 'start' : 'end';
 
-/** The text of one plan: shadow copy, then fill with optional outline. */
-function textNodes(plan: LetterPlan): SvgNode[] {
+/** Pro text-styling steps a plan draws (PE-LETTER); null for a plan that draws exactly as before. */
+interface ProText {
+  glow: { color: string; opacity: number; size: number } | null;
+  /** Stacked outlines, innermost first (supersede textStroke); null = textStroke as before. */
+  strokes: StrokeLayer[] | null;
+  gradient: FillGradient | null;
+  /** SFX 3D extrusion: copies stepped toward the shadow offset (em), in this paint. */
+  extrude: { color: string; opacity: number; dx: number; dy: number } | null;
+  shatter: boolean;
+}
+
+const proTextOf = (plan: LetterPlan): ProText | null => {
+  const st = plan.style;
+  const pro = proLetterOf(st);
+  const effect = plan.kind === 'sfx' ? (st.sfxEffect as string) : '';
+  const glowP = pro.glow && pro.glow.size > 0 ? paintOf(pro.glow.color) : null;
+  // The load keeps any finite stored size (rollback rule), so the drawing clamps to the write bounds.
+  const glow = glowP && pro.glow ? { ...glowP, size: Math.min(PRO_LETTER_LIMITS.glowSizeMax, pro.glow.size) } : null;
+  // Stored strokes win; the SFX outline stack derives three rings from the line's outline.
+  let strokes: StrokeLayer[] | null = Array.isArray(st.strokes)
+    ? st.strokes
+        .filter((x) => !!x && !!paintOf(x.color) && x.w > 0)
+        .slice(0, PRO_LETTER_LIMITS.strokes)
+        .map((x) => ({ color: x.color, w: Math.min(PRO_LETTER_LIMITS.strokeWMax, x.w) }))
+    : null;
+  if (!strokes && effect === 'outline_stack') {
+    const w = st.textStroke?.width && st.textStroke.width > 0 ? st.textStroke.width : 0.1;
+    const c = st.textStroke && paintOf(st.textStroke.color) ? st.textStroke.color : INK;
+    strokes = [{ color: c, w }, { color: '#ffffff', w: w * 0.9 }, { color: c, w: w * 0.7 }];
+  }
+  let gradient: FillGradient | null = pro.fillGradient && paintOf(pro.fillGradient.from) && paintOf(pro.fillGradient.to) ? pro.fillGradient : null;
+  if (!gradient && effect === 'gradient') {
+    const from = paintOf(st.textColor) ? st.textColor : INK;
+    gradient = { from, to: shadeColor(from, 0.55), angle: 90 };
+  }
+  let extrude: ProText['extrude'] = null;
+  if (effect === 'extrude3d') {
+    const base = paintOf(st.textColor)?.color ?? INK;
+    const sp = st.shadow ? paintOf(st.shadow.color) : null;
+    extrude = { ...(sp ?? { color: shadeColor(base, -0.55), opacity: 1 }), dx: st.shadow?.dx ?? 0.07, dy: st.shadow?.dy ?? 0.07 };
+  }
+  const shatter = effect === 'shatter';
+  return glow || strokes || gradient || extrude || shatter ? { glow, strokes, gradient, extrude, shatter } : null;
+};
+
+/** userSpaceOnUse end points of a two-stop gradient across the text box at `angle` degrees (0 = left to right). */
+const gradientLine = (plan: LetterPlan, angle: number) => {
+  const rad = (angle * Math.PI) / 180;
+  const cx = plan.x + plan.w / 2;
+  const cy = plan.y + plan.h / 2;
+  const half = (Math.abs(plan.w * Math.cos(rad)) + Math.abs(plan.h * Math.sin(rad))) / 2;
+  return { x1: r2(cx - half * Math.cos(rad)), y1: r2(cy - half * Math.sin(rad)), x2: r2(cx + half * Math.cos(rad)), y2: r2(cy + half * Math.sin(rad)) };
+};
+
+const gradientNode = (id: string, plan: LetterPlan, g: FillGradient): SvgNode => {
+  const stop = (offset: number, c: string): SvgNode => {
+    const p = paintOf(c)!;
+    return { tag: 'stop', attrs: { offset, 'stop-color': p.color, 'stop-opacity': p.opacity < 1 ? p.opacity : undefined } };
+  };
+  return { tag: 'linearGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', ...gradientLine(plan, g.angle) }, children: [stop(0, g.from), stop(1, g.to)] };
+};
+
+/** SFX 'shatter': a seeded crack across the text box; the two clip polygons above and below it (plan units). */
+const shatterClips = (plan: LetterPlan): { top: string; bottom: string } => {
+  const fs = plan.fontSize;
+  const x0 = r2(plan.x - fs);
+  const x1 = r2(plan.x + plan.w + fs);
+  const y0 = r2(plan.y - fs);
+  const y1 = r2(plan.y + plan.h + fs);
+  let h = hashSeed(`${plan.lineId}|crack`) || 1;
+  const next = () => {
+    h = (Math.imul(h ^ (h >>> 13), 0x5bd1e995) + 0x9e3779b9) >>> 0;
+    return h / 4294967296;
+  };
+  const mid = plan.y + plan.h / 2;
+  const n = 6;
+  const crack = Array.from({ length: n + 1 }, (_v, k) => ({ x: r2(x0 + ((x1 - x0) * k) / n), y: r2(mid + (next() - 0.5) * 0.45 * plan.h) }));
+  const pts = (list: { x: number; y: number }[]) => list.map((q) => `${q.x} ${q.y}`).join('L');
+  return {
+    top: `M${x0} ${y0}L${x1} ${y0}L${pts([...crack].reverse())}Z`,
+    bottom: `M${pts(crack)}L${x1} ${y1}L${x0} ${y1}Z`
+  };
+};
+
+/** The text of one plan: shadow copy, then fill with optional outline (Pro steps: see the file note). */
+function textNodes(plan: LetterPlan, idBase = 'lt'): SvgNode[] {
   const parsed = parseFont(plan.font);
   const fs = plan.fontSize;
   const rtl = plan.dir === 'rtl';
   const fill = paintOf(plan.style.textColor) ?? { color: INK, opacity: 1 };
   const strokeP = plan.style.textStroke ? paintOf(plan.style.textStroke.color) : null;
   const shadowP = plan.style.shadow ? paintOf(plan.style.shadow.color) : null;
+  const pro = proTextOf(plan);
   const base: SvgNode['attrs'] = {
     'font-family': fontFamilyStack(plan.fontId),
     'font-size': r2(fs),
@@ -281,25 +373,105 @@ function textNodes(plan: LetterPlan): SvgNode[] {
       }
       return { tag: 'text', attrs: { ...base, ...paint, x: r2(run.x), y: r2(run.y), 'text-anchor': anchorFor(plan.style.align, rtl) }, text: run.text };
     });
-  const out: SvgNode[] = [];
-  if (shadowP && plan.style.shadow) {
+  let out: SvgNode[] = [];
+  if (!pro) {
+    if (shadowP && plan.style.shadow) {
+      out.push({
+        tag: 'g',
+        attrs: { transform: `translate(${r2(plan.style.shadow.dx * fs)} ${r2(plan.style.shadow.dy * fs)})`, opacity: shadowP.opacity < 1 ? shadowP.opacity : undefined },
+        children: runNodes({ fill: shadowP.color })
+      });
+    }
+    const strokeW = plan.style.textStroke && strokeP ? r2(plan.style.textStroke.width * fs) : 0;
     out.push({
       tag: 'g',
-      attrs: { transform: `translate(${r2(plan.style.shadow.dx * fs)} ${r2(plan.style.shadow.dy * fs)})`, opacity: shadowP.opacity < 1 ? shadowP.opacity : undefined },
-      children: runNodes({ fill: shadowP.color })
+      attrs: { 'fill-opacity': fill.opacity < 1 ? fill.opacity : undefined },
+      children: runNodes({
+        fill: fill.color,
+        ...(strokeW > 0
+          ? { stroke: strokeP!.color, 'stroke-opacity': strokeP!.opacity < 1 ? strokeP!.opacity : undefined, 'stroke-width': strokeW, 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
+          : {})
+      })
     });
+  } else {
+    const defs: SvgNode[] = [];
+    // 1. Glow: four round strokes, widest and faintest first (no filter: canvas draws the same strokes).
+    if (pro.glow) {
+      const steps = 4;
+      for (let k = steps; k >= 1; k -= 1) {
+        const width = r2(2 * pro.glow.size * fs * (k / steps));
+        const a = Math.round(pro.glow.opacity * (0.18 + (0.5 * (steps - k)) / steps) * 1000) / 1000;
+        out.push({
+          tag: 'g',
+          attrs: { 'data-pro': 'glow' },
+          children: runNodes({ fill: pro.glow.color, 'fill-opacity': a, stroke: pro.glow.color, 'stroke-opacity': a, 'stroke-width': width, 'stroke-linejoin': 'round' })
+        });
+      }
+    }
+    // 2. Shadow, or the SFX 3D extrusion (six copies stepping out to the shadow offset).
+    if (pro.extrude) {
+      const steps = 6;
+      for (let k = steps; k >= 1; k -= 1) {
+        out.push({
+          tag: 'g',
+          attrs: { 'data-pro': 'extrude', transform: `translate(${r2((pro.extrude.dx * fs * k) / steps)} ${r2((pro.extrude.dy * fs * k) / steps)})`, 'fill-opacity': pro.extrude.opacity < 1 ? pro.extrude.opacity : undefined },
+          children: runNodes({ fill: pro.extrude.color })
+        });
+      }
+    } else if (shadowP && plan.style.shadow) {
+      out.push({
+        tag: 'g',
+        attrs: { transform: `translate(${r2(plan.style.shadow.dx * fs)} ${r2(plan.style.shadow.dy * fs)})`, opacity: shadowP.opacity < 1 ? shadowP.opacity : undefined },
+        children: runNodes({ fill: shadowP.color })
+      });
+    }
+    // 3. Stacked outlines, outermost first: ring i is drawn at the summed width of rings 0..i.
+    const stack = pro.strokes;
+    if (stack) {
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        const p = paintOf(stack[i].color)!;
+        const width = r2(stack.slice(0, i + 1).reduce((n, x) => n + x.w, 0) * fs);
+        out.push({
+          tag: 'g',
+          attrs: { 'data-pro': 'stroke' },
+          children: runNodes({ fill: p.color, 'fill-opacity': p.opacity < 1 ? p.opacity : undefined, stroke: p.color, 'stroke-opacity': p.opacity < 1 ? p.opacity : undefined, 'stroke-width': width, 'stroke-linejoin': 'round' })
+        });
+      }
+    }
+    // 4. The fill: a gradient or the text colour, with the line's outline only when no stack supersedes it.
+    let fillPaint: string = fill.color;
+    if (pro.gradient) {
+      const id = `${idBase}-grad`;
+      defs.push(gradientNode(id, plan, pro.gradient));
+      fillPaint = `url(#${id})`;
+    }
+    const strokeW = !stack && plan.style.textStroke && strokeP ? r2(plan.style.textStroke.width * fs) : 0;
+    out.push({
+      tag: 'g',
+      attrs: { 'fill-opacity': !pro.gradient && fill.opacity < 1 ? fill.opacity : undefined },
+      children: runNodes({
+        fill: fillPaint,
+        ...(strokeW > 0
+          ? { stroke: strokeP!.color, 'stroke-opacity': strokeP!.opacity < 1 ? strokeP!.opacity : undefined, 'stroke-width': strokeW, 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
+          : {})
+      })
+    });
+    // 5. Shatter: the whole stack twice, clipped above and below the crack and pulled apart.
+    if (pro.shatter) {
+      const clips = shatterClips(plan);
+      const topId = `${idBase}-clip-a`;
+      const bottomId = `${idBase}-clip-b`;
+      defs.push({ tag: 'clipPath', attrs: { id: topId }, children: [{ tag: 'path', attrs: { d: clips.top } }] });
+      defs.push({ tag: 'clipPath', attrs: { id: bottomId }, children: [{ tag: 'path', attrs: { d: clips.bottom } }] });
+      const piece = (id: string, dx: number, dy: number): SvgNode => ({
+        tag: 'g',
+        attrs: { 'data-pro': 'shard', 'clip-path': `url(#${id})`, transform: `translate(${r2(dx * fs)} ${r2(dy * fs)})` },
+        children: out
+      });
+      out = [piece(topId, -0.03, -0.04), piece(bottomId, 0.03, 0.04)];
+    }
+    if (defs.length) out.unshift({ tag: 'defs', attrs: {}, children: defs });
   }
-  const strokeW = plan.style.textStroke && strokeP ? r2(plan.style.textStroke.width * fs) : 0;
-  out.push({
-    tag: 'g',
-    attrs: { 'fill-opacity': fill.opacity < 1 ? fill.opacity : undefined },
-    children: runNodes({
-      fill: fill.color,
-      ...(strokeW > 0
-        ? { stroke: strokeP!.color, 'stroke-opacity': strokeP!.opacity < 1 ? strokeP!.opacity : undefined, 'stroke-width': strokeW, 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
-        : {})
-    })
-  });
   const skew = plan.transform?.skewX;
   if (skew) {
     const { cx, cy } = plan.transform!;
@@ -386,15 +558,15 @@ export function letteringNodes(plans: readonly LetterPlan[], opts: LetteringDraw
         children: [...children, ...extra]
       };
     };
-    const texts = (m: Member): SvgNode => {
+    const texts = (m: Member, mi: number): SvgNode => {
       const rot = m.plan.transform?.rotate;
-      const nodes = textNodes(m.plan);
+      const nodes = textNodes(m.plan, `${prefix}-t${gi}-${mi}`);
       return rot ? { tag: 'g', attrs: { transform: `rotate(${r2(rot)} ${r2(m.plan.transform!.cx)} ${r2(m.plan.transform!.cy)})` }, children: nodes } : { tag: 'g', attrs: {}, children: nodes };
     };
     if (members.length === 1) {
-      out.push(lineGroup(members[0], [...art, texts(members[0])]));
+      out.push(lineGroup(members[0], [...art, texts(members[0], 0)]));
     } else {
-      out.push({ tag: 'g', attrs: { 'data-link-group': members.map((m) => m.plan.lineId).join(' ') }, children: [...art, ...members.map((m) => lineGroup(m, [texts(m)]))] });
+      out.push({ tag: 'g', attrs: { 'data-link-group': members.map((m) => m.plan.lineId).join(' ') }, children: [...art, ...members.map((m, mi) => lineGroup(m, [texts(m, mi)]))] });
     }
   });
   return out;
