@@ -17,7 +17,7 @@
 //     (`isUnsignable`) reads "Preview unavailable" instead of loading forever.
 //   • progress — a drawing tile says how long it has been drawing against the model's usual time
 //     ("12s · usually ~20s") and which model draws it, with an indeterminate bar until it reads "taking
-//     longer than usual" — at the board's own threshold (SLOW_FACTOR × the usual time), so the chat and the
+//     longer than usual" — at the board's own threshold (board/ui SLOW_FACTOR × the usual time), so the chat and the
 //     board never disagree about one render. Far past it (isStuck) the tile stops: "Still drawing", a
 //     still dot, no shimmer, and a free "Check again" (the open studio's refresh, on a tap only). One shared
 //     one-second clock serves every drawing tile; it never fetches, skips hidden tabs and stops when
@@ -47,7 +47,7 @@ import { useInViewPause } from '../../../ds/useInViewPause';
 import { FOCUS_RING, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import { THUMB_MAX_W, frameSources, variantCssWidth, type FrameSources } from '../../board/ImageFrame';
 import { formatElapsed, jobModel } from '../../board/boardModel';
-import { isStuck, studioRefresh } from '../../board/ui';
+import { isStuck, SLOW_FACTOR, studioRefresh } from '../../board/ui';
 import type { StudioController } from '../../types';
 import { cx } from '../ui';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
@@ -181,13 +181,12 @@ export const tileSources = (
 export const TILE_CLOCK_MS = 1000;
 
 /**
- * "Taking longer than usual" starts past this many times the model's usual time — the board's RenderOverlay
- * threshold (`typicalSec * 2500` ms in board/ui.tsx), so one render never reads "slow" in the chat while the
- * board still reads "(usually ~20s)". `usual` is the model's typical time, so half of normal renders run past
- * 1×: calling those slow would cry wolf. (Wave note: board/ui exports one SLOW_FACTOR beside STUCK_FACTOR and
- * both files import it; renderTile.test pins the two against each other until then.)
+ * "Taking longer than usual" starts past SLOW_FACTOR times the model's usual time: board/ui.tsx's one constant,
+ * beside STUCK_FACTOR, which the board's RenderOverlay reads too, so one render never reads "slow" in the chat while
+ * the board still reads "(usually ~20s)". `usual` is the model's typical time, so half of normal renders run past
+ * 1×: calling those slow would cry wolf (PF-2 #6). Re-exported for the cards and their tests.
  */
-export const SLOW_FACTOR = 2.5;
+export { SLOW_FACTOR };
 
 const tileClock = (() => {
   const listeners = new Set<() => void>();

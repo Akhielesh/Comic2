@@ -1,11 +1,12 @@
 // PF-2 (perf F2 + styles M4): chat render tiles load small variants lazily and say how long a drawing has
 // taken against the model's usual time, with the model's name, on ONE shared clock that never fetches.
 import React from 'react';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createEmptyDoc, variantFor, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc';
 import { jobModel } from '../../board/boardModel';
-import { RenderOverlay, registerStudioRefresh } from '../../board/ui';
+import { RenderOverlay, registerStudioRefresh, SLOW_FACTOR as BOARD_SLOW_FACTOR } from '../../board/ui';
 import { CardRenderer } from './CardRenderer';
 import { CastAvatar } from './castVisual';
 import { RenderThumb, SLOW_FACTOR, TILE_CLOCK_MS, describeTarget, tileProgress, tileSources, unsignableOf } from './renderTile';
@@ -386,6 +387,12 @@ describe('the chat and the board agree on one render (styles M4)', () => {
 
   it('"taking longer than usual" and "much longer than usual" start at the same second as the board’s RenderOverlay', () => {
     expect(SLOW_FACTOR).toBe(2.5);
+    // One constant, not two that agree today (PF-2 #6): the tiles read board/ui's SLOW_FACTOR, and neither file
+    // spells its own threshold.
+    expect(SLOW_FACTOR).toBe(BOARD_SLOW_FACTOR);
+    const source = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+    expect(source('./renderTile.tsx')).not.toMatch(/const SLOW_FACTOR\s*=/);
+    expect(source('../../board/ui.tsx')).not.toMatch(/typicalSec \* 2500/);
     for (const sec of [12, 25, 49, 50, 51, 120, 199, 201]) {
       vi.setSystemTime(T0 + sec * 1000);
       const { container } = render(
