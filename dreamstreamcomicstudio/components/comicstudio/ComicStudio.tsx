@@ -52,6 +52,7 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
+import { headerShowsQualityChip } from './qualityHome';
 import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
 import { SPEND_KIND_LABEL, pageProgress } from './board/boardModel';
@@ -95,11 +96,8 @@ const ImmersiveReader = React.lazy(() => import('./immersive/ImmersiveReader').t
 
 /** Below this width the phone header moves the spend chip into the ⋯ menu (the title keeps ≥ 100 px). */
 export const SPEND_CHIP_MIN_WIDTH = 360;
-/**
- * The header's quality chip shows only below this width (PROGRAM3 D22, declutter F2): from here the composer's
- * quality chip is on screen beside it, the same setting twice. Phones keep their ⋯ Quality row.
- */
-export const HEADER_QUALITY_CHIP_BELOW = 1024;
+// The header's quality chip shows only below HEADER_QUALITY_CHIP_BELOW (qualityHome.ts; PROGRAM3 D22, declutter F2).
+export { HEADER_QUALITY_CHIP_BELOW } from './qualityHome';
 /** The full-screen reader re-signs image URLs after an image error at most this often. */
 export const READER_REFRESH_MS = 30_000;
 
@@ -352,7 +350,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const showSpendChip = !phone || ff.width >= SPEND_CHIP_MIN_WIDTH;
   // One home per action (C2): the quality chip below 1024 only (the composer chip from there, F2); Read only
   // while the board — whose Read tab is the reader — is out of sight, and only once there is a page (F1, F5).
-  const showQualityChip = !phone && ff.width < HEADER_QUALITY_CHIP_BELOW;
+  const showQualityChip = headerShowsQualityChip(phone, ff.width);
   const showRead = !phone && !boardVisible && !readHint;
   // The phone wallet joins the flat icon family (F4); icon-only when it shows no figure.
   const walletIconOnly = cost.governed && !(pillShare && doc.spend.totalUsd > 0);

@@ -382,6 +382,51 @@ const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioContr
     </FormFactorProvider>
   );
 
+describe('StudioComposer — the quality chip is quality’s home from 1024 px (DC-1 #3, D10; s2b review)', () => {
+  const lockedDoc = () => {
+    const doc = makeSampleDoc();
+    doc.imageModel = { modelId: resolveImageJob('page', 'pro').spec.id, lockedAt: 1, origin: 'user_change' };
+    return doc;
+  };
+  /** A composer narrower than ROOMY_PX (400): jsdom measures 0, so the width is faked for the size hook. */
+  const narrow = () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 320, bottom: 120, width: 320, height: 120, toJSON: () => ({}) } as DOMRect);
+    return spy;
+  };
+
+  it('leads the chip row, so the row’s scroller can never clip it, and the lock leads its words', () => {
+    renderAt(DESKTOP, makeFakeStudio({ doc: lockedDoc() }));
+    const chips = within(screen.getByRole('toolbar', { name: 'Comic options' })).getAllByRole('button');
+    expect(chips[0]).toHaveAttribute('data-action', 'quality');
+    const chip = chips[0];
+    const lock = within(chip).getByTestId('composer-quality-lock');
+    const words = within(chip).getByText(/·|Standard|Pro|Draft/);
+    expect(lock.compareDocumentPosition(words) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('at 1024 px and up it never hides, even in a composer narrower than 400 px: a compact "{Tier}" and the lock', () => {
+    const spy = narrow();
+    try {
+      for (const w of [1024, 1280]) {
+        const { unmount } = renderAt(formFactorFor({ w, h: 800, coarse: false }), makeFakeStudio({ doc: lockedDoc() }));
+        const chip = document.querySelector<HTMLElement>('[data-action="quality"]')!;
+        expect(chip.className.split(/\s+/), `${w} px`).not.toContain('hidden');
+        expect(within(chip).getByTestId('composer-quality-lock')).toBeInTheDocument();
+        // Compact: the tier only; the model is in the title (a tier and a model, never a price).
+        expect(chip.textContent).not.toContain('·');
+        expect(chip.getAttribute('title')).toMatch(/·/);
+        expect(chip.getAttribute('title')).not.toMatch(/[$¢]/);
+        unmount();
+      }
+      // Below 1024 the header has the chip, so a narrow composer still steps aside.
+      renderAt(formFactorFor({ w: 900, h: 800, coarse: false }), makeFakeStudio({ doc: lockedDoc() }));
+      expect(document.querySelector<HTMLElement>('[data-action="quality"]')!.className.split(/\s+/)).toContain('hidden');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('StudioComposer — option chips say what they show (composer-chip-names, WCAG 2.5.3)', () => {
   it('each chip’s accessible name contains its visible text', () => {
     renderAt(TABLET, makeFakeStudio());
