@@ -141,8 +141,8 @@ export type TileSources = FrameSources & { unavailable?: boolean };
 export type IsUnsignable = (path: string) => boolean;
 
 /**
- * The controller's `isUnsignable`, when it has one. Read by name so the cards pick it up the moment useStudio
- * exposes it (PF-2 wave note); until then a tile whose small file can't be signed keeps its loading shimmer.
+ * The controller's `isUnsignable` (StudioController has it since PF-2 #7). Still read by name, so a hand-rolled
+ * controller without it leaves a tile whose small file can't be signed on its loading shimmer instead of throwing.
  */
 export const unsignableOf = (studio: object | null | undefined): IsUnsignable | undefined => {
   const f = studio ? (studio as { isUnsignable?: unknown }).isUnsignable : undefined;

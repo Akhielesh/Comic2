@@ -78,7 +78,9 @@ describe('tileSources (perf F2: the ≤ 480w variant, never the original)', () =
   });
 
   it('unsignableOf reads the controller\'s isUnsignable when it has one', () => {
-    expect(unsignableOf(makeFakeStudio())).toBeUndefined();
+    // A bare object (an older hand-rolled fake) has none; the shared fake's controller now carries it (PF-2 #7).
+    expect(unsignableOf({})).toBeUndefined();
+    expect(unsignableOf(makeFakeStudio())?.('u/x/p/a_w480.webp')).toBe(false);
     const studio = { ...makeFakeStudio(), isUnsignable: (p: string) => p.endsWith('_w480.webp') };
     expect(unsignableOf(studio)?.('u/x/p/a_w480.webp')).toBe(true);
     expect(unsignableOf(studio)?.('u/x/p/a.png')).toBe(false);
