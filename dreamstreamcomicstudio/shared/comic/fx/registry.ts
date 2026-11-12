@@ -4,12 +4,13 @@
 // changed: a stored effect must draw the same forever, so a new look is a new version.
 //
 // Rules (PE-0 fixer note 10; collisions B-7):
-// - this file imports types, names.ts and limits.ts only, never a generator module (lines, bursts, emanata, atmosphere,
-//   borders, seed, generators): the shared barrel (`comic.fx`) re-exports it, so the server sanitizer, the editor and
-//   every reader see the schemas without generator code (a source scan holds it);
+// - this file imports types, names.ts and limits.ts only, never a generator module (lines, bursts, emanata,
+//   atmosphere, borders, draw, seed, generators): the shared barrel (`comic.fx`) re-exports it, so the server
+//   sanitizer, the editor and every reader see the schemas without generator code (a source scan holds it);
 // - each FxGenerator.name is FX_NAMES[gen] (fx/names.ts), which the editor scene and History read;
-// - renderFx keeps PE-0's synchronous signature. Until fx/generators.ts is imported (the Pro editor and the compose
-//   path import it), no drawing is registered and renderFx returns [] for every effect, as before PE-FX.
+// - renderFx keeps PE-0's synchronous signature. Until fx/generators.ts is loaded (compose and the Pro editor load it
+//   lazily, with import(); fxCanDraw says whether it has), no drawing is registered and renderFx returns [] for every
+//   effect, as before PE-FX.
 //
 // S2 holds 14 generators (lines 2, bursts 4, emanata 1, atmosphere 6, borders 1). The 42 named presets (lines 6,
 // bursts 8, emanata 12, atmosphere 6, borders 10) live with the drawings in fx/generators.ts: only the Pro editor's

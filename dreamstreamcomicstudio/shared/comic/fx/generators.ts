@@ -1,7 +1,9 @@
 // The S2 effect generators (master plan §2.6, §2.12 PE-FX; collisions B-7): importing this module registers the
-// drawing of every generator in FX_GENERATORS, so renderFx (fx/registry.ts) draws them. Only the Pro editor and the
-// compose path import it (one import each); the shared barrel never does, so generator code stays out of the server,
-// the editor scene, History and every bundle that does not draw effects. Until it is imported, renderFx returns [].
+// drawing of every generator in FX_GENERATORS, so renderFx (fx/registry.ts) draws them. Nothing imports it statically:
+// compose loads it with import() the first time a page holds an effect (and before an export draws one), and the Pro
+// editor's pickers load it the same way. The shared barrel never reaches it, so generator code stays out of the server,
+// the reader's first load, the PageEditor chunk, the editor scene and History. Until it loads, renderFx returns [].
+// With draw.ts and the generator modules it imports, it forms the lazy `pro-editor` chunk (vite rule: PE-QA, S3).
 //
 // Every registered drawing reads its parameters through fxParamsOf (fx/index.ts): a stored value out of the schema's
 // range, of the wrong kind or missing draws as the clamped value or the default (PE-0 risk 2: players clamp at draw time).
