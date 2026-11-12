@@ -139,7 +139,8 @@ describe('legacy pages render and export byte-identically (PE-COMPOSE golden ove
 
   it('board and reader DOM, canvas raster calls and the print document equal the renderers before PE-COMPOSE', async () => {
     const now = await computeAll();
-    if (WRITE || !existsSync(GOLDEN)) {
+    // Only an explicit re-record writes: a missing golden is a failure, never a fresh self-fulfilling one.
+    if (WRITE) {
       writeFileSync(
         GOLDEN,
         `${JSON.stringify(
@@ -152,6 +153,7 @@ describe('legacy pages render and export byte-identically (PE-COMPOSE golden ove
         )}\n`
       );
     }
+    expect(existsSync(GOLDEN), 'legacyGolden.json missing — re-record on the base renderers').toBe(true);
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as { pages: Record<string, PageHashes>; print: Record<string, string> };
     expect(Object.keys(now.pages).sort()).toEqual(Object.keys(golden.pages).sort());
     const diff = Object.keys(now.pages).filter((k) => JSON.stringify(now.pages[k]) !== JSON.stringify(golden.pages[k]));

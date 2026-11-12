@@ -18,14 +18,19 @@
 // <img>; a page in page mode with overlays draws them over the <img>. Guide-only overlays only with `guides` (the
 // editor), never in readers. Other pictures (another take in a frame, an image overlay) need `urlForPath`. A page
 // without frames or overlays renders exactly as before (compose/legacyGolden.test.tsx).
+//   - `loading="lazy"` holds a composed page's pictures back until the page box is within a viewport of the screen (an
+//     IntersectionObserver that disconnects once it fires), as the <img>'s native lazy loading does.
+//   - Each other picture is judged on its own safety verdict: one the owner may not be served (blocked) is left out,
+//     and with `safety` the veil takes the strictest verdict among the drawing and the pictures drawn.
+//   - Effects re-draw once their drawings have loaded (compose/pageNodes.ts ensureFxDrawings).
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EyeOff } from 'lucide-react';
-import type { Balloon, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
+import { mapAssetRefs, type AssetRef, type Balloon, type ComicDoc, type LineKind, type Page } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
-import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
-import { composePage, pageComposes } from '../../../shared/comic/panelize/compose';
-import { composeScene } from '../compose/pageNodes';
+import { canServeToOwner, ratingRank, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../shared/comic/safety';
+import { composePage, pageComposes, type PageComposition } from '../../../shared/comic/panelize/compose';
+import { composeScene, ensureFxDrawings, fxDrawingsPending, type ComposeResolve } from '../compose/pageNodes';
 import type { PatchOptions } from '../types';
 import { ImageDevelop } from '../../studio/kit/streamMotion';
 import { SafetyVeil } from '../safety/SafetyVeil';
@@ -96,8 +101,9 @@ export interface ComicPageViewProps {
   /**
    * A storage path's URL (another take or an image in a frame, an image overlay). Without it those pictures are not
    * fetched: such a frame shows empty and such an overlay is left out. The page's own drawing always uses `imageUrl`.
+   * An image overlay is asked with `widthPx`, the CSS width it is drawn at (pick a variant, as `srcWidth` does).
    */
-  urlForPath?: (path: string) => string | undefined;
+  urlForPath?: (path: string, widthPx?: number) => string | undefined;
   /** The editor: also draw guide-only overlays (print: false) and a dashed placeholder in an empty frame. */
   guides?: boolean;
 }
@@ -133,6 +139,62 @@ export const WithheldArt: React.FC<{ label: string; detail?: string }> = ({ labe
 
 /** Fallback page width for geometry before the box has been measured (and in tests). */
 const FALLBACK_WIDTH = 600;
+
+/** Every stored picture's AssetRef by path (a variant maps to its picture), built once per doc object. */
+const refIndex = new WeakMap<ComicDoc, Map<string, AssetRef>>();
+const assetRefOf = (doc: ComicDoc, path: string): AssetRef | undefined => {
+  let map = refIndex.get(doc);
+  if (!map) {
+    map = new Map<string, AssetRef>();
+    const m = map;
+    try {
+      mapAssetRefs(doc, (a) => {
+        if (a && typeof a.path === 'string' && !m.has(a.path)) m.set(a.path, a);
+        for (const v of a?.variants || []) if (v && typeof v.path === 'string' && !m.has(v.path)) m.set(v.path, a);
+        return a;
+      });
+    } catch {
+      /* a partial doc: no verdicts known */
+    }
+    refIndex.set(doc, m);
+  }
+  return map.get(path);
+};
+
+/** The owner may be shown this picture (no verdict known, or not blocked). */
+const servable = (doc: ComicDoc, path: string): boolean => {
+  const ref = assetRefOf(doc, path);
+  return !ref || canServeToOwner(ref);
+};
+
+const VEIL_RANK: Record<SafetyStatus, number> = { unchecked: 0, pass: 0, pending: 1, over_rating: 2, blocked: 3 };
+
+/**
+ * The verdict the veil shows for a composed page: the strictest among its drawing and the other pictures it draws (a
+ * take rated above the comic inside a frame blurs the page as it would on its own).
+ */
+const veilAssetOf = (doc: ComicDoc, page: Page, composition: PageComposition, rating: ContentRating): AssetRef | undefined => {
+  const drawing = page.render.asset;
+  const paths = new Set<string>(composition.paths);
+  for (const o of composition.overlays) if (o.layer.kind === 'image' && o.layer.src?.path) paths.add(o.layer.src.path);
+  if (drawing?.path) paths.delete(drawing.path);
+  let best = drawing;
+  let bestRank = VEIL_RANK[safetyStatusOf(drawing?.safety, rating)];
+  for (const path of paths) {
+    const ref = assetRefOf(doc, path);
+    if (!ref || !canServeToOwner(ref)) continue;
+    const rank = VEIL_RANK[safetyStatusOf(ref.safety, rating)];
+    const higher = rank === 2 && bestRank === 2 && ratingRank(ref.safety!.assessed!) > ratingRank(best!.safety!.assessed!);
+    if (rank > bestRank || higher) {
+      best = ref;
+      bestRank = rank;
+    }
+  }
+  return best;
+};
+
+/** A composed page's pictures wait until its box is within a viewport of the screen (loading="lazy"). */
+const NEAR_MARGIN = '100%';
 
 const clip = (text: string, max: number) => {
   const t = (text || '').replace(/\s+/g, ' ').trim();
@@ -225,7 +287,15 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   urlForPath,
   guides
 }) => {
-  const [boxRef, size] = useElementSize<HTMLDivElement>();
+  const [measureRef, size] = useElementSize<HTMLDivElement>();
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const boxRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      elRef.current = el;
+      measureRef(el);
+    },
+    [measureRef]
+  );
   const [natural, setNatural] = useState<{ path: string; w: number; h: number } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [variantFailed, setVariantFailed] = useState<string | null>(null);
@@ -233,6 +303,43 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   // Frames or overlays to draw (undefined: the page renders exactly as before Ship 2).
   const composition = useMemo(() => (pageComposes(page, { guides }) ? composePage(doc, page, { guides }) : undefined), [doc, page, guides]);
   const framed = composition?.mode === 'panels';
+  // loading="lazy": a composed page's pictures (its drawing in frames, other takes, overlays) wait until the page is
+  // near the screen, like a lazy <img>. Without IntersectionObserver (jsdom, old engines) they load at once.
+  const lazyPictures = loading === 'lazy' && !!composition;
+  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined');
+  useEffect(() => {
+    if (!lazyPictures || near) return;
+    const el = elRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setNear(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        setNear(true);
+      },
+      { rootMargin: NEAR_MARGIN }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [lazyPictures, near]);
+  const picturesNow = !lazyPictures || near;
+  // Effects draw once their drawings have loaded (lazily, once for the app): re-draw when they arrive.
+  const [fxEpoch, setFxEpoch] = useState(0);
+  const fxWaiting = !!composition && picturesNow && fxDrawingsPending(page);
+  useEffect(() => {
+    if (!fxWaiting) return;
+    let live = true;
+    void ensureFxDrawings(page).then((loaded) => {
+      if (live && loaded) setFxEpoch((n) => n + 1);
+    });
+    return () => {
+      live = false;
+    };
+  }, [fxWaiting, page]);
   // Adopt the real pixel ratio once the image is known (models snap to their nearest supported aspect). A page shown in
   // its frames has the book's aspect, whatever shape the drawing came back in.
   const naturalAspect = !framed && natural && natural.path === assetPath && natural.w > 0 && natural.h > 0 ? natural.w / natural.h : 0;
@@ -251,9 +358,30 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   const showImage = needsDrawing ? !!src && failed !== src : true;
   const waitingForUrl = needsDrawing && !src && !!assetPath;
   const lettering = doc.format.lettering === 'overlay' && showImage && !hideLettering;
+  // Where the pictures come from: nothing until the page is near (lazy); a picture the owner may not be served is
+  // never asked for (its frame shows empty, its overlay is left out).
+  const overlayWidth = size.width > 0 ? Math.round(size.width) : undefined;
+  const resolve = useMemo<ComposeResolve>(
+    () =>
+      picturesNow
+        ? {
+            rasterUrl: src,
+            ...(urlForPath
+              ? { urlForPath: (path: string, widthPx?: number) => (!servable(doc, path) ? undefined : widthPx ? urlForPath(path, widthPx) : urlForPath(path)) }
+              : {}),
+            ...(overlayWidth ? { widthPx: overlayWidth } : {})
+          }
+        : { libUrl: () => undefined },
+    [picturesNow, src, urlForPath, doc, overlayWidth]
+  );
   const scene = useMemo(
-    () => (composition && showImage ? composeScene(doc, page, { guides, composition, resolve: { rasterUrl: src, urlForPath } }) : undefined),
-    [composition, showImage, doc, page, guides, src, urlForPath]
+    () => (composition && showImage ? composeScene(doc, page, { guides, composition, resolve }) : undefined),
+    // fxEpoch: the effect drawings arrived, draw the effects again.
+    [composition, showImage, doc, page, guides, resolve, fxEpoch]
+  );
+  const veilAsset = useMemo(
+    () => (safety && composition ? veilAssetOf(doc, page, composition, safety.rating) : page.render.asset),
+    [safety, composition, doc, page]
   );
   const pageLabel = alt || `Page ${page.n}${page.summary ? ` — ${page.summary}` : ''}`;
   const onDrawingError = () => {
@@ -378,7 +506,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
       {safety ? (
         // The veil wraps the art AND its lettering (a blurred page must not keep crisp balloons on top).
         <div className="absolute inset-0" data-testid="page-veil">
-          <SafetyVeil asset={page.render.asset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} redrawPrice={safety.redrawPrice} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
+          <SafetyVeil asset={veilAsset} rating={safety.rating} onRedrawSafer={safety.onRedrawSafer} redrawPrice={safety.redrawPrice} onCheckAgain={safety.onCheckAgain} onChangeRating={safety.onChangeRating}>
             {art}
           </SafetyVeil>
         </div>

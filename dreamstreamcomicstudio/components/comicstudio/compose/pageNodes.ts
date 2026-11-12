@@ -10,11 +10,13 @@
 // hold both. Pure: no DOM, no clock; URLs come from the caller (resolve).
 //
 // Seams: effects draw through renderFx (shared/comic/fx/registry.ts), synchronously, whatever it returns ([] until a
-// generators module registers drawings; this folder never imports one, collisions B-7). Stickers draw from the bundled
-// library's same-origin file (libAssetUrl). Every Pro edit is free software: this folder never imports editActionFor
-// and never calls studio.act (proEdit.contract.test.ts scans it).
+// generators module registers drawings; this folder never imports one statically, collisions B-7). The drawings load
+// lazily through the effect loader below (setFxLoader / ensureFxDrawings): the screen re-draws once they arrive, and
+// every export and the print document wait for them before drawing a page that holds an effect. Stickers draw from the
+// bundled library's same-origin file (libAssetUrl). Every Pro edit is free software: this folder never imports
+// editActionFor and never calls studio.act (proEdit.contract.test.ts scans it).
 
-import type { ComicDoc, LayerBlend, Page, PageLayer } from '../../../shared/comic/doc';
+import { knownLayersOf, type ComicDoc, type LayerBlend, type Page, type PageLayer } from '../../../shared/comic/doc';
 import { libAssetUrl } from '../../../shared/comic/assets/index';
 import type { AssetLibRef } from '../../../shared/comic/assets/types';
 import { renderFx } from '../../../shared/comic/fx/registry';
@@ -38,14 +40,65 @@ import type { SvgNode } from '../lettering/svgMarkup';
 
 export { pageComposes } from '../../../shared/comic/panelize/compose';
 
+// ── Effect drawings, loaded lazily (PE-FX seam, collisions B-7) ─────────────────────────────────────────────────────
+
+/** Loads the module that registers the effect drawings (PE-FX's fx/generators.ts), e.g. `() => import(…)`. */
+export type FxLoader = () => Promise<unknown>;
+
+let loadFx: FxLoader | undefined;
+let fxLoading: Promise<boolean> | undefined;
+let fxLoaded = false;
+
+/**
+ * Sets the effect loader (S2b-INT sets the default to PE-FX's generators module, a dynamic import; tests pass a fake).
+ * Without one, renderFx draws what is registered now (nothing on this base), synchronously, and nothing waits.
+ */
+export const setFxLoader = (loader: FxLoader | undefined): void => {
+  loadFx = loader;
+  fxLoading = undefined;
+  fxLoaded = false;
+};
+
+const holdsEffect = (page: Page | null | undefined): boolean => !!page && knownLayersOf(page).some((l) => l.kind === 'effect' && !!l.fx);
+
+/** The page holds an effect whose drawings have not loaded yet (a loader is set and has not finished). */
+export const fxDrawingsPending = (page: Page | null | undefined): boolean => !!loadFx && !fxLoaded && holdsEffect(page);
+
+/**
+ * Loads the effect drawings when the page holds an effect and they are not loaded yet (once for the whole app; a
+ * failed load is tried again on the next call). Resolves true when this call made them available (the caller re-draws),
+ * false when nothing was needed or the load failed (fxDrawingsPending stays true then). Never rejects.
+ */
+export const ensureFxDrawings = (page: Page | null | undefined): Promise<boolean> => {
+  if (!fxDrawingsPending(page) || !loadFx) return Promise.resolve(false);
+  if (!fxLoading) {
+    fxLoading = loadFx().then(
+      () => {
+        fxLoaded = true;
+        return true;
+      },
+      () => {
+        fxLoading = undefined;
+        return false;
+      }
+    );
+  }
+  return fxLoading;
+};
+
 /** Where the pictures come from. */
 export interface ComposeResolve {
   /** The page's current drawing (the variant picked for this size). Every piece that shows it uses this ONE URL. */
   rasterUrl?: string;
-  /** A storage path's URL: frame sources (another take, an image) and image overlays. */
-  urlForPath?: (path: string) => string | undefined;
+  /**
+   * A storage path's URL: frame sources (another take, an image; asked without a width, they are drawn enlarged) and
+   * image overlays (asked with `widthPx`, the width in px the whole picture is drawn at, when the page's is known).
+   */
+  urlForPath?: (path: string, widthPx?: number) => string | undefined;
   /** A library sticker's URL (default: the same-origin file, libAssetUrl). */
   libUrl?: (ref: AssetLibRef) => string | undefined;
+  /** The page's drawn width in px (screen CSS px, or the export canvas): sizes the overlay pictures it asks for. */
+  widthPx?: number;
 }
 
 export interface ComposeSceneOptions extends ComposeOptions {
@@ -132,15 +185,17 @@ const place = (url: string, src: { x: number; y: number; w: number; h: number },
 const layerContent = (layer: PageLayer, rect: UnitRect, resolve: ComposeResolve, missing: string[]): LayerContent | undefined => {
   if (layer.kind === 'image') {
     const src = layer.src;
+    const crop = src?.crop && src.crop.w > 0 && src.crop.h > 0 ? src.crop : { x: 0, y: 0, w: 1, h: 1 };
+    const cropped = !(crop.x === 0 && crop.y === 0 && crop.w === 1 && crop.h === 1);
     let url: string | undefined;
     if (src?.lib) url = (resolve.libUrl ?? libAssetUrl)(src.lib);
     else if (src?.path) {
-      url = resolve.urlForPath?.(src.path);
+      // The whole picture is drawn rect.w / crop.w wide: ask for a picture that size (a variant), not the original.
+      const widthPx = resolve.widthPx && resolve.widthPx > 0 ? Math.max(1, Math.ceil((rect.w / crop.w / COMPOSE_UNIT) * resolve.widthPx)) : undefined;
+      url = widthPx ? resolve.urlForPath?.(src.path, widthPx) : resolve.urlForPath?.(src.path);
       if (!url && !missing.includes(src.path)) missing.push(src.path);
     }
     if (!url) return undefined;
-    const crop = src?.crop && src.crop.w > 0 && src.crop.h > 0 ? src.crop : { x: 0, y: 0, w: 1, h: 1 };
-    const cropped = !(crop.x === 0 && crop.y === 0 && crop.w === 1 && crop.h === 1);
     return { t: 'image', image: place(url, crop, rect), crop: cropped };
   }
   if (layer.kind === 'shape' && layer.shape) {

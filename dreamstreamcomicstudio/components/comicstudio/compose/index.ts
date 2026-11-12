@@ -7,6 +7,8 @@
 //   readers or exports; a page without Pro or Ship 2 data does not compose, so every renderer takes its old path.
 // - ComposeLayer.tsx: the tree as React SVG (board/ComposedArt.tsx mounts it inside ComicPageView).
 // - composeCanvas.ts: the same tree on a canvas (export/rasterize.ts).
+// - Effect drawings load lazily (pageNodes.ts setFxLoader / ensureFxDrawings, the PE-FX seam): ComicPageView re-draws
+//   once they arrive; every export and the print document wait for them before drawing a page that holds an effect.
 //
 // Every Pro edit is free software: this folder never imports editActionFor and never calls studio.act
 // (proEdit.contract.test.ts scans it). Nothing here writes an op.
@@ -19,8 +21,12 @@ export {
   composeScene,
   composeSceneIfAny,
   composeSvgNodes,
+  ensureFxDrawings,
+  fxDrawingsPending,
   pageComposes,
+  setFxLoader,
   type ComposeNode,
+  type FxLoader,
   type ComposeResolve,
   type ComposeScene,
   type ComposeSceneOptions,

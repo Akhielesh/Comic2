@@ -4,12 +4,13 @@
 import React from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fireEvent, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PANEL_BORDER_STYLES } from '../../../shared/comic/doc';
 import { EDITOR_LIMITS } from '../../../shared/comic/limits';
 import { libAssetUrl } from '../../../shared/comic/assets/index';
-import { borderMarks, composePage, pageComposes, rectPathD, seedOf } from '../../../shared/comic/panelize/compose';
+import { borderMarks, composePage, framePathD, pageComposes, rectPathD, seedOf } from '../../../shared/comic/panelize/compose';
+import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { frameAffine } from '../../../shared/comic/panelize/space';
 import { framesShown } from '../../../shared/comic/editor/scene';
 import { ComicPageView } from '../board/ComicPageView';
@@ -17,7 +18,7 @@ import { fakeUrlFor } from '../board/__fixtures__/sampleDoc';
 import { makeQaDoc, QA_FIXTURES } from '../testing/qaFixtures';
 import { composeScene, composeSvgNodes } from './pageNodes';
 import { part } from './index';
-import { fakePathUrl, framedDoc, LAYERS, layeredDoc, OTHER_PATHS, TAKE_PATH } from './__fixtures__/composeDocs';
+import { fakePathUrl, framedDoc, LAYERS, layeredDoc, OTHER_PATHS, PHOTO_PATH, TAKE_PATH } from './__fixtures__/composeDocs';
 
 const RASTER_URL = (doc: ReturnType<typeof framedDoc>) => fakeUrlFor(doc.pages[0].render.asset)!;
 
@@ -172,7 +173,7 @@ describe('composePage: one page node tree (shared/comic/panelize/compose.ts)', (
 });
 
 describe('the page node tree (compose/pageNodes.ts)', () => {
-  it('panels mode: N pieces with ONE image URL; extra pictures resolve through urlForPath, at most 3 distinct per page', () => {
+  it('panels mode: N pieces with ONE image URL; frame pictures resolve through urlForPath, at most 3 distinct per page (overlays are bounded by layersPerPage)', () => {
     const doc = framedDoc();
     const url = RASTER_URL(doc);
     const scene = composeScene(doc, doc.pages[0], { resolve: { rasterUrl: url, urlForPath: fakePathUrl } });
@@ -226,7 +227,7 @@ describe('ComicPageView composes a page from the node tree', () => {
     expect(container.querySelectorAll('[data-testid="balloon"]').length).toBeGreaterThan(0);
   });
 
-  it('panels mode: at most 3 distinct picture URLs per page, other takes through urlForPath', () => {
+  it('panels mode: the frames use at most 3 distinct picture URLs per page, other takes through urlForPath', () => {
     const doc = framedDoc((page) => {
       page.panels.push({ ...page.panels[2], id: 'pg_1_p4', n: 4, lines: [], frame: { box: { x: 0.5, y: 0.8, w: 0.4, h: 0.15 } } });
       page.render.cuts!.cuts.push({ panelId: 'pg_1_p4', drawn: 4, box: { x: 0.5, y: 0.8, w: 0.4, h: 0.15 }, conf: 1 });
@@ -295,6 +296,157 @@ describe('ComicPageView composes a page from the node tree', () => {
   });
 });
 
+describe('ComicPageView: what a composed page fetches, and when', () => {
+  const art = (c: HTMLElement) => c.querySelector('[data-testid="composed-art"], [data-testid="composed-overlays"]');
+  const hrefs = (c: HTMLElement) => [...c.querySelectorAll('[data-testid="composed-art"] image, [data-testid="composed-overlays"] image')].map((i) => i.getAttribute('href'));
+
+  it('a frame picture or an overlay that fails to load leaves the drawing in place (never the page’s error)', () => {
+    const doc = framedDoc((page) => {
+      page.panels[1].frame = { ...page.panels[1].frame!, src: { path: TAKE_PATH } };
+      page.layers = [LAYERS.image];
+    });
+    const onImageError = vi.fn();
+    const { container } = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={fakePathUrl} onImageError={onImageError} />);
+    fireEvent.error(container.querySelector(`image[href="${fakePathUrl(TAKE_PATH)}"]`)!);
+    fireEvent.error(container.querySelector(`image[href="${fakePathUrl(PHOTO_PATH)}"]`)!);
+    expect(container.querySelector('[data-testid="composed-art"]')).not.toBeNull();
+    expect(onImageError).not.toHaveBeenCalled();
+    expect(hrefs(container)).toContain(RASTER_URL(doc));
+  });
+
+  it('page mode: an overlay kept in a panel is clipped to that panel’s box on the drawing', () => {
+    const doc = layeredDoc([{ ...LAYERS.shape, clip: 'pg_1_p1' }]);
+    const page = doc.pages[0];
+    const { container } = render(<ComicPageView doc={doc} page={page} imageUrl={fakeUrlFor(page.render.asset)} />);
+    const g = container.querySelector('g[data-layer-id="ly_box"]')!;
+    const id = /url\(#(.+)\)/.exec(g.getAttribute('clip-path') || '')![1];
+    const box = panelBoxesFor(doc, page)[0];
+    const r4 = (n: number) => Math.round(n * 10000) / 10000;
+    const aspect = composePage(doc, page).aspect;
+    expect(container.querySelector(`[id="${id}"] path`)!.getAttribute('d')).toBe(framePathD({ x: r4(box.x), y: r4(box.y), w: r4(box.w), h: r4(box.h) }, 0, aspect));
+  });
+
+  it('an image overlay is asked for at the width it is drawn (a variant), frame pictures at full size', () => {
+    const doc = framedDoc((page) => {
+      page.panels[1].frame = { ...page.panels[1].frame!, src: { path: TAKE_PATH } };
+      page.layers = [LAYERS.image];
+    });
+    const urlForPath = vi.fn((path: string, widthPx?: number) => `${fakePathUrl(path)}${widthPx ? `?w=${widthPx}` : ''}`);
+    const original = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = () => ({ width: 300, height: 450, x: 0, y: 0, top: 0, left: 0, right: 300, bottom: 450, toJSON: () => ({}) }) as DOMRect;
+    try {
+      const { container } = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={urlForPath} />);
+      // The photo is 0.3 of the page wide, showing 0.8 of its picture: the whole picture is 300 × 0.3 / 0.8 px.
+      expect(urlForPath).toHaveBeenLastCalledWith(PHOTO_PATH, Math.ceil((300 * 0.3) / 0.8));
+      expect(urlForPath).toHaveBeenCalledWith(TAKE_PATH);
+      expect(hrefs(container)).toContain(`${fakePathUrl(PHOTO_PATH)}?w=113`);
+    } finally {
+      Element.prototype.getBoundingClientRect = original;
+    }
+  });
+
+  describe('loading="lazy" holds a composed page’s pictures until it is near the screen', () => {
+    type Rec = { cb: IntersectionObserverCallback; targets: Element[]; options?: IntersectionObserverInit; off: boolean };
+    const observers: Rec[] = [];
+    class FakeObserver {
+      private rec: Rec;
+      constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.rec = { cb, targets: [], options, off: false };
+        observers.push(this.rec);
+      }
+      observe(el: Element) {
+        this.rec.targets.push(el);
+      }
+      unobserve() {}
+      disconnect() {
+        this.rec.off = true;
+      }
+      takeRecords() {
+        return [];
+      }
+    }
+    const fire = (rec: Rec, isIntersecting: boolean) =>
+      act(() => rec.cb([{ isIntersecting, target: rec.targets[0] } as IntersectionObserverEntry], {} as IntersectionObserver));
+    beforeEach(() => {
+      observers.length = 0;
+      vi.stubGlobal('IntersectionObserver', FakeObserver);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('panels mode: no <image href> until the observer fires (one viewport ahead), then the drawing; eager at once', () => {
+      const doc = framedDoc((page) => (page.panels[1].frame = { ...page.panels[1].frame!, src: { path: TAKE_PATH } }));
+      const lazy = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={fakePathUrl} loading="lazy" />);
+      expect(art(lazy.container)).not.toBeNull();
+      expect(hrefs(lazy.container)).toEqual([]);
+      // The frames and their borders are there, waiting.
+      expect(lazy.container.querySelectorAll('g[data-panel-id]')).toHaveLength(3);
+      expect(observers).toHaveLength(1);
+      expect(observers[0].options?.rootMargin).toBe('100%');
+      expect(observers[0].targets[0].getAttribute('data-testid')).toBe('comic-page');
+      fire(observers[0], false);
+      expect(hrefs(lazy.container)).toEqual([]);
+      fire(observers[0], true);
+      expect(new Set(hrefs(lazy.container))).toEqual(new Set([RASTER_URL(doc), fakePathUrl(TAKE_PATH)]));
+      expect(observers[0].off).toBe(true);
+      lazy.unmount();
+
+      const eager = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={fakePathUrl} loading="eager" />);
+      expect(new Set(hrefs(eager.container))).toEqual(new Set([RASTER_URL(doc), fakePathUrl(TAKE_PATH)]));
+      expect(observers).toHaveLength(1);
+    });
+
+    it('page mode: overlay pictures wait with the lazy <img>; a page without frames or overlays never observes', () => {
+      const doc = layeredDoc([LAYERS.image, LAYERS.sticker, LAYERS.shape]);
+      const page = doc.pages[0];
+      const lazy = render(<ComicPageView doc={doc} page={page} imageUrl={fakeUrlFor(page.render.asset)} urlForPath={fakePathUrl} />);
+      expect(lazy.container.querySelector('img')!.getAttribute('loading')).toBe('lazy');
+      expect(hrefs(lazy.container)).toEqual([]);
+      expect(lazy.container.querySelector('g[data-layer-id="ly_box"] path')).not.toBeNull();
+      fire(observers[0], true);
+      expect(hrefs(lazy.container)).toEqual([fakePathUrl(PHOTO_PATH), libAssetUrl(LAYERS.sticker.src!.lib!)]);
+      lazy.unmount();
+      observers.length = 0;
+      const legacy = makeQaDoc('heist-12p');
+      render(<ComicPageView doc={legacy} page={legacy.pages[1]} imageUrl={fakeUrlFor(legacy.pages[1].render.asset)} />);
+      expect(observers).toHaveLength(0);
+    });
+  });
+
+  describe('each other picture is judged on its own safety verdict', () => {
+    const rated = () =>
+      framedDoc((page) => {
+        page.panels[1].frame = { ...page.panels[1].frame!, src: { path: TAKE_PATH } };
+        page.panels[2].frame = { ...page.panels[2].frame!, src: { path: OTHER_PATHS[0] } };
+        page.render.history = [
+          ...(page.render.history || []),
+          { path: TAKE_PATH, source: 'generated', at: 1, w: 1000, h: 1500, safety: { assessed: 'PG-13', at: 1 } },
+          { path: OTHER_PATHS[0], source: 'upload', at: 1, w: 1000, h: 1000, safety: { quarantined: true, at: 1 } }
+        ];
+      });
+
+    it('a frame picture rated above the comic veils the page (as it would on its own); a blocked one is never asked for', () => {
+      const doc = rated();
+      const urlForPath = vi.fn(fakePathUrl);
+      const { container } = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={urlForPath} safety={{ rating: 'G' }} />);
+      expect(container.querySelector('[data-safety="over_rating"]')).not.toBeNull();
+      expect(container.textContent).toContain('Rated PG-13 — your comic is G');
+      expect(urlForPath).not.toHaveBeenCalledWith(OTHER_PATHS[0], expect.anything());
+      expect(urlForPath.mock.calls.map((c) => c[0])).not.toContain(OTHER_PATHS[0]);
+      expect(container.querySelector('g[data-panel-id="pg_1_p3"]')!.getAttribute('data-empty')).toBe('blank');
+    });
+
+    it('within the rating nothing is veiled; without `safety` the blocked picture is still left out', () => {
+      const doc = rated();
+      const ok = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={fakePathUrl} safety={{ rating: 'PG-13' }} />);
+      expect(ok.container.querySelector('[data-safety]')).toBeNull();
+      ok.unmount();
+      const plain = render(<ComicPageView doc={doc} page={doc.pages[0]} imageUrl={RASTER_URL(doc)} urlForPath={fakePathUrl} />);
+      expect(hrefs(plain.container)).not.toContain(fakePathUrl(OTHER_PATHS[0]));
+      expect(hrefs(plain.container)).toContain(fakePathUrl(TAKE_PATH));
+    });
+  });
+});
+
 describe('the compose part', () => {
   it('is ready (PE-COMPOSE built it) and the compose code never imports editActionFor nor calls studio.act', () => {
     expect(part).toEqual({ id: 'compose', ready: true });
@@ -310,8 +462,9 @@ describe('the compose part', () => {
       const src = readFileSync(file, 'utf8').replace(/\/\/.*$/gm, '');
       expect(src, file).not.toMatch(/\beditActionFor\b/);
       expect(src, file).not.toMatch(/\bstudio\s*\.\s*act\b|\{\s*[^}]*\bact\b[^}]*\}\s*=\s*studio/);
-      // Generators load through the registry seam only (collisions B-7).
-      expect(src, file).not.toMatch(/fx\/(generators|lines|bursts|emanata|atmosphere|borders|seed)['".]/);
+      // Generators load through the registry seam and the lazy loader only (collisions B-7): never a static import (a
+      // dynamic import() of the generators module, which the effect loader may use, is its own chunk).
+      expect(src, file).not.toMatch(/(?:\bfrom\s*|\bimport\s+)['"][^'"]*fx\/(generators|lines|bursts|emanata|atmosphere|borders|seed|draw)(?:\.js)?['"]/);
     }
   });
 });

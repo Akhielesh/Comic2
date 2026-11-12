@@ -7,13 +7,15 @@
 //     an image (drawImage of its crop onto its box), a shape (fill then stroke of its path) or an effect (renderFx's
 //     nodes under translate(box) scale(box)). Opacity and blend composite the layer ONCE, like the SVG group: a layer
 //     with more than one draw call is drawn into an offscreen layer, then drawn with globalAlpha and
-//     globalCompositeOperation ('multiply' | 'screen' | 'overlay'); a single draw call gets them directly.
+//     globalCompositeOperation ('multiply' | 'screen' | 'overlay'); a single draw call gets them directly. The page's
+//     grouped layers share ONE offscreen buffer (a LayerPool, sized for the largest of them and cleared between
+//     layers), so 24 translucent overlays never allocate 24 page-sized canvases.
 // Pictures must be loaded first (ComposeImage by URL); one that is missing is left out, never a crash. The lettering is
 // drawn after this by canvasDraw.ts (PE-LETTER's renderer), always on top.
 
 import type { FxNode } from '../../../shared/comic/fx/types';
 import { COMPOSE_UNIT, rectPathD, type BorderMark, type UnitRect } from '../../../shared/comic/panelize/compose';
-import { defaultLayerFactory, type LayerFactory, type PathFactory } from '../export/canvasDraw';
+import { defaultLayerFactory, type CanvasLayer, type LayerFactory, type LayerPool, type PathFactory } from '../export/canvasDraw';
 import type { ComposeNode, ComposeScene, LayerContent } from './pageNodes';
 
 /** A loaded picture. */
@@ -28,6 +30,17 @@ export interface ComposeCanvasOptions {
   images: ReadonlyMap<string, ComposeImage>;
   makePath?: PathFactory;
   createLayer?: LayerFactory;
+  /** Offscreen buffers to reuse (default: one pool for this call, i.e. for the page). */
+  pool?: LayerPool;
+}
+
+type LayerNode = Extract<ComposeNode, { k: 'layer' }>;
+
+/** The offscreen extent of a grouped layer: page-unit bounds and its size in px. */
+interface Extent {
+  b: UnitRect;
+  lw: number;
+  lh: number;
 }
 
 const defaultPath: PathFactory = (d) => new Path2D(d);
@@ -136,20 +149,41 @@ const boundsOf = (rect: UnitRect, m: [number, number, number, number, number, nu
   return { x, y, w: Math.max(...xs) + pad - x, h: Math.max(...ys) + pad - y };
 };
 
-const drawLayer = (ctx: CanvasRenderingContext2D, node: Extract<ComposeNode, { k: 'layer' }>, opts: ComposeCanvasOptions, path: PathFactory, sx: number, sy: number) => {
+/** A layer composites through an offscreen buffer: translucent or blended, and more than one draw call. */
+const isGrouped = (node: LayerNode): boolean => !!node.content && (node.opacity < 1 || !!node.blend) && drawCalls(node.content) > 1;
+
+const extentOf = (node: LayerNode, sx: number, sy: number): Extent => {
+  const pad = node.content?.t === 'shape' ? (node.content.strokeW ?? 0) + 2 : 2;
+  const b = boundsOf(node.rect, node.matrix, pad);
+  return { b, lw: Math.max(1, Math.ceil(b.w * sx)), lh: Math.max(1, Math.ceil(b.h * sy)) };
+};
+
+/** A free pooled buffer at least w × h px; the first one is made at `size` (the page's largest grouped layer). */
+const acquire = (pool: LayerPool, create: LayerFactory, w: number, h: number, size: { w: number; h: number }): CanvasLayer | null => {
+  const fit = pool.find((s) => !s.busy && s.layer.canvas.width >= w && s.layer.canvas.height >= h);
+  if (fit) {
+    fit.busy = true;
+    return fit.layer;
+  }
+  const layer = create(Math.max(w, size.w), Math.max(h, size.h));
+  if (!layer) return null;
+  pool.push({ layer, busy: true });
+  return layer;
+};
+
+const drawLayer = (ctx: CanvasRenderingContext2D, node: LayerNode, opts: ComposeCanvasOptions, path: PathFactory, sx: number, sy: number, env: { pool: LayerPool; size: { w: number; h: number } }) => {
   const content = node.content;
   if (!content) return;
   ctx.save();
   if (node.clipD) ctx.clip(path(node.clipD));
-  const grouped = (node.opacity < 1 || !!node.blend) && drawCalls(content) > 1;
-  if (grouped) {
-    const pad = content.t === 'shape' ? (content.strokeW ?? 0) + 2 : 2;
-    const b = boundsOf(node.rect, node.matrix, pad);
-    const lw = Math.max(1, Math.ceil(b.w * sx));
-    const lh = Math.max(1, Math.ceil(b.h * sy));
-    const layer = (opts.createLayer ?? defaultLayerFactory)(lw, lh);
+  if (isGrouped(node)) {
+    const { b, lw, lh } = extentOf(node, sx, sy);
+    const layer = acquire(env.pool, opts.createLayer ?? defaultLayerFactory, lw, lh, env.size);
     if (layer) {
       const lctx = layer.ctx;
+      // A reused buffer: clear what this layer reads (identity transform), then draw it in page units.
+      lctx.setTransform(1, 0, 0, 1, 0, 0);
+      lctx.clearRect(0, 0, lw, lh);
       lctx.save();
       lctx.scale(sx, sy);
       lctx.translate(-b.x, -b.y);
@@ -158,7 +192,10 @@ const drawLayer = (ctx: CanvasRenderingContext2D, node: Extract<ComposeNode, { k
       lctx.restore();
       if (node.opacity < 1) ctx.globalAlpha = node.opacity;
       if (node.blend) ctx.globalCompositeOperation = node.blend;
-      ctx.drawImage(layer.canvas, b.x, b.y, lw / sx, lh / sy);
+      // Only the part this layer drew (the buffer may be larger).
+      ctx.drawImage(layer.canvas, 0, 0, lw, lh, b.x, b.y, lw / sx, lh / sy);
+      const slot = env.pool.find((s) => s.layer === layer);
+      if (slot) slot.busy = false;
       ctx.restore();
       return;
     }
@@ -178,6 +215,15 @@ export function drawComposeScene(ctx: CanvasRenderingContext2D, scene: ComposeSc
   const path = opts.makePath ?? defaultPath;
   const sx = widthPx / COMPOSE_UNIT;
   const sy = heightPx / scene.H;
+  // One offscreen buffer for every grouped layer of the page: made once, at the largest of them.
+  const size = { w: 1, h: 1 };
+  for (const node of scene.nodes) {
+    if (node.k !== 'layer' || !isGrouped(node)) continue;
+    const e = extentOf(node, sx, sy);
+    size.w = Math.max(size.w, e.lw);
+    size.h = Math.max(size.h, e.lh);
+  }
+  const env = { pool: opts.pool ?? [], size };
   ctx.save();
   ctx.scale(sx, sy);
   for (const node of scene.nodes) {
@@ -198,7 +244,7 @@ export function drawComposeScene(ctx: CanvasRenderingContext2D, scene: ComposeSc
       for (const m of node.marks) drawMark(ctx, m, path);
       continue;
     }
-    drawLayer(ctx, node, opts, path, sx, sy);
+    drawLayer(ctx, node, opts, path, sx, sy, env);
   }
   ctx.restore();
 }

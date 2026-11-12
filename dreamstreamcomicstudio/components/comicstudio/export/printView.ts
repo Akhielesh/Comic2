@@ -12,7 +12,9 @@
 // A page that composes (shown in its panel frames, or carrying overlays) gets ONE more inline SVG drawn from the page
 // node tree (compose/pageNodes.ts, the tree the board draws): in panels mode it replaces the <img> (paper, frames,
 // borders, overlays); in page mode it holds the overlays over the <img>. Guide-only overlays never print. Every other
-// page is written exactly as before (compose/legacyGolden.test.tsx).
+// page is written exactly as before (compose/legacyGolden.test.tsx). A picture whose link isn't signed yet is left
+// out and said so in the bar's "Not included" list (and PrintResult.skipped); the effect drawings load before the
+// document is written.
 
 import type { ComicDoc, Page } from '../../../shared/comic/doc';
 import { estimateMeasure, planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
@@ -21,7 +23,7 @@ import type { FontId } from '../../../shared/comic/lettering/style';
 import { dirOf } from '../../../shared/comic/languages';
 import { libAssetUrl } from '../../../shared/comic/assets/index';
 import { pageComposes } from '../../../shared/comic/panelize/compose';
-import { composeScene, composeSvgNodes } from '../compose/pageNodes';
+import { composeScene, composeSvgNodes, ensureFxDrawings, fxDrawingsPending } from '../compose/pageNodes';
 import { fontFaceCss } from '../lettering/fontLoader';
 import { letteringSvgMarkup, nodesToMarkup } from '../lettering/svgMarkup';
 import { plateLayout, type PlateKind } from '../timeline/plates';
@@ -117,26 +119,52 @@ const printFontIds = (doc: ComicDoc): FontId[] => {
   return [...ids];
 };
 
-/**
- * The composed page's SVG (frames and/or overlays) for a print sheet, or '' for a page that does not compose. Every
- * picture URL is checked (safeImageUrl); stickers resolve against the opener's origin (the print window is blank).
- */
-const composedMarkup = (doc: ComicDoc, page: Page, rasterUrl: string | undefined, label: string, i: number, opts: PrintHtmlOptions, origin: string): { markup: string; framed: boolean } => {
-  if (!pageComposes(page)) return { markup: '', framed: false };
-  const scene = composeScene(doc, page, {
+/** The sheet's note in the "Not included" list when a picture on its composed page had no link yet. */
+export const pictureLeftOutNote = (label: string): string => `${label} (a picture wasn’t ready — it’s left out)`;
+/** The sheet's note when its effects' drawings couldn't be loaded. */
+export const effectsLeftOutNote = (label: string): string => `${label} (its effects weren’t ready — they’re left out)`;
+
+const printScene = (doc: ComicDoc, page: Page, rasterUrl: string | undefined, opts: Pick<PrintHtmlOptions, 'urlFor'>, origin: string) =>
+  composeScene(doc, page, {
     resolve: {
       rasterUrl,
       urlForPath: (path) => safeImageUrl(opts.urlFor?.(path)),
       libUrl: (ref) => (origin ? safeImageUrl(`${origin}${libAssetUrl(ref)}`) : undefined)
     }
   });
+
+/**
+ * The composed page's SVG (frames and/or overlays) for a print sheet, or '' for a page that does not compose. Every
+ * picture URL is checked (safeImageUrl); stickers resolve against the opener's origin (the print window is blank).
+ * `missing`: a picture had no URL, so the sheet prints without it (a blank frame, no overlay).
+ */
+const composedMarkup = (
+  doc: ComicDoc,
+  page: Page,
+  rasterUrl: string | undefined,
+  label: string,
+  i: number,
+  opts: PrintHtmlOptions,
+  origin: string
+): { markup: string; framed: boolean; missing: boolean } => {
+  if (!pageComposes(page)) return { markup: '', framed: false, missing: false };
+  const scene = printScene(doc, page, rasterUrl, opts, origin);
   const framed = scene.mode === 'panels';
   const a11y = framed ? ` role="img" aria-label="${escapeHtml(label)}"` : ' aria-hidden="true"';
   const body = nodesToMarkup(composeSvgNodes(scene, `cp${i}`));
   return {
     framed,
+    missing: scene.missing.length > 0,
     markup: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 ${scene.H}" preserveAspectRatio="none" data-compose="${scene.mode}" style="overflow:hidden"${a11y}>${body}</svg>`
   };
+};
+
+/** Notes for the sheets that print without a picture (no link yet), in sheet order: what buildPrintHtml lists. */
+export const printPicturesNotReady = (doc: ComicDoc, sheets: readonly PrintSheet[], opts: Pick<PrintHtmlOptions, 'urlFor' | 'origin'> = {}): string[] => {
+  const origin = opts.origin ?? (typeof location !== 'undefined' ? location.origin : '');
+  return sheets
+    .filter((s) => s.kind === 'page' && s.page && pageComposes(s.page) && printScene(doc, s.page, safeImageUrl(s.imageUrl), opts, origin).missing.length > 0)
+    .map((s) => pictureLeftOutNote(s.label));
 };
 
 /** Lettering plans for a page sheet (overlay comics only). */
@@ -179,6 +207,7 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a
   .bar { display: none; }
   .sheet { margin: 0; box-shadow: none; zoom: 1 !important; }
 }`;
+  const leftOut = [...(opts.skipped ?? [])];
   const body = sheets
     .map((s, i) => {
       const label = escapeHtml(s.label);
@@ -198,12 +227,13 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a
         lettering = coverTitleSvgMarkup(doc, s.aspect, measure);
       }
       const coverText = s.kind === 'cover' ? coverTitleText(doc, s.aspect, measure) : '';
-      const composed = s.kind === 'page' && s.page ? composedMarkup(doc, s.page, url, alt, i, opts, origin) : { markup: '', framed: false };
+      const composed = s.kind === 'page' && s.page ? composedMarkup(doc, s.page, url, alt, i, opts, origin) : { markup: '', framed: false, missing: false };
+      if (composed.missing && !leftOut.includes(pictureLeftOutNote(s.label))) leftOut.push(pictureLeftOutNote(s.label));
       const img = url && !composed.framed ? `<img src="${escapeHtml(url)}" alt="${escapeHtml(coverText ? `${alt}: ${coverText}` : alt)}">` : '';
       return `<section class="sheet" data-kind="${s.kind}" data-label="${label}"><div class="frame"><div class="page" data-aspect="${round3(s.aspect)}" data-key="${escapeHtml(s.key)}" style="width:${box.w}in;height:${box.h}in">${img}${composed.markup}${lettering}</div></div></section>`;
     })
     .join('\n');
-  const skipped = opts.skipped?.length ? `<span class="muted">Not included: ${escapeHtml(opts.skipped.join(', '))}</span>` : '';
+  const skipped = leftOut.length ? `<span class="muted">Not included: ${escapeHtml(leftOut.join(', '))}</span>` : '';
   return `<!doctype html>
 <html lang="${escapeHtml(lang)}" dir="${dir}">
 <head>
@@ -386,6 +416,14 @@ export async function openPrintView(doc: ComicDoc, urlFor: UrlFor, opts: OpenPri
   }
   const fonts = opts.measure ? null : await prepareExportFonts([book]);
   const measure = opts.measure ?? fonts!.measure;
+  // Effects draw from drawings that load lazily: load them before the document is written; a page whose effects still
+  // can't be drawn prints without them, and says so.
+  const pages = sheets.filter((s): s is PrintSheet & { page: Page } => s.kind === 'page' && !!s.page);
+  await Promise.all(pages.map((s) => ensureFxDrawings(s.page)));
+  const effectsLeftOut = pages.filter((s) => fxDrawingsPending(s.page)).map((s) => effectsLeftOutNote(s.label));
+  // A picture whose link isn't signed yet is left out of its sheet, and listed (it arrives on its own: try again soon).
+  const picturesLeftOut = printPicturesNotReady(book, sheets, { urlFor });
+  skipped.push(...picturesLeftOut, ...effectsLeftOut);
   const status = (text: string) => {
     const el = win.document.getElementById('cs-status');
     if (el) el.textContent = text;
@@ -408,6 +446,7 @@ export async function openPrintView(doc: ComicDoc, urlFor: UrlFor, opts: OpenPri
   win.document.getElementById('cs-print')?.addEventListener('click', () => win.print());
   const notes: string[] = [];
   if (failedImages.length) notes.push(`Some images didn’t load (${failedImages.join(', ')}) — their links may have expired. Close this tab and print again.`);
+  if (picturesLeftOut.length || effectsLeftOut.length) notes.push('Some pictures weren’t ready and are left out (see “Not included”). Try again in a moment.');
   if (fonts?.notice) notes.push(fonts.notice);
   status(notes.length ? notes.join(' ') : 'Ready. In the print dialog choose “Save as PDF” to keep a PDF.');
   try {

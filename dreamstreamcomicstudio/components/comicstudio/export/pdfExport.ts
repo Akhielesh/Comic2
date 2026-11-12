@@ -17,7 +17,7 @@ import { forEachReported, plateWidthFor, renderSlotWith, checkCancelled, type Sl
 import { ExportError } from './errors';
 import { exportFileStem, safeLangCode } from './filenames';
 import { prepareExportFonts } from './fonts';
-import type { RasterOptions } from './rasterize';
+import { pathUrlFor, type RasterOptions } from './rasterize';
 import { collectExportSlots, localizedFor, trimAspectOf, uniformTrimOf, type ExportSlot } from './sequence';
 import { blobBytes, type ExportProgress, type UrlFor } from './zipExport';
 
@@ -103,8 +103,8 @@ export async function exportComicPdf(doc: ComicDoc, urlFor: UrlFor, opts: PdfExp
     quality: opts.quality ?? 0.9,
     measure: fonts?.measure,
     plateWidth: plateWidthFor(targets),
-    // A composed page's other pictures (frame sources, image overlays).
-    urlForPath: (path) => urlFor(path)
+    // A composed page's other pictures (frame sources, image overlays at their drawn width).
+    urlForPath: pathUrlFor(urlFor)
   };
   const coverUrl = targets.find((t) => t.kind === 'cover')?.url;
   let pages = 0;

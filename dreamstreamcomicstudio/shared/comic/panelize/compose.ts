@@ -99,7 +99,11 @@ export interface PageComposition {
   items: ComposeItem[];
   pieces: ComposePiece[];
   overlays: ComposeOverlay[];
-  /** Distinct pictures the frames show, the page's drawing first: at most 1 + EDITOR_LIMITS.sourcesPerPage. */
+  /**
+   * Distinct pictures the FRAMES show, the page's drawing first: at most 1 + EDITOR_LIMITS.sourcesPerPage (the
+   * sanitizer's extraSources rule). Image overlays are not counted here: each brings its own picture, bounded by
+   * EDITOR_LIMITS.layersPerPage.
+   */
   paths: string[];
 }
 
