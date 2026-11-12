@@ -1,10 +1,17 @@
-// Pro Edit motion (master plan §2.5). STUB with fixed export names (PE-0): the motion engine (PE-MOTION-ENGINE: beats,
-// easing, presets, sample, reduced, budget) adds its modules next to this file and re-exports them here.
+// Pro Edit motion (master plan §2.5). The stored shape (types.ts, PE-0) and the pure motion engine (PE-MOTION-ENGINE):
+// reading beats (beats.ts), easing, the presets and their param schemas, the evaluator (sample.ts sampleAt), the calm,
+// reduced and poster readings (reduced.ts) and the budgets PE-SERVER's sanitizer shares (budget.ts).
 //
-// What is final now: the stored shape (types.ts) and the label words below. The normalizer that keeps stored motion
-// valid is doc.ts normalizePageMotion; the ops are ops.ts `motion` / `page_motion` (behind PRO_EDIT_OPS_PATCHABLE).
+// The normalizer that keeps stored motion valid is doc.ts normalizePageMotion; the ops are ops.ts `motion` /
+// `page_motion` (behind PRO_EDIT_OPS_PATCHABLE). Nothing here writes ops.
 
 export * from './types.js';
+export * from './easing.js';
+export * from './beats.js';
+export * from './presets.js';
+export * from './budget.js';
+export * from './sample.js';
+export * from './reduced.js';
 import type { CameraMoveId, MotionPresetId } from './types.js';
 
 /** "Zoom punch", "Speed line scroll", "Pan left": a preset or camera move id in words (labels, undo, History). */
