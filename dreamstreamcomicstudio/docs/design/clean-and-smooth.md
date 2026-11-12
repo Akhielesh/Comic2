@@ -351,6 +351,8 @@ Lead decisions recorded here:
   Quality at desk too (ComicStudio.test.tsx 'the quality cut is 1024' still pins the header side).
 - **D20:** DC-1 #6 and #7 (ids on the header Share and History) are held, as in §2, because each would be the first
   rise in a desk C2 entry.
+- The page editor's flag-off snapshots (`board/PageEditor.flagOff.test.tsx`, PE-SHELL's pin of today's DOM) carry
+  DC-1's add-tile words: "Add page — a blank page", with no "free" (lead decision D7, a test edit forced by the merge).
 
 Still red in the loop, for their owners (new scenes the baseline does not list, so they are held to the targets and
 were not added): `app-ds-content` C3 depth 4 (DS-R1's content-kit scene: a ComicCard's chip inside the scene's own

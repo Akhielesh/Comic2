@@ -409,8 +409,8 @@ toolbar shares a skip delay, not at the App root (a Tooltip outside any provider
 of the first-load chunk (master plan §1.6 risk 6: `components/ds` adds at most 25 KB gz there): use them from surfaces that
 load lazily.
 
-**Not yet:** the AppHeader / NavRail / TabBar wrappers (DS-2); the creative editor kit (Program 2, promoted to
-`components/ds/creative` in DS-10).
+The shell primitives (AppHeader, TabBar, NavRail) landed with DS-2 ("Shell (DS-2)" below). **Not yet:** the creative
+editor kit (Program 2, promoted to `components/ds/creative` in DS-10).
 
 ### Deliberate deviations from Atlas
 
@@ -442,7 +442,9 @@ load lazily.
   under the header.
 - Tooltips wait 300 ms (Atlas's `--tooltip-delay`; its ui-generated Provider passes 0) and show on a long press on touch.
 - The Toast host ports GlobalNotificationBar onto the TOAST recipes instead of Radix Toast: one slot needs no queue or
-  swipe machinery (`@radix-ui/react-toast` is pinned by PE-FONTS and not imported).
+  swipe machinery (`@radix-ui/react-toast` is pinned by PE-FONTS and not imported; lead decision D19 at the S2b
+  integration keeps it pinned for now, so the lockfile does not churn mid-integration, and the next dependency pass drops
+  it).
 
 ### Motion classes and hooks (wave 9)
 
@@ -501,6 +503,30 @@ The rules:
   `markReachable()`); it never polls. One polite announcer for the whole app.
 - Amounts arrive formatted, and the kit never prints a currency.
 - The edge fades (`.ds-fade-edge-x/-y`) and every entrance stop under reduced motion in the one reduced-motion block.
+
+### Shell (DS-2)
+
+- **AppHeader** (`components/ds/AppHeader.tsx`): the `STICKY_HEADER` + `HEADER_GLASS` layer, `data-scrolled` from
+  `useScrolledPast(4)` (one read per frame). Brand · nav · actions on `HEADER_GRID` (min-h `--header-h`).
+  `AppHeaderSkeleton` paints the same header, `HEADER_INNER` and `HEADER_GRID` with Skeletons. Props: brand, nav,
+  actions, banner, children, scrolled, innerClassName. The site header (`components/layout/StaticSiteHeader.tsx`) is an
+  AppHeader.
+- **TabBar<Id extends string>** (`components/ds/TabBar.tsx`): flex-1 min-w-0 items at `--ds-density-touch`;
+  badge/badgeLabel; dot accent | amber | pulse (LiveDot); aria-disabled items say why in a role=status bubble for
+  `TAB_HINT_MS` on `Z.tooltip`; `navItemName` gives the item's spoken name. The bar is `--tabbar-h` + `--sa-bottom-eff`,
+  max 560 px centred, hidden under `html.kb-open`.
+- **NavRail<Id>** (`components/ds/NavRail.tsx`): `--rail-w` + `--sa-left`, optional leading Back `{label, onBack}`.
+- These are not wrappers over `mobile/shell/*`: the studio's `MobileTabBar` stays until v2 (it takes `navItemName`).
+- NotificationBell's panel is pinned to the viewport below sm (inset-x-4, its top `var(--bell-top)` = the bell's bottom
+  + 8 px, measured on open and on resize). From sm it hangs from the bell. It stops 1rem above the screen's bottom.
+- NavDropdown opens on hover for pointerType `'mouse'` only; touch and pen open it by tap. Both triggers are disclosures
+  (no aria-haspopup).
+- Overlays enter with `ds-scale-in` (280 ms) and the tab hint with `ds-fade-in`, never the 420 ms `ds-rise-in`.
+- **UserAvatar** (`components/UserAvatar.tsx`, DS-2 #6 at the S2b integration) is on the Atlas tokens: a hairline ring
+  on `--ds-well`, the initial in `MUTED`, the signed-in dot on `--ds-success`. An avatar with `onClick` (CommentSection)
+  is a real, named button.
+- The browser chrome colour and the first paint follow the Atlas paper (lead decision D8; `docs/design/atlas-skin.md`
+  changelog, S2b). The shell's Contact link is `CONTACT_HREF` = `mailto:${SUPPORT_EMAIL}` (lead decision D9).
 
 ## Guards and the ratchet (DS-0 owns the code)
 
@@ -564,7 +590,10 @@ and dark, with and without the Atlas skin: no overflow, no coarse target under 4
 The gallery shows every primitive in every variant and state in the page theme and, while the page is
 light, again in a dark panel. The overlays have their own scene, `qa/app/scenes/ds-overlays.tsx` (DS-1c): a trigger for
 each (they start closed, so an open modal never hides the page from the smoke), the Toast host and a static card in
-every status. The content kit has its own scene too, `qa/app/scenes/ds-content.tsx` (DS-R1). A new primitive is not done until the gallery shows it
+every status. The content kit has its own scene too, `qa/app/scenes/ds-content.tsx` (DS-R1). DS-3 (S2): the comics landing, the
+sign-in card, the tester invite, Project info and its image gallery, and the legacy share link's state views compose the
+DS primitives and recipes; their guard baselines are 0; QA scenes landing, auth, auth-signin, auth-access, shared. The app
+shell has the `shell` scene (DS-2). A new primitive is not done until the gallery shows it
 (`components/ds/gallery.test.tsx` checks every primitive is there).
 
 Clutter ratchet: `--project=declutter` (tests/e2e/declutter.spec.ts, baseline tests/e2e/baselines/declutter.json; 320,

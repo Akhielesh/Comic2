@@ -143,7 +143,8 @@ caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`), never env. `COMIC_
 publication snapshot and its fingerprint (`server/src/comic/publication/snapshot.ts` `readerMotionPublished`): page
 motion goes into a published snapshot, and counts as a change since publishing, only while it is `all`; turning it on
 shows comics with motion as changed until they are republished. Rolling back to `off` leaves motion in snapshots already
-published (readers gate playback). `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
+published (readers gate playback). Lead decision D2 (S2b integration): this gate stays as built, and
+`COMIC_READER_MOTION` stays `off` until PE-READER-MOTION (S4). `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
 take the stages above (`off` | `admins` | `all`, same synonyms; a bare `on` means admins only).
 `COMIC_READER_MOTION` is `off` | `all` only (`readerMotionStage`, lead decision S1).
 - A bare `on`, `true` or `1`, and `all` / `everyone` (any case, spaces ignored), turn it on for **everyone**.

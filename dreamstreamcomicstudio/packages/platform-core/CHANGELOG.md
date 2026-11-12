@@ -80,6 +80,8 @@ Tagged `platform-core-v1.0.0` after admin QA.
   --ds-info / --ds-info-text are now neutral (#525252 / #404040 light, #e5e5e5 dark). Atlas may consume
   DREAMSTREAM_SKIN / ATLAS_SKIN as package API (CL-0, S2a). Both skins also carry the art develop tokens
   (--ds-develop-light, --ds-develop-sheen; MO-1), another DreamStream extension.
+- Skins: `--ds-z-dialog: 88` in both skins (DS-1c, S2b), the dialog scrim's own step above the sheets (86) and under
+  the popover (90), so a confirm opened from a phone sheet is never under it. Additive; every other z step is unchanged.
 
 ### Governance (W1.4)
 

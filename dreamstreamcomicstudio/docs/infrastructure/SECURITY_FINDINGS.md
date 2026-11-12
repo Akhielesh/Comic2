@@ -47,6 +47,13 @@ policies (SEC-DS) 2026-11-05. **Companions:** `INFRA_MAP.md`,
   ADR 0006 WS-4).
 - **Typo'd duplicate bucket `comic-aasets`** — left untouched (may hold orphaned objects;
   never delete without verifying empty/backed up).
+- **Discover RPCs (`server/sql/comic_discovery.sql`, DS-R2) — written, NOT applied** (lead decision D12 at the S2b
+  integration). `comic_discover_list` and `comic_discover_shelves` are SECURITY DEFINER (`search_path = public`) and
+  granted EXECUTE to `anon`, so a direct anon RPC call bypasses the edge Worker's `PUBLIC_COMIC_RL` limiter and its 30 s
+  cache. Relative rank is visible by paging; no score or count is. A security review of these RPCs comes first, and the
+  file is applied with DS-R6 (S3) behind `DISCOVER_V2_STAGE`. Until then the edge route answers 503 calmly. Lead
+  decision D11: an `avatarUrl` is sent only from our own storage with no id in the URL, so no owner uid travels in a
+  byline (`docs/features/discovery.md` §2).
 
 ---
 
@@ -203,3 +210,4 @@ so a table without RLS is readable and writable by any client the moment it is c
 | 2026-11-05 | **Fixed (BK-0):** `POST /api/keys/validate` described the platform OpenRouter key to anyone and `GET /api/models/verify` showed platform-key telemetry to any signed-in user. Both now check only the caller's own keys; platform telemetry is admin-only. |
 | 2026-11-05 | **Fixed:** the platform OpenRouter key was sent to other vendors. `platformKeyFor()` fell back to it for any provider without its own platform key, and the public `GET /api/models/catalog` lists every direct provider's models on each request, so the OpenRouter secret went to OpenAI, Anthropic, DeepSeek, xAI, Z.AI, MiniMax and Tencent `/models` endpoints. A named provider now gets only its own platform key, or none (`server/src/ai/gateway.ts`; test `gateway.platformKey.test.ts`). The OpenRouter key should be rotated: those vendors received it in failed-auth requests. |
 | 2026-11-12 | **Fixed (C1b gap, not yet deployed):** every signed-in Chat Studio turn with memory on embedded its last user message (up to 8,000 characters) through the platform Gemini key to search long-term memory, on free and withheld turns too and ignoring `CONNECTOR_PROVIDERS_CONFIRMED`; that message can carry connected content (follow-up chips built from connected replies, pasted connected items). The query is now never embedded for a conversation that may carry connected content until `gemini` is confirmed, nor on any withheld turn of a user with (or maybe with) connections, whatever is confirmed: free turns, unconfirmed direct providers and the usage-budget free re-plan, which withholds a turn after it was prepared as paid (`runChatParams` derives that half from `connectorPrivacy`). Memory is found by word search and recency instead (`prepareChat` `memoryNoQueryEmbedding` and `runChatParams` → `services/userMemory.ts` `noQueryEmbedding`; the gate reuses the turn's own connection and provenance lookups; test `routes/chat.memoryQueryAndHelpers.test.ts`). Also: every chat helper (enhance, title, memory, auto-memory, memory import, follow-ups) sent the OpenRouter model slug to direct providers and failed silently; it now calls the provider's own default model (`helperModelFor`), the wave 0 helper gates unchanged, and `POST /api/chat/memory` receives the source the turn ran on from the client (`reqSource`; test `components/chat/AIChatPlatform.memorySource.test.tsx`). |
+| 2026-11-12 | S2b integration (`integ/s2b`, not deployed): the Discover RPCs are listed as deferred (D12: security review before they are applied, with DS-R6); Discover bylines never carry an owner uid (D11). One support address on DreamStream surfaces, `SUPPORT_EMAIL` (D9). |
