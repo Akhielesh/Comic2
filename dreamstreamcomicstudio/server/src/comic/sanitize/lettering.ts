@@ -19,7 +19,8 @@
 //   - Named styles (`letterStyle.named`, `Line.styleId`) count as Pro fields (lead decision C-9): with
 //     PRO_EDIT_OPS_PATCHABLE on, a letter_style `named` patch keeps at most PRO_LETTER_LIMITS.namedStyles styles with
 //     names of at most namedNameChars (a calm 400/409 otherwise); off, it is dropped as before. A line's styleId
-//     (lineStyleIdOf) is kept only when it names a saved style, or re-asserts the line's own.
+//     (lineStyleIdOf) is kept only with the switch on, when it names a saved style or re-asserts the line's own; off,
+//     it is dropped as before (the line op merges, so the stored one stays).
 
 import type { ComicDoc, Line, LineKind } from '../../../../shared/comic/doc.js';
 import { PRO_LETTER_LIMITS } from '../../../../shared/comic/limits.js';
@@ -119,16 +120,17 @@ const reassertedLetterPatch = (raw: Record<string, unknown>, client: LetteringSt
 // ── Named styles (Pro fields, lead decision C-9) ─────────────────────────────
 
 /**
- * A line's named style as a client may set it (`Line.styleId`), or undefined to drop it. `stored` is the line's own
- * styleId: re-sending it is a re-assert and is always kept. Otherwise only while PRO_EDIT_OPS_PATCHABLE is on: an id
- * that names a saved style (an own key of doc.letterStyle.named) is kept, an unknown one dropped, null (or '') clears.
+ * A line's named style as a client may set it (`Line.styleId`), or undefined to drop it. Only while
+ * PRO_EDIT_OPS_PATCHABLE is on: an id that names a saved style (an own key of doc.letterStyle.named) is kept, the line's
+ * own stored styleId (`stored`) is re-asserted even when that saved style is gone, any other id is dropped, and null
+ * (or '') clears. Off, it is always dropped, exactly as before PE-SERVER: a `line` patch merges, so a dropped key leaves
+ * the stored styleId as it is (no re-assert is needed, and none is accepted).
  */
 export const lineStyleIdOf = (doc: Pick<ComicDoc, 'letterStyle'>, v: unknown, stored?: string): string | null | undefined => {
-  if (v === undefined) return undefined;
-  if (v === null || v === '') return PRO_EDIT_OPS_PATCHABLE && stored !== undefined ? null : undefined;
+  if (v === undefined || !PRO_EDIT_OPS_PATCHABLE) return undefined;
+  if (v === null || v === '') return stored !== undefined ? null : undefined;
   if (typeof v !== 'string') return undefined;
   if (stored !== undefined && v === stored) return v;
-  if (!PRO_EDIT_OPS_PATCHABLE) return undefined;
   const named = doc.letterStyle?.named;
   return named && hasOwn(named, v) ? v : undefined;
 };

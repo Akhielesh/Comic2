@@ -140,7 +140,7 @@ describe('stored Pro lettering survives an undo (re-assert, PE-0 wave note 9)', 
 });
 
 describe('named styles (Pro fields, lead decision C-9)', () => {
-  it('lineStyleIdOf: a saved style is kept and an unknown one dropped with the switch on; off, only the line’s own re-asserts', () => {
+  it('lineStyleIdOf: a saved style is kept and an unknown one dropped with the switch on; off, every styleId is dropped as before', () => {
     const doc = stored();
     expect(lineStyleIdOf(doc, 'st_radio')).toBe('st_radio');
     expect(lineStyleIdOf(doc, 'st_ghost')).toBeUndefined();
@@ -148,9 +148,12 @@ describe('named styles (Pro fields, lead decision C-9)', () => {
     expect(lineStyleIdOf(doc, 42)).toBeUndefined();
     expect(lineStyleIdOf(doc, null, 'st_villain')).toBeNull();
     expect(lineStyleIdOf(doc, null)).toBeUndefined();
+    // The line's own, even once its saved style is gone (an undo after the style was deleted).
+    expect(lineStyleIdOf(doc, 'st_old', 'st_old')).toBe('st_old');
+    expect(lineStyleIdOf(doc, 'st_old', 'st_villain')).toBeUndefined();
     sw.on = false;
     expect(lineStyleIdOf(doc, 'st_radio')).toBeUndefined();
-    expect(lineStyleIdOf(doc, 'st_villain', 'st_villain')).toBe('st_villain');
+    expect(lineStyleIdOf(doc, 'st_villain', 'st_villain')).toBeUndefined();
     expect(lineStyleIdOf(doc, null, 'st_villain')).toBeUndefined();
     expect(lineStyleIdOf(doc, 'st_radio', 'st_villain')).toBeUndefined();
   });
