@@ -21,7 +21,7 @@ Before this, every card in every old Director message stayed live: option chips,
   - "Approved · ≈2% of your usage · 6 images";
   - "Closed — a newer plan replaced it", and so on (§3).
 - **A settled renders or media card** shows that line plus one plain link to where the pictures live: the board, a
-  page, the cast, the style or Media. It mounts no `<img>`.
+  page, the cast, the style or Assets (the media tab's visible name). It mounts no `<img>`.
 - **There is no details model** and no per-card browser storage.
 - **Derived, not stored.** `cardSettle(doc, msgIndex, card, {pending})` is a pure function of the stored doc and this
   tab's sending message. A reload, a second tab and another device all agree. Legacy docs need no migration.
@@ -46,9 +46,13 @@ Before this, every card in every old Director message stayed live: option chips,
 - **Never settled by passing:**
   - **an open gate** (`doc.gate.id === card.gateId`, status `open`): it is the one live approval, and the redesign's
     Approval bar mirrors it;
-  - **a running render** (any target queued or rendering);
+  - **a running render**: a target queued or rendering keeps live only the **latest renders card that includes
+    it**. "Redraw page 1" or "Render all" never brings back every earlier renders card with those pages: an older card
+    stays settled and its line counts them as "being redrawn";
+  - **a running publish** (`status: 'running'`);
   - **an outage card with a waiting "wait and retry"** (`opts.retrying`, from `waitingRetries()`);
-  - **a translation card** while the director works and an edition is unfinished (`opts.working`).
+  - **the latest translation card** for its languages while the director works and an edition is unfinished
+    (`opts.working`). An older card for an edition that never finished (failed, abandoned) stays settled.
 - **States:** `open` (a question or approval to answer now), `live` (a current view), `settled` (the line). Outcomes:
 
 | Card | Settles when | Outcome |
@@ -59,7 +63,7 @@ Before this, every card in every old Director message stayed live: option chips,
 | `breakdown` with `gateId` | its gate closes | `folded`: nothing renders, the gate's line covers it |
 | book, `style_choice`, `cast`, `recap`, `refs`, `versions`, `share`, `history`, `renders` | passed, or a newer card of the kind | `passed` · `newer` |
 | `style_presets` | also once `picked` | `picked` |
-| `publish` | done or declined, or passed | `done` · `passed` |
+| `publish` | done or declined, or passed (never while `running`) | `done` · `passed` |
 | `notice`, `model_outage`, unknown types | passed | `passed` |
 
 ## 3. The line (`summaryOf`)
@@ -91,13 +95,24 @@ Before this, every card in every old Director message stayed live: option chips,
   - **conflict:** "Kept yours (2) · used the director’s (1)", or "Left as yours".
   - **book:** "Page plan · 12 pages · 38 panels" from the stamped counts. Legacy: "An earlier page plan". Replaced:
     "Closed — a newer plan replaced it".
-  - **renders:** "Drew 6 pages and the cover · 1 didn’t finish", tallied from current statuses (ready or stale counts
-    as drawn), with the link "Open the pages", "Open page 3", "Open the cast" or "Open the style".
-  - **picture cards** (`versions`, `refs`, `style_choice`, `cast`) keep one link as well. Every link is a
-    `ClientAction` (`open_page`, `open_tab`): it changes nothing.
+  - **renders:** "Drew 6 pages and the cover · 1 didn’t finish · 1 being redrawn", tallied from current statuses:
+    ready or stale counts as drawn; queued or rendering (a newer run is drawing it) reads "being redrawn"; failed,
+    never started or gone reads "didn’t finish". When everything is busy again: "Being redrawn: 2 pages". The link is
+    "Open the pages" (several targets, or the cover, which lives with the pages), "Open page 3", "Open the cast" or
+    "Open the style".
+  - **picture cards** (`versions`, `refs`, `style_choice`, `cast`) keep one link as well; photos and places open
+    "Open Assets" (`open_tab: 'media'`). Every link is a `ClientAction` (`open_page`, `open_tab`): it changes nothing.
   - **notice:** its text (≤ 200 characters), plus "· 2 fixes offered".
-  - **outage:** "Nano Banana 2.1 was paused · 3 pages waited". No status fetch.
-  - **publish:** "Published", "Not published" or "Didn’t publish". No Copy link under D3.
+  - **outage:** "{Model} was paused · 3 pages waited". No status fetch.
+  - **publish,** by mode, never claiming a change that did not happen (no Copy link under D3):
+
+| Mode | Done | Failed | Declined, or passed while pending |
+|---|---|---|---|
+| `publish` | "Published" | "Didn’t publish" | "Not published" |
+| `update` | "Updated" | "Didn’t update" | "Kept the published version" |
+| `unpublish` | "Unpublished" | "Didn’t unpublish" | "Still published" |
+| `regenerate` | "New link made" | "Didn’t make a new link" | "Kept the current link" |
+
   - **unknown:** "Earlier card", never silent and never interactive.
 - **Feature cards** may give their own words through `CardRegistration.settledSummary`
   (`components/comicstudio/extensions.ts`). It returns null to keep `summaryOf`'s line.
@@ -148,9 +163,10 @@ behaviour:
 - **`recordOptionAnswer`'s text match** considers only cards after the last user message (not passed), through
   `settle.matchChoices`. The director's own `normalizeAnswer` and `pickedChoices` are removed.
   `server/src/comic/settle.parity.test.ts` pins that both give the same ids today.
-- **`cardText` adds the outcome** (`settle.outcomeForModel`): "[asked: …; skipped]",
-  "[asked: … — options: …; answered: Noir ink]", "[asked the user to approve a spend; approved]". It names no amount: a
-  governed user's director never sees a dollar figure to repeat.
+- **`cardText` adds the outcome** (`settle.outcomeForModel`): "[asked: … — options: …; no option picked]",
+  "[asked: … — options: …; answered: Noir ink]", "[asked the user to approve a spend; approved]". "no option picked",
+  not "skipped": the next message may still answer the question in free text ("the noir one"). An open card's outcome
+  is empty and adds nothing. It names no amount: a governed user's director never sees a dollar figure to repeat.
 
 ## 6. Flags and decisions
 
@@ -169,7 +185,11 @@ behaviour:
   - the production-shaped fixture (10 passed option cards) is all skipped;
   - a tapped card is picked, and a sending message equal to a choice is picked (pending);
   - an open gate that was passed stays open, and a running render and a waiting retry stay live;
-  - latest-of-kind works across plan and breakdown cards;
+  - "Redraw page 1" keeps only the newest renders card live: the old one reads "· 1 being redrawn", never
+    "didn’t finish";
+  - only the latest translation card stays live while the director works;
+  - a running publish stays live, and every publish mode reads honestly;
+  - latest-of-kind works across plan and breakdown cards, and within one message;
   - an unstamped replaced gate reads "An earlier approval";
   - every gate line, and a governed line has no `$`;
   - `isOpenQuestion` equals A1's `openQuestion` on A1's cases;
@@ -178,8 +198,8 @@ behaviour:
   - approve stamps `approved` with the quote;
   - a new gate stamps the old card `replaced`, and a stale re-quote does too;
   - `nothing_to_draw` is stamped, and so is the user's "Not now";
-  - a moot gate is stamped `superseded`;
+  - a moot gate is stamped `superseded`, by a newer spend and by a confirmed re-check;
   - the reopen clears the stamp;
   - expiry stamps `expired`;
-  - `plan_pages` posts counts.
+  - `plan_pages` posts counts, and so do its unchanged-inputs reply and a "nothing to draw" status breakdown.
 - **`server/src/comic/settle.parity.test.ts`:** `matchChoices` equals the director's `pickedChoices`.

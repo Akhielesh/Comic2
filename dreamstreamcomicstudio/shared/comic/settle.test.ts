@@ -4,6 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, type Card, type ComicDoc, type Gate, type Msg } from './doc';
 import { applyOps } from './ops';
+import { editionProgress } from './i18n';
+import { IMAGE_MODELS } from './models';
 import { makeQaDoc } from '../../components/comicstudio/testing/qaFixtures';
 import { makeSampleDoc } from '../../components/comicstudio/conversation/testing/fixtures';
 import { openQuestion } from '../../components/comicstudio/messageQueue';
@@ -138,6 +140,15 @@ describe('the heist-12p conversation (the QA studio scene)', () => {
     expect(settleById(only, 'p1')).toEqual({ state: 'live' });
   });
 
+  it('latest-of-kind within one message: the first of two book cards is replaced by the second', () => {
+    const doc = withConv([reply('a1', [{ type: 'plan', id: 'p1' }, { type: 'breakdown', id: 'b1', view: 'plan' }])]);
+    expect(settleById(doc, 'p1')).toEqual({ state: 'settled', outcome: 'newer' });
+    expect(settleById(doc, 'b1')).toEqual({ state: 'live' });
+    const index = buildSettleIndex(doc);
+    expect(index.get(settleKey('a1', 'p1'))).toEqual({ state: 'settled', outcome: 'newer' });
+    expect(index.get(settleKey('a1', 'b1'))).toEqual({ state: 'live' });
+  });
+
   it('the settle index agrees with cardSettle for every card, and is keyed by message and card', () => {
     const index = buildSettleIndex(doc);
     let n = 0;
@@ -225,6 +236,51 @@ describe('option cards', () => {
   });
 });
 
+describe('renders cards', () => {
+  const base = makeQaDoc('heist-12p');
+  const [p1, p2] = base.pages;
+  const page = (id: string) => ({ kind: 'page' as const, id });
+  const withStatus = (doc: ComicDoc, statuses: Record<string, ComicDoc['pages'][number]['render']['status']>): ComicDoc => ({
+    ...doc,
+    pages: doc.pages.map((p) => (statuses[p.id] ? { ...p, render: { ...p.render, status: statuses[p.id] } } : p))
+  });
+  const renders = (id: string, ids: string[]): Card => ({ type: 'renders', id, targets: ids.map(page), label: 'Drawing' });
+
+  it('"Redraw page 1" keeps only the new card live: the old card stays settled and reads "being redrawn"', () => {
+    // The probe: [a1 renders(pg 1, pg 2), u1 "redraw page 1", a2 renders(pg 1)] while page 1 draws again.
+    const conv = [reply('a1', [renders('r_old', [p1.id, p2.id])]), user('u1', 'redraw page 1'), reply('a2', [renders('r_new', [p1.id])])];
+    const doc = withStatus({ ...base, conversation: conv }, { [p1.id]: 'rendering', [p2.id]: 'ready' });
+    expect(settleById(doc, 'r_old')).toEqual({ state: 'settled', outcome: 'newer' });
+    expect(settleById(doc, 'r_new')).toEqual({ state: 'live' });
+    const line = summaryById(doc, 'r_old')!;
+    expect(line.text).toBe('Drew 1 page · 1 being redrawn');
+    expect(line.text).toContain('1 being redrawn');
+    expect(line.text).not.toMatch(/didn’t finish/);
+    // Queued counts as busy too; the settle index agrees.
+    const queued = withStatus(doc, { [p1.id]: 'queued' });
+    expect(buildSettleIndex(queued).get(settleKey('a1', 'r_old'))).toEqual({ state: 'settled', outcome: 'newer' });
+    expect(buildSettleIndex(queued).get(settleKey('a2', 'r_new'))).toEqual({ state: 'live' });
+    // Everything it drew is being redrawn: no "Nothing was drawn", no "didn't finish".
+    const both = withStatus({ ...base, conversation: [conv[0], conv[1], reply('a2', [renders('r_new', [p1.id, p2.id])])] }, { [p1.id]: 'rendering', [p2.id]: 'queued' });
+    expect(summaryById(both, 'r_old')?.text).toBe('Being redrawn: 2 pages');
+    // A failed page still reads "didn't finish", beside the one being redrawn.
+    const failed = withStatus(doc, { [p2.id]: 'failed', [base.pages[2].id]: 'ready' });
+    const three = { ...failed, conversation: [reply('a1', [renders('r_old', [p1.id, p2.id, base.pages[2].id])]), conv[1], conv[2]] };
+    expect(summaryById(three, 'r_old')?.text).toBe('Drew 1 page · 1 didn’t finish · 1 being redrawn');
+  });
+
+  it('a card whose own run is still drawing stays live, even under a newer card for other pictures', () => {
+    const conv = [reply('a1', [renders('r_run', [p1.id, p2.id])]), user('u1', 'and the cover'), reply('a2', [{ type: 'renders', id: 'r_cover', targets: [{ kind: 'cover' }], label: 'Cover' }])];
+    const doc = withStatus({ ...base, conversation: conv }, { [p1.id]: 'ready', [p2.id]: 'rendering' });
+    expect(settleById(doc, 'r_run')).toEqual({ state: 'live' });
+    // Once it ends it settles on the newer card, with the single cover card linking to the pages (the cover lives there).
+    const ended = withStatus(doc, { [p2.id]: 'ready' });
+    expect(settleById(ended, 'r_run')).toEqual({ state: 'settled', outcome: 'newer' });
+    const cover = { ...ended, conversation: [...conv, user('u2', 'thanks')], cover: { ...ended.cover, render: { ...ended.cover.render, status: 'ready' as const } } };
+    expect(summaryById(cover, 'r_cover')).toEqual({ text: 'Drew the cover', tone: 'plain', link: { label: 'Open the pages', client: { type: 'open_tab', tab: 'pages' } } });
+  });
+});
+
 describe('parity with A1’s openQuestion (messageQueue.ts), on A1’s cases', () => {
   const q: Msg = { id: 'm_a', role: 'assistant', text: 'Here you go', at: 2, cards: [{ type: 'options', id: 'card_q', question: 'Which cover?', choices: [{ id: 'c1', label: 'Moody' }] }] };
   const item = { id: 'i1', where: { pageId: 'pg_1', label: 'page 1' }, mine: 'a', theirs: 'b', proposed: [] };
@@ -254,7 +310,7 @@ describe('parity with A1’s openQuestion (messageQueue.ts), on A1’s cases', (
 describe('gate cards', () => {
   const gate: Gate = {
     id: 'g1', action: { type: 'render_cover' }, title: 'Draw the cover', summary: '', estimateUsd: 0.4235, imageCount: 6,
-    model: 'Nano Banana Pro', createdAt: 1, status: 'open', reason: 'policy'
+    model: 'Model A', createdAt: 1, status: 'open', reason: 'policy'
   };
   const card: Card = { type: 'gate', id: 'cg', gateId: 'g1' };
 
@@ -368,12 +424,60 @@ describe('other cards', () => {
   });
 
   it('a waiting "wait and retry" keeps its outage card live; otherwise it settles when passed', () => {
-    const card = { type: 'model_outage', id: 'mo', modelId: 'nano-banana-2.1', options: [{ kind: 'wait_and_retry' }], blockedAction: { type: 'render_pages', pageIds: ['a', 'b', 'c'] } } as unknown as Card;
+    const card = { type: 'model_outage', id: 'mo', modelId: IMAGE_MODELS[0].id, options: [{ kind: 'wait_and_retry' }], blockedAction: { type: 'render_pages', pageIds: ['a', 'b', 'c'] } } as unknown as Card;
     const doc = withConv([reply('a1', [card]), user('u1', 'ok')]);
     expect(settleById(doc, 'mo', { retrying: ['mo'] })).toEqual({ state: 'live' });
     expect(settleById(doc, 'mo', { retrying: new Set(['mo']) })).toEqual({ state: 'live' });
     expect(settleById(doc, 'mo')).toEqual({ state: 'settled', outcome: 'passed' });
     expect(summaryById(doc, 'mo')?.text).toMatch(/ was paused · 3 pages waited$/);
+  });
+
+  it('only the latest translation card stays live while the director writes its edition', () => {
+    const base = makeQaDoc('heist-12p');
+    const t = (id: string): Card => ({ type: 'translation', id, languages: ['es'] });
+    // A failed or abandoned Spanish edition never finishes; the creator asked again, then sent another message.
+    const doc = { ...base, conversation: [reply('a1', [t('t_old')]), user('u1', 'try the Spanish again'), reply('a2', [t('t_new')]), user('u2', 'and make the title bigger')] };
+    const p = editionProgress(doc, 'es');
+    expect(p.total).toBeGreaterThan(0);
+    expect(p.done).toBeLessThan(p.total);
+    expect(settleById(doc, 't_new', { working: true })).toEqual({ state: 'live' });
+    expect(settleById(doc, 't_old', { working: true })).toEqual({ state: 'settled', outcome: 'newer' });
+    // Not working: the passed latest card settles too.
+    expect(settleById(doc, 't_new')).toEqual({ state: 'settled', outcome: 'passed' });
+    expect(summaryById(doc, 't_new')?.text).toBe('Spanish edition · not finished');
+  });
+
+  it('a publish card reads honestly per mode; a running publish stays live however old', () => {
+    const pub = (mode: string, status: string) => ({ type: 'publish', id: 'pb', mode, status }) as unknown as Card;
+    const passed = (card: Card) => withConv([reply('a1', [card]), user('u1', 'ok'), reply('a2')]);
+    expect(settleById(passed(pub('publish', 'running')), 'pb')).toEqual({ state: 'live' });
+    expect(settleById(passed(pub('unpublish', 'running')), 'pb')).toEqual({ state: 'live' });
+    expect(settleById(passed(pub('publish', 'pending')), 'pb')).toEqual({ state: 'settled', outcome: 'passed' });
+    for (const [mode, done, failed, kept] of [
+      ['publish', 'Published', 'Didn’t publish', 'Not published'],
+      ['update', 'Updated', 'Didn’t update', 'Kept the published version'],
+      ['unpublish', 'Unpublished', 'Didn’t unpublish', 'Still published'],
+      ['regenerate', 'New link made', 'Didn’t make a new link', 'Kept the current link']
+    ] as const) {
+      expect(summaryById(passed(pub(mode, 'done')), 'pb')).toEqual({ text: done, tone: 'done' });
+      expect(summaryById(passed(pub(mode, 'failed')), 'pb')).toEqual({ text: failed, tone: 'quiet' });
+      expect(summaryById(passed(pub(mode, 'declined')), 'pb')).toEqual({ text: kept, tone: 'quiet' });
+      expect(summaryById(passed(pub(mode, 'pending')), 'pb')).toEqual({ text: kept, tone: 'quiet' });
+    }
+  });
+
+  it('a media link opens the tab by its visible name, Assets', () => {
+    const doc = withConv(
+      [
+        reply('a1', [
+          { type: 'refs', id: 'rf', owner: { kind: 'style' }, paths: ['a.webp', 'b.webp'] } as Card,
+          { type: 'versions', id: 'vs', target: { kind: 'place', id: 'pl_x' } }
+        ]),
+        user('u1', 'ok')
+      ]
+    );
+    expect(summaryById(doc, 'rf')).toEqual({ text: 'Added 2 photos to the style', tone: 'plain', link: { label: 'Open Assets', client: { type: 'open_tab', tab: 'media' } } });
+    expect(summaryById(doc, 'vs')?.link).toEqual({ label: 'Open Assets', client: { type: 'open_tab', tab: 'media' } });
   });
 
   it('notices, unknown cards and live views settle when passed; picture cards keep one plain link and no price', () => {
@@ -396,7 +500,8 @@ describe('other cards', () => {
       return outcomeForModel(card, doc, cardSettle(doc, i, card));
     };
     expect(words('q_look')).toBe('answered: Noir ink');
-    expect(words('q2')).toBe('skipped');
+    // "no option picked", not "skipped": the next message may still answer it in free text ("the noir one").
+    expect(words('q2')).toBe('no option picked');
     expect(words('cg')).toBe('approved');
     expect(words('cg')).not.toMatch(/[$¢\d]/);
   });

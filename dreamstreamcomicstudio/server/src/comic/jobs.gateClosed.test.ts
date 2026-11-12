@@ -7,14 +7,20 @@ import { emptyRender, type Card, type ComicDoc, type Page } from '../../../share
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { cardSettle, gateClosedOf, planCountsOf, summaryOf, type GateClosed } from '../../../shared/comic/settle.js';
 import { costFormatter, costViewFor } from './costText.js';
-import { JOB_TIMINGS, runAction, startAction } from './jobs.js';
+import { sixPageDrawnDoc } from './golden/fixtures.js';
+import { JOB_TIMINGS, estimateSpendAction, planInputHashOf, runAction, startAction } from './jobs.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
 import { recoveryOps, GATE_EXPIRY_MS } from './session.js';
+import { analyzePageRender } from './vision.js';
 import { writePagePlan } from './writer.js';
 
 vi.mock('./writer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./writer.js')>();
   return { ...actual, writePagePlan: vi.fn(actual.writePagePlan) };
+});
+vi.mock('./vision.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./vision.js')>();
+  return { ...actual, analyzePageRender: vi.fn(actual.analyzePageRender) };
 });
 
 const TIMINGS = { ...JOB_TIMINGS };
@@ -28,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   Object.assign(JOB_TIMINGS, TIMINGS);
   vi.mocked(writePagePlan).mockReset();
+  vi.mocked(analyzePageRender).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -165,13 +172,34 @@ describe('commitGate stamps the gate card', () => {
     expect(lineOf(session.doc, gate.id)).toBe('Closed — a newer request covered it');
     expect(lineOf(session.doc, gate.id)).not.toMatch(/Not now/);
   });
+
+  it('a confirmed re-check makes the open re-check gate moot: stamped superseded by the system (:2022)', async () => {
+    const doc = plannedDoc();
+    doc.pages[0] = readyPage(doc.pages[0], 'u/user-1/p/proj-1/img/p1.webp');
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    vi.mocked(analyzePageRender).mockImplementation(async ({ page }) => ({
+      qc: { score: 0.9, issues: [], checkedAt: 2 },
+      balloons: page.panels.flatMap((p) => p.lines.map((l) => ({ lineId: l.id, x: 0.1, y: 0.1, w: 0.3 }))),
+      model: 'v'
+    }));
+    await startAction(ctx, { type: 'recheck_page', pageId: 'pg_1' }, { confirmed: false, origin: 'user', forceGate: 'policy' });
+    const gate = session.doc.gate!;
+    expect(gate).toMatchObject({ status: 'open', action: { type: 'recheck_page', pageId: 'pg_1' } });
+    const quotedUsd = estimateSpendAction(session.doc, { type: 'recheck_page', pageId: 'pg_1' }, false).usd;
+    const ran = await startAction(ctx, { type: 'recheck_page', pageId: 'pg_1', quotedUsd }, { confirmed: true, origin: 'user' });
+    await ran.done;
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+    expect(stampOf(session.doc, gate.id)).toEqual({ status: 'superseded', by: 'system', at: expect.any(Number) });
+    expect(lineOf(session.doc, gate.id)).toBe('Closed — a newer request covered it');
+  });
 });
 
 describe('expiry (session.ts recoveryOps)', () => {
   it('an open gate older than a day is declined and its card stamped expired, in the same ops', () => {
     const now = 100 * GATE_EXPIRY_MS;
     const doc = plannedDoc();
-    const gate = { id: 'g1', action: { type: 'render_cover' as const }, title: 't', summary: 's', estimateUsd: 0.1, imageCount: 1, model: 'NB', createdAt: now - GATE_EXPIRY_MS - 1, status: 'open' as const, reason: 'policy' as const };
+    const gate = { id: 'g1', action: { type: 'render_cover' as const }, title: 't', summary: 's', estimateUsd: 0.1, imageCount: 1, model: 'Model A', createdAt: now - GATE_EXPIRY_MS - 1, status: 'open' as const, reason: 'policy' as const };
     doc.gate = gate;
     doc.conversation = [{ id: 'm1', role: 'assistant', text: 'Approve?', at: 1, cards: [{ type: 'gate', id: 'cg', gateId: 'g1' }] }];
     const ops = recoveryOps(doc, { now, allInFlight: true });
@@ -197,5 +225,28 @@ describe('book cards get their counts where jobs.ts posts them', () => {
     const book = session.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.type === 'breakdown');
     expect(book).toBeTruthy();
     expect(planCountsOf(book)).toEqual({ pages: session.doc.pages.length, panels: session.doc.pages.reduce((n, p) => n + p.panels.length, 0) });
+  });
+  it('the unchanged-inputs plan reply carries counts too (no writer call)', async () => {
+    const doc = plannedDoc();
+    doc.planInputHash = planInputHashOf(doc);
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await runAction(ctx, { type: 'plan_pages' }, { confirmed: true });
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
+    const last = session.doc.conversation.at(-1)!;
+    expect(last.text).toMatch(/^Nothing changed since the plan was written/);
+    const book = (last.cards || []).find((c) => c.type === 'breakdown');
+    expect(planCountsOf(book)).toEqual({ pages: doc.pages.length, panels: doc.pages.reduce((n, p) => n + p.panels.length, 0) });
+  });
+
+  it('render_pages with nothing to draw posts its status breakdown with counts', async () => {
+    const doc = sixPageDrawnDoc();
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    const out = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_six_1'] }, { confirmed: true, origin: 'user' });
+    expect(out.outcome.status).toBe('nothing');
+    const book = (session.doc.conversation.at(-1)!.cards || []).find((c) => c.type === 'breakdown');
+    expect(book).toMatchObject({ view: 'status', pageIds: ['pg_six_1'] });
+    expect(planCountsOf(book)).toEqual({ pages: 1, panels: doc.pages[0].panels.length });
   });
 });

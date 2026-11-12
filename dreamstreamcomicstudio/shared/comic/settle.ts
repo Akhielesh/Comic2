@@ -6,12 +6,12 @@
 //
 // D3 (the owner: users "should not be able to view/edit those options once the chat has moved forward"): a settled card
 // has NO controls and NO "Show details". It collapses to one line of words (summaryOf). A settled renders or media card
-// adds one plain link to where the pictures live (the board or Media) and mounts no image. There is no details model.
+// adds one plain link to where the pictures live (the board or Assets) and mounts no image. There is no details model.
 //
 // Card states (§5.1): open = a question or approval the user can answer now; live = a current view that may carry
 // actions; settled = the one summary line. A card settles once it is PASSED (a committed user message comes after its
-// message, or this tab's message is sending), except an open gate, a running render and a waiting "wait and retry",
-// which stay live however old they are. Live views (plan, cast, renders, …) also settle when a newer card of the same
+// message, or this tab's message is sending), except an open gate, a running render (on the latest renders card that
+// includes it), a running publish and a waiting "wait and retry", which stay live however old they are. Live views (plan, cast, renders, …) also settle when a newer card of the same
 // kind arrives (kindKeyOf).
 //
 // Two facts the live doc forgets are stamped on the card by the server with `message_patch` (≤ about 120 bytes each):
@@ -217,6 +217,11 @@ interface SettleContext {
   answer: PendingAnswer | null;
   /** Last position of each kind key: [message index, card index]. */
   last: Map<string, [number, number]>;
+  /**
+   * Last renders card that includes each target (targetKey): [message index, card index]. A busy target keeps only
+   * THAT card live; an older card whose page a newer run is redrawing stays settled ("· 1 being redrawn").
+   */
+  lastRender: Map<string, [number, number]>;
   retrying: ReadonlySet<string>;
   working: boolean;
 }
@@ -265,12 +270,16 @@ const contextOf = (doc: ComicDoc, opts: SettleOptions = {}): SettleContext => {
   const lastUser = lastUserIndex(conv);
   const pending = sending(opts);
   const last = new Map<string, [number, number]>();
+  const lastRender = new Map<string, [number, number]>();
   conv.forEach((m, i) => cardsOf(m).forEach((c, j) => {
     const key = kindKeyOf(c);
     if (key) last.set(key, [i, j]);
+    if (isCard(c) && c.type === 'renders' && Array.isArray(c.targets)) {
+      for (const t of c.targets) if (isObject(t)) lastRender.set(targetKey(t), [i, j]);
+    }
   }));
   const retrying = opts.retrying instanceof Set ? opts.retrying : new Set(Array.isArray(opts.retrying) ? opts.retrying : []);
-  return { doc, conv, lastUser, pending, answer: pendingAnswerOf(conv, lastUser, pending), last, retrying, working: opts.working === true };
+  return { doc, conv, lastUser, pending, answer: pendingAnswerOf(conv, lastUser, pending), last, lastRender, retrying, working: opts.working === true };
 };
 
 const isBusy = (doc: ComicDoc, target: RenderTarget): boolean => {
@@ -333,18 +342,28 @@ function settleWith(ctx: SettleContext, msgIndex: number, cardIndex: number, car
       return view();
     case 'renders': {
       const targets = Array.isArray(card.targets) ? card.targets : [];
-      // A running render shows its progress until it finishes, however old its message is.
-      if (targets.some((t) => isObject(t) && isBusy(doc, t as RenderTarget))) return LIVE;
+      // A running render shows its progress until it finishes, however old its message is — but only on the latest
+      // renders card that includes the busy target: "Redraw page 1" never brings every earlier card with page 1 back.
+      const ownRun = (t: unknown): boolean => {
+        if (!isObject(t) || !isBusy(doc, t as RenderTarget)) return false;
+        const at = ctx.lastRender.get(targetKey(t));
+        return !!at && at[0] === msgIndex && at[1] === cardIndex;
+      };
+      if (targets.some(ownRun)) return LIVE;
       return view();
     }
     case 'style_presets':
       if (typeof card.picked === 'string' && card.picked) return settled('picked');
       return view();
     case 'translation':
-      if (ctx.working && translationRunning(doc, card.languages)) return LIVE;
+      // Only the latest card for these languages stays live while the director writes an edition; an older card for
+      // an edition that never finished (failed, abandoned) stays settled.
+      if (latest && ctx.working && translationRunning(doc, card.languages)) return LIVE;
       return view();
     case 'publish':
       if (card.status === 'done' || card.status === 'declined') return settled('done');
+      // A publish that is running shows its progress until it ends, however old (like a running render).
+      if (card.status === 'running') return LIVE;
       return passed ? settled('passed') : LIVE;
     case 'model_outage':
       // A waiting "wait and retry" keeps its card (and "Don't retry") live.
@@ -608,17 +627,20 @@ const targetWords = (doc: ComicDoc, target: unknown): string => {
   }
 };
 
-/** Where a target's pictures live: the page itself, or the board tab that shows them. */
+const BOARD_LINK: SettledLink = { label: 'Open the pages', client: { type: 'open_tab', tab: 'pages' } };
+/** The media tab is labelled "Assets" (components/comicstudio/timeline/index.ts registers it). */
+const ASSETS_LINK: SettledLink = { label: 'Open Assets', client: { type: 'open_tab', tab: 'media' } };
+
+/** Where a target's pictures live: the page itself, or the board tab that shows them (the cover lives with the pages). */
 const targetLink = (doc: ComicDoc, target: unknown): SettledLink => {
   if (isObject(target) && target.kind === 'page' && typeof target.id === 'string' && pageNumber(doc, target.id) !== null) {
     return { label: `Open page ${pageNumber(doc, target.id)}`, client: { type: 'open_page', pageId: target.id } };
   }
+  if (isObject(target) && target.kind === 'cover') return BOARD_LINK;
   if (isObject(target) && target.kind === 'sheet') return { label: 'Open the cast', client: { type: 'open_tab', tab: 'cast' } };
   if (isObject(target) && target.kind === 'style_option') return { label: 'Open the style', client: { type: 'open_tab', tab: 'style' } };
-  return { label: 'Open Media', client: { type: 'open_tab', tab: 'media' } };
+  return ASSETS_LINK;
 };
-
-const BOARD_LINK: SettledLink = { label: 'Open the pages', client: { type: 'open_tab', tab: 'pages' } };
 
 /** A gate's outcome: its stamp, or what the current doc.gate still says, or 'legacy' (replaced before stamps). */
 const gateOutcome = (card: GateCard, doc: ComicDoc): GateClosed | { status: 'declined'; by?: undefined } | 'legacy' => {
@@ -659,13 +681,22 @@ function gateSummary(card: GateCard, doc: ComicDoc, cost?: SettleCost | null): S
   }
 }
 
+/** "6 pages", "the cover", "2 character sheets", … for a set of render targets. */
+const targetTally = (targets: readonly RenderTarget[]): string[] => {
+  const n = (kind: RenderTarget['kind']) => targets.filter((t) => t.kind === kind).length;
+  return [
+    n('page') ? plural(n('page'), 'page') : '',
+    n('cover') ? 'the cover' : '',
+    n('sheet') ? plural(n('sheet'), 'character sheet') : '',
+    n('place') ? plural(n('place'), 'place') : '',
+    n('style_option') ? plural(n('style_option'), 'style option') : ''
+  ].filter(Boolean);
+};
+
 function rendersSummary(card: Extract<Card, { type: 'renders' }>, doc: ComicDoc): SettledSummary {
   const targets = (Array.isArray(card.targets) ? card.targets : []).filter(isObject) as RenderTarget[];
-  let pages = 0;
-  let cover = false;
-  let sheets = 0;
-  let places = 0;
-  let styles = 0;
+  const drawn: RenderTarget[] = [];
+  const busy: RenderTarget[] = [];
   let missed = 0;
   for (const t of targets) {
     let status: string | undefined;
@@ -674,25 +705,19 @@ function rendersSummary(card: Extract<Card, { type: 'renders' }>, doc: ComicDoc)
     } catch {
       status = undefined;
     }
-    if (status !== 'ready' && status !== 'stale') {
-      missed += 1;
-      continue;
-    }
-    if (t.kind === 'page') pages += 1;
-    else if (t.kind === 'cover') cover = true;
-    else if (t.kind === 'sheet') sheets += 1;
-    else if (t.kind === 'place') places += 1;
-    else if (t.kind === 'style_option') styles += 1;
+    if (status === 'ready' || status === 'stale') drawn.push(t);
+    // A newer run is drawing it now (this card settled): never "didn't finish".
+    else if (status === 'queued' || status === 'rendering') busy.push(t);
+    // Failed, never started ('none') or gone.
+    else missed += 1;
   }
-  const drew = [
-    pages ? plural(pages, 'page') : '',
-    cover ? 'the cover' : '',
-    sheets ? plural(sheets, 'character sheet') : '',
-    places ? plural(places, 'place') : '',
-    styles ? plural(styles, 'style option') : ''
-  ].filter(Boolean);
-  const head = drew.length ? `Drew ${listWords(drew)}` : 'Nothing was drawn';
-  const text = missed && drew.length ? `${head} · ${missed} didn’t finish` : head;
+  const drew = targetTally(drawn);
+  const redrawn = busy.length ? `${busy.length} being redrawn` : '';
+  const text = drew.length
+    ? [`Drew ${listWords(drew)}`, missed ? `${missed} didn’t finish` : '', redrawn].filter(Boolean).join(' · ')
+    : busy.length
+      ? [`Being redrawn: ${listWords(targetTally(busy))}`, missed ? `${missed} didn’t finish` : ''].filter(Boolean).join(' · ')
+      : 'Nothing was drawn';
   const kinds = new Set(targets.map((t) => t.kind));
   const link =
     targets.length === 1 ? targetLink(doc, targets[0])
@@ -701,6 +726,16 @@ function rendersSummary(card: Extract<Card, { type: 'renders' }>, doc: ComicDoc)
     : BOARD_LINK;
   return { text, tone: 'plain', link };
 }
+
+type PublishMode = Extract<Card, { type: 'publish' }>['mode'];
+
+/** A publish card's line by mode: done; failed; and nothing changed (declined, or passed while pending). */
+const PUBLISH_WORDS: Record<PublishMode, { done: string; failed: string; kept: string }> = {
+  publish: { done: 'Published', failed: 'Didn’t publish', kept: 'Not published' },
+  update: { done: 'Updated', failed: 'Didn’t update', kept: 'Kept the published version' },
+  unpublish: { done: 'Unpublished', failed: 'Didn’t unpublish', kept: 'Still published' },
+  regenerate: { done: 'New link made', failed: 'Didn’t make a new link', kept: 'Kept the current link' }
+};
 
 /**
  * The settled card's one line (§5.2, D3): words only, prices through the viewer's `cost` (none without it), and for
@@ -784,7 +819,7 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
         : owner?.kind === 'place' ? (doc.places || []).find((p) => p.id === owner.id)?.name
         : owner?.kind === 'style' ? 'the style'
         : undefined;
-      return { text: `Added ${plural(n, 'photo')}${who ? ` to ${clip(who, 40)}` : ''}`, tone: 'plain', link: { label: 'Open Media', client: { type: 'open_tab', tab: 'media' } } };
+      return { text: `Added ${plural(n, 'photo')}${who ? ` to ${clip(who, 40)}` : ''}`, tone: 'plain', link: ASSETS_LINK };
     }
     case 'translation': {
       const langs = (Array.isArray(card.languages) ? card.languages : []).filter((l) => typeof l === 'string' && languageSpec(l));
@@ -802,12 +837,12 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
       return { text: `${head} · ${ready ? 'ready' : 'not finished'}`, tone: ready ? 'done' : 'plain' };
     }
     case 'publish': {
-      if (card.status === 'done') {
-        const word = card.mode === 'unpublish' ? 'Unpublished' : card.mode === 'regenerate' ? 'New link made' : card.mode === 'update' ? 'Updated' : 'Published';
-        return { text: word, tone: 'done' };
-      }
-      if (card.status === 'failed') return { text: 'Didn’t publish', tone: 'quiet' };
-      return { text: 'Not published', tone: 'quiet' };
+      // Honest per mode: a declined unpublish leaves the comic published, a declined update keeps the old version.
+      const words = PUBLISH_WORDS[card.mode] ?? PUBLISH_WORDS.publish;
+      if (card.status === 'done') return { text: words.done, tone: 'done' };
+      if (card.status === 'failed') return { text: words.failed, tone: 'quiet' };
+      // Declined, or a pending ask the chat moved past: nothing changed.
+      return { text: words.kept, tone: 'quiet' };
     }
     case 'share':
       return { text: 'Share link', tone: 'plain' };
@@ -839,15 +874,16 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
 }
 
 /**
- * The outcome in the model's words, for director.ts cardText (settle.md §5.7, V.8): "skipped", "answered: Noir ink",
- * "approved", "not now", "closed by the studio", "replaced by a newer plan", or '' while the card is open or live.
+ * The outcome in the model's words, for director.ts cardText (settle.md §5.7, V.8): "no option picked", "answered: Noir
+ * ink", "approved", "not now", "closed by the studio", "replaced by a newer plan", or '' while the card is open or live.
+ * "no option picked", not "skipped": the next user message may still answer the question in free text ("the noir one").
  * Never an amount: a governed user's director never sees a dollar figure to repeat (director.ts:162).
  */
 export function outcomeForModel(card: Card, doc: ComicDoc, settle: CardSettle): string {
   if (!settle || settle.state !== 'settled' || !isCard(card)) return '';
   switch (card.type) {
     case 'options':
-      if (settle.outcome === 'skipped') return 'skipped';
+      if (settle.outcome === 'skipped') return 'no option picked';
       return `answered: ${(settle.picked ?? []).map((id) => (settle.outcome === 'answered' ? clip(id, 80) : choiceLabel(card, id))).join(', ')}`;
     case 'conflict':
       return settle.outcome === 'resolved' ? 'resolved' : 'left as the creator’s';

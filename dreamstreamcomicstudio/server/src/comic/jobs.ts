@@ -140,12 +140,12 @@ import {
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
-import { gateClosedFor, gateStampOps, withPlanCounts, type GateClosedStatus } from '../../../shared/comic/settle.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { PRO_QUALITY_USAGE_MESSAGE } from './access.js';
 import { withHistoryAction } from './history/recorder.js';
+import { gateClosedFor, gateStampOps, withPlanCounts, type GateClosedStatus } from '../../../shared/comic/settle.js';
 import { actionHandlerFor } from './actions/index.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
