@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
-import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, stripScrollDelta } from './BookTimeline';
+import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, stripScrollDelta, timelineSummary } from './BookTimeline';
+import { dockSummary } from './bookModel';
+import { BoardPane } from '../board/BoardPane';
+import { makeStudio } from '../board/__fixtures__/sampleDoc';
 import { computeAccessibleName } from 'dom-accessibility-api';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { clipThumbWidth } from './TimelineClip';
@@ -52,8 +55,8 @@ describe('BookTimeline', () => {
     expect(labels[1]).toMatch(/^Page 1, ready/);
     expect(labels[2]).toMatch(/^Page 2, planned/);
     expect(labels[3]).toMatch(/^Page 3, failed/);
-    expect(labels[4]).toMatch(/^Add page — a blank page, free/);
-    expect(labels.slice(5)).toEqual(['Title page — made by software, free', '“The End” — made by software, free', 'Back cover — made by software, free']);
+    expect(labels[4]).toMatch(/^Add page — a blank page$/);
+    expect(labels.slice(5)).toEqual(['Title page — made by software', '“The End” — made by software', 'Back cover — made by software']);
     // Roving focus: exactly one tab stop.
     expect(options().filter((o) => o.tabIndex === 0)).toHaveLength(1);
   });
@@ -61,7 +64,7 @@ describe('BookTimeline', () => {
   it('plates appear as clips when switched on; a ghost chip switches one on (free book op)', () => {
     const doc = makeSampleDoc({ book: { titlePage: true, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true } });
     const { studio } = setup(doc);
-    expect(nameOf(options()[1])).toBe('Title page, made by software, free');
+    expect(nameOf(options()[1])).toBe('Title page, made by software');
     fireEvent.click(optionNamed(/^“The End” — /));
     expect(lastPatch(studio)[0]).toEqual([{ op: 'book', patch: { endPage: true } }]);
   });
@@ -204,7 +207,9 @@ describe('BookTimeline', () => {
     const toggle = screen.getByRole('button', { name: 'Book' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('listbox')).toBeNull();
-    expect(screen.getByText(/Cover|No cover yet/).textContent).toMatch(/1\/3 pages drawn/);
+    // The summary keeps the cover and versions; the page count is the Pages badge's (declutter F7).
+    expect(screen.getByText(/Cover|No cover yet/).textContent).toMatch(/version/);
+    expect(screen.getByText(/Cover|No cover yet/).textContent).not.toMatch(/pages? drawn/);
     fireEvent.click(toggle);
     expect(screen.getByRole('listbox')).toBeInTheDocument();
     expect(window.localStorage.getItem(DOCK_OPEN_KEY)).toBe('1');
@@ -493,5 +498,92 @@ describe('the History link in the summary row (Comic History; lead decision on H
   it('the compact dock has no summary row, so no History link', () => {
     setup(makeSampleDoc(), { caps: ON }, { compact: true });
     expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
+  });
+});
+
+// Declutter DC-1 (PROGRAM3 §3.2; declutter F7, F9, F11; clean-and-smooth.md C2, C4, C5).
+describe('declutter: one home per action, one count, no "Free" on the add tiles', () => {
+  const MEDIA = 'Open Assets: every image in this comic';
+  const HISTORY = 'Open History: every saved moment of this comic';
+  const ON = { ...DEFAULT_CAPS, history: true };
+  const DESK = formFactorFor({ w: 1280, h: 800 });
+
+  it('the summary leaves the page count to the Pages badge (one count, one place)', () => {
+    const doc = makeSampleDoc();
+    expect(dockSummary(doc)).toMatch(/\d+\/\d+ pages drawn/);
+    const line = timelineSummary(doc, (usd) => `$${usd.toFixed(2)}`);
+    expect(line).not.toMatch(/pages? drawn/);
+    expect(line).not.toMatch(/^Book/);
+    expect(line).toMatch(/^(Cover ✓|No cover yet)( · |$)/);
+    // An empty book has no badge count: "no pages yet" stays.
+    const fresh = makeSampleDoc();
+    fresh.pages = [];
+    expect(timelineSummary(fresh)).toMatch(/no pages yet/);
+    // Without the viewer's formatter (governed, or not loaded yet): never dollars.
+    const spent = makeSampleDoc();
+    spent.spend = { ...spent.spend, totalUsd: 0.42 };
+    expect(timelineSummary(spent)).not.toMatch(/\$/);
+  });
+
+  it('the add tiles and software pages carry no "Free" (nothing beside them costs)', () => {
+    setup(makeSampleDoc({ book: { titlePage: true, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true } }));
+    const strip = screen.getByRole('listbox', { name: 'Book timeline' });
+    // Leaf by leaf: textContent runs the captions together ("Add pageFree"), so one regex over it would miss a word.
+    const leaves = Array.from(strip.querySelectorAll('*')).filter((el) => el.children.length === 0 && (el.textContent || '').trim());
+    expect(leaves.length).toBeGreaterThan(0);
+    for (const el of leaves) expect(el.textContent).not.toMatch(/\bfree\b/i);
+    for (const o of options()) {
+      expect(nameOf(o)).not.toMatch(/\bfree\b/i);
+      expect(o.getAttribute('title') || '').not.toMatch(/\bfree\b/i);
+    }
+    // The tiles are still there and still say what they do.
+    expect(optionNamed(/^Add page — a blank page$/)).toBeTruthy();
+    expect(optionNamed(/^“The End” — made by software$/)).toBeTruthy();
+  });
+
+  it('standalone (no board tab strip) the row keeps its Assets and History links, named for the probe', () => {
+    setup(makeSampleDoc(), { caps: ON });
+    expect(screen.getByRole('button', { name: MEDIA })).toHaveAttribute('data-action', 'media');
+    expect(screen.getByRole('button', { name: HISTORY })).toBeInTheDocument();
+  });
+
+  it('under a tab strip that shows Assets and History, the row links to neither; a strip without them keeps them', () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages', caps: ON });
+    const board = (tabs: string[]) => (
+      <div data-board>
+        <div role="tablist" data-tab-strip>
+          {tabs.map((id) => (
+            <button key={id} type="button" role="tab" id={`board-tab-${id}`}>
+              {id}
+            </button>
+          ))}
+        </div>
+        <BookTimeline studio={studio} reorderActivation="immediate" />
+      </div>
+    );
+    const { rerender } = render(board(['story', 'pages', 'media', 'history', 'read']));
+    expect(screen.queryByRole('button', { name: MEDIA })).toBeNull();
+    expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
+    expect(document.querySelector('[data-action="media"]')).toBeNull();
+    // The strip loses the Assets tab (another host, another rule): the link comes back, in the same commit.
+    rerender(board(['story', 'pages', 'history', 'read']));
+    expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
+  });
+
+  it('the real board at 1280: the Assets and History tabs show, so the timeline has no Assets or History link', () => {
+    const studio = makeStudio(makeSampleDoc(), { tab: 'pages', caps: ON });
+    render(
+      <FormFactorProvider value={DESK}>
+        <BoardPane studio={studio} />
+      </FormFactorProvider>
+    );
+    const strip = screen.getByRole('tablist', { name: 'Board' });
+    expect(within(strip).getByRole('tab', { name: /Assets/ })).toBeInTheDocument();
+    expect(within(strip).getByRole('tab', { name: /History/ })).toBeInTheDocument();
+    const dock = screen.getByRole('region', { name: 'Book timeline' });
+    expect(within(dock).getByRole('button', { name: 'Book' })).toBeInTheDocument();
+    expect(within(dock).queryByRole('button', { name: MEDIA })).toBeNull();
+    expect(within(dock).queryByRole('button', { name: HISTORY })).toBeNull();
   });
 });
