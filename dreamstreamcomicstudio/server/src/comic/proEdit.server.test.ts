@@ -119,9 +119,11 @@ describe('rollback safety (PE-0): what a newer build stored survives this server
     expect(ops).toEqual([{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { textColor: '#aa0000' } }]);
     const after = normalizeDoc(JSON.parse(JSON.stringify(applyOps(doc, ops))));
     expect(firstLine(after).line.style).toEqual({ ...PRO_STYLE, textColor: '#aa0000' });
-    for (const patch of [{ shape: 'heart' }, { sfxEffect: 'wobble' }, { font: 'bungee' }, { warp: 'arc' }]) {
+    for (const patch of [{ shape: 'radio' }, { sfxEffect: 'shatter' }, { font: 'other-face' }, { warp: 'wave' }]) {
       refuseStyle(doc, page.id, line.id, patch);
     }
+    // PE-SERVER (PE-0 wave note 9, approved): re-sending a stored Pro value is a re-assert, accepted as it is.
+    expect(sanitizePatchOps(doc, [{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { shape: 'heart' } }], sctx())).toEqual([{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { shape: 'heart' } }]);
     expect(() => sanitizePatchOps(doc, [{ op: 'letter_style', patch: { base: { warp: 'arc' } } }], sctx())).toThrow(/nothing valid/);
     // A preset switch through the client keeps the saved named styles (the op never drops them).
     const preset = sanitizePatchOps(doc, [{ op: 'letter_style', patch: { presetId: 'manga' } }], sctx()) as DocOp[];
