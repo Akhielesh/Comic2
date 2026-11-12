@@ -1,0 +1,847 @@
+{
+ "note": "The renderers before PE-COMPOSE (756b5a70): hashString of ComicPageView innerHTML (board props; reader props: paper, letteringAriaHidden, eager, develop off; useId tokens renumbered by first appearance), of JSON.stringify of every canvas call renderPageToBlob makes (JPEG, estimateMeasure, fakeCanvas), per page, and of buildPrintHtml per book. Every QA fixture and its rtl edition, and the sample doc.",
+ "pages": {
+  "lake-1p|pg_1": {
+   "board": "493199d4",
+   "reader": "205f16d7",
+   "raster": "038b5935"
+  },
+  "lake-1p|rtl|pg_1": {
+   "board": "493199d4",
+   "raster": "038b5935"
+  },
+  "heist-12p|pg_1": {
+   "board": "98a7a714",
+   "reader": "31795dc3",
+   "raster": "e3c1b1e2"
+  },
+  "heist-12p|pg_2": {
+   "board": "bb5d102c",
+   "reader": "9317a903",
+   "raster": "aca2a2a2"
+  },
+  "heist-12p|pg_3": {
+   "board": "906da444",
+   "reader": "415eaf79"
+  },
+  "heist-12p|pg_4": {
+   "board": "4754e5de",
+   "reader": "c6e46c19"
+  },
+  "heist-12p|pg_5": {
+   "board": "88de2382",
+   "reader": "0bd7d6cf"
+  },
+  "heist-12p|pg_6": {
+   "board": "c1e562a2",
+   "reader": "65de4ea9",
+   "raster": "cd1d73aa"
+  },
+  "heist-12p|pg_7": {
+   "board": "18cb02fc",
+   "reader": "c426c487"
+  },
+  "heist-12p|pg_8": {
+   "board": "0bd986d2",
+   "reader": "a0cf2787",
+   "raster": "3cbb98b4"
+  },
+  "heist-12p|pg_9": {
+   "board": "826c49b2",
+   "reader": "4afb9d9f",
+   "raster": "6d73b802"
+  },
+  "heist-12p|pg_10": {
+   "board": "337d7fdf",
+   "reader": "7621bf1c",
+   "raster": "597c720a"
+  },
+  "heist-12p|pg_11": {
+   "board": "34e4c01c",
+   "reader": "551cf599",
+   "raster": "f4eb8c4b"
+  },
+  "heist-12p|pg_12": {
+   "board": "681b4f48",
+   "reader": "9247dffd"
+  },
+  "heist-12p|rtl|pg_1": {
+   "board": "98a7a714",
+   "raster": "e3c1b1e2"
+  },
+  "heist-12p|rtl|pg_2": {
+   "board": "bb5d102c",
+   "raster": "aca2a2a2"
+  },
+  "heist-12p|rtl|pg_3": {
+   "board": "510154e8"
+  },
+  "heist-12p|rtl|pg_4": {
+   "board": "ff83ef6c"
+  },
+  "heist-12p|rtl|pg_5": {
+   "board": "0873d4e4"
+  },
+  "heist-12p|rtl|pg_6": {
+   "board": "5fcae75a",
+   "raster": "9ba5db3c"
+  },
+  "heist-12p|rtl|pg_7": {
+   "board": "c559130a"
+  },
+  "heist-12p|rtl|pg_8": {
+   "board": "0bd986d2",
+   "raster": "3cbb98b4"
+  },
+  "heist-12p|rtl|pg_9": {
+   "board": "33bb5a36",
+   "raster": "09704750"
+  },
+  "heist-12p|rtl|pg_10": {
+   "board": "337d7fdf",
+   "raster": "597c720a"
+  },
+  "heist-12p|rtl|pg_11": {
+   "board": "34e4c01c",
+   "raster": "f4eb8c4b"
+  },
+  "heist-12p|rtl|pg_12": {
+   "board": "bdbc32b6"
+  },
+  "deep-40p|pg_1": {
+   "board": "6605516b",
+   "reader": "4281179a",
+   "raster": "e3c1b1e2"
+  },
+  "deep-40p|pg_2": {
+   "board": "36eda35d",
+   "reader": "55c8e08c",
+   "raster": "aca2a2a2"
+  },
+  "deep-40p|pg_3": {
+   "board": "3c7bbd1d",
+   "reader": "2bd243ba",
+   "raster": "1f13047b"
+  },
+  "deep-40p|pg_4": {
+   "board": "6b532d15",
+   "reader": "836563a4",
+   "raster": "8f69a7d1"
+  },
+  "deep-40p|pg_5": {
+   "board": "a4d5fe4e",
+   "reader": "a51868ed",
+   "raster": "d4ff509d"
+  },
+  "deep-40p|pg_6": {
+   "board": "daad78aa",
+   "reader": "25cc4f91",
+   "raster": "79aa94e8"
+  },
+  "deep-40p|pg_7": {
+   "board": "3bb2ab15",
+   "reader": "6789a028",
+   "raster": "b12140c1"
+  },
+  "deep-40p|pg_8": {
+   "board": "bb58f639",
+   "reader": "fce7cc6e",
+   "raster": "3cbb98b4"
+  },
+  "deep-40p|pg_9": {
+   "board": "e0ba534e",
+   "reader": "b4d9076f",
+   "raster": "5231c14c"
+  },
+  "deep-40p|pg_10": {
+   "board": "0fe38255",
+   "reader": "e71c4a12",
+   "raster": "597c720a"
+  },
+  "deep-40p|pg_11": {
+   "board": "47ebfc36",
+   "reader": "44f70b17",
+   "raster": "f4eb8c4b"
+  },
+  "deep-40p|pg_12": {
+   "board": "a9f5f964",
+   "reader": "311d9e49",
+   "raster": "fe6d9ddb"
+  },
+  "deep-40p|pg_13": {
+   "board": "80ace25d",
+   "reader": "3912cf7e",
+   "raster": "0c69457e"
+  },
+  "deep-40p|pg_14": {
+   "board": "e1b1e719",
+   "reader": "34ce1958",
+   "raster": "6699e89e"
+  },
+  "deep-40p|pg_15": {
+   "board": "04108fff",
+   "reader": "49b38a20",
+   "raster": "cd994a63"
+  },
+  "deep-40p|pg_16": {
+   "board": "e489bac4",
+   "reader": "79715525",
+   "raster": "e2ac3542"
+  },
+  "deep-40p|pg_17": {
+   "board": "f358edf0",
+   "reader": "e0a64bf7",
+   "raster": "71785778"
+  },
+  "deep-40p|pg_18": {
+   "board": "221b529b",
+   "reader": "4cdb2028",
+   "raster": "35f1e35f"
+  },
+  "deep-40p|pg_19": {
+   "board": "88d0ff1a",
+   "reader": "af99f3ad",
+   "raster": "b56550c2"
+  },
+  "deep-40p|pg_20": {
+   "board": "e7091390",
+   "reader": "3f3249b9",
+   "raster": "c81b86b8"
+  },
+  "deep-40p|pg_21": {
+   "board": "753a2066",
+   "reader": "ac7b0465",
+   "raster": "69a8f916"
+  },
+  "deep-40p|pg_22": {
+   "board": "5c30c474",
+   "reader": "80ebfcc3",
+   "raster": "57a2bdf1"
+  },
+  "deep-40p|pg_23": {
+   "board": "aed6a377",
+   "reader": "5346d940",
+   "raster": "ce25c950"
+  },
+  "deep-40p|pg_24": {
+   "board": "75aafca3",
+   "reader": "c1c34c78",
+   "raster": "534d669b"
+  },
+  "deep-40p|pg_25": {
+   "board": "02933f57",
+   "reader": "61bb1496",
+   "raster": "b5960590"
+  },
+  "deep-40p|pg_26": {
+   "board": "b9082c4a",
+   "reader": "787bc597",
+   "raster": "d8594331"
+  },
+  "deep-40p|pg_27": {
+   "board": "69fcc1bc",
+   "reader": "9343465f",
+   "raster": "fa242d52"
+  },
+  "deep-40p|pg_28": {
+   "board": "9bbe2517",
+   "reader": "f1948bcc",
+   "raster": "14ccae11"
+  },
+  "deep-40p|pg_29": {
+   "board": "c687ef9f",
+   "reader": "de5bfe7a",
+   "raster": "08847fb1"
+  },
+  "deep-40p|pg_30": {
+   "board": "0853425e",
+   "reader": "41368e27",
+   "raster": "ed7d3a55"
+  },
+  "deep-40p|pg_31": {
+   "board": "33a4b707",
+   "reader": "020f73e6",
+   "raster": "3d27040f"
+  },
+  "deep-40p|pg_32": {
+   "board": "d9215238",
+   "reader": "e10d0b77",
+   "raster": "14a58e06"
+  },
+  "deep-40p|pg_33": {
+   "board": "a61f7fac",
+   "reader": "8ca5143b",
+   "raster": "795d3e5b"
+  },
+  "deep-40p|pg_34": {
+   "board": "cf59508f",
+   "reader": "e3ef14e8",
+   "raster": "8e3d343a"
+  },
+  "deep-40p|pg_35": {
+   "board": "a090425b",
+   "reader": "e0546272",
+   "raster": "06d36cbf"
+  },
+  "deep-40p|pg_36": {
+   "board": "14a30a86",
+   "reader": "a4b4d399",
+   "raster": "83fc376a"
+  },
+  "deep-40p|pg_37": {
+   "board": "43cb12ff",
+   "reader": "944aa042",
+   "raster": "77d294c8"
+  },
+  "deep-40p|pg_38": {
+   "board": "d776a6a0",
+   "reader": "29cbe8ff",
+   "raster": "f665a226"
+  },
+  "deep-40p|pg_39": {
+   "board": "082b4d98",
+   "reader": "77043377",
+   "raster": "e1762429"
+  },
+  "deep-40p|pg_40": {
+   "board": "1e1dcc9a",
+   "reader": "5b49dc6f",
+   "raster": "a1530d0c"
+  },
+  "deep-40p|rtl|pg_1": {
+   "board": "6605516b",
+   "raster": "e3c1b1e2"
+  },
+  "deep-40p|rtl|pg_2": {
+   "board": "36eda35d",
+   "raster": "aca2a2a2"
+  },
+  "deep-40p|rtl|pg_3": {
+   "board": "18275c0f",
+   "raster": "d0539291"
+  },
+  "deep-40p|rtl|pg_4": {
+   "board": "6b532d15",
+   "raster": "8f69a7d1"
+  },
+  "deep-40p|rtl|pg_5": {
+   "board": "a4d5fe4e",
+   "raster": "d4ff509d"
+  },
+  "deep-40p|rtl|pg_6": {
+   "board": "736ec754",
+   "raster": "13fab4cc"
+  },
+  "deep-40p|rtl|pg_7": {
+   "board": "3bb2ab15",
+   "raster": "b12140c1"
+  },
+  "deep-40p|rtl|pg_8": {
+   "board": "bb58f639",
+   "raster": "3cbb98b4"
+  },
+  "deep-40p|rtl|pg_9": {
+   "board": "ad1540b4",
+   "raster": "84c6c782"
+  },
+  "deep-40p|rtl|pg_10": {
+   "board": "0fe38255",
+   "raster": "597c720a"
+  },
+  "deep-40p|rtl|pg_11": {
+   "board": "47ebfc36",
+   "raster": "f4eb8c4b"
+  },
+  "deep-40p|rtl|pg_12": {
+   "board": "35061527",
+   "raster": "5f2115b1"
+  },
+  "deep-40p|rtl|pg_13": {
+   "board": "80ace25d",
+   "raster": "0c69457e"
+  },
+  "deep-40p|rtl|pg_14": {
+   "board": "e1b1e719",
+   "raster": "6699e89e"
+  },
+  "deep-40p|rtl|pg_15": {
+   "board": "d073e5fd",
+   "raster": "c3a8d2f5"
+  },
+  "deep-40p|rtl|pg_16": {
+   "board": "e489bac4",
+   "raster": "e2ac3542"
+  },
+  "deep-40p|rtl|pg_17": {
+   "board": "f358edf0",
+   "raster": "71785778"
+  },
+  "deep-40p|rtl|pg_18": {
+   "board": "5e403fcd",
+   "raster": "3a4922fb"
+  },
+  "deep-40p|rtl|pg_19": {
+   "board": "88d0ff1a",
+   "raster": "b56550c2"
+  },
+  "deep-40p|rtl|pg_20": {
+   "board": "e7091390",
+   "raster": "c81b86b8"
+  },
+  "deep-40p|rtl|pg_21": {
+   "board": "b533aafe",
+   "raster": "a3662dd6"
+  },
+  "deep-40p|rtl|pg_22": {
+   "board": "5c30c474",
+   "raster": "57a2bdf1"
+  },
+  "deep-40p|rtl|pg_23": {
+   "board": "aed6a377",
+   "raster": "ce25c950"
+  },
+  "deep-40p|rtl|pg_24": {
+   "board": "f6e71ee5",
+   "raster": "eed25f12"
+  },
+  "deep-40p|rtl|pg_25": {
+   "board": "02933f57",
+   "raster": "b5960590"
+  },
+  "deep-40p|rtl|pg_26": {
+   "board": "b9082c4a",
+   "raster": "d8594331"
+  },
+  "deep-40p|rtl|pg_27": {
+   "board": "f6c0851e",
+   "raster": "a72012d0"
+  },
+  "deep-40p|rtl|pg_28": {
+   "board": "9bbe2517",
+   "raster": "14ccae11"
+  },
+  "deep-40p|rtl|pg_29": {
+   "board": "c687ef9f",
+   "raster": "08847fb1"
+  },
+  "deep-40p|rtl|pg_30": {
+   "board": "8e966cb0",
+   "raster": "7d714cc9"
+  },
+  "deep-40p|rtl|pg_31": {
+   "board": "33a4b707",
+   "raster": "3d27040f"
+  },
+  "deep-40p|rtl|pg_32": {
+   "board": "d9215238",
+   "raster": "14a58e06"
+  },
+  "deep-40p|rtl|pg_33": {
+   "board": "8f173d56",
+   "raster": "a7a69be1"
+  },
+  "deep-40p|rtl|pg_34": {
+   "board": "cf59508f",
+   "raster": "8e3d343a"
+  },
+  "deep-40p|rtl|pg_35": {
+   "board": "a090425b",
+   "raster": "06d36cbf"
+  },
+  "deep-40p|rtl|pg_36": {
+   "board": "04911625",
+   "raster": "bf2fffb6"
+  },
+  "deep-40p|rtl|pg_37": {
+   "board": "43cb12ff",
+   "raster": "77d294c8"
+  },
+  "deep-40p|rtl|pg_38": {
+   "board": "d776a6a0",
+   "raster": "f665a226"
+  },
+  "deep-40p|rtl|pg_39": {
+   "board": "6cb3dede",
+   "raster": "1dd404af"
+  },
+  "deep-40p|rtl|pg_40": {
+   "board": "1e1dcc9a",
+   "raster": "a1530d0c"
+  },
+  "webtoon-20p|pg_1": {
+   "board": "d8330f2d",
+   "reader": "7ae91d08",
+   "raster": "bc3a6bd4"
+  },
+  "webtoon-20p|pg_2": {
+   "board": "5343c23f",
+   "reader": "341e4a3c",
+   "raster": "be4db0ee"
+  },
+  "webtoon-20p|pg_3": {
+   "board": "0c660681",
+   "reader": "f6c1e0de",
+   "raster": "6c6ae0a9"
+  },
+  "webtoon-20p|pg_4": {
+   "board": "dd5dbbab",
+   "reader": "f6d5922e",
+   "raster": "74bce63a"
+  },
+  "webtoon-20p|pg_5": {
+   "board": "8fbdafe2",
+   "reader": "5284dea1",
+   "raster": "828e4f15"
+  },
+  "webtoon-20p|pg_6": {
+   "board": "ea824c3d",
+   "reader": "62046144",
+   "raster": "90d1475c"
+  },
+  "webtoon-20p|pg_7": {
+   "board": "22e35269",
+   "reader": "edaed06c",
+   "raster": "861ec04d"
+  },
+  "webtoon-20p|pg_8": {
+   "board": "3eb891f7",
+   "reader": "39466626",
+   "raster": "d6c5f358"
+  },
+  "webtoon-20p|pg_9": {
+   "board": "59548e52",
+   "reader": "efdb1cbf",
+   "raster": "dc671b3b"
+  },
+  "webtoon-20p|pg_10": {
+   "board": "ef3e59fa",
+   "reader": "5bafdf2f",
+   "raster": "05c0378e"
+  },
+  "webtoon-20p|pg_11": {
+   "board": "d9cd2324",
+   "reader": "b1942fe7",
+   "raster": "6b6e006f"
+  },
+  "webtoon-20p|pg_12": {
+   "board": "726d8c39",
+   "reader": "bf22cfce",
+   "raster": "39c4d287"
+  },
+  "webtoon-20p|pg_13": {
+   "board": "e23d9c68",
+   "reader": "a475fe9d",
+   "raster": "5ac04281"
+  },
+  "webtoon-20p|pg_14": {
+   "board": "1a5ca792",
+   "reader": "fb622bf9",
+   "raster": "63cd8171"
+  },
+  "webtoon-20p|pg_15": {
+   "board": "c0dce992",
+   "reader": "b1473db5",
+   "raster": "29b7c072"
+  },
+  "webtoon-20p|pg_16": {
+   "board": "13419242",
+   "reader": "99ba4d63",
+   "raster": "d4ea90f5"
+  },
+  "webtoon-20p|pg_17": {
+   "board": "511bbe71",
+   "reader": "8abbc878",
+   "raster": "403c2500"
+  },
+  "webtoon-20p|pg_18": {
+   "board": "1e7aa12f",
+   "reader": "b4add266",
+   "raster": "997be041"
+  },
+  "webtoon-20p|pg_19": {
+   "board": "9174546d",
+   "reader": "b0e3190c",
+   "raster": "ee167bff"
+  },
+  "webtoon-20p|pg_20": {
+   "board": "c08172fa",
+   "reader": "c2d07a4f",
+   "raster": "69dfc9c2"
+  },
+  "webtoon-20p|rtl|pg_1": {
+   "board": "d8330f2d",
+   "raster": "bc3a6bd4"
+  },
+  "webtoon-20p|rtl|pg_2": {
+   "board": "5343c23f",
+   "raster": "be4db0ee"
+  },
+  "webtoon-20p|rtl|pg_3": {
+   "board": "0c660681",
+   "raster": "6c6ae0a9"
+  },
+  "webtoon-20p|rtl|pg_4": {
+   "board": "dd5dbbab",
+   "raster": "74bce63a"
+  },
+  "webtoon-20p|rtl|pg_5": {
+   "board": "8fbdafe2",
+   "raster": "828e4f15"
+  },
+  "webtoon-20p|rtl|pg_6": {
+   "board": "ea824c3d",
+   "raster": "90d1475c"
+  },
+  "webtoon-20p|rtl|pg_7": {
+   "board": "22e35269",
+   "raster": "861ec04d"
+  },
+  "webtoon-20p|rtl|pg_8": {
+   "board": "3eb891f7",
+   "raster": "d6c5f358"
+  },
+  "webtoon-20p|rtl|pg_9": {
+   "board": "59548e52",
+   "raster": "dc671b3b"
+  },
+  "webtoon-20p|rtl|pg_10": {
+   "board": "ef3e59fa",
+   "raster": "05c0378e"
+  },
+  "webtoon-20p|rtl|pg_11": {
+   "board": "d9cd2324",
+   "raster": "6b6e006f"
+  },
+  "webtoon-20p|rtl|pg_12": {
+   "board": "726d8c39",
+   "raster": "39c4d287"
+  },
+  "webtoon-20p|rtl|pg_13": {
+   "board": "e23d9c68",
+   "raster": "5ac04281"
+  },
+  "webtoon-20p|rtl|pg_14": {
+   "board": "1a5ca792",
+   "raster": "63cd8171"
+  },
+  "webtoon-20p|rtl|pg_15": {
+   "board": "c0dce992",
+   "raster": "29b7c072"
+  },
+  "webtoon-20p|rtl|pg_16": {
+   "board": "13419242",
+   "raster": "d4ea90f5"
+  },
+  "webtoon-20p|rtl|pg_17": {
+   "board": "511bbe71",
+   "raster": "403c2500"
+  },
+  "webtoon-20p|rtl|pg_18": {
+   "board": "1e7aa12f",
+   "raster": "997be041"
+  },
+  "webtoon-20p|rtl|pg_19": {
+   "board": "9174546d",
+   "raster": "ee167bff"
+  },
+  "webtoon-20p|rtl|pg_20": {
+   "board": "c08172fa",
+   "raster": "69dfc9c2"
+  },
+  "stress|pg_1": {
+   "board": "feb7bf34",
+   "reader": "9b0e57dd",
+   "raster": "216fe288"
+  },
+  "stress|pg_2": {
+   "board": "64310295",
+   "reader": "50b6e324"
+  },
+  "stress|pg_3": {
+   "board": "004da14b",
+   "reader": "e1a68530"
+  },
+  "stress|pg_4": {
+   "board": "032f8db0",
+   "reader": "7c484949"
+  },
+  "stress|pg_5": {
+   "board": "9e5b0aed",
+   "reader": "75823ad4",
+   "raster": "f2f42945"
+  },
+  "stress|pg_6": {
+   "board": "08e69cae",
+   "reader": "f225e747"
+  },
+  "stress|pg_7": {
+   "board": "2c8c7b72",
+   "reader": "44250471",
+   "raster": "cab910f8"
+  },
+  "stress|pg_8": {
+   "board": "ad6dfdfe",
+   "reader": "43db7b5b"
+  },
+  "stress|pg_9": {
+   "board": "36043516",
+   "reader": "7df08ce3"
+  },
+  "stress|pg_10": {
+   "board": "5d34da4f",
+   "reader": "05194df8"
+  },
+  "stress|pg_11": {
+   "board": "03210917",
+   "reader": "6e04a750",
+   "raster": "bf6a4791"
+  },
+  "stress|pg_12": {
+   "board": "73456e16",
+   "reader": "1b777787"
+  },
+  "stress|pg_13": {
+   "board": "efdbc45d",
+   "reader": "b4fe483e",
+   "raster": "3f9b506a"
+  },
+  "stress|pg_14": {
+   "board": "edba1feb",
+   "reader": "16581b26"
+  },
+  "stress|pg_15": {
+   "board": "13d4a87f",
+   "reader": "60761750"
+  },
+  "stress|pg_16": {
+   "board": "13b72b0a",
+   "reader": "03a9d13f"
+  },
+  "stress|pg_17": {
+   "board": "58e3b956",
+   "reader": "4082be29",
+   "raster": "80b86891"
+  },
+  "stress|pg_18": {
+   "board": "1ec0de4c",
+   "reader": "80ff6479"
+  },
+  "stress|pg_19": {
+   "board": "70f18f0c",
+   "reader": "57976b3b",
+   "raster": "9b9f3a71"
+  },
+  "stress|pg_20": {
+   "board": "7b7d8cbe",
+   "reader": "9c970e65"
+  },
+  "stress|rtl|pg_1": {
+   "board": "b629b7a2",
+   "raster": "2a82c9da"
+  },
+  "stress|rtl|pg_2": {
+   "board": "39d3612b"
+  },
+  "stress|rtl|pg_3": {
+   "board": "99efa153"
+  },
+  "stress|rtl|pg_4": {
+   "board": "452f7876"
+  },
+  "stress|rtl|pg_5": {
+   "board": "012913f7",
+   "raster": "4805e587"
+  },
+  "stress|rtl|pg_6": {
+   "board": "6a52ab96"
+  },
+  "stress|rtl|pg_7": {
+   "board": "9fb869fd",
+   "raster": "6c8dce49"
+  },
+  "stress|rtl|pg_8": {
+   "board": "8a0edc4a"
+  },
+  "stress|rtl|pg_9": {
+   "board": "fd1cc306"
+  },
+  "stress|rtl|pg_10": {
+   "board": "8ecda257"
+  },
+  "stress|rtl|pg_11": {
+   "board": "d5a1a167",
+   "raster": "408b7a73"
+  },
+  "stress|rtl|pg_12": {
+   "board": "39bb106a"
+  },
+  "stress|rtl|pg_13": {
+   "board": "6f138c98",
+   "raster": "2a272d64"
+  },
+  "stress|rtl|pg_14": {
+   "board": "36f86211"
+  },
+  "stress|rtl|pg_15": {
+   "board": "b06b6d27"
+  },
+  "stress|rtl|pg_16": {
+   "board": "87fcdeb8"
+  },
+  "stress|rtl|pg_17": {
+   "board": "167fd9b2",
+   "raster": "d5861ccb"
+  },
+  "stress|rtl|pg_18": {
+   "board": "742a9de4"
+  },
+  "stress|rtl|pg_19": {
+   "board": "afc5e044",
+   "raster": "6100d175"
+  },
+  "stress|rtl|pg_20": {
+   "board": "655e1e0a"
+  },
+  "sample|pg_1": {
+   "board": "3a6ed603",
+   "reader": "bbd570fa",
+   "raster": "e06ef3eb"
+  },
+  "sample|pg_2": {
+   "board": "6e494c7b",
+   "reader": "2e337024"
+  },
+  "sample|pg_3": {
+   "board": "d2b94221",
+   "reader": "d4c94e18"
+  },
+  "sample|pg_4": {
+   "board": "52b9224f",
+   "reader": "17a816e8"
+  },
+  "sample|pg_5": {
+   "board": "69b11c01",
+   "reader": "2f20b45c",
+   "raster": "a9c18960"
+  },
+  "sample|pg_6": {
+   "board": "9604f94b",
+   "reader": "13a0c10c"
+  }
+ },
+ "print": {
+  "lake-1p": "6a88834c",
+  "lake-1p|rtl": "6a88834c",
+  "heist-12p": "0713ae65",
+  "heist-12p|rtl": "61797b6b",
+  "deep-40p": "31ba3cc7",
+  "deep-40p|rtl": "24d5de49",
+  "webtoon-20p": "8ca40d50",
+  "webtoon-20p|rtl": "8ca40d50",
+  "stress": "55559ba4",
+  "stress|rtl": "38defd7e",
+  "empty": "3f29cf7d",
+  "empty|rtl": "3f29cf7d",
+  "sample": "15c92739"
+ }
+}
