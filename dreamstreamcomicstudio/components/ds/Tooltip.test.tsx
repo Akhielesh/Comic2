@@ -105,6 +105,8 @@ describe('Tooltip', () => {
     expect(tip()).toBeNull();
     advance(1);
     expect(tip()).toHaveTextContent('Undo · Ctrl+Z');
+    // The system menu a long press raises (contextmenu) is held back: the label is what the press asked for.
+    expect(fireEvent.contextMenu(trigger())).toBe(false);
     fireEvent.pointerUp(trigger(), { pointerType: 'touch' });
     fireEvent.click(trigger());
     expect(onUndo).not.toHaveBeenCalled(); // the long press was for the label
@@ -118,6 +120,7 @@ describe('Tooltip', () => {
     fireEvent.pointerUp(trigger(), { pointerType: 'touch' });
     fireEvent.click(trigger());
     expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(fireEvent.contextMenu(trigger())).toBe(true); // no long press: the system menu is left alone
     advance(TOOLTIP_LONG_PRESS_MS);
     expect(tip()).toBeNull();
   });

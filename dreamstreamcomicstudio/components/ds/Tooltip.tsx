@@ -10,7 +10,8 @@
  * - touch: hover does not exist there, so it never depends on it. A long press (TOOLTIP_LONG_PRESS_MS) shows the
  *   label and holds it TOOLTIP_TOUCH_HOLD_MS after the finger lifts; that press does not also press the control
  *   (its click is swallowed). A plain tap is a plain tap: it presses the control and shows nothing.
- * Esc, a press elsewhere or leaving closes it. Radix gives the open tooltip `role` tooltip and points the trigger's
+ * Esc, a press elsewhere or leaving closes it; Esc closes only the tooltip (it is the top layer while shown,
+ * ./overlayLayer), so a sheet or dialog under it stays open. Radix gives the open tooltip `role` tooltip and points the trigger's
  * `aria-describedby` at it. A tooltip repeats or adds to a name, never replaces one: an icon-only trigger still needs
  * its own label (IconButton's `label`; pass `title={null}` so the native title does not double it).
  *
@@ -18,12 +19,13 @@
  * <TooltipContent>Undo · Ctrl+Z</TooltipContent></Tooltip>. One TooltipProvider near the root shares the skip-delay
  * across tooltips; a Tooltip outside any provider brings its own.
  */
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 import { cn } from '../../lib/utils';
 // Not in components/ds/recipes.ts yet (a wave note adds it); from the single source.
 import { INVERSE_SURFACE } from '../chat/studioDesign';
 import { Z } from './recipes';
+import { NO_OVERLAY, useOpenState, useOverlayLayer, type OverlayState } from './overlayLayer';
 import { useReducedMotion } from './useReducedMotion';
 
 /** The hover delay: Atlas's tooltip delay (index.css `--ds-tooltip-delay`, 300 ms). */
@@ -43,7 +45,8 @@ export const TOOLTIP_PANEL = `${Z.tooltip} w-fit max-w-[min(20rem,calc(100vw-1re
 export const TOOLTIP_ARROW = 'fill-[var(--ds-ink)]';
 
 const InProvider = /* @__PURE__ */ createContext(false);
-const PressContext = /* @__PURE__ */ createContext<((open: boolean) => void) | null>(null);
+/** The tooltip's open state: the trigger's long press opens it, the content's layer closes it on Esc. */
+const TooltipState = /* @__PURE__ */ createContext<OverlayState | null>(null);
 
 export type TooltipProviderProps = React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Provider>;
 
@@ -61,20 +64,10 @@ export type TooltipProps = React.ComponentPropsWithoutRef<typeof TooltipPrimitiv
 /** One tooltip (its trigger and content inside). Controlled with `open` / `onOpenChange`, or on its own. */
 export function Tooltip({ open: openProp, defaultOpen = false, onOpenChange, ...props }: TooltipProps) {
   const inProvider = useContext(InProvider);
-  const [ownOpen, setOwnOpen] = useState(defaultOpen);
-  const controlled = openProp !== undefined;
-  const open = controlled ? openProp : ownOpen;
-  const onChangeRef = useRef(onOpenChange);
-  onChangeRef.current = onOpenChange;
-  const setOpen = useCallback(
-    (next: boolean) => {
-      if (!controlled) setOwnOpen(next);
-      onChangeRef.current?.(next);
-    },
-    [controlled]
-  );
+  const [open, setOpen] = useOpenState(openProp, defaultOpen, onOpenChange);
+  const state = useMemo(() => ({ open, setOpen }), [open, setOpen]);
   const root = <TooltipPrimitive.Root open={open} onOpenChange={setOpen} {...props} />;
-  return <PressContext.Provider value={setOpen}>{inProvider ? root : <TooltipProvider>{root}</TooltipProvider>}</PressContext.Provider>;
+  return <TooltipState.Provider value={state}>{inProvider ? root : <TooltipProvider>{root}</TooltipProvider>}</TooltipState.Provider>;
 }
 
 /** The trigger (usually `asChild` around a button). Adds the long-press path for touch. */
@@ -82,7 +75,7 @@ export const TooltipTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger>
 >(function TooltipTrigger({ onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, onClickCapture, ...props }, ref) {
-  const setOpen = useContext(PressContext);
+  const setOpen = useContext(TooltipState)?.setOpen;
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const shownByPress = useRef(false);
   const holdTimer = useRef(0);
@@ -156,8 +149,12 @@ export const TooltipTrigger = /* @__PURE__ */ React.forwardRef<
 export const TooltipContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
->(function TooltipContent({ className, sideOffset = 6, collisionPadding = 8, children, ...props }, ref) {
+>(function TooltipContent({ className, sideOffset = 6, collisionPadding = 8, children, onEscapeKeyDown, ...props }, ref) {
   const reduce = useReducedMotion();
+  const { open, setOpen } = useContext(TooltipState) ?? NO_OVERLAY;
+  const close = useCallback(() => setOpen(false), [setOpen]);
+  // Esc closes the tooltip only; it takes no press or focus, so it does not join the sheets' stack.
+  useOverlayLayer(open, close, { onEscapeKeyDown, joinSheets: false });
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -165,6 +162,7 @@ export const TooltipContent = /* @__PURE__ */ React.forwardRef<
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
+        onEscapeKeyDown={onEscapeKeyDown}
         className={cn(INVERSE_SURFACE, TOOLTIP_PANEL, reduce ? '' : 'ds-fade-in', className)}
         {...props}
       >

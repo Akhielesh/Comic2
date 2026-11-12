@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * The DS-1c overlay sources (components/ds/{Dialog,AlertDialog,Menu,Popover,Tooltip,Toast}.tsx) and their QA scene
+ * The DS-1c overlay sources (components/ds/{Dialog,AlertDialog,Menu,Popover,Tooltip,Toast}.tsx, overlayLayer.ts) and their QA scene
  * (qa/app/scenes/ds-overlays.tsx) hold the design-system rules, so DS-0's app-wide guards find nothing at integration:
  * no hex, no raw z-index (layers come from Z), no local cx, no legacy kit, no raw hue ink, no spelled duration, no
  * stacked inks, no hand-rolled eyebrow; every --ds-* token they read exists; and every motion, ease and radius token
@@ -13,7 +13,9 @@ import * as design from '../chat/studioDesign';
 import { findCompetingInks, findHandRolledOverlines } from '../../tests/config/classLists';
 import { APP_ROOT } from '../../tests/config/cssTokens';
 
-const FILES = ['Dialog', 'AlertDialog', 'Menu', 'Popover', 'Tooltip', 'Toast'].map((n) => `components/ds/${n}.tsx`).concat('qa/app/scenes/ds-overlays.tsx');
+const FILES = ['Dialog', 'AlertDialog', 'Menu', 'Popover', 'Tooltip', 'Toast']
+  .map((n) => `components/ds/${n}.tsx`)
+  .concat('components/ds/overlayLayer.ts', 'qa/app/scenes/ds-overlays.tsx');
 const source = (rel: string) => readFileSync(path.join(APP_ROOT, rel), 'utf8');
 
 describe('the overlay sources hold the design-system rules', () => {
@@ -89,15 +91,24 @@ describe('the overlays cost nothing where they are not used', () => {
       ]
     });
     const out = Object.values(result.metafile!.outputs)[0];
-    return { kept: Object.entries(out.inputs).filter(([, v]) => v.bytesInOutput > 0).map(([f]) => f), gz: gzipSync(result.outputFiles[0].contents).length };
+    const bytes = Object.fromEntries(Object.entries(out.inputs).map(([f, v]) => [f, v.bytesInOutput]));
+    return { kept: Object.keys(bytes).filter((f) => bytes[f] > 0), bytes, gz: gzipSync(result.outputFiles[0].contents).length };
   }
   const radixIn = (kept: string[]) => kept.filter((f) => /@radix-ui|@floating-ui|react-remove-scroll|aria-hidden/.test(f));
 
-  it('a Button imported through a barrel that re-exports every overlay carries no Radix', { timeout: 30_000 }, async () => {
+  it('a Button imported through a barrel that re-exports every overlay carries no Radix, and almost nothing else', { timeout: 30_000 }, async () => {
+    const entry = "import { Button } from 'virtual:barrel';\nconsole.log(Button);";
     const barrel = [...OVERLAYS.map((m) => `export * from './${m}';`), "export { Button } from './Button';"].join('\n');
-    const { kept } = await bundle({ barrel, entry: "import { Button } from 'virtual:barrel';\nconsole.log(Button);" });
+    const { kept, bytes, gz } = await bundle({ barrel, entry });
     expect(kept.some((f) => f.endsWith('components/ds/Button.tsx'))).toBe(true);
     expect(radixIn(kept)).toEqual([]);
+    // The overlay layer and what it joins (the sheets' stack, the back stack) leave only their module-level lines
+    // (a token string, a load id, import lines esbuild keeps; Rollup drops most of them).
+    const layer = Object.entries(bytes).filter(([f]) => /overlayLayer|PopSheet|backStack|conversation\/ui/.test(f));
+    expect(layer.reduce((sum, [, n]) => sum + n, 0)).toBeLessThan(1024);
+    // In all, an unused overlay set costs a Button-only chunk under 1.5 KB gz (minified, esbuild).
+    const alone = await bundle({ barrel: "export { Button } from './Button';", entry });
+    expect(gz - alone.gz).toBeLessThan(1536);
   });
 
   it('the probe is real: a used Dialog does bring Radix', { timeout: 30_000 }, async () => {

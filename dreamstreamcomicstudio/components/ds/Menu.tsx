@@ -2,32 +2,42 @@
  * Menu — Atlas `ui-generated/dropdown-menu.tsx` on Radix (`@radix-ui/react-dropdown-menu`) and the `--ds-*` tokens: the
  * app's one action menu (⋯ menus, "More" buttons), replacing the hand-rolled ones as their surfaces move.
  *
- * Radix supplies the behaviour: the trigger opens it on a press, Enter, Space or ↓ (↑ opens at the last item); the
- * arrow keys move between items with roving focus (Home / End jump, disabled items are skipped); typing a letter
- * jumps to the next item that starts with it (typeahead); Enter or Space chooses; Esc, a press outside or Tab closes
+ * Radix supplies the behaviour: the trigger opens it on a mouse or pen press, Enter, Space or ↓ (↑ opens at the last
+ * item); the arrow keys move between items with roving focus (Home / End jump, disabled items are skipped); typing a
+ * letter jumps to the next item that starts with it (typeahead); Enter or Space chooses; a press outside or Tab closes
  * it and focus goes back to the trigger; → / ← open and close a submenu. It is portalled, flips to stay on screen and
  * never grows past the space left (it scrolls inside).
  *
+ * A finger opens it on the tap (the click), never on touch-down, so a scroll that starts on a ⋯ trigger in a list
+ * does not open it. While open it is the top layer (./overlayLayer): Esc closes it (from a submenu too) and nothing
+ * beneath it, and a sheet that opened it stands down, so choosing a row never reads as a press outside the sheet.
+ *
  * Mapped onto the recipes: the panel is OVERLAY on the Z.popover layer; a highlighted row (pointer or keyboard) takes
- * `--ds-overlay-hover` (Atlas's menu highlight, white 8 % in dark), keyboard focus also draws the inset ring; a
- * destructive row reads the danger text ink (always with its words). Every row is 44 px tall under a coarse pointer
- * (DENSITY.coarse). The panel enters with `ds-scale-in` from the trigger's side (none under reduced motion).
+ * `--ds-overlay-hover` (Atlas's menu highlight, white 8 % in dark), keyboard focus is FOCUS_ITEM (the same tint and
+ * the inset ring); a destructive row reads the danger text ink (always with its words). Every row is 44 px tall under
+ * a coarse pointer (DENSITY.coarse). The panel enters with `ds-scale-in` from the trigger's side (none under reduced
+ * motion).
  */
 import React from 'react';
 import * as MenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { Check, ChevronRight, Circle } from 'lucide-react';
 import { cn } from '../../lib/utils';
-// Not in components/ds/recipes.ts yet (a wave note adds it); from the single source.
-import { OVERLAY } from '../chat/studioDesign';
+// Not in components/ds/recipes.ts yet (a wave note adds them); from the single source.
+import { FOCUS_ITEM, OVERLAY } from '../chat/studioDesign';
 import { DENSITY, TONE_TEXT, Z } from './recipes';
+import { NO_OVERLAY, useOpenState, useOverlayLayer, type OverlayState } from './overlayLayer';
 import { useReducedMotion } from './useReducedMotion';
 
 export type MenuItemVariant = 'default' | 'destructive';
 
 /** The floating panel (also the submenu's). */
 export const MENU_PANEL = `${OVERLAY} ${Z.popover} min-w-[8rem] max-w-[calc(100vw-1rem)] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overflow-x-hidden p-1 origin-[var(--radix-dropdown-menu-content-transform-origin)]`;
-/** A row: Atlas's item on the tokens; 44 px under a coarse pointer; its ink is chosen per variant (MENU_ROW_INK). */
-export const MENU_ROW = `relative flex w-full min-w-0 cursor-default select-none items-center gap-2 rounded-[var(--ds-radius-control,8px)] px-2 py-2 text-left text-[length:var(--ds-text-base)] leading-5 outline-none transition-colors duration-[var(--ds-motion-fast,120ms)] ease-[var(--ds-ease,ease)] motion-reduce:transition-none data-[highlighted]:bg-[var(--ds-overlay-hover)] data-[state=open]:bg-[var(--ds-overlay-hover)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)] ${DENSITY.coarse} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4`;
+/**
+ * A row: Atlas's item on the tokens. The highlighted row (pointer or roving focus) and an open submenu's row take the
+ * overlay-row tint; keyboard focus is FOCUS_ITEM (the tint and the inset ring). 44 px under a coarse pointer; its ink
+ * is chosen per variant (MENU_ROW_INK).
+ */
+export const MENU_ROW = `relative flex w-full min-w-0 cursor-default select-none items-center gap-2 rounded-[var(--ds-radius-control,8px)] px-2 py-2 text-left text-[length:var(--ds-text-base)] leading-5 outline-none transition-colors duration-[var(--ds-motion-fast,120ms)] ease-[var(--ds-ease,ease)] motion-reduce:transition-none data-[highlighted]:bg-[var(--ds-overlay-hover)] data-[state=open]:bg-[var(--ds-overlay-hover)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 ${FOCUS_ITEM} ${DENSITY.coarse} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4`;
 export const MENU_ROW_INK: Record<MenuItemVariant, string> = {
   default: 'text-[var(--ds-ink)]',
   destructive: TONE_TEXT.danger
@@ -42,21 +52,68 @@ export const MENU_SHORTCUT = 'ml-auto pl-4 text-[length:var(--ds-text-xs)] track
 const inset = (on: boolean | undefined) => (on ? '' : undefined);
 const entrance = (reduce: boolean) => (reduce ? '' : 'ds-scale-in');
 
-export { Root as Menu, Group as MenuGroup, RadioGroup as MenuRadioGroup, Sub as MenuSub } from '@radix-ui/react-dropdown-menu';
+export { Group as MenuGroup, RadioGroup as MenuRadioGroup, Sub as MenuSub } from '@radix-ui/react-dropdown-menu';
+
+/** The root's open state, for the trigger's tap and the content's layer. */
+const MenuState = /* @__PURE__ */ React.createContext<OverlayState>(NO_OVERLAY);
+
 export type MenuProps = React.ComponentPropsWithoutRef<typeof MenuPrimitive.Root>;
 
+/** The menu root: open with `open` + `onOpenChange`, or on its own (`defaultOpen`). */
+export function Menu({ open, defaultOpen, onOpenChange, ...props }: MenuProps): React.ReactElement {
+  const [isOpen, setOpen] = useOpenState(open, defaultOpen, onOpenChange);
+  const state = React.useMemo(() => ({ open: isOpen, setOpen }), [isOpen, setOpen]);
+  return (
+    <MenuState.Provider value={state}>
+      <MenuPrimitive.Root {...props} open={isOpen} onOpenChange={setOpen} />
+    </MenuState.Provider>
+  );
+}
+
+/**
+ * The trigger. A mouse or pen opens the menu on the press (Radix); a finger opens it on the tap, never on touch-down
+ * (a scroll that starts on the trigger must not open it): the touch press is marked handled, so Radix skips its own
+ * press toggle, and the click that ends a tap toggles the menu.
+ */
 export const MenuTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Trigger>
->(function MenuTrigger(props, ref) {
-  return <MenuPrimitive.Trigger ref={ref} data-slot="menu-trigger" {...props} />;
+>(function MenuTrigger({ onPointerDown, onPointerCancel, onClick, ...props }, ref) {
+  const menu = React.useContext(MenuState);
+  const tapping = React.useRef(false);
+  return (
+    <MenuPrimitive.Trigger
+      ref={ref}
+      data-slot="menu-trigger"
+      {...props}
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        tapping.current = event.pointerType === 'touch' && !event.defaultPrevented;
+        if (tapping.current) event.preventDefault();
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        tapping.current = false;
+      }}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!tapping.current) return;
+        tapping.current = false;
+        if (!event.defaultPrevented && !props.disabled) menu.setOpen(!menu.open);
+      }}
+    />
+  );
 });
 
 export const MenuContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Content>
->(function MenuContent({ className, sideOffset = 4, collisionPadding = 8, ...props }, ref) {
+>(function MenuContent({ className, sideOffset = 4, collisionPadding = 8, onEscapeKeyDown, ...props }, ref) {
   const reduce = useReducedMotion();
+  const { open, setOpen } = React.useContext(MenuState);
+  const close = React.useCallback(() => setOpen(false), [setOpen]);
+  // One layer for the menu and its submenus: Esc in a submenu closes the whole menu, as Radix does.
+  useOverlayLayer(open, close, { onEscapeKeyDown });
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Content
@@ -64,6 +121,7 @@ export const MenuContent = /* @__PURE__ */ React.forwardRef<
         data-slot="menu-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
+        onEscapeKeyDown={onEscapeKeyDown}
         className={cn(MENU_PANEL, entrance(reduce), className)}
         {...props}
       />

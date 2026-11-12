@@ -2,8 +2,8 @@
  * Menu and Popover (Radix): the Atlas classes on the tokens (OVERLAY on Z.popover; the highlighted row on
  * --ds-overlay-hover; a destructive row in the danger text ink), the keyboard contract (Enter / ↓ open the menu on its
  * first item, the arrow keys move with roving focus, a letter jumps by typeahead, Esc closes and focus returns to the
- * trigger; the popover moves focus in and back out), 44 px rows under a coarse pointer, and no entrance animation under
- * reduced motion.
+ * trigger; the popover moves focus in and back out), a finger opening the menu on its tap and never on touch-down,
+ * 44 px rows under a coarse pointer, and no entrance animation under reduced motion (the submenu's too).
  */
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -18,6 +18,9 @@ import {
   MenuRadioItem,
   MenuSeparator,
   MenuShortcut,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
   MenuTrigger,
   MENU_PANEL,
   MENU_ROW,
@@ -25,7 +28,7 @@ import {
 } from './Menu';
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger, POPOVER_PANEL } from './Popover';
 import { Button } from './Button';
-import { OVERLAY } from '../chat/studioDesign';
+import { FOCUS_ITEM, OVERLAY } from '../chat/studioDesign';
 import { DENSITY, TONE_TEXT, Z } from './recipes';
 import { expectClasses } from './ds.testkit';
 
@@ -64,7 +67,7 @@ const press = async (key: string) => {
   await flush();
 };
 
-function PageMenu({ onSelect }: { onSelect?: (what: string) => void }) {
+function PageMenu({ onSelect, sub = false }: { onSelect?: (what: string) => void; sub?: boolean }) {
   const [grid, setGrid] = React.useState(true);
   const [view, setView] = React.useState('page');
   return (
@@ -80,6 +83,14 @@ function PageMenu({ onSelect }: { onSelect?: (what: string) => void }) {
         <MenuItem onSelect={() => onSelect?.('duplicate')}>Duplicate</MenuItem>
         <MenuItem disabled>Move to another comic</MenuItem>
         <MenuItem onSelect={() => onSelect?.('download')}>Download</MenuItem>
+        {sub ? (
+          <MenuSub>
+            <MenuSubTrigger>Move to</MenuSubTrigger>
+            <MenuSubContent>
+              <MenuItem onSelect={() => onSelect?.('chapter 1')}>Chapter 1</MenuItem>
+            </MenuSubContent>
+          </MenuSub>
+        ) : null}
         <MenuSeparator />
         <MenuCheckboxItem checked={grid} onCheckedChange={setGrid}>
           Show the grid
@@ -113,6 +124,9 @@ describe('Menu', () => {
     const rename = screen.getByRole('menuitem', { name: 'Rename' });
     expectClasses(rename, MENU_ROW, 'text-[var(--ds-ink)]');
     expect(rename.className).toContain('data-[highlighted]:bg-[var(--ds-overlay-hover)]');
+    // Keyboard focus is the FOCUS_ITEM recipe (the overlay-row tint and the inset ring), not a re-spelling of it.
+    expect(MENU_ROW).toContain(FOCUS_ITEM);
+    expectClasses(rename, FOCUS_ITEM);
     const del = screen.getByRole('menuitem', { name: 'Delete page' });
     expectClasses(del, MENU_ROW, TONE_TEXT.danger);
     expect(del.className).not.toContain('text-[var(--ds-ink)]'); // one ink, never two stacked
@@ -177,6 +191,56 @@ describe('Menu', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('a finger opens it on the tap, never on touch-down: a scroll that starts on the trigger opens nothing', () => {
+    render(<PageMenu />);
+    const trigger = screen.getByRole('button', { name: 'Page actions' });
+    // Touch-down, then the page scrolls (the browser cancels the pointer; no click follows).
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'touch' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.pointerCancel(trigger, { pointerType: 'touch' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    // A tap: down, up, click.
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'touch' });
+    fireEvent.pointerUp(trigger, { button: 0, pointerType: 'touch' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    // A plain click that no touch started (a mouse already toggled on its press) never toggles a second time.
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('a controlled menu follows open / onOpenChange (and a tap asks it to open)', () => {
+    const onOpenChange = vi.fn();
+    render(
+      <Menu open={false} onOpenChange={onOpenChange}>
+        <MenuTrigger>More</MenuTrigger>
+        <MenuContent>
+          <MenuItem>One</MenuItem>
+        </MenuContent>
+      </Menu>
+    );
+    const trigger = screen.getByRole('button', { name: 'More' });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'touch' });
+    fireEvent.click(trigger);
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('Esc in a submenu closes the whole menu and focus goes back to the trigger', async () => {
+    render(<PageMenu sub />);
+    const trigger = screen.getByRole('button', { name: 'Page actions' });
+    openByKeyboard();
+    act(() => screen.getByRole('menuitem', { name: 'Move to' }).focus());
+    await press('ArrowRight');
+    expect(screen.getAllByRole('menu')).toHaveLength(2);
+    await press('Escape');
+    expect(screen.queryByRole('menu')).toBeNull();
+    await flush();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('44 px under a coarse pointer: every row', () => {
     render(<PageMenu />);
     openByKeyboard();
@@ -189,6 +253,23 @@ describe('Menu', () => {
     reducedMotion = true;
     render(<PageMenu />);
     expect(openByKeyboard().className).not.toContain('ds-scale-in');
+  });
+
+  it('the submenu enters with ds-scale-in, and not under reduced motion', async () => {
+    const subPanel = async () => {
+      openByKeyboard();
+      act(() => screen.getByRole('menuitem', { name: 'Move to' }).focus());
+      await press('ArrowRight');
+      const sub = document.querySelector<HTMLElement>('[data-slot="menu-sub-content"]')!;
+      expectClasses(sub, OVERLAY, MENU_PANEL);
+      return sub;
+    };
+    const { unmount } = render(<PageMenu sub />);
+    expect((await subPanel()).className).toContain('ds-scale-in');
+    unmount();
+    reducedMotion = true;
+    render(<PageMenu sub />);
+    expect((await subPanel()).className).not.toContain('ds-scale-in');
   });
 });
 

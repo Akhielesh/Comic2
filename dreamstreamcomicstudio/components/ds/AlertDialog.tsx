@@ -3,9 +3,11 @@
  * surfaces of ./Dialog (the same scrim, panel, title and entrance). It is the app's confirm step: it replaces
  * `window.confirm` as each surface moves onto the design system (redesign plan §4; no caller moves in DS-1c).
  *
- * Radix supplies the behaviour: it is modal (focus trapped, the page behind hidden and still), Esc cancels, a press on
- * the scrim does NOT close it (the person answers the question), and focus starts on Cancel, so Enter never confirms
- * a destructive step by accident; on close focus goes back to whatever opened it. The confirm button is
+ * Radix supplies the behaviour: it is modal (focus trapped, the page behind hidden and still), a press on the scrim
+ * does NOT close it (the person answers the question), and focus starts on Cancel, so Enter never confirms a
+ * destructive step by accident; on close focus goes back to whatever opened it. Like the Dialog it is the top layer
+ * while open (./overlayLayer): Esc cancels it and nothing beneath it, the sheet that opened it stands down (a press
+ * on an answer never reads as a press outside the sheet), and the back gesture cancels it first. The confirm button is
  * `AlertDialogAction`: `variant="destructive"` paints it with DANGER_FILL (the Button's destructive variant, the label
  * on `--ds-on-danger`), and its words say what happens ("Delete page"), never "OK". Both buttons are 44 px tall under
  * a coarse pointer.
@@ -15,15 +17,29 @@ import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { cn } from '../../lib/utils';
 import { buttonClasses } from './Button';
 import { DIALOG_DESCRIPTION, DIALOG_FOOTER, DIALOG_HEADER, DIALOG_PANEL, DIALOG_SCRIM, DIALOG_SIZE, DIALOG_TITLE_CLASSES, dialogMotion, type DialogSize } from './Dialog';
+import { NO_OVERLAY, useOpenState, useOverlayLayer, type OverlayState } from './overlayLayer';
 import { useReducedMotion } from './useReducedMotion';
+import { useBackLayer } from '../comicstudio/mobile/backStack';
 
 export type AlertDialogActionVariant = 'default' | 'destructive';
 
 /** The alert panel's header has no close button to leave room for. */
 export const ALERT_DIALOG_HEADER = 'pr-0';
 
-export { Root as AlertDialog } from '@radix-ui/react-alert-dialog';
+const AlertDialogState = /* @__PURE__ */ React.createContext<OverlayState>(NO_OVERLAY);
+
 export type AlertDialogProps = React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Root>;
+
+/** The confirm step's root: open with `open` + `onOpenChange`, or on its own (`defaultOpen`). */
+export function AlertDialog({ open, defaultOpen, onOpenChange, ...props }: AlertDialogProps): React.ReactElement {
+  const [isOpen, setOpen] = useOpenState(open, defaultOpen, onOpenChange);
+  const state = React.useMemo(() => ({ open: isOpen, setOpen }), [isOpen, setOpen]);
+  return (
+    <AlertDialogState.Provider value={state}>
+      <AlertDialogPrimitive.Root {...props} open={isOpen} onOpenChange={setOpen} />
+    </AlertDialogState.Provider>
+  );
+}
 
 export const AlertDialogTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Trigger>,
@@ -39,12 +55,22 @@ export interface AlertDialogContentProps extends React.ComponentPropsWithoutRef<
 }
 
 export const AlertDialogContent = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Content>, AlertDialogContentProps>(
-  function AlertDialogContent({ className, size = 'sm', scrimClassName, ...props }, ref) {
+  function AlertDialogContent({ className, size = 'sm', scrimClassName, onEscapeKeyDown, ...props }, ref) {
     const motion = dialogMotion(useReducedMotion());
+    const { open, setOpen } = React.useContext(AlertDialogState);
+    const cancel = React.useCallback(() => setOpen(false), [setOpen]);
+    useOverlayLayer(open, cancel, { onEscapeKeyDown });
+    useBackLayer(open, cancel, 'ds-alert-dialog');
     return (
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay data-slot="alert-dialog-scrim" className={cn(DIALOG_SCRIM, motion.scrim, scrimClassName)}>
-          <AlertDialogPrimitive.Content ref={ref} data-slot="alert-dialog-content" className={cn(DIALOG_PANEL, DIALOG_SIZE[size], motion.panel, className)} {...props} />
+          <AlertDialogPrimitive.Content
+            ref={ref}
+            data-slot="alert-dialog-content"
+            className={cn(DIALOG_PANEL, DIALOG_SIZE[size], motion.panel, className)}
+            onEscapeKeyDown={onEscapeKeyDown}
+            {...props}
+          />
         </AlertDialogPrimitive.Overlay>
       </AlertDialogPrimitive.Portal>
     );
