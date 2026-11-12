@@ -101,7 +101,8 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
                   <CastAvatar character={c} urlFor={studio.urlFor} size={40} busy={status.tone === 'busy'} showCount={false} />
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-baseline gap-1">
-                      <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{c.name}</span>
+                      {/* The creator's own name for the character: user content, which the clutter probe does not count as a cut label (DC-0 #5a). */}
+                      <span data-user-content="" className="min-w-0 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{c.name}</span>
                       {n && <span className="shrink-0 text-[11.5px] font-semibold tabular-nums text-[var(--ds-accent)]">×{n}</span>}
                     </span>
                     <span
