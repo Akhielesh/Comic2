@@ -48,21 +48,41 @@ export const readerPathsOfState = (state: unknown): string[] => {
 };
 
 /**
- * The states of an owner's public projects, without force-private (moderated) ones, whatever is_public says
- * (service role; tolerates databases without the moderation column, and only that: any other error throws).
+ * The state keys that carry an image path (EGRESS-DB E2): everything readerPathsOfState and the image proxy's
+ * projectStateReferencesImagePath (system.ts) read, and nothing else. Never `versions` (the classic snapshots) or
+ * `pageStudio.style`: the whole state of an owner's public comics was ~8 MB a check, these keys ~0.6 MB.
+ */
+const READER_STATE_KEYS = ['studioVersion', 'coverImageId', 'coverTemplateImageId', 'panels', 'characters', 'items', 'locations', 'styleVariants', 'imageTags'] as const;
+const READER_STATE_COLUMNS = [...READER_STATE_KEYS.map((k) => `${k}:state->${k}`), 'pageStudioPages:state->pageStudio->pages'].join(',');
+export const READER_STATE_SELECT = `is_forced_private,${READER_STATE_COLUMNS}`;
+/** The same projection on a database without the moderation column (error 42703). */
+export const READER_STATE_SELECT_LEGACY = READER_STATE_COLUMNS;
+
+/** The path-bearing part of a state, as the projected row carries it (a missing key stays missing). */
+const readerStateOf = (row: Record<string, unknown>): Record<string, unknown> => {
+  const state: Record<string, unknown> = {};
+  for (const key of READER_STATE_KEYS) if (row[key] !== null && row[key] !== undefined) state[key] = row[key];
+  if (row.pageStudioPages !== null && row.pageStudioPages !== undefined) state.pageStudio = { pages: row.pageStudioPages };
+  return state;
+};
+
+/**
+ * The path-bearing states of an owner's public projects, without force-private (moderated) ones, whatever
+ * is_public says (service role; tolerates databases without the moderation column, and only that: any other error
+ * throws).
  */
 export const loadPublicProjectStates = async (supabaseAdmin: SupabaseClient, ownerId: string): Promise<unknown[]> => {
-  let rows: Array<{ state?: unknown; is_forced_private?: boolean | null }> = [];
-  const first = await supabaseAdmin.from('projects').select('state, is_forced_private').eq('user_id', ownerId).eq('is_public', true);
+  let rows: Array<Record<string, unknown>> = [];
+  const first = await supabaseAdmin.from('projects').select(READER_STATE_SELECT).eq('user_id', ownerId).eq('is_public', true);
   if (first.error) {
     if (String((first.error as { code?: string }).code || '') !== '42703') throw first.error;
-    const fallback = await supabaseAdmin.from('projects').select('state').eq('user_id', ownerId).eq('is_public', true);
+    const fallback = await supabaseAdmin.from('projects').select(READER_STATE_SELECT_LEGACY).eq('user_id', ownerId).eq('is_public', true);
     if (fallback.error) throw fallback.error;
-    rows = (fallback.data as typeof rows) || [];
+    rows = (fallback.data as unknown as typeof rows) || [];
   } else {
-    rows = (first.data as typeof rows) || [];
+    rows = (first.data as unknown as typeof rows) || [];
   }
-  return rows.filter((row) => row.is_forced_private !== true).map((row) => row.state);
+  return rows.filter((row) => isRecord(row) && row.is_forced_private !== true).map(readerStateOf);
 };
 
 /**

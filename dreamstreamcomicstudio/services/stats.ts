@@ -23,7 +23,7 @@ export const getStudioStats = async (): Promise<StudioStats> => {
         // relies on the same policy), so this is an accurate, RLS-safe count.
         const { count: publicComicCount, error: comicError } = await supabase
             .from('projects')
-            .select('*', { count: 'exact', head: true })
+            .select('id', { count: 'exact', head: true })
             .eq('is_public', true);
 
         const comicCount = comicError ? 0 : (publicComicCount || 0);

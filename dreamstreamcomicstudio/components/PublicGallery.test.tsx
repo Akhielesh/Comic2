@@ -5,24 +5,23 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { columnsRead, fakeSupabase, jsonBytes, projectRow } from '../services/projectRows.testkit';
+
 const SLUG = 'AbCdEfGhIjKlMnOpQ';
 const KEY = 'A'.repeat(22);
-const rows = vi.hoisted(() => ({ value: [] as Record<string, unknown>[] }));
+/** The public projects table the gallery reads (the fake applies the select, filters, order and range). */
+const rows = {
+  get value() {
+    return fakeSupabase.state.tables.projects;
+  },
+  set value(next: Record<string, unknown>[]) {
+    fakeSupabase.state.tables.projects = next;
+  }
+};
 
-vi.mock('../services/supabase', () => {
-  const query: Record<string, unknown> = {};
-  query.select = () => query;
-  query.eq = () => query;
-  query.order = () => Promise.resolve({ data: rows.value, error: null });
-  query.in = () => Promise.resolve({ data: [{ id: 'u1', username: 'mira' }], error: null });
-  return {
-    supabase: {
-      from: () => query,
-      storage: { from: (bucket: string) => ({ getPublicUrl: (p: string) => ({ data: { publicUrl: `https://sb.test/storage/v1/object/public/${bucket}/${p}` } }) }) }
-    }
-  };
-});
-vi.mock('../services/db', () => ({
+vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
+vi.mock('../services/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/db')>()),
   getImageUrl: vi.fn(async () => undefined),
   getProjectLikeMap: vi.fn(async () => ({})),
   toggleProjectLike: vi.fn(async () => ({ liked: true }))
@@ -51,6 +50,8 @@ const row = (id: string, name: string, state: Record<string, unknown>, extra: Re
 });
 
 beforeEach(() => {
+  fakeSupabase.reset();
+  fakeSupabase.state.tables.profiles = [{ id: 'u1', username: 'mira' }];
   rows.value = [
     row('v4-1', 'The Lake', { studioVersion: 4, shareSlug: SLUG, publicCover: `pub/${KEY}/cover-1080.webp` }, { content_rating: 'PG' }),
     row('v4-2', 'Night Raid', { studioVersion: 4, shareSlug: 'BbCdEfGhIjKlMnOpQ' }, { content_rating: 'PG-13' }),
@@ -163,6 +164,66 @@ describe('PublicGallery', () => {
     await screen.findByRole('link', { name: 'Read Night Raid' });
     fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
     expect(screen.getByText('No kids-friendly comics yet.')).toBeInTheDocument();
+  });
+});
+
+// EGRESS-DB E3: the gallery reads cards (the columns and state keys a card reads), never a comic's whole state, and
+// asks the database to leave out held comics; the client still drops one that slips through.
+describe('PublicGallery reads cards', () => {
+  const VERSIONS = Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, state: { script: 'draft '.repeat(2_000) } }));
+  const galleryQueries = () => fakeSupabase.queriesOn('projects');
+
+  it('selects no `*`, no bare `state` and no `versions`, unheld public comics only, one page at a time', async () => {
+    rows.value = [...rows.value, row('big', 'Big Classic', { coverImageUrl: 'https://cdn.test/big.png', versions: VERSIONS, script: 'x'.repeat(10_000) })];
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read Big Classic' });
+    const [query] = galleryQueries();
+    const items = query.columns.split(',');
+    expect(items).not.toContain('*');
+    expect(items).not.toContain('state');
+    expect(query.columns).not.toMatch(/versions|script/);
+    for (const item of items) if (columnsRead(item)[0] === 'state') expect(item).toMatch(/^[A-Za-z]+:state->[A-Za-z]+$/);
+    expect(query.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=likes_count.desc', 'range=0-47']);
+    // The rows on the wire are cards: a small fraction of the full rows.
+    const shipped = rows.value.map((r) => projectRow(r, query.columns));
+    expect(JSON.stringify(shipped)).not.toContain('draft draft');
+    expect(jsonBytes(shipped)).toBeLessThan(jsonBytes(rows.value) / 10);
+  });
+
+  it('the trending fallback and the recent tab keep the same projection', async () => {
+    fakeSupabase.state.failures.push({ when: (q) => q.table === 'projects' && q.filters.includes('order=likes_count.desc'), error: { code: '42703', message: 'no likes_count' } });
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    const [failed, fallback] = galleryQueries();
+    expect(fallback.columns).toBe(failed.columns);
+    expect(fallback.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=created_at.desc', 'range=0-47']);
+  });
+
+  it('still drops a held comic the database returned (defence in depth)', async () => {
+    fakeSupabase.state.ignoredFilterColumns = new Set(['is_forced_private']);
+    rows.value = [...rows.value, row('held', 'Held Comic', { coverImageUrl: 'https://cdn.test/held.png' }, { is_forced_private: true })];
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    expect(screen.queryByRole('link', { name: 'Read Held Comic' })).toBeNull();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(3);
+  });
+
+  it('a classic card falls back to its first panel or style preview, signing ids from the projected fields', async () => {
+    rows.value = [
+      row('panel', 'Panel Only', { panels: [{ id: 'p', imageUrl: 'https://cdn.test/panel.png' }], styleVariants: [{ id: 's', imageUrl: 'https://cdn.test/style.png' }], versions: VERSIONS }),
+      row('style', 'Style Only', { styleVariants: [{ id: 's', imageUrl: 'https://cdn.test/style-only.png' }] }),
+      row('ids', 'Ids Only', { coverImageId: 'u1/cover.png', panels: [{ id: 'q', imageId: 'u1/q.png' }] })
+    ];
+    vi.mocked(db.getImageUrl).mockImplementation(async (id: string) => `https://signed.test/${id}`);
+    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    const panel = await screen.findByRole('link', { name: 'Read Panel Only' });
+    expect(panel.querySelector('img')?.getAttribute('src')).toBe('https://cdn.test/panel.png');
+    expect(panel.querySelector('img')?.getAttribute('data-fallbacks')).toContain('https://cdn.test/style.png');
+    expect(screen.getByRole('link', { name: 'Read Style Only' }).querySelector('img')?.getAttribute('src')).toBe('https://cdn.test/style-only.png');
+    const ids = screen.getByRole('link', { name: 'Read Ids Only' });
+    expect(ids.querySelector('img')?.getAttribute('src')).toBe('https://signed.test/u1/cover.png');
+    expect(ids.querySelector('img')?.getAttribute('data-fallbacks')).toContain('https://signed.test/u1/q.png');
+    expect(db.getImageUrl).toHaveBeenCalledWith('u1/cover.png', expect.anything());
   });
 });
 
