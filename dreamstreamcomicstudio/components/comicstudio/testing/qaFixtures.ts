@@ -127,11 +127,17 @@ const sheetState = (i: number, stress: boolean, seed: string): RenderState => {
   }
 };
 
-const makeCast = (names: string[], density: Density, seed: string): Character[] =>
+/**
+ * Free-text roles, as creators write them (DC-0 #6): never the tier words "Lead" / "Support", which the cast chips
+ * already show and the clutter probe would count as a cut duplicate. Fixtures name their own; others cycle these.
+ */
+const FREE_ROLES = ['Getaway driver', 'Safecracker', 'Lookout on the water tower', 'Fence who knows everyone', 'Night-shift guard', 'Rival thief'] as const;
+
+const makeCast = (names: string[], density: Density, seed: string, roles: readonly string[] = FREE_ROLES): Character[] =>
   names.map((name, i) => ({
     id: `ch_${i}`,
     name,
-    role: density === 'stress' && i % 3 === 0 ? 'Retired lighthouse keeper who secretly runs the lakeside detective agency' : i === 0 ? 'Lead' : 'Support',
+    role: density === 'stress' && i % 3 === 0 ? 'Retired lighthouse keeper who secretly runs the lakeside detective agency' : roles[i % roles.length],
     tier: i < 2 ? 'lead' : i < 6 ? 'support' : 'extra',
     look: {
       summary:
@@ -450,6 +456,8 @@ interface DocOpts {
   density: Density;
   seed: string;
   castNames: string[];
+  /** Each character's free-text role (cycled); FREE_ROLES when absent. */
+  castRoles?: readonly string[];
   statuses: RenderState['status'][];
   panels: (i: number) => number;
   balloons: 'edge' | 'tidy' | 'none';
@@ -519,7 +527,7 @@ const buildDoc = (o: DocOpts): ComicDoc => {
           savedUsd: 0.12
         }
   };
-  doc.cast = makeCast(o.castNames, o.density, o.seed);
+  doc.cast = makeCast(o.castNames, o.density, o.seed, o.castRoles);
   doc.pages = makePages({
     count: o.pages,
     density: o.density,
@@ -584,6 +592,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'lake',
         castNames: ['Baby Bea', 'Mother Duck', 'Frog', 'Ducklings'],
+        castRoles: ['Toddler who wanders off to the water', 'Worried mother', 'Frog who sings opera', 'Followers in a row'],
         statuses: ['ready'],
         panels: () => 4,
         balloons: 'edge',
@@ -602,6 +611,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'deep',
         castNames: ['Maya', 'Arjun', 'Vendor'],
+        castRoles: ['Rooftop runner', 'Safecracker', 'Market informant'],
         statuses: ['ready'],
         panels: (i) => 3 + (i % 3),
         balloons: 'tidy',
@@ -619,6 +629,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'toon',
         castNames: ['Kai', 'Mira'],
+        castRoles: ['Pearl diver', 'Lighthouse keeper'],
         statuses: ['ready'],
         panels: () => 2,
         balloons: 'tidy',
@@ -660,6 +671,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'heist',
         castNames: ['Maya', 'Arjun', 'Vendor', 'Pigeons'],
+        castRoles: ['Pickpocket with a plan', 'Getaway driver', 'Saffron seller', 'Lookouts on the ledge'],
         statuses: READY_HEAVY,
         panels: (i) => 3 + (i % 3),
         balloons: 'tidy',

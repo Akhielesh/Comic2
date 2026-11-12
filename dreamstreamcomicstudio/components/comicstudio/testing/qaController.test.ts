@@ -85,6 +85,17 @@ describe('fixtures', () => {
     expect(makeQaDoc('heist-12p', { rtl: true }).format.readingDirection).toBe('rtl');
   });
 
+  it('cast roles are free text, never the tier words the chips already show (DC-0 #6)', () => {
+    for (const name of QA_FIXTURES) {
+      const roles = makeQaDoc(name).cast.map((c) => c.role);
+      expect(roles.filter((r) => r === 'Lead' || r === 'Support'), name).toEqual([]);
+      expect(roles.every((r) => typeof r === 'string' && r.trim().length > 0), name).toBe(true);
+    }
+    expect(makeQaDoc('heist-12p').cast.map((c) => c.role)).toEqual(['Pickpocket with a plan', 'Getaway driver', 'Saffron seller', 'Lookouts on the ledge']);
+    // The stress cast still carries its long role on every third member.
+    expect(makeQaDoc('stress').cast[0].role).toMatch(/^Retired lighthouse keeper/);
+  });
+
   it('every heist page status is represented and ready pages are not stale', () => {
     const doc = makeQaDoc('heist-12p');
     const statuses = new Set(doc.pages.map((p) => p.render.status));
