@@ -49,6 +49,14 @@ describe('ComicsHeader', () => {
     }
   });
 
+  it('the lockup reads "Comic Studio" (with the space) inside its accessible name, so axe sees no label mismatch', () => {
+    render(<ComicsHeader {...props()} />);
+    const home = screen.getByRole('button', { name: 'Comic Studio, home' });
+    const visible = (home.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(visible).toBe('Comic Studio');
+    expect(home.getAttribute('aria-label')?.startsWith(visible)).toBe(true);
+  });
+
   it('the lockup is the Comic Studio home link', () => {
     const p = props();
     render(<ComicsHeader {...p} />);

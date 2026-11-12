@@ -127,7 +127,10 @@ describe('AuthPage on Atlas', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Request access' }));
     expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
     expect(screen.getByTestId('waitlist')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    // "Already have an account? Sign in" is a 44 x 44 target under a coarse pointer (the layout smoke's hit-target rule).
+    const signIn = screen.getByRole('button', { name: 'Sign in' });
+    for (const cls of DENSITY.coarseSquare.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
+    fireEvent.click(signIn);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
   });
 

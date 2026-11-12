@@ -41,6 +41,9 @@ export const BrandLockup: React.FC<BrandLockupProps> = ({
       {mark ?? <img src={BRAND_MARK_SRC} alt="" width={28} height={28} draggable={false} className="size-7 shrink-0 select-none" />}
       <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none">
         <span className={cn('text-[length:var(--ds-text-md)] font-semibold tracking-[-0.01em]', INK)}>{name}</span>
+        {/* A real space between the two words: the flex gap draws it, but the text a screen reader and axe compare
+            with the button's aria-label ("Comic Studio, home") must read "Comic Studio", not "ComicStudio". */}
+        {' '}
         {/* DS-2's rule read `min-[380px]:inline`, which this config's raw screens compile to nothing (the suffix never
             showed); `medium` (600 px) is the first named screen with room for it beside the main site's header. */}
         <span className={cn(suffixAlways ? 'inline text-[length:var(--ds-text-md)] font-medium' : 'hidden text-[length:var(--ds-text-md)] font-medium medium:inline', MUTED)}>{suffix}</span>
