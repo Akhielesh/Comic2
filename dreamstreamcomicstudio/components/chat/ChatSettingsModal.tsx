@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Activity,
-  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles, Plug
+  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles, Plug, Info
 } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import { SystemDashboard } from './SystemDashboard';
@@ -13,9 +13,10 @@ import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
 import { importChatMemory } from '../../services/chatApi';
 import {
-  MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent,
+  MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent, memoryImportNothingFoundNotice,
   type MemoryImportSource
 } from '../../services/memoryImport';
+import { TONE_TEXT } from './studioDesign';
 import { useTheme, type ThemePreference } from '../../services/theme';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import {
@@ -364,6 +365,10 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  // Calm notice: the file or paste held none of the user's own words, so nothing was sent.
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  // The box holds an uploaded file's text (until the user edits it), for the notice's wording.
+  const [importFromFile, setImportFromFile] = useState(false);
   const [preview, setPreview] = useState<string[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -371,19 +376,32 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
 
   const onPickFile = async (file: File | null) => {
     if (!file) return;
+    setImportNotice(null);
     if (file.size > MAX_IMPORT_FILE_BYTES) {
       setImportError('That file is too large — export files over 8 MB usually mean full chat logs; paste just the memory/instructions text instead.');
       return;
     }
     setImportError(null);
     setImportText(await file.text());
+    setImportFromFile(true);
   };
 
   const runImport = async () => {
+    if (importing) return;
+    // Only the user's own words leave the browser: an export layout with none (e.g. a
+    // Takeout activity file, whose entries are the assistant's answers) sends nothing.
     const content = prepareMemoryImportContent(importText);
-    if (!content || importing) return;
+    if (!content) {
+      if (importText.trim()) {
+        setImportError(null);
+        setPreview(null);
+        setImportNotice(memoryImportNothingFoundNotice(importFromFile));
+      }
+      return;
+    }
     setImporting(true);
     setImportError(null);
+    setImportNotice(null);
     try {
       const existing = formatMemoryItems(items);
       const res = await importChatMemory(importSource, content, existing);
@@ -405,6 +423,8 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
     commit(preview);
     setPreview(null);
     setImportText('');
+    setImportFromFile(false);
+    setImportNotice(null);
   };
 
   const previewNewCount = useMemo(() => {
@@ -500,7 +520,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
             <p className="text-[11px] text-[var(--ds-muted)]">Where to find it: {sourceMeta.hint}.</p>
             <textarea
               value={importText}
-              onChange={(e) => { setImportText(e.target.value); setPreview(null); }}
+              onChange={(e) => { setImportText(e.target.value); setPreview(null); setImportNotice(null); setImportFromFile(false); }}
               rows={4}
               placeholder={`Paste your ${sourceMeta.label === 'Other' ? '' : `${sourceMeta.label} `}memories or instructions here…`}
               className={`w-full resize-y ${FIELD}`}
@@ -513,6 +533,12 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
               onChange={(e) => { void onPickFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
             />
             {importError && <p className="text-xs text-red-500">{importError}</p>}
+            {importNotice && (
+              <p role="status" className="flex items-start gap-1.5 text-xs leading-5 text-[var(--ds-ink)]">
+                <Info aria-hidden className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${TONE_TEXT.info}`} />
+                <span className="min-w-0 [overflow-wrap:anywhere]">{importNotice}</span>
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => fileRef.current?.click()}

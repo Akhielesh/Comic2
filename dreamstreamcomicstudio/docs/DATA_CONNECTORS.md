@@ -217,6 +217,7 @@ routes (image APIs, third-party MCPs, web search) are listed under "Known gaps".
 
   Such a turn makes no `embedContent` request: retrieval uses full-text search, then recency. A user
   with no connection and no marked or recorded history keeps the vector search.
+- **Memory import** (Settings → Memory → Import from another AI; `services/memoryImport.ts`) sends only the user's own words, up to 24,000 characters: plain text as written; from JSON, the user's turns of a ChatGPT or Claude export, memory and instruction fields, and the text after "Prompted " / "Searched for " in a Google Takeout activity title (never the answer in `safeHtmlItem`). JSON in any other layout sends nothing: no request, and the modal says "We couldn't find your own words in that file, so nothing was sent."
 - The free-model fallbacks never take a conversation that carries, or may carry, connector
   content (marked history, or a user with connections and an earlier assistant reply): the capped
   shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan

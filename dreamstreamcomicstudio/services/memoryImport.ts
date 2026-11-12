@@ -6,6 +6,9 @@
 // those to a bounded plain-text payload BEFORE it leaves the browser, so the server
 // distiller (POST /api/chat/memory/import) receives signal, not megabytes of JSON
 // scaffolding — and nothing irrelevant (assistant replies, ids, timestamps) is sent.
+// JSON in which none of the user's own words can be found sends NOTHING: a layout we
+// don't recognise is never sent raw, because its raw text would carry the assistant's
+// replies (the privacy promise is "only the text you wrote").
 
 export type MemoryImportSource = 'chatgpt' | 'claude' | 'gemini' | 'other';
 
@@ -34,7 +37,10 @@ const IGNORED_KEYS = new Set([
   'id', 'uuid', 'conversation_id', 'parent', 'children', 'create_time', 'update_time',
   'created_at', 'updated_at', 'timestamp', 'model', 'model_slug', 'url', 'href', 'image',
   'attachments', 'metadata', 'status', 'recipient', 'channel', 'weight', 'end_turn', 'index',
-  'role', 'sender', 'author', 'name', 'slug'
+  'role', 'sender', 'author', 'name', 'slug',
+  // Labels and pointers inside a user turn (ChatGPT content.content_type and image
+  // asset_pointer; Claude content[].type and its start/stop timestamps): not words.
+  'content_type', 'type', 'asset_pointer', 'start_timestamp', 'stop_timestamp'
 ]);
 
 const looksLikeAssistantRole = (value: unknown): boolean =>
@@ -42,6 +48,28 @@ const looksLikeAssistantRole = (value: unknown): boolean =>
 
 const looksLikeUserRole = (value: unknown): boolean =>
   typeof value === 'string' && ['user', 'human'].includes(value.toLowerCase());
+
+/**
+ * Google Takeout "My Activity" titles that hold the user's own words after a fixed
+ * prefix: a Gemini (or Bard) prompt, and a search the user typed. Only the English
+ * prefixes are known; a title in another language, or any other entry ("Visited …",
+ * "Watched …", "Used Gemini Apps"), is not separable and is skipped.
+ */
+const TAKEOUT_OWN_WORDS_PREFIXES = ['Prompted ', 'Searched for '] as const;
+
+/**
+ * A Google Takeout "My Activity" record is {header, title, time, …} (all strings). Its
+ * `safeHtmlItem` holds the assistant's answer and `subtitles`/`details` hold page and
+ * product names, so only the title's text after a known prefix is the user's: returns
+ * that text, `null` for a Takeout record with none (nothing of it is collected), or
+ * `undefined` when the record is not Takeout-shaped (walk it as usual).
+ */
+const takeoutOwnWords = (record: Record<string, unknown>): string | null | undefined => {
+  const { header, title, time } = record;
+  if (typeof header !== 'string' || typeof title !== 'string' || typeof time !== 'string') return undefined;
+  const prefix = TAKEOUT_OWN_WORDS_PREFIXES.find((p) => title.startsWith(p));
+  return prefix ? title.slice(prefix.length).trim() : null;
+};
 
 /**
  * Walk arbitrary exported JSON and collect the user's OWN text: memory entries,
@@ -75,6 +103,14 @@ const collectUserText = (
 
   const record = node as Record<string, unknown>;
 
+  // Google Takeout activity entry: its title's prompt or search is the user's; nothing
+  // else in it is (the answer sits in safeHtmlItem), so it is never walked.
+  const takeout = takeoutOwnWords(record);
+  if (takeout !== undefined) {
+    if (takeout && takeout.length >= 3 && roleHint !== 'assistant') out.push(takeout);
+    return;
+  }
+
   // Role detection for chat-log shapes (ChatGPT: author.role; Claude: sender).
   let nextRole = roleHint;
   const role = record.role ?? record.sender ?? (record.author as Record<string, unknown> | undefined)?.role;
@@ -90,25 +126,36 @@ const collectUserText = (
 
 /**
  * Normalize pasted or uploaded content to a bounded plain-text payload.
- * JSON gets the user-text extraction; anything else passes through trimmed.
+ * JSON (an object or array) gets the user-text extraction, and JSON in which none of the
+ * user's own words is found returns '' so nothing is sent; anything else (plain text,
+ * markdown, or text that only looks like JSON and does not parse) passes through trimmed.
  */
 export const prepareMemoryImportContent = (raw: string): string => {
   const trimmed = (raw || '').trim();
   if (!trimmed) return '';
 
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const out: string[] = [];
-      // Root starts `allowed` so a bare array/string export (e.g. Gemini saved info
-      // copied as JSON) imports directly; object keys re-gate from there.
-      collectUserText(parsed, out, null, true, 0);
-      const deduped = [...new Set(out)];
-      if (deduped.length > 0) return deduped.join('\n').slice(0, MAX_IMPORT_CHARS);
-      // JSON with nothing user-authored: fall through to raw (it may still be useful).
+      parsed = JSON.parse(trimmed) as unknown;
     } catch {
       /* not valid JSON — treat as plain text */
+      return trimmed.slice(0, MAX_IMPORT_CHARS);
     }
+    const out: string[] = [];
+    // Root starts `allowed` so a bare array/string export (e.g. Gemini saved info
+    // copied as JSON) imports directly; object keys re-gate from there.
+    collectUserText(parsed, out, null, true, 0);
+    // JSON with nothing user-authored sends nothing: its raw text is the assistant's
+    // replies and the export's scaffolding, never the user's own words.
+    return [...new Set(out)].join('\n').slice(0, MAX_IMPORT_CHARS);
   }
   return trimmed.slice(0, MAX_IMPORT_CHARS);
 };
+
+/**
+ * The calm notice when a non-empty file or paste holds none of the user's own words
+ * (prepareMemoryImportContent returned ''): the import is not called.
+ */
+export const memoryImportNothingFoundNotice = (fromFile: boolean): string =>
+  `We couldn't find your own words in that ${fromFile ? 'file' : 'text'}, so nothing was sent.`;
