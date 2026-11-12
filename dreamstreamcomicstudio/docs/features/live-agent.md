@@ -7,7 +7,11 @@
   - A2 TURN: the turn reservation, `POST …/steer` and the director's steer rounds;
   - A3 CONFLICT: the conflict guard, the conflict card, the DECIDED line and the contradiction questions.
 - **Each part sits behind its flag (§1).** Flag defaults are unchanged, so steering stays off. The queue and the conflict guard are on for admins only.
-- **Left for wave 2:** A4 (presence) and B-TOOL (the dialogue writers calling the guard).
+- **Wave 2 (S2), A4 STEER-UI + PRESENCE (`live/a4`):** presence, set from `activity.where` and shown on the activity line
+  and to the editor (§3.1); the "Send now" steer path checked against A2's refusal table (§3.2). It has no flag of its
+  own and stays invisible until a server sends `where`.
+- **Wave 2 (S2), B-TOOL (`live/b-tool`):** the dialogue writers call the guard (§5), and the director's tool activity
+  carries `where` (§3.1). PE-SHELL and PE-INSPECT build the editor outline and the Layers badge that read presence.
 - **Plan:** the agent-editor plan, Track A (§3), waves (§4), flags (§5).
 
 **What it is for:** the creator keeps working while the director works.
@@ -142,8 +146,69 @@ idempotent, and it runs on every refusal or failure before the turn takes the lo
   - The note chips go first. The exception is an outage or R5 turn, where they follow the first outage chip.
 - **The recent-commit ring.** It keeps the last 300 commits, bounded at 1 MB of ops; the newest commit is always kept.
   `recentCommitsComplete(sinceRev)` says whether the ring still covers a turn.
-- **Presence (A4, wave 2):** `activity.where` will name the page and at most `STEER_LIMITS.whereLines` (20) line ids
-  the running tool is changing.
+- **Presence (A4, wave 2):** `activity.where` names the page and at most `STEER_LIMITS.whereLines` (20) line ids the
+  running tool is changing. The client side is built (§3.1); the server emit is B-TOOL's (`director.ts`, the two tool
+  activity emits).
+
+### 3.1 Presence: where the director is working (A4)
+
+**What the creator sees.** While a director step names its place, the live activity line says it in words beside the
+step: "Moving a balloon… page 2 · 1 balloon". The page editor outlines those balloons ("Director is editing this
+balloon") and the Layers panel badges them; those two read `StudioController.presence` and are PE-SHELL's and
+PE-INSPECT's. A step that names no place reads exactly as before.
+
+**What the server sends (B-TOOL, wave 2).** The activity start and end events carry where {pageId, lineIds} (at most
+STEER_LIMITS.whereLines) from activityWhere (server/src/comic/tools.ts), for set_line, edit_panel_text, dialogue_edit,
+arrange_balloons, restyle_balloons and edit_page.
+
+**The state (`studioReducer.ts`).** A `presence` slice of live entries, newest last, at most `MAX_PRESENCE` (8):
+- **Set** by an `activity` start whose `where` names something. `presenceWhere` keeps the page id and at most
+  `STEER_LIMITS.whereLines` (20) distinct line ids; ids that are not short strings are dropped. A `where` that names
+  nothing usable is the same as none.
+- **Cleared** by that activity's `end` (whichever stream delivers it), by its stream's `done` or `error`, by the stream
+  closing without one (a dropped connection), and by Stop (`cancel_start`, before the streams close). A project switch
+  starts empty.
+- **Not set while Stop winds down.** A start that arrives after Stop and before the server sees the cancel (about one
+  round trip) names no place, so the editor outline never shows while the activity line says "Stopping…". An end still
+  removes its entry. Once Stop is over (`cancel_end`), new starts set it again.
+- **Many streams.** Every open stream receives every session event, so one start can arrive twice. An entry lives until
+  every stream that delivered its start has finished. A second message refused BUSY (another tab) also saw the start;
+  its error does not clear the running turn's presence. A stream that never saw the start never clears it.
+- **Shown:** `presenceOf(state)`, the newest live entry or null. It is the same object while the entry lives, so the
+  panes that read it do not re-render for nothing.
+
+**The controller (`useStudio.ts`).** `presence: StudioPresence | null`, with `{pageId?, lineIds, label, at}`
+(`types.ts`). `label` is the step's label and `at` is when it started. It adds no timer and no fetch; a fake-timer test
+pins that.
+
+**The words (`studioReducer.ts`, shown by `conversation/ActivityLine.tsx`).** `presencePlace(doc, presence)` is pure and
+sits beside the slice, so the board imports it without a conversation component (`ActivityLine.tsx` re-exports it).
+It gives "page 2 · 1 balloon", "page 2" or "3 balloons". The page comes from the page id, or else from the page that
+holds the first known balloon. A page the doc does not have yet is left out, never guessed. The words sit beside the
+line the place came from, matched by label. They never sit beside a newer job's line ("Drawing page 3…"); in that case
+they show on their own row under "+N". They are muted, visible text only, so the phone View button's name still starts
+with what it shows. While Stop winds down, no place is named.
+
+**For the editor (PE-SHELL, PE-INSPECT).** Read `studio.presence` (optional on the type: absent or null means nobody is
+anywhere). Outline the balloons in `lineIds` on the page you show. `pageId` may be absent, and the line ids alone
+identify the balloons. Reuse `presencePlace` from `studioReducer.ts` for words. Never treat it as a lock: the creator
+can still edit the balloon, and the conflict guard (§5) settles a collision.
+
+### 3.2 "Send now" with steering on: the path as built (A4 check)
+
+S1 built the client half of steering; A4 checked it against A2's refusal table (§3) and its tests
+(`useStudio.queue.test.tsx`):
+- `useStudio` steers through `studioApi.steerStudio` (`DEFAULT_STEER`). It does so only while
+  `caps.liveAgent.steer` is on (`COMIC_STEER`), which is off by default.
+- `NOT_RUNNING`, `BUSY` and `LIMIT` put the note first in Up next without stopping the director. So does a note over
+  `STEER_LIMITS.noteChars`, which never tries to steer. `COOLDOWN` keeps the note in its place. `CONTENT_POLICY` keeps
+  it, with the reason. `NOT_AVAILABLE` and other failures fall back to D2 (Stop, then send) with a calm notice.
+- A4 added two cases that were not yet covered. A note with photos stops the director instead of steering, because a
+  steer carries text only. A `plan_pages` run is neither steered nor stopped; the note goes the moment the plan is in.
+- **One fix (`QueuedMessages.tsx`).** After a refusal that keeps the director working, the note's button read
+  "Stopping, then sending…" while nothing stopped. It now reads "Goes next, after this step". During a `plan_pages`
+  run (the turn is locked, no message in flight) it reads "Goes once the plan is in", as its tooltip says, not
+  "Sending next…" for the whole plan. "Stopping, then sending…" shows only while a Stop is really under way.
 
 ## 4. Up next: the message queue (A1; `COMIC_LIVE_QUEUE`)
 
@@ -248,7 +313,12 @@ and an action chip waits for the turn lock.
 - If the ring no longer covers `startRev` (`recentCommitsComplete` false), every planned entity is held back and
   `comic_conflict_ring_incomplete` is logged. Unseen edits never lose to the director.
 - With the guard off, everything is allowed, exactly as before.
-- Wave 2 B-TOOL wires the dialogue writers to it.
+- Wave 2 B-TOOL: every director line, balloon and style writer goes through commitGuarded
+  (server/src/comic/tools/lettering.ts). That covers edit_panel_text (create ops included), set_line, dialogue_edit,
+  the automatic lettering-preset follow, set_lettering_style, restyle_balloons and every arrange_balloons action. The
+  hold carries over to dependent ops: a balloon, line_style or line_move on a held line, and every op of a unit
+  (edit_panel_text's line structure; a dialogue_edit reorder or swap). Those join the line's card item. The panel cast
+  change is built after the guard, from the lines that commit. Results are worded from what committed.
 
 **The card (D3).** The creator's edit always wins. The director applies the rest of its edit and asks with one
 conflict card per turn.
@@ -320,6 +390,18 @@ conflict card per turn.
 - **The bounds stay as built:** the ring's 1 MB, and the steer cap of 6000 (= `LONG_MESSAGE_CHARS`). Steer seats are
   per session.
 
+**S2 (wave 2), A4:**
+- **Presence has no flag of its own.** It shows only what the server sends in `where`, so B-TOOL's emit decides when it
+  appears. It spends nothing and fetches nothing.
+- **An entry outlives a stream only while another stream that delivered it is still open.** This follows the activity
+  lines. The cost is rare: an action stream open beside a turn whose tool failed without an end keeps the place until
+  that stream ends, as its activity line already does.
+- **`StudioController.isUnsignable` (S2a PF-2 #7, landed on integ/s2a as a required member).** A4 keeps integ/s2a's
+  member, its fixtures and its test, and adds two things in `useStudio.ts`: its identity renews whenever a path is given
+  up on (the server declines it, the last allowed try fails, or the image keeps failing to load), so a tile re-renders
+  out of its shimmer; and the last allowed try still in flight is not given up on yet, so a tile never flashes
+  "Preview unavailable" before a late signature arrives.
+
 ## 7. What each package fills in
 
 | Package | Wave | Status | Fills in |
@@ -327,8 +409,8 @@ conflict card per turn.
 | A1 QUEUE | 1 | Done (S1) | `messageQueue.ts`; the queue slice in `studioReducer.ts`; `send()` outcomes; the drain (D1); the holds; `sessionStorage`; Send now; the controller members (§4) |
 | A2 TURN | 1 | Done (S1) | `reserveTurn` (G19); the steer inbox, seats and the recent-commit ring; `POST …/steer`; the director's drain, extra rounds and unread-note chips; `steerStudio` in `studioApi.ts` (§3) |
 | A3 CONFLICT | 1 | Done (S1) | `entityKeys`; `guardUserEdits` and the card; `resolve_conflict`; the DECIDED line and the contradiction gaps; pictures in questions; Show me selecting the balloon (§5) |
-| A4 STEER-UI + PRESENCE | 2 | — | "Send now" already calls `steerStudio` through `useStudio`. A4 adds `StudioController.presence`, set from `activity.where` and cleared on the activity's end or `done` |
-| B-TOOL | 2 | — | Every line, balloon and style writer calls `guardUserEdits`, commits `allowed`, then `recordConflicts` and `conflictToolNote`. Also `offer_next` (up to 2 free chips, never a spend); if it becomes a core tool, add it to `RESERVED_CORE_TOOLS` first (see `docs/features/dialogue.md`) |
+| A4 STEER-UI + PRESENCE | 2 | Done (S2, `live/a4`) | The presence slice (`presenceWhere`, `presenceOf`) and `StudioController.presence`, set from `activity.where` and cleared on the activity's end, the stream's `done` or `error`, and Stop; the place in words on the activity line (`presencePlace`); the "Send now" steer path checked, with two cases added and one copy fix (§3.1, §3.2). Also `StudioController.isUnsignable` for the chat tiles (S2a PF-2 #7) |
+| B-TOOL | 2 | Done (S2, `live/b-tool`) | Every line, balloon and style writer calls `guardUserEdits`, commits `allowed`, then `recordConflicts` and `conflictToolNote`. Also `offer_next` (up to 2 free chips, never a spend); offer_next is not core: buildTurnToolset gives it a seat the groups leave free (see `docs/features/dialogue.md`) |
 
 ## 8. Tests
 
@@ -358,6 +440,11 @@ conflict card per turn.
   - `conversation/QueuedMessages.test.tsx`;
   - `conversation/StudioComposer.queue.test.tsx`;
   - `conversation/keepRefusedInComposer.test.tsx`.
+- **A4:**
+  - `components/comicstudio/studioReducer.presence.test.ts` (set, each clear, many streams, the bounds);
+  - `useStudio.presence.test.tsx` (the controller's `presence`, no fetch on a timer, `isUnsignable`);
+  - `conversation/ActivityLine.test.tsx` (the place words);
+  - `useStudio.queue.test.tsx` and `conversation/QueuedMessages.test.tsx` (the steer path cases).
 - **A3:**
   - `shared/comic/conflicts.test.ts`;
   - `server/src/comic/conflictGuard.test.ts`;
