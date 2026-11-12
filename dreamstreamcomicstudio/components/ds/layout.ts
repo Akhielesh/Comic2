@@ -345,5 +345,12 @@ export function studioContentHeight(table: LayoutTable, lines: { approval?: bool
   return Math.max(0, table.studio.content.height - (lines.approval ? CHROME.approvalBarPx : 0) - (lines.offline ? CHROME.offlineLinePx : 0));
 }
 
+/**
+ * A 44 px touch target for a control that is drawn smaller (a card title, a chip link, "See all"), without changing
+ * its layout: under a coarse pointer a transparent ::before extends the control 12 px on every side (a 20 px line
+ * becomes a 44 px target). Only for controls whose neighbours within that margin are not other controls.
+ */
+export const COARSE_HIT_AREA = "relative coarse:before:absolute coarse:before:-inset-3 coarse:before:content-['']";
+
 /** The CSS custom property a grid reads its column count from (CardGrid sets it inline). */
 export const columnsStyle = (columns: number): React.CSSProperties => ({ '--cols': String(clamp(Math.round(columns) || 1, 1, 12)) }) as React.CSSProperties;

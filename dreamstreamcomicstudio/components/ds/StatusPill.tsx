@@ -52,6 +52,26 @@ export interface StatusPillProps {
   className?: string;
 }
 
+/** Lower-case words, as label-in-name checks compare them ("2/6" → "2 6"). */
+const words = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+/**
+ * The accessible name of a compact pill: what it shows first (WCAG 2.5.3, so voice control can say "2/6"), then the
+ * full words, unless the full words already begin with what is shown ("62%" in "62% left").
+ */
+export function pillName(shown: string, label: string): string {
+  if (shown === label) return label;
+  const s = words(shown);
+  const l = words(label);
+  // A symbol ("!", "…") has no words to match: the full words alone name it.
+  if (!s || l === s || l.startsWith(`${s} `)) return label;
+  return `${shown}, ${label}`;
+}
+
 export function StatusPill({ state, label, short, compact = false, onOpen, className }: StatusPillProps) {
   const reduced = useReducedMotion();
   const status = pillStatus[state];
@@ -76,18 +96,18 @@ export function StatusPill({ state, label, short, compact = false, onOpen, class
       <button
         type="button"
         onClick={onOpen}
-        aria-label={shown === label ? undefined : label}
+        aria-label={shown === label ? undefined : pillName(shown, label)}
         aria-haspopup="dialog"
         data-slot="status-pill"
         data-state={state}
-        className={`${cn(common, DENSITY.coarse, 'hover:brightness-95')} ${FOCUS_RING}`}
+        className={`${cn(common, DENSITY.coarseSquare, 'justify-center hover:brightness-95')} ${FOCUS_RING}`}
       >
         {body}
       </button>
     );
   }
   return (
-    <span role="status" aria-label={shown === label ? undefined : label} data-slot="status-pill" data-state={state} className={common}>
+    <span role="status" aria-label={shown === label ? undefined : pillName(shown, label)} data-slot="status-pill" data-state={state} className={common}>
       {body}
     </span>
   );

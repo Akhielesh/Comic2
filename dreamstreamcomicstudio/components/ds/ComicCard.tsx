@@ -24,6 +24,7 @@ import { cn } from '../../lib/utils';
 import { Button, buttonClasses } from './Button';
 import { CoverImage, type CoverImageProps } from './CoverImage';
 import { InlineMeta } from './InlineMeta';
+import { COARSE_HIT_AREA } from './layout';
 import { MediaTile } from './MediaTile';
 import { Progress } from './Progress';
 import { FONT_DISPLAY, LIFT, RADIUS_PANEL, TEXT_2XL } from './recipes';
@@ -73,8 +74,8 @@ export interface ComicCardProps {
 
 /** The card surface: opaque, hairline, the panel radius; the primary control's ::after covers it. */
 export const COMIC_CARD = `group/card relative flex min-w-0 flex-col ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)]`;
-/** The primary control inside the heading (the card's focus outline shows its focus). */
-export const COMIC_CARD_PRIMARY = 'min-w-0 cursor-pointer text-left text-inherit no-underline bg-transparent p-0 focus-visible:outline-none';
+/** The primary control inside the heading (the card's focus outline shows its focus; 44 px to a finger). */
+export const COMIC_CARD_PRIMARY = `block min-w-0 cursor-pointer text-left text-inherit no-underline bg-transparent p-0 focus-visible:outline-none ${COARSE_HIT_AREA}`;
 /** Clicks on these never open the card: they are controls of their own. */
 const OWN_CONTROLS = 'a,button,input,select,textarea,label,summary,[role="checkbox"],[role="switch"],[role="menuitem"],[data-card-ignore]';
 
@@ -136,16 +137,19 @@ export function ComicCard({
     primaryRef.current?.click();
   };
 
+  // The two-line clamp lives on the words, not on the heading: a clamp clips (overflow: hidden), and the heading
+  // must not clip the control's 44 px touch area.
+  const words = <span className="line-clamp-2">{title}</span>;
   const primary = href ? (
     <a ref={primaryRef} href={href} aria-label={openLabel} data-card-primary="" className={COMIC_CARD_PRIMARY}>
-      {title}
+      {words}
     </a>
   ) : onOpen ? (
     <button ref={primaryRef} type="button" onClick={onOpen} aria-label={openLabel} data-card-primary="" className={COMIC_CARD_PRIMARY}>
-      {title}
+      {words}
     </button>
   ) : (
-    <span>{title}</span>
+    words
   );
 
   const coverBox = (
@@ -169,7 +173,7 @@ export function ComicCard({
       <Heading
         className={cn(
           'm-0 min-w-0 font-semibold text-[var(--ds-ink)]',
-          hero ? cn(TEXT_2XL, FONT_DISPLAY, 'line-clamp-2') : compact ? 'line-clamp-2 text-[13px] leading-5' : 'line-clamp-2 text-[length:var(--ds-text-base)] leading-5'
+          hero ? cn(TEXT_2XL, FONT_DISPLAY) : compact ? 'text-[13px] leading-5' : 'text-[length:var(--ds-text-base)] leading-5'
         )}
       >
         {primary}

@@ -69,7 +69,7 @@ export function SearchField({ value, onChange, label, placeholder, onSubmit, sho
       <label htmlFor={id} className={showLabel ? 'text-[13px] font-medium leading-5 text-[var(--ds-ink)]' : 'sr-only'}>
         {label}
       </label>
-      <div className={cn(FIELD_GROUP, 'h-9 px-3 coarse:h-11', disabled && 'opacity-50')}>
+      <div className={cn(FIELD_GROUP, 'px-3', disabled && 'opacity-50')}>
         <Search aria-hidden="true" className="size-4 shrink-0 text-[var(--ds-muted)]" />
         <input
           ref={input}
@@ -96,7 +96,7 @@ export function SearchField({ value, onChange, label, placeholder, onSubmit, sho
               } else (e.target as HTMLInputElement).blur();
             }
           }}
-          className={cn(FIELD_EMBEDDED, 'h-full min-w-0 text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] [&::-webkit-search-cancel-button]:hidden')}
+          className={cn(FIELD_EMBEDDED, 'h-[34px] min-w-0 coarse:h-11 text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] [&::-webkit-search-cancel-button]:hidden')}
         />
         {value && !disabled ? (
           <IconButton label="Clear search" size="sm" onClick={clear} className={cn('-mr-1.5', DENSITY.coarseSquare)}>

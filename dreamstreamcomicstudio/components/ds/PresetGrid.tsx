@@ -17,6 +17,7 @@ import { cn } from '../../lib/utils';
 import { columnsStyle } from './layout';
 import { PresetTile, type PresetSemantics } from './PresetTile';
 import { isRtl, nextRovingIndex } from './roving';
+import { useReducedMotion } from './useReducedMotion';
 
 export interface PresetOption<T extends string> {
   value: T;
@@ -57,6 +58,7 @@ export function PresetGrid<T extends string>(props: PresetGridProps<T>) {
   const { options, label, columns = 3, scroll = false, tileWidthPx = 128, aspect, className } = props;
   const semantics: PresetSemantics = props.semantics === 'pressed' ? 'pressed' : 'radio';
   const group = useRef<HTMLDivElement>(null);
+  const reduced = useReducedMotion();
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const enabled = options.map((o) => !o.disabled);
   const isOn = (v: T) => (props.semantics === 'pressed' ? props.value.includes(v) : props.value === v);
@@ -100,7 +102,7 @@ export function PresetGrid<T extends string>(props: PresetGridProps<T>) {
       role={semantics === 'radio' ? 'radiogroup' : 'group'}
       aria-label={label}
       data-slot="preset-grid"
-      className={cn(scroll ? 'ds-fade-edge-x flex min-w-0 gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'grid min-w-0 grid-cols-[repeat(var(--cols),minmax(0,1fr))] gap-2', className)}
+      className={cn(scroll ? 'flex min-w-0 gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'grid min-w-0 grid-cols-[repeat(var(--cols),minmax(0,1fr))] gap-2', scroll && !reduced && 'ds-fade-edge-x', className)}
       style={scroll ? undefined : columnsStyle(columns)}
     >
       {options.map((o, i) => (

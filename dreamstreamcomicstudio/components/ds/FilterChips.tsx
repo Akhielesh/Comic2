@@ -13,6 +13,7 @@ import React, { useRef } from 'react';
 import { cn } from '../../lib/utils';
 import { CHIP, CHIP_VARIANT, DENSITY, FOCUS_RING } from './recipes';
 import { isRtl, nextRovingIndex } from './roving';
+import { useReducedMotion } from './useReducedMotion';
 
 export interface FilterChipOption<T extends string> {
   value: T;
@@ -43,6 +44,8 @@ export const FILTER_CHIP_ON = 'border-transparent bg-[var(--ds-ink)] text-[var(-
 
 export function FilterChips<T extends string>({ value, onChange, options, label, countNoun, hideEmpty = false, scroll = false, className }: FilterChipsProps<T>) {
   const group = useRef<HTMLDivElement>(null);
+  // The edge fade is a scroll-driven animation: only where motion is allowed.
+  const reduced = useReducedMotion();
   const items = useRef<Array<HTMLButtonElement | null>>([]);
   const shown = hideEmpty ? options.filter((o) => o.value === value || o.count === undefined || o.count > 0) : options;
   const enabled = shown.map((o) => !o.disabled);
@@ -63,7 +66,7 @@ export function FilterChips<T extends string>({ value, onChange, options, label,
       role="radiogroup"
       aria-label={label}
       data-slot="filter-chips"
-      className={cn('flex min-w-0 gap-1.5', scroll ? 'ds-fade-edge-x flex-nowrap overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'flex-wrap', className)}
+      className={cn('flex min-w-0 gap-1.5', scroll ? 'flex-nowrap overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : 'flex-wrap', scroll && !reduced && 'ds-fade-edge-x', className)}
     >
       {shown.map((o, i) => {
         const on = o.value === value;

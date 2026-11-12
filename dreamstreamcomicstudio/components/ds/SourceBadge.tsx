@@ -9,6 +9,7 @@
 import React from 'react';
 import { BadgeCheck } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { COARSE_HIT_AREA } from './layout';
 import { CHIP, CHIP_VARIANT, FOCUS_RING } from './recipes';
 
 export interface SourceBadgeProps {
@@ -37,7 +38,7 @@ export function SourceBadge({ licence, source, href, className }: SourceBadgePro
   const link = safeHref(href);
   if (link) {
     return (
-      <a href={link} target="_blank" rel="noreferrer noopener" data-slot="source-badge" className={`${cn(CHIP, CHIP_VARIANT.outline, 'no-underline hover:text-[var(--ds-ink)]', className)} ${FOCUS_RING}`}>
+      <a href={link} target="_blank" rel="noreferrer noopener" data-slot="source-badge" className={`${cn(CHIP, CHIP_VARIANT.outline, 'no-underline hover:text-[var(--ds-ink)]', COARSE_HIT_AREA, className)} ${FOCUS_RING}`}>
         {body}
       </a>
     );

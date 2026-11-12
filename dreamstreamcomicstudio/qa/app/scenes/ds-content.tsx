@@ -65,10 +65,10 @@ const COMICS: DemoComic[] = [
 const PILLS: ReadonlyArray<[StatusPillState, string, string]> = [
   ['offline', 'Offline', 'Off'],
   ['error', 'Needs attention', '!'],
-  ['waiting', 'Waiting for you', 'Wait'],
+  ['waiting', 'Waiting for you', '!'],
   ['drawing', 'Drawing 2 of 6', '2/6'],
-  ['uploading', 'Uploading 3', 'Up 3'],
-  ['saving', 'Saving…', 'Save'],
+  ['uploading', 'Uploading 3', '↑3'],
+  ['saving', 'Saving…', '…'],
   ['idle', '62% left', '62%']
 ];
 

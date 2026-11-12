@@ -101,9 +101,10 @@ export function NavTrack<Id extends string = string>({ items, current, onSelect,
               ) : null}
               <span className={cn('min-w-0 truncate', dense && 'text-[11px]')}>{item.label}</span>
               {item.badge ? (
-                <span aria-hidden="true" className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">
-                  {item.badge}
-                </span>
+                <>
+                  {/* A real space: the visible text reads "Pages 4/6", the start of the accessible name. */}{' '}
+                  <span className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">{item.badge}</span>
+                </>
               ) : null}
               {item.dot ? <span aria-hidden="true" data-slot="nav-dot" className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[item.dot])} /> : null}
             </>

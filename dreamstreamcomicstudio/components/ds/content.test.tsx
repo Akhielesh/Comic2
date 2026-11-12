@@ -22,7 +22,7 @@ import { SelectionBar, selectionText } from './SelectionBar';
 import { Shelf } from './Shelf';
 import { SourceBadge } from './SourceBadge';
 import { StatusBanner } from './StatusBanner';
-import { pickPillState, StatusPill, type StatusPillState } from './StatusPill';
+import { pickPillState, pillName, StatusPill, type StatusPillState } from './StatusPill';
 import { PUBLIC_ASSET_PATH_RE } from '../comicstudio/export/publicDownload';
 
 // ── Test doubles ──────────────────────────────────────────────────────────────────────────────────
@@ -393,6 +393,9 @@ describe('StatusPill', () => {
     const { container } = render(<StatusPill state="idle" label="62% left" short="62%" compact onOpen={() => {}} />);
     expect(container.querySelector('.ds-live-dot')).toBeNull();
     expect(screen.getByRole('button', { name: '62% left' })).toHaveTextContent('62%');
+    // A short form that is not the start of the words leads the name (label in name, WCAG 2.5.3).
+    expect(pillName('2/6', 'Drawing 2 of 6')).toBe('2/6, Drawing 2 of 6');
+    expect(pillName('Wait', 'Waiting for you')).toBe('Wait, Waiting for you');
     expect(pickPillState({ saving: true, drawing: true, waiting: true })).toBe('waiting');
     expect(pickPillState({ offline: true, error: true })).toBe('offline');
     expect(pickPillState({})).toBe('idle');

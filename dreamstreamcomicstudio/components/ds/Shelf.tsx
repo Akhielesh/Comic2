@@ -13,13 +13,16 @@
  * content-visibility:auto with its intrinsic height). Cards are list items; the shelf's heading is h2 so a
  * card's h3 follows it (§9 headings: h1 page → h2 shelf → h3 card).
  */
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
+import { DENSITY, FOCUS_RING } from './recipes';
 import { Skeleton } from './Skeleton';
 import { useReducedMotion } from './useReducedMotion';
+
+const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** Whether the primary pointer is fine (a mouse or trackpad): the shelf arrows only show there. Live. */
 export function useFinePointer(): boolean {
@@ -68,7 +71,8 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
   const fine = useFinePointer();
   const reduced = useReducedMotion();
   const scroller = useRef<HTMLUListElement>(null);
-  const [edges, setEdges] = useState({ start: true, end: false });
+  // null until measured: the arrows mount with their final state, so a disabled arrow never fades in after load.
+  const [edges, setEdges] = useState<{ start: boolean; end: boolean } | null>(null);
 
   const measure = useCallback(() => {
     const el = scroller.current;
@@ -77,12 +81,13 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
     const at = Math.abs(el.scrollLeft);
     setEdges((prev) => {
       const next = { start: at <= 1, end: at >= max - 1 };
-      return prev.start === next.start && prev.end === next.end ? prev : next;
+      return prev && prev.start === next.start && prev.end === next.end ? prev : next;
     });
   }, []);
 
+  // Measured before the first paint, so the arrows never flip (and transition) right after load.
+  useIsoLayoutEffect(() => measure(), [measure, items.length, loading, error]);
   useEffect(() => {
-    measure();
     const el = scroller.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
@@ -103,7 +108,7 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
 
   const seeAllControl = seeAll && (seeAll.href || seeAll.onClick) && !error && items.length > 0 ? (
     seeAll.href ? (
-      <a href={seeAll.href} className="text-[13px] font-medium text-[var(--ds-ink)] underline-offset-4 hover:underline">
+      <a href={seeAll.href} className={`inline-flex items-center rounded-[var(--ds-radius-sm)] text-[13px] font-medium text-[var(--ds-ink)] underline-offset-4 hover:underline coarse:px-2 ${DENSITY.coarseSquare} ${FOCUS_RING}`}>
         {seeAll.label ?? 'See all'}
       </a>
     ) : (
@@ -126,7 +131,7 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
         </h2>
         <div className="flex shrink-0 items-center gap-1">
           {seeAllControl}
-          {fine && !error && items.length > 0 ? (
+          {fine && !error && items.length > 0 && edges ? (
             <>
               <IconButton label={`Scroll ${title} left`} size="sm" disabled={edges.start} onClick={() => page(-1)} data-shelf-arrow="prev">
                 <ChevronLeft />
@@ -144,7 +149,7 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
           {onRetry ? (
             <>
               <span aria-hidden="true">·</span>
-              <Button variant="link" size="sm" onClick={onRetry} className="h-auto p-0">
+              <Button variant="link" size="sm" onClick={onRetry} className={cn('h-auto p-0', DENSITY.coarseSquare)}>
                 Retry
               </Button>
             </>
@@ -157,7 +162,8 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
           aria-labelledby={headingId}
           aria-busy={loading || undefined}
           onScroll={measure}
-          className="ds-fade-edge-x m-0 flex min-w-0 list-none snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth p-0 pb-1 motion-reduce:scroll-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          // The edge fade is a scroll-driven animation: only where motion is allowed.
+          className={cn('m-0 flex min-w-0 list-none snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth p-0 pb-1 motion-reduce:scroll-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden', !reduced && 'ds-fade-edge-x')}
         >
           {loading
             ? Array.from({ length: Math.max(1, skeletonCount) }, (_, i) => (
