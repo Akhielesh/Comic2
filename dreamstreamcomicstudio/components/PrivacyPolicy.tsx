@@ -1,15 +1,21 @@
 import React from 'react';
+import { cn } from '../lib/utils';
+import { CANVAS_BG, DISPLAY_SECTION, LEGAL_PROSE, OVERLINE, OVERLINE_DISPLAY, SECTION_CARD } from './chat/studioDesign';
 
-export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+// On the Atlas tokens (Atlas LegalDocumentPage's values: the "Legal" eyebrow, the display title, the date, the text in
+// a reading column on a card). No Back button: the header's lockup goes home on both hosts. `onBack` stays in the
+// props for the callers that still pass it.
+export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
     return (
-        <div className="min-h-screen bg-slate-50 font-sans">
-            <main className="max-w-4xl mx-auto px-6 py-12 prose prose-slate">
-                <div className="flex items-center justify-between mb-6 not-prose">
-                    <h1 className="font-display text-3xl text-black">Privacy Policy</h1>
-                    <button onClick={onBack} className="text-xs font-bold hover:underline">Back</button>
-                </div>
-                <p className="font-bold text-sm text-slate-500 uppercase">Last Updated: June 24, 2026</p>
-                <div className="bg-white p-8 border-2 border-slate-200 rounded-xl shadow-sm">
+        <div className={cn(CANVAS_BG, 'min-h-screen font-sans text-[var(--ds-ink)]')}>
+            <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-12 medium:px-6 sm:pb-24 sm:pt-16">
+                <header className="mb-8 sm:mb-10">
+                    <p className={OVERLINE_DISPLAY}>Legal</p>
+                    <h1 className={cn(DISPLAY_SECTION, 'mt-4 text-[var(--ds-ink)]')}>Privacy Policy</h1>
+                    <p className={cn(OVERLINE, 'mt-5')}>Last updated: June 24, 2026</p>
+                </header>
+                <div className={cn(SECTION_CARD, 'p-6 sm:p-8')}>
+                <div className={LEGAL_PROSE}>
                     <p>DreamStream Studio ("DreamStream", "we", "our", or "us") provides tools for private Stream Studio live events and AI-assisted creative workflows. This Privacy Policy explains what data we process, why we process it, how it moves through our APIs and providers, and what controls you have.</p>
 
                     <h3>1. Information We Collect</h3>
@@ -91,6 +97,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li><strong>How do I delete my data?</strong> Delete content in-app where available and use support contact for account-level/privacy deletion requests.</li>
                         <li><strong>Do you send marketing emails automatically?</strong> Marketing communication is optional and based on your signup consent choices.</li>
                     </ul>
+                </div>
                 </div>
             </main>
         </div>

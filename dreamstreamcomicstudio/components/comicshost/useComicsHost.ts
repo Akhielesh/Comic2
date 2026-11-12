@@ -5,6 +5,10 @@
 //   - a signed-in visitor opening the bare host goes straight to their comics (the dashboard;
 //     product gating for `comic_studio` still applies there, in App.tsx);
 //   - a signed-out visitor sees the Comic Studio landing (App renders <ComicsLanding/> for 'home');
+//   - the landing's own chrome (ComicsHeader, no floating widgets) carries on into the views a signed-out visitor
+//     reaches from it — sign-in, Privacy, Terms and the Library — so the journey stays in one product (signed in,
+//     those keep the app header and its account menu), and each view change starts at the top of the page (never
+//     with its title under the sticky header);
 //   - views that belong to other products (Chat Studio, Operator Console, model catalog) open on
 //     the main site instead (replace(), so Back never loops), and nothing of theirs renders here.
 // Deep links (?view=studio&id=…, ?view=read…), auth callbacks, invites and the ?next= hand-back
@@ -12,7 +16,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isComicsHost } from '../../services/productHost';
-import { OFF_HOST_VIEWS, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
+import { OFF_HOST_VIEWS, comicsChromeFor, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 
 export interface UseComicsHostOptions {
   /** App's current (requested) view. */
@@ -32,7 +36,11 @@ export interface ComicsHostBoot {
   active: boolean;
   /** True while the current view is being handed to the main site (render a loader, not the view). */
   leaving: boolean;
-  /** The comics host renders its own landing chrome for this view (the suite header steps aside). */
+  /**
+   * The comics host renders its own chrome for this view (comicsChromeFor): the landing for everyone; sign-in,
+   * Privacy, Terms and the Library for a signed-out visitor. The suite header and the floating widgets step aside;
+   * signed in, every view but the landing keeps the app header (its account menu and notifications).
+   */
   ownsChrome: (view: string) => boolean;
 }
 
@@ -59,6 +67,20 @@ export function useComicsHost({ view, setView, signedIn, ready, hostname, naviga
     if (signedIn && view === 'home' && bootEligible) setView('dashboard');
   }, [active, ready, signedIn, view, bootEligible, setView]);
 
+  // A view change on the comics host starts at the top of the page (a Library click used to land mid-page, its
+  // title under the sticky header). Not on the first render: the browser restores a reload's position itself.
+  const lastViewRef = useRef(view);
+  useEffect(() => {
+    if (lastViewRef.current === view) return;
+    lastViewRef.current = view;
+    if (!active || typeof window === 'undefined') return;
+    try {
+      window.scrollTo({ top: 0 });
+    } catch {
+      /* no scrolling outside a browser */
+    }
+  }, [active, view]);
+
   useEffect(() => {
     if (!leaving) return;
     const target = offHostUrlForView(view);
@@ -70,6 +92,6 @@ export function useComicsHost({ view, setView, signedIn, ready, hostname, naviga
   return {
     active,
     leaving,
-    ownsChrome: (v: string) => active && v === 'home'
+    ownsChrome: (v: string) => comicsChromeFor(v, { active, signedIn }).owns
   };
 }

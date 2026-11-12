@@ -554,4 +554,13 @@
   .ds-lift:hover {
     transform: none;
   }
+
+  /* The edge fades are scroll-linked, not timed, but they still run as animations: under reduced motion the
+     scroller simply shows its content edge to edge (no mask), so nothing animates at all. */
+  .ds-fade-edge-x,
+  .ds-fade-edge-y {
+    animation: none;
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
 }

@@ -541,6 +541,55 @@ export const hueClass = (kind: 'dot' | 'fill' | 'stroke', i: number): string | n
 };
 
 // ---------------------------------------------------------------------------
+// Public pages (the comics landing; Atlas app/page.tsx and PublicSiteChrome, design values only): the pill
+// shape, the feature and hero radii, the product-proof shadow, the display type steps and the inverse panel's
+// buttons. Token-driven like the rest (--ds-radius-pill, --ds-shadow-hero, --ds-text-md / 4xl / 5xl / 7xl).
+// ---------------------------------------------------------------------------
+
+/** Public pills and calls to action (Atlas rounded-full): the same in every skin, unlike RADIUS_PILL (8 px under Atlas). */
+export const RADIUS_ROUND = 'rounded-[var(--ds-radius-pill)]';
+/** A public feature card (Atlas rounded-2xl, 16 px). */
+export const RADIUS_FEATURE = 'rounded-[var(--ds-radius-feature)]';
+/** A public hero panel or frame (Atlas rounded-[28px]). */
+export const RADIUS_HERO = 'rounded-[var(--ds-radius-hero)]';
+/** The product-proof frame's drop (Atlas's hero demo); a light rim and a deeper drop in dark. */
+export const SHADOW_HERO = 'shadow-[shadow:var(--ds-shadow-hero)]';
+/** The larger eyebrow over a public page section (Atlas atlas-overline-display: 12 px, 500, 0.18em; styles/ds-motion.css). */
+export const OVERLINE_DISPLAY = 'ds-overline-display';
+/**
+ * The public h1 (Atlas hero): 36 → 48 (medium) → 72 (lg) px, 600, 1.02, -0.035em, balanced. The leading comes after
+ * the sizes: cn (tailwind-merge) drops a line height that precedes a font-size class, as Tailwind's sizes carry one.
+ */
+export const DISPLAY_HERO = `${FONT_DISPLAY} font-semibold tracking-[-0.035em] text-balance text-[length:var(--ds-text-4xl)] medium:text-[length:var(--ds-text-5xl)] lg:text-[length:var(--ds-text-7xl)] leading-[1.02]`;
+/** A public section h2: 30 → 36 (medium) → 48 (lg) px, 600, 1.1, -0.03em. */
+export const DISPLAY_SECTION = `${FONT_DISPLAY} font-semibold tracking-[-0.03em] text-balance text-[length:var(--ds-text-3xl)] medium:text-[length:var(--ds-text-4xl)] lg:text-[length:var(--ds-text-5xl)] leading-[1.1]`;
+/** Step and feature-card titles on a public page (Atlas text-2xl/7 in the display face). */
+export const DISPLAY_CARD_TITLE = `${FONT_DISPLAY} text-[length:var(--ds-text-2xl)] leading-7 font-semibold tracking-tight`;
+/** The lead under a public h1: 16/28 on phones, 20/32 from medium. */
+export const PUBLIC_LEAD = 'text-pretty text-[length:var(--ds-text-lg)] leading-7 text-[var(--ds-muted)] medium:text-[length:var(--ds-text-xl)] medium:leading-8';
+/** Public body copy (Atlas text-[15px] leading-7, muted). */
+export const PUBLIC_BODY = 'text-[length:var(--ds-text-md)] leading-7 text-[var(--ds-muted)]';
+/**
+ * Running legal text (Privacy, Terms): Atlas LegalDocumentPage's reading values on the tokens — the 15/28 muted body,
+ * ink semibold section titles with room above, ink <strong>, muted list markers, long words that wrap instead of
+ * scrolling a phone sideways. The app ships no typography plugin, so the recipe styles the pages' plain tags.
+ */
+export const LEGAL_PROSE =
+  'text-[length:var(--ds-text-md)] leading-7 text-[var(--ds-muted)] [overflow-wrap:break-word] marker:text-[var(--ds-muted)] [&>:first-child]:mt-0 [&_h3]:mt-10 [&_h3]:text-[length:var(--ds-text-lg)] [&_h3]:font-semibold [&_h3]:leading-6 [&_h3]:tracking-[-0.01em] [&_h3]:text-[var(--ds-ink)] [&_p]:mt-3 [&_ul]:mt-3 [&_strong]:font-semibold [&_strong]:text-[var(--ds-ink)]';
+/** The public hero / panel call-to-action shape (Atlas h-11 rounded-full px-7 text-[15px]); pass as className to Button size="lg". */
+export const CTA_LG = `h-11 px-7 has-[>svg]:px-7 text-[length:var(--ds-text-md)] ${RADIUS_ROUND}`;
+/** The trailing arrow that nudges 2 px on hover (put `group` on the button); still under reduced motion. */
+export const ARROW_NUDGE = 'transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:group-hover:translate-x-0.5';
+/**
+ * Buttons inside INVERSE_SURFACE (paper on ink). No Button variant reads there: in light `default` is ink on ink, and
+ * in dark `outline` / `secondary` put the swapped ink on a near-identical fill. So inside the panel use
+ * buttonClasses({ variant: 'secondary' | 'outline', size: 'lg', className: cn(CTA_LG, INVERSE_ACTION[_QUIET]) }).
+ * Correct in dark too, where the panel swaps --ds-ink and --ds-canvas back (index.css .ds-inverse-surface).
+ */
+export const INVERSE_ACTION = 'border-transparent bg-[var(--ds-canvas)] text-[var(--ds-ink)] hover:bg-[color:color-mix(in_srgb,var(--ds-canvas)_90%,transparent)]';
+export const INVERSE_ACTION_QUIET = 'border-[color:color-mix(in_srgb,var(--ds-canvas)_30%,transparent)] bg-transparent text-[var(--ds-canvas)] hover:bg-[color:color-mix(in_srgb,var(--ds-canvas)_10%,transparent)]';
+
+// ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)
 // ---------------------------------------------------------------------------
 
