@@ -96,7 +96,7 @@ export function SearchField({ value, onChange, label, placeholder, onSubmit, sho
               } else (e.target as HTMLInputElement).blur();
             }
           }}
-          className={cn(FIELD_EMBEDDED, 'h-[34px] min-w-0 coarse:h-11 text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] [&::-webkit-search-cancel-button]:hidden')}
+          className={cn(FIELD_EMBEDDED, 'h-[34px] min-w-0 text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] [&::-webkit-search-cancel-button]:hidden', DENSITY.coarse)}
         />
         {value && !disabled ? (
           <IconButton label="Clear search" size="sm" onClick={clear} className={cn('-mr-1.5', DENSITY.coarseSquare)}>

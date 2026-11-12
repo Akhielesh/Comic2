@@ -33,7 +33,7 @@ import { useSelection } from '../../../components/ds/useSelection';
 import { countWords } from '../../../components/ds/announce';
 import { RatingBadge } from '../../../components/comicstudio/safety/RatingBadge';
 import { useFormFactor } from '../../../components/comicstudio/mobile/useFormFactor';
-import { HEADING, OVERLINE, SECTION_CARD } from '../../../components/chat/studioDesign';
+import { DENSITY, HEADING, OVERLINE, SECTION_CARD } from '../../../components/chat/studioDesign';
 import type { QaAppScene } from '../index';
 
 /** A cover as inline SVG: a soft gradient in the comic's hue and a simple panel grid (no request, no hex). */
@@ -192,7 +192,7 @@ function Scene() {
         <Section id="grid" title="Your comics">
           <div className="flex min-w-0 flex-col gap-3">
             <SearchField value={query} onChange={setQuery} label="Search your comics" placeholder="Search your comics" shortcut resultText={countWords(shown.length, 'comic')} />
-            <FilterChips value={kind} onChange={setKind} options={KINDS} label="Filter comics" countNoun="comics" scroll />
+            <FilterChips<Kind> value={kind} onChange={setKind} options={KINDS} label="Filter comics" countNoun="comics" scroll />
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => (selection.selecting ? selection.clear() : selection.start())}>
                 {selection.selecting ? 'Done' : 'Select'}
@@ -240,7 +240,7 @@ function Scene() {
                   read={selection.selecting ? undefined : { onClick: () => undefined }}
                   corner={
                     selection.selecting ? (
-                      <label className="grid size-8 cursor-pointer place-items-center rounded-full bg-[var(--ds-raised)] coarse:size-11">
+                      <label className={`grid size-8 cursor-pointer place-items-center rounded-full bg-[var(--ds-raised)] ${DENSITY.coarseSquare}`}>
                         <input
                           type="checkbox"
                           aria-label={`Select ${c.title}`}
