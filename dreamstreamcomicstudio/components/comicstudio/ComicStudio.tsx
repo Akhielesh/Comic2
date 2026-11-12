@@ -433,7 +433,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
       id: 'history',
       label: 'History',
       icon: <HistoryIcon className="h-4 w-4" />,
-      hint: 'Look back and restore — free',
+      hint: 'Look back and restore',
       opensSheet: true,
       onSelect: () => void requestOpenHistory({ view: 'list' })
     });

@@ -27,7 +27,10 @@ vi.mock('./immersive/ImmersiveReader', () => ({
   )
 }));
 
-import { ComicStudio, ComicStudioShell, READER_REFRESH_MS, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
+import { ComicStudio, ComicStudioShell, HEADER_QUALITY_CHIP_BELOW, READER_REFRESH_MS, SPLIT_STORAGE_KEY, SpendBreakdown, spendKindsShown } from './ComicStudio';
+import { makeLakeComic } from '../../shared/comic/__fixtures__/lakeComic';
+import { deriveLock } from '../../shared/comic/modelLock';
+import { TIER_PRESETS, getImageModel } from '../../shared/comic/models';
 import { requestOpenSettings } from './openSettings';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
@@ -613,6 +616,37 @@ describe('declutter: one home per action in the studio header', () => {
     expect(header).toHaveAttribute('data-header', 'medium');
     expect(within(header).getByRole('button', { name: /^Quality:/ })).toHaveAttribute('data-action', 'quality');
     fireEvent.click(within(header).getByRole('button', { name: 'More' }));
+    expect(within(screen.getByRole('menu', { name: 'More' })).queryByRole('menuitem', { name: /Quality/ })).toBeNull();
+  });
+
+  it('the quality cut is 1024 (D22): at 1024 no header chip and ⋯ reads "{Tier} · {Model}" with the lock (L0); at 1023 the icon chip does', () => {
+    expect(HEADER_QUALITY_CHIP_BELOW).toBe(1024);
+    const doc = makeLakeComic();
+    const lock = deriveLock(doc);
+    expect(lock).toBeTruthy();
+    // The same words the header builds (no model name spelled out here: the registry names it).
+    const line = `${TIER_PRESETS[doc.settings.quality]?.label} · ${getImageModel(lock!.modelId)?.nickname ?? lock!.modelId}`;
+    const escaped = line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 1024: the regular header, no chip; the ⋯ row is quality's header home, with the lock glyph and the words.
+    const wide = mountAt(formFactorFor({ w: 1024, h: 800 }), makeFakeStudio({ doc }));
+    const header = screen.getByRole('banner');
+    expect(header).toHaveAttribute('data-header', 'regular');
+    expect(header.querySelector('[data-action="quality"]')).toBeNull();
+    expect(within(header).queryByTitle('Quality')).toBeNull();
+    fireEvent.click(within(header).getByRole('button', { name: 'More' }));
+    const row = within(screen.getByRole('menu', { name: 'More' })).getByRole('menuitem', { name: /Quality/ });
+    expect(row).toHaveTextContent(line);
+    expect(row).toHaveAccessibleName(new RegExp(`${escaped}, locked for this comic`));
+    expect(row.querySelectorAll('svg').length).toBeGreaterThanOrEqual(3); // icon, lock, chevron
+    wide.unmount();
+    // 1023: the medium header's icon chip, named in full, with the lock glyph next to the chevron; ⋯ does not repeat it.
+    mountAt(formFactorFor({ w: 1023, h: 800 }), makeFakeStudio({ doc }));
+    const narrow = screen.getByRole('banner');
+    const chip = within(narrow).getByRole('button', { name: /^Quality:/ });
+    expect(chip).toHaveAttribute('data-action', 'quality');
+    expect(chip).toHaveAccessibleName(`Quality: ${line}, locked for this comic`);
+    expect(chip.querySelectorAll('svg').length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(within(narrow).getByRole('button', { name: 'More' }));
     expect(within(screen.getByRole('menu', { name: 'More' })).queryByRole('menuitem', { name: /Quality/ })).toBeNull();
   });
 

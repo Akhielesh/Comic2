@@ -326,6 +326,24 @@ describe('ReaderTab: one full-screen entry', () => {
   });
 });
 
+// Declutter F9 / rubric C5 (DC-1): an editing row carries no price word when nothing beside it costs.
+describe('ReaderTab: the Reader look panel says no price word', () => {
+  it('neither the Reader look toggle nor its panel says "free"', () => {
+    const doc = makeSampleDoc();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1280, h: 800 })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    const toggle = screen.getByRole('button', { name: 'Reader look' });
+    expect(toggle.getAttribute('title') || '').not.toMatch(/\bfree\b/i);
+    fireEvent.click(toggle);
+    const panel = screen.getByRole('region', { name: 'Reader look' });
+    expect(panel).toHaveTextContent('Readers can still change it for themselves');
+    expect(panel.textContent || '').not.toMatch(/\bfree\b/i);
+  });
+});
+
 // PROGRAM3 B25 / collisions C-15 (RD-A built the one "drawn" definition; DC-1 verifies it on the loop's fixture): the
 // Read tab and the Pages tab badge say the same number on heist-12p (the reader used to say 7 against the badge's 6).
 describe('ReaderTab: the reader and the Pages badge agree on heist-12p', () => {

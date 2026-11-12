@@ -1,7 +1,7 @@
 // BookTimeline: the video-editor style dock (timeline.md §4.2, §7 client).
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { emptyRender, type ComicDoc } from '../../../shared/comic/doc';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, stripScrollDelta, timelineSummary } from './BookTimeline';
@@ -541,6 +541,20 @@ describe('declutter: one home per action, one count, no "Free" on the add tiles'
     expect(optionNamed(/^“The End” — made by software$/)).toBeTruthy();
   });
 
+  it('adding a software page and opening its editor say no price word either (undo toast, dialog title)', () => {
+    const { studio } = setup(makeSampleDoc());
+    fireEvent.click(optionNamed(/^Title page — /));
+    expect(lastPatch(studio)[0]).toEqual([{ op: 'book', patch: { titlePage: true } }]);
+    const toast = screen.getByText(/^Title page added/);
+    expect(toast.textContent).toBe('Title page added — made by software');
+    cleanup();
+    setup(makeSampleDoc({ book: { titlePage: true, endPage: false, backCover: 'none', firstPageRight: true, uniformTrim: true } }));
+    fireEvent.click(optionNamed(/^Title page, /));
+    const dialog = screen.getByRole('dialog', { name: 'Title page' });
+    expect(dialog).toHaveAccessibleName('Title page');
+    expect(dialog.textContent || '').not.toMatch(/·\s*free\b/i);
+  });
+
   it('standalone (no board tab strip) the row keeps its Assets and History links, named for the probe', () => {
     setup(makeSampleDoc(), { caps: ON });
     expect(screen.getByRole('button', { name: MEDIA })).toHaveAttribute('data-action', 'media');
@@ -549,8 +563,8 @@ describe('declutter: one home per action, one count, no "Free" on the add tiles'
 
   it('under a tab strip that shows Assets and History, the row links to neither; a strip without them keeps them', () => {
     const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages', caps: ON });
-    const board = (tabs: string[]) => (
-      <div data-board>
+    const board = (tabs: string[], stripHidden = false) => {
+      const strip = (
         <div role="tablist" data-tab-strip>
           {tabs.map((id) => (
             <button key={id} type="button" role="tab" id={`board-tab-${id}`}>
@@ -558,9 +572,14 @@ describe('declutter: one home per action, one count, no "Free" on the add tiles'
             </button>
           ))}
         </div>
-        <BookTimeline studio={studio} reorderActivation="immediate" />
-      </div>
-    );
+      );
+      return (
+        <div data-board>
+          {stripHidden ? <div hidden>{strip}</div> : strip}
+          <BookTimeline studio={studio} reorderActivation="immediate" />
+        </div>
+      );
+    };
     const { rerender } = render(board(['story', 'pages', 'media', 'history', 'read']));
     expect(screen.queryByRole('button', { name: MEDIA })).toBeNull();
     expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
@@ -569,6 +588,10 @@ describe('declutter: one home per action, one count, no "Free" on the add tiles'
     rerender(board(['story', 'pages', 'history', 'read']));
     expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
+    // A strip that is in the DOM but hidden offers no tab on screen: both links come back.
+    rerender(board(['story', 'pages', 'media', 'history', 'read'], true));
+    expect(screen.getByRole('button', { name: MEDIA })).toHaveAttribute('data-action', 'media');
+    expect(screen.getByRole('button', { name: HISTORY })).toBeInTheDocument();
   });
 
   it('the real board at 1280: the Assets and History tabs show, so the timeline has no Assets or History link', () => {

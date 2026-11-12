@@ -138,7 +138,10 @@ const PitchDeckRow: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ o
     />
   ) : null;
 
-/** The creator's reader defaults (doc.reader): viewers can still override them locally. Free. */
+/**
+ * The creator's reader defaults (doc.reader): viewers can still override them locally. Editing them costs nothing, and
+ * nothing beside them costs, so the panel carries no price word (declutter F9, rubric C5).
+ */
 export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
   const r = readerOf(doc);
   const set = (patch: Partial<ReaderSettings>, label = 'Change reader look') => void studio.patch([{ op: 'reader', patch }], { label });
@@ -149,7 +152,7 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
     <Surface className="mx-3 mt-2 max-h-[55%] shrink-0 overflow-y-auto overscroll-contain p-3" aria-label="Reader look">
       <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
         <p className={OVERLINE}>Reader look</p>
-        <span className="text-[11px] text-[var(--ds-muted)]">Free · readers can still change it for themselves</span>
+        <span className="text-[11px] text-[var(--ds-muted)]">Readers can still change it for themselves</span>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
         <span className="text-[12px] text-[var(--ds-muted)]" id="reader-turn-label">
@@ -408,7 +411,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Share &amp; export</span>
         </GhostButton>
       </span>
-      <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic (free)">
+      <GhostButton size="sm" onClick={() => setLookOpen((v) => !v)} aria-expanded={lookOpen} aria-label="Reader look" title="How readers see your comic">
         <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden md:inline'}>Reader look</span>
       </GhostButton>
       {switchOptions.length > 1 && (

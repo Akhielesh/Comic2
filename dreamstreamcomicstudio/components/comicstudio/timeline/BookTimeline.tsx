@@ -8,8 +8,8 @@
 // in the Read tab. `compact` is the 64 px strip for the page editor.
 //
 // Declutter (DC-1, F7/F9/F11): the summary leaves the page count to the Pages tab badge; its Assets and
-// History links show only where this board offers no such tab (one home per action, C2); the add tiles
-// carry no "Free" (nothing beside them costs money).
+// History links show only where this board offers no such tab (one home per action, C2); the add tiles,
+// the software pages, their undo toast and their editor's title carry no "free" (nothing beside them costs).
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronUp, Images } from 'lucide-react';
@@ -388,7 +388,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const activateItem = (item: Item) => {
     if (item.kind === 'clip') return openClip(item.clip);
     if (item.kind === 'add') return insertAfter(pages.length);
-    edit.commit([{ op: 'book', patch: item.ghost.patch }], `${item.ghost.label} added — free, made by software`, { label: 'Change book pages' });
+    edit.commit([{ op: 'book', patch: item.ghost.patch }], `${item.ghost.label} added — made by software`, { label: 'Change book pages' });
     focusItem(item.ghost.kind);
   };
   const undo = () => {
@@ -740,7 +740,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
       >
         {dialog?.kind === 'versions' && <VersionStack key={renderTargetKey(dialog.target)} studio={studio} target={dialog.target} initialCompare={dialog.compare} />}
       </TimelineDialog>
-      <TimelineDialog open={dialog?.kind === 'plate'} onClose={() => setDialog(null)} title={dialog?.kind === 'plate' ? `${PLATE_LABEL[dialog.plate]} · free` : ''}>
+      <TimelineDialog open={dialog?.kind === 'plate'} onClose={() => setDialog(null)} title={dialog?.kind === 'plate' ? PLATE_LABEL[dialog.plate] : ''}>
         {dialog?.kind === 'plate' && (
           <PlateEditor
             doc={doc}
