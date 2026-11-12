@@ -7,8 +7,10 @@
 // title "Saved" reads as "your work is saved". So the header slot draws no chip at any width:
 //  - the total and its breakdown live in the Spending sheet (ComicStudio's spend chip / ⋯ Spending row) at
 //    every width (`SavingsBreakdown`);
-//  - a new saving shows the copy as a calm transient toast under the header (role="status"), on every form
-//    factor — the one moment the signal matters. First sight never flashes.
+//  - a new saving shows the copy as a calm transient toast under the header, on every form factor — the one
+//    moment the signal matters. First sight never flashes. Screen readers hear it from a visually hidden live
+//    region that is always mounted and only changes its text (a region inserted already holding its words is
+//    often not announced); the visible toast is aria-hidden, so the words are read once.
 //  - Money is printed for THIS user (conversation/cost.ts): governed users read a share of their usage
 //    ("Saved ≈0.5% of your usage") or just the copy — never dollars, also before their status loads.
 
@@ -94,30 +96,40 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = 
 };
 
 /**
- * The header slot's content: no chip (F3), only the transient toast when a new saving lands. `compact` is kept for
- * the slot contract and changes nothing: the toast is the same on every form factor.
+ * The header slot's content: no chip (F3). It always mounts an empty, visually hidden live region (role="status"),
+ * which takes the copy while a new saving flashes, and portals the transient toast for sighted users. `compact` is
+ * kept for the slot contract and changes nothing: the toast is the same on every form factor.
  */
 export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { caps?: StudioController['caps']; byok?: boolean }; compact?: boolean }> = ({ studio }) => {
   const ff = useFormFactor();
   const total = savedTotal(studio.doc);
   const flash = useSavingsFlash(total);
-  if (!studio.doc || total <= 0 || !flash || typeof document === 'undefined') return null;
-  return createPortal(
-    <div
-      role="status"
-      className={`pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal`}
-      // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
-      // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait; the root's
-      // 56 px on tablets and desktops).
-      style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
-      data-savings-toast
-    >
-      <span className="flex items-center gap-1.5">
-        <Leaf className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />
-        <span className="truncate">{SAVINGS_COPY}</span>
+  const showToast = !!studio.doc && total > 0 && flash;
+  return (
+    <>
+      <span className="sr-only" role="status" aria-live="polite" data-savings-live>
+        {showToast ? SAVINGS_COPY : ''}
       </span>
-    </div>,
-    document.body
+      {showToast &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            aria-hidden
+            className={`pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal`}
+            // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
+            // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait; the root's
+            // 56 px on tablets and desktops).
+            style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
+            data-savings-toast
+          >
+            <span className="flex items-center gap-1.5">
+              <Leaf className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />
+              <span className="truncate">{SAVINGS_COPY}</span>
+            </span>
+          </div>,
+          document.body
+        )}
+    </>
   );
 };
 
