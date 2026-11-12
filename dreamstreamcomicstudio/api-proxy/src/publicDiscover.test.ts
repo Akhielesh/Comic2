@@ -4,7 +4,7 @@
 // cache, 503 + no-store on a database timeout, HEAD, only allow-listed fields, and the dispatch in proxy.ts.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from './proxy';
-import { handlePublicDiscover, type EdgeCache } from './publicDiscover';
+import { DISCOVER_BACKOFF_MS, handlePublicDiscover, resetDiscoverBackoffForTests, type EdgeCache } from './publicDiscover';
 import { rpc as realRpc, type RpcResult } from '../../functions/_shared/supabaseRpc';
 import { decodeDiscoverPage, encodeDiscoverCursor, type DiscoverPage } from '../../shared/comic/discovery';
 
@@ -83,6 +83,7 @@ async function call(path: string, opts: { method?: string; origin?: string; env?
 const listOk = (items: unknown[] = [rpcItem()], next: unknown = null) => ({ ok: true as const, data: { items, next } });
 
 afterEach(() => {
+  resetDiscoverBackoffForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -268,6 +269,36 @@ describe('503 + no-store when the database does not answer', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"code":"PGRST202"}', { status: 404 })));
     const res = (await call('/api/comic/public/discover', { rpc: realRpc }))!;
     expect(res.status).toBe(503);
+  });
+});
+
+describe('back-off while the database is down or the SQL is not applied', () => {
+  it('two requests after a failed answer make ONE database call; the second is the same 503, at once', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rpc = fakeRpc(() => ({ ok: false, reason: 'unavailable' } as RpcResult<unknown>));
+    const first = (await call('/api/comic/public/discover', { rpc: rpc.fn }))!;
+    const second = (await call('/api/comic/public/discover/shelves', { rpc: rpc.fn }))!;
+    expect(rpc.calls).toHaveLength(1);
+    for (const res of [first, second]) {
+      expect(res.status).toBe(503);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect((await res.json()).error.code).toBe('UNAVAILABLE');
+    }
+    expect(Number(second.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it(`asks again once ${DISCOVER_BACKOFF_MS / 1000} s have passed, and a good answer serves as usual`, async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let down = true;
+    const rpc = fakeRpc(() => (down ? ({ ok: false, reason: 'timeout' } as RpcResult<unknown>) : listOk()));
+    expect((await call('/api/comic/public/discover', { rpc: rpc.fn }))!.status).toBe(503);
+    vi.setSystemTime(Date.now() + DISCOVER_BACKOFF_MS - 1000);
+    expect((await call('/api/comic/public/discover', { rpc: rpc.fn }))!.status).toBe(503);
+    expect(rpc.calls).toHaveLength(1);
+    down = false;
+    vi.setSystemTime(Date.now() + 2000);
+    expect((await call('/api/comic/public/discover', { rpc: rpc.fn }))!.status).toBe(200);
+    expect(rpc.calls).toHaveLength(2);
   });
 });
 

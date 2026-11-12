@@ -17,6 +17,10 @@
  * not applied yet: PostgREST's 404 reads as "unavailable", never as an empty Discover). A 200 is
  * `public, max-age=30, s-maxage=30` and is kept in the edge cache (Cache API) for 30 s under the canonical query,
  * so a hold or an unpublish leaves every listing within 60 s; CORS headers are added per request, never cached.
+ *
+ * Back-off: after the database fails to answer (a timeout, an error, or the SQL not applied yet), this isolate answers
+ * the same 503 for DISCOVER_BACKOFF_MS without calling it again, so a scripted client spread over many IPs cannot turn
+ * every hit into a Supabase request and a log line while Discover is down or not yet live.
  */
 import {
   DISCOVER_CACHE_SECONDS,
@@ -54,6 +58,13 @@ export interface PublicDiscoverDeps {
 }
 
 const RPC_TIMEOUT_MS = 4000;
+/** How long one failed database answer keeps this isolate from asking again (the 503 answers in the meantime). */
+export const DISCOVER_BACKOFF_MS = 30_000;
+let unavailableUntil = 0;
+/** Test hook: forget the back-off (module state lives as long as the Worker isolate). */
+export function resetDiscoverBackoffForTests(): void {
+  unavailableUntil = 0;
+}
 const CACHEABLE = `public, max-age=${DISCOVER_CACHE_SECONDS}, s-maxage=${DISCOVER_CACHE_SECONDS}`;
 const BASE_HEADERS: Record<string, string> = {
   'content-type': 'application/json; charset=utf-8',
@@ -143,8 +154,15 @@ export async function handlePublicDiscover(req: Request, env: PublicComicEnv, ct
     if (hit && hit.ok) return respond(req, env, await hit.text(), 200, { 'cache-control': CACHEABLE, vary: 'Origin', 'x-discover-cache': 'hit' });
   }
 
+  const now = Date.now();
+  if (now < unavailableUntil) {
+    return noStore(req, env, UNAVAILABLE_BODY, 503, { 'retry-after': String(Math.max(1, Math.ceil((unavailableUntil - now) / 1000))) });
+  }
   const result = await (deps.rpc || supabaseRpc)<unknown>(env, route.name, route.args, { timeoutMs: RPC_TIMEOUT_MS });
-  if (!result.ok) return noStore(req, env, UNAVAILABLE_BODY, 503, { 'retry-after': '5' });
+  if (!result.ok) {
+    unavailableUntil = Date.now() + DISCOVER_BACKOFF_MS;
+    return noStore(req, env, UNAVAILABLE_BODY, 503, { 'retry-after': '5' });
+  }
   const body = route.build(result.data, { coverUrl: (p) => publicObjectUrl(env, p), avatarOrigin: supabaseOrigin(env) });
   if (!body) {
     console.error('public_discover_rejected', { route: route.kind, reason: 'the listing RPC answered an unexpected shape' });
