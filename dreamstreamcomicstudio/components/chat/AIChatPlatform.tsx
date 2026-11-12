@@ -983,7 +983,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     priorTurns: ChatTurn[],
     answerText: string,
     chatOwner: string | undefined,
-    answerConnectorData = false
+    answerConnectorData = false,
+    /** The chat's model source: the merge runs on it, as the title and follow-ups do. */
+    source?: string
   ) => {
     if (!user?.id || !answerText.trim()) return;
     // Facts learned from a chat go into its OWNER's memory only: a chat still on screen after
@@ -995,7 +997,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       .map(toRequestMessage);
     recent.push({ role: 'assistant', content: answerText, ...(answerConnectorData ? { connectorData: true } : {}) });
     const current = getChatMemory(user.id);
-    void updateChatMemory(recent, current, { memoryConnected: isChatMemoryConnected(user.id) })
+    void updateChatMemory(recent, current, { memoryConnected: isChatMemoryConnected(user.id), source })
       .then((res) => {
         const next = storeMemoryUpdate(user.id, current, res);
         if (next) setMemory(next);
@@ -1226,7 +1228,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
-      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true);
+      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true, session.source || undefined);
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever, and keep the
