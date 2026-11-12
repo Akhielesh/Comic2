@@ -11,7 +11,9 @@
 // target matched nothing — what actually exists ("No whisper balloons; page 1 has speech ×2, caption ×3").
 
 import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
-import type { DocOp } from '../../../../shared/comic/ops.js';
+import { applyOps, type DocOp } from '../../../../shared/comic/ops.js';
+import { placeLine } from '../../../../shared/comic/dialogue/placement.js';
+import type { Placement } from '../../../../shared/comic/dialogue/types.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
 import { drawnSpotPatch, estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions, planLettering, PLAN_W, withDrawnSpots } from '../../../../shared/comic/lettering/layout.js';
 import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
@@ -45,6 +47,7 @@ import { defineTool, toolArgError, type DirectorTool, type SanitizeCtx, type Too
 import type { DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 import { LETTERING_SANITIZERS } from '../sanitize/lettering.js';
+import { conflictToolNote, guardUserEdits, recordConflicts, type BlockedEdit } from '../conflictGuard.js';
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -371,7 +374,59 @@ const runSanitizer = (doc: ComicDoc, op: DocOp, ctx: StudioContext): DocOp => {
   return s.sanitize(doc, op, sctx);
 };
 
-const USER_ASKED_LETTERING_RE = /\b(font|letter(?:ing)?|balloon|bubble|text|caption|style|preset|manga|storybook|noir|webtoon|pulp|handwritten|minimal|classic)\b/i;
+/**
+ * The lettering sanitizers over a list of director ops, each checked against the doc as the earlier ones leave it (a
+ * restyle of a line added in the same edit). Ops the sanitizers do not own pass through. Throws the sanitizer's
+ * StudioError (a calm reason) on a bad op.
+ */
+export function sanitizeLetteringOps(doc: ComicDoc, ops: readonly DocOp[], ctx: StudioContext): DocOp[] {
+  let work = doc;
+  const out: DocOp[] = [];
+  for (const op of ops) {
+    const clean = runSanitizer(work, op, ctx);
+    out.push(clean);
+    work = applyOps(work, [clean]);
+  }
+  return out;
+}
+
+/** What a guarded director write committed and what it left for the conflict card (agent-editor plan §3 A3.1). */
+export interface GuardedCommit {
+  /** The doc after the commit (the doc as it was when nothing was allowed). */
+  after: ComicDoc;
+  allowed: DocOp[];
+  blocked: BlockedEdit[];
+  /** "Conflict: you changed … so I left it. …" for the tool result ('' when nothing was held back). */
+  note: string;
+}
+
+/**
+ * Every director line, balloon and style write goes through here (A3 fixer wave note 6): guardUserEdits splits the
+ * planned ops, the allowed part commits with origin 'director', recordConflicts keeps the held part for the one
+ * conflict card (right after the guard, so the next call on the same entity builds on it), and `note` goes into the
+ * tool result. Without a turn (a caller outside the director loop) everything commits as before.
+ */
+export function commitGuarded(ctx: StudioContext, turn: DirectorTurn | undefined, ops: DocOp[], label?: string): GuardedCommit {
+  if (!ops.length) return { after: ctx.session.doc, allowed: [], blocked: [], note: '' };
+  const { allowed, blocked } = turn ? guardUserEdits(ctx, turn, ops) : { allowed: ops, blocked: [] as BlockedEdit[] };
+  const after = allowed.length ? ctx.session.commit(allowed, { origin: 'director', ...(label ? { label } : {}) }) : ctx.session.doc;
+  if (turn) recordConflicts(turn, blocked);
+  return { after, allowed, blocked, note: conflictToolNote(blocked) };
+}
+
+/** A tool result with the conflict note after it (never silent about a held-back edit). */
+const withNote = (text: string, note: string): string => (note ? `${text} ${note}`.trim() : text);
+
+/** The line ids a held-back edit names (its proposed ops), for honest counts. */
+const blockedLineIds = (blocked: readonly BlockedEdit[]): Set<string> =>
+  new Set(
+    blocked.flatMap((b) => [
+      ...(b.where.lineId ? [b.where.lineId] : []),
+      ...b.proposed.flatMap((op) => (op.op === 'line_style' ? op.lineIds : op.op === 'balloon' ? [op.lineId] : op.op === 'line' || op.op === 'line_move' ? [op.id] : []))
+    ])
+  );
+
+const USER_ASKED_LETTERING_RE =/\b(font|letter(?:ing)?|balloon|bubble|text|caption|style|preset|manga|storybook|noir|webtoon|pulp|handwritten|minimal|classic)\b/i;
 
 // ── set_lettering_style ──────────────────────────────────────────────────────
 
@@ -403,7 +458,8 @@ const STYLE_SCHEMA = {
   }
 };
 
-const TARGET_SCHEMA = {
+/** Which balloons a lettering tool changes (the lettering group's full target). */
+export const TARGET_SCHEMA = {
   type: 'object',
   description: 'Which balloons (all conditions must match; no page = every page).',
   properties: {
@@ -415,6 +471,16 @@ const TARGET_SCHEMA = {
     line_ids: { type: 'array', items: { type: 'string' } },
     selected: { type: 'boolean', description: 'The balloons the user has selected ("this bubble")' }
   }
+};
+
+/**
+ * The core line tools' target (set_line, edit_panel_text; agent-editor plan §3 B3): the four ways to name a line
+ * without counting — its id from read_pages, the user's selection, its speaker, or words from it. Compact on purpose:
+ * it sits in every director prompt (golden/scenarios.test.ts measures the core).
+ */
+export const LINE_TARGET_SCHEMA = {
+  type: 'object',
+  description: 'Or name the line: line_ids (read_pages), selected, speaker or text_contains.'
 };
 
 const currentScopeStyle = (doc: ComicDoc, scope: 'comic' | 'kind' | 'speaker', kind?: LineKind, speakerId?: string): LetterStyle =>
@@ -512,7 +578,10 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
       if (!clean) throw toolArgError('That lettering change has nothing valid in it.');
       const op = runSanitizer(doc, { op: 'letter_style', patch: clean }, ctx);
       const label = preset ? `Lettering: ${LETTERING_PRESETS[preset].name}` : 'Lettering style';
-      const after = ctx.session.commit([op], { origin: 'director', label });
+      // The creator's own lettering change since the turn began wins: the guard holds this back and the card asks.
+      const guarded = commitGuarded(ctx, turn, [op], label);
+      if (!guarded.allowed.length) return guarded.note;
+      const after = guarded.after;
 
       const lines = allHits(after, after.pages);
       const inScope = (l: Line) => (scope === 'kind' ? l.kind === kind : scope === 'speaker' ? l.speakerId === speakerId : true);
@@ -535,7 +604,7 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
         );
       }
       const note = coverageNote(after, stylePatch?.font);
-      return `${parts.join(' ')}${note} ${FREE_NOTE}`;
+      return withNote(`${parts.join(' ')}${note} ${FREE_NOTE}`, guarded.note);
     }
   );
 }
@@ -579,13 +648,17 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
           ops.push(runSanitizer(doc, { op: 'line_style', pageId: g.pageId, lineIds: g.ids.slice(i, i + 80), patch: g.patch, mode: reset && g.patch ? 'replace' : 'merge' }, ctx));
         }
       }
-      ctx.session.commit(ops, { origin: 'director', label: reset && !summary ? 'Reset balloon style' : 'Restyle balloons' });
+      const guarded = commitGuarded(ctx, turn, ops, reset && !summary ? 'Reset balloon style' : 'Restyle balloons');
+      // Balloons the creator restyled while the director worked keep their look (the conflict card asks).
+      const held = blockedLineIds(guarded.blocked);
+      const done = hits.filter((h) => !held.has(h.line.id));
+      if (!done.length) return guarded.note;
       const speakerBit = t.speakerName ? ` of ${t.speakerName}'s` : '';
-      const where = pageRange(hits.map((h) => h.page.n));
+      const where = pageRange(done.map((h) => h.page.n));
       const what = summary ? `(${describePatch(summary)})` : '(back to the comic\'s lettering)';
       const total = t.speakerId ? allHits(doc, doc.pages).filter((h) => h.line.speakerId === t.speakerId).length : 0;
-      const ofTotal = t.speakerId && total > hits.length ? ` ${hits.length} of ${total}` : ` ${hits.length}`;
-      return `Restyled${ofTotal}${speakerBit} balloon${hits.length === 1 ? '' : 's'} on ${where} ${what}.${coverageNote(doc, summary?.font)} ${FREE_NOTE}`;
+      const ofTotal = t.speakerId && total > done.length ? ` ${done.length} of ${total}` : ` ${done.length}`;
+      return withNote(`Restyled${ofTotal}${speakerBit} balloon${done.length === 1 ? '' : 's'} on ${where} ${what}.${coverageNote(doc, summary?.font)} ${FREE_NOTE}`, guarded.note);
     }
   );
 }
@@ -693,6 +766,8 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         action: { type: 'string', enum: [...ARRANGE_ACTIONS] },
         target: TARGET_SCHEMA,
         position: { type: 'string', enum: [...POSITIONS], description: 'Inside the balloon\'s panel (move)' },
+        frame: { type: 'string', enum: ['panel', 'page'], description: 'move: page = that spot of the whole page' },
+        near: { type: 'string', description: 'move: next to this character (position top/bottom/left/right = above/below/beside)' },
         dx: { type: 'number', description: 'nudge: fraction of page width (+ right), e.g. 0.03' },
         dy: { type: 'number', description: 'nudge: fraction of page height (+ down)' },
         width_scale: { type: 'number', description: 'resize: 0.5–2' },
@@ -729,11 +804,13 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
 
       const ops: DocOp[] = [];
       const label = `Arrange balloons · page ${page.n}`;
+      // Guarded (A3): a balloon the creator moved, resized or restyled while the director worked stays theirs.
+      let guarded = undefined as GuardedCommit | undefined;
       const commit = () => {
-        if (ops.length) ctx.session.commit(ops, { origin: 'director', label });
+        if (ops.length) guarded = commitGuarded(ctx, turn, ops, label);
       };
       const who = hits.length === 1 ? `the ${KIND_WORD[hits[0].line.kind]} balloon ${quote(hits[0].line.text, 30)}` : plural(hits.length, 'balloon');
-
+      const arrange = (): string => {
       switch (action) {
         case 'auto_layout': {
           // Lettering tools are FREE by contract (lettering.md §8): never start a vision call from here, even
@@ -771,7 +848,23 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         }
         case 'move': {
           const pos = args.position !== undefined ? enumArg(args.position, POSITIONS, 'position') : undefined;
-          if (!pos) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel). Use nudge with dx/dy for small shifts.`);
+          const near = str(args.near, 80);
+          if (!pos && !near) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel). Use nudge with dx/dy for small shifts.`);
+          if (args.frame === 'page' || near) {
+            // A spot of the whole page, or next to a character: the shared dialogue placement (agent-editor plan §3 B3),
+            // so arrange_balloons and dialogue_edit put a balloon in the same place for the same words.
+            if (hits.length > 1) throw toolArgError(`Place one balloon at a time on the page or next to a character — which of the ${hits.length}? Give its words or line id.`);
+            const h = hits[0];
+            const relation: Placement['relation'] = !pos ? 'near' : pos.startsWith('top') ? 'above' : pos.startsWith('bottom') ? 'below' : pos === 'left' ? 'left' : pos === 'right' ? 'right' : 'near';
+            const place: Placement = near ? { frame: 'panel', near, relation } : { frame: 'page', cell: pos! };
+            const spot = placeLine(doc, page.id, h.line.id, place);
+            if (spot.ok === false) return `${spot.reason} Nothing was moved.`;
+            const cur = pc.current.get(h.line.id);
+            ops.push(balloonOp(pc, h.line.id, { x: spot.x, y: spot.y, ...(spot.w !== undefined ? { w: spot.w } : cur ? { w: cur.w } : {}), pinned: true }));
+            commit();
+            return `Moved ${who} to ${spot.where}, inside the safe margin. Pinned, so auto-layout won't move it.${spot.note ? ` ${spot.note}` : ''} ${FREE_NOTE}`;
+          }
+          if (!pos) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel).`);
           // Several balloons sent to one spot stack in reading order (outline to outline, 0.01 apart):
           // downwards from a top/middle spot, upwards from a bottom one — never on top of each other.
           const stacks = new Map<number, { top: number; bottom: number }>();
@@ -938,6 +1031,10 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         default:
           throw toolArgError(`Unknown action. Use one of: ${ARRANGE_ACTIONS.join(', ')}.`);
       }
+      };
+      const result = arrange();
+      if (guarded && !guarded.allowed.length) return guarded.note;
+      return withNote(result, guarded?.note ?? '');
     }
   );
 }
@@ -994,6 +1091,8 @@ const LETTERING_RULES = [
   '- "this/that bubble" while balloons are selected → target {selected: true}.',
   '- If the preset is still automatic and no longer fits the comic (kids → storybook, manga, webtoon, noir/detective), call set_lettering_style with that preset; never override a preset the user picked.',
   '- Overlapping or edge-hugging balloons → arrange_balloons auto_layout (free; it keeps faces clear and leaves balloons the user placed).',
+  '- whisper / thought / shout / caption / sfx = change the line KIND (dialogue_edit set_kind); shapes, colours and fonts = restyle.',
+  '- A dialogue edit that matches more than one line → let dialogue_edit ask "Which line?"; never apply it to all unless the user said all / every / both.',
   '- Repeat tool results honestly: if nothing matched, say what exists instead.'
 ].join('\n');
 

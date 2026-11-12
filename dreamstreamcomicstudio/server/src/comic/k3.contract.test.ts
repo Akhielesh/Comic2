@@ -126,52 +126,53 @@ describe('session.ts steering seams (A2 TURN filled them)', () => {
   });
 });
 
-describe('tools.ts: the reserved dialogue tool and offer_next (B-TOOL fills them)', () => {
-  it('dialogue_edit is a reserved core tool, not offered yet, and refuses honestly naming the tools that work today', async () => {
+describe('tools.ts: dialogue_edit and offer_next (filled by wave 2 B-TOOL)', () => {
+  it('dialogue_edit took its reserved seat: a free core tool that edits through the dialogue engine; offer_next adds chips', async () => {
     const ctx = testContext(newSession(plannedDoc()));
-    const turn = createDirectorTurn({ userText: 'make it a whisper' });
-    expect(RESERVED_CORE_TOOLS).toEqual(['dialogue_edit']);
-    expect(buildDirectorTools(ctx, turn).map((t) => t.spec.function.name)).not.toContain('dialogue_edit');
+    const turn = createDirectorTurn({ userText: 'make it a whisper', focus: { pageId: 'pg_1', lineIds: ['ln_1_2'] } });
+    expect(RESERVED_CORE_TOOLS).toEqual([]);
+    expect(buildDirectorTools(ctx, turn).map((t) => t.spec.function.name)).toEqual(expect.arrayContaining(['dialogue_edit', 'offer_next']));
     const tool = dialogueEditTool(ctx, turn);
     expect(tool.spec.function.name).toBe('dialogue_edit');
     expect(tool.cost).toBe('free');
     expect(tool.spec.function.description.startsWith('FREE — ')).toBe(true);
-    const rev = ctx.session.doc.rev;
-    expect(await tool.execute({ action: 'set_kind', target: { selected: true }, kind: 'whisper' })).toBe(`Error: ${DIALOGUE_EDIT_NOT_AVAILABLE}`);
-    expect(ctx.session.doc.rev).toBe(rev);
+    const out = await tool.execute({ action: 'set_kind', target: { selected: true }, kind: 'whisper' });
+    expect(out).not.toContain(DIALOGUE_EDIT_NOT_AVAILABLE);
+    expect(ctx.session.doc.pages[0].panels[1].lines[0]).toMatchObject({ id: 'ln_1_2', kind: 'whisper', speakerId: 'c_maya' });
     const offer = offerNextTool(ctx, turn);
     expect(offer.spec.function.name).toBe('offer_next');
-    expect(await offer.execute({ chips: [{ label: 'A bit higher', say: 'move it up a bit' }] })).toBe(`Error: ${OFFER_NEXT_NOT_AVAILABLE}`);
-    expect(turn.nextSteps).toEqual([]);
+    const said = await offer.execute({ chips: [{ label: 'A bit higher', say: 'move it up a bit' }] });
+    expect(said).not.toContain(OFFER_NEXT_NOT_AVAILABLE);
+    expect(turn.nextSteps).toContainEqual({ label: 'A bit higher', say: 'move it up a bit' });
+    expect(turn.askedUser).toBe(false);
   });
 
-  it('dialogue_edit already has its final B3 signature: every argument, the B1 LineRef and Placement, the style schema', () => {
+  it('dialogue_edit has its B3 signature plus the B-RESOLVE additions (confirmed, dir, LineRef.all), compact for the core prompt', () => {
     const ctx = testContext(newSession(plannedDoc()));
     const params = dialogueEditTool(ctx, createDirectorTurn({ userText: 'x' })).spec.function.parameters as {
-      properties: Record<string, { enum?: string[]; properties?: Record<string, { enum?: string[] }>; required?: string[] }>;
+      properties: Record<string, { type?: string; enum?: string[]; description?: string; properties?: Record<string, { enum?: string[] }> }>;
       required: string[];
     };
     expect(Object.keys(params.properties).sort()).toEqual(
-      ['action', 'target', 'second', 'kind', 'text', 'speaker', 'place', 'tail_to', 'to_panel', 'index', 'style', 'scope'].sort()
+      ['action', 'target', 'second', 'kind', 'text', 'speaker', 'place', 'tail_to', 'to_panel', 'index', 'style', 'scope', 'dir', 'confirmed'].sort()
     );
     expect(params.required).toEqual(['action']);
     expect(params.properties.action.enum).toEqual([...DIALOGUE_ACTS]);
-    // LineRef (B1): every narrowing field, `which` among them.
+    expect(params.properties.dir.enum).toEqual(['front', 'back']);
+    expect(params.properties.index.description).toBe('0 = first, -1 = last, any other = 0-based position.');
+    // LineRef (B1): the narrowing fields the director uses, plus the plural marker (`which` is read when sent).
     const ref = params.properties.target.properties!;
-    expect(Object.keys(ref).sort()).toEqual(['kind', 'line_ids', 'nth', 'page', 'panel', 'selected', 'speaker', 'text_contains', 'which'].sort());
-    expect(ref.which.enum).toEqual(['top', 'bottom', 'left', 'right', 'biggest']);
-    expect(params.properties.second).toEqual(params.properties.target);
-    // Placement (B1): typed, not a free-form object.
-    const place = params.properties.place.properties!;
-    expect(Object.keys(place).sort()).toEqual(['amount', 'and', 'cell', 'edge', 'frame', 'near', 'nudge', 'relation'].sort());
-    expect(place.frame.enum).toEqual(['panel', 'page']);
-    expect(place.cell.enum).toEqual([...POS9]);
-    expect(place.edge.enum).toEqual(['top', 'bottom']);
-    expect(place.relation.enum).toEqual(['above', 'below', 'left', 'right', 'near', 'between']);
-    expect(place.nudge.enum).toEqual(['up', 'down', 'left', 'right']);
-    expect(place.amount.enum).toEqual(['bit', 'lot']);
-    // style reuses the lettering tools' schema, so a restyle reads the same everywhere.
-    expect(params.properties.style).toBe(LETTERING_STYLE_ARGS_SCHEMA);
+    expect(Object.keys(ref).sort()).toEqual(['all', 'kind', 'line_ids', 'nth', 'page', 'panel', 'selected', 'speaker', 'text_contains'].sort());
+    expect(params.properties.second.type).toBe('object');
+    // Placement (B1) and the style are named in their descriptions (every key and value the engine reads), not typed key
+    // by key: dialogue_edit is core, and the golden prompt cap (golden/scenarios.test.ts) has no room for both schemas.
+    const place = params.properties.place;
+    expect(place.type).toBe('object');
+    for (const word of ['frame', 'panel|page', 'cell', ...POS9, 'edge', 'near', 'relation', 'between', 'and', 'nudge', 'amount', 'bit|lot']) expect(place.description).toContain(word);
+    for (const key of ['font', 'size', 'bold', 'italic', 'text_color', 'fill_color', 'shape', 'tail']) {
+      expect(params.properties.style.description).toContain(key);
+      expect(LETTERING_STYLE_ARGS_SCHEMA.properties).toHaveProperty(key);
+    }
   });
 });
 

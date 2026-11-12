@@ -35,7 +35,9 @@ afterEach(() => vi.restoreAllMocks());
 const CORE_TOOL_NAMES = [
   'update_brief', 'add_notes', 'set_format', 'save_source', 'upsert_character', 'remove_character', 'upsert_place', 'remove_place',
   'set_style', 'propose_styles', 'render_character_sheets', 'plan_pages', 'revise_pages', 'read_pages', 'edit_panel_text', 'set_line',
-  'render_pages', 'edit_page', 'render_cover', 'set_settings', 'ask_user'
+  'render_pages', 'edit_page', 'render_cover', 'set_settings', 'ask_user',
+  // Wave 2 B-TOOL (agent-editor plan §3 A4, B3): core, so dialogue never depends on GROUP_HINTS.
+  'dialogue_edit', 'offer_next'
 ];
 
 const fakeTool = (name: string, cost: DirectorTool['cost'] = 'free'): DirectorTool => defineTool(name, cost, `${name} tool`, { type: 'object', properties: {} }, () => `${name} ok`);

@@ -202,8 +202,10 @@ describe('page actions on a drawn book with a 7-tool timeline (lettering yields)
 });
 
 describe('reserved core slot for dialogue_edit (plan §3 B3)', () => {
-  it('names dialogue_edit as a reserved core tool', () => {
-    expect(RESERVED_CORE_TOOLS).toContain('dialogue_edit');
+  it('dialogue_edit took its reserved seat: a core tool now, so nothing is reserved any more (wave 2 B-TOOL)', () => {
+    const ctx = testContext(newSession(plannedDoc()));
+    expect(buildDirectorTools(ctx).map((t) => t.spec.function.name)).toContain('dialogue_edit');
+    expect(RESERVED_CORE_TOOLS).toEqual([]);
   });
 
   it('keeps one seat free for every reserved core tool the core list does not carry yet', () => {

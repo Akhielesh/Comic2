@@ -44,7 +44,7 @@ import {
   type RenderTarget,
   type StyleBible
 } from '../../../shared/comic/doc.js';
-import type { StudioFocus } from '../../../shared/comic/events.js';
+import { STEER_LIMITS, type ActivityWhere, type StudioFocus } from '../../../shared/comic/events.js';
 import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety.js';
 import { applyOps, type DocOp, type SpendAction } from '../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
@@ -70,7 +70,7 @@ import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
-import { costFormatterFor } from './costText.js';
+import { costFormatterFor, governDollars } from './costText.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import {
   ASPECT_RATIOS,
@@ -96,14 +96,16 @@ import {
   MAX_TOOLS_PER_TURN,
   ToolArgError,
   defineTool,
-  notAvailableError,
   type DirectorTool,
   type ToolCost,
   type ToolGroup
 } from './extensions.js';
 import { DIALOGUE_ACTS } from '../../../shared/comic/dialogue/types.js';
+import { compileDialogue, describeStyle, intentFromArgs, lineRefFromArgs, resolveLineRef, type LineHit, type ResolveContext } from '../../../shared/comic/dialogue/index.js';
+import { normalizeLetteringText } from '../../../shared/comic/textLayout.js';
 import { addRefs } from './refs/index.js';
-import { LETTERING_STYLE_ARGS_SCHEMA, balloonAtPosition, styleArgsToPatch } from './tools/lettering.js';
+import { recentCommitsOf } from './session.js';
+import { LINE_TARGET_SCHEMA, balloonAtPosition, commitGuarded, sanitizeLetteringOps, styleArgsToPatch } from './tools/lettering.js';
 import { MODEL_ASK_RE } from './tools/models.js';
 import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
 import { StudioError, type StudioContext } from './types.js';
@@ -250,15 +252,19 @@ const B = (description: string) => ({ type: 'boolean', description });
 const A = (items: Record<string, unknown>, description: string) => ({ type: 'array', items, description });
 
 const LOOK_HINTS: Partial<Record<(typeof LOOK_KEYS)[number], string>> = {
-  summary: 'One dense, drawable visual sentence.',
-  marks: 'Marks that must never drift.',
-  species: 'Non-humans: what they are (mallard duckling).',
-  markings: 'Non-humans: markings that never drift.'
+  summary: 'one dense, drawable sentence',
+  marks: 'never drift',
+  species: 'non-humans: mallard duckling',
+  markings: 'non-humans, never drift'
 };
+/**
+ * The look fields (string values, sanitizeLook keeps exactly LOOK_KEYS), named in the description rather than typed one
+ * by one: the core sits in every director prompt and golden/scenarios.test.ts caps its median (B-TOOL made room for
+ * dialogue_edit and offer_next this way).
+ */
 const lookSchema = {
   type: 'object',
-  description: 'Fill every field the user gave.',
-  properties: Object.fromEntries(LOOK_KEYS.map((k) => [k, LOOK_HINTS[k] ? { type: 'string', description: LOOK_HINTS[k] } : { type: 'string' }]))
+  description: `Strings; fill every field the user gave: ${LOOK_KEYS.map((k) => (LOOK_HINTS[k] ? `${k} (${LOOK_HINTS[k]})` : k)).join(', ')}.`
 };
 
 /** A core tool: the description gets its cost prefix ("FREE — …"), the cost is logged per call. */
@@ -608,15 +614,13 @@ function castUncastBeings(ctx: StudioContext): string {
 // ── Lettering helpers for edit_panel_text ────────────────────────────────────
 
 /**
- * The lettering engine's style args (tools/lettering.ts), trimmed to the six keys a dialogue edit
- * needs so the core prompt stays small; the engine parses them (plain words, relative sizes).
+ * A line's look in edit_panel_text: the lettering engine's style args (tools/lettering.ts LETTERING_STYLE_ARGS_SCHEMA),
+ * named in one line rather than typed key by key, because the core sits in every director prompt (golden/scenarios.test.ts
+ * caps its median). The engine parses every key (plain words, relative sizes) and answers a bad value with the choices.
  */
 const LETTERING_STYLE_ARGS_COMPACT = {
   type: 'object',
-  description: 'Optional lettering (free).',
-  properties: Object.fromEntries(
-    ['font', 'size', 'bold', 'text_color', 'fill_color', 'shape'].map((k) => [k, (LETTERING_STYLE_ARGS_SCHEMA.properties as Record<string, unknown>)[k]])
-  )
+  description: 'Optional look, as restyle_balloons: font, size, bold, text_color, fill_color, shape.'
 };
 
 /** The compact styleArgs subset → a sanitized LetterStylePatch (undefined when nothing valid). */
@@ -677,6 +681,167 @@ const tooLong = (doc: ComicDoc, lines: Pick<Line, 'text'>[]): number => {
   return lines.filter((l) => (rule.unit === 'chars' ? [...l.text.replace(/\s+/g, '')].length : (l.text.match(/\S+/g) || []).length) > rule.perLine).length;
 };
 
+
+// ── Lines by target, recent pages, presence (agent-editor plan §3 A2, B2, B3) ─────────────────────────────────────
+
+const pageIdOfOp = (op: DocOp): string | undefined => {
+  const o = op as unknown as { op: string; pageId?: unknown; id?: unknown };
+  if (typeof o.pageId === 'string') return o.pageId;
+  return (o.op === 'page' || o.op === 'page_panels') && typeof o.id === 'string' ? o.id : undefined;
+};
+
+/**
+ * The pages the last two turns changed, newest first (the resolver's third widening step, plan §3 B2 step 4): every
+ * commit in the session's recent-commit ring since the user message before the latest one. [] without a ring.
+ */
+export function recentPageIdsOf(ctx: StudioContext): string[] {
+  const commits = recentCommitsOf(ctx.session, 0);
+  const live = new Set(ctx.session.doc.pages.map((p) => p.id));
+  const out: string[] = [];
+  let turns = 0;
+  for (let i = commits.length - 1; i >= 0 && out.length < 6; i -= 1) {
+    for (const op of commits[i].ops) {
+      const id = pageIdOfOp(op);
+      if (id && live.has(id) && !out.includes(id)) out.push(id);
+    }
+    if (commits[i].ops.some((op) => op.op === 'message' && op.msg?.role === 'user') && (turns += 1) >= 2) break;
+  }
+  return out.slice(0, 6);
+}
+
+/** Where the resolver looks for this turn: the creator's selection, page and panel, then the recently touched pages. */
+const resolveContextOf = (ctx: StudioContext, turn: DirectorTurn): ResolveContext => {
+  const recent = recentPageIdsOf(ctx);
+  return {
+    ...(turn.focus?.lineIds?.length ? { lineIds: turn.focus.lineIds } : {}),
+    ...(turn.focus?.pageId ? { pageId: turn.focus.pageId } : {}),
+    ...(typeof turn.focus?.panelN === 'number' ? { panelN: turn.focus.panelN } : {}),
+    ...(recent.length ? { recentPageIds: recent } : {})
+  };
+};
+
+const hasTarget = (raw: unknown): raw is Record<string, unknown> => isObject(raw) && Object.keys(raw).length > 0;
+const hitWords = (h: LineHit) => `[${h.lineId}] page ${h.pageN} panel ${h.panelN} "${clipText(h.text, 30)}"`;
+
+/**
+ * A LINE_TARGET_SCHEMA target (the call's page / panel numbers narrow it) → the lines it names, resolved like
+ * dialogue_edit's (the selection first, fuzzy speakers, quoted words), or a fix-it error naming the candidates.
+ */
+function linesByTarget(ctx: StudioContext, turn: DirectorTurn, raw: Record<string, unknown>, page?: number, panel?: number): LineHit[] {
+  if (raw.selected === true && !turn.focus?.lineIds?.length) {
+    throw argError('Nothing is selected on the board right now — name the line (line_ids from read_pages, a speaker or its words).');
+  }
+  const ref = { ...lineRefFromArgs(raw), ...(page !== undefined ? { page } : {}), ...(panel !== undefined ? { panel } : {}) };
+  const res = resolveLineRef(ctx.session.doc, ref, resolveContextOf(ctx, turn));
+  if (res.status === 'lines' || res.status === 'confirm') return res.lines;
+  if (res.status === 'which') throw argError(`That matches ${res.candidates.length} lines: ${res.candidates.map(hitWords).join('; ')}. Pass line_ids, or use dialogue_edit (it asks the user).`);
+  if (res.status === 'tap') throw argError(`That could be any of ${res.count} lines. Pass line_ids from read_pages, or ask which one.`);
+  throw argError(res.note);
+}
+
+/**
+ * Where a director tool call is about to work (presence, plan §3 A2 / A4): its page and the balloons it changes, for the
+ * `activity` events' `where` (≤ STEER_LIMITS.whereLines ids, one page). Undefined when the call names no page or line,
+ * or on any doubt. Read-only and never throws.
+ */
+export function activityWhere(ctx: StudioContext, turn: DirectorTurn, name: string, args: Record<string, unknown>): ActivityWhere | undefined {
+  try {
+    const d = ctx.session.doc;
+    const pageOf = (n: unknown) => {
+      const k = int(n);
+      return k === undefined ? undefined : d.pages.find((p) => p.n === k);
+    };
+    const target = isObject(args.target) ? args.target : undefined;
+    let pageId: string | undefined;
+    let lineIds: string[] = [];
+    const resolved = (raw: unknown) => {
+      const res = resolveLineRef(d, lineRefFromArgs(raw), resolveContextOf(ctx, turn));
+      return res.status === 'lines' || res.status === 'confirm' ? res.lines : [];
+    };
+    switch (name) {
+      case 'set_line':
+      case 'edit_panel_text': {
+        if (hasTarget(target)) {
+          const hits = resolved({ ...target, ...(int(args.page) !== undefined ? { page: int(args.page) } : {}), ...(int(args.panel) !== undefined ? { panel: int(args.panel) } : {}) });
+          pageId = hits[0]?.pageId;
+          lineIds = hits.map((h) => h.lineId);
+          break;
+        }
+        const page = pageOf(args.page);
+        const panel = page?.panels.find((p) => p.n === int(args.panel));
+        pageId = page?.id;
+        if (panel) lineIds = name === 'set_line' ? [panel.lines[(int(args.line) ?? 0) - 1]?.id].filter((id): id is string => !!id) : panel.lines.map((l) => l.id);
+        break;
+      }
+      case 'dialogue_edit': {
+        if (args.action === 'add') {
+          const ref = lineRefFromArgs(target);
+          pageId = (typeof ref.page === 'number' ? pageOf(ref.page)?.id : undefined) ?? turn.focus?.pageId;
+          break;
+        }
+        const hits = resolved(target);
+        pageId = hits[0]?.pageId;
+        lineIds = hits.map((h) => h.lineId);
+        break;
+      }
+      case 'arrange_balloons':
+      case 'restyle_balloons': {
+        const page = pageOf(args.page ?? target?.page);
+        pageId = page?.id;
+        const ids = Array.isArray(target?.line_ids) ? target!.line_ids.filter((x): x is string => typeof x === 'string') : [];
+        lineIds = ids.length ? ids : target?.selected === true || (!target && name === 'arrange_balloons') ? turn.focus?.lineIds ?? [] : [];
+        if (!pageId && lineIds.length) pageId = d.pages.find((p) => p.panels.some((pn) => pn.lines.some((l) => l.id === lineIds[0])))?.id;
+        break;
+      }
+      case 'edit_page':
+        pageId = pageOf(args.page)?.id;
+        break;
+      default:
+        return undefined;
+    }
+    const onPage = pageId ? new Set(d.pages.find((p) => p.id === pageId)?.panels.flatMap((pn) => pn.lines.map((l) => l.id)) ?? []) : undefined;
+    lineIds = [...new Set(lineIds)].filter((id) => !onPage || onPage.has(id)).slice(0, STEER_LIMITS.whereLines);
+    if (!pageId && !lineIds.length) return undefined;
+    return { ...(pageId ? { pageId } : {}), ...(lineIds.length ? { lineIds } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Where a balloon sits in its panel, as one of the nine cells (its top-centre), for read_pages. */
+const cellIn = (b: { x: number; y: number; w: number }, box: { x: number; y: number; w: number; h: number }): string => {
+  const third = (v: number) => Math.max(0, Math.min(2, Math.floor(v * 3)));
+  const col = third(box.w > 0 ? (b.x + b.w / 2 - box.x) / box.w : 0.5);
+  const row = third(box.h > 0 ? (b.y + 0.02 - box.y) / box.h : 0.5);
+  return POS9[row * 3 + col];
+};
+
+/** read_pages' facts about one line's balloon: its cell, pinned or locked, where its tail points, its own style. */
+function balloonFacts(d: ComicDoc, page: Page, panelIndex: number, line: Line, boxes: { x: number; y: number; w: number; h: number }[]): string {
+  const bits: string[] = [];
+  const b = page.balloons.find((x) => x.lineId === line.id);
+  if (b) {
+    const box = boxes[panelIndex] ?? { x: 0, y: 0, w: 1, h: 1 };
+    bits.push(cellIn(b, box));
+    if (b.locked) bits.push('locked');
+    else if (b.pinned) bits.push('pinned');
+    if (typeof b.tailX === 'number' && typeof b.tailY === 'number') {
+      const panelN = page.panels[panelIndex]?.n;
+      const near = (page.render.qc?.heads ?? [])
+        .filter((m) => m.panel === panelN && m.characterId)
+        .map((m) => {
+          const tip = m.mouth ?? m.head;
+          return { id: m.characterId!, dist: Math.hypot(tip.x - b.tailX!, tip.y - b.tailY!) };
+        })
+        .sort((a, z) => a.dist - z.dist)[0];
+      const who = near && near.dist <= 0.12 ? d.cast.find((c) => c.id === near.id)?.name : undefined;
+      bits.push(`tail → ${who ? upper(who) : 'set by hand'}`);
+    }
+  }
+  if (line.style && Object.keys(line.style).length) bits.push(`own style: ${describeStyle(line.style) || 'custom'}`);
+  return bits.length ? ` · ${bits.join(' · ')}` : '';
+}
+
 // ── Tool set ─────────────────────────────────────────────────────────────────
 
 /**
@@ -713,7 +878,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     if (!ls.auto || d.format.lettering === 'in_art') return '';
     const fit = presetForComic(d.format, d.brief);
     if (fit === ls.presetId) return '';
-    commit([{ op: 'letter_style', patch: { presetId: fit, auto: true, keepOverrides: true } }], 'Lettering preset');
+    // Guarded (A3): a lettering pick the creator made while the director worked wins over the automatic follow.
+    const g = commitGuarded(ctx, state, [{ op: 'letter_style', patch: { presetId: fit, auto: true, keepOverrides: true } }], 'Lettering preset');
+    if (!g.allowed.length) return ` ${g.note}`;
     return ` Lettering now uses the ${fit.replace(/_/g, ' ')} preset to fit (free; it was on automatic).`;
   };
   const captured = (fact: string) => {
@@ -726,14 +893,14 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'free',
       'Save story facts the user stated. Only include fields that change.',
       schema({
-        title: S('Comic title.'),
+        title: { type: 'string' },
         logline: S('One-sentence pitch.'),
-        premise: S('What the story is about (a short paragraph).'),
-        genre: S('Genre, e.g. noir mystery.'),
-        tone: S('Tone, e.g. funny, tense, cozy.'),
-        audience: S('Who it is for, e.g. kids 6–9.'),
-        setting: S('Where and when it takes place.'),
-        themes: A({ type: 'string' }, 'Themes.')
+        premise: S('A short paragraph.'),
+        genre: S('e.g. noir mystery.'),
+        tone: S('e.g. funny, tense, cozy.'),
+        audience: S('e.g. kids 6–9.'),
+        setting: S('Where and when.'),
+        themes: { type: 'array', items: { type: 'string' } }
       }),
       (args) => {
         const patch: Record<string, unknown> = {};
@@ -757,7 +924,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'add_notes',
       'free',
-      "Record the user's decisions or wishes that don't fit a brief field (e.g. 'no gore', 'ends on a cliffhanger').",
+      "Record the user's decisions or wishes that fit no brief field ('no gore', 'ends on a cliffhanger').",
       schema({ notes: A({ type: 'string' }, 'Short notes, one idea each.') }, ['notes']),
       (args) => {
         const notes = strList(args.notes, 12, 500);
@@ -773,17 +940,17 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'free',
       'Set the format. If drawn pages would go out of date, the first call only reports it (confirm:true applies).',
       schema({
-        kind: S('Comic kind.', { enum: COMIC_KINDS }),
+        kind: { type: 'string', enum: COMIC_KINDS },
         pageCount: I('Number of pages, 1–40.'),
-        pageAspect: S('Page aspect ratio (2:3 is a standard comic page).', { enum: ASPECT_RATIOS }),
-        panelsPerPage: S(`"auto" (${PANEL_LIMITS.autoTypical}–4 big panels; the dialogue decides) or ${PANEL_LIMITS.uiChoices.join(', ')} panels a page.`, {
+        pageAspect: S('2:3 = a standard comic page.', { enum: ASPECT_RATIOS }),
+        panelsPerPage: S(`"auto" = ${PANEL_LIMITS.autoTypical}–4 big panels, the dialogue decides.`, {
           enum: ['auto', ...PANEL_LIMITS.uiChoices.map(String)]
         }),
         readingDirection: S('ltr, or rtl for manga.', { enum: ['ltr', 'rtl'] }),
-        lettering: S('overlay = editable balloons (default); in_art = the model letters the page.', { enum: LETTERING_MODES }),
-        colorMode: S('Color mode.', { enum: COLOR_MODES }),
-        language: S('BCP-47 dialogue language, e.g. en, hi, te.'),
-        confirm: B('Apply although drawn pages go out of date.')
+        lettering: S('overlay = editable balloons (default); in_art = drawn into the art.', { enum: LETTERING_MODES }),
+        colorMode: { type: 'string', enum: COLOR_MODES },
+        language: S('Dialogue language (BCP-47: en, hi, te).'),
+        confirm: B('Apply although drawn pages go stale.')
       }),
       (args) => {
         const raw: Record<string, unknown> = {};
@@ -830,11 +997,11 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'save_source',
       'text',
-      "Store the user's script/story/notes as the source. If the message says it was already saved, call with no arguments to read the full text. Otherwise text = the material, or useMessage:true for the current message. Long material is analyzed (brief, cast, places).",
+      "Store the user's script/story as the source: text, or useMessage:true for this message; no arguments = read what was already saved. Long material is analyzed (brief, cast, places).",
       schema({
-        text: S('The source material (omit when useMessage is true).'),
-        useMessage: B("Store the user's current message text as the source."),
-        analyze: B('Force (true) or skip (false) the analysis. Default: analyze when long.')
+        text: { type: 'string' },
+        useMessage: { type: 'boolean' },
+        analyze: B('Force or skip the analysis (default: when long).')
       }),
       (args) => storeAndAnalyzeSource(ctx, state, args)
     ),
@@ -842,20 +1009,20 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'upsert_character',
       'free',
-      'Create/update a cast member — people AND recurring animals, creatures, robots, toys, vehicles, key props (matched by id or name). attachmentRefs = image numbers showing them (all kept).',
+      'Create/update a cast member: people AND recurring animals, creatures, robots, toys, vehicles, key props (by id or name). attachmentRefs = image numbers of them (all kept).',
       schema(
         {
-          id: S('Existing character id.'),
-          name: S('Name (matches case-insensitively). Unnamed beings: a descriptive name ("Ducklings").'),
-          newName: S('Rename to this.'),
+          id: { type: 'string' },
+          name: S('Unnamed beings: a descriptive name ("Ducklings").'),
+          newName: { type: 'string' },
           kind: S('Absent = person.', { enum: CAST_KINDS }),
           count: I('2–12 = a group drawn as one identity.'),
           tier: S('lead/support get a model sheet; extra = text only.', { enum: ['lead', 'support', 'extra'] }),
-          role: S('Role in the story.'),
+          role: { type: 'string' },
           look: lookSchema,
-          personality: S('Personality.'),
+          personality: { type: 'string' },
           voice: S('How they talk.'),
-          attachmentRefs: A({ type: 'integer' }, 'Image numbers to use as references.')
+          attachmentRefs: { type: 'array', items: { type: 'integer' } }
         },
         ['name']
       ),
@@ -927,7 +1094,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'remove_character',
       'free',
       'Remove a character from the cast (and from every panel).',
-      schema({ id: S('Character id.'), name: S('Character name.') }),
+      schema({ id: { type: 'string' }, name: { type: 'string' } }),
       (args) => {
         const c = findCharacterArg(doc(), args);
         if (!c) throw argError(`No such character. Cast: ${castList(doc())}.`);
@@ -943,11 +1110,11 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'Create or update a recurring location (matched by id or name). attachmentRefs = image numbers showing it.',
       schema(
         {
-          id: S('Existing place id.'),
-          name: S('Place name.'),
-          newName: S('Rename to this.'),
-          look: S('What it looks like: architecture, props, light, palette.'),
-          attachmentRefs: A({ type: 'integer' }, 'Image numbers to use as reference.')
+          id: { type: 'string' },
+          name: { type: 'string' },
+          newName: { type: 'string' },
+          look: S('Architecture, props, light, palette.'),
+          attachmentRefs: { type: 'array', items: { type: 'integer' } }
         },
         ['name']
       ),
@@ -978,7 +1145,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'remove_place',
       'free',
       'Remove a location.',
-      schema({ id: S('Place id.'), name: S('Place name.') }),
+      schema({ id: { type: 'string' }, name: { type: 'string' } }),
       (args) => {
         const p = findPlaceArg(doc(), args);
         if (!p) throw argError(`No such place. Places: ${placeList(doc())}.`);
@@ -1060,8 +1227,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock.',
       schema({
         directions: A(
-          { type: 'object', properties: { name: S('2–4 word name.'), spec: S('Concrete art direction, 35–80 words.') }, required: ['name', 'spec'] },
-          'Optional directions you wrote; omit to have the art director propose them.'
+          { type: 'object', properties: { name: S('2–4 words.'), spec: S('Concrete art direction, 35–80 words.') }, required: ['name', 'spec'] },
+          'Optional; omit and the art director proposes them.'
         )
       }),
       (args) => {
@@ -1077,10 +1244,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'render_character_sheets',
       'paid',
-      'Draw model sheets (turnaround + expressions) for lead/support cast that lack one, or for the named characters/places (force:true redraws).',
+      'Draw model sheets (turnaround + expressions) for lead/support cast missing one, or the named characters/places (force:true redraws).',
       schema({
-        names: A({ type: 'string' }, 'Character (or place) names; omit for every lead/support missing a sheet.'),
-        force: B('Redraw even if a sheet exists (only when the user asked).')
+        names: A({ type: 'string' }, 'Characters or places; omit = every lead/support missing one.'),
+        force: B('Redraw an existing sheet (only when the user asked).')
       }),
       (args) => {
         const d = doc();
@@ -1111,7 +1278,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'plan_pages',
       'text',
       'Write the page-by-page script (layout, panels, cast, dialogue). No image spend; drawn pages are kept (out of date). Show it before drawing.',
-      schema({ instructions: S('Extra direction for the writer (pacing, what to emphasize).') }),
+      schema({ instructions: S('Extra direction for the writer (pacing, emphasis).') }),
       async (args) => {
         const d = doc();
         const hasStory = !!(d.brief.premise || d.brief.logline || d.source.script || d.cast.length || d.brief.notes.length);
@@ -1129,8 +1296,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'revise_pages',
       'text',
-      'Rewrite specific pages of the plan following instructions (e.g. "make page 2 a splash"). Drawn pages become out of date, never wiped.',
-      schema({ pages: A({ type: 'integer' }, 'Page numbers to rewrite.'), instructions: S('What to change.') }, ['pages', 'instructions']),
+      'Rewrite pages of the plan ("make page 2 a splash"). Drawn pages go out of date, never wiped.',
+      schema({ pages: { type: 'array', items: { type: 'integer' } }, instructions: { type: 'string' } }, ['pages', 'instructions']),
       async (args) => {
         const d = doc();
         if (!d.pages.length) throw argError('There is no plan yet — call plan_pages first.');
@@ -1149,24 +1316,26 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'read_pages',
       'free',
-      'Read the full script of planned pages (panels, cast, numbered lines) before editing them.',
-      schema({ pages: A({ type: 'integer' }, 'Page numbers.') }, ['pages']),
+      'Read planned pages: panels, cast, each line with its [id] and balloon (spot, pin, tail, style).',
+      schema({ pages: { type: 'array', items: { type: 'integer' } } }, ['pages']),
       (args) => {
         const d = doc();
         const pages = pagesByNumbers(d, intList(args.pages).slice(0, 6));
         if (!pages.length) throw argError('Pass page numbers.');
         const name = (id?: string) => upper(d.cast.find((c) => c.id === id)?.name || id);
+        // B3: every line carries its id (dialogue_edit / set_line line_ids) and what the creator set on its balloon.
         return pages
-          .map((p) =>
-            [
+          .map((p) => {
+            const boxes = panelBoxesFor(d, p);
+            return [
               `PAGE ${p.n}: ${p.summary}${p.layout ? ` | Layout: ${p.layout}` : ''}`,
               ...p.panels.map(
-                (panel) =>
+                (panel, pi) =>
                   `  Panel ${panel.n} (${panel.size}, ${panel.shot}): ${panel.action}${panel.castIds.length ? ` | Cast: ${panel.castIds.map(name).join(', ')}` : ''}` +
-                  panel.lines.map((l, i) => `\n    ${i + 1}. ${l.kind}${l.speakerId ? ` ${name(l.speakerId)}` : ''}: "${l.text}"`).join('')
+                  panel.lines.map((l, i) => `\n    ${i + 1}. [${l.id}] ${l.kind}${l.speakerId ? ` ${name(l.speakerId)}` : ''}: "${l.text}"${balloonFacts(d, p, pi, l, boxes)}`).join('')
               )
-            ].join('\n')
-          )
+            ].join('\n');
+          })
           .join('\n')
           .slice(0, 12_000);
       }
@@ -1175,17 +1344,18 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'edit_panel_text',
       'free',
-      'Set one panel\'s lines (exact text; [] = silent). Matching lines keep their balloon and translations.',
+      "Set one panel's lines (exact text; [] = silent). Lines keeping their words or speaker keep their balloons.",
       schema(
         {
-          page: I('Page number.'),
-          panel: I('Panel number.'),
+          page: { type: 'integer' },
+          panel: { type: 'integer' },
+          target: LINE_TARGET_SCHEMA,
           lines: A(
             {
               type: 'object',
               properties: {
-                kind: S('Line kind.', { enum: LINE_KINDS }),
-                speaker: S('Speaker name (speech/thought/whisper/shout).'),
+                kind: { type: 'string', enum: LINE_KINDS },
+                speaker: S('For spoken kinds.'),
                 text: S('Exact text.'),
                 style: LETTERING_STYLE_ARGS_COMPACT,
                 position: S('Balloon spot.', { enum: POSITIONS })
@@ -1195,14 +1365,26 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             'The panel’s lines in reading order (≤ 3 balloons).'
           )
         },
-        ['page', 'panel', 'lines']
+        ['lines']
       ),
       (args) => {
         const d = doc();
-        const page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
-        if (!page) throw argError('Pass the page number.');
-        const panel = page.panels.find((p) => p.n === int(args.panel));
-        if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
+        let page: Page | undefined;
+        let panel: Panel | undefined;
+        if (hasTarget(args.target) && (args.page === undefined || args.panel === undefined)) {
+          // The panel of the named line(s): "rewrite the panel where Maya says 'Run'".
+          const hits = linesByTarget(ctx, state, args.target, int(args.page), int(args.panel));
+          const panels = [...new Set(hits.map((h) => h.panelId))];
+          if (panels.length !== 1) throw argError(`Those lines are in ${panels.length} panels — pass page and panel.`);
+          page = d.pages.find((p) => p.id === hits[0].pageId);
+          panel = page?.panels.find((p) => p.id === panels[0]);
+        } else {
+          page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
+          if (!page) throw argError('Pass the page number.');
+          panel = page.panels.find((p) => p.n === int(args.panel));
+          if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
+        }
+        if (!page || !panel) throw argError('Pass the page and panel numbers.');
         if (!Array.isArray(args.lines)) throw argError('Pass lines as a list (empty for a silent panel).');
         type Wanted = Omit<Line, 'id'> & { position?: Position };
         const wanted: Wanted[] = [];
@@ -1227,12 +1409,32 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           if (typeof raw.position === 'string' && (POSITIONS as readonly string[]).includes(raw.position)) line.position = raw.position as Position;
           wanted.push(line);
         }
-        // Keep line ids positionally when kind + speaker match (i18n.md §4.3): balloons keep their
-        // pins, translations go stale instead of vanishing, and history shows an edit.
+        // Keep a line's id whenever it is still that line (i18n.md §4.3, plan §3 B3), wherever it moved in the panel:
+        // its balloon keeps its pin, translations go stale instead of vanishing, history shows an edit. Strongest match
+        // first: the same words, kind and speaker; the same words; the same speaker; the same kind of unspoken line.
+        // Ties go to the nearest old position.
         const old = panel.lines;
-        const reused = wanted.map((w, i) => (old[i] && old[i].kind === w.kind && (old[i].speakerId ?? '') === (w.speakerId ?? '') ? old[i] : undefined));
-        const keep = new Set(reused.filter((l): l is Line => !!l).map((l) => l.id));
-        const ops: DocOp[] = old.filter((l) => !keep.has(l.id)).map((l): DocOp => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: null }));
+        const words = (t: string) => normalizeLetteringText(t).toLowerCase().replace(/\s+/g, ' ').trim();
+        const reused: (Line | undefined)[] = wanted.map(() => undefined);
+        const taken = new Set<string>();
+        const claim = (match: (l: Line, w: Wanted) => boolean) =>
+          wanted.forEach((w, i) => {
+            if (reused[i]) return;
+            const best = old
+              .map((l, j) => ({ l, j }))
+              .filter(({ l }) => !taken.has(l.id) && match(l, w))
+              .sort((a, b) => Math.abs(a.j - i) - Math.abs(b.j - i))[0];
+            if (best) {
+              reused[i] = best.l;
+              taken.add(best.l.id);
+            }
+          });
+        const sameVoice = (l: Line, w: Wanted) => l.kind === w.kind && (l.speakerId ?? '') === (w.speakerId ?? '');
+        claim((l, w) => words(l.text) === words(w.text) && sameVoice(l, w));
+        claim((l, w) => words(l.text) === words(w.text));
+        claim((l, w) => !!w.speakerId && l.speakerId === w.speakerId);
+        claim((l, w) => !w.speakerId && !l.speakerId && l.kind === w.kind);
+        const ops: DocOp[] = old.filter((l) => !taken.has(l.id)).map((l): DocOp => ({ op: 'line', pageId: page!.id, panelId: panel!.id, id: l.id, patch: null }));
         const finalIds: string[] = [];
         const positioned: { id: string; position: Position }[] = [];
         wanted.forEach((w, i) => {
@@ -1241,22 +1443,35 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           if (prev) {
             const patch: Partial<Line> = {};
             if (prev.text !== line.text) patch.text = line.text;
+            if (prev.kind !== line.kind) patch.kind = line.kind;
+            if ((prev.speakerId ?? '') !== (line.speakerId ?? '')) patch.speakerId = line.speakerId;
             if (line.style) patch.style = line.style;
-            if (Object.keys(patch).length) ops.push({ op: 'line', pageId: page.id, panelId: panel.id, id: prev.id, patch });
+            if (Object.keys(patch).length) ops.push({ op: 'line', pageId: page!.id, panelId: panel!.id, id: prev.id, patch });
             finalIds.push(prev.id);
           } else {
             const id = newId('l');
-            ops.push({ op: 'line', pageId: page.id, panelId: panel.id, id, patch: { ...line, id }, index: i });
+            ops.push({ op: 'line', pageId: page!.id, panelId: panel!.id, id, patch: { ...line, id }, index: i });
             finalIds.push(id);
           }
           if (position && d.format.lettering === 'overlay') positioned.push({ id: finalIds[i], position });
+        });
+        // Kept lines that changed places: one line_move each, in reading order, so the panel reads as asked (undoable).
+        let order = applyOps(d, ops);
+        let moved = 0;
+        finalIds.forEach((id, k) => {
+          const now = findPage(order, page!.id)?.panels.find((p) => p.id === panel!.id)?.lines ?? [];
+          if (now[k]?.id === id || !now.some((l) => l.id === id)) return;
+          const op: DocOp = { op: 'line_move', pageId: page!.id, id, toPanelId: panel!.id, index: k };
+          ops.push(op);
+          order = applyOps(order, [op]);
+          moved += 1;
         });
         if (addCast.size) ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, ...addCast] } });
         if (positioned.length) {
           // Placed on the page as it will be after this edit (new lines exist), by the lettering engine:
           // the balloon's real outline stays inside its panel and the safe area. A 9-grid box is the fallback.
           const preview = applyOps(d, ops);
-          const previewPage = preview.pages.find((p) => p.id === page.id);
+          const previewPage = preview.pages.find((p) => p.id === page!.id);
           for (const { id, position } of positioned) {
             const b = previewPage ? balloonAtPosition(preview, previewPage, id, position) : undefined;
             ops.push(
@@ -1266,40 +1481,57 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             );
           }
         }
-        if (ops.length) commit(ops, `Page ${page.n} panel ${panel.n} text`);
+        // Guarded (A3): a line, balloon or order the creator changed while the director worked stays theirs; the new
+        // lines that would land in a panel they reordered too. The rest applies; the card asks about the held part.
+        const g = commitGuarded(ctx, state, ops, `Page ${page.n} panel ${panel.n} text`);
+        if (ops.length && !g.allowed.length) return g.note;
         const kept = reused.filter(Boolean).length;
         const long = tooLong(d, wanted);
         captured(`page ${page.n} panel ${panel.n}'s text`);
         const budget = panelBudgetNote(doc(), page.id, panel.id);
         const voices = [...offPanel].map((id) => doc().cast.find((c) => c.id === id)?.name).filter((n): n is string => !!n);
-        return `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place)` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${voices.length ? ` ${joinList(voices.map(upper))} ${voices.length === 1 ? 'speaks' : 'speak'} off-panel (heard, not drawn — a ${panel.shot} shot).` : ''}${budget ? ` ${budget}` : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
+        const result = `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place${moved ? `, ${moved} moved to the new order` : ''})` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${voices.length ? ` ${joinList(voices.map(upper))} ${voices.length === 1 ? 'speaks' : 'speak'} off-panel (heard, not drawn — a ${panel.shot} shot).` : ''}${budget ? ` ${budget}` : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
+        return g.note ? `${result} ${g.note}` : result;
       }
     ),
 
     define(
       'set_line',
       'free',
-      'Change ONE line in place (kind e.g. thought bubble, speaker or text); its balloon stays. line = number from read_pages.',
-      schema(
-        {
-          page: I('Page number.'),
-          panel: I('Panel number.'),
-          line: I('1-based line in the panel.'),
-          kind: S('Kind.', { enum: LINE_KINDS }),
-          speaker: S('Speaker name.'),
-          text: S('Exact text.')
-        },
-        ['page', 'panel', 'line']
-      ),
+      'Change ONE line in place (kind, speaker or text); its balloon stays. By page + panel + line (1-based), or target.',
+      schema({
+        page: { type: 'integer' },
+        panel: { type: 'integer' },
+        line: { type: 'integer' },
+        target: LINE_TARGET_SCHEMA,
+        kind: { type: 'string', enum: LINE_KINDS },
+        speaker: { type: 'string' },
+        text: S('Exact text.')
+      }),
       (args) => {
         const d = doc();
-        const page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
-        if (!page) throw argError('Pass the page number.');
-        const panel = page.panels.find((p) => p.n === int(args.panel));
-        if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
-        const n = int(args.line);
-        const line = n !== undefined ? panel.lines[n - 1] : undefined;
-        if (!line) throw argError(panel.lines.length ? `Page ${page.n} panel ${panel.n} has lines 1–${panel.lines.length}.` : `Page ${page.n} panel ${panel.n} has no lines — use edit_panel_text.`);
+        let page: Page | undefined;
+        let panel: Panel | undefined;
+        let line: Line | undefined;
+        let n: number | undefined;
+        if (hasTarget(args.target)) {
+          const hits = linesByTarget(ctx, state, args.target, int(args.page), int(args.panel));
+          if (hits.length !== 1) throw argError(`set_line changes ONE line and that names ${hits.length}: ${hits.slice(0, 5).map(hitWords).join('; ')}. Use dialogue_edit for several.`);
+          page = d.pages.find((p) => p.id === hits[0].pageId);
+          panel = page?.panels.find((p) => p.id === hits[0].panelId);
+          const index = panel ? panel.lines.findIndex((l) => l.id === hits[0].lineId) : -1;
+          if (!page || !panel || index < 0) throw argError('That line is not in the comic any more.');
+          line = panel.lines[index];
+          n = index + 1;
+        } else {
+          page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
+          if (!page) throw argError('Pass the page number (or a target).');
+          panel = page.panels.find((p) => p.n === int(args.panel));
+          if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
+          n = int(args.line);
+          line = n !== undefined ? panel.lines[n - 1] : undefined;
+          if (!line) throw argError(panel.lines.length ? `Page ${page.n} panel ${panel.n} has lines 1–${panel.lines.length}.` : `Page ${page.n} panel ${panel.n} has no lines — use edit_panel_text.`);
+        }
         const patch: Partial<Line> = {};
         const kind = LINE_KINDS.includes(args.kind as LineKind) ? (args.kind as LineKind) : undefined;
         const newText = typeof args.text === 'string' ? args.text.trim().slice(0, 600) : '';
@@ -1324,25 +1556,28 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (patch.speakerId && !panel.castIds.includes(patch.speakerId) && !OFF_PANEL_SHOTS.has(panel.shot)) {
           ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, patch.speakerId] } });
         }
-        commit(ops, `Page ${page.n} panel ${panel.n} line ${n}`);
+        // Guarded (A3): the creator's own change to this line since the turn began wins; the card asks.
+        const g = commitGuarded(ctx, state, ops, `Page ${page.n} panel ${panel.n} line ${n}`);
+        if (!g.allowed.some((op) => op.op === 'line')) return g.note;
         captured(`page ${page.n} panel ${panel.n} line ${n}`);
         const inArt = d.format.lettering === 'in_art' && page.render.status === 'ready';
         // A changed text or kind changes what the panel must hold: report its budget like edit_panel_text (plan §4.1).
         const budget = 'text' in patch || 'kind' in patch ? panelBudgetNote(doc(), page.id, panel.id) : undefined;
-        return `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${budget ? ` ${budget}` : ''}${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
+        const result = `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${budget ? ` ${budget}` : ''}${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
+        return g.note ? `${result} ${g.note}` : result;
       }
     ),
 
     define(
       'render_pages',
       'paid',
-      'Draw undrawn/out-of-date pages (no pages = all; "draw everything" adds include_cover). Never redraws a current page unless redraw:true (only when the user asked for another take). $0 when nothing needs drawing.',
+      'Draw undrawn or out-of-date pages (none named = all; "draw everything" adds include_cover). Never redraws a current page unless redraw:true (only when the user asked for another take). $0 when nothing needs it.',
       schema({
         pages: A({ type: 'integer' }, 'Limit to these pages.'),
         redraw: B('New take of current pages.'),
         include_cover: B('Also draw a missing cover.'),
         safe: B('A tamer take.'),
-        draw_anyway: A({ type: 'integer' }, 'Pages held back for too many words to draw anyway (only when the user says so).')
+        draw_anyway: A({ type: 'integer' }, 'Overfull pages to draw anyway (only when the user says so).')
       }),
       (args) => {
         const d = doc();
@@ -1400,7 +1635,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'edit_page',
       'paid',
       'Change part of a DRAWN page ("make it night"), optionally one panel. Never for text or balloons (free).',
-      schema({ page: I('Page number.'), instruction: S('What to change, concretely.'), panel: I('Panel number (optional).'), safe: B('A tamer take.') }, ['page', 'instruction']),
+      schema({ page: { type: 'integer' }, instruction: S('What to change, concretely.'), panel: I('Optional.'), safe: B('A tamer take.') }, ['page', 'instruction']),
       (args) => {
         const d = doc();
         const page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
@@ -1426,9 +1661,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'paid',
       'Draw the cover. Title/tagline edits on a textless cover are FREE. textless:true = one-time re-render with an editable title.',
       schema({
-        title: S('Cover title (defaults to the comic title).'),
-        tagline: S('Short tagline.'),
-        direction: S('Cover composition idea.'),
+        title: S('Default: the comic title.'),
+        tagline: { type: 'string' },
+        direction: S('Composition idea.'),
         textless: B('Re-render without painted text.'),
         safe: B('A tamer take.')
       }),
@@ -1468,12 +1703,12 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'set_settings',
       'free',
-      'Tighten money settings: lower the quality tier, require more confirmations, lower the "big spend" threshold, or set/lower a budget cap in USD. Loosening is the user\'s call (quality chip or Settings).',
+      'Tighten money settings only: lower tier, more confirmations, a lower "big spend" threshold, a set or lower USD budget. Loosening is the user\'s call (quality chip or Settings).',
       schema({
-        quality: S('Quality tier.', { enum: QUALITY_TIERS }),
-        confirm: S('always = confirm every spend; big = only above the threshold; never = only the budget stops spend.', { enum: CONFIRM_POLICIES }),
-        bigSpendUsd: N('Threshold for "big" spends (USD).'),
-        budgetUsd: N('Project budget cap in USD; 0 clears it.')
+        quality: { type: 'string', enum: QUALITY_TIERS },
+        confirm: S('always; big = only above the threshold; never = only the budget stops spend.', { enum: CONFIRM_POLICIES }),
+        bigSpendUsd: N('"Big" spend threshold (USD).'),
+        budgetUsd: N('Budget cap (USD); 0 clears it.')
       }),
       (args) => {
         const raw: Record<string, unknown> = {};
@@ -1550,21 +1785,22 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'Ask ONE question with 2–5 tappable options (default first; price in descriptions of options that spend).',
       schema(
         {
-          question: S('The question, short.'),
+          question: S('Short.'),
           options: A(
             {
               type: 'object',
               properties: {
-                label: S('Chip label, ≤ 5 words.'),
-                description: S('Optional one-line detail (price when it spends).'),
-                reply: S('Message sent when tapped (defaults to the label).')
+                label: S('≤ 5 words.'),
+                description: S('One line (price when it spends).'),
+                reply: S('Sent when tapped (default: label).'),
+                visual: { type: 'object', description: 'Picture: {kind:"balloon",lineId} or {kind:"spot",page,cell,panel?}.' }
               },
               required: ['label']
             },
             '2–5 options.'
           ),
-          allowCustom: B('Let the user type their own answer (default true).'),
-          multi: B('Allow picking several.')
+          allowCustom: B('Typed answer too (default true).'),
+          multi: B('Pick several.')
         },
         ['question', 'options']
       ),
@@ -1575,14 +1811,15 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const choices: OptionChoice[] = (Array.isArray(args.options) ? args.options : [])
           .map((o) => (typeof o === 'string' ? { label: o } : o))
           .filter(isObject)
-          .map((o) => ({ label: text(o.label, 60), description: text(o.description, 160), reply: text(o.reply, 600) }))
+          .map((o) => ({ label: text(o.label, 60), description: text(o.description, 160), reply: text(o.reply, 600), visual: optionVisualOf(doc(), o.visual) }))
           .filter((o) => o.label && !seen.has(o.label.toLowerCase()) && seen.add(o.label.toLowerCase()))
           .slice(0, 5)
           .map((o) => ({
             id: newId('opt'),
             label: o.label,
             ...(o.description ? { description: o.description } : {}),
-            ...(o.reply ? { reply: o.reply } : {})
+            ...(o.reply ? { reply: o.reply } : {}),
+            ...(o.visual ? { visual: o.visual } : {})
           }));
         if (choices.length < 2) throw argError('Give 2–5 distinct options.');
         if (state.askedUser) throw argError('You already asked a question this turn — end your turn now.');
@@ -1598,8 +1835,40 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         state.question = question;
         return 'Asked — the options are on screen. (Your reply in this message is what the user reads; if you wrote none, the studio adds a one-line recap.)';
       }
-    )
+    ),
+
+    // Core since wave 2 B-TOOL (plan §3 B3, A4): dialogue never depends on GROUP_HINTS, and follow-up chips are always one call away.
+    dialogueEditTool(ctx, state),
+    offerNextTool(ctx, state)
   ];
+}
+
+/**
+ * An ask_user option's picture (plan §3 A3.3), checked against the doc: a crop of one balloon (`{kind:'balloon', lineId}`;
+ * its page is looked up), or a page thumbnail with one cell lit (`{kind:'spot', page | pageId, cell, panel?, frame?}`;
+ * frame defaults to the panel when one is named). Anything else, or a page or line the comic does not have, is dropped
+ * (the option still works without its picture).
+ */
+export function optionVisualOf(d: ComicDoc, raw: unknown): OptionChoice['visual'] | undefined {
+  if (!isObject(raw)) return undefined;
+  const pageOf = () => (typeof raw.pageId === 'string' ? d.pages.find((p) => p.id === raw.pageId) : d.pages.find((p) => p.n === int(raw.page)));
+  if (raw.kind === 'balloon') {
+    const lineId = typeof raw.lineId === 'string' ? raw.lineId : typeof raw.line_id === 'string' ? raw.line_id : '';
+    const page = d.pages.find((p) => p.panels.some((pn) => pn.lines.some((l) => l.id === lineId)));
+    return page && lineId ? { kind: 'balloon', pageId: page.id, lineId } : undefined;
+  }
+  if (raw.kind === 'spot') {
+    const page = pageOf();
+    const cell = (POS9 as readonly string[]).includes(String(raw.cell)) ? (raw.cell as (typeof POS9)[number]) : undefined;
+    if (!page || !cell) return undefined;
+    const panelN = int(raw.panel ?? raw.panelN);
+    const panel = panelN !== undefined ? page.panels.find((p) => p.n === panelN) : undefined;
+    if (panelN !== undefined && !panel) return undefined;
+    const frame = raw.frame === 'page' || (raw.frame !== 'panel' && !panel) ? 'page' : 'panel';
+    if (frame === 'panel' && !panel) return undefined;
+    return { kind: 'spot', pageId: page.id, cell, frame, ...(frame === 'panel' && panel ? { panelN: panel.n } : {}) };
+  }
+  return undefined;
 }
 
 /** Exposed for tests and the director: the tool names in the order offered. */
@@ -1607,94 +1876,189 @@ export const directorToolNames = (tools: DirectorTool[]) => tools.map((t) => t.s
 
 // ── Live agent and dialogue tools (agent-editor plan §3 A4 and B3; K3 stubs, wave 2 B-TOOL fills them) ───────────────
 
-/** What the dialogue_edit stub tells the model (honest, with the tools that work today). */
+/** What the wave-0 dialogue_edit stub told the model. Kept for old callers; the tool is built (wave 2 B-TOOL). */
 export const DIALOGUE_EDIT_NOT_AVAILABLE =
   "dialogue_edit isn't available yet. Use set_line or edit_panel_text for words, kind and speaker, and arrange_balloons to move a balloon.";
-/** What the offer_next stub tells the model. */
+/** What the wave-0 offer_next stub told the model. Kept for old callers; the tool is built (wave 2 B-TOOL). */
 export const OFFER_NEXT_NOT_AVAILABLE = "offer_next isn't available yet. Suggest next steps in your reply instead.";
 
+/**
+ * LineRef (plan §3 B1) in tool-JSON form. Compact on purpose: dialogue_edit is a core tool, so this sits in every
+ * director prompt (golden/scenarios.test.ts caps the median prompt). lineRefFromArgs (shared/comic/dialogue) reads it.
+ */
 const LINE_REF_SCHEMA = {
   type: 'object',
-  description: 'Which line: the selection, or page / panel / speaker / kind / quoted text / ordinal.',
+  description: 'Which line(s); empty = the selection.',
   properties: {
-    selected: B('this / that / these / it: the selected balloons.'),
-    page: I('Page number.'),
-    panel: I('Panel number on that page.'),
-    speaker: S('Who says it ("Mira", "the robot").'),
-    kind: S('Line kind.', { enum: [...LINE_KINDS] }),
-    text_contains: S('Words from the line.'),
-    line_ids: A({ type: 'string' }, 'Exact line ids from read_pages.'),
-    nth: I('Her 2nd line = 2; -1 = the last.'),
-    which: S('Which of several: the top / bottom / left / right one, or the biggest.', { enum: ['top', 'bottom', 'left', 'right', 'biggest'] })
+    selected: { type: 'boolean' },
+    page: { type: 'integer' },
+    panel: { type: 'integer' },
+    speaker: { type: 'string' },
+    kind: { type: 'string', enum: [...LINE_KINDS] },
+    text_contains: { type: 'string' },
+    line_ids: { type: 'array', items: { type: 'string' } },
+    nth: I('-1 = last.'),
+    all: B('all / every / both / these.')
   }
 };
 
-/** Placement (plan §3 B1) in tool-JSON form: where a balloon goes. */
+/**
+ * Placement (plan §3 B1) in tool-JSON form, named in its description rather than typed key by key (the core prompt
+ * budget); the engine's placementFromArgs reads exactly these keys and values.
+ */
 const PLACEMENT_SCHEMA = {
   type: 'object',
-  description: 'Where: a cell of the panel or page, a full-width bar at its top or bottom edge, next to a character, or a nudge.',
-  properties: {
-    frame: S('Inside the line\'s panel, or anywhere on the page ("of the page").', { enum: ['panel', 'page'] }),
-    cell: S('One of nine cells of the frame.', { enum: [...POS9] }),
-    edge: S('A full-width caption bar at this edge of the frame.', { enum: ['top', 'bottom'] }),
-    near: S('A character: a cast name or kind word ("Mira", "the robot").'),
-    relation: S('Where relative to `near`.', { enum: ['above', 'below', 'left', 'right', 'near', 'between'] }),
-    and: S('The second character of "between them".'),
-    nudge: S('Move a little from where it is.', { enum: ['up', 'down', 'left', 'right'] }),
-    amount: S('How far to nudge.', { enum: ['bit', 'lot'] })
-  },
-  required: ['frame']
+  description:
+    'Where: frame panel|page + cell top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right; or edge top|bottom (full bar); or near a character + relation above|below|left|right|near|between (+ and); or nudge up|down|left|right + amount bit|lot.'
 };
 
 /**
- * dialogue_edit (plan §3 B3): one free tool for every dialogue edit — resolve the line (asking "Which line?" when several
- * match), compile the intent to ops, guardUserEdits, commit with origin 'director'. A RESERVED core tool (RESERVED_CORE_TOOLS):
- * its seat is kept free in every turn. STUB: refuses NOT_AVAILABLE and is not offered yet (B-TOOL adds it to the core list).
+ * dialogue_edit's look: the same words restyle_balloons and set_lettering_style read (LETTERING_STYLE_ARGS_SCHEMA),
+ * named in one line (the core prompt budget). The body parses every key with the lettering engine, so an unknown value
+ * comes back as a fix-it message listing the choices.
+ */
+const DIALOGUE_STYLE_SCHEMA = {
+  type: 'object',
+  description: 'Look, as restyle_balloons: font, size ("larger" or 1.2), bold, italic, text_color, fill_color, shape, tail.'
+};
+
+/** Follow-up chips a dialogue run may show: free `say` and `client` chips only (a spend action never rides along). */
+const freeChips = (steps: readonly NextStep[]): NextStep[] => steps.filter((s) => !!s?.label && !s.action && (!!s.say || !!s.client));
+
+/**
+ * dialogue_edit's `style` args → a style patch for intentFromArgs (relative to the scope's current look), or undefined.
+ * An unknown font is carried through, never dropped: the rest converts without it, and the engine asks with the 3
+ * nearest fonts (intentFromArgs reads the font name from the args). Any other bad value is a fix-it error.
+ */
+function dialogueStylePatch(d: ComicDoc, args: Record<string, unknown>): LetterStylePatch | undefined {
+  if (!isObject(args.style) || !Object.keys(args.style).length) return undefined;
+  const target = isObject(args.target) ? args.target : {};
+  const kind = LINE_KINDS.includes(target.kind as LineKind) ? (target.kind as LineKind) : 'speech';
+  const current = resolveLetterStyle(d, { id: '_dialogue', kind, text: '' });
+  try {
+    return styleArgsToPatch(args.style, current);
+  } catch (err) {
+    if (args.style.font === undefined) throw err;
+    const { font: _unknown, ...rest } = args.style;
+    return Object.keys(rest).length ? styleArgsToPatch(rest, current) : undefined;
+  }
+}
+
+/**
+ * dialogue_edit (plan §3 B3): one free tool for every dialogue edit. The engine (shared/comic/dialogue) resolves the
+ * line deterministically (the selection first, then the view, then the pages touched in the last two turns), compiles
+ * the intent to free undoable ops (all or nothing), and the conflict guard keeps every line the creator changed while
+ * the director worked. Several matches ask "Which line?" (a picture of each balloon) and end the turn the way ask_user
+ * does; a big plural asks once to confirm, and only the re-call after the creator's yes carries `confirmed`.
  */
 export function dialogueEditTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
-  void ctx;
-  void turn;
   return define(
     'dialogue_edit',
     'free',
-    'Change dialogue: a line\'s kind, words or speaker; add, delete, move, reorder or swap lines; aim or restyle a tail; restyle a balloon.',
+    'Any dialogue edit: a line\'s kind (whisper, shout, thought, caption…), words, speaker, place, tail, order, look; add, delete, swap, lock, link. Asks which line itself.',
     schema(
       {
-        action: S('What to do.', { enum: [...DIALOGUE_ACTS] }),
+        action: { type: 'string', enum: [...DIALOGUE_ACTS] },
         target: LINE_REF_SCHEMA,
-        second: LINE_REF_SCHEMA,
-        kind: S('New line kind.', { enum: [...LINE_KINDS] }),
-        text: S('New words.'),
-        speaker: S('Speaker name, or "off_panel".'),
+        second: { type: 'object', description: 'The other line (swap, before it, link): keys as target.' },
+        kind: { type: 'string', enum: [...LINE_KINDS] },
+        text: { type: 'string' },
+        speaker: S('Or "off_panel".'),
         place: PLACEMENT_SCHEMA,
-        tail_to: S('Who or what the tail points at ("mouth" = the speaker\'s mouth).'),
-        to_panel: I('Panel number to move the line to.'),
-        index: I('0-based position in the panel.'),
-        style: LETTERING_STYLE_ARGS_SCHEMA,
-        scope: S('Restyle scope.', { enum: ['line', 'kind', 'speaker', 'comic'] })
+        tail_to: S('A character, or "mouth".'),
+        to_panel: { type: 'integer' },
+        index: I('0 = first, -1 = last, any other = 0-based position.'),
+        style: DIALOGUE_STYLE_SCHEMA,
+        scope: { type: 'string', enum: ['line', 'kind', 'speaker', 'comic'] },
+        dir: { type: 'string', enum: ['front', 'back'] },
+        confirmed: B('Only when re-calling after the user said yes to "Go ahead?".')
       },
       ['action']
     ),
-    () => {
-      throw notAvailableError(DIALOGUE_EDIT_NOT_AVAILABLE);
+    (args) => {
+      const d = ctx.session.doc;
+      const style = dialogueStylePatch(d, args);
+      const m = intentFromArgs(args, style ? { style } : {});
+      if ('error' in m) throw argError(m.error);
+      const run = compileDialogue(d, [m.intent], { ...resolveContextOf(ctx, turn), confirmed: args.confirmed === true });
+      const chips = freeChips(run.followUps);
+      if (run.status === 'apply') {
+        let ops: DocOp[];
+        try {
+          // The same server checks every other lettering tool's ops pass (sanitize/lettering.ts).
+          ops = sanitizeLetteringOps(d, run.ops, ctx);
+        } catch (err) {
+          throw argError(err instanceof StudioError ? err.userMessage : 'That dialogue change could not be applied.');
+        }
+        const g = commitGuarded(ctx, turn, ops, run.label || 'Dialogue');
+        if (!g.allowed.length) return g.note;
+        pushNextSteps(turn, chips);
+        if (!turn.captured.includes('the dialogue') && turn.captured.length < 12) turn.captured.push('the dialogue');
+        const said = run.note || 'Done.';
+        return `${said}${g.note ? ` ${g.note}` : ''} Free — undoable.`;
+      }
+      if (run.status === 'ask') {
+        if (turn.askedUser) throw argError('You already asked a question this turn — end your turn now.');
+        const question = text(run.ask?.question || run.note || 'Which line?', 300);
+        // The engine's choices (each "Which line?" option shows its balloon), then its say-chips ("Yes, change all N of
+        // them.", "I mean Mira.", "Use Bangers", "New shout…") as more choices: at most 5 in the card, the rest as chips.
+        const seen = new Set<string>();
+        const fresh = (label: string) => !!label && !seen.has(label.toLowerCase()) && !!seen.add(label.toLowerCase());
+        const choices: OptionChoice[] = [];
+        for (const o of run.ask?.options ?? []) if (choices.length < 5 && fresh(o.label)) choices.push(o);
+        const rest: NextStep[] = [];
+        for (const c of chips) {
+          if (c.say && !c.client && choices.length < 5 && fresh(c.label)) choices.push({ id: newId('opt'), label: clipText(c.label, 60), reply: c.say });
+          else if (!seen.has(c.label.toLowerCase())) rest.push(c);
+        }
+        if (choices.length) turn.cards.push({ type: 'options', id: newId('card'), question, choices, allowCustom: true });
+        pushNextSteps(turn, rest);
+        turn.askedUser = true;
+        turn.question = question;
+        const pictures = choices.some((c) => c.visual) ? ' (each shows its balloon)' : '';
+        return `Asked: "${question}"${choices.length ? ` with ${choices.length} choice${choices.length === 1 ? '' : 's'}${pictures}` : ''}. Nothing changed yet. End your turn now; the user's answer comes next turn.`;
+      }
+      pushNextSteps(turn, chips);
+      return run.note || 'Nothing to change.';
     }
   );
 }
 
+/** offer_next chips per turn (plan §3 A4: "up to 2"). */
+export const OFFER_NEXT_MAX = 2;
+const offeredThisTurn = new WeakMap<DirectorTurn, number>();
+
 /**
- * offer_next (plan §3 A4): up to 2 free `say` chips that follow what was just asked; never a spend action, never ends the
- * turn. STUB: refuses NOT_AVAILABLE and is not offered yet.
+ * offer_next (plan §3 A4): up to 2 free `say` chips that follow what was just asked. A chip only ever SENDS words: it
+ * carries no action, so it can never spend (a chip whose words ask for spend meets the normal gate when sent). It does
+ * not end the turn. Governed users never read dollars on a chip.
  */
 export function offerNextTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
-  void ctx;
-  void turn;
   return define(
     'offer_next',
     'free',
-    'Offer up to 2 short next-step chips the user can tap (each sends its text). Does not end your turn.',
-    schema({ chips: A({ type: 'object', properties: { label: S('Chip text (≤ 40 chars).'), say: S('Message sent when tapped.') } }, '1–2 chips.') }, ['chips']),
-    () => {
-      throw notAvailableError(OFFER_NEXT_NOT_AVAILABLE);
+    'Offer 1–2 tappable replies that follow this turn (they send their words, never buy). Does not end your turn.',
+    schema({ chips: A({ type: 'string' }, '1–2 short replies (≤ 40 chars).') }, ['chips']),
+    (args) => {
+      const view = costFormatterFor(ctx).view;
+      const words = (v: unknown, max: number) => governDollars(text(v, max), view);
+      const chips: NextStep[] = (Array.isArray(args.chips) ? args.chips : [])
+        .map((c) => (typeof c === 'string' ? { label: c } : c))
+        .filter(isObject)
+        .map((c) => {
+          const label = words(c.label, 40);
+          return { label, say: words(c.say, 300) || label };
+        })
+        .filter((c) => !!c.label);
+      if (!chips.length) throw argError('Pass 1–2 chips: {label, say}.');
+      const room = OFFER_NEXT_MAX - (offeredThisTurn.get(turn) ?? 0);
+      if (room <= 0) throw argError(`You already offered ${OFFER_NEXT_MAX} chips this turn.`);
+      const before = turn.nextSteps.length;
+      pushNextSteps(turn, chips.slice(0, room));
+      const added = turn.nextSteps.slice(before);
+      offeredThisTurn.set(turn, (offeredThisTurn.get(turn) ?? 0) + added.length);
+      if (!added.length) return 'Those chips are already offered. Keep going, or answer now.';
+      return `Offered ${added.map((c) => `"${c.label}"`).join(' and ')} under your reply (free taps that send their words). Keep going, or answer now.`;
     }
   );
 }
@@ -1777,11 +2141,11 @@ const groupRelevant = (g: ToolGroup, turn: DirectorTurn): boolean => {
 };
 
 /**
- * Core tools that always have a seat in a director turn, so dialogue never depends on GROUP_HINTS (agent-editor plan
- * §3 B3). While one is not in the core list yet (dialogue_edit ships in wave 2 B-TOOL), buildTurnToolset keeps its
- * slot free under MAX_TOOLS_PER_TURN; adding it to buildDirectorTools later trims no feature group.
+ * Core tools that must keep a seat before they join the core list (agent-editor plan §3 B3). While a name here is not in
+ * buildDirectorTools yet, buildTurnToolset keeps its slot free under MAX_TOOLS_PER_TURN, so adding it later trims no
+ * feature group. Empty since wave 2 B-TOOL: dialogue_edit is a core tool, so dialogue never depends on GROUP_HINTS.
  */
-export const RESERVED_CORE_TOOLS: readonly string[] = ['dialogue_edit'];
+export const RESERVED_CORE_TOOLS: readonly string[] = [];
 
 const groupFailed = (ctx: StudioContext, id: string, stage: string, err: unknown) =>
   logger.warn('comic_tool_group_failed', { projectId: ctx.projectId, group: id, stage, message: (err as Error)?.message });
