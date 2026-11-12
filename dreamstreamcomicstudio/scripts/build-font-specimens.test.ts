@@ -1,7 +1,7 @@
 // PE-FONTS generator: the committed face tables are exactly what the generator makes from the pinned packages, every
 // compact table expands to the planned files, and the WOFF reader draws real outlines.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FONT_IDS } from '../shared/comic/lettering/style';
 import { FONT_REGISTRY, PRO_FONT_REGISTRY } from '../shared/comic/lettering/fonts';
@@ -9,6 +9,23 @@ import { PRO_FONT_IDS } from '../shared/comic/lettering/proFonts';
 import { APP_ROOT, facePlan, openFont, readSfntTables, renderFontTables, textAdvanceEm, textPath } from './build-font-specimens.mjs';
 
 const SCRIPT_IDS = FONT_IDS.filter((id) => id.startsWith('noto-'));
+const FONT_FILES_TS = 'components/comicstudio/lettering/fontFiles.ts';
+/** A static import or re-export (`import … from`, `export … from`, bare `import '…'`) of a path matching `target`. */
+const staticImportOf = (target: string) => new RegExp(`^\\s*(?:import|export)\\b[^(;'"]*['"][^'"]*${target}[^'"]*['"]`, 'm');
+/** Client source files (no tests): what the app bundles. */
+const clientSources = (): string[] => {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== 'node_modules' && e.name !== '__fixtures__') walk(abs);
+      } else if (/\.(ts|tsx|mts|js|mjs)$/.test(e.name) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(e.name)) out.push(relative(APP_ROOT, abs));
+    }
+  };
+  for (const d of ['components', 'contexts', 'hooks', 'lib', 'services', 'shared', 'styles']) walk(join(APP_ROOT, d));
+  return [...out, 'App.tsx', 'index.tsx'];
+};
 const woff = (pkg: string, file: string) => readFileSync(join(APP_ROOT, 'node_modules', '@fontsource', pkg, 'files', file));
 
 describe('build-font-specimens: tables', () => {
@@ -23,6 +40,22 @@ describe('build-font-specimens: tables', () => {
     );
     for (const [rel, text] of Object.entries(files)) expect(readFileSync(join(APP_ROOT, rel), 'utf8'), rel).toBe(text);
   });
+
+  it('the Pro and script tables stay lazy: fontFiles.ts reaches fontTables/* only through import(), and nothing else imports them', async () => {
+    const files = await renderFontTables();
+    for (const text of [files[FONT_FILES_TS], readFileSync(join(APP_ROOT, FONT_FILES_TS), 'utf8')]) {
+      expect(text).not.toMatch(staticImportOf('fontTables/'));
+      expect(text.match(/\(\) => import\('\.\/fontTables\/[a-z0-9-]+'\)/g)).toHaveLength(PRO_FONT_IDS.length + SCRIPT_IDS.length);
+    }
+    const offenders = clientSources().filter((rel) => {
+      if (rel === FONT_FILES_TS || rel.includes('/lettering/fontTables/')) return false;
+      const text = readFileSync(join(APP_ROOT, rel), 'utf8');
+      return staticImportOf('fontTables/').test(text) || (rel !== 'components/comicstudio/lettering/fontSpecimens.ts' && staticImportOf('fontSpecimens\\.png').test(text));
+    });
+    expect(offenders).toEqual([]);
+    // The sprite is a URL (fetched when a mask first paints), never inlined into a JS chunk.
+    expect(readFileSync(join(APP_ROOT, 'components/comicstudio/lettering/fontSpecimens.ts'), 'utf8')).toMatch(/^import spriteUrl from '\.\/fontSpecimens\.png\?url';$/m);
+  }, 60_000);
 
   it('every script table expands to exactly its planned slices, each with a self-hosted URL', async () => {
     for (const id of SCRIPT_IDS) {

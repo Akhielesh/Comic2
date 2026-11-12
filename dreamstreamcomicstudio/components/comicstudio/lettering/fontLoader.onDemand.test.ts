@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PRO_FONT_IDS } from '../../../shared/comic/lettering/proFonts';
 
 const tableLoads = vi.hoisted(() => [] as string[]);
+/** Tables whose chunk request never answers (a stalled dynamic import on a weak connection). */
+const stalled = vi.hoisted(() => new Set<string>());
 vi.mock('./fontFiles', async (orig) => {
   const actual = await orig<typeof import('./fontFiles')>();
   const lazy = Object.fromEntries(
@@ -11,14 +13,14 @@ vi.mock('./fontFiles', async (orig) => {
       id,
       () => {
         tableLoads.push(id);
-        return load();
+        return stalled.has(id) ? new Promise<never>(() => undefined) : load();
       }
     ])
   );
   return { ...actual, LAZY_FONT_FILES: lazy };
 });
 
-import { ensureFonts, isFontReady, resetFontLoaderForTests } from './fontLoader';
+import { ensureFonts, fontFaceCss, isFontReady, preloadFontFiles, resetFontLoaderForTests } from './fontLoader';
 
 interface Made {
   family: string;
@@ -47,8 +49,10 @@ const installFontApi = () => {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   resetFontLoaderForTests();
   tableLoads.length = 0;
+  stalled.clear();
   vi.unstubAllGlobals();
   delete (document as unknown as { fonts?: unknown }).fonts;
 });
@@ -97,5 +101,49 @@ describe('fontLoader loads a face only on demand, once', () => {
     const r = await ensureFonts(['bungee', 'noto-sans-jp']);
     expect(r).toEqual({ loaded: [], failed: ['bungee', 'noto-sans-jp'] });
     expect(tableLoads).toEqual([]);
+  });
+});
+
+describe('a face table that never arrives is bounded by the timeout', () => {
+  const settle = <T,>(p: Promise<T>) => {
+    const state: { done: boolean; value?: T } = { done: false };
+    void p.then((value) => Object.assign(state, { done: true, value }));
+    return state;
+  };
+
+  it('ensureFonts reports the stalled faces as failed within timeoutMs; the ready faces still load', async () => {
+    vi.useFakeTimers();
+    installFontApi();
+    stalled.add('bungee').add('noto-sans-telugu');
+    const r = settle(ensureFonts(['bungee', 'noto-sans-telugu', 'comic-neue'], { weights: [400], sample: 'నమస్తే', timeoutMs: 1000 }));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(r.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r).toEqual({ done: true, value: { loaded: ['comic-neue'], failed: ['noto-sans-telugu', 'bungee'] } });
+    expect(tableLoads).toEqual(['bungee', 'noto-sans-telugu']);
+  });
+
+  it('the default 5 s budget applies when no timeout is given (the export path waits on this call)', async () => {
+    vi.useFakeTimers();
+    installFontApi();
+    stalled.add('noto-sans-jp');
+    const r = settle(ensureFonts(['noto-sans-jp'], { sample: '月まで' }));
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(r.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r).toEqual({ done: true, value: { loaded: [], failed: ['noto-sans-jp'] } });
+  });
+
+  it('preloadFontFiles (the print view waits on it) resolves by its timeout and leaves the stalled face out of the CSS', async () => {
+    vi.useFakeTimers();
+    stalled.add('noto-sans-telugu');
+    const r = settle(preloadFontFiles(['noto-sans-telugu', 'bungee'], 1000));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(r.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(r.done).toBe(true);
+    const css = fontFaceCss(['noto-sans-telugu', 'bungee'], 'https://comics.example');
+    expect(css).toContain('font-family:"DSL Bungee"');
+    expect(css).not.toContain('Noto Sans Telugu');
   });
 });

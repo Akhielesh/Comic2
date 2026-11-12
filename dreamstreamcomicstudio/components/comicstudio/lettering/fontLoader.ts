@@ -95,9 +95,25 @@ const loadTable = (id: AnyFontId): Promise<FontFile[]> => {
 /** The files of a face whose table is already here (the eager Latin table, or a table an earlier load fetched). */
 const tableNow = (id: AnyFontId): FontFile[] => (isLatin(id) ? FONT_FILES[id] || [] : tables.get(id) || []);
 
-/** Load the tables (not the font files) of these faces, so `fontFaceCss` can list them. Never rejects. */
-export async function preloadFontFiles(ids: readonly AnyFontId[]): Promise<void> {
-  await Promise.all([...new Set(ids.filter(known))].map(loadTable));
+/**
+ * `work`, or `fallback` once `ms` have passed, whichever comes first. A table chunk can stall (a weak mobile connection
+ * never answers the dynamic import), so every wait on one has a deadline; the stalled load keeps running and lands in
+ * the memo if it ever arrives.
+ */
+const withDeadline = <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(0, ms));
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Load the tables (not the font files) of these faces, so `fontFaceCss` can list them. Never rejects, and never waits
+ * longer than `timeoutMs` (default 5 s): a face whose table has not arrived by then is left out of the CSS.
+ */
+export async function preloadFontFiles(ids: readonly AnyFontId[], timeoutMs = 5000): Promise<void> {
+  await Promise.all([...new Set(ids.filter(known))].map((id) => withDeadline(loadTable(id), timeoutMs, [] as FontFile[])));
 }
 
 /** The files a style needs from `files`: the nearest shipped weight, italic only when the face ships it. */
@@ -206,13 +222,14 @@ export interface EnsureFontsOptions {
   italic?: boolean;
   /** Sample text (script faces load only the unicode-range slices the text needs). */
   sample?: string;
-  /** Per-face timeout; default 5 s (as the export path always did). */
+  /** Per-face timeout, the face's table chunk included; default 5 s (as the export path always did). */
   timeoutMs?: number;
 }
 
 /**
- * Load lettering faces (base or Pro ids) on demand; resolves with what is ready (never rejects). Each face file is
- * fetched once; a face nobody asks for is never fetched.
+ * Load lettering faces (base or Pro ids) on demand; resolves with what is ready (never rejects) within `timeoutMs`: a
+ * face whose table or files have not arrived by then is reported in `failed` (its loads keep going and bump the
+ * generation if they land later). Each face file is fetched once; a face nobody asks for is never fetched.
  */
 export async function ensureFonts<T extends AnyFontId = FontId>(ids: readonly T[], opts: EnsureFontsOptions = {}): Promise<EnsureFontsResult<T>> {
   listenToDocumentFonts();
@@ -222,23 +239,28 @@ export async function ensureFonts<T extends AnyFontId = FontId>(ids: readonly T[
   const loaded: T[] = [];
   const failed: T[] = [];
   if (!hasFontApi()) return { loaded, failed: unique };
-  await Promise.all(
-    unique.map(async (id) => {
-      const meta = fontFaceMeta(id);
-      const files = meta ? await loadTable(id) : [];
-      const jobs: Promise<boolean>[] = [];
-      if (meta && files.length) {
-        if (isSliced(id)) {
-          for (const w of weights) jobs.push(loadScriptFace(id, meta.family, files, w, opts.sample || '', timeoutMs));
-        } else {
-          for (const w of weights) {
-            for (const file of pick(files, w, false)) jobs.push(loadFile(meta.family, file, timeoutMs));
-            if (opts.italic && meta.italic) for (const file of pick(files, w, true)) jobs.push(loadFile(meta.family, file, timeoutMs));
-          }
+  const loadFace = async (id: T): Promise<boolean> => {
+    const meta = fontFaceMeta(id);
+    const files = meta ? await loadTable(id) : [];
+    const jobs: Promise<boolean>[] = [];
+    if (meta && files.length) {
+      if (isSliced(id)) {
+        for (const w of weights) jobs.push(loadScriptFace(id, meta.family, files, w, opts.sample || '', timeoutMs));
+      } else {
+        for (const w of weights) {
+          for (const file of pick(files, w, false)) jobs.push(loadFile(meta.family, file, timeoutMs));
+          if (opts.italic && meta.italic) for (const file of pick(files, w, true)) jobs.push(loadFile(meta.family, file, timeoutMs));
         }
       }
-      const results = await Promise.all(jobs);
-      (results.length && results.some(Boolean) ? loaded : failed).push(id);
+    }
+    const results = await Promise.all(jobs);
+    return results.length > 0 && results.some(Boolean);
+  };
+  await Promise.all(
+    unique.map(async (id) => {
+      // One deadline per face, table chunk included (the per-file and per-sample timers start only once it is here).
+      const ok = await withDeadline(loadFace(id).catch(() => false), timeoutMs, false);
+      (ok ? loaded : failed).push(id);
     })
   );
   const order = (list: T[]) => ALL_IDS.filter((id) => (list as readonly AnyFontId[]).includes(id)) as T[];
