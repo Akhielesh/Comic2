@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import postcss from 'postcss';
 import { describe, expect, it } from 'vitest';
 import * as design from '../chat/studioDesign';
-import { APP_ROOT } from '../../tests/config/cssTokens';
+import { APP_ROOT, parseRules, topLevelSplit } from '../../tests/config/cssTokens';
 
 const req = createRequire(path.join(APP_ROOT, 'package.json'));
 
@@ -48,7 +48,10 @@ describe('the colour layer recipes compile and exist', () => {
     expect(design.MAKING_TEXT.split(' ')[0]).toBe('ds-shimmer-text');
     expect(motion).toMatch(/\.ds-making-sweep::after \{[^}]*var\(--ds-spark-glow\)[^}]*animation: ds-making-sweep 2\.4s/);
     expect(motion).toMatch(/@keyframes ds-making-sweep \{\s*to \{ transform: translateX\(100%\); \}/);
-    expect(motion).toMatch(/\[data-inview="false"\] \.ds-making-sweep::after,\s*\.ds-making-sweep\[data-inview="false"\]::after \{\s*animation-play-state: paused;/);
+    // Both off-screen forms sit in the shared paused list (other loops join that list too, so read its selectors).
+    const paused = parseRules(motion).filter((r) => r.parents.length === 0 && /animation-play-state:\s*paused/.test(r.body));
+    const pausedSelectors = paused.flatMap((r) => topLevelSplit(r.selector).map((sel) => sel.trim()));
+    expect(pausedSelectors).toEqual(expect.arrayContaining(['[data-inview="false"] .ds-making-sweep::after', '.ds-making-sweep[data-inview="false"]::after']));
     const reduce = motion.slice(motion.indexOf('@media (prefers-reduced-motion: reduce)'));
     expect(reduce).toMatch(/\.ds-making-sweep::after \{\s*animation: none;\s*transform: none;/);
     // Ben-Day: the spark at 22 % in both dot lattices, spelled on the layer itself, never animated.
