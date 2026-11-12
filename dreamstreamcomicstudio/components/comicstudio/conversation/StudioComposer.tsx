@@ -28,8 +28,12 @@
 //    such a file is attached. The server appends short scripts to the message and saves
 //    long ones as the comic's source script. Long pasted text stays in the box (a script
 //    is the message); past the server's message cap it is sent as a script file instead.
-//  - Voice via DictationButton with the base-snapshot pattern (partials replace only the
-//    dictated segment). "Auto-send when I stop talking" sends the transcript on stop.
+//  - Voice via DictationButton: the words heard so far show in its bar, and when the take ends they
+//    land in the box at the cursor (replacing a selection), for the person to read and send. Nothing
+//    sends by itself unless the person turned on "Send when I tap Done", and even then only a Done tap
+//    with browser dictation in English sends (services/dictation/autoSend.ts): never a pause, the time
+//    limit, a hidden tab or Esc, never the private voice model, never a message that asks to remove
+//    something. The mic sits at the left of the toolbar, so its boxes line up with its left edge.
 //  - Gemini-style option chips (format · style · quality) open anchored panels above the
 //    composer; changes there are instant doc patches.
 //  - While a director turn streams the send button becomes Stop ("Stop the director"). Once its
@@ -55,7 +59,8 @@ import { UploadQueue } from '../refs/UploadQueue';
 import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
-import { voiceInputSupported } from '../../../hooks/useDictation';
+import { voiceInputSupported, webSpeechSupported, type FinalInfo } from '../../../hooks/useDictation';
+import { isEnglish, voiceAutoSend } from '../../../services/dictation/autoSend';
 import { CONTROL_BTN, FOCUS_RING, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
 import { sendOutcomeOf } from '../messageQueue';
@@ -184,13 +189,33 @@ export interface StudioComposerHandle {
   openPanel(panel: ComposerPanel | null): void;
 }
 
+/**
+ * "Send when I tap Done": off unless the person turned it on. Only the toggle writes `'true'`, so a stored
+ * `'true'` is always their choice and is kept; nothing stored, `'false'` or unreadable storage all mean off.
+ */
 export const readVoiceAutoSend = (): boolean => {
   try {
-    const raw = window.localStorage.getItem(VOICE_AUTOSEND_KEY);
-    return raw === null ? true : raw !== 'false';
+    return window.localStorage.getItem(VOICE_AUTOSEND_KEY) === 'true';
   } catch {
-    return true;
+    return false;
   }
+};
+
+/**
+ * Put spoken words into a draft where the person left the cursor: they replace the selection (or go in at the
+ * caret), joined by one space to the text on each side unless that side is empty or already ends in white space.
+ * Returns the new draft and where the caret goes (just after the words).
+ */
+export const insertSpoken = (draft: string, words: string, sel?: { start: number; end: number } | null): { text: string; caret: number } => {
+  const clamp = (n: number) => Math.max(0, Math.min(draft.length, Number.isFinite(n) ? n : draft.length));
+  const start = sel ? clamp(Math.min(sel.start, sel.end)) : draft.length;
+  const end = sel ? clamp(Math.max(sel.start, sel.end)) : draft.length;
+  const before = draft.slice(0, start);
+  const after = draft.slice(end);
+  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const trail = after && !/^\s/.test(after) ? ' ' : '';
+  const head = `${before}${lead}${words}`;
+  return { text: `${head}${trail}${after}`, caret: head.length };
 };
 
 const writeVoiceAutoSend = (on: boolean) => {
@@ -374,7 +399,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const [hint, setHint] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [autoSend, setAutoSend] = useState<boolean>(() => (typeof window === 'undefined' ? true : readVoiceAutoSend()));
+  const [autoSend, setAutoSend] = useState<boolean>(() => (typeof window === 'undefined' ? false : readVoiceAutoSend()));
   const [voiceOk] = useState<boolean>(() => {
     try {
       return voiceInputSupported();
@@ -390,7 +415,6 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const scriptInputRef = useRef<HTMLInputElement>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
-  const dictationBaseRef = useRef('');
   const dragDepth = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1011,29 +1035,51 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   // ── Voice ──────────────────────────────────────────────────────────────────
 
-  const joinDictation = (spoken: string) => {
-    const base = dictationBaseRef.current;
-    return base ? `${base.replace(/\s+$/, '')} ${spoken}` : spoken;
-  };
+  const voiceLang = typeof navigator === 'undefined' ? 'en-US' : navigator.language || 'en-US';
+  // "Send when I tap Done" can only ever act for browser dictation in English, so it shows only where it can.
+  const [voiceSendOk] = useState<boolean>(() => {
+    try {
+      return webSpeechSupported() && isEnglish(voiceLang);
+    } catch {
+      return false;
+    }
+  });
 
-  const applyDictation = (spoken: string) => {
-    if (!spoken) return;
-    setText(joinDictation(spoken));
-    requestAnimationFrame(autoGrow);
-  };
-
-  const onDictationFinal = (spoken: string) => {
+  const onDictationFinal = (spoken: string, info: FinalInfo) => {
     const said = (spoken || '').trim();
     if (!said) return;
-    const joined = joinDictation(said);
-    // The words go in the box first: they leave it only once the message is sent or queued (else they wait there).
-    setText(joined);
-    if (autoSend && ready && (!locked || queueMode) && sendNow(joined, attachmentsRef.current)) return;
-    // Not sent (photos still uploading, or auto-send is off): the words wait in the box.
-    if (autoSend && attachmentsRef.current.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) {
+    // The words go in the box first, at the cursor (or over the selection), and leave it only once the message
+    // is sent or queued. The box keeps its caret while the mic has focus, so read the live value and selection.
+    const ta = textareaRef.current;
+    const draft = ta ? ta.value : text;
+    const sel = ta && typeof ta.selectionStart === 'number' ? { start: ta.selectionStart, end: ta.selectionEnd ?? ta.selectionStart } : null;
+    const { text: next, caret } = insertSpoken(draft, said, sel);
+    setText(next);
+    const verdict = voiceAutoSend({ chosen: autoSend, info, text: next, lang: voiceLang });
+    if (verdict === 'send' && ready && (!locked || queueMode) && sendNow(next, attachmentsRef.current)) return;
+    if (verdict === 'hold-removal') showNotice('This asks to remove something, so it waits for you. Check it, then tap Send.');
+    else if (verdict === 'send' && attachmentsRef.current.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) {
       showNotice('Your photos are still uploading — tap Send when they’re in.');
     }
-    focusEnd();
+    // Only a Done tap moves focus into the box (a pause, the limit or a hidden tab never pulls it).
+    const placeCaret = () => {
+      const el = textareaRef.current;
+      if (!el) return;
+      autoGrow();
+      try {
+        el.setSelectionRange(caret, caret);
+      } catch {
+        /* some inputs have no selection */
+      }
+    };
+    if (info.end === 'user') {
+      try {
+        ta?.focus({ preventScroll: true });
+      } catch {
+        ta?.focus();
+      }
+    }
+    requestAnimationFrame(placeCaret);
   };
 
   const toggleAutoSend = () => {
@@ -1231,7 +1277,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           {attachRow('photos', <ImageIcon className="h-4 w-4" />, 'Photo library', 'Character photos or style references', () => photoInputRef.current?.click())}
           {coarse && attachRow('camera', <Camera className="h-4 w-4" />, 'Take a photo', 'Use the camera — a person, a sketch, a place', () => cameraInputRef.current?.click())}
           {attachRow('script', <FileText className="h-4 w-4" />, 'Script or document', '.txt · .md · .docx · .pdf · .fdx · .fountain', () => scriptInputRef.current?.click())}
-          {voiceOk && !showVoiceToggleInline && (
+          {voiceOk && voiceSendOk && !showVoiceToggleInline && (
             <button
               type="button"
               role="menuitemcheckbox"
@@ -1241,8 +1287,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             >
               <AudioLines className={cx('h-4 w-4 shrink-0', autoSend ? 'text-[var(--ds-accent)]' : MUTED)} aria-hidden />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[14px] text-[var(--ds-ink)]">Voice sends when I stop talking</span>
-                <span className={`block truncate text-[11.5px] ${MUTED}`}>{autoSend ? 'On — tap to review before sending' : 'Off — the text waits for you'}</span>
+                <span className="block truncate text-[14px] text-[var(--ds-ink)]">Send when I tap Done</span>
+                <span className={`block truncate text-[11.5px] ${MUTED}`}>{autoSend ? 'On · browser dictation sends when you tap Done' : 'Off · your words wait in the box for you'}</span>
               </span>
             </button>
           )}
@@ -1496,23 +1542,26 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 <span className="contents coarse:[&_button]:min-h-[44px] coarse:[&_button]:min-w-[44px]">
                   <DictationButton
                     disabled={!ready || (locked && !queueMode)}
-                    onStart={() => {
-                      dictationBaseRef.current = text;
-                    }}
-                    onPartial={applyDictation}
+                    align="start"
+                    showHeard
                     onFinal={onDictationFinal}
+                    onTypeInstead={focusEnd}
                   />
                 </span>
-                {showVoiceToggleInline && (
+                {showVoiceToggleInline && voiceSendOk && (
                   <button
                     type="button"
                     onClick={toggleAutoSend}
                     aria-pressed={autoSend}
-                    aria-label="Auto-send when I stop talking"
-                    title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
+                    aria-label="Send when I tap Done"
+                    title={
+                      autoSend
+                        ? 'On: browser dictation in English sends when you tap Done. The private voice model, and messages that ask to remove something, always wait for you. Click so your words always wait.'
+                        : 'Off: your words wait in the box for you to read and send. Click to send browser dictation when you tap Done.'
+                    }
                     className={cx(
                       // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
-                      `relative ${iconBtn} ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+                      `relative ${iconBtn} ${TRANSITION} hover:bg-[var(--ds-hover)] ${FOCUS_RING}`,
                       autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
                     )}
                   >

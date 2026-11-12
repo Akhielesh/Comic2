@@ -2,22 +2,26 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-vi.mock('../../chat/DictationButton', () => ({
-  DictationButton: (props: { onStart?: () => void; onPartial: (t: string) => void; onFinal: (t: string) => void; disabled?: boolean }) => (
-    <div>
-      <button type="button" onClick={() => props.onStart?.()}>
-        mock-mic-start
-      </button>
-      <button type="button" onClick={() => props.onPartial('make it')}>
-        mock-mic-partial
-      </button>
-      <button type="button" onClick={() => props.onFinal('make it rain')}>
-        mock-mic-final
-      </button>
-    </div>
-  )
+// The mic is a stand-in that hands its props to the test, which then plays the take's end (the hook's own tests
+// cover the take itself).
+const mic = vi.hoisted(() => ({
+  props: null as null | {
+    onFinal: (t: string, info: { end: string; engine: string }) => void;
+    onPartial?: (t: string) => void;
+    onTypeInstead?: () => void;
+    align?: string;
+    showHeard?: boolean;
+    disabled?: boolean;
+  },
+  webSpeech: true
 }));
-vi.mock('../../../hooks/useDictation', () => ({ voiceInputSupported: () => true }));
+vi.mock('../../chat/DictationButton', () => ({
+  DictationButton: (props: NonNullable<typeof mic.props>) => {
+    mic.props = props;
+    return <button type="button">mock-mic</button>;
+  }
+}));
+vi.mock('../../../hooks/useDictation', () => ({ voiceInputSupported: () => true, webSpeechSupported: () => mic.webSpeech }));
 // jsdom can't decode images: the shared refs pipeline is stubbed to "prepared as is" (its own tests cover it).
 vi.mock('../refs/downscale', async (importOriginal) => {
   const real = await importOriginal<typeof import('../refs/downscale')>();
@@ -180,31 +184,127 @@ describe('StudioComposer — option chips', () => {
 });
 
 describe('StudioComposer — voice', () => {
-  it('auto-sends the transcript by default', () => {
+  // How a take ended, and on which engine (hooks/useDictation FinalInfo).
+  const done = { end: 'user', engine: 'browser-cloud' } as const;
+  const speak = (words: string, info: { end: string; engine: string } = done) =>
+    act(() => {
+      mic.props!.onFinal(words, info);
+    });
+  const chooseAutoSend = () => window.localStorage.setItem(VOICE_AUTOSEND_KEY, 'true');
+  const setLanguage = (lang: string) => Object.defineProperty(window.navigator, 'language', { configurable: true, get: () => lang });
+
+  beforeEach(() => {
+    mic.props = null;
+    mic.webSpeech = true;
+    setLanguage('en-US');
+  });
+
+  it('with nothing chosen, a Done take puts the words in the box and sends nothing', () => {
     const studio = makeFakeStudio();
     render(<StudioComposer studio={studio} />);
-    expect(screen.getByRole('button', { name: 'Auto-send when I stop talking' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByText('mock-mic-start'));
-    fireEvent.click(screen.getByText('mock-mic-final'));
+    expect(screen.getByRole('button', { name: 'Send when I tap Done' })).toHaveAttribute('aria-pressed', 'false');
+    speak('make it rain');
+    expect(textarea().value).toBe('make it rain');
+    expect(studio.send).not.toHaveBeenCalled();
+  });
+
+  it('auto-send, once chosen, sends only on a Done tap: never on a pause, the limit, a hidden tab, Esc or the browser’s own end', () => {
+    chooseAutoSend();
+    for (const end of ['escape', 'silence', 'no-speech', 'limit', 'hidden', 'device', 'engine']) {
+      const studio = makeFakeStudio();
+      const { unmount } = render(<StudioComposer studio={studio} />);
+      speak('make it rain', { end, engine: 'browser-cloud' });
+      expect(studio.send, end).not.toHaveBeenCalled();
+      expect(textarea().value, end).toBe('make it rain');
+      unmount();
+    }
+    const studio = makeFakeStudio();
+    render(<StudioComposer studio={studio} />);
+    expect(screen.getByRole('button', { name: 'Send when I tap Done' })).toHaveAttribute('aria-pressed', 'true');
+    speak('make it rain');
     expect(studio.send).toHaveBeenCalledWith('make it rain', []);
   });
 
-  it('the toggle is persisted; when off the transcript joins the typed draft for review', () => {
+  it('auto-send never sends the private voice model’s words, a language other than English, or a removal', () => {
+    chooseAutoSend();
+    const whisper = makeFakeStudio();
+    const first = render(<StudioComposer studio={whisper} />);
+    speak('make it rain', { end: 'user', engine: 'whisper' });
+    expect(whisper.send).not.toHaveBeenCalled();
+    expect(textarea().value).toBe('make it rain');
+    first.unmount();
+
+    const removal = makeFakeStudio();
+    const second = render(<StudioComposer studio={removal} />);
+    speak('delete page 3');
+    expect(removal.send).not.toHaveBeenCalled();
+    expect(textarea().value).toBe('delete page 3');
+    expect(screen.getByRole('status')).toHaveTextContent('This asks to remove something, so it waits for you. Check it, then tap Send.');
+    second.unmount();
+
+    setLanguage('es-ES');
+    const spanish = makeFakeStudio();
+    render(<StudioComposer studio={spanish} />);
+    expect(screen.queryByRole('button', { name: 'Send when I tap Done' })).toBeNull(); // it could never act here
+    speak('haz que llueva');
+    expect(spanish.send).not.toHaveBeenCalled();
+  });
+
+  it('the words land at the cursor, replacing a selection, with one space on each side', () => {
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    fireEvent.change(textarea(), { target: { value: 'Page 2 is moody' } });
+    textarea().setSelectionRange(6, 6);
+    speak('and page 3');
+    expect(textarea().value).toBe('Page 2 and page 3 is moody');
+
+    fireEvent.change(textarea(), { target: { value: 'Give the hero a cape' } });
+    textarea().setSelectionRange(9, 13); // "hero"
+    speak('dragon');
+    expect(textarea().value).toBe('Give the dragon a cape');
+  });
+
+  it('only a Done tap moves focus into the box; a hidden tab or the limit leaves it where it was', () => {
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    const other = document.createElement('button');
+    document.body.appendChild(other);
+    other.focus();
+    speak('make it rain', { end: 'hidden', engine: 'whisper' });
+    expect(document.activeElement).toBe(other);
+    speak('and windy', { end: 'limit', engine: 'whisper' });
+    expect(document.activeElement).toBe(other);
+    speak('at night', { end: 'user', engine: 'whisper' });
+    expect(document.activeElement).toBe(textarea());
+    other.remove();
+  });
+
+  it('the mic lines up its boxes with its left edge and shows the words heard in its own bar, not in the box', () => {
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(mic.props?.align).toBe('start');
+    expect(mic.props?.showHeard).toBe(true);
+    expect(mic.props?.onPartial).toBeUndefined(); // the draft is never rewritten while the person talks
+    expect(typeof mic.props?.onTypeInstead).toBe('function');
+  });
+
+  it('the toggle says exactly what it does and is remembered', () => {
     const studio = makeFakeStudio();
     const { unmount } = render(<StudioComposer studio={studio} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Auto-send when I stop talking' }));
-    expect(window.localStorage.getItem(VOICE_AUTOSEND_KEY)).toBe('false');
-    fireEvent.change(textarea(), { target: { value: 'Page 2:' } });
-    fireEvent.click(screen.getByText('mock-mic-start'));
-    fireEvent.click(screen.getByText('mock-mic-partial'));
-    expect(textarea().value).toBe('Page 2: make it');
-    fireEvent.click(screen.getByText('mock-mic-final'));
-    expect(textarea().value).toBe('Page 2: make it rain');
-    expect(studio.send).not.toHaveBeenCalled();
+    const toggle = screen.getByRole('button', { name: 'Send when I tap Done' });
+    expect(toggle.getAttribute('title')).toMatch(/^Off: your words wait in the box for you to read and send/);
+    fireEvent.click(toggle);
+    expect(window.localStorage.getItem(VOICE_AUTOSEND_KEY)).toBe('true');
+    expect(toggle.getAttribute('title')).toMatch(/^On: browser dictation in English sends when you tap Done\. The private voice model, and messages that ask to remove something, always wait/);
     unmount();
 
     render(<StudioComposer studio={makeFakeStudio()} />);
-    expect(screen.getByRole('button', { name: 'Auto-send when I stop talking' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Send when I tap Done' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText(/stop talking/i)).toBeNull();
+  });
+
+  it('the toggle is hidden where browser dictation does not exist (it could never act)', () => {
+    mic.webSpeech = false;
+    render(<StudioComposer studio={makeFakeStudio()} />);
+    expect(screen.getByText('mock-mic')).toBeInTheDocument(); // the mic itself stays
+    expect(screen.queryByRole('button', { name: /send when|auto-send/i })).toBeNull();
   });
 });
 

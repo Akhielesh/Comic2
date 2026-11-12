@@ -84,10 +84,11 @@ accumulated take** on an interval (`PARTIAL_INTERVAL_MS = 4000`,
 - On stop, the hook waits out any in-flight partial pass, then transcribes the full
   final buffer and delivers `onFinal` (`useDictation.ts:149-169`).
 
-The composer (`components/chat/ChatComposer.tsx:94-110`, `429-439`) snapshots the
-draft when a take starts (`dictationBaseRef`) and splices `base + spoken` on every
-partial/final — streamed partials replace only the dictated segment, never clobbering
-typed text.
+Chat Studio and Dashboards snapshot their draft when a take starts (`dictationBaseRef`)
+and splice `base + spoken` on every partial and final. Comic Studio does not touch its
+box while you talk: the words heard so far show in the mic's bar (`showHeard`), and the
+final words go in at the cursor (`insertSpoken` in `StudioComposer.tsx`), so typing
+during a take is never overwritten.
 
 ## Settings persistence
 
@@ -135,32 +136,57 @@ requires in-page capture, so the policy is now
 (`server/src/middleware/security.ts:21-23`) — mic access allowed for same-origin
 documents only, still denied to embedded third-party frames.
 
-## UI states — `components/chat/DictationButton.tsx`
+## Take lifecycle — the microphone is never left on (`hooks/useDictation.ts`)
 
-Status machine: `idle → starting → recording → transcribing → idle`, plus `error`
-(`useDictation.ts:24`).
+- **One take, one id.** `start()` and `cancel()` bump the id; every async step (the model load, `getUserMedia`,
+  the final decode) checks it when it resumes, and a step from a cancelled or replaced take stops whatever it
+  opened and returns (a `getUserMedia` that resolves after a cancel has its tracks stopped at once).
+- **Prepare, then open the mic.** Whisper loads the model first; the mic opens only after the load succeeds, so a
+  failed or cancelled download never turns it on. Tapping the mic while it prepares cancels.
+- **One clean-up path** (`release`): stops the recorder and every track, aborts the recognition, clears every
+  timer and listener, closes the audio context. Cancel, errors, a hidden tab, the 2-minute limit and unmount all
+  run it. The recorder (`recorder.ts`) also stops its tracks if anything after `getUserMedia` fails. The audio
+  context is made inside the tap (iOS starts audio only from a gesture), kept quiet during the download and
+  resumed when the mic opens; one that will not start is the `audio-suspended` error.
+- **Why a take ended** rides with the words: `onFinal(text, { end, engine })`, `end` one of `user` (Done),
+  `escape`, `hidden` (tab in the background), `limit` (2 minutes from when the mic opened), `engine` (the browser
+  ended its own dictation). A caller that sends on its own checks `end === 'user'`.
+- **Browser dictation:** after our stop the browser gets 2 s to end its session before we end it ourselves.
 
-- **Idle**: quiet mic button; a chevron opens the engine/model menu (`:86-125`).
-- **Downloading** (first Whisper use): floating glass bar with percent + "One-time
-  download, then it's instant & offline", cancellable (`:137-149`).
-- **Recording**: red ping dot, 5-bar live level meter, `m:ss` timer, engine tag,
-  ✕ discard / ✓ finish (`:150-176`). Mic icon pulses; clicking it finishes the take.
-- **Transcribing**: spinner + "Transcribing on-device…" (`:132-136`).
-- **Error**: red toast above the composer with the message (`:180-186`).
+## UI — `components/chat/DictationButton.tsx`
 
-`cancel()` discards everything (sets `cancelledRef` so late async results are dropped,
-`useDictation.ts:235-241`); `stop()` finalizes and inserts text.
+- **Idle:** a quiet mic and a settings caret. The mic's title names the engine that will listen ("Voice typing ·
+  private, on this device" / "… browser dictation, online").
+- **Settings:** "How it listens" (Private, on this device · Browser dictation, online) and, for the private
+  model, "Accuracy" with the true one-time download per size on this device (`downloadMb`: model plus runtime,
+  rounded to 5 MB, an upper bound): Fast up to about 65 MB, Balanced 100 MB, Accurate 275 MB on WASM; 120, 165
+  and 325 MB with WebGPU.
+- **Preparing:** "Getting voice typing ready… N%" and "Your microphone stays off until it's ready.", with Cancel.
+- **Listening:** a live dot and "Listening", the level meter, the timer, Discard and Done. With `showHeard` (Comic
+  Studio) the words heard so far show in the bar (`aria-live="off"`) instead of being written into the input.
+- **Writing it down:** "Writing down what you said…".
+- **Error:** one calm sentence and one action (Try again · Allow microphone · Type instead), a Dismiss, and the
+  technical detail (the code and the browser's error name) only behind "Show details"
+  (`services/dictation/errors.ts`).
+- **Esc** while a take runs stops it and keeps the words (a window capture listener, so a sheet underneath stays
+  open).
+- **Placement** (`dictationPlacement.ts`): every box sits next to the mic on the side the caller names (`align`:
+  `end` by default, `start` in Comic Studio, whose mic is at the left), flips below the mic when there is clearly
+  more room there (the Dashboards header), and is clamped 8 px inside the visual viewport and any clipping
+  ancestor. Tokens only (`Z.popover`, `OVERLAY`, `STATUS_*`). Checked in Chromium by
+  `tests/e2e/studio.dictation.spec.ts` at 320, 390, 768 and 1280 px.
 
 ## Failure modes
 
 | Failure | Behavior |
 |---|---|
-| Mic permission denied | `NotAllowedError` mapped to "Microphone access was denied. Allow the mic in your browser settings to dictate." (`useDictation.ts:143-145`; webspeech equivalent `:200-202`). |
-| Model download fails / offline | `startWhisper` catch → generic "Could not start dictation…" error; the failed pipeline promise is evicted (`whisperEngine.ts:74`) so the next attempt re-downloads. |
-| Final transcription fails | "Transcription failed. Try again." — the audio take is lost (`useDictation.ts:164-167`). |
-| Partial pass fails | Silently ignored; partials are best-effort (`useDictation.ts:132-134`). |
-| No Web Speech support | Engine option hidden (`DictationButton.tsx:90`); if somehow selected, error suggests Whisper (`useDictation.ts:178-182`). |
-| No mic / no AudioContext | Button doesn't render at all (`DictationButton.tsx:80`). |
+| Mic blocked | "To talk, allow the microphone for this site in your browser's settings." · Allow microphone (asks again where the browser still can). |
+| No mic / mic busy / page policy | "No microphone was found on this device." / "Another app is using the microphone right now." / "Voice typing is turned off on this page." |
+| Model download fails / offline | "The voice model didn't download, so your microphone stayed off." · Try again. The failed load is evicted so a retry downloads again. |
+| Final transcription fails | "Couldn't turn that into text, and nothing was sent." |
+| Browser dictation: no speech, offline, Siri off, language | Each has its own sentence; words already heard are kept in the input. |
+| Partial pass fails | Silently ignored; partials are best-effort. |
+| No mic API / no AudioContext | The button doesn't render at all. |
 
 ## Bundle impact
 

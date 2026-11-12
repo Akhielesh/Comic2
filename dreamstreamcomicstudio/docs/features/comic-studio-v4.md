@@ -107,8 +107,14 @@ The director can also *open* a panel for the user by emitting an `options` card.
 Changing a panel = a `patch` action (instant, no LLM), and the director sees it next turn.
 
 ### Voice
-Mic in the composer reuses `hooks/useDictation` (on-device Whisper / Web Speech).
-"Auto-send when I stop talking" toggle (default on) sends the transcript on stop.
+Mic in the composer reuses `hooks/useDictation` (private on-device Whisper, or the browser's online
+dictation). While you talk, the words heard so far show in the mic's bar; when the take ends they land in the
+box at the cursor (replacing a selection) for you to read and send. **Nothing sends by itself by default.**
+"Send when I tap Done" (off by default; shown only where browser dictation exists and the language is English)
+sends a take only when you tap Done with browser dictation, and never a message that asks to remove something
+(`services/dictation/autoSend.ts`). A pause, the 2-minute limit, a hidden tab and Esc never send; the private
+voice model's words always wait. The mic sits at the left of the toolbar, so its settings, bar and errors line
+up with its left edge and stay on screen (`components/chat/dictationPlacement.ts`).
 
 ## 4. Architecture
 
