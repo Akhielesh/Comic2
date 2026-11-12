@@ -14,7 +14,8 @@
 // full quota only loses the reload convenience, never the notes on screen.
 
 import { STEER_LIMITS, type AttachmentTarget, type StudioFocus } from '../../shared/comic/events';
-import { CAST_KINDS, type ComicDoc, type Msg } from '../../shared/comic/doc';
+import { CAST_KINDS, type ComicDoc } from '../../shared/comic/doc';
+import { isOpenQuestion, type SettlePending } from '../../shared/comic/settle';
 
 export const QUEUE_LIMITS = {
   /** Notes waiting at once (plan §3 A1). */
@@ -234,27 +235,16 @@ export const noteFocusLabel = (doc: Pick<ComicDoc, 'pages'> | null | undefined, 
 
 // ── Holds ────────────────────────────────────────────────────────────────────
 
-const lastAssistant = (doc: ComicDoc | null | undefined): Msg | undefined => {
-  const list = doc?.conversation;
-  if (!Array.isArray(list)) return undefined;
-  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'assistant') return list[i];
-  return undefined;
-};
-
 /**
  * The last reply asks something the creator has not answered: an options card with no answer, or a conflict card
  * with an item not yet resolved. Its answer belongs to that question, so queued notes wait (plan §3 A1).
+ *
+ * Settled cards (PROGRAM3 SETTLE-UI; settle.md §5.10): the one rule is shared/comic/settle.ts isOpenQuestion. A card
+ * the creator has moved past — their message committed after it, or this tab's message (`pending`) sending — is not
+ * open, so it no longer holds the queue (a director turn that ended without a reply used to leave it holding forever).
+ * On a reply nobody has answered or passed, it is exactly A1's rule.
  */
-export const openQuestion = (doc: ComicDoc | null | undefined): boolean => {
-  const cards = lastAssistant(doc)?.cards;
-  if (!Array.isArray(cards)) return false;
-  return cards.some((card) => {
-    if (!card || typeof card !== 'object') return false;
-    if (card.type === 'options') return Array.isArray(card.choices) && card.choices.length > 0 && !(card.answered || []).some(Boolean);
-    if (card.type === 'conflict') return Array.isArray(card.items) && card.items.some((item) => item && !item.resolved);
-    return false;
-  });
-};
+export const openQuestion = (doc: ComicDoc | null | undefined, pending?: SettlePending | null): boolean => isOpenQuestion(doc, pending);
 
 export interface QueueHoldInput {
   doc: ComicDoc | null | undefined;
@@ -264,6 +254,8 @@ export interface QueueHoldInput {
   planning?: boolean;
   /** The creator's last message failed before the server took it (its bubble offers Try again). */
   failed?: boolean;
+  /** This tab's message on its way (studio.pendingMessage): a sending one passes the question it follows. */
+  pending?: SettlePending | null;
 }
 
 /** Why the queue waits instead of draining, most binding first; null = it drains as soon as the turn is free. */
@@ -273,7 +265,7 @@ export const holdReason = (input: QueueHoldInput): QueueHold | null => {
   if (input.planning) return 'plan_pages';
   if (input.held === 'elsewhere') return 'elsewhere';
   if (input.doc?.gate && input.doc.gate.status === 'open') return 'gate';
-  if (openQuestion(input.doc)) return 'question';
+  if (openQuestion(input.doc, input.pending)) return 'question';
   return null;
 };
 

@@ -10,11 +10,17 @@
 // Governed users (the included DreamStream usage) never see dollars here: the quote, the
 // Approve button, the reason line and the server's summary all read as a share of their
 // usage ("≈2% of your usage"); admins and own-key comics keep real prices (conversation/cost.ts).
+//
+// Closed gates read their past tense from the server's stamp (PROGRAM3 SETTLE-UI; shared/comic/settle.ts GateClosed,
+// written by jobs.ts commitGate and session.ts's expiry): only the creator's own "Not now" reads "Not now"; a gate the
+// studio closed (a newer request covered it, a day passed, the stale quote was re-quoted) says so, and an approval
+// that a later gate followed still reads "Approved", never "replaced". An unstamped (older) card keeps today's words.
 
 import React from 'react';
 import { CheckCircle2, CircleSlash, Coins, TriangleAlert } from 'lucide-react';
 import type { Card, ComicDoc, Gate, Msg } from '../../../../shared/comic/doc';
 import { getImageModel } from '../../../../shared/comic/models';
+import { gateClosedOf, type GateClosed } from '../../../../shared/comic/settle';
 import { CountUp } from '../../../studio/kit/streamMotion';
 import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
@@ -94,6 +100,35 @@ type EmbeddedCard = React.ComponentType<CardProps<Card> & { compact?: boolean }>
 export const messageHasGateBreakdown = (message: Msg | undefined, gateId: string): boolean =>
   !!message?.cards?.some((c) => c && c.type === 'breakdown' && (c as { gateId?: unknown }).gateId === gateId);
 
+/**
+ * A closed gate's sentence from its stamp, in the past tense; null for an approval of the gate the doc still holds
+ * (that one is "Approved — drawing now."). Never "Not now" for a close the creator did not make; never a dollar for a
+ * governed user (the amount goes through `cost`).
+ */
+export const gateClosedCopy = (stamp: GateClosed, cost: CostFormat, current: boolean): string | null => {
+  switch (stamp.status) {
+    case 'approved': {
+      if (current) return null;
+      const parts = ['Approved'];
+      if (typeof stamp.usd === 'number' && stamp.usd > 0) parts.push(cost.approx(stamp.usd));
+      if (typeof stamp.imageCount === 'number' && stamp.imageCount > 0) parts.push(plural(stamp.imageCount, 'image'));
+      return `${parts.join(' · ')}.`;
+    }
+    case 'declined':
+      return stamp.by === 'user' ? 'Not now — nothing was spent.' : 'Closed by the studio — nothing was spent.';
+    case 'nothing_to_draw':
+      return 'Nothing left to draw — nothing was spent.';
+    case 'replaced':
+      return 'This approval was replaced by a newer one.';
+    case 'superseded':
+      return 'Closed — a newer request covered it. Nothing was spent here.';
+    case 'expired':
+      return 'Closed after a day without an answer — nothing was spent.';
+    default:
+      return null;
+  }
+};
+
 /** "drawing now" / "translating now" — what an approved gate is doing. */
 export const approvedCopy = (gate: Gate): string =>
   gate.action.type === 'translate' ? 'Approved — translating now.' : gate.action.type === 'edit_page' ? 'Approved — editing now.' : 'Approved — drawing now.';
@@ -130,12 +165,17 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
   const cost = useCostFormat(studio);
   if (!doc) return null;
   const gate = doc.gate && doc.gate.id === card.gateId ? doc.gate : null;
+  const stamp = gateClosedOf(card);
 
   if (!gate) {
+    // Gone from the doc: the stamp says how it closed (an approval a newer gate followed is still an approval).
+    const closed = stamp ? gateClosedCopy(stamp, cost, false) : null;
+    const approved = stamp?.status === 'approved';
     return (
       <CardShell aria-label="Spend approval">
-        <p className="flex items-center gap-2 text-[13px] text-[var(--ds-muted)]">
-          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden /> This approval was replaced by a newer one.
+        <p className={`flex items-center gap-2 text-[13px] ${approved ? TONE_TEXT.success : 'text-[var(--ds-muted)]'}`}>
+          {approved ? <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden /> : <CircleSlash className="h-4 w-4 shrink-0" aria-hidden />}{' '}
+          {closed ?? 'This approval was replaced by a newer one.'}
         </p>
       </CardShell>
     );
@@ -206,7 +246,9 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
         </p>
       ) : (
         <p className="mt-3 flex items-center gap-1.5 text-[12.5px] text-[var(--ds-muted)]">
-          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden /> {gate.closedReason === 'nothing_to_draw' ? 'Nothing left to draw — nothing was spent.' : 'Not now — nothing was spent.'}
+          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden />{' '}
+          {(stamp && stamp.status !== 'approved' ? gateClosedCopy(stamp, cost, true) : null) ??
+            (gate.closedReason === 'nothing_to_draw' ? 'Nothing left to draw — nothing was spent.' : 'Not now — nothing was spent.')}
         </p>
       )}
     </CardShell>

@@ -7,10 +7,25 @@
 // when nobody filed them yet — "Who's in this photo? · Assign", which opens the quick-assign
 // menu and files it right away (`ref_add`, or `ref_transfer` out of the inbox): free software
 // work, undoable, no director call (refs.md §7.2).
+//
+// PROGRAM3 SETTLE-UI:
+//   - Settled cards (lead decision D3, CHANGED): with a settle index from the pane (SETTLED_CARDS on for this viewer),
+//     a card the chat has moved past is its one-line SettledCard (CardRenderer), and consecutive settled rows stack
+//     4 px apart instead of the reply's 12 px, so a long history reads like a compact log. A gate's own breakdown
+//     folds into the gate's line and takes no room. The user bubble's Assign is offered on the latest message only;
+//     an older unfiled photo reads "Not filed yet".
+//   - Fresh-only entrance (MO-2; styles.md M3 with C17, the server-clock rule): a message rises in only when its
+//     server `at` is newer than the newest `at` present when the pane first rendered this doc (a module-level map),
+//     or when it streams in now; the first 12 blocks of a fresh reply stagger. Stored messages render static, and a
+//     message that already rose in never rises again (a remount, the committed copy of the bubble just sent).
+//   - Memoised rows (PF-7a; perf.md F9): the pane renders UserMessageRow / AssistantMessageRow (React.memo) with a
+//     controller kept by identity while only the streaming drafts change (useRowStudio), so a token delta re-renders
+//     only the row it streams into.
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Feather, FileText, Pencil, RotateCcw, UserRound, X } from 'lucide-react';
-import { newId, refInboxOf, resolveCharacter, type AssetRef, type ComicDoc, type Msg, type RefAsset, type RefOwner } from '../../../shared/comic/doc';
+import { newId, refInboxOf, resolveCharacter, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset, type RefOwner } from '../../../shared/comic/doc';
+import { settleOf, type CardSettle, type SettleIndex } from '../../../shared/comic/settle';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { findRefOwners } from '../../../shared/comic/refs';
@@ -22,7 +37,7 @@ import type { ComicStudioController } from '../useStudio';
 import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
 import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
-import { STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 const CLAMP_CHARS = 700;
@@ -102,6 +117,96 @@ export const assignPhotoOps = (doc: ComicDoc, photos: AssetRef[], target: Attach
   return { ops, owner };
 };
 
+// ── Fresh-only entrance (MO-2) ───────────────────────────────────────────────
+
+interface EntranceBook {
+  /** The newest server `at` in the conversation when the pane first rendered this doc. */
+  baseline: number;
+  /** Messages that already rose in (by id): a remount never replays them. */
+  shown: Set<string>;
+  /** The words of this tab's bubble that just rose in while sending: its committed copy arrives without a second rise. */
+  sent: string | null;
+}
+
+const entranceBooks = new Map<string, EntranceBook>();
+
+const newestAt = (conversation: readonly Msg[] | null | undefined): number => {
+  let n = 0;
+  for (const m of conversation || []) if (typeof m?.at === 'number' && Number.isFinite(m.at) && m.at > n) n = m.at;
+  return n;
+};
+
+const sameWords = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  (a || '').replace(/\s+/g, ' ').trim() === (b || '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Record, once per doc, the newest server `at` the pane sees on its first render (C17: both sides on the server
+ * clock, so a device clock that is off changes nothing). Every message at or before it is history and renders static.
+ * Idempotent: later calls for the same doc keep the first baseline.
+ */
+export const seedEntrances = (docKey: string | null | undefined, conversation: readonly Msg[] | null | undefined): void => {
+  if (!docKey || entranceBooks.has(docKey)) return;
+  entranceBooks.set(docKey, { baseline: newestAt(conversation), shown: new Set(), sent: null });
+};
+
+/** Tests only: forget every doc's entrance baseline. */
+export const __resetEntrances = (): void => entranceBooks.clear();
+
+/** What a row is: a committed message, this tab's bubble on its way, or a reply streaming before it is committed. */
+export type EntranceKind = 'committed' | 'pending' | 'draft';
+
+const entranceFor = (docKey: string | null | undefined, msg: Pick<Msg, 'id' | 'at' | 'role' | 'text'>, kind: EntranceKind): boolean => {
+  const book = docKey ? entranceBooks.get(docKey) : undefined;
+  if (!book || !msg?.id || book.shown.has(msg.id)) return false;
+  if (kind !== 'committed') return true;
+  if (!(typeof msg.at === 'number' && msg.at > book.baseline)) return false;
+  // The committed copy of the bubble that already rose in while sending: it is the same words, so it does not rise twice.
+  return !(msg.role === 'user' && book.sent !== null && sameWords(book.sent, msg.text));
+};
+
+/**
+ * Whether this row rises in. Decided once when the row mounts (so the class stays for the whole animation, however
+ * often the row re-renders) and recorded after it mounts, so the same message never rises again.
+ */
+export const useFreshEntrance = (docKey: string | null | undefined, msg: Pick<Msg, 'id' | 'at' | 'role' | 'text'>, kind: EntranceKind = 'committed'): boolean => {
+  const [fresh] = useState(() => entranceFor(docKey, msg, kind));
+  useEffect(() => {
+    const book = docKey ? entranceBooks.get(docKey) : undefined;
+    if (!book || !msg?.id) return;
+    if (fresh) book.shown.add(msg.id);
+    if (kind === 'pending' && msg.role === 'user') book.sent = msg.text || '';
+    else if (kind === 'committed' && msg.role === 'user' && book.sent !== null && sameWords(book.sent, msg.text)) book.sent = null;
+    // The decision is per mount: only the first commit records it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return fresh;
+};
+
+// ── Memoised rows (PF-7a) ────────────────────────────────────────────────────
+
+const sameControllerExceptDrafts = (a: ComicStudioController, b: ComicStudioController): boolean => {
+  if (a === b) return true;
+  const ka = Object.keys(a) as (keyof ComicStudioController)[];
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (k === 'drafts') continue;
+    if (!Object.prototype.hasOwnProperty.call(b, k) || !Object.is(a[k], b[k])) return false;
+  }
+  return true;
+};
+
+/**
+ * The controller as the message rows see it: the same object while only `drafts` changed (one token delta), a new
+ * one as soon as anything a row can read changes. Rows never read `drafts` (the pane hands each its own draft), so a
+ * kept controller is never stale for them.
+ */
+export const useRowStudio = (studio: ComicStudioController): ComicStudioController => {
+  const kept = useRef(studio);
+  if (!sameControllerExceptDrafts(kept.current, studio)) kept.current = studio;
+  return kept.current;
+};
+
 // ── User ─────────────────────────────────────────────────────────────────────
 
 export interface UserBubbleProps {
@@ -115,20 +220,29 @@ export interface UserBubbleProps {
   onDismiss?: () => void;
   /** Lets sent photos show where they went and be assigned (the committed message only). */
   studio?: Pick<ComicStudioController, 'doc' | 'patch'>;
+  /**
+   * Settled cards (SETTLE-UI): false on every user message but the latest — an unfiled photo there reads "Not filed
+   * yet" with no Assign menu. Absent: Assign is offered (today's behaviour).
+   */
+  latest?: boolean;
+  /** Rises in (MO-2: a fresh message). Absent: static. */
+  fresh?: boolean;
 }
 
 const isPending = (a: AssetRef | PendingAttachment): a is PendingAttachment => 'dataUrl' in a;
 const attachmentSrc = (a: AssetRef | PendingAttachment, urlFor: UserBubbleProps['urlFor']) => (isPending(a) ? a.dataUrl : urlFor(a));
 
-export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], urlFor, status, error, onRetry, onEdit, onDismiss, studio }) => {
+export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], urlFor, status, error, onRetry, onEdit, onDismiss, studio, latest, fresh }) => {
   const [expanded, setExpanded] = useState(false);
   const long = isLong(text);
   const doc = studio?.doc || null;
+  // An older message's photos are history: where they went, or "Not filed yet" — the menu lives on the latest only.
+  const canAssign = latest !== false;
   // Which photos the assign menu is for (indexes into `attachments`), and what it is anchored to.
   const [assigning, setAssigning] = useState<number[] | null>(null);
   const anchorRef = useRef<HTMLElement | null>(null);
   const sent = attachments.filter((a): a is AssetRef => !isPending(a) && !!a.path);
-  const unassigned = doc ? attachments.map((a, i) => (!isPending(a) && a.path && !photoOwnerLabel(doc, a.path) ? i : -1)).filter((i) => i >= 0) : [];
+  const unassigned = doc && canAssign ? attachments.map((a, i) => (!isPending(a) && a.path && !photoOwnerLabel(doc, a.path) ? i : -1)).filter((i) => i >= 0) : [];
   const assign = (target: AttachmentTarget) => {
     const picked = (assigning || []).map((i) => attachments[i]).filter((a): a is AssetRef => !!a && !isPending(a));
     setAssigning(null);
@@ -147,7 +261,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
     })();
   };
   return (
-    <div className="flex flex-col items-end gap-1.5 pl-10 studio-reveal" data-role="user">
+    <div className={cx('flex flex-col items-end gap-1.5 pl-10', fresh && RISE_IN)} data-role="user">
       {attachments.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) => {
@@ -170,7 +284,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
             const owner = photoOwnerLabel(doc, a.path);
             return (
               <span key={i} className="flex w-16 flex-col items-center gap-0.5" data-photo-owner={owner || 'unassigned'}>
-                {owner ? (
+                {owner || !canAssign ? (
                   img
                 ) : (
                   <button
@@ -187,7 +301,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
                   </button>
                 )}
                 <span className={cx('block w-16 truncate text-center text-[10.5px] leading-tight', owner ? 'font-semibold text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')} title={owner ? `Filed under ${owner}` : 'Not filed yet'}>
-                  {owner ? `→ ${owner}` : 'Unassigned'}
+                  {owner ? `→ ${owner}` : canAssign ? 'Unassigned' : 'Not filed yet'}
                 </span>
               </span>
             );
@@ -294,26 +408,38 @@ export interface AssistantMessageProps {
   /** Show next-step chips (latest reply, nothing after it, not busy). */
   showSuggestions?: boolean;
   studio: ComicStudioController;
+  /**
+   * Settled cards (SETTLE-UI): the pane's settle index (shared/comic/settle.ts buildSettleIndex), present only while
+   * SETTLED_CARDS is on for this viewer. A card it reads as settled renders as its one line; absent, every card is live.
+   */
+  settles?: SettleIndex;
+  /** Rises in (MO-2: a fresh reply): its first 12 blocks stagger. Absent: static. */
+  fresh?: boolean;
 }
 
 export const StreamingCaret: React.FC = () => (
   <span aria-hidden className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse rounded-full bg-[var(--ds-accent)] align-baseline motion-reduce:animate-none" />
 );
 
-export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio }) => {
+/** A gate's own breakdown, folded into the gate's settled line: it takes no room at all. */
+const isFolded = (settle: CardSettle | undefined): boolean => settle?.state === 'settled' && settle.outcome === 'folded';
+
+export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, streaming, showSuggestions, studio, settles, fresh }) => {
   const text = stripMarkdownImages(draft ?? msg.text ?? '');
   const cards = Array.isArray(msg.cards) ? msg.cards : [];
   // The latest reply always offers a next move: its own nextSteps, else old suggestions, else
   // a free client-side step ("See the pages" / "Read it") so the conversation never dead-ends.
   const chips = showSuggestions ? chipsFor(msg, studio.doc, { fallback: true }) : [];
+  const settleFor = (card: Card): CardSettle | undefined => (settles && card && typeof card.id === 'string' ? settleOf(settles, msg, card) : undefined);
   // Never silent: a committed reply with no words and nothing this client can show (no cards, or
   // only card types it doesn't know yet) still says something.
-  const shown = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)));
+  const shown = cards.filter((c) => !!c && typeof c.type === 'string' && (CARD_TYPES.includes(c.type) || !!registeredCard(c.type)) && !isFolded(settleFor(c)));
   const silent = !text && !streaming && shown.length === 0;
   return (
-    <div className="flex min-w-0 gap-3 pr-2 studio-reveal" data-role="assistant">
+    <div className="flex min-w-0 gap-3 pr-2" data-role="assistant">
       <DirectorMark className="mt-0.5" />
-      <div className="min-w-0 flex-1 space-y-3">
+      {/* Consecutive settled rows sit 4 px apart (a compact log); everything else keeps the reply's 12 px. */}
+      <div className={cx('min-w-0 flex-1 space-y-3 [&>[data-settled-slot]+[data-settled-slot]]:!mt-1', fresh && 'ds-stagger')}>
         {(text || streaming) && (
           <div className="min-w-0 text-[14px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]">
             {text ? <ChatMarkdown text={text} className="comicstudio-md" /> : null}
@@ -321,13 +447,55 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ msg, draft, 
           </div>
         )}
         {silent && <p className="text-[13.5px] leading-relaxed text-[var(--ds-muted)]">Done — the board shows the latest.</p>}
-        {cards.map((card) => (
-          <div key={card.id} className="min-w-0 studio-reveal">
-            <CardRenderer card={card} studio={studio} message={msg} />
-          </div>
-        ))}
+        {cards.map((card) => {
+          if (!card) return null;
+          const settle = settleFor(card);
+          if (isFolded(settle)) return null;
+          const settled = settle?.state === 'settled';
+          return (
+            <div key={card.id} className="min-w-0" data-card-slot={card.id} {...(settled ? { 'data-settled-slot': '' } : {})}>
+              <CardRenderer card={card} studio={studio} message={msg} {...(settles ? { settle: settle ?? null } : {})} />
+            </div>
+          );
+        })}
         <NextStepChips chips={chips} studio={studio} />
       </div>
     </div>
   );
 };
+
+// ── Rows (what the pane renders) ─────────────────────────────────────────────
+
+export interface UserMessageRowProps {
+  msg: Msg;
+  /** useRowStudio's controller (kept while only the drafts change). */
+  studio: ComicStudioController;
+  /** The doc id the entrance baseline is kept under (seedEntrances). */
+  docKey?: string;
+  /** The latest committed user message (Assign); undefined = today's behaviour. */
+  latest?: boolean;
+}
+
+/** A committed user message as the pane renders it: memoised, rising in only when fresh. */
+export const UserMessageRow = React.memo(function UserMessageRow({ msg, studio, docKey, latest }: UserMessageRowProps) {
+  const fresh = useFreshEntrance(docKey, msg, 'committed');
+  return <UserBubble text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} studio={studio} latest={latest} fresh={fresh} />;
+});
+
+/** This tab's message on its way (studio.pendingMessage): it rises in as the creator sends it. */
+export const PendingMessageRow: React.FC<Omit<UserBubbleProps, 'fresh' | 'studio' | 'latest'> & { id: string; at: number; docKey?: string }> = ({ id, at, docKey, ...bubble }) => {
+  const fresh = useFreshEntrance(docKey, { id, at, role: 'user', text: bubble.text }, 'pending');
+  return <UserBubble {...bubble} fresh={fresh} />;
+};
+
+export interface AssistantMessageRowProps extends Omit<AssistantMessageProps, 'fresh'> {
+  docKey?: string;
+  /** A reply streaming before the server has committed it (its entrance plays as it starts). */
+  uncommitted?: boolean;
+}
+
+/** A director reply as the pane renders it: memoised (a token delta re-renders only the reply it streams into). */
+export const AssistantMessageRow = React.memo(function AssistantMessageRow({ docKey, uncommitted, ...props }: AssistantMessageRowProps) {
+  const fresh = useFreshEntrance(docKey, props.msg, uncommitted ? 'draft' : 'committed');
+  return <AssistantMessage {...props} fresh={fresh} />;
+});

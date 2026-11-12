@@ -44,7 +44,7 @@ describe('registry cards in a director reply', () => {
     expect(container.textContent).not.toMatch(/This card couldn’t be shown/);
     expect(screen.queryByText('Done — the board shows the latest.')).toBeNull();
     // The card is mounted inside the reply and shows something real.
-    const slot = container.querySelector('[data-role="assistant"] .studio-reveal') as HTMLElement;
+    const slot = container.querySelector('[data-role="assistant"] [data-card-slot]') as HTMLElement;
     expect(slot).toBeTruthy();
     expect(slot.childElementCount).toBeGreaterThan(0);
     expect((slot.textContent || '').trim().length + slot.querySelectorAll('img,svg').length).toBeGreaterThan(0);
