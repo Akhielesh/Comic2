@@ -327,8 +327,12 @@ export const motionPatchScreen: PatchScreen = (doc, ops) => {
     if (!now) continue; // the batch deleted the page: its motion went with it
     checkPage(before, now);
     const stored = new Set((before?.motion?.clips ?? []).map((c) => c.id));
+    // Each clip as the batch leaves it: only its last op counts (an upsert then a delete leaves nothing to check).
+    const last = new Map<string, MotionOp>();
+    for (const op of motionOps) if (op.op === 'motion' && op.pageId === pageId) last.set(op.id, op);
     for (const op of motionOps) {
       if (op.pageId !== pageId) continue;
+      if (op.op === 'motion' && last.get(op.id) !== op) continue;
       if (op.op === 'page_motion') {
         for (const move of op.patch?.camera ?? []) {
           if (!now.panels.some((p) => p.id === move.panelId)) throw bad('A camera move names a panel that is no longer on the page.');

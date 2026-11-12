@@ -132,7 +132,7 @@ describe('one clip', () => {
     const doc = fixture();
     const four = flicker('mc_f', 4);
     expect(clipFlashHz(four)).toBe(4);
-    rejects(() => sanitize(doc, [motionOp('mc_f', { ...four, id: undefined })]), 400, /flash 4 times a second/);
+    rejects(() => sanitize(doc, [motionOp('mc_f', { ...four, id: undefined })]), 400, /^That animation would flash 4 times a second/);
     const three = flicker('mc_f', 3);
     expect(clipFlashHz(three)).toBe(3);
     expect(sanitize(doc, [motionOp('mc_f', { ...three, id: undefined })])).toHaveLength(1);
@@ -163,6 +163,8 @@ describe('the batch, as it will be stored', () => {
       motionOp('mc_boom', { target: { k: 'line', id: 'ln_new' }, role: 'emphasis', preset: 'shake', at: { anchor: 'reveal', ms: 0 } })
     ]);
     expect(applyOps(doc, ops).pages[0].motion!.clips.map((c) => c.id)).toEqual(['mc_boom']);
+    // A clip created and deleted in the same batch leaves nothing to check.
+    expect(sanitize(doc, [motionOp('mc_tmp', pop()), motionOp('mc_tmp', null)])).toHaveLength(2);
   });
 
   it('a clip that already has a target keeps working when that target is gone (an edit of a dangling clip is not refused)', () => {
