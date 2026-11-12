@@ -7,9 +7,10 @@
 // so there is no caps gate here; ownership is enforced by the route before sanitizing.
 //
 // Pro Edit (master plan §2.3 "Sanitizers"; PE-SERVER):
-//   - The Pro text keys and ids (PRO_STYLE_KEYS, a Pro shape, SFX effect or font) stay refused from a client, as today:
-//     the shared sanitizers decide them, and PE-LETTER's opt-in (`allowPro`) is wired here by the S2 integration as
-//     `allowPro: PRO_EDIT_OPS_PATCHABLE` (collisions B-3). This file never forks their rules.
+//   - The Pro text keys and ids (PRO_STYLE_KEYS, a Pro shape, SFX effect or font) and the Pro looks are refused from a
+//     client while PRO_EDIT_OPS_PATCHABLE is off, as before: the shared sanitizers decide them, and PE-LETTER's opt-in
+//     is wired here (S2b integration, collisions B-3) as `allowPro: PRO_EDIT_OPS_PATCHABLE`. This file never forks
+//     their rules.
 //   - RE-ASSERT (PE-0 wave note 9, approved by the lead for S2): a client may re-send a Pro key or id whose JSON equals
 //     what the doc stores, never add or change one. So an undo after a rollback keeps a stored Pro style: a single-line
 //     line_style (every line_style inverse is one op per line) checked against that line's style, and the letter_style
@@ -28,7 +29,9 @@ import { PRO_EDIT_OPS_PATCHABLE, type DocOp } from '../../../../shared/comic/ops
 import {
   LETTERING_PRESET_IDS,
   LINE_KINDS,
+  PRO_LETTERING_PRESET_IDS,
   PRO_STYLE_KEYS,
+  isProLetteringPresetId,
   mergeStylePatch,
   sanitizeLetterStylePatch,
   sanitizeLetteringStyleOpPatch,
@@ -159,27 +162,43 @@ const checkNamedPatch = (doc: ComicDoc, named: unknown): void => {
   }
 };
 
+/** A look a client may pick: a base look, or a Pro look while PRO_EDIT_OPS_PATCHABLE is on (PE-LETTER, B-3). */
+const pickableLook = (id: unknown): boolean =>
+  (LETTERING_PRESET_IDS as readonly unknown[]).includes(id) || (PRO_EDIT_OPS_PATCHABLE && isProLetteringPresetId(id));
+
 const letterStyleSanitizer: OpSanitizer<LetterStyleOp> = {
   op: 'letter_style',
   sanitize(doc: ComicDoc, op: LetterStyleOp): LetterStyleOp {
     if (!isObject(op)) throw bad('Invalid lettering style change.');
     if (op.patch === null) return { op: 'letter_style', patch: null };
-    const raw = op.patch as unknown;
-    if (!isObject(raw)) throw bad('Invalid lettering style change.');
-    if (bytes(raw) > LETTER_STYLE_MAX_BYTES) throw bad('That lettering style change is too large.');
-    if (raw.presetId !== undefined && !(LETTERING_PRESET_IDS as readonly unknown[]).includes(raw.presetId)) {
-      throw bad(`Unknown lettering preset. Choose one of: ${LETTERING_PRESET_IDS.join(', ')}.`);
+    const sent = op.patch as unknown;
+    if (!isObject(sent)) throw bad('Invalid lettering style change.');
+    if (bytes(sent) > LETTER_STYLE_MAX_BYTES) throw bad('That lettering style change is too large.');
+    // RE-ASSERT (C-8): the doc's own stored look may come back even when this client may not pick it (a Pro look while
+    // the switch is off, a newer build's look after a rollback: the undo of a restyle). It is taken out before the
+    // shared sanitizer, which would refuse it, and put back on the result. Any other look must be pickable.
+    const storedLook = doc.letterStyle?.presetId;
+    const reassertLook = sent.presetId !== undefined && !pickableLook(sent.presetId) && typeof sent.presetId === 'string' && sent.presetId === storedLook;
+    if (sent.presetId !== undefined && !pickableLook(sent.presetId) && !reassertLook) {
+      const looks = PRO_EDIT_OPS_PATCHABLE ? [...LETTERING_PRESET_IDS, ...PRO_LETTERING_PRESET_IDS] : LETTERING_PRESET_IDS;
+      throw bad(`Unknown lettering preset. Choose one of: ${looks.join(', ')}.`);
     }
+    const raw: Record<string, unknown> = reassertLook ? { ...sent } : sent;
+    if (reassertLook) delete raw.presetId;
     const castIds = new Set((doc.cast || []).map((c) => c.id));
     if (isObject(raw.speakers)) {
       const unknown = Object.keys(raw.speakers).filter((id) => !castIds.has(id));
       if (unknown.length) throw bad('A speaker in that lettering change is not in the cast.');
     }
+    // The one cap on saved styles (PRO_LETTER_LIMITS.namedStyles) is checkNamedPatch's; the shared sanitizer checks
+    // each entry (allowPro).
     if (PRO_EDIT_OPS_PATCHABLE && raw.named !== undefined) checkNamedPatch(doc, raw.named);
-    const client = sanitizeLetteringStyleOpPatch(raw, castIds);
+    const opts = { allowPro: PRO_EDIT_OPS_PATCHABLE };
+    const client = sanitizeLetteringStyleOpPatch(raw, castIds, opts);
     // Invalid (not just empty) is still refused: the probe key makes an otherwise-valid patch non-empty.
-    if (!client && !sanitizeLetteringStyleOpPatch({ ...raw, keepOverrides: false }, castIds)) throw bad('That lettering style change has nothing valid in it.');
-    const patch = reassertedLetterPatch(raw, client, doc);
+    if (!client && !sanitizeLetteringStyleOpPatch({ ...raw, keepOverrides: false }, castIds, opts)) throw bad('That lettering style change has nothing valid in it.');
+    const rest = reassertedLetterPatch(raw, client, doc);
+    const patch: LetteringStyleOpPatch | null = reassertLook ? { presetId: sent.presetId as LetteringStyleOpPatch['presetId'], ...(rest || {}) } : rest;
     if (!patch) throw bad('That lettering style change has nothing valid in it.');
     return { op: 'letter_style', patch };
   }
@@ -214,7 +233,7 @@ const lineStyleSanitizer: OpSanitizer<LineStyleOp> = {
     if (op.patch === null) return out;
     if (!isObject(op.patch)) throw bad('Invalid balloon style change.');
     if (bytes(op.patch) > LINE_STYLE_MAX_BYTES) throw bad('That balloon style is too large.');
-    const client = sanitizeLetterStylePatch(op.patch);
+    const client = sanitizeLetterStylePatch(op.patch, { allowPro: PRO_EDIT_OPS_PATCHABLE });
     // Re-assert (wave note 9): one line's own stored Pro keys may come back (an undo after a rollback); never new ones.
     const patch: LetterStylePatch | undefined = ids.length === 1 ? reassertedStylePatch(op.patch, client, lines.get(ids[0])?.style) : client;
     if (!patch) {

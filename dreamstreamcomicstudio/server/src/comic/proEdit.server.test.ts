@@ -11,6 +11,7 @@ import { normalizeDoc, type ComicDoc, type PageLayer } from '../../../shared/com
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import { inverseOps } from '../../../shared/comic/undo.js';
 import { resolveLetterStyle } from '../../../shared/comic/lettering/style.js';
+import { isProFontId } from '../../../shared/comic/lettering/proFonts.js';
 import { __resetAccessCacheForTests, studioCapsFor } from './access.js';
 import { sanitizePatchOps } from './jobs.js';
 import type { SanitizeCtx } from './extensions.js';
@@ -112,8 +113,10 @@ describe('rollback safety (PE-0): what a newer build stored survives this server
     const { page, line } = firstLine(doc);
     expect(line.style).toEqual(PRO_STYLE);
     expect(doc.letterStyle?.named).toEqual(NAMED);
-    // Drawn exactly as a line styled only { italic: true }.
-    expect(resolveLetterStyle(doc, line)).toEqual(resolveLetterStyle(doc, { ...line, style: { italic: true } }));
+    // Drawn with the Pro lettering this build ships (PE-LETTER); a face it does not ship (bungee before PE-FONTS) is skipped.
+    const { font: _font, ...drawn } = PRO_STYLE;
+    expect(resolveLetterStyle(doc, line)).toMatchObject(drawn);
+    expect(resolveLetterStyle(doc, line).font).toBe(isProFontId('bungee') ? 'bungee' : resolveLetterStyle(doc, { ...line, style: { italic: true } }).font);
     // A client restyle (merge) keeps the stored Pro keys; a client cannot add any.
     const ops = sanitizePatchOps(doc, [{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { textColor: '#aa0000', shape: 'radio', glow: { color: '#ffffff', size: 0.2 } } }], sctx()) as DocOp[];
     expect(ops).toEqual([{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { textColor: '#aa0000' } }]);

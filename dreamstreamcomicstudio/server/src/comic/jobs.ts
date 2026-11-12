@@ -79,6 +79,7 @@ import {
 } from '../../../shared/comic/doc.js';
 import {
   CLIENT_PATCHABLE_OPS,
+  PRO_EDIT_OPS_PATCHABLE,
   PRO_PAGE_PATCH_OPS,
   applyOp,
   clampBalloonPatch,
@@ -4718,12 +4719,13 @@ const jsonBytes = (v: unknown): number => {
 
 /**
  * A line's per-balloon style from a client `line` patch (contract §5.4: sanitizeLetterStylePatch, ≤ 2 KB
- * before and after the merge with the line's current style). Nothing valid in it → the key is dropped.
+ * before and after the merge with the line's current style). Nothing valid in it → the key is dropped. The Pro text
+ * keys and ids pass only while PRO_EDIT_OPS_PATCHABLE is on (PE-LETTER's allowPro; collisions B-3).
  */
 const lineStylePatch = (v: unknown, current: LetterStylePatch | undefined): LetterStylePatch | typeof DROP | undefined => {
   if (!isObject(v)) return undefined;
   if (jsonBytes(v) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
-  const style = sanitizeLetterStylePatch(v);
+  const style = sanitizeLetterStylePatch(v, { allowPro: PRO_EDIT_OPS_PATCHABLE });
   if (!style) return DROP;
   if (jsonBytes(mergeStylePatch(current, style)) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
   return style;

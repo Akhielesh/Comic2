@@ -11,13 +11,20 @@
 //   - `<g opacity>` (a translucent fill layer, a soft shadow) is drawn into a layer and composited once
 //     with `globalAlpha`, so overlapping members never double up;
 //   - text sets `ctx.direction` (rtl for Urdu / Arabic) and maps `text-anchor` to `textAlign` the way SVG
-//     does (start/end follow the direction); glyph runs (`<tspan x y rotate>`) are drawn per glyph.
+//     does (start/end follow the direction); glyph runs (`<tspan x y rotate>`) are drawn per glyph;
+//   - `<defs>` (PE-LETTER) are read, never painted: a `fill` / `stroke` of `url(#id)` naming a `<linearGradient>`
+//     (userSpaceOnUse, as svgMarkup writes them) becomes a CanvasGradient in the current user space, exactly where
+//     SVG puts it. A glyph `<tspan rotate>` keeps its text element's user space in SVG, but the canvas draws that glyph
+//     in its own turned frame, so the gradient's end points are mapped into the frame (gradientInFrame) and every glyph
+//     takes the colour SVG gives it there; `clip-path="url(#id)"` naming a `<clipPath>` clips the element (after its own transform, as SVG
+//     does) to the union of the clip's paths, rects and circles. Typewriter and wipe reveals (PE-MOTION-EXPORT) use
+//     the same clip. A reference to nothing paints nothing (fill) or clips nothing (clip-path).
 // Layers are sized to the group's bounds (not the whole page) so a phone never allocates a full-page
 // buffer per translucent balloon. Without an offscreen canvas the group is drawn straight onto the page
 // (strokes may show through a translucent fill — the only degradation).
 
 import type { LetterPlan } from '../../../shared/comic/lettering/layout';
-import { letteringNodes, planOutline, type SvgNode } from '../lettering/svgMarkup';
+import { glyphFrame, gradientInFrame, letteringNodes, planOutline, type Affine, type SvgNode } from '../lettering/svgMarkup';
 
 export type PathFactory = (d: string) => Path2D;
 export interface CanvasLayer {
@@ -215,6 +222,9 @@ interface Env {
   makePath: PathFactory;
   createLayer: LayerFactory;
   masks: Map<string, SvgNode>;
+  /** `<linearGradient>` and `<clipPath>` definitions by id (anywhere in the tree, normally in a `<defs>`). */
+  gradients: Map<string, SvgNode>;
+  clips: Map<string, SvgNode>;
   /** Device-pixel rectangle layers cover; null = off the canvas (draw nothing that needs a layer);
    *  undefined = unknown canvas size (draw straight onto the target). */
   region: { x: number; y: number; w: number; h: number } | null | undefined;
@@ -227,11 +237,79 @@ interface Env {
   cut: boolean;
 }
 
-const collectMasks = (nodes: readonly SvgNode[], into: Map<string, SvgNode>) => {
+const collectDefs = (nodes: readonly SvgNode[], env: Pick<Env, 'masks' | 'gradients' | 'clips'>) => {
   for (const n of nodes) {
-    if (n.tag === 'mask' && n.attrs.id !== undefined) into.set(String(n.attrs.id), n);
-    if (n.children?.length) collectMasks(n.children, into);
+    if (n.attrs.id !== undefined) {
+      const id = String(n.attrs.id);
+      if (n.tag === 'mask') env.masks.set(id, n);
+      else if (n.tag === 'linearGradient') env.gradients.set(id, n);
+      else if (n.tag === 'clipPath') env.clips.set(id, n);
+    }
+    if (n.children?.length) collectDefs(n.children, env);
   }
+};
+
+const URL_REF = /^url\(\s*#([^)\s]+)\s*\)$/;
+/** The id a `url(#id)` paint or clip-path names, else undefined. */
+const refOf = (v: unknown): string | undefined => URL_REF.exec(String(v ?? '').trim())?.[1];
+
+/** '#rgb' / '#rrggbb' + an opacity → a canvas colour ('rgba(…)' below 1). Anything else passes through. */
+const withOpacity = (color: string, opacity: number): string => {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (!m || opacity >= 1) return color;
+  const hex = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1];
+  const n = parseInt(hex, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${Math.round(clamp01(opacity) * 1000) / 1000})`;
+};
+
+/**
+ * A paint value as a canvas fill/stroke style: a colour as is, `url(#id)` as a CanvasGradient built in the current user
+ * space (the gradient's userSpaceOnUse end points), null when it names nothing drawable. Without createLinearGradient
+ * (or for objectBoundingBox units) the first stop's colour stands in. `frame` (local → the gradient's user space) is set
+ * when the canvas draws in a frame SVG does not have (a rotated glyph): the end points are mapped into it.
+ */
+function paintStyle(ctx: CanvasRenderingContext2D, env: Env, value: string, frame?: Affine): string | CanvasGradient | null {
+  const id = refOf(value);
+  if (!id) return value;
+  const g = env.gradients.get(id);
+  if (!g) return null;
+  const stops = (g.children || [])
+    .filter((c) => c.tag === 'stop')
+    .map((c) => ({ offset: clamp01(num(c.attrs.offset, 0)), color: withOpacity(str(c.attrs['stop-color']) ?? '#000000', num(c.attrs['stop-opacity'], 1)) }));
+  if (!stops.length) return null;
+  const user = str(g.attrs.gradientUnits) === 'userSpaceOnUse';
+  if (!user || typeof ctx.createLinearGradient !== 'function') return stops[0].color;
+  try {
+    const line = { x1: num(g.attrs.x1, 0), y1: num(g.attrs.y1, 0), x2: num(g.attrs.x2, 0), y2: num(g.attrs.y2, 0) };
+    const at = frame ? gradientInFrame(line, frame) : line;
+    const grad = ctx.createLinearGradient(at.x1, at.y1, at.x2, at.y2);
+    for (const st of stops) grad.addColorStop(st.offset, st.color);
+    return grad;
+  } catch {
+    return stops[0].color;
+  }
+}
+
+/** One path string for a `<clipPath>`'s shapes (paths, rects, circles), so a single clip() takes their union. */
+const clipPathData = (clip: SvgNode): string => {
+  const parts: string[] = [];
+  for (const c of clip.children || []) {
+    const a = c.attrs;
+    if (c.tag === 'path' && str(a.d)) parts.push(String(a.d));
+    else if (c.tag === 'rect') {
+      const x = num(a.x, 0);
+      const y = num(a.y, 0);
+      const w = num(a.width, 0);
+      const h = num(a.height, 0);
+      if (w > 0 && h > 0) parts.push(`M${x} ${y}L${x + w} ${y}L${x + w} ${y + h}L${x} ${y + h}Z`);
+    } else if (c.tag === 'circle') {
+      const r = num(a.r, 0);
+      const cx = num(a.cx, 0);
+      const cy = num(a.cy, 0);
+      if (r > 0) parts.push(`M${cx - r} ${cy}A${r} ${r} 0 1 0 ${cx + r} ${cy}A${r} ${r} 0 1 0 ${cx - r} ${cy}Z`);
+    }
+  }
+  return parts.join('');
 };
 
 const acquire = (env: Env, w: number, h: number): CanvasLayer | null => {
@@ -261,14 +339,16 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, env: Env, p: Paint, draw: 
     }
     return;
   }
-  if (painted(p.fill) && p.fillOpacity > 0) {
+  const fillStyle = painted(p.fill) && p.fillOpacity > 0 ? paintStyle(ctx, env, p.fill) : null;
+  if (fillStyle) {
     ctx.globalAlpha = env.alpha * p.fillOpacity;
-    ctx.fillStyle = p.fill;
+    ctx.fillStyle = fillStyle;
     draw.fill();
   }
-  if (painted(p.stroke) && p.strokeWidth > 0 && p.strokeOpacity > 0) {
+  const strokeStyle = painted(p.stroke) && p.strokeWidth > 0 && p.strokeOpacity > 0 ? paintStyle(ctx, env, p.stroke) : null;
+  if (strokeStyle) {
     ctx.globalAlpha = env.alpha * p.strokeOpacity;
-    ctx.strokeStyle = p.stroke;
+    ctx.strokeStyle = strokeStyle;
     ctx.lineWidth = p.strokeWidth;
     ctx.lineJoin = p.lineJoin;
     ctx.lineCap = p.lineCap;
@@ -287,13 +367,15 @@ function drawText(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pai
   ctx.textAlign = canvasAlign(p.textAnchor);
   ctx.textBaseline = 'alphabetic';
   if ('direction' in ctx) (ctx as CanvasRenderingContext2D & { direction: CanvasDirection }).direction = p.direction;
-  const paintText = (text: string, x: number, y: number, tp: Paint) => {
+  const paintText = (text: string, x: number, y: number, tp: Paint, frame?: Affine) => {
     if (!text) return;
-    const stroke = painted(tp.stroke) && tp.strokeWidth > 0 && tp.strokeOpacity > 0;
-    const fill = painted(tp.fill) && tp.fillOpacity > 0;
+    const strokeStyle = painted(tp.stroke) && tp.strokeWidth > 0 && tp.strokeOpacity > 0 ? paintStyle(ctx, env, tp.stroke, frame) : null;
+    const fillStyle = painted(tp.fill) && tp.fillOpacity > 0 ? paintStyle(ctx, env, tp.fill, frame) : null;
+    const stroke = !!strokeStyle;
+    const fill = !!fillStyle;
     const doStroke = () => {
       ctx.globalAlpha = env.alpha * tp.strokeOpacity;
-      ctx.strokeStyle = tp.stroke;
+      ctx.strokeStyle = strokeStyle!;
       ctx.lineWidth = tp.strokeWidth;
       ctx.lineJoin = tp.lineJoin;
       ctx.setLineDash([]);
@@ -301,7 +383,7 @@ function drawText(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pai
     };
     const doFill = () => {
       ctx.globalAlpha = env.alpha * tp.fillOpacity;
-      ctx.fillStyle = tp.fill;
+      ctx.fillStyle = fillStyle!;
       ctx.fillText(text, x, y);
     };
     if (tp.paintOrderStroke) {
@@ -327,10 +409,11 @@ function drawText(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pai
     y = span.attrs.y !== undefined ? num(span.attrs.y, y) : y + num(span.attrs.dy, 0);
     const rotate = num(span.attrs.rotate, 0);
     if (rotate) {
+      // The glyph is drawn in its own turned frame; SVG fills it in the text element's user space (frame → that space).
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate((rotate * Math.PI) / 180);
-      paintText(span.text ?? '', 0, 0, sp);
+      paintText(span.text ?? '', 0, 0, sp, glyphFrame(x, y, rotate));
       ctx.restore();
     } else paintText(span.text ?? '', x, y, sp);
   }
@@ -396,7 +479,7 @@ function drawShape(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, p: Pa
   }
 }
 
-const SKIP = new Set(['mask', 'title', 'desc', 'defs', 'clipPath', 'tspan']);
+const SKIP = new Set(['mask', 'title', 'desc', 'defs', 'clipPath', 'linearGradient', 'stop', 'tspan']);
 
 function drawNode(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, parent: Paint): void {
   if (SKIP.has(node.tag)) return;
@@ -405,10 +488,23 @@ function drawNode(ctx: CanvasRenderingContext2D, env: Env, node: SvgNode, parent
   const p = inherit(parent, node.attrs);
   const maskId = /^url\(#([^)]+)\)$/.exec(String(node.attrs.mask ?? '').trim())?.[1];
   const mask = maskId ? env.masks.get(maskId) : undefined;
+  const clipId = refOf(node.attrs['clip-path']);
+  const clip = clipId ? env.clips.get(clipId) : undefined;
   ctx.save();
   const transform = str(node.attrs.transform);
   if (transform) applySvgTransform(ctx, transform);
   const body = (target: CanvasRenderingContext2D) => {
+    // clip-path: in the element's own user space (after its transform), inside the save() that restores it.
+    if (clip && !env.cut) {
+      const d = clipPathData(clip);
+      if (d) {
+        try {
+          target.clip(env.makePath(d));
+        } catch {
+          /* an unreadable clip clips nothing */
+        }
+      }
+    }
     drawShape(target, env, node, p);
     for (const child of node.children || []) drawNode(target, env, child, p);
   };
@@ -483,12 +579,12 @@ function regionFor(ctx: CanvasRenderingContext2D, bounds: Bounds | undefined): E
 
 /** Draw drawing nodes (svgMarkup's SvgNode tree) onto a canvas at the current transform. */
 export function drawSvgNodes(ctx: CanvasRenderingContext2D, nodes: readonly SvgNode[], opts: DrawNodesOptions = {}): void {
-  const masks = new Map<string, SvgNode>();
-  collectMasks(nodes, masks);
+  const defs = { masks: new Map<string, SvgNode>(), gradients: new Map<string, SvgNode>(), clips: new Map<string, SvgNode>() };
+  collectDefs(nodes, defs);
   const env: Env = {
     makePath: opts.makePath ?? defaultPath,
     createLayer: opts.createLayer ?? defaultLayerFactory,
-    masks,
+    ...defs,
     region: regionFor(ctx, opts.layerBounds),
     offset: { x: 0, y: 0 },
     pool: opts.pool ?? [],

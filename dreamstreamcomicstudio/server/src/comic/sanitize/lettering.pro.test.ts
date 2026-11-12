@@ -1,8 +1,9 @@
 // @vitest-environment node
-// PE-SERVER (master plan §2.3 "Sanitizers"; lead addendum "PE-0 note 9, approved"; collisions B-3, C-9): the lettering
-// sanitizers keep refusing the Pro text keys and ids from a client (PE-LETTER's opt-in is wired at the S2 integration),
-// but a client may RE-ASSERT a Pro value the doc stores — a single-line line_style and the letter_style base / kinds /
-// speakers — so an undo after a rollback keeps a stored Pro style; a new or different Pro value is still stripped.
+// PE-SERVER (master plan §2.3 "Sanitizers"; lead addendum "PE-0 note 9, approved"; collisions B-3, C-9): with
+// PRO_EDIT_OPS_PATCHABLE off the lettering sanitizers keep refusing the Pro text keys, ids and looks from a client; on,
+// PE-LETTER's opt-in (`allowPro`, wired at the S2b integration) accepts them. Either way a client may RE-ASSERT a Pro
+// value the doc stores — a single-line line_style, the letter_style base / kinds / speakers and the stored look — so an
+// undo after a rollback keeps a stored Pro style; with the switch off a new or different Pro value is still stripped.
 // Named styles are Pro fields: a line's styleId is kept only when it names a saved style (switch on) or re-asserts the
 // line's own; a letter_style `named` patch keeps the count and name rules. PRO_EDIT_OPS_PATCHABLE is flipped locally.
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -91,7 +92,8 @@ describe('stored Pro lettering survives an undo (re-assert, PE-0 wave note 9)', 
     }
   });
 
-  it('line_style: a new or different Pro value is still stripped, and a multi-line op never re-asserts', () => {
+  it('line_style, switch off: a new or different Pro value is still stripped, and a multi-line op never re-asserts', () => {
+    sw.on = false;
     const doc = stored();
     rejects(() => sanitize(doc, [{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { shape: 'radio' } }]), 400, /nothing valid/);
     rejects(() => sanitize(doc, [{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { warp: 'wave', warpAmount: 0.9 } }]), 400, /nothing valid/);
@@ -100,12 +102,9 @@ describe('stored Pro lettering survives an undo (re-assert, PE-0 wave note 9)', 
     ]);
     // ln_1_1 stores warp 'arc' too, but a two-line op cannot be checked line by line: stripped.
     rejects(() => sanitize(doc, [{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_1', 'ln_1_2'], patch: { warp: 'arc' } }]), 400, /nothing valid/);
-    // A line with no stored Pro style: the Pro keys are refused as before (switch on or off: PE-LETTER's opt-in is not wired here).
-    for (const on of [true, false]) {
-      sw.on = on;
-      const plain = normalizeDoc(JSON.parse(JSON.stringify(plannedDoc())));
-      rejects(() => sanitize(plain, [{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { warp: 'arc', fillGradient: { from: '#000000', to: '#ffffff', angle: 0 } } }]), 400, /nothing valid/);
-    }
+    // A line with no stored Pro style: the Pro keys are refused as before (the switch on is the next describe's).
+    const plain = normalizeDoc(JSON.parse(JSON.stringify(plannedDoc())));
+    rejects(() => sanitize(plain, [{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { warp: 'arc', fillGradient: { from: '#000000', to: '#ffffff', angle: 0 } } }]), 400, /nothing valid/);
   });
 
   it('letter_style: undoing a base, kind or speaker edit keeps the stored Pro keys (the reset in the inverse does not lose them)', () => {
@@ -120,7 +119,8 @@ describe('stored Pro lettering survives an undo (re-assert, PE-0 wave note 9)', 
     }
   });
 
-  it('letter_style: a Pro key that differs from the stored one is stripped; equal ones are re-asserted', () => {
+  it('letter_style, switch off: a Pro key that differs from the stored one is stripped; equal ones are re-asserted', () => {
+    sw.on = false;
     const doc = stored();
     expect(sanitize(doc, [{ op: 'letter_style', patch: { base: { warp: 'wave', weight: 800 }, kinds: { shout: { shape: 'monster' } }, speakers: { c_maya: { font: 'bungee' } } } }])).toEqual([
       { op: 'letter_style', patch: { base: { weight: 800, warp: 'wave' }, kinds: { shout: { shape: 'monster' } }, speakers: { c_maya: { font: 'bungee' } } } }
@@ -175,5 +175,75 @@ describe('named styles (Pro fields, lead decision C-9)', () => {
     const more = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`st_${i}`, { name: 'x'.repeat(60), patch: {} }]));
     rejects(() => sanitize(doc, [{ op: 'letter_style', patch: { named: more } }]), 400, /nothing valid/);
     expect(sanitize(doc, [{ op: 'letter_style', patch: { named: more, base: { weight: 400 } } }])).toEqual([{ op: 'letter_style', patch: { base: { weight: 400 } } }]);
+  });
+});
+
+describe("PE-LETTER's opt-in, wired (collisions B-3): accepted with the switch on, refused as before with it off", () => {
+  const plain = () => normalizeDoc(JSON.parse(JSON.stringify(plannedDoc())));
+  const PRO_TEXT = { warp: 'arc', warpAmount: 0.5, fillGradient: { from: '#000000', to: '#ffffff', angle: 0 }, shape: 'radio' };
+  /** A doc whose comic look is `presetId` as stored (a Pro look written while the switch was on). */
+  const withLook = (presetId: string): ComicDoc => {
+    const raw = JSON.parse(JSON.stringify(plannedDoc())) as ComicDoc;
+    raw.letterStyle = JSON.parse(JSON.stringify({ presetId, base: { weight: 700 } }));
+    return normalizeDoc(raw);
+  };
+
+  it('line_style: the Pro text keys and a Pro shape on a plain line', () => {
+    const op = { op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { textColor: '#123456', ...PRO_TEXT } };
+    const [out] = sanitize(plain(), [op]) as Extract<DocOp, { op: 'line_style' }>[];
+    expect(out.patch).toMatchObject({ textColor: '#123456', ...PRO_TEXT });
+    expect(line(applyOps(plain(), [out])).style).toMatchObject(PRO_TEXT);
+    sw.on = false;
+    expect(sanitize(plain(), [op])).toEqual([{ op: 'line_style', pageId: 'pg_1', lineIds: ['ln_1_2'], patch: { textColor: '#123456' } }]);
+  });
+
+  it('a new line (panel_add) and a `line` create or update carry Pro text keys only with the switch on', () => {
+    const add = { op: 'panel_add', pageId: 'pg_1', panel: { id: 'pn_new', lines: [{ id: 'ln_new', kind: 'speech', text: 'Hi', style: { italic: true, ...PRO_TEXT } }] } };
+    const upd = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { style: { italic: true, ...PRO_TEXT } } };
+    const addedStyle = (ops: DocOp[]) => (ops[0] as Extract<DocOp, { op: 'panel_add' }>).panel.lines[0].style;
+    const lineStyle = (ops: DocOp[]) => ((ops[0] as Extract<DocOp, { op: 'line' }>).patch as { style?: unknown }).style;
+    expect(addedStyle(sanitize(plain(), [add]))).toMatchObject({ italic: true, ...PRO_TEXT });
+    expect(lineStyle(sanitize(plain(), [upd]))).toMatchObject({ italic: true, ...PRO_TEXT });
+    sw.on = false;
+    expect(addedStyle(sanitize(plain(), [add]))).toEqual({ italic: true });
+    expect(lineStyle(sanitize(plain(), [upd]))).toEqual({ italic: true });
+  });
+
+  it('letter_style: a Pro look is picked only with the switch on, and the refusal lists the looks a client may pick', () => {
+    const [op] = sanitize(plain(), [{ op: 'letter_style', patch: { presetId: 'horror' } }]);
+    expect(op).toEqual({ op: 'letter_style', patch: { presetId: 'horror' } });
+    expect(applyOps(plain(), [op]).letterStyle?.presetId).toBe('horror');
+    const on = rejects(() => sanitize(plain(), [{ op: 'letter_style', patch: { presetId: 'teleport' } }]), 400, /Unknown lettering preset/);
+    expect(on.message).toMatch(/horror/);
+    sw.on = false;
+    const off = rejects(() => sanitize(plain(), [{ op: 'letter_style', patch: { presetId: 'horror' } }]), 400, /Unknown lettering preset/);
+    expect(off.message).not.toMatch(/horror/);
+  });
+
+  it('letter_style: the stored look re-asserts with the switch off (C-8), so undoing an edit keeps it; another Pro look is refused', () => {
+    sw.on = false;
+    const doc = withLook('horror');
+    expect(doc.letterStyle?.presetId).toBe('horror');
+    expect(sanitize(doc, [{ op: 'letter_style', patch: { presetId: 'horror', keepOverrides: true, base: { weight: 800 } } }])).toEqual([
+      { op: 'letter_style', patch: { presetId: 'horror', keepOverrides: true, base: { weight: 800 } } }
+    ]);
+    // The inverse of a base edit is a reset, then the old look: jobs.ts never applies letter_style to the batch's
+    // working doc, so the restore still meets the stored look and re-asserts it.
+    const { undo, back } = undoRoundTrip(doc, [{ op: 'letter_style', patch: { base: { weight: 400 } } }]);
+    expect(undo[0]).toEqual({ op: 'letter_style', patch: null });
+    expect(undo[1]).toMatchObject({ op: 'letter_style', patch: { presetId: 'horror', keepOverrides: true, base: { weight: 700 } } });
+    expect(back.letterStyle).toEqual(doc.letterStyle);
+    rejects(() => sanitize(doc, [{ op: 'letter_style', patch: { presetId: 'robot' } }]), 400, /Unknown lettering preset/);
+  });
+
+  it('letter_style `named`: a save and a delete apply, and their undo puts the saved styles back exactly', () => {
+    const doc = stored();
+    const save = undoRoundTrip(doc, [{ op: 'letter_style', patch: { named: { st_hero: { name: 'Hero', patch: { italic: true, textColor: '#0000ff' } } } } }]);
+    expect(save.after.letterStyle?.named).toEqual({ ...NAMED, st_hero: { name: 'Hero', patch: { italic: true, textColor: '#0000ff' } } });
+    expect(save.undo[save.undo.length - 1]).toEqual({ op: 'letter_style', patch: { named: { st_hero: null } } });
+    expect(save.back.letterStyle).toEqual(doc.letterStyle);
+    const drop = undoRoundTrip(doc, [{ op: 'letter_style', patch: { named: { st_villain: null } } }]);
+    expect(Object.keys(drop.after.letterStyle?.named ?? {})).toEqual(['st_radio']);
+    expect(drop.back.letterStyle).toEqual(doc.letterStyle);
   });
 });

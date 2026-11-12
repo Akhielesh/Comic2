@@ -500,7 +500,7 @@ const panelOf = (doc: ComicDoc, page: Page, raw: unknown, ctx: SanitizeCtx): Pan
       if (SPOKEN.has(kind)) line.speakerId = l.speakerId;
     }
     if (l.style !== undefined && l.style !== null) {
-      const style = sanitizeLetterStylePatch(l.style);
+      const style = sanitizeLetterStylePatch(l.style, { allowPro: PRO_EDIT_OPS_PATCHABLE }); // Pro keys only with the switch (B-3)
       if (style) line.style = style;
     }
     if (typeof l.lang === 'string' && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(l.lang)) line.lang = l.lang;

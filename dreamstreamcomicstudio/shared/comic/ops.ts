@@ -119,8 +119,10 @@ import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, MAX_BALLOON_SNAPSHOT, MO
 // --- Ship 2 (K2a): frames carry their lettering and overlays along (pure; space.ts never imports this module) ---
 import { panelPointMap, type PointMap } from './panelize/space.js';
 import {
-  LETTERING_PRESETS,
   MAX_SAFE_MARGIN,
+  isLetteringPresetId,
+  isProLetteringPresetId,
+  mergeNamedStyles,
   mergeStylePatch,
   type LetteringStyle,
   type LetteringStyleOpPatch,
@@ -1037,7 +1039,7 @@ const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): C
   const cur = letterStyleOf(doc);
   const next: LetteringStyle = { ...cur };
   if (patch.presetId !== undefined && patch.presetId !== null) {
-    if (!LETTERING_PRESETS[patch.presetId]) return doc;
+    if (!isLetteringPresetId(patch.presetId) && !isProLetteringPresetId(patch.presetId)) return doc;
     if (patch.presetId !== cur.presetId) {
       next.presetId = patch.presetId;
       if (!patch.keepOverrides) {
@@ -1082,6 +1084,13 @@ const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): C
   if (patch.safeMargin === null) delete next.safeMargin;
   else if (typeof patch.safeMargin === 'number' && Number.isFinite(patch.safeMargin)) {
     next.safeMargin = Math.min(MAX_SAFE_MARGIN, Math.max(0, patch.safeMargin));
+  }
+  // Saved named styles (PE-LETTER; Pro fields, C-9: only a server with PRO_EDIT_OPS_PATCHABLE on accepts them from a
+  // client): an entry upserts that style, null deletes it, through the shared merge (≤ PRO_LETTER_LIMITS.namedStyles).
+  if (isObject(patch.named)) {
+    const named = mergeNamedStyles(next.named, patch.named);
+    if (named) next.named = named;
+    else delete next.named;
   }
   return { ...doc, letterStyle: next };
 };

@@ -597,7 +597,7 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     return d;
   };
 
-  it('stored Pro lettering and named styles round-trip normalizeDoc (rollback-safe) and draw exactly as today', () => {
+  it('stored Pro lettering and named styles round-trip normalizeDoc (rollback-safe) and draw what this build ships', () => {
     const stored = proLettered();
     const loaded = normalizeDoc(json(stored));
     expect(loaded.pages[0].panels[2].lines[0].style).toEqual(PRO_LINE_STYLE);
@@ -606,17 +606,15 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     // Idempotent, and a jsonb reload (keys reordered) changes nothing.
     expect(normalizeDoc(json(loaded))).toEqual(loaded);
     expect(normalizeDoc(jsonbOrder(json(loaded)) as ComicDoc)).toEqual(loaded);
-    // Draws exactly as today: the cascade skips what this build cannot draw (Pro text keys, a Pro shape, SFX effect or
-    // font), so the line resolves as if only its base keys were stored, and every id is one the exhaustive records know.
+    // Draws what this build ships (PE-LETTER): the Pro text keys, the Pro shape and SFX effect apply through the cascade
+    // (doc.base, then named st_radio, then the line's own style); a face this build does not ship (bungee before
+    // PE-FONTS) is skipped, so the exhaustive font records only see shipped ids.
     const line = loaded.pages[0].panels[2].lines[0];
-    const today = { ...loaded, letterStyle: { ...loaded.letterStyle!, base: { textColor: '#222222' } } };
     const resolved = resolveLetterStyle(loaded, line);
-    expect(resolved).toEqual(resolveLetterStyle(today, { ...line, style: { italic: true } }));
-    expect(BUBBLE_SHAPES).toContain(resolved.shape);
-    expect(SFX_EFFECTS).toContain(resolved.sfxEffect);
-    expect(JSON.stringify(resolved)).not.toMatch(/fillGradient|strokes|glow|warp|bungee|heart|wobble/);
+    expect(resolved).toMatchObject({ italic: true, shape: 'heart', fillGradient: PRO_LINE_STYLE.fillGradient, strokes: PRO_LINE_STYLE.strokes, glow: PRO_LINE_STYLE.glow, warp: 'arc', warpAmount: 0.5, textColor: '#00aa00' });
+    expect(resolved.font).toBe(isProFontId('bungee') ? 'bungee' : resolveLetterStyle(v5(), { ...line, style: undefined, styleId: undefined }).font);
     const sfx = { ...line, kind: 'sfx' as const };
-    expect(resolveLetterStyle(loaded, sfx)).toEqual(resolveLetterStyle(today, { ...sfx, style: { italic: true } }));
+    expect(resolveLetterStyle(loaded, sfx).sfxEffect).toBe('wobble');
     // No spec hash moves.
     expect(specHashes(loaded)).toEqual(specHashes(v5()));
   });
