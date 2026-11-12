@@ -56,6 +56,7 @@ import { chainHeadOf, planLettering, type LetterPlan } from '../../../shared/com
 import { EDITOR_LIMITS } from '../../../shared/comic/limits';
 import { INVERSE_SURFACE, RADIUS_PILL } from '../../chat/studioDesign';
 import type { BalloonTransformKit, TwoFingerApi } from '../editor/balloonTransform';
+import type { DuplicateCopyOptions } from '../editor/inspector/proSwitch';
 import { LetteringSvg } from '../lettering/LetteringSvg';
 import { BalloonTextEditor } from '../lettering/BalloonTextEditor';
 import { SnapGuides, computeSnap, snapTargets, type SnapGuide } from '../lettering/SnapGuides';
@@ -137,6 +138,8 @@ export interface BalloonEditorExtras {
   keyboard: boolean;
   /** The balloons the director is editing right now (A4's StudioController.presence on this page). */
   presenceLineIds?: ReadonlySet<string>;
+  /** What Cmd+D's copy may carry (the page editor passes editor/inspector/proSwitch duplicateCopyOptions). */
+  duplicate?: DuplicateCopyOptions;
 }
 export const NO_BALLOON_EXTRAS: BalloonEditorExtras = { transform: false, keyboard: false };
 export const BalloonEditorExtrasContext = createContext<BalloonEditorExtras>(NO_BALLOON_EXTRAS);
@@ -901,7 +904,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     }
     if (mod && (e.key === 'd' || e.key === 'D') && onOps && !editionLang) {
       handled();
-      onOps(duplicateLineOps(page, id, base.placements.balloons), { label: 'Duplicate balloon' });
+      onOps(duplicateLineOps(page, id, base.placements.balloons, undefined, extras.duplicate), { label: 'Duplicate balloon' });
       return;
     }
     if ((e.key === '[' || e.key === ']' || e.key === '{' || e.key === '}') && onOps && !editionLang) {

@@ -17,6 +17,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import { PRO_EDIT_OPS } from '../../../shared/comic/ops';
 import { RADIUS_PILL } from '../../chat/studioDesign';
+import { duplicateCopyOptions } from '../editor/inspector/proSwitch';
 import { PAGE_Z } from '../editor/kit/zLayers';
 
 afterEach(cleanup);
@@ -105,6 +106,24 @@ describe('BalloonLayer without the Pro extras (flag off, readers)', () => {
     const tab = fireEvent.keyDown(hit('pg_1_l2'), { key: 'Tab' });
     expect(tab).toBe(true); // not prevented: native Tab
     expect(onSelectionChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('Cmd+D copies by Duplicate’s rule (collisions C-9: no Pro field while they are not writable)', () => {
+  it('with the page editor’s copy rule, a line that stores glow and a saved-style link is copied without either', () => {
+    const doc = makeSampleDoc((d) => {
+      const line = d.pages[0].panels.flatMap((p) => p.lines).find((l) => l.id === 'pg_1_l2')!;
+      line.styleId = 'st_v';
+      line.style = { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } };
+    });
+    const { hit, onOps } = setup({ doc, onOps: true, selected: ['pg_1_l2'], extras: { transform: false, keyboard: false, duplicate: duplicateCopyOptions() } });
+    fireEvent.keyDown(hit('pg_1_l2'), { key: 'd', metaKey: true });
+    const ops = onOps.mock.calls.at(-1)![0] as DocOp[];
+    const created = ops.find((o) => o.op === 'line') as Extract<DocOp, { op: 'line' }>;
+    expect(created).toBeTruthy();
+    expect('styleId' in created.patch).toBe(false);
+    expect(created.patch.style).toEqual({ fill: '#ffd84a' });
+    expect(JSON.stringify(ops)).not.toMatch(/glow|st_v/);
   });
 });
 

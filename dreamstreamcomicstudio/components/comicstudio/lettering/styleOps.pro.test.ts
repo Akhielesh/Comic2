@@ -32,6 +32,9 @@ import {
   useNamedStyleOps
 } from './proStyleOps';
 import { stripProFields } from '../editor/inspector/proGate';
+import { duplicateCopyOptions } from '../editor/inspector/proSwitch';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const ASPECT = 2 / 3;
 
@@ -294,6 +297,41 @@ describe('Duplicate while Pro fields are not writable (collisions C-9)', () => {
     expect(bare[0].op === 'line' && 'style' in bare[0].patch).toBe(false);
     // The balloon beside it is the same either way.
     expect(clean.slice(1)).toEqual(whole.slice(1));
+  });
+});
+
+describe('every Duplicate copies by the one rule (collisions C-9)', () => {
+  it('duplicateCopyOptions: with the switch off the copy drops glow and the saved-style link, as the server would', () => {
+    const { page, placements } = ctx((d) => {
+      const line = d.pages[0].panels[2].lines[1];
+      line.styleId = 'st_v';
+      line.style = { fill: '#ffd84a', glow: { color: '#ffffff', size: 0.2 } };
+    });
+    const opts = duplicateCopyOptions();
+    expect(opts).toEqual({ keepLink: false, clean: stripProFields });
+    const [create] = duplicateLineOps(page, 'pg_1_l4', placements.balloons, 'ln_copy', opts);
+    expect(create.op === 'line' && create.patch).toMatchObject({ style: { fill: '#ffd84a' } });
+    expect(create.op === 'line' && ('styleId' in create.patch || 'glow' in (create.patch.style ?? {}))).toBe(false);
+  });
+
+  it('no Duplicate in the app calls duplicateLineOps without a copy rule (BalloonLayer Cmd+D, the context menu, Easy, Pro)', () => {
+    const root = join(process.cwd(), 'components');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !full.endsWith('lettering/styleOps.ts')) files.push(full);
+      }
+    };
+    walk(root);
+    const calls: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/duplicateLineOps\(([^;]*?)\)(?=[,;)\s])/g)) calls.push(`${f.slice(root.length + 1)}: ${m[1]}`);
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    expect(calls.filter((c) => !/duplicateCopyOptions\(|extras\.duplicate|stripProFields|proFieldsWritable\(/.test(c))).toEqual([]);
   });
 });
 

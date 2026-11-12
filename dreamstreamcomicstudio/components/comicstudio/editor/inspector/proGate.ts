@@ -8,49 +8,22 @@
 // read them there); they are re-exported here under their names. Only the lazily loaded Pro modules import this file.
 
 import {
-  BUBBLE_SHAPES,
   DRAWN_PRO_SFX_EFFECTS,
-  FONT_IDS,
   PRO_BUBBLE_SHAPES,
-  PRO_STYLE_KEYS,
-  SFX_EFFECTS,
   type LetterStylePatch,
   type ProBubbleShape,
   type ProSfxEffect
 } from '../../../../shared/comic/lettering/style';
 import type { ScriptId } from '../../../../shared/comic/languages';
-import { proFieldsWritable } from './proSwitch';
+import { proFieldsWritable, stripProFields } from './proSwitch';
 
-export { proFieldsWritable, proFontIds, proLooks, PRO_LOOKS_EXPORT, PRO_LOOK_IDS_EXPORT, type ProLook } from './proSwitch';
+export { duplicateCopyOptions, proFieldsWritable, proFontIds, proLooks, stripProFields, PRO_LOOKS_EXPORT, PRO_LOOK_IDS_EXPORT, type DuplicateCopyOptions, type ProLook } from './proSwitch';
 
 /** The SFX effects PE-LETTER draws in S2: its DRAWN_PRO_SFX_EFFECTS (halftone_fill needs canvas patterns: S3, PE-TONES). */
 export const PRO_SFX_DRAWN: readonly ProSfxEffect[] = DRAWN_PRO_SFX_EFFECTS;
 
-const BASE_SHAPES: ReadonlySet<string> = new Set(BUBBLE_SHAPES);
-const BASE_SFX: ReadonlySet<string> = new Set(SFX_EFFECTS);
-const BASE_FONTS: ReadonlySet<string> = new Set(FONT_IDS);
-const PRO_KEYS: ReadonlySet<string> = new Set(PRO_STYLE_KEYS);
-
 /** A Pro shape id (never a base one). */
 export const isProShape = (v: unknown): v is ProBubbleShape => typeof v === 'string' && (PRO_BUBBLE_SHAPES as readonly string[]).includes(v);
-
-/**
- * A style patch without any Pro field: the Pro text keys, a shape, SFX effect or font outside the base lists, and the
- * named-style link. What Copy / Paste style and every other generic writer sends while the switch is off. Undefined
- * when nothing is left.
- */
-export function stripProFields(patch: LetterStylePatch | null | undefined): LetterStylePatch | undefined {
-  if (!patch) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined || PRO_KEYS.has(k) || k === 'styleId') continue;
-    if (k === 'shape' && !BASE_SHAPES.has(v as string)) continue;
-    if (k === 'sfxEffect' && !BASE_SFX.has(v as string)) continue;
-    if (k === 'font' && !BASE_FONTS.has(v as string)) continue;
-    out[k] = v;
-  }
-  return Object.keys(out).length ? (out as LetterStylePatch) : undefined;
-}
 
 /** A patch as this build may write it: whole when the switch is on, without its Pro fields when it is off. */
 export const writablePatch = (patch: LetterStylePatch | null | undefined): LetterStylePatch | undefined =>

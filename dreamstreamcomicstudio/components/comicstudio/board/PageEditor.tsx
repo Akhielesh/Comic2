@@ -118,6 +118,7 @@ import { PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { holdsOverlaysOn, useLetteringSelection } from '../lettering/useLetteringSelection';
 import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, pinKeepingSizeOps, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
+import { duplicateCopyOptions } from '../editor/inspector/proSwitch';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { TouchCanvas, useZoom } from '../mobile/touch/TouchCanvas';
 import { useGestureArbiter } from '../mobile/touch/GestureArbiter';
@@ -1047,10 +1048,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   }, [presenceKey, presence?.pageId, sourcePage.id, validIds]);
   // The rotate / height handles come with the lazily loaded transform kit (no B9 engine on the Easy path).
   const balloonKit = useBalloonTransformKit(pro.pro);
-  const balloonExtras: BalloonEditorExtras = useMemo(
-    () => (pro.pro || presenceIds ? { transform: pro.pro && !!balloonKit, kit: balloonKit ?? undefined, keyboard: pro.pro, presenceLineIds: presenceIds } : NO_BALLOON_EXTRAS),
-    [pro.pro, presenceIds, balloonKit]
-  );
+  // Cmd+D in the balloon layer copies by Duplicate's rule (no Pro field while they are not writable, C-9).
+  const balloonExtras: BalloonEditorExtras = useMemo(() => {
+    const duplicate = duplicateCopyOptions();
+    return pro.pro || presenceIds
+      ? { transform: pro.pro && !!balloonKit, kit: balloonKit ?? undefined, keyboard: pro.pro, presenceLineIds: presenceIds, duplicate }
+      : { ...NO_BALLOON_EXTRAS, duplicate };
+  }, [pro.pro, presenceIds, balloonKit]);
 
   // Inspector anchor: the selection's outline bounds on screen (recomputed on resize/scroll/zoom).
   const [anchor, setAnchor] = useState<Rect | null>(null);
@@ -1260,7 +1264,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           setInspectorClosed(false);
         }
       },
-      { id: 'duplicate', label: 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: !!lang, hint: inOriginal, onSelect: () => apply(duplicateLineOps(sourcePage, lineId, placements.balloons), { label: 'Duplicate balloon' }) },
+      { id: 'duplicate', label: 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: !!lang, hint: inOriginal, onSelect: () => apply(duplicateLineOps(sourcePage, lineId, placements.balloons, undefined, duplicateCopyOptions()), { label: 'Duplicate balloon' }) },
       { id: 'front', label: 'Bring to front', icon: <Layers className="h-4 w-4" />, onSelect: () => apply(zOrderOps(page, [lineId], 'front', plans, placements.balloons), { label: 'Bring to front' }) },
       { id: 'back', label: 'Send to back', icon: <Layers className="h-4 w-4 rotate-180" />, onSelect: () => apply(zOrderOps(page, [lineId], 'back', plans, placements.balloons), { label: 'Send to back' }) },
       {
