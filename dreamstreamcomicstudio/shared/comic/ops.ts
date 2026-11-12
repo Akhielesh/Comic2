@@ -453,8 +453,8 @@ export const PRO_PAGE_OPS_PATCHABLE = true;
 /** The Pro Edit ops: page motion (free content edits; no spend, no new asset). Objects ride the existing `layer` op. */
 export const PRO_EDIT_OPS: readonly DocOp['op'][] = ['motion', 'page_motion'];
 /**
- * One-line switch (master plan §2.10): the Pro Edit ops join CLIENT_PATCHABLE_OPS. OFF until the S2 integration flips it,
- * after PE-SERVER's sanitizer (server/src/comic/sanitize/motion.ts) is deployed. Off, a client batch carrying one is
+ * One-line switch (master plan §2.10): the Pro Edit ops join CLIENT_PATCHABLE_OPS. OFF until the package that flips it,
+ * after the PE-SERVER deploy (its sanitizer, server/src/comic/sanitize/motion.ts) — never in S2b (lead decision D1). Off, a client batch carrying one is
  * refused ("can't be changed directly"); every build still applies them when the server streams them (KNOWN_DOC_OPS)
  * and computes their inverses (undo.ts), so the contract ships ahead of any writer.
  */

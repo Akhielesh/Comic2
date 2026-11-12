@@ -556,7 +556,7 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     expect(offences).toEqual([]);
   });
 
-  it('Pro text styling is neutral and the lettering sanitizer does not accept a Pro key or id until the drawing lands', () => {
+  it('Pro text styling is neutral and the lettering sanitizer does not accept a Pro key or id while PRO_EDIT_OPS_PATCHABLE is off', () => {
     const doc = v5();
     const line = doc.pages[0].panels[2].lines[0];
     const before = JSON.stringify(resolveLetterStyle(doc, line));
@@ -568,7 +568,8 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     for (const sfxEffect of PRO_SFX_EFFECTS) expect(sanitizeLetterStylePatch({ sfxEffect }), sfxEffect).toBeUndefined();
     expect(PRO_BUBBLE_SHAPES.filter((s) => (BUBBLE_SHAPES as readonly string[]).includes(s))).toEqual([]);
     expect(PRO_SFX_EFFECTS.filter((s) => (SFX_EFFECTS as readonly string[]).includes(s))).toEqual([]);
-    // PE-FONTS filled the font seam (28 faces); a client still cannot write one until the drawing lands (PE-LETTER).
+    // PE-FONTS filled the font seam (28 faces) and PE-LETTER draws them; a client still cannot write one while
+    // PRO_EDIT_OPS_PATCHABLE is off (the server's `allowPro` is that switch).
     expect(PRO_FONT_IDS).toHaveLength(28);
     expect(isProFontId('bungee')).toBe(true);
     expect(sanitizeLetterStylePatch({ font: 'bungee' })).toBeUndefined();
@@ -734,7 +735,7 @@ describe('Pro Edit contract (PE-0): flags and seams', () => {
     for (const key of ['proMotion', 'proStickers', 'readerMotion']) expect(key in DEFAULT_CAPS, key).toBe(false);
   });
 
-  it('the stubs carry their final names and do nothing yet: no effect drawn, no font, no part ready', () => {
+  it('the seams carry their final names; registered seams draw nothing on their own; only compose, inspector, kit and layers are ready', () => {
     // PE-FX filled the registry (14 generators); nothing draws until fx/generators.ts is loaded, which this file never imports.
     expect(FX_GENERATORS.map((g) => `${g.gen}@${g.v}`)).toHaveLength(14);
     expect(renderFx(FX, { aspect: 1 })).toEqual([]);

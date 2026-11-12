@@ -2,8 +2,8 @@
 
 **Status:** PE-0 landed (S1, 2026-11-05): the contract only. The object model, the motion ops, the flags and every
 seam exist with their final names; nothing a creator or reader sees changes. Owner sign-off **D5** (the schema: effect
-layers, sticker references, `Page.motion`, the new text-style fields; plus the video reveal default) is still pending,
-so the contract is **additive and invisible**:
+layers, sticker references, `Page.motion`, the new text-style fields; plus the video reveal default): D5 confirmed for
+S2b (§10); review before the flip. The contract stays **additive and invisible** while `PRO_EDIT_OPS_PATCHABLE` is off:
 
 - every stored comic normalizes to the same object as before (fingerprint goldens in `proEdit.contract.test.ts`);
 - no `pageSpecHash` (or any other spec hash) moves: no Pro edit ever marks the art out of date;
@@ -46,8 +46,8 @@ reader motion has no admins stage (readers are not signed in), so a bare `on` (`
 for everyone and `admins` stays off (`readerMotionStage`, lead decision S1). Details and
 rollout criteria: `docs/infrastructure/ENV_MATRIX.md`, "Comic Studio: Pro Edit".
 
-`PRO_EDIT_OPS_PATCHABLE` (`shared/comic/ops.ts`) is a code constant, `false`: the S2 integration flips it **only after**
-the PE-SERVER sanitizer is deployed.
+`PRO_EDIT_OPS_PATCHABLE` (`shared/comic/ops.ts`) is a code constant, `false`: the package that flips it does so after
+the PE-SERVER deploy (never in S2b; D1).
 
 ## 2. The object model (`shared/comic/doc.ts`, all optional, never hashed)
 
