@@ -27,15 +27,22 @@ const db = vi.hoisted(() => ({
   /** Storage paths with no object: signing them fails the way Supabase does (a 400). */
   missing: [] as string[],
   /** When set, every projects query fails with this Postgres code. */
-  failProjects: null as string | null
+  failProjects: null as string | null,
+  /** Every select the route made: table and column list. */
+  selects: [] as { table: string; columns: string }[]
 }));
 
-vi.mock('../services/supabase.js', () => {
+vi.mock('../services/supabase.js', async () => {
+  // Rows come back as the select's columns ask (EGRESS-DB E2: the path check reads JSON paths into `state`).
+  const { projectRow } = await import('../../../services/projectRows.testkit.js');
   class Query {
     private filters: ((r: Record<string, unknown>) => boolean)[] = [];
     private single = false;
+    private columns = '*';
     constructor(private table: string) {}
-    select() {
+    select(columns = '*') {
+      this.columns = columns;
+      db.selects.push({ table: this.table, columns });
       return this;
     }
     eq(col: string, value: unknown) {
@@ -48,7 +55,7 @@ vi.mock('../services/supabase.js', () => {
     }
     then<T>(resolve: (v: { data: unknown; error: unknown }) => T) {
       if (this.table === 'projects' && db.failProjects) return Promise.resolve(resolve({ data: null, error: { code: db.failProjects, message: 'down' } }));
-      const rows = (db.tables[this.table] || []).filter((r) => this.filters.every((f) => f(r)));
+      const rows = (db.tables[this.table] || []).filter((r) => this.filters.every((f) => f(r))).map((r) => projectRow(r, this.columns));
       return Promise.resolve(resolve({ data: this.single ? rows[0] ?? null : rows, error: null }));
     }
   }
@@ -99,6 +106,7 @@ beforeEach(() => {
   db.signedWith = [];
   db.missing = [];
   db.failProjects = null;
+  db.selects = [];
   db.tokens = { 'owner-token': OWNER, 'stranger-token': STRANGER };
   const project = (id: string, extra: Row = {}): Row => ({
     id,
@@ -427,6 +435,30 @@ describe('image proxy: legacy paths of a public classic comic (reading is free w
 
   it('the owner always may', async () => {
     expect((await fetchImage(legacy('private-cover.png'), 'owner-token')).status).toBe(200);
+  });
+
+  // EGRESS-DB E2: the check reads the path-bearing keys only (JSON paths into state, never the whole state), and
+  // answers as the whole state did: every key it reads still authorizes, a path kept only in `versions` never did.
+  it('reads only the path-bearing state keys, with the same answers as the whole state', async () => {
+    const current = db.tables.projects[1].state as Row;
+    db.tables.projects[1].state = {
+      ...current,
+      items: [{ imageId: legacy('sword.png'), referenceImageIds: [legacy('sword-ref.jpg')] }],
+      locations: [{ imageId: legacy('castle.png'), referenceImageIds: [legacy('place.jpg')] }],
+      imageTags: { [legacy('tagged.png')]: { tag: 'T1' } },
+      versions: [{ id: 'v1', state: { coverImageId: legacy('old-cover.png') } }],
+      script: 'x'.repeat(10_000)
+    };
+    const allowed = ['cover.png', 'template.jpg', 'p1.png', 'p1-old.png', 'p2', 'hero.png', 'selfie.jpg', 'sword.png', 'sword-ref.jpg', 'castle.png', 'place.jpg', 'style.png', 'tagged.png'];
+    for (const file of allowed) expect((await fetchImage(legacy(file), 'stranger-token')).status, file).toBe(200);
+    expect((await fetchImage(legacy('old-cover.png'), 'stranger-token')).status).toBe(403);
+    const projectSelects = db.selects.filter((q) => q.table === 'projects').map((q) => q.columns);
+    expect(projectSelects.length).toBeGreaterThan(0);
+    for (const columns of projectSelects) {
+      expect(columns.split(',')).not.toContain('state');
+      expect(columns.split(',').map((c) => c.trim())).not.toContain('*');
+      expect(columns).not.toMatch(/versions|script/);
+    }
   });
 
   it("a signed-out reader gets a shown panel's tmp-lane twin, never a tmp path the reader does not show", async () => {

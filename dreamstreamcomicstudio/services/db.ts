@@ -6,6 +6,7 @@ import { isMissingPrivateProfileTableError } from "./profilePrivate";
 import { buildApiUrl } from "./clientConfig";
 import { isStudioV4Project } from "./studioDeepLink";
 import { isContentRating } from "../shared/comic/safety";
+import { CARD_STATE, isCardState } from './projectCardState';
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -476,8 +477,112 @@ const isProjectLikesMissingError = (error: unknown): boolean => {
 // fire on every generation tick). Only log the first time, or when the size changes meaningfully.
 const lastStateBytesLogged = new Map<string, number>();
 
+// --- Library cards (EGRESS-DB E1) ---
+// The library list reads a CARD per comic: the row's columns plus the few state keys the dashboard,
+// the cover hydration, the deep-link routing and the assistant summaries read. Never `versions` (the
+// classic editor's snapshots, ~70% of all state bytes) or `pageStudio.style` (an inline image). The
+// full state loads only when a comic is opened, duplicated or changed (loadProjectState).
+export const PROJECT_CARD_STATE_KEYS = ['studioVersion', 'studioPages', 'studioRendered', 'pipelineMode', 'shareSlug',
+  'publicCover', 'publishedAt', 'isFeatured', 'step', 'overview', 'generationStatus', 'comments', 'coverImageId',
+  'coverImageUrl', 'coverTemplateImageId', 'panels', 'styleVariants', 'scenes', 'script', 'layoutType', 'textLayout',
+  'styleCategory', 'styleAspectRatio', 'imageResolution', 'pricingConfig', 'characters', 'items', 'locations'] as const;
+const PROJECT_CARD_STATE_SELECT = [
+  ...PROJECT_CARD_STATE_KEYS.map((k) => `${k}:state->${k}`),
+  'pageStudioPages:state->pageStudio->pages,pageStudioActivePageId:state->pageStudio->activePageId'
+].join(',');
+export const PROJECT_CARD_SELECT = [
+  'id,user_id,name,cover_image_url,is_public,is_forced_private,content_rating,likes_count,views_count,created_at,updated_at',
+  PROJECT_CARD_STATE_SELECT
+].join(',');
+/** The same card on a database without the moderation, rating and counter columns (error 42703). */
+const PROJECT_CARD_SELECT_LEGACY = ['id,user_id,name,cover_image_url,is_public,created_at,updated_at', PROJECT_CARD_STATE_SELECT].join(',');
+
+const CARD_ARRAY_KEYS: ReadonlySet<string> = new Set(['panels', 'styleVariants', 'scenes', 'characters', 'items', 'locations', 'comments']);
+
+// The card marker (CARD_STATE, isCardState) lives in services/projectCardState.ts; re-exported here.
+export { CARD_STATE, isCardState };
+
+/** The state a card row stands for: its projected keys, arrays defaulted to [] and the script to ''. */
+export const projectCardStateOf = (row: Record<string, unknown>): Project['state'] => {
+  const state: Record<string | symbol, unknown> = { [CARD_STATE]: true };
+  for (const key of PROJECT_CARD_STATE_KEYS) {
+    const value = row[key];
+    if (CARD_ARRAY_KEYS.has(key)) state[key] = Array.isArray(value) ? value : [];
+    else if (key === 'script') state[key] = typeof value === 'string' ? value : '';
+    else if (value !== null && value !== undefined) state[key] = value;
+  }
+  const pages = row.pageStudioPages;
+  const activePageId = row.pageStudioActivePageId;
+  if (Array.isArray(pages) || typeof activePageId === 'string') {
+    state.pageStudio = { pages: Array.isArray(pages) ? pages : [], ...(typeof activePageId === 'string' ? { activePageId } : {}) };
+  }
+  return state as unknown as Project['state'];
+};
+
+const isProjectCardRow = (value: unknown): value is Record<string, unknown> & Omit<ProjectRow, 'state'> =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.name === 'string' &&
+  typeof value.created_at === 'string' &&
+  typeof value.updated_at === 'string';
+
+const isUndefinedColumnError = (error: unknown): boolean => isRecord(error) && String(error.code ?? '') === '42703';
+
+// --- Public gallery and profile cards (EGRESS-DB E3) ---
+// What a public card reads: the row's columns plus the state keys behind the share link, the published
+// cover, the rating badge and the cover fallbacks (shareSlugOf, publicCoverUrl, gateRatingOf,
+// coverCandidates, hydratePreview). Never the whole state: a public classic comic's `versions` alone are
+// ~0.7 MB, and every gallery view shipped every public comic's.
+export const GALLERY_CARD_STATE_KEYS = ['studioVersion', 'shareSlug', 'publicCover', 'publishedAt', 'coverImageId', 'coverImageUrl', 'panels', 'styleVariants'] as const;
+export const GALLERY_CARD_SELECT = [
+  'id,user_id,name,created_at,updated_at,cover_image_url,is_public,is_forced_private,likes_count,views_count,content_rating',
+  ...GALLERY_CARD_STATE_KEYS.map((k) => `${k}:state->${k}`)
+].join(',');
+/** The gallery shows at most this many comics per view. */
+export const GALLERY_PAGE_SIZE = 48;
+
+/** The state a public card row stands for (arrays default to []). */
+export const galleryCardStateOf = (row: Record<string, unknown>): Project['state'] => {
+  const state: Record<string, unknown> = {};
+  for (const key of GALLERY_CARD_STATE_KEYS) {
+    const value = row[key];
+    if (key === 'panels' || key === 'styleVariants') state[key] = Array.isArray(value) ? value : [];
+    else if (value !== null && value !== undefined) state[key] = value;
+  }
+  return state as unknown as Project['state'];
+};
+
+/**
+ * Ids whose in-memory project is a card (a state subset), or a full copy older than the row: saveProject refuses
+ * them. The save guard is keyed by the id, not by the state object, so a state rebuilt from a card (a spread, an
+ * update) is still refused. The project manager (hooks/useProjectManager.ts) owns the flags: it sets and clears
+ * them in the same synchronous step as the in-memory change they describe, so no update can land in between.
+ */
+const cardOnlyIds = new Set<string>();
+export const isCardOnly = (id: string): boolean => cardOnlyIds.has(id);
+export const markCardOnly = (id: string): void => {
+  cardOnlyIds.add(id);
+};
+export const markStateLoaded = (id: string): void => {
+  cardOnlyIds.delete(id);
+};
+
+/** saveProject refused a project whose in-memory state is only its library card (or was built from one). */
+export class CardSaveRefusedError extends Error {
+  code = 'CARD_ONLY' as const;
+  projectId: string;
+  constructor(projectId: string) {
+    super(`Refused to save comic ${projectId}: only its library card is loaded, not its full state.`);
+    this.name = 'CardSaveRefusedError';
+    this.projectId = projectId;
+  }
+}
+
 // 1. Projects
 export const saveProject = async (project: Project): Promise<void> => {
+  // Before any await: a card must never be upserted over the full row. A save that passed this check
+  // carries a full state, whatever a library reload flags while it is in flight.
+  if (cardOnlyIds.has(project.id) || isCardState(project.state)) throw new CardSaveRefusedError(project.id);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -534,7 +639,11 @@ export const deleteProject = async (projectId: string): Promise<void> => {
   if (error) throw error;
 };
 
-export const loadProjects = async (): Promise<Project[]> => {
+/**
+ * The signed-in user's library as cards (see PROJECT_CARD_SELECT). It flags nothing: the caller that keeps the
+ * cards in memory marks them card-only (markCardOnly) in the same step as it holds them.
+ */
+export const loadProjectCards = async (): Promise<Project[]> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -542,21 +651,49 @@ export const loadProjects = async (): Promise<Project[]> => {
     return [];
   }
 
-  const { data, error } = await supabase
+  const selectCards = (columns: string) => supabase
     .from('projects')
-    .select('*')
+    .select(columns)
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
+  let { data, error } = await selectCards(PROJECT_CARD_SELECT);
+  if (error && isUndefinedColumnError(error)) ({ data, error } = await selectCards(PROJECT_CARD_SELECT_LEGACY));
   if (error) throw error;
 
-  const rows = (data || []).filter(isProjectRow);
+  const rows = ((data || []) as unknown[]).filter(isProjectCardRow);
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
-  return rows.map((row) => mapProjectRow(row, profileMap));
+  return rows.map((row) => mapProjectRow({ ...row, state: projectCardStateOf(row) } as ProjectRow, profileMap));
 };
+
+/** The library as cards (no full state, no card-only flag): see loadProjectCards. */
+export const loadProjects = (): Promise<Project[]> => loadProjectCards();
 
 export const reloadProjects = async (): Promise<Project[]> => {
   return loadProjects();
+};
+
+/**
+ * One comic's full state (the only read that ships `versions`): for opening, duplicating, changing or
+ * generating a comic listed as a card. It does not clear the card-only flag: the caller does, in the same step as
+ * it puts the state in memory (markStateLoaded).
+ */
+export const loadProjectState = async (projectId: string): Promise<{ state: Project['state']; updatedAt: number }> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to open this comic.');
+
+  const { data, error } = await supabase
+    .from('projects')
+    .select('state,updated_at')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (error) throw error;
+  if (!isRecord(data) || !isRecord(data.state) || typeof data.updated_at !== 'string') {
+    throw new Error('This comic could not be loaded.');
+  }
+  return { state: data.state as unknown as Project['state'], updatedAt: new Date(data.updated_at).getTime() };
 };
 
 // A public read signs what the reader shows: the cover, each panel's current art and each Page Studio page's current
@@ -1031,15 +1168,116 @@ export const saveArtifact = async (artifact: GenerationArtifact): Promise<void> 
     data: artifact, // Store the whole JSON object
     created_at: new Date().toISOString()
   });
+  invalidateArtifactMemo(artifact.projectId);
 };
 
-export const loadArtifactsForProject = async (projectId: string): Promise<GenerationArtifact[]> => {
-  const { data } = await supabase
-    .from('artifacts')
-    .select('data')
-    .eq('project_id', projectId);
+// EGRESS-DB E5: the cost panels and the assistant read artifacts without `responseText` (a third of the table's
+// bytes, rendered by none of them), memoised per project for 5 minutes in this tab; saveArtifact drops the entry.
+// An export (and anything else that needs the response text) passes { withResponse: true }.
+const ARTIFACT_SLIM_KEYS = ['id', 'projectId', 'timestamp', 'type', 'provider', 'model', 'prompt', 'inputImageIds', 'outputImageId',
+  'referenceCount', 'fallbackOccurred', 'fallbackFromModel', 'fallbackToModel', 'styleLockUsed', 'meta', 'stage', 'success', 'error',
+  'aspectRatio', 'resolution', 'timings', 'usage', 'cost'] as const;
+export const ARTIFACT_SLIM_SELECT = ARTIFACT_SLIM_KEYS.map((k) => `${k}:data->${k}`).join(',');
+export const ARTIFACT_MEMO_TTL_MS = 5 * 60_000;
 
-  return (data || []).map((row: any) => row.data);
+type Memo<T> = { at: number; value: Promise<T> };
+// Keyed by `${signed-in user id}:${projectId}`: a tab another account signs in to never gets the previous
+// account's artifacts from memory (RLS is checked on every read the memo serves first).
+const artifactMemo = new Map<string, Memo<GenerationArtifact[]>>();
+const artifactCountMemo = new Map<string, Memo<number>>();
+
+/** Forget the memoised artifacts (and count) of one project, for every account, or of every project. */
+export const invalidateArtifactMemo = (projectId?: string): void => {
+  if (projectId === undefined) {
+    artifactMemo.clear();
+    artifactCountMemo.clear();
+    return;
+  }
+  for (const memo of [artifactMemo, artifactCountMemo] as Map<string, unknown>[]) {
+    for (const key of [...memo.keys()]) if (key.endsWith(`:${projectId}`)) memo.delete(key);
+  }
+};
+
+/** The memo key for this project and the signed-in user; none without a session (that read is never memoised). */
+const artifactMemoKey = async (projectId: string): Promise<string | null> => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    return userId ? `${userId}:${projectId}` : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The memo entry for `key`, or a new one from `load` (a failed load is never kept; no key, no memo). */
+const memoized = <T>(memo: Map<string, Memo<T>>, key: string | null, load: () => Promise<T>): Promise<T> => {
+  if (key === null) return load();
+  const hit = memo.get(key);
+  if (hit && Date.now() - hit.at < ARTIFACT_MEMO_TTL_MS) return hit.value;
+  const entry: Memo<T> = { at: Date.now(), value: load() };
+  memo.set(key, entry);
+  entry.value.catch(() => {
+    if (memo.get(key) === entry) memo.delete(key);
+  });
+  return entry.value;
+};
+
+const slimArtifactOf = (row: Record<string, unknown>): GenerationArtifact => {
+  const artifact: Record<string, unknown> = {};
+  for (const key of ARTIFACT_SLIM_KEYS) if (row[key] !== null && row[key] !== undefined) artifact[key] = row[key];
+  return artifact as unknown as GenerationArtifact;
+};
+
+export const loadArtifactsForProject = async (
+  projectId: string,
+  options: { withResponse?: boolean } = {}
+): Promise<GenerationArtifact[]> => {
+  if (options.withResponse) {
+    const { data } = await supabase
+      .from('artifacts')
+      .select('data')
+      .eq('project_id', projectId);
+    return (data || []).map((row: any) => row.data);
+  }
+  try {
+    const artifacts = await memoized(artifactMemo, await artifactMemoKey(projectId), async () => {
+      const { data, error } = await supabase
+        .from('artifacts')
+        .select(ARTIFACT_SLIM_SELECT)
+        .eq('project_id', projectId);
+      if (error) throw error;
+      return ((data || []) as unknown as Record<string, unknown>[]).map(slimArtifactOf);
+    });
+    // A copy per caller: some sort the list in place.
+    return artifacts.slice();
+  } catch {
+    return [];
+  }
+};
+
+/** How many artifacts a project has: a HEAD count (no rows), or the memoised list's length when it is fresh. */
+export const countArtifactsForProject = async (projectId: string): Promise<number> => {
+  const key = await artifactMemoKey(projectId);
+  const listed = key === null ? undefined : artifactMemo.get(key);
+  if (listed && Date.now() - listed.at < ARTIFACT_MEMO_TTL_MS) {
+    try {
+      return (await listed.value).length;
+    } catch {
+      /* fall through to the count */
+    }
+  }
+  try {
+    return await memoized(artifactCountMemo, key, async () => {
+      const { count, error } = await supabase
+        .from('artifacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', projectId);
+      if (error) throw error;
+      return count ?? 0;
+    });
+  } catch {
+    return 0;
+  }
 };
 
 
@@ -1197,7 +1435,8 @@ export const exportProject = async (projectId: string): Promise<any> => {
     const { data: project, error } = await supabase.from('projects').select('*').eq('id', projectId).single();
     if (error || !project) throw new Error("Project not found");
 
-    const artifacts = await loadArtifactsForProject(projectId);
+    // An export carries every artifact whole, response text included.
+    const artifacts = await loadArtifactsForProject(projectId, { withResponse: true });
 
     // For MVP, we don't download all images to blob yet, but we return structure so UI doesn't crash.
     return { project, images: {}, artifacts };
@@ -1452,16 +1691,21 @@ export const getProfileByUsername = async (username: string): Promise<UserProfil
 };
 
 export const getPublicProjectsByUser = async (userId: string): Promise<Project[]> => {
+  // Cards only (EGRESS-DB E3), and a comic held by moderation is never shipped.
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select(GALLERY_CARD_SELECT)
     .eq('user_id', userId)
     .eq('is_public', true)
+    .not('is_forced_private', 'is', true)
     .order('created_at', { ascending: false });
 
   if (error) return [];
 
-  const rows = (data || []).filter(isProjectRow);
+  const rows = ((data || []) as unknown[])
+    .filter(isProjectCardRow)
+    .map((row) => ({ ...row, state: galleryCardStateOf(row) }) as ProjectRow)
+    .filter(isProjectRow);
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
   return rows.map((row): Project => {
     const project: ProjectWithStats = {

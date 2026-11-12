@@ -9,6 +9,8 @@ import {
   MAX_PATHS_PER_OWNER,
   MAX_PATH_LENGTH,
   PUBLIC_READER_CACHE_DEFAULTS,
+  READER_STATE_SELECT,
+  READER_STATE_SELECT_LEGACY,
   createPublicReaderPathCache,
   loadPublicProjectStates,
   loadPublicReaderPaths,
@@ -16,6 +18,7 @@ import {
   showsIn,
   shownPathsOf
 } from './publicReaderPaths.js';
+import { jsonBytes, projectRow } from '../../../services/projectRows.testkit.js';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -46,9 +49,8 @@ const fakeAdmin = (
           if (opts.failFirst && cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: opts.failFirst } }));
           if (opts.failFallback && !cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: 'XX001' } }));
           if (opts.noModerationColumn && cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: '42703' } }));
-          const out = rows
-            .filter((r) => filters.every(([c, v]) => r[c] === v))
-            .map((r) => (cols.includes('is_forced_private') ? { state: r.state, is_forced_private: r.is_forced_private } : { state: r.state }));
+          // The columns as PostgREST returns them: JSON paths into `state`, the moderation column when asked for.
+          const out = rows.filter((r) => filters.every(([c, v]) => r[c] === v)).map((r) => projectRow(r, cols));
           return Promise.resolve(resolve({ data: out, error: null }));
         }
       };
@@ -113,13 +115,13 @@ describe('loadPublicReaderPaths', () => {
   it('tolerates a database without the moderation column', async () => {
     const { admin, calls } = fakeAdmin(rows, { noModerationColumn: true });
     expect(await loadPublicProjectStates(admin, OWNER)).toHaveLength(2);
-    expect(calls).toEqual(['state, is_forced_private', 'state']);
+    expect(calls).toEqual([READER_STATE_SELECT, READER_STATE_SELECT_LEGACY]);
   });
 
   it('rethrows any other error on the first query: never falls back to the query that cannot see moderation', async () => {
     const { admin, calls } = fakeAdmin(rows, { failFirst: '57014' });
     await expect(loadPublicProjectStates(admin, OWNER)).rejects.toMatchObject({ code: '57014' });
-    expect(calls).toEqual(['state, is_forced_private']);
+    expect(calls).toEqual([READER_STATE_SELECT]);
   });
 
   it('rethrows when the fallback query fails too', async () => {
@@ -166,6 +168,73 @@ describe('loadPublicReaderPaths', () => {
     expect(capped.size).toBe(MAX_PATHS_PER_OWNER);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+// EGRESS-DB E2: the check reads only the state keys that carry paths, never the whole state (whose classic
+// `versions` snapshots and inline Page Studio style were ~90% of an owner's public bytes), with the same answer.
+describe('loadPublicProjectStates selects only the path-bearing keys', () => {
+  const versionsOnly = `${OWNER}/only-in-an-old-version.png`;
+  const fullState = {
+    ...classicState,
+    script: 'x'.repeat(2_000),
+    versions: Array.from({ length: 10 }, (_, i) => ({ id: `v${i}`, state: { ...classicState, coverImageId: versionsOnly, script: 'y'.repeat(5_000) } })),
+    pageStudio: { ...classicState.pageStudio, style: { image: `data:image/png;base64,${'A'.repeat(50_000)}` } },
+    continuity: { bible: { entities: [{ id: 'e1', referenceImageIds: [`${OWNER}/bible.png`] }] } }
+  };
+  const rows = [
+    { user_id: OWNER, is_public: true, is_forced_private: false, state: fullState },
+    { user_id: OWNER, is_public: true, is_forced_private: null, state: { panels: [{ imageId: `u/${OWNER}/tmp/t.webp` }] } },
+    { user_id: OWNER, is_public: true, is_forced_private: false, state: { ...classicState, studioVersion: 4 } },
+    { user_id: OWNER, is_public: true, is_forced_private: true, state: { coverImageId: `${OWNER}/moderated.png` } },
+    { user_id: OWNER, is_public: true, is_forced_private: false, state: null }
+  ];
+
+  it('never selects `*`, the bare state, `versions` or the Page Studio style', () => {
+    for (const select of [READER_STATE_SELECT, READER_STATE_SELECT_LEGACY]) {
+      const items = select.split(',');
+      expect(items).not.toContain('*');
+      expect(items).not.toContain('state');
+      expect(select).not.toMatch(/versions|->style(?![A-Za-z])|script|continuity/);
+      for (const item of items) if (item.includes('state')) expect(item).toMatch(/^[A-Za-z]+:state->[A-Za-z]+(->pages)?$/);
+    }
+    expect(READER_STATE_SELECT.split(',')[0]).toBe('is_forced_private');
+    expect(READER_STATE_SELECT_LEGACY).not.toContain('is_forced_private');
+  });
+
+  it('gives the same shown paths as the full states, and excludes held rows', async () => {
+    const { admin, calls } = fakeAdmin(rows);
+    const projected = await loadPublicProjectStates(admin, OWNER);
+    expect(calls).toEqual([READER_STATE_SELECT]);
+    const fullStates = rows.filter((r) => r.is_forced_private !== true).map((r) => r.state);
+    expect(projected).toHaveLength(fullStates.length);
+    expect([...shownPathsOf(projected, OWNER)].sort()).toEqual([...shownPathsOf(fullStates, OWNER)].sort());
+    expect(projected.map(readerPathsOfState)).toEqual(fullStates.map(readerPathsOfState));
+    expect(shownPathsOf(projected, OWNER).has(`${OWNER}/moderated.png`)).toBe(false);
+    // What projectStateReferencesImagePath (system.ts) reads survives the projection, key by key.
+    const [first] = projected as Record<string, unknown>[];
+    for (const key of ['coverImageId', 'coverTemplateImageId', 'panels', 'characters', 'items', 'locations', 'styleVariants', 'imageTags']) {
+      expect(first[key], key).toEqual((fullState as Record<string, unknown>)[key]);
+    }
+    expect(first.pageStudio).toEqual({ pages: fullState.pageStudio.pages });
+    expect((projected[2] as Record<string, unknown>).studioVersion).toBe(4);
+    // ...and nothing else: no snapshots, no inline style, no script.
+    expect(JSON.stringify(projected)).not.toContain(versionsOnly);
+    expect(JSON.stringify(projected)).not.toContain('data:image/png');
+    expect(Object.keys(first).sort()).toEqual(['characters', 'coverImageId', 'coverTemplateImageId', 'imageTags', 'items', 'locations', 'pageStudio', 'panels', 'styleVariants']);
+  });
+
+  it('ships a small fraction of the full rows', () => {
+    const own = rows.filter((r) => r.user_id === OWNER);
+    expect(jsonBytes(own.map((r) => projectRow(r, READER_STATE_SELECT)))).toBeLessThan(jsonBytes(own.map((r) => ({ state: r.state, is_forced_private: r.is_forced_private }))) / 10);
+  });
+
+  it('the 42703 fallback keeps the same projection, minus the moderation column', async () => {
+    const { admin, calls } = fakeAdmin(rows, { noModerationColumn: true });
+    const projected = await loadPublicProjectStates(admin, OWNER);
+    expect(calls).toEqual([READER_STATE_SELECT, READER_STATE_SELECT_LEGACY]);
+    expect(projected).toHaveLength(rows.length);
+    expect(JSON.stringify(projected)).not.toContain(versionsOnly);
   });
 });
 

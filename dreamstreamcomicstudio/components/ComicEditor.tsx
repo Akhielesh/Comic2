@@ -11,6 +11,7 @@ import { AgentSettingsPanel } from './studio/comic/AgentSettingsPanel';
 import { ReviewExport } from './steps/ReviewExport';
 import { AppStep, Project } from '../types';
 import { assignImageTags, collectStateImageEntries } from '../services/imageTags';
+import { isCardState } from '../services/projectCardState';
 import {
   resetFromLayoutConfirm,
   resetFromScriptAnalysis,
@@ -555,6 +556,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }, [project.id]);
 
   useEffect(() => {
+    // A library card (shown here only when the comic failed to open) carries no image tags: tags built from it would
+    // renumber or drop the comic's own (EGRESS-DB E1).
+    if (isCardState(state)) return;
     const entries = collectStateImageEntries(state);
     if (entries.length === 0) return;
     const { tags, counters, added } = assignImageTags(

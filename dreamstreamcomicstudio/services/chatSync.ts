@@ -38,29 +38,6 @@ const keyFor = (kind: 'session' | 'project', id: string) => `${kind}:${id}`;
 
 export const isChatSyncAvailable = (): boolean => available;
 
-/**
- * Every row in full. Kept for callers that need the whole set; Chat Studio's mount uses the
- * manifest (`pullManifest` + `pullBodies`) instead.
- */
-export const pullAll = async (): Promise<{ userId: string; sessions: ChatSession[]; projects: ChatProject[] } | null> => {
-  if (!available) return null;
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data, error } = await supabase.from(TABLE).select('kind, data').eq('user_id', user.id);
-  if (error) {
-    if (isMissingTable(error)) available = false;
-    return null;
-  }
-  const sessions: ChatSession[] = [];
-  const projects: ChatProject[] = [];
-  for (const row of data || []) {
-    if (row.kind === 'session' && row.data) sessions.push(row.data as ChatSession);
-    else if (row.kind === 'project' && row.data) projects.push(row.data as ChatProject);
-  }
-  return { userId: user.id, sessions, projects };
-};
-
 // --- Manifest -------------------------------------------------------------------------------------
 
 /** One remote row, without its body. */

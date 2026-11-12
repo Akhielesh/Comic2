@@ -8,6 +8,7 @@ import { exportProject, loadArtifactsForProject } from '../../services/db';
 import { parseRatio } from '../../services/imageUtils';
 import { estimateTokensFromTextInput } from '../../services/reporting';
 import { assignImageTags, collectStateImageEntries } from '../../services/imageTags';
+import { isCardState } from '../../services/projectCardState';
 import { MasterGalleryModal, MasterGalleryItem } from './MasterGalleryModal';
 import { downloadBlob } from '../../services/download';
 import { isStudioV4Project } from '../../services/studioDeepLink';
@@ -137,6 +138,13 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   /** The project snapshot (`id:updatedAt`) the automatic size refresh last ran for: once per snapshot. */
   const autoRefreshedFor = useRef<string | null>(null);
   const hasExport = !!exportData?.project;
+  /**
+   * The state the exports and the gallery read. From the library the modal gets a card (EGRESS-DB E1), which carries
+   * no image tags and no custom aspect ratio; the export payload's row (exportProject) holds the comic's full state.
+   */
+  const storedStateOf = (data?: Awaited<ReturnType<typeof exportProject>> | null): Project['state'] =>
+    isCardState(project.state) ? ((data ?? exportData)?.project?.state as Project['state'] | undefined) ?? project.state : project.state;
+  const imageTags = storedStateOf().imageTags;
   const [artifacts, setArtifacts] = useState<GenerationArtifact[]>([]);
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = useState<string | null>(null);
@@ -430,7 +438,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   };
 
   const galleryItems = useMemo<MasterGalleryItem[]>(() => {
-    const tagMap = project.state.imageTags || {};
+    const tagMap = imageTags || {};
     const ids = new Set<string>(Object.keys(tagMap));
     artifacts.forEach((artifact) => {
       if (artifact.outputImageId) ids.add(artifact.outputImageId);
@@ -449,7 +457,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       } as MasterGalleryItem;
     });
     return items.filter((item): item is MasterGalleryItem => !!item);
-  }, [project.state.imageTags, artifacts, exportData, stateImageUrlMap]);
+  }, [imageTags, artifacts, exportData, stateImageUrlMap]);
 
   const galleryCategories = useMemo(() => {
     const values = new Set<string>();
@@ -480,19 +488,19 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       items.sort((a, b) => (a.category || '').localeCompare(b.category || ''));
     } else if (gallerySort === 'oldest') {
       items.sort((a, b) => {
-        const tagA = project.state.imageTags?.[a.imageId]?.createdAt || 0;
-        const tagB = project.state.imageTags?.[b.imageId]?.createdAt || 0;
+        const tagA = imageTags?.[a.imageId]?.createdAt || 0;
+        const tagB = imageTags?.[b.imageId]?.createdAt || 0;
         return tagA - tagB;
       });
     } else {
       items.sort((a, b) => {
-        const tagA = project.state.imageTags?.[a.imageId]?.createdAt || 0;
-        const tagB = project.state.imageTags?.[b.imageId]?.createdAt || 0;
+        const tagA = imageTags?.[a.imageId]?.createdAt || 0;
+        const tagB = imageTags?.[b.imageId]?.createdAt || 0;
         return tagB - tagA;
       });
     }
     return items;
-  }, [galleryItems, galleryFilter, gallerySearch, gallerySort, project.state.imageTags]);
+  }, [galleryItems, galleryFilter, gallerySearch, gallerySort, imageTags]);
 
   const openGalleryModal = (items: MasterGalleryItem[], index: number) => {
     setGalleryModalItems(items);
@@ -502,9 +510,10 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
   const buildPdfBlob = async (dataOverride?: Awaited<ReturnType<typeof exportProject>> | null) => {
     const jsPDF = await loadJsPdf();
-    const ratioValue = parseRatio(project.state.customAspectRatioEnabled && project.state.customAspectRatio
-      ? project.state.customAspectRatio
-      : project.state.styleAspectRatio) || 1;
+    const stored = storedStateOf(dataOverride);
+    const ratioValue = parseRatio(stored.customAspectRatioEnabled && stored.customAspectRatio
+      ? stored.customAspectRatio
+      : stored.styleAspectRatio) || 1;
     const orientation = ratioValue < 1 ? 'p' : 'l';
     const pdf = new jsPDF(orientation, 'mm', 'a4');
 
@@ -583,7 +592,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       reportFolder.file('storage.json', JSON.stringify(data.report.storage, null, 2));
     }
 
-    const tagMap = project.state.imageTags || {};
+    const tagMap = storedStateOf(data).imageTags || {};
     const galleryEntries = Object.keys(imageFileMap).map((imageId) => {
       const tag = tagMap[imageId];
       return {
@@ -746,6 +755,8 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   };
 
   useEffect(() => {
+    // Never from a library card: it carries no tags, and tags assigned from nothing would replace the comic's own.
+    if (isCardState(project.state)) return;
     const currentTags = project.state.imageTags || {};
     const currentCounters = project.state.imageTagCounters || {};
     const entries = collectStateImageEntries(project.state);
@@ -911,7 +922,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                               <div className="p-2 text-xs text-slate-500 font-comic">No artifact costs available.</div>
                             )}
                             {reportArtifacts.slice(0, 50).map((artifact: any) => {
-                              const tag = artifact.outputImageId ? project.state.imageTags?.[artifact.outputImageId]?.tag : undefined;
+                              const tag = artifact.outputImageId ? imageTags?.[artifact.outputImageId]?.tag : undefined;
                               return (
                                 <div key={artifact.id} className="flex items-center justify-between px-2 py-1 text-[11px] border-b border-black/10">
                                   <div>
@@ -1193,7 +1204,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                       const costValue = reportRow?.cost?.value;
                       const currency = reportRow?.cost?.currency || costSummary.currency || '$';
                       const outputTag = artifact.outputImageId
-                        ? project.state.imageTags?.[artifact.outputImageId]?.tag || artifact.outputImageId
+                        ? imageTags?.[artifact.outputImageId]?.tag || artifact.outputImageId
                         : '—';
                       const promptPreview = artifact.prompt
                         ? artifact.prompt.length > 60
