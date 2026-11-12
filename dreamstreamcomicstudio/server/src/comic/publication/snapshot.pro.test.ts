@@ -4,11 +4,13 @@
 // effect's numbers (`fx`), a library sticker's reference (`src.lib`: same-origin, nothing copied to pub/) and `blend`;
 // publicMotion drops clips aimed at a guide-only overlay; layoutGeometryOf counts fx, blend, src.lib and the page's motion,
 // so republishing sees an effect, blend or animation edit; a comic without any of them keeps its snapshot and fingerprint.
+// Page motion is published, and counted, only while COMIC_READER_MOTION is `all` (master plan §2.10: the flag is read
+// by the snapshot and the reader); this file pins both states.
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc, MotionClip, Page, PageLayer } from '../../../../shared/comic/doc.js';
-import { buildSnapshot, contentFingerprint, layoutGeometryOf, planSnapshot, publicLayers, publicMotion, snapshotPaths } from './snapshot.js';
+import { buildSnapshot, contentFingerprint, layoutGeometryOf, planSnapshot, publicLayers, publicMotion, readerMotionPublished, snapshotPaths } from './snapshot.js';
 import { legacyPublishedDoc } from './__fixtures__/ship2Books.js';
 
 const GOLDEN = JSON.parse(fs.readFileSync(path.resolve(__dirname, '__fixtures__/legacy-snapshot.golden.json'), 'utf8'));
@@ -91,7 +93,59 @@ describe('publicLayers', () => {
   });
 });
 
+const readerMotion = (value: string | undefined) => {
+  if (value === undefined) vi.stubEnv('COMIC_READER_MOTION', '');
+  else vi.stubEnv('COMIC_READER_MOTION', value);
+};
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('COMIC_READER_MOTION (read by the snapshot and the reader)', () => {
+  it('readerMotionPublished follows readerMotionStage: on / all for everyone; unset, off and admins are off', () => {
+    for (const v of ['all', 'on', 'true', '1', ' Everyone ']) expect(readerMotionPublished({ COMIC_READER_MOTION: v }), v).toBe(true);
+    for (const v of [undefined, '', 'off', 'admins', 'beta']) expect(readerMotionPublished({ COMIC_READER_MOTION: v }), String(v)).toBe(false);
+    readerMotion('all');
+    expect(readerMotionPublished()).toBe(true);
+    readerMotion('admins');
+    expect(readerMotionPublished()).toBe(false);
+  });
+
+  it('off (the default): no page goes out with motion, and an animation edit is not a change since publishing', () => {
+    readerMotion(undefined);
+    const doc = proDoc();
+    const { snapshot } = snap(doc);
+    expect(snapshot.pages.some((p) => 'motion' in p)).toBe(false);
+    // Everything else Pro Edit still goes out.
+    expect(snapshot.pages[0].layers!.map((l) => l.id)).toEqual(['ly_fx', 'ly_star', 'ly_box']);
+    const fp = contentFingerprint(doc, ['en']);
+    const edited = proDoc();
+    edited.pages[0].motion!.clips[0].at.ms = 500;
+    edited.pages[0].motion!.hold = 900;
+    expect(contentFingerprint(edited, ['en'])).toBe(fp);
+    expect(layoutGeometryOf(edited.pages[0])).toEqual(layoutGeometryOf(doc.pages[0]));
+    // A page with motion and nothing else from Ship 2 has no geometry: the legacy fingerprint holds.
+    const legacy = legacyPublishedDoc();
+    legacy.pages[1] = { ...legacy.pages[1], motion: { clips: [clip('mc_a', { k: 'line', id: 'ln_2_1' })] } };
+    expect(layoutGeometryOf(legacy.pages[1])).toBeUndefined();
+    expect(contentFingerprint(legacy, ['en'])).toBe(GOLDEN.fingerprint);
+  });
+
+  it('turning it on makes a comic with motion read as changed (a republish would now ship its animation)', () => {
+    const doc = proDoc();
+    readerMotion('off');
+    const before = contentFingerprint(doc, ['en']);
+    readerMotion('all');
+    expect(contentFingerprint(doc, ['en'])).not.toBe(before);
+    expect(snap(doc).snapshot.pages[0].motion).toBeDefined();
+    // A comic without motion is unaffected by the flag.
+    expect(contentFingerprint(legacyPublishedDoc(), ['en'])).toBe(GOLDEN.fingerprint);
+  });
+});
+
 describe('publicMotion', () => {
+  beforeEach(() => readerMotion('all'));
+
   it('drops clips aimed at a guide-only, opaque or missing target, and camera moves of panels not on the page', () => {
     const doc = proDoc();
     const { snapshot } = snap(doc);
@@ -118,6 +172,7 @@ describe('frames and lines', () => {
 });
 
 describe('the content fingerprint ("changes since publishing")', () => {
+  beforeEach(() => readerMotion('all'));
   const fp = (doc: ComicDoc) => contentFingerprint(doc, ['en']);
   const edit = (fn: (page: Page) => void): ComicDoc => {
     const doc = proDoc();
@@ -161,7 +216,36 @@ describe('the content fingerprint ("changes since publishing")', () => {
     for (const [what, doc] of same) expect(fp(doc), what).toBe(fp(base));
   });
 
-  it('a page with motion and nothing else from Ship 2 has a layout geometry (an animation-only edit is a change)', () => {
+  it('motion the published page drops does not move it: a clip aimed at a missing line, panel or layer, or at an opaque one, and a camera move of a panel the page lacks', () => {
+    const base = proDoc();
+    base.pages[0].motion!.clips.push(clip('mc_nopanel', { k: 'panel', id: 'pn_9_9' }), clip('mc_nolayer', { k: 'layer', id: 'ly_gone' }));
+    const editOf = (fn: (page: Page) => void): ComicDoc => {
+      const doc = JSON.parse(JSON.stringify(base)) as ComicDoc;
+      fn(doc.pages[0]);
+      return doc;
+    };
+    const byId = (p: Page, id: string) => p.motion!.clips.find((c) => c.id === id)!;
+    const same: [string, ComicDoc][] = [
+      ['clip on a missing line', editOf((p) => (byId(p, 'mc_gone').at.ms = 700))],
+      ['clip on a missing panel', editOf((p) => (byId(p, 'mc_nopanel').dur = 900))],
+      ['clip on a missing layer', editOf((p) => (byId(p, 'mc_nolayer').preset = 'fade'))],
+      ['clip on an opaque layer', editOf((p) => (byId(p, 'mc_future').at.ms = 300))],
+      ['camera move of a missing panel', editOf((p) => (p.motion!.camera![1].move = 'push'))],
+      ['a dangling clip deleted', editOf((p) => (p.motion!.clips = p.motion!.clips.filter((c) => c.id !== 'mc_gone')))]
+    ];
+    for (const [what, doc] of same) {
+      expect(layoutGeometryOf(doc.pages[0]), what).toEqual(layoutGeometryOf(base.pages[0]));
+      expect(fp(doc), what).toBe(fp(base));
+      // …and indeed a republish would ship exactly the same page.
+      expect(snap(doc).snapshot.pages[0].motion, what).toEqual(snap(base).snapshot.pages[0].motion);
+    }
+    // Bringing the line back is a change (its clip now plays).
+    const back = editOf((p) => p.panels[0].lines.push({ id: 'ln_9_9', kind: 'speech', text: 'Back!' } as Page['panels'][number]['lines'][number]));
+    expect(fp(back)).not.toBe(fp(base));
+    expect(snap(back).snapshot.pages[0].motion!.clips.map((c) => c.id)).toContain('mc_gone');
+  });
+
+  it('a page with motion and nothing else from Ship 2 has a layout geometry (an animation-only edit is a change; reader motion on)', () => {
     const doc = legacyPublishedDoc();
     expect(layoutGeometryOf(doc.pages[1])).toBeUndefined();
     doc.pages[1] = { ...doc.pages[1], motion: { clips: [clip('mc_a', { k: 'line', id: 'ln_2_1' })] } };

@@ -41,6 +41,7 @@ import {
   type TextTranslation
 } from '../../../../shared/comic/doc.js';
 import { normalizeAssetLibRef } from '../../../../shared/comic/assets/index.js';
+import { PRO_FLAG_ENV, readerMotionStage } from '../../../../shared/comic/capabilities.js';
 import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
@@ -354,12 +355,22 @@ const publishedTarget = (page: Page, layerIds: ReadonlySet<string>, target: Moti
 };
 
 /**
+ * Whether published pages carry their motion: COMIC_READER_MOTION is `all` (master plan §2.10: the flag is read by the
+ * snapshot and the reader). Off (the default), the snapshot and the fingerprint leave page motion out, so nothing new
+ * goes public before readers can play it, and an animation edit is not a "change since publishing" a republish would
+ * not ship. Turning it on makes a comic with motion read as changed until it is republished, which is then true. Read
+ * at call time, like the per-request caps (access.ts proCapsFromEnv).
+ */
+export const readerMotionPublished = (env: Record<string, string | undefined> = process.env): boolean =>
+  readerMotionStage(env[PRO_FLAG_ENV.readerMotion]) === 'all';
+
+/**
  * A page's animation as readers get it (Pro Edit, master plan §2.3 "Hashing and publication"): clips aimed at an
  * overlay that is not published (guide-only, an unpublishable picture, opaque) or at nothing on the page are dropped,
  * and so are camera moves of a panel the page does not have. Each clip goes out as normalizeMotionClip reads it (ids,
- * numbers, words; no free text). Whether readers play it is the reader's call (COMIC_READER_MOTION, the creator's
- * reader.motion, the viewer's own toggle, Calm motion, reduced motion), so turning reader motion on needs no republish.
- * Undefined when nothing is left.
+ * numbers, words; no free text). The snapshot carries it only while readerMotionPublished(); whether a reader then
+ * plays it is still the reader's call (the creator's reader.motion, the viewer's own toggle, Calm motion, reduced
+ * motion). Undefined when nothing is left.
  */
 export const publicMotion = (page: Page, publishedLayers: readonly Pick<PageLayer, 'id'>[]): PageMotion | undefined => {
   const motion = page.motion;
@@ -447,7 +458,7 @@ function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: Readonly
   if (page.frameStyle) out.frameStyle = { ...frameStyleOf(page) };
   const layers = publicLayers(page.layers, plan);
   if (layers.length) out.layers = layers;
-  const motion = publicMotion(page, layers);
+  const motion = readerMotionPublished() ? publicMotion(page, layers) : undefined;
   if (motion) out.motion = motion;
   return out;
 }
@@ -615,7 +626,7 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
  * What a reader sees of a page's Ship 2 layout (pro plan §8): display mode, frame style, frames (box, crop, border with
  * its look, stacking, picture), the current cut boxes in panels mode and the printed overlays (a library sticker's
  * reference rides `src`). Pro Edit (PE-SERVER): an effect's `fx` and an overlay's `blend` are appended to its entry, and
- * the page's motion (clips not aimed at a guide-only or opaque overlay, camera, hold) to the geometry, each only when
+ * the page's motion as publicMotion publishes it to the geometry (only while readerMotionPublished()), each only when
  * present, so a page without them keeps the fingerprint it had and republishing sees an effect, blend or animation edit.
  * Opaque overlays (a newer build's, never published) are left out. Undefined when the page has none of it.
  */
@@ -628,22 +639,20 @@ export const layoutGeometryOf = (p: Page): unknown => {
     return entry;
   });
   const cuts = p.artMode === 'panels' ? (p.render.cuts?.cuts || []).map((c) => [c.panelId, c.drawn, c.box]) : [];
-  const motion = motionGeometryOf(p, new Set(printedLayers.map((l) => l.id)));
+  const motion = readerMotionPublished() ? motionGeometryOf(p, printedLayers) : undefined;
   if (p.artMode !== 'panels' && !p.frameStyle && !frames.length && !printed.length && !motion) return undefined;
   const out: Record<string, unknown> = { mode: p.artMode ?? null, style: p.frameStyle ?? null, frames, cuts, layers: printed };
   if (motion) out.motion = motion;
   return out;
 };
 
-/** The part of a page's motion readers could see, without the publish plan: clips not aimed at a guide-only or opaque
- *  overlay (a layer that is not on the page at all still counts: an undo can bring it back), the camera and the hold. */
-const motionGeometryOf = (p: Page, printedLayerIds: ReadonlySet<string>): unknown => {
-  const m = p.motion;
-  if (!m) return undefined;
-  const layerIds = new Set((p.layers || []).map((l) => l.id));
-  const clips = (m.clips || []).filter((c) => !(c?.target?.k === 'layer' && layerIds.has(c.target.id) && !printedLayerIds.has(c.target.id)));
-  if (!clips.length && !m.camera?.length && m.hold === undefined) return undefined;
-  return [clips, m.camera ?? null, m.hold ?? null];
+/** The page's motion as readers would get it, by publicMotion's own rule without the publish plan: a clip counts only
+ *  when it is aimed at a printed overlay of the page or a line or panel the page has, a camera move only for a panel
+ *  of the page. So an edit of a dangling clip (its balloon deleted) moves nothing, as a republish would ship nothing new;
+ *  bringing the target back changes the page's entry anyway. */
+const motionGeometryOf = (p: Page, printedLayers: readonly Pick<PageLayer, 'id'>[]): unknown => {
+  const m = publicMotion(p, printedLayers);
+  return m ? [m.clips, m.camera ?? null, m.hold ?? null] : undefined;
 };
 
 /**
