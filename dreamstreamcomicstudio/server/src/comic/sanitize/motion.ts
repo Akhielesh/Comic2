@@ -138,12 +138,18 @@ const keysOf = (v: unknown): MotionKey[] => {
   });
 };
 
-/** Preset params as sent: an object of plain values (their schema is checked against the clip's preset). */
+/** Parameter names as stored (doc.ts normalizeMotionClip keeps only these). */
+const PARAM_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,23}$/;
+
+/** Preset params as sent: an object of plain values under well-formed names, numbers to 4 places as the load keeps
+ *  them (their schema is checked against the clip's preset in checkClip). */
 const paramsShapeOf = (v: unknown): Record<string, number | string | boolean> => {
   if (!isObject(v)) throw bad('Invalid animation settings.');
   const out: Record<string, number | string | boolean> = {};
   for (const [key, value] of Object.entries(v)) {
-    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') out[key] = value;
+    if (!PARAM_KEY_RE.test(key)) throw bad('Invalid animation settings.');
+    if (finite(value)) out[key] = Math.round(value * 10000) / 10000;
+    else if (typeof value === 'string' || typeof value === 'boolean') out[key] = value;
     else throw bad('Invalid animation settings.');
   }
   return out;

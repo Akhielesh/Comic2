@@ -121,6 +121,8 @@ describe('one clip', () => {
     const doc = fixture();
     rejects(() => sanitize(doc, [motionOp('mc_a', pop({ params: { from: 2 } }))]), 400, /out of range/);
     rejects(() => sanitize(doc, [motionOp('mc_a', pop({ params: { speed: 1 } }))]), 400, /no setting called “speed”/);
+    rejects(() => sanitize(doc, [motionOp('mc_a', pop({ params: JSON.parse('{"__proto__": 1}') }))]), 400, /Invalid animation settings/);
+    rejects(() => sanitize(doc, [motionOp('mc_a', pop({ params: { from: Number.POSITIVE_INFINITY } }))]), 400, /Invalid animation settings/);
     rejects(() => sanitize(doc, [motionOp('mc_a', { ...flicker('mc_a', 2.5), id: undefined })]), 400, /out of range/);
     const many = Object.fromEntries(Array.from({ length: MOTION_LIMITS.paramsPerClip + 1 }, (_, i) => [`p${i}`, 1]));
     rejects(() => sanitize(doc, [motionOp('mc_a', pop({ params: many }))]), 400, /at most/);
