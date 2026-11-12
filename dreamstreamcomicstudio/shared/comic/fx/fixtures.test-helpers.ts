@@ -5,7 +5,7 @@ import type { FxGenerator, FxNode, FxParamValue, LayerFx } from './types';
 import { fxDefaultsOf } from './registry';
 
 /** A deterministic stream for random parameter sets (independent of the generators' own). */
-const lcg = (seed: number) => {
+export const lcg = (seed: number) => {
   let s = seed >>> 0 || 1;
   return () => {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
@@ -52,7 +52,12 @@ export const fxOf = (g: Pick<FxGenerator, 'gen' | 'v'>, params: Record<string, F
 export const commandsOf = (d: string): [string, number[]][] =>
   [...d.matchAll(/([A-Za-z])([^A-Za-z]*)/g)].map((m) => [m[1], m[2].trim() ? m[2].trim().split(/[\s,]+/).map(Number) : []]);
 
-/** On-curve points of a path: every end point, and samples along each quadratic and cubic. */
+/** Samples along each quadratic and cubic (interior points, evenly spaced): dense enough that a curve bulging past the
+ *  box between two samples overshoots by far less than the bounds tests allow. */
+export const CURVE_SAMPLES = 32;
+const SAMPLE_TS = Array.from({ length: CURVE_SAMPLES }, (_, k) => (k + 1) / (CURVE_SAMPLES + 1));
+
+/** On-curve points of a path: every end point, and CURVE_SAMPLES samples along each quadratic and cubic. */
 export const curvePoints = (node: FxNode): { ends: [number, number][]; samples: [number, number][] } => {
   if (node.tag !== 'path') {
     if (node.tag === 'rect') return { ends: [[node.x, node.y], [node.x + node.w, node.y + node.h]], samples: [] };
@@ -68,14 +73,14 @@ export const curvePoints = (node: FxNode): { ends: [number, number][]; samples: 
       if (c === 'M') start = cur;
       ends.push(cur);
     } else if (c === 'Q') {
-      for (const t of [0.25, 0.5, 0.75]) {
+      for (const t of SAMPLE_TS) {
         const u = 1 - t;
         samples.push([u * u * cur[0] + 2 * u * t * v[0] + t * t * v[2], u * u * cur[1] + 2 * u * t * v[1] + t * t * v[3]]);
       }
       cur = [v[2], v[3]];
       ends.push(cur);
     } else if (c === 'C') {
-      for (const t of [0.25, 0.5, 0.75]) {
+      for (const t of SAMPLE_TS) {
         const u = 1 - t;
         samples.push([
           u * u * u * cur[0] + 3 * u * u * t * v[0] + 3 * u * t * t * v[2] + t * t * t * v[4],

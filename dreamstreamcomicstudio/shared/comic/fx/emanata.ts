@@ -264,6 +264,9 @@ export const drawEmanata = (p: FxParams, seed: number, aspect: number): FxNode[]
         c = best;
       }
     }
+    // One mark sits in the middle of its box, whatever the arrangement: the creator places it by placing the box (an
+    // anger mark drawn over a head lands on the head, not at a seeded spot beside it).
+    if (count === 1) c = C;
     // Jitter: up to ±20 % size, ±30 % of a cell in position and ±20° of turn.
     s *= 1 + jitter * 0.4 * (rand() - 0.5);
     c = [c[0] + jitter * s * 0.3 * (rand() - 0.5), c[1] + jitter * s * 0.3 * (rand() - 0.5)];

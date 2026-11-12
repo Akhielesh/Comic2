@@ -9,7 +9,7 @@
 // The named presets (FX_PRESETS) live here too, with the drawings, in the Pro editor's code (§2.6 "Delivery").
 
 import { fxParamsOf } from './index.js';
-import { fxDefaultsOf, fxGeneratorOf, latestFxGenerator, registerFxDraw, type FxDraw } from './registry.js';
+import { fxDefaultsOf, fxGeneratorOf, latestFxGenerator, registerFxDraw, renderFx, type FxDraw } from './registry.js';
 import type { FxGroup, FxParamValue, LayerFx } from './types.js';
 import type { FxDrawFn } from './draw.js';
 import { drawFocusLines, drawSpeedLines } from './lines.js';
@@ -18,8 +18,12 @@ import { drawEmanata } from './emanata.js';
 import { drawBokeh, drawPetals, drawRain, drawSmoke, drawSnow, drawSparkle } from './atmosphere.js';
 import { drawFrameBorder } from './borders.js';
 
-/** The pure drawings by `gen@v`, before the schema check (tests and tools call them with checked parameters). */
-export const FX_DRAW_FNS: Readonly<Record<string, FxDrawFn>> = Object.freeze({
+/**
+ * The pure drawings by `gen@v`. Module-private: a drawing assumes its parameters are already clamped to the schema and
+ * skips the 400-segment cap and the memo, so a stored `count: 100000` would run 100 000 iterations. Everything outside
+ * this file draws through renderFx (or FX_DRAW_FNS below, which wraps it).
+ */
+const DRAW_FNS: Readonly<Record<string, FxDrawFn>> = Object.freeze({
   'speed-lines@1': drawSpeedLines,
   'focus-lines@1': drawFocusLines,
   'burst@1': drawBurst,
@@ -36,20 +40,46 @@ export const FX_DRAW_FNS: Readonly<Record<string, FxDrawFn>> = Object.freeze({
   'frame-border@1': drawFrameBorder
 });
 
+const splitKey = (key: string): [string, number] => {
+  const at = key.lastIndexOf('@');
+  return [key.slice(0, at), Number(key.slice(at + 1))];
+};
+
+/**
+ * Every S2 drawing by `gen@v`, safe with stored parameters: each call goes through renderFx (the schema clamp, the
+ * 400-segment cap and the memo; the result is shared and frozen). Thumbnails and previews may use it or, better,
+ * renderFx(fxFromPreset(id)!, { aspect }) itself; never a raw drawing.
+ */
+export const FX_DRAW_FNS: Readonly<Record<string, FxDrawFn>> = Object.freeze(
+  Object.fromEntries(
+    Object.keys(DRAW_FNS).map((key): [string, FxDrawFn] => {
+      const [gen, v] = splitKey(key);
+      return [key, (p, seed, aspect) => renderFx({ gen, v, seed, params: p as Record<string, FxParamValue> }, { aspect })];
+    })
+  )
+);
+
+/**
+ * TESTS ONLY, UNCHECKED: the raw drawing of `gen@v`, with no schema clamp, no segment cap, no memo and no freezing. The
+ * budget, bounds and speed tests measure the drawings themselves through it (after fxParamsOf); app code never calls
+ * it (use renderFx).
+ */
+export const fxDrawUncheckedForTests = (key: string): FxDrawFn | undefined => DRAW_FNS[key];
+
 /** The registered drawing of `gen@v`: the schema check, then the pure drawing. */
 export const fxDrawFor = (key: string): FxDraw => {
-  const [gen, v] = [key.slice(0, key.lastIndexOf('@')), Number(key.slice(key.lastIndexOf('@') + 1))];
+  const [gen, v] = splitKey(key);
   const generator = fxGeneratorOf(gen, v);
-  const fn = FX_DRAW_FNS[key];
+  const fn = DRAW_FNS[key];
   if (!generator || !fn) throw new Error(`fx: no generator ${key}`);
   return (fx, ctx) => fn(fxParamsOf(generator, fx.params), fx.seed | 0, ctx.aspect);
 };
 
 /** Registers every S2 drawing (idempotent). Called once when this module loads. */
 export const registerFxGenerators = (): void => {
-  for (const key of Object.keys(FX_DRAW_FNS)) {
-    const at = key.lastIndexOf('@');
-    registerFxDraw(key.slice(0, at), Number(key.slice(at + 1)), fxDrawFor(key));
+  for (const key of Object.keys(DRAW_FNS)) {
+    const [gen, v] = splitKey(key);
+    registerFxDraw(gen, v, fxDrawFor(key));
   }
 };
 

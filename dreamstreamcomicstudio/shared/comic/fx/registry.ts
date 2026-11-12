@@ -21,21 +21,25 @@ import type { FxDrawContext, FxGenerator, FxGroup, FxNode, FxParamSpec, FxParamV
 
 // ── Schemas ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const num = (min: number, max: number, def: number, label: string, step?: number): FxParamSpec => ({ kind: 'number', min, max, default: def, label, ...(step ? { step } : {}) });
-const int = (min: number, max: number, def: number, label: string): FxParamSpec => ({ kind: 'number', min, max, default: def, int: true, step: 1, label });
-const choice = (values: readonly string[], def: string, label: string): FxParamSpec => ({ kind: 'enum', values, default: def, label });
-const colour = (def: string, label: string): FxParamSpec => ({ kind: 'color', default: def, label });
-const flag = (def: boolean, label: string): FxParamSpec => ({ kind: 'bool', default: def, label });
+// Every spec and every enum list is frozen, as are the generators and their params records: the server sanitizer
+// (PE-SERVER) reads these schemas, so a stray `g.params.count.max = …` or `values.push(…)` anywhere must throw instead of
+// silently widening what a client may store.
+const num = (min: number, max: number, def: number, label: string, step?: number): FxParamSpec => Object.freeze({ kind: 'number', min, max, default: def, label, ...(step ? { step } : {}) });
+const int = (min: number, max: number, def: number, label: string): FxParamSpec => Object.freeze({ kind: 'number', min, max, default: def, int: true, step: 1, label });
+const choice = (values: readonly string[], def: string, label: string): FxParamSpec =>
+  Object.freeze({ kind: 'enum', values: Object.isFrozen(values) ? values : Object.freeze([...values]), default: def, label });
+const colour = (def: string, label: string): FxParamSpec => Object.freeze({ kind: 'color', default: def, label });
+const flag = (def: boolean, label: string): FxParamSpec => Object.freeze({ kind: 'bool', default: def, label });
 
 const INK = '#111111';
 const centre = { cx: num(0, 1, 0.5, 'Centre across', 0.01), cy: num(0, 1, 0.5, 'Centre down', 0.01) };
 
 /** emanata@1 symbols, in picker order. */
-export const FX_EMANATA_SYMBOLS = ['sweat', 'shake', 'surprise', 'anger', 'heart', 'star', 'steam', 'sleep', 'note', 'gloom', 'exclaim', 'spiral'] as const;
+export const FX_EMANATA_SYMBOLS = Object.freeze(['sweat', 'shake', 'surprise', 'anger', 'heart', 'star', 'steam', 'sleep', 'note', 'gloom', 'exclaim', 'spiral'] as const);
 /** emanata@1 arrangements. */
-export const FX_EMANATA_ARRANGEMENTS = ['arc', 'ring', 'rise', 'row', 'sides', 'scatter'] as const;
+export const FX_EMANATA_ARRANGEMENTS = Object.freeze(['arc', 'ring', 'rise', 'row', 'sides', 'scatter'] as const);
 /** frame-border@1 styles, in picker order (rough … film are also PanelFrameBorder styles). */
-export const FX_BORDER_STYLES = ['rough', 'brush', 'double', 'dashed', 'dotted', 'wavy', 'jagged', 'film', 'torn', 'scallop'] as const;
+export const FX_BORDER_STYLES = Object.freeze(['rough', 'brush', 'double', 'dashed', 'dotted', 'wavy', 'jagged', 'film', 'torn', 'scallop'] as const);
 
 const gen = (id: string, v: number, group: FxGroup, params: Record<string, FxParamSpec>): FxGenerator =>
   Object.freeze({ gen: id, v, name: FX_NAMES[id] ?? id, group, params: Object.freeze(params) });

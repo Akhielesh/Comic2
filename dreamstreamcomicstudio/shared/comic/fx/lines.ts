@@ -88,15 +88,16 @@ const parallelLines = (p: FxParams, seed: number, A: number, S: number, curved: 
     const b: Pt = [a[0] + u[0] * L, a[1] + u[1] * L];
     let bulge = 0;
     if (curved && bend !== 0) {
-      // The centre line bends by bend·L/4 at its middle (4t(1−t) of that along it), never past the box edge: the room
-      // is measured at points along the chord, where the box edge may come closer than at the middle.
+      // The centre line bends by up to bend·L/4 at its middle. At t along the chord the ribbon's outer edge sits
+      // hw + 4t(1−t)·bulge out (a lens's edge, 4t(1−t)·(bulge + hw), never further). The room d(t) from the chord to the
+      // box edge on the bend's side is concave in t (the box is convex), so it is at least the straight blend of its
+      // ends, d0·(1−t) + d1·t. With d' = max(0, d − w) at each end, every t then keeps the edge half a width inside
+      // the box when 4t(1−t)·bulge ≤ d0'·(1−t) + d1'·t, whose tightest t gives bulge ≤ (√d0' + √d1')² / 4. A bound for
+      // every t, not samples: a long chord almost parallel to an edge once bent out between samples.
       const side = bend > 0 ? Math.atan2(n[1], n[0]) : Math.atan2(-n[1], -n[0]);
-      let room = Math.abs(bend) * L * 0.25;
-      for (const t of [0.15, 0.3, 0.5, 0.7, 0.85]) {
-        const at: Pt = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        room = Math.min(room, Math.max(0, rayToEdge(at, side, A) - w) / (4 * t * (1 - t)));
-      }
-      bulge = Math.sign(bend) * room;
+      const d0 = Math.max(0, rayToEdge(a, side, A) - w);
+      const d1 = Math.max(0, rayToEdge(b, side, A) - w);
+      bulge = Math.sign(bend) * Math.min(Math.abs(bend) * L * 0.25, (Math.sqrt(d0) + Math.sqrt(d1)) ** 2 / 4);
     }
     if (taper) path.lens(a, b, w, bulge);
     else if (bulge) bentRibbon(path, a, b, w, bulge);

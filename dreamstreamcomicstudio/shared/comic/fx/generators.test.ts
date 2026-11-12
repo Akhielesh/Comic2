@@ -8,15 +8,19 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { FX_LIMITS } from '../limits';
 import { FX_GEN_RE, fxParamsOf, fxWithinBudget } from './index';
-import { FX_DRAW_FNS, FX_GENERATORS_LOADED, FX_PRESETS, fxDrawFor, fxFromPreset, fxPresetOf, registerFxGenerators } from './generators';
-import { FX_BORDER_STYLES, FX_EMANATA_SYMBOLS, FX_GENERATORS, fxCanDraw, fxDefaultsOf, fxGeneratorOf, fxSegmentsOf, registerFxDraw, renderFx } from './registry';
-import { ASPECTS, SEEDS, atBound, commandsOf, curvePoints, fxOf, paramSets } from './fixtures.test-helpers';
+import * as generatorsModule from './generators';
+import { FX_DRAW_FNS, FX_GENERATORS_LOADED, FX_PRESETS, fxDrawFor, fxDrawUncheckedForTests, fxFromPreset, fxPresetOf, registerFxGenerators } from './generators';
+import { FX_BORDER_STYLES, FX_EMANATA_ARRANGEMENTS, FX_EMANATA_SYMBOLS, FX_GENERATORS, fxCanDraw, fxDefaultsOf, fxGeneratorOf, fxSegmentsOf, registerFxDraw, renderFx } from './registry';
+import { ASPECTS, SEEDS, atBound, commandsOf, curvePoints, fxOf, lcg, paramSets } from './fixtures.test-helpers';
 import type { FxGenerator, FxNode, FxParamValue } from './types';
 
 const h = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16);
 const keyOf = (g: Pick<FxGenerator, 'gen' | 'v'>) => `${g.gen}@${g.v}`;
-/** The pure drawing with the schema check, as registered. */
-const draw = (g: FxGenerator, raw: Record<string, FxParamValue>, seed: number, aspect: number): FxNode[] => FX_DRAW_FNS[keyOf(g)](fxParamsOf(g, raw), seed, aspect);
+/** The raw drawing after the schema check, as registered (no cap, no memo): the sweeps measure the drawing itself. */
+const draw = (g: FxGenerator, raw: Record<string, FxParamValue>, seed: number, aspect: number): FxNode[] => fxDrawUncheckedForTests(keyOf(g))!(fxParamsOf(g, raw), seed, aspect);
+/** Every enum value of a generator, each at the defaults (speed-line modes, emanata marks and arrangements, border styles). */
+const enumSets = (g: FxGenerator): Record<string, FxParamValue>[] =>
+  Object.entries(g.params).flatMap(([key, spec]) => (spec.kind === 'enum' ? spec.values.map((v) => ({ ...fxDefaultsOf(g), [key]: v })) : []));
 /** Every (generator, parameter set, seed, aspect) the sweep tests run over. */
 const sweep = function* () {
   for (const g of FX_GENERATORS) for (const raw of paramSets(g)) for (const seed of SEEDS) for (const aspect of ASPECTS) yield { g, raw, seed, aspect };
@@ -24,23 +28,24 @@ const sweep = function* () {
 
 /**
  * Frozen per gen@v: [defaults, seed 1, aspect 1], [defaults, seed 1, aspect 1.6], [every number at its max, seed −7,
- * aspect 0.6]. A registered version's drawing never changes: a new look is a new version with a new golden here.
+ * aspect 0.6], then every enum value at the defaults (seed 3, aspect 1.6). A registered version's drawing never changes
+ * once shipped: a new look is a new version with a new golden here.
  */
 const GOLDEN: Record<string, string> = {
-  'speed-lines@1': '196f0f9594088cbe',
+  'speed-lines@1': '37a4a408cb77e6f3',
   'focus-lines@1': 'd01ec22e36f33b17',
   'burst@1': 'c3bb1d914601ecf7',
   'sunburst@1': 'a3a78dec302f3e83',
   'explosion@1': 'a7aecd9ee0aad4b0',
   'shock-rings@1': '9507d31dd2293bf4',
-  'emanata@1': '00bfc6bab9f71bf1',
+  'emanata@1': 'c11fa9aae3ad3591',
   'rain@1': 'f62792616cff5bc6',
   'snow@1': '77e3ce07228ef508',
   'petals@1': 'c2b4b8f69b46ea1f',
   'bokeh@1': '00737eef7d39459f',
   'sparkle@1': '0dfbe39a31ff2b16',
   'smoke@1': '79819fca9278edcb',
-  'frame-border@1': 'eeea52777b086f78'
+  'frame-border@1': '36e6a1c07d9ca45e'
 };
 /** Frozen per named preset, at aspect 1 with its own seed. */
 const PRESET_GOLDEN: Record<string, string> = {
@@ -61,15 +66,15 @@ const PRESET_GOLDEN: Record<string, string> = {
   'sweat-drops': 'c936bcf8b4cbc48b',
   'shake-marks': 'a31d71f1f11fa91b',
   'surprise-lines': 'bf75ccbc6a6dd87b',
-  'anger-mark': 'ad4429d404de9a97',
+  'anger-mark': '53d6c9f57be08de4',
   'love-hearts': '2e84ed38b4a7031f',
   'dizzy-stars': 'f764c54693c51ce5',
   'steam-puffs': 'fb304615da2d81aa',
   'sleep-z': '4fa5fe771aba992e',
   'music-notes': '5af8c3ee36ca504f',
   'gloom-lines': 'e9e8b1df12de77df',
-  'exclamation': '5e38439a4cc1102e',
-  'dizzy-swirl': 'fdde4471272f8abd',
+  'exclamation': '11482862d40cb251',
+  'dizzy-swirl': '194e9f7663d58cf9',
   'rain': '817c8f2e7d7ba0d5',
   'snow': '2e4167731bf90363',
   'falling-petals': 'c978f7185f7ab29c',
@@ -94,6 +99,21 @@ describe('effect generators: registration and determinism', () => {
     expect(Object.keys(FX_DRAW_FNS).sort()).toEqual(FX_GENERATORS.map(keyOf).sort());
     for (const g of FX_GENERATORS) expect(fxCanDraw(g), keyOf(g)).toBe(true);
     expect(() => fxDrawFor('nope@1')).toThrow(/no generator/);
+  });
+
+  it('exports no raw drawing: FX_DRAW_FNS clamps, caps and memoizes a stored parameter set like renderFx', () => {
+    // The raw map stays module-private; only the accessor whose name says it is unchecked (and for tests) reaches it.
+    expect('DRAW_FNS' in generatorsModule).toBe(false);
+    const speed = fxGeneratorOf('speed-lines', 1)!;
+    const stored = { count: 100000, weight: 9, length: 'long' } as unknown as Record<string, FxParamValue>;
+    const nodes = FX_DRAW_FNS['speed-lines@1'](stored, 1, 1);
+    expect(nodes).toEqual(draw(speed, { ...fxDefaultsOf(speed), count: 96, weight: 0.06 }, 1, 1));
+    expect(nodes).toBe(renderFx({ gen: 'speed-lines', v: 1, seed: 1, params: stored }, { aspect: 1 }));
+    expect(Object.isFrozen(nodes)).toBe(true);
+    for (const g of FX_GENERATORS) {
+      const wild = Object.fromEntries(Object.entries(g.params).map(([k, spec]) => [k, spec.kind === 'number' ? spec.max * 1000 + 1e6 : 'x']));
+      expect(fxSegmentsOf(FX_DRAW_FNS[keyOf(g)](wild, 5, 1.6)), keyOf(g)).toBeLessThanOrEqual(FX_LIMITS.segmentsMax);
+    }
   });
 
   it('is deterministic: the same fx gives byte-identical nodes (fresh objects, any key order, through renderFx too)', () => {
@@ -122,7 +142,8 @@ describe('effect generators: registration and determinism', () => {
       got[keyOf(g)] = h([
         renderFx(fxOf(g, fxDefaultsOf(g), 1), { aspect: 1 }),
         renderFx(fxOf(g, fxDefaultsOf(g), 1), { aspect: 1.6 }),
-        renderFx(fxOf(g, atBound(g, 'max'), -7), { aspect: 0.6 })
+        renderFx(fxOf(g, atBound(g, 'max'), -7), { aspect: 0.6 }),
+        ...enumSets(g).map((raw) => renderFx(fxOf(g, raw, 3), { aspect: 1.6 }))
       ]);
     }
     expect(got).toEqual(GOLDEN);
@@ -221,6 +242,35 @@ describe('effect generators: geometry budget and shape (§2.8)', () => {
     expect(worstCurve).toBeLessThanOrEqual(0.01);
   });
 
+  it('curved speed lines never bend past the box, on any aspect (a seeded sweep of 200 random sets, aspects up to 5)', () => {
+    const g = fxGeneratorOf('speed-lines', 1)!;
+    /** How far a node reaches past the box, in units of the box height (x is scaled by the aspect). */
+    const overflow = (nodes: readonly FxNode[], aspect: number): number => {
+      let worst = 0;
+      for (const node of nodes) {
+        const { ends, samples } = curvePoints(node);
+        for (const [x, y] of [...ends, ...samples]) worst = Math.max(worst, -x * aspect, (x - 1) * aspect, -y, y - 1);
+      }
+      return worst;
+    };
+    const rand = lcg(0x5eed);
+    const cases: { raw: Record<string, FxParamValue>; seed: number; aspect: number }[] = [
+      // Found by a 4,000-set probe: near the ends of a long chord almost parallel to an edge, the ribbon crossed the box.
+      { raw: { mode: 'curved', count: 10, angle: -172.24, length: 0.831, weight: 0.01, taper: false, bend: 0.837, jitter: 0.7515 }, seed: -1598422169, aspect: 4 }
+    ];
+    for (const raw of paramSets(g, 200).slice(-200)) {
+      cases.push({ raw: { ...raw, mode: 'curved' }, seed: (Math.floor(rand() * 2 ** 32) | 0), aspect: Math.round((0.2 + rand() * 4.8) * 1000) / 1000 });
+    }
+    for (const aspect of [4, 5]) for (const raw of paramSets(g, 0)) cases.push({ raw: { ...raw, mode: 'curved' }, seed: 11, aspect });
+    let worst = 0;
+    let at = '';
+    for (const { raw, seed, aspect } of cases) {
+      const out = overflow(draw(g, raw, seed, aspect), aspect);
+      if (out > worst) [worst, at] = [out, `${JSON.stringify(raw)} seed ${seed} aspect ${aspect}`];
+    }
+    expect(worst, at).toBeLessThanOrEqual(0.002);
+  });
+
   it('keeps marks round on any aspect: a disc drawn in a 2.5:1 box is as wide as it is tall once the box is mapped', () => {
     const g = fxGeneratorOf('bokeh', 1)!;
     for (const aspect of [0.4, 2.5]) {
@@ -234,6 +284,45 @@ describe('effect generators: geometry budget and shape (§2.8)', () => {
         const xs = pts.map((p) => p[0] * aspect);
         const ys = pts.map((p) => p[1]);
         expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(Math.max(...ys) - Math.min(...ys), 3);
+      }
+    }
+  });
+
+  it('one emanata mark sits in the middle of its box, whatever the arrangement', () => {
+    const g = fxGeneratorOf('emanata', 1)!;
+    /** The middle of everything drawn, in the isotropic frame (box heights). */
+    const middleOf = (nodes: readonly FxNode[], aspect: number): [number, number] => {
+      const pts = nodes.flatMap((n) => {
+        const { ends, samples } = curvePoints(n);
+        return [...ends, ...samples];
+      });
+      const xs = pts.map(([x]) => x * aspect);
+      const ys = pts.map(([, y]) => y);
+      return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+    };
+    let worst = 0;
+    let at = '';
+    for (const symbol of FX_EMANATA_SYMBOLS) {
+      for (const arrange of FX_EMANATA_ARRANGEMENTS) {
+        for (const aspect of [0.5, 1, 2.4]) {
+          for (const seed of [1, -9, 4242]) {
+            const [x, y] = middleOf(draw(g, { ...fxDefaultsOf(g), symbol, arrange, count: 1, jitter: 0, size: 0.3 }, seed, aspect), aspect);
+            // A mark's own outline is not quite centred in its cell (the swirl, the drop): at most 0.1 of its size.
+            const off = Math.max(Math.abs(x - aspect / 2), Math.abs(y - 0.5));
+            if (off > worst) [worst, at] = [off, `${symbol} ${arrange} ${aspect} ${seed}`];
+          }
+        }
+      }
+    }
+    expect(worst, at).toBeLessThanOrEqual(0.03);
+    // The single-mark presets (anger mark, exclamation, dizzy swirl) at the contact-sheet aspects, with any seed.
+    for (const id of ['anger-mark', 'exclamation', 'dizzy-swirl']) {
+      for (const aspect of [1, 2.4]) {
+        for (const seed of [undefined, 77, -5]) {
+          const [x, y] = middleOf(renderFx(fxFromPreset(id, seed)!, { aspect }), aspect);
+          expect(Math.abs(x / aspect - 0.5), `${id} ${aspect} ${seed} across`).toBeLessThanOrEqual(0.04);
+          expect(Math.abs(y - 0.5), `${id} ${aspect} ${seed} down`).toBeLessThanOrEqual(0.04);
+        }
       }
     }
   });
@@ -327,7 +416,7 @@ describe('effect generators: memo, budget guard and speed', () => {
       let worst = 0;
       for (const raw of paramSets(g, 4)) {
         const p = fxParamsOf(g, raw);
-        const fn = FX_DRAW_FNS[keyOf(g)];
+        const fn = fxDrawUncheckedForTests(keyOf(g))!;
         for (let i = 0; i < 3; i += 1) fn(p, i, 1.6);
         const times: number[] = [];
         for (let i = 0; i < 9; i += 1) {

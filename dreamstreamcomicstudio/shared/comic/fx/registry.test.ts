@@ -14,6 +14,7 @@ import { FX_GEN_RE, FX_GROUPS, FX_PARAM_KEY_RE, fxParamsOf, fxWithinBudget } fro
 import { FX_NAMES, fxName } from './names';
 import {
   FX_BORDER_STYLES,
+  FX_EMANATA_ARRANGEMENTS,
   FX_EMANATA_SYMBOLS,
   FX_GENERATORS,
   fxAspectOf,
@@ -25,7 +26,7 @@ import {
   registerFxDraw,
   renderFx
 } from './registry';
-import type { LayerFx } from './types';
+import type { FxParamSpec, LayerFx } from './types';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultFx = (gen: string, v = 1, seed = 7): LayerFx => ({ gen, v, seed, params: fxDefaultsOf(fxGeneratorOf(gen, v)!) });
@@ -90,6 +91,27 @@ describe('fx registry: generators and their schemas', () => {
     expect(FX_EMANATA_SYMBOLS).toHaveLength(12);
     expect(fxGeneratorOf('frame-border', 1)!.params.style).toMatchObject({ values: FX_BORDER_STYLES });
     expect(FX_BORDER_STYLES).toHaveLength(10);
+  });
+
+  it('is frozen all the way down: generators, params records, every spec and every enum list (the sanitizer reads them)', () => {
+    expect(Object.isFrozen(FX_GENERATORS)).toBe(true);
+    for (const list of [FX_EMANATA_SYMBOLS, FX_EMANATA_ARRANGEMENTS, FX_BORDER_STYLES]) expect(Object.isFrozen(list)).toBe(true);
+    for (const g of FX_GENERATORS) {
+      expect(Object.isFrozen(g) && Object.isFrozen(g.params), g.gen).toBe(true);
+      for (const [key, spec] of Object.entries(g.params)) {
+        expect(Object.isFrozen(spec), `${g.gen}.${key}`).toBe(true);
+        if (spec.kind === 'enum') expect(Object.isFrozen(spec.values), `${g.gen}.${key}.values`).toBe(true);
+      }
+    }
+    // A stray write throws (ES modules are strict) and the schema the server checks against is unchanged.
+    const count = fxGeneratorOf('speed-lines', 1)!.params.count as Extract<FxParamSpec, { kind: 'number' }>;
+    expect(() => {
+      (count as { max: number }).max = 100000;
+    }).toThrow(TypeError);
+    expect(() => (FX_EMANATA_SYMBOLS as unknown as string[]).push('skull')).toThrow(TypeError);
+    const mode = fxGeneratorOf('speed-lines', 1)!.params.mode as Extract<FxParamSpec, { kind: 'enum' }>;
+    expect(() => (mode.values as string[]).push('spiral')).toThrow(TypeError);
+    expect(fxParamsOf(fxGeneratorOf('speed-lines', 1)!, { count: 500, mode: 'spiral' })).toMatchObject({ count: 96, mode: 'linear' });
   });
 
   it('the largest effect any schema allows stays within FX_LIMITS.fxBytes (1 KB)', () => {
