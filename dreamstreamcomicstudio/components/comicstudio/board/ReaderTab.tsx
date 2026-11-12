@@ -22,9 +22,14 @@
 // Fullscreen API needs that user gesture); a chip, card or the director opening the reader
 // (studio.readerRequest) opens it too, in Guided View when asked. The root fills the board
 // (`h-full min-h-0`, no 520 px floor), so a landscape phone never scrolls the reader inside the board.
+//
+// One full-screen entry (declutter DC-1, F1): "Read full screen" is the only one. The inline reader's own
+// browser full-screen icon is off at every height (it did a different thing with the same icon), and the
+// Share & export sheet no longer repeats it. `data-action` ids (read, share) let the clutter probe count
+// duplicate homes (docs/design/clean-and-smooth.md, C2).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
+import { Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
 import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
@@ -207,8 +212,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const shareCaps = useShareCapabilities();
   // Phone landscape (ui-findings 2026-10-29, board/read at 734×343): the board pane is ~100 px tall,
   // so this tab's action row plus the reader's toolbar left the toolbar clipped under the pane. At a
-  // compact height the actions fold into the reader's own toolbar (one row) and the reader's browser
-  // full-screen button steps aside for "Read full screen".
+  // compact height the actions fold into the reader's own toolbar (one row).
   const compactH = useFormFactor().heightClass === 'compact';
   // The studio preview offers draft editions too (marked by their percentage), always opens in the
   // comic's own language (never the browser's or a reader's stored choice) and never touches the URL.
@@ -382,11 +386,25 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   // The actions: their own row at regular heights; icon-only inside the reader's toolbar at a compact height.
   const actions = (dense: boolean) => (
     <>
-      <PrimaryButton size="sm" onClick={() => openFullScreen(false)} aria-label="Read full screen" title="Read full screen (page turns, Guided View, your languages)">
+      <PrimaryButton
+        size="sm"
+        onClick={() => openFullScreen(false)}
+        aria-label="Read full screen"
+        title="Read full screen (page turns, Guided View, your languages)"
+        data-action="read"
+      >
         <Expand className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Read full screen</span>
       </PrimaryButton>
       <span ref={sheetAnchor} className="inline-flex shrink-0">
-        <GhostButton size="sm" onClick={() => setSheetOpen((v) => !v)} aria-haspopup="dialog" aria-expanded={sheetOpen} aria-label="Share & export" disabled={working}>
+        <GhostButton
+          size="sm"
+          onClick={() => setSheetOpen((v) => !v)}
+          aria-haspopup="dialog"
+          aria-expanded={sheetOpen}
+          aria-label="Share & export"
+          disabled={working}
+          data-action="share"
+        >
           <Share2 className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Share &amp; export</span>
         </GhostButton>
       </span>
@@ -481,7 +499,9 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           urlFor={studio.urlFor}
           autoFocus={false}
           toolbarExtra={drawn && compactH ? actions(true) : undefined}
-          fullscreenControl={!compactH}
+          // One full-screen entry (declutter F1): "Read full screen" above (or folded into this toolbar at a compact
+          // height) opens the immersive reader; the inline reader's own browser full-screen icon stays off.
+          fullscreenControl={false}
           overlay={overlay}
         />
       </div>
@@ -516,7 +536,6 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
             hint={shareUrl ? 'Opens your published link in a new tab' : 'Full screen with the cover intro, as readers will see it'}
             onClick={preview}
           />
-          <SheetRow icon={<BookOpen className="h-4 w-4" />} label="Read full screen" onClick={() => openFullScreen(false)} />
           <p className={cx('px-2.5 pb-1 pt-3', OVERLINE)}>
             Download{editionName ? ` · ${editionName} edition` : ''}
           </p>
