@@ -2422,8 +2422,8 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
               <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                 <h2 className={pro.on ? 'min-w-0 truncate whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]' : 'shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]'}>
                   Page {page.n}{' '}
-                  {/* Flag on, phones: the header also holds the Easy | Pro switch, so "of n" goes below 360 px. */}
-                  <span className={pro.on ? 'hidden font-normal text-[var(--ds-muted)] min-[360px]:inline' : 'font-normal text-[var(--ds-muted)]'}>of {pages.length}</span>
+                  {/* Flag on, phones: the header also holds the Easy | Pro switch, so "of n" is read, not shown (320 px). */}
+                  <span className={pro.on && phoneLayout ? 'sr-only' : 'font-normal text-[var(--ds-muted)]'}>of {pages.length}</span>
                 </h2>
                 <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} className="min-w-0" />
               </div>
