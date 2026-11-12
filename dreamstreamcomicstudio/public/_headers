@@ -46,19 +46,15 @@
 /theme-boot.js
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
-# The private voice model's engine (the ONNX runtime, services/dictation/ortRuntime.ts), built into
-# /ort/<onnxruntime-web version>/ by vite.config.ts. Versioned path → cache forever; same-origin only.
-# These requests go through functions/_middleware.ts (public/_routes.json does not exclude /ort/*), which
-# turns a missing file into a 404 instead of the SPA's index.html and sets these same headers itself.
-/ort/*
-  Cache-Control: public, max-age=31536000, immutable
-  Cross-Origin-Resource-Policy: same-origin
-
-/ort/*.mjs
-  Content-Type: text/javascript; charset=utf-8
-
-/ort/*.wasm
-  Content-Type: application/wasm
+# NO RULE FOR /ort HERE, on purpose. The private voice model's engine (the ONNX runtime,
+# services/dictation/ortRuntime.ts) is built into /ort/<onnxruntime-web version>/ by vite.config.ts and
+# served through functions/_middleware.ts (public/_routes.json does not exclude /ort/*), which sets its
+# Content-Type, immutable Cache-Control and Cross-Origin-Resource-Policy itself, on a file it has checked.
+# Pages applies THIS file to whatever its asset server answers for a path, the SPA fallback (index.html,
+# HTTP 200) included, before the Function sees it. A Content-Type rule here once made index.html come
+# back labelled as JavaScript / WebAssembly for a missing engine file, and a Cache-Control rule would
+# mark that page immutable for a year. tests/edge/voiceRuntime.test.ts fails on any rule that matches an
+# /ort path and names Content-Type, Cache-Control or Access-Control-Allow-Origin.
 
 # On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
 /models/*

@@ -29,8 +29,10 @@
  * so an id can never reveal an unlisted slug). Everything else passes through untouched.
  *
  * The private voice model's engine, `/ort/<version>/<file>` (services/dictation/ortRuntime.ts), is served through
- * here too: every client gets the file (no agent gate), with its content type and immutable caching, and a missing
- * one is a plain 404, never the SPA's index.html with a 200 (which poisoned the model cache in F11).
+ * here too: every client gets the file (no agent gate), with its content type and immutable caching, to our own
+ * origin only, and a missing one is a plain 404, never the SPA's index.html with a 200 (which poisoned the model
+ * cache in F11). Only the pinned version's folder is ever asked of the asset server, and what it answers is checked
+ * by its first bytes, not by its label.
  *
  * public/_routes.json keeps this function off every other static asset, so it runs for page loads and the voice
  * engine. Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
@@ -49,7 +51,17 @@ import {
   toStreamUrl,
 } from '../shared/streamHost';
 import { CSP_REPORT_GROUP, CSP_REPORT_PATH, type CspReportEnv } from './csp-report';
-import { ORT_CACHE_CONTROL, ORT_RESOURCE_POLICY, isOrtRuntimePath, ortContentType, parseOrtRuntimePath } from '../services/dictation/ortRuntime';
+import {
+  ORT_CACHE_CONTROL,
+  ORT_RESOURCE_POLICY,
+  ORT_RUNTIME_PIN,
+  ORT_SNIFF_BYTES,
+  isOrtRuntimePath,
+  looksLikeOrtRuntimeFile,
+  ortContentType,
+  parseOrtRuntimePath,
+  type OrtRuntimeFile,
+} from '../services/dictation/ortRuntime';
 
 /** The Pages asset server (`context.env.ASSETS`). */
 interface AssetFetcher {
@@ -464,23 +476,71 @@ const runtimeNotFound = (): Response =>
 /** The statuses the asset server answers a real file with (a full body, a range, a revalidation). */
 const RUNTIME_FILE_STATUSES = new Set([200, 206, 304]);
 
+/** True when the response's body starts at the file's first byte, as plain bytes: a whole body, or a range from 0. */
+function carriesFileStart(res: Response): boolean {
+  if (!res.body) return false; // HEAD, 304
+  const encoding = (res.headers.get('content-encoding') || '').trim().toLowerCase();
+  if (encoding && encoding !== 'identity') return false; // compressed bytes say nothing about the file's own
+  if (res.status === 200) return true;
+  return res.status === 206 && /^bytes\s+0-/i.test(res.headers.get('content-range') || '');
+}
+
 /**
- * `/ort/<version>/<file>`, the voice engine: the asset server's file, with the runtime's headers set here (Cloudflare
- * need not apply public/_headers to a response that passed through this Function, so this sets the same values).
- * Pages answers a missing file with the SPA's index.html and a 200, which transformers.js would keep in its cache
- * as the engine (the F11 failure), so an HTML answer, or any other non-file answer, becomes a 404. So does a path
- * under /ort/ that is not one of the four files, without asking the asset server.
+ * Is this body the named engine file, judged by its first bytes (looksLikeOrtRuntimeFile)? The bytes are read from
+ * a clone, which is then cancelled, so `res.body` stays whole and keeps streaming natively (no copy of a 24 MB file
+ * through this Function). The cancel is not awaited: a clone is one branch of a tee, and by the Streams standard a
+ * branch's cancel only settles once the other branch (the body being served) is cancelled too.
+ */
+async function startsLikeRuntimeFile(file: OrtRuntimeFile, res: Response): Promise<boolean> {
+  const reader = res.clone().body?.getReader();
+  if (!reader) return false;
+  let head = new Uint8Array(0);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value?.length) {
+        const joined = new Uint8Array(Math.min(head.length + value.length, ORT_SNIFF_BYTES));
+        joined.set(head);
+        joined.set(value.subarray(0, joined.length - head.length), head.length);
+        head = joined;
+      }
+      const verdict = looksLikeOrtRuntimeFile(file, head, done);
+      if (verdict !== null) return verdict;
+    }
+  } catch {
+    return false;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
+
+/**
+ * `/ort/<version>/<file>`, the voice engine: the asset server's file, with the runtime's headers set here, on a file
+ * this function has checked. (public/_headers must set none of them for /ort: Pages applies that file to whatever
+ * its asset server answers, the SPA fallback included, before `next()` returns.)
+ *
+ *  - Only the four files of the pinned version (ORT_RUNTIME_PIN) are asked of the asset server. Any other path
+ *    under /ort/ is a 404 without asking it: another version (an old tab after a deploy that moved the engine), a
+ *    file this build does not ship.
+ *  - Pages answers a missing file with the SPA's index.html and a 200, which the browser would keep as the engine
+ *    for a year (the F11 failure). So the answer must be a file status, must not be labelled HTML, and, whenever it
+ *    carries the start of the file, must start like the file: the WebAssembly magic number, or a module that does
+ *    not begin with `<`. The label alone is not trusted (a _headers rule can rewrite it). Anything else is a 404.
+ *  - The file goes out to our own origin only: the asset server's `Access-Control-Allow-Origin: *` (it adds one to
+ *    every asset) is dropped, since CORP does not stop a CORS request from another site.
  */
 export async function serveOrtRuntime(url: URL, next: () => Promise<Response>): Promise<Response> {
   const hit = parseOrtRuntimePath(url.pathname);
-  if (!hit) return runtimeNotFound();
+  if (!hit || hit.version !== ORT_RUNTIME_PIN.version) return runtimeNotFound();
   const res = await next();
   const type = res.headers.get('content-type') || '';
-  if (!RUNTIME_FILE_STATUSES.has(res.status) || /^\s*text\/html\b/i.test(type)) {
-    await res.body?.cancel().catch(() => undefined);
+  const isFile = RUNTIME_FILE_STATUSES.has(res.status) && !/^\s*text\/html\b/i.test(type) && (!carriesFileStart(res) || (await startsLikeRuntimeFile(hit.file, res)));
+  if (!isFile) {
+    void res.body?.cancel().catch(() => undefined);
     return runtimeNotFound();
   }
   const headers = new Headers(res.headers);
+  for (const name of [...headers.keys()]) if (name.toLowerCase().startsWith('access-control-')) headers.delete(name);
   if (res.status !== 304) headers.set('content-type', ortContentType(hit.file));
   headers.set('cache-control', ORT_CACHE_CONTROL);
   headers.set('cross-origin-resource-policy', ORT_RESOURCE_POLICY);

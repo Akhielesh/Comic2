@@ -1,7 +1,8 @@
 # Voice dictation (on-device Whisper)
 
 Dictation transcribes speech **fully in the browser** with open-source Whisper via
-transformers.js — WebGPU when available, WASM otherwise. Audio never leaves the
+transformers.js — WebGPU where the engine that runs has it and the device has a usable GPU,
+WASM otherwise. Audio never leaves the
 device; no API key or inference service is involved. The browser's own online
 dictation (Web Speech) is offered as the instant alternative. (Short readme:
 `services/dictation/README.md`; this is the full doc. It names functions, not line
@@ -36,21 +37,57 @@ StudioComposer (Comic Studio) — words wait in the bar, then go in at the curso
 
 ### Engine — `services/dictation/whisperEngine.ts`
 
-- Models: `onnx-community/whisper-{tiny,base,small}`.
+- Models: `onnx-community/whisper-{tiny,base,small}`, each fetched at **one fixed commit** (`WHISPER_MODELS`), never
+  `main`. `main` moves (whisper-base changed on 2026-11-02); without a pin each browser would keep whatever the
+  branch held at its first download.
+  - **The pin is applied at the network, not with transformers.js's `revision` option.** Every Hub request
+    transformers.js makes goes through its `env.fetch`; `pinHubFetch` wraps it so that any URL of these three
+    repositories, at whatever revision, is asked for at the pinned commit (`pinnedModelUrl`). transformers.js itself
+    still believes it loads `main`. That is deliberate: in 4.2.0 several of its own look-ups ignore the revision
+    they are given and use `main` (`pipeline()`'s file list and file sizes, the tokenizer's "is there a
+    `tokenizer_config.json`?" probe). With `revision` passed, those look-ups miss the cache on **every** load, so each
+    take would ask Hugging Face for `main` again, and an offline take would fail outright (the probe cannot be
+    answered, so no tokenizer is loaded). With one name for everything, a cached model needs no request at all,
+    and no request ever names a branch (the e2e requires it).
+  - **The cache says which commit it holds.** transformers.js stores the files under their `main` URLs, which do
+    not say where the bytes came from, so `keepPinnedModelCache` keeps one small note per repository in the same
+    cache (`…/resolve/main/.dreamstream-pinned-commit`) with the commit. Once per page, a model whose note is
+    missing or names another commit has its note rewritten and its cached files dropped, so they are fetched again
+    at the pin. Files cached before pins existed go the same way, once. If the note cannot be written, nothing is
+    dropped.
+  - To move a pin: read the new commit from `huggingface.co/api/models/<repo>`, check the q8 and q4 encoder and
+    decoder sizes at it (`…/tree/<commit>/onnx`), update `MODEL_MB` if they changed, and change the constant in a
+    reviewed commit. Browsers that hold the old files download the new ones once.
 - `loadWhisper(size, onProgress?)` lazily imports `@huggingface/transformers` and builds an ASR pipeline with
   `device: webgpu | wasm` and `dtype: 'q4'` on GPU / `'q8'` on WASM. In-flight loads are shared (a take started
   after a cancel joins the same load and hears its progress); a failed download is evicted so retry works.
+- **The device** (`whisperDevice`) is WebGPU only when both hold: the engine file transformers.js picked is the
+  build with a WebGPU entry point (`ORT_WEBGPU_RUNTIME_MJS`, the asyncify build), and
+  `navigator.gpu.requestAdapter()` answers with an adapter. Everything else is WASM. `'gpu' in navigator` alone
+  (the old rule) is not enough: transformers.js gives Safari the plain build, which has no `webgpuInit`, and
+  Safari 26 ships `navigator.gpu`, so every load failed there ("no available backend found … webgpuInit is not a
+  function"); a browser with the API but no adapter failed too ("Failed to get GPU adapter"). The rule reads the
+  pair transformers.js really picked, so there is no browser sniffing of our own in what runs.
 - Per-file download progress is aggregated into one 0..1 number.
 - `transcribe(asr, audio)` chunks long takes (`chunk_length_s: 30`, `stride_length_s: 5`) and skips audio under
   0.1 s. Language is auto-detected; Whisper adds punctuation and casing itself.
-- `downloadMb(size, device)`: the true one-time download, model plus runtime, rounded to 5 MB (an upper bound:
-  Safari's runtime is about 10 MB smaller). Fast 65 / Balanced 100 / Accurate 275 MB on WASM; 120 / 165 / 325 MB
-  with WebGPU.
+- `downloadMb(size, { device, runtime })`: the true one-time download, the model files plus the engine build that
+  will run, rounded to 5 MB. By default it is what this browser will most likely use (`likelyVoiceSetup`): the
+  plain engine and the WASM files on Safari (`picksPlainRuntime`, transformers.js's own Safari test, mirrored only
+  for this number and pinned by a test), otherwise the asyncify engine with the WebGPU files when the browser has
+  the API. It is an upper bound (no adapter means the smaller WASM files), so the copy says "up to about".
+
+  | Size | Safari (plain engine, WASM) | WASM (asyncify engine) | WebGPU (asyncify engine) |
+  |---|---|---|---|
+  | Fast | 55 MB | 65 MB | 120 MB |
+  | Balanced | 90 MB | 100 MB | 165 MB |
+  | Accurate | 260 MB | 275 MB | 325 MB |
 
 ## Engines
 
 - **`whisper` (default)** — private, on-device. The first use downloads the model once (progress shown); after
-  that it starts from the browser cache and works offline.
+  that it starts from the browser's caches and works offline, for as long as the browser keeps both (see "What
+  the browser keeps" below).
 - **`webspeech`** — the browser's `SpeechRecognition`: instant and streamed, but the browser may send the voice
   to its speech service (Google in Chrome, Apple in Safari, Microsoft in Edge). Offered as the online choice,
   never the default.
@@ -85,11 +122,13 @@ The first use of the private model downloads two things, and the settings copy s
 the voice model once from Hugging Face, and the voice engine from DreamStream"):
 
 - **Hugging Face** (`huggingface.co`, which redirects to its CDN, `cas-bridge.xethub.hf.co` / `cdn-lfs*.hf.co`):
-  the model weights (data, not code). transformers.js keeps them in the browser **Cache API**. It is the only
-  third-party host the private model contacts.
+  the model weights (data, not code), at one fixed commit per size (`WHISPER_MODELS`, `pinHubFetch`).
+  transformers.js keeps them in the browser **Cache API**. It is the only third-party host the private model
+  contacts.
 - **Our own site**, `/ort/<onnxruntime-web version>/` (`services/dictation/ortRuntime.ts`): the voice engine, the ONNX
-  runtime (`ort-wasm-simd-threaded.asyncify.{mjs,wasm}`, about 23.6 MB; the plain build, about 12.9 MB, on Safari).
-  The `.mjs` is code that runs in our origin next to the session, so it is never fetched from a third party.
+  runtime (`ort-wasm-simd-threaded.asyncify.{mjs,wasm}`, about 23.6 MB; the plain build, about 13 MB, on Safari).
+  The `.mjs` is code that runs in our origin next to the session, so it is never fetched from a third party, and
+  the bytes we serve are pinned by SHA-256 in source (`ORT_RUNTIME_PIN`).
 
 **How the engine is chosen and served.** transformers.js 4.2.0 picks the build itself when it is imported
 (`src/backends/onnx.js` in `node_modules/@huggingface/transformers/dist/transformers.web.js`):
@@ -119,24 +158,56 @@ engine of another version. It also sets `env.useWasmCache = false`, so transform
 code into its Cache API (where a script could rewrite it for every later page) nor turns it into a `blob:` script;
 the browser imports the `.mjs` and fetches the `.wasm` from our origin and keeps them in its HTTP cache (immutable).
 
-**Build.** `ortRuntime()` in `vite.config.ts` resolves onnxruntime-web from transformers.js's own folder (the lockfile
-nests 1.26.0-dev under it; the app's own 1.30.0 is the sound model's), defines `__ORT_WEB_VERSION__` as that version,
-and copies exactly the four files (`ORT_RUNTIME_FILES`) into `<outDir>/ort/<version>/`, never into git. The build
-stops if a file is missing, is 25 MiB or more (the largest is 23.6 MB), or the installed version is not
-transformers.js's pin. `vite dev` serves the same four files from the package and `vite preview` from the build, with
-the production headers, and both answer anything else under `/ort/` with a 404.
+**Build, and the integrity pin.** `ortRuntime()` in `vite.config.ts` resolves onnxruntime-web from transformers.js's
+own folder (the lockfile nests 1.26.0-dev under it; the app's own 1.30.0 is the sound model's), defines
+`__ORT_WEB_VERSION__` as that version, and copies exactly the four files (`ORT_RUNTIME_FILES`) into
+`<outDir>/ort/<version>/`, never into git. The engine is first-party code next to the session, so a version number
+is not enough: `ORT_RUNTIME_PIN` (`ortRuntime.ts`) holds the version and the **SHA-256 of each file** as published
+to npm (checked against the registry tarball, whose own hash is the lockfile's `integrity`). The build stops, and
+emits none of the four, if the installed version is not the pinned one or transformers.js's own pin, if a file is
+missing or is 25 MiB or more (the largest is 23.6 MB), or if a file's hash is not the pinned one (a stale, patched
+or rewritten `node_modules`). A new transformers.js therefore needs the version and the four hashes changed in the
+same reviewed commit, as the SRI pins in `services/legacyPdfLoader.ts` do. `vite dev` serves the same four files
+from the package and `vite preview` from the build, with the production headers; both answer anything else under
+`/ort/` with a 404 and refuse (500) a file whose bytes are not the pinned ones.
 
 **Serving.** `/ort/*` goes through `functions/_middleware.ts` (`public/_routes.json` does not exclude it): every client
 gets the file (no agent gate), with `Content-Type: text/javascript; charset=utf-8` or `application/wasm`,
 `Cache-Control: public, max-age=31536000, immutable` (the path is versioned), `Cross-Origin-Resource-Policy:
-same-origin` and `nosniff`; `public/_headers` states the same for the static server. A missing file (an old tab after
-a deploy that moved to a new version, a path that is not one of the four) is a plain 404 with `no-store`, never the
-SPA's `index.html` with a 200, which is what poisoned the model cache in F11. The comics host proxies `/ort/*` to the
-Pages origin untouched. Tests: `services/dictation/whisperEngine.test.ts` (the pair, Safari, fail-closed, the
-selection code in node_modules names exactly these four files), `tests/edge/voiceRuntime.test.ts` (version =
-node_modules = pin = lockfile, the emitted files, the middleware, `_routes.json`, `_headers`, dev and preview) and
-`tests/e2e/studio.dictation.spec.ts` (a take requests the engine from our origin only, as JavaScript and WebAssembly,
-and nothing but Hugging Face, answered there with stand-ins).
+same-origin` and `nosniff`, and **without** the `Access-Control-Allow-Origin: *` the Pages asset server adds to every
+asset (CORP does not stop another site's CORS `import()` or `fetch()`; the page's own are same-origin on every
+host). The middleware sets these itself, on a file it has checked:
+
+- Only the four files of the **pinned version** are asked of the asset server. Any other path under `/ort/` (another
+  version: an old tab after a deploy that moved the engine; a file this build does not ship) is a plain 404 with
+  `no-store`, without asking it.
+- What the asset server answers must be a file: a file status, not labelled HTML, and, whenever the answer carries the
+  start of the file, **starting like the file** (the WebAssembly magic number `\0asm`; a module that does not begin
+  with `<`). Pages answers a missing file with the SPA's `index.html` and a 200, which is what poisoned the model
+  cache in F11, and it applies `public/_headers` to that fallback before the Function sees it: a `Content-Type` rule
+  for `/ort/*.mjs` once made the page come back labelled as JavaScript, cached immutable for a year (seen with
+  `wrangler pages dev`). So the label is not trusted, the first bytes are, and **`public/_headers` has no rule for
+  `/ort` at all** (a test fails on one that names `Content-Type`, `Cache-Control` or a CORS grant).
+
+The comics host proxies `/ort/*` to the Pages origin untouched. Tests: `services/dictation/whisperEngine.test.ts` (the
+pair, Safari, fail-closed, the device rule, the model commits and the cache note, and the transformers.js source it
+relies on: the selection names exactly these four files, `env.backends.onnx` shares onnxruntime-web's own `wasm`
+object, the proxy worker is off, the Safari test, every Hub request goes through `env.fetch`),
+`tests/edge/voiceRuntime.test.ts` (version = node_modules = pin = lockfile, the
+hashes, a tampered engine stops the build, the emitted files, the middleware against the answers Pages really
+gives, `_routes.json`, `_headers`, dev and preview) and `tests/e2e/studio.dictation.spec.ts` (a take requests the
+engine from our origin only, as JavaScript and WebAssembly, and nothing but Hugging Face, answered there with
+stand-ins, at a fixed commit; Safari's plain engine is never asked for WebGPU; the production CSP reports nothing
+for the engine).
+
+**What the browser keeps (the offline trade-off).** The weights live in the Cache API (transformers.js puts them
+there). The engine lives only in the browser's **HTTP cache** (`immutable`, one year): with `env.useWasmCache = false`
+no copy of the code is kept in the Cache API, on purpose, because a script that can write that cache could rewrite
+the engine for every later page. Both are best-effort storage, and the HTTP cache is the one a browser trims first.
+If the engine is evicted, the next take downloads it again (13 or 24 MB, no progress shown) and an offline take
+fails with the calm "didn't download" error until the device is online once. A deploy that moves to a new
+onnxruntime-web version has the same one-time cost. Within a session, once a take has run, later takes need no
+network. The settings copy ("then it works offline") states the normal case; softening it is an owner's call.
 
 Our own origin is never asked for model files. `loadWhisper` sets:
 
@@ -162,9 +233,11 @@ SHA-256 pinning then (V-4).
 
 **CSP (wave note).** The main site's policy is Report-Only (`functions/_middleware.ts` `mainCsp`, an inventory of
 what enforcing would block). The engine now needs nothing beyond `'self'` and the `'wasm-unsafe-eval'` the policy
-already has (a same-origin module import and fetch, no `blob:` script). Its `connect-src` does not list Hugging Face,
-so the weights' download still files violation reports; that is expected, and enforcing the main CSP before V-4 (ADR
-0006 D6.5) would need `huggingface.co` and its CDN hosts in `connect-src`. Browser dictation is unaffected.
+already has (a same-origin module import and fetch, no `blob:` script); the e2e sends that policy Report-Only on
+the QA page and requires that a take reports no `script-src` or `worker-src` violation. Its `connect-src` does not
+list Hugging Face, so the weights' download still files violation reports; that is expected, and enforcing the main
+CSP before V-4 (ADR 0006 D6.5) would need `huggingface.co` and its CDN hosts in `connect-src`. Browser dictation is
+unaffected.
 
 **Downloads and Cancel.** Cancel, a hidden tab or leaving the page stops the take, and the mic never opens, but a
 download already started keeps going in the background (up to the size shown) and is then cached for next time.
@@ -247,7 +320,8 @@ private model's stock phrases on silence ("Thank you.").
 chunk: the chat bundle pays nothing until dictation is first used. Model weights and the ONNX runtime are runtime
 fetches (above), never part of the JS bundle. The recorder and hook are tiny and statically imported. The build output
 grows by the engine's four files under `/ort/<version>/` (36.6 MB, 4 files; 103.9 MB to 140.5 MB for `dist/` on
-2026-11-12). Pages bandwidth is not metered, and each browser downloads only its own build, once. The transformers.js
+2026-11-12). Pages bandwidth is not metered, and each browser downloads only its own build, once (two requests
+through the Pages Function per browser per engine version; the Function reads the first bytes and streams the rest). The transformers.js
 chunk still carries onnxruntime-web's own fallback copy of the asyncify `.wasm` under `/assets/` (Vite emits it from
 the bundle's `new URL(…, import.meta.url)`); it is never requested while `wasmPaths` is set, and dropping it is a
 later, separate change.
