@@ -55,6 +55,16 @@ describe('ComicsLanding on Atlas', () => {
     }
   });
 
+  it('below the medium screen the header mark stands alone; the name stays for screen readers (named screens only)', () => {
+    render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const wordmark = within(screen.getByRole('banner')).getByTestId('comics-wordmark');
+    expect(wordmark).toHaveTextContent('DreamStreamComic Studio');
+    // sr-only below 600 px, shown from `medium:` up. Never a min-[…]/max-[…] variant: this config's raw screens
+    // disable those, so such a class compiles to no CSS at all (the old max-width 359 px sr-only variant did nothing).
+    expect(classes(wordmark)).toEqual(expect.arrayContaining(['sr-only', 'medium:not-sr-only']));
+    expect(classes(wordmark).filter((c) => /(?:^|:)!?(?:min|max)-\[[^\]]*\]:/.test(c))).toEqual([]);
+  });
+
   it('one hero call to action per state, and it starts the right thing', () => {
     const h = handlers();
     const { unmount } = render(<ComicsLanding signedIn={false} {...h} />);

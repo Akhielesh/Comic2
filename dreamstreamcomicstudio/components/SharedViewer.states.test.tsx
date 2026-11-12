@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The legacy share link's Atlas state views (DS-3, redesign M3): loading, sign in, not active and couldn't open,
 // each in calm words on the canvas. A link that is gone, expired or not shared with you says which; only an
-// unexpected failure offers "Try again", and only a reader's press asks again (never a timer).
+// unexpected failure offers "Try again" (an alert, redesign §8), and only a reader's press asks again (never a
+// timer). The raw client or server text never reaches the card.
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -70,15 +71,27 @@ describe('SharedViewer state views', () => {
     vi.mocked(get).mockRejectedValueOnce({ status: 403, message: 'You do not have access to this comic' });
     mount();
     expect(await screen.findByRole('heading', { name: 'This comic isn’t shared with you' })).toBeInTheDocument();
+    // 403 reaches only a signed-in reader: the words say so, and offer nothing the page has no button for.
+    const card = screen.getByRole('status');
+    expect(card).toHaveTextContent('You’re signed in with an account it wasn’t shared with. Ask the creator to share it with this account.');
+    expect(card.textContent).not.toMatch(/sign in with/i);
+    expect(screen.getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['Go home']);
   });
 
   it('an unexpected failure offers Try again, and only that press asks for the link again', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       vi.mocked(get).mockRejectedValueOnce({ status: 500, message: 'Internal error' });
       mount();
-      expect(await screen.findByRole('heading', { name: 'We couldn’t open this comic' })).toBeInTheDocument();
-      expect(screen.getByText('Internal error')).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Couldn’t open this comic' })).toBeInTheDocument();
+      // A load failure is an alert; the raw server text goes to the console, not onto the card.
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveAttribute('data-shared-state', 'error');
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(screen.getByRole('main').textContent).not.toContain('Internal error');
+      expect(warn).toHaveBeenCalledWith(expect.any(String), 'Internal error');
+      warn.mockRestore();
       // Nothing retries on its own.
       await vi.advanceTimersByTimeAsync(120_000);
       expect(get).toHaveBeenCalledTimes(1);
@@ -88,6 +101,19 @@ describe('SharedViewer state views', () => {
       expect(get).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('SharedViewerStateView never prints an error’s raw message, and only the failure is an alert', () => {
+    const { unmount } = render(<SharedViewerStateView notice={{ status: 'error', message: 'Failed to fetch' }} onRetry={vi.fn()} />);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Failed to fetch');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    unmount();
+    for (const notice of [{ status: 'loading' }, { status: 'login_required' }, { status: 'not_active', reason: 'gone' }] as const) {
+      const view = render(<SharedViewerStateView notice={notice} />);
+      expect(screen.getByRole('status')).toHaveAttribute('data-shared-state', notice.status);
+      expect(screen.queryByRole('alert')).toBeNull();
+      view.unmount();
     }
   });
 

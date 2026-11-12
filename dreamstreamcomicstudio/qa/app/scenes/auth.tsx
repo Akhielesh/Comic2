@@ -2,7 +2,7 @@
 // it — the invite notice, the sign-in / sign-up switch and the whole sign-up form (every field, both
 // consents, the submit) on the Atlas tokens. The page brings its own <main>. The invite code is synthetic;
 // nothing is submitted (the form only acts on submit, and the scene never submits it), so nothing reaches
-// the network.
+// the network. (The sign-in step without an invite is scene `auth-signin`; the access request is `auth-access`.)
 
 import React from 'react';
 import { AuthPage } from '../../../components/AuthPage';

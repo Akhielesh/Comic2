@@ -7,6 +7,7 @@ import { ModalPortal } from './ModalPortal';
 import { IconButton } from '../ds/IconButton';
 import { Input, Textarea } from '../ds/Input';
 import { Select } from '../ds/Select';
+import { Switch } from '../ds/Switch';
 import { cn } from '../../lib/utils';
 import {
   CHIP,
@@ -21,7 +22,6 @@ import {
   SCRIM,
   SECTION_ICON_TILE,
   SECTION_TITLE,
-  STATUS_CHIP_TONE,
   STATUS_INK,
   STATUS_SURFACE,
   TONE_TEXT,
@@ -166,6 +166,41 @@ const BLOCK = `min-w-0 ${RADIUS_PANEL} border border-[var(--ds-hairline-soft)] b
 const TEXT_ACTION = `inline-flex items-center ${RADIUS_CONTROL} text-xs font-medium text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${DENSITY.coarse} ${FOCUS_RING}`;
 /** A vote that is on reads as pressed: the active tint, never a hue alone. */
 const VOTE = 'aria-pressed:bg-[var(--ds-active)] aria-pressed:text-[var(--ds-ink)]';
+
+/**
+ * The export ZIP's project.json: the full project row, except that a governed user's copy leaves out every
+ * dollar figure the state carries (the story plan's `estimatedCostRange`, the agent's `budgetCapUsd`, and any
+ * other `…Usd` amount, such as a v4 comic's per-image `costUsd`), the same rule as the report and artifact files
+ * (house rule: governed users never see dollars). Admins and no-limit accounts get the row unchanged. Only the
+ * objects on a path to a dropped key are copied. The shared home for this is components/steps/comicCostDisplay.ts
+ * (DS-3 wave note), beside costSummaryForExport, so the legacy export step (ReviewExport) can call it too.
+ */
+const DOLLAR_KEY = /Usd$/;
+const withoutDollarFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const out = withoutDollarFields(item);
+      if (out !== item) changed = true;
+      return out;
+    });
+    return changed ? next : value;
+  }
+  if (!value || typeof value !== 'object') return value;
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'estimatedCostRange' || DOLLAR_KEY.test(key)) {
+      changed = true;
+      continue;
+    }
+    const out = withoutDollarFields(item);
+    if (out !== item) changed = true;
+    next[key] = out;
+  }
+  return changed ? next : value;
+};
+const projectForExport = (projectRow: unknown, ctx: { governed: boolean }): unknown => (ctx.governed ? withoutDollarFields(projectRow) : projectRow);
 
 /** One labelled figure (a stat, a size, a cost). `boxed` sets it in its own tile. */
 const Fact: React.FC<{ label: string; boxed?: boolean; children: React.ReactNode }> = ({ label, boxed, children }) => (
@@ -653,7 +688,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     const zip = new JSZip();
     const safeName = project.name.replace(/[^a-zA-Z0-9-_]+/g, '_');
 
-    zip.file('project.json', JSON.stringify(data.project, null, 2));
+    zip.file('project.json', JSON.stringify(projectForExport(data.project, costCtx), null, 2));
 
     const imagesFolder = zip.folder('images');
     const imageFileMap: Record<string, string> = {};
@@ -932,31 +967,32 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     {isPublic ? 'Public' : 'Private'} · Publish from the studio
                   </span>
                   ) : (
-                  <button
-                    type="button"
-                    aria-pressed={isPublic}
-                    onClick={() => {
-                      const next = !isPublic;
-                      setIsPublic(next);
-                      onUpdateProject(project.id, (prev) => {
-                        const existingPublishedAt = prev.publishedAt ?? prev.state.publishedAt;
-                        const publishedAt = next ? (existingPublishedAt ?? Date.now()) : existingPublishedAt;
-                        return {
-                          isPublic: next,
-                          publishedAt,
-                          state: {
-                            ...prev.state,
-                            publishedAt
-                          }
-                        };
-                      });
-                    }}
-                    className={cn(CHIP, isPublic ? STATUS_CHIP_TONE.healthy : CHIP_VARIANT.outline, 'gap-1.5 px-3 py-1 text-xs', DENSITY.coarse, FOCUS_RING)}
+                  // A setting, not a status: a switch with one constant name ("Public in the Library") whose state is
+                  // aria-checked and the track (never a name that flips between Public and Private).
+                  <label
+                    className={cn('inline-flex min-w-0 cursor-pointer items-center gap-2 text-xs font-medium text-[var(--ds-ink)]', DENSITY.coarse)}
                     title={isPublic ? "Visible in the Library" : "Only visible to you"}
                   >
-                    {isPublic ? <Globe size={14} aria-hidden /> : <Lock size={14} aria-hidden />}
-                    {isPublic ? 'Public' : 'Private'}
-                  </button>
+                    <Switch
+                      checked={isPublic}
+                      onCheckedChange={(next) => {
+                        setIsPublic(next);
+                        onUpdateProject(project.id, (prev) => {
+                          const existingPublishedAt = prev.publishedAt ?? prev.state.publishedAt;
+                          const publishedAt = next ? (existingPublishedAt ?? Date.now()) : existingPublishedAt;
+                          return {
+                            isPublic: next,
+                            publishedAt,
+                            state: {
+                              ...prev.state,
+                              publishedAt
+                            }
+                          };
+                        });
+                      }}
+                    />
+                    <span className="min-w-0">Public in the Library</span>
+                  </label>
                   )}
                 </div>
                 <Textarea
@@ -1352,7 +1388,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                           {expandedArtifactId === artifact.id && (
                             <tr className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)]">
                               <td colSpan={14} className="p-3">
-                                <pre className="whitespace-pre-wrap text-[11px] [overflow-wrap:anywhere]">{JSON.stringify(costCtx.governed ? artifactsForExport([artifact], costCtx) : artifact, null, 2)}</pre>
+                                <pre className="whitespace-pre-wrap text-[11px] [overflow-wrap:anywhere]" data-testid="artifact-json">{JSON.stringify((artifactsForExport([artifact], costCtx) as unknown[])[0], null, 2)}</pre>
                               </td>
                             </tr>
                           )}

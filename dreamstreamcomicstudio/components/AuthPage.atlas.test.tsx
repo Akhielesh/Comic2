@@ -6,7 +6,7 @@
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STATUS_SURFACE } from './chat/studioDesign';
+import { DENSITY, STATUS_SURFACE } from './chat/studioDesign';
 
 const auth = vi.hoisted(() => ({ signInWithPassword: vi.fn(), signOut: vi.fn() }));
 vi.mock('../services/supabase', () => ({
@@ -79,6 +79,47 @@ describe('AuthPage on Atlas', () => {
     expect(onOpenPrivacy).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('checkbox', { name: /I accept the Terms and Conditions/ })).not.toBeChecked();
     expect(container.innerHTML).not.toMatch(LEGACY);
+  });
+
+  it('the sign-in link has one name, and every submit label is in sentence case (“Enter Studio” stays)', () => {
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in link' }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Email me a sign-in link' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send the link' })).toHaveAttribute('type', 'submit');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to password sign-in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    expect(screen.getByRole('button', { name: 'Send reset link' })).toHaveAttribute('type', 'submit');
+    cleanup();
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} pendingInviteCode="DS-ABCD-EFGH" />);
+    expect(screen.getByRole('button', { name: 'Create account' })).toHaveAttribute('type', 'submit');
+    expect(document.body.textContent).not.toMatch(/magic link/i);
+    expect(document.body.textContent).not.toMatch(/Send Magic Link|Send Reset Link|Create Account/);
+  });
+
+  it('pressing the checked “Sign in” on the reset or sign-in-link step goes back to the password step', () => {
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    for (const step of ['Email me a sign-in link', 'Forgot password?']) {
+      fireEvent.click(screen.getByRole('button', { name: step }));
+      expect(screen.queryByRole('heading', { level: 1, name: 'Welcome back' })).toBeNull();
+      const signIn = screen.getByRole('radio', { name: 'Sign in' });
+      expect(signIn).toHaveAttribute('aria-checked', 'true');
+      fireEvent.click(signIn);
+      expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+    }
+    // On the password step itself the press changes nothing.
+    fireEvent.click(screen.getByRole('radio', { name: 'Sign in' }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
+  });
+
+  it('an unverified email offers “Resend verification email” as a 44 px coarse target', async () => {
+    render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/Email or username/), { target: { value: 'ada@example.com' } });
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: 'secret-pass' } });
+    auth.signInWithPassword.mockResolvedValueOnce({ data: {}, error: { message: 'Email not confirmed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enter Studio' }));
+    await settle();
+    const resend = screen.getByRole('button', { name: 'Resend verification email' });
+    for (const cls of DENSITY.coarse.split(' ')) expect(resend.className.split(/\s+/)).toContain(cls);
   });
 
   it('switching to “Request access” (sign-ups closed) shows the access request in place', () => {

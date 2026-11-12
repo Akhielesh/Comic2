@@ -60,8 +60,32 @@ const project = {
   }
 } as unknown as Project;
 
+/** The stored project row: its state carries dollar figures (the story plan's estimate, the agent's cap, a v4 image's cost). */
+const projectRow = () => ({
+  id: 'p1',
+  name: 'The Lantern Keeper',
+  state: {
+    storyPlanning: { approved: true, estimatedCostRange: { currency: '$', minUsd: 1.2, maxUsd: 3.4 } },
+    agentSettings: { autoPageCount: true, budgetCapUsd: 5 },
+    studioPages: [{ id: 'pg1', variants: [{ path: 'pages/pg1/a.png', costUsd: 0.04 }] }]
+  }
+});
+
+/** One generation record, with the local dollar estimate every record carries (GenerationArtifact.cost). */
+const ARTIFACT = {
+  id: 'a1',
+  projectId: 'p1',
+  timestamp: 1_700_000_000_500,
+  type: 'image',
+  model: 'm',
+  prompt: 'The keeper lights the lantern',
+  stage: 'panel',
+  success: true,
+  cost: { currency: '$', value: 0.25, isEstimated: true }
+};
+
 const exportPayload = () => ({
-  project: { id: 'p1' },
+  project: projectRow(),
   images: { img1: PNG, img2: PNG },
   artifacts: [{ id: 'a1', type: 'image', cost: { value: 0.25, currency: '$' } }],
   report: {
@@ -157,23 +181,75 @@ describe('ProjectInfoModal — cost reads the way this user should see it', () =
     const blob = download.downloadBlob.mock.calls[0][0] as Blob;
     const zip = await act(async () => JSZip.loadAsync(blob));
     const read = async (name: string) => JSON.parse(await zip.file(name)!.async('string'));
-    return { summary: await read('report/cost_summary.json'), usage: await read('report/ai_usage.json'), artifacts: await read('artifacts/artifacts.json') };
+    return {
+      summary: await read('report/cost_summary.json'),
+      usage: await read('report/ai_usage.json'),
+      artifacts: await read('artifacts/artifacts.json'),
+      projectJson: await zip.file('project.json')!.async('string')
+    };
   };
 
   it('the project ZIP a governed user downloads carries token counts, not dollar estimates', async () => {
     await open();
-    const { summary, usage, artifacts } = await zipReport();
+    const { summary, usage, artifacts, projectJson } = await zipReport();
     expect(JSON.stringify([summary, usage, artifacts])).not.toMatch(/"cost"|totalCost|"currency"/);
     expect(summary.byModel).toEqual({ m: { tokens: 120 } });
     expect(usage.totalTokens).toBe(120);
     expect(artifacts).toEqual([{ id: 'a1', type: 'image' }]);
+    // project.json is the whole project, without the dollar figures its state carries.
+    expect(projectJson).not.toMatch(/Usd|"currency"|estimatedCostRange/);
+    const row = JSON.parse(projectJson);
+    expect(row.state.storyPlanning).toEqual({ approved: true });
+    expect(row.state.agentSettings).toEqual({ autoPageCount: true });
+    expect(row.state.studioPages).toEqual([{ id: 'pg1', variants: [{ path: 'pages/pg1/a.png' }] }]);
   });
 
   it('an admin’s ZIP keeps the full report', async () => {
     allowance.status = ADMIN;
     await open();
-    const { summary, artifacts } = await zipReport();
+    const { summary, artifacts, projectJson } = await zipReport();
     expect(summary.totalCost).toBe(0.5);
     expect(artifacts[0].cost).toEqual({ value: 0.25, currency: '$' });
+    expect(JSON.parse(projectJson)).toEqual(projectRow());
+  });
+
+  const viewArtifact = async () => {
+    db.loadArtifactsForProject.mockResolvedValue([{ ...ARTIFACT }]);
+    await open();
+    // The generation log loads a moment after the dialog opens (one 400 ms wait, never repeated).
+    fireEvent.click(await screen.findByRole('button', { name: 'View' }, { timeout: 2000 }));
+    return screen.getByTestId('artifact-json');
+  };
+
+  it('a governed user’s generation log “View” shows the record without its dollar estimate', async () => {
+    const json = await viewArtifact();
+    expect(json.textContent).toContain('"prompt": "The keeper lights the lantern"');
+    expect(json.textContent).not.toMatch(/"cost"|\$/);
+    expect(screen.getByRole('dialog', { name: 'The Lantern Keeper' }).textContent).not.toMatch(/\$|¢/);
+  });
+
+  it('an admin’s “View” keeps the whole record, its cost included', async () => {
+    allowance.status = ADMIN;
+    const json = await viewArtifact();
+    expect(JSON.parse(json.textContent || '{}')).toEqual(ARTIFACT);
+  });
+});
+
+describe('ProjectInfoModal — the Library setting', () => {
+  it('is a switch with one name (never “Public” or “Private” as its name), its state in aria-checked', async () => {
+    const onUpdateProject = vi.fn();
+    render(<ProjectInfoModal project={project} onClose={vi.fn()} onUpdateProject={onUpdateProject} />);
+    await screen.findByText('Artifacts');
+    const toggle = screen.getByRole('switch', { name: 'Public in the Library' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('button', { name: /^(Public|Private)$/ })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('switch', { name: 'Public in the Library' })).toHaveAttribute('aria-checked', 'true');
+    expect(onUpdateProject).toHaveBeenCalledTimes(1);
+    const [id, update] = onUpdateProject.mock.calls[0];
+    expect(id).toBe('p1');
+    expect(update({ ...project, publishedAt: undefined })).toMatchObject({ isPublic: true });
+    // A setting, not a status: no status tone on it.
+    expect(toggle.closest('label')?.className).not.toMatch(/healthy|success|--ds-success/);
   });
 });

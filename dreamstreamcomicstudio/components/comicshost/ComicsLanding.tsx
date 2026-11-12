@@ -6,7 +6,7 @@
 // via onSignIn / onRequestAccess.
 //
 // The one "start making" call to action is the hero's (heroButton). It is the ink primary until the colour
-// layer (CL-0) lands, then the spark: see docs/design/design-system.md § Colour layer and the DS-3 wave note.
+// layer (CL-0) lands, then the spark: PROGRAM3 §3.5 "DS-3 (S2)" (CL-3) and DS-3's wave note 4 hold the exact change.
 
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, LayoutGrid, LogIn, Mail } from 'lucide-react';
@@ -136,8 +136,9 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-6">
           <div className="flex min-h-[44px] min-w-0 items-center gap-2.5">
             <ComicsMark size={36} className="shrink-0" />
-            {/* Below 360 px the mark stands alone, so the Library and Sign in stay whole; the name stays for screen readers. */}
-            <span className="min-w-0 leading-tight max-[359px]:sr-only">
+            {/* Below the medium screen (600 px) the mark stands alone, so Library and Sign in stay whole and the name is
+                never cut; it stays for screen readers. Named screens only: this config's raw screens disable min-[…]/max-[…]. */}
+            <span className="min-w-0 leading-tight sr-only medium:not-sr-only" data-testid="comics-wordmark">
               <span className={`block truncate ${OVERLINE}`}>DreamStream</span>
               <span className="block truncate text-base font-semibold">Comic Studio</span>
             </span>

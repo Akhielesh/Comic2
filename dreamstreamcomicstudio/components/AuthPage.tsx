@@ -281,7 +281,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             } else if (mode === 'magic-link') {
                 const normalizedEmail = email.trim().toLowerCase();
                 if (!EMAIL_REGEX.test(normalizedEmail)) {
-                    throw new Error("Enter a valid email to receive a magic link.");
+                    throw new Error("Enter a valid email to receive a sign-in link.");
                 }
                 setAuthPersistMode(rememberMe ? 'local' : 'session');
 
@@ -294,7 +294,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 // Every auth email comes from dreamstreamstudio.ai — never fall back to Supabase's own mailer.
                 if (viaApi.status === 'unreachable') throw new Error(EMAIL_SERVICE_DOWN);
 
-                setMessage("Magic link sent! Check your email to continue.");
+                setMessage("Sign-in link sent. Check your email to continue.");
                 setMode('signin');
             } else if (mode === 'forgot') {
                 const normalizedEmail = email.trim().toLowerCase();
@@ -331,6 +331,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const choice: 'signin' | 'join' = mode === 'signin' || mode === 'forgot' || mode === 'magic-link' ? 'signin' : 'join';
     const chooseSignIn = () => { setMode('signin'); resetNotices(); };
     const chooseJoin = () => { setMode(signupsAllowed ? 'signup' : 'request-access'); resetNotices(); };
+    const onChoiceClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (mode !== 'forgot' && mode !== 'magic-link') return;
+        const radio = (e.target as HTMLElement).closest('[role="radio"]');
+        // In these steps the checked radio is "Sign in" (choice === 'signin').
+        if (radio && radio.getAttribute('aria-checked') === 'true') chooseSignIn();
+    };
     const showPasswordLabel = showPassword ? 'Hide password' : 'Show password';
     const heading = AUTH_HEADINGS[mode];
 
@@ -339,7 +345,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             <AuthBrand />
 
             <div className={`w-full max-w-md overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] ${SHADOW_SOFT}`}>
-                <div className="border-b border-[var(--ds-hairline-soft)] p-3">
+                {/* On the reset and sign-in-link steps "Sign in" is already the checked radio, so the Segmented sends no
+                    change: a press on it (click, Space or Enter) still goes back to the password step, as the old tab did. */}
+                <div className="border-b border-[var(--ds-hairline-soft)] p-3" onClick={onChoiceClick}>
                     <Segmented
                         label="Sign in or join"
                         fullWidth
@@ -416,7 +424,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                 type="button"
                                 onClick={handleResendVerification}
                                 disabled={isLoading}
-                                className={`${textLink} font-medium disabled:opacity-60`}
+                                className={`inline-flex items-center ${textLink} font-medium ${DENSITY.coarse} disabled:opacity-60`}
                             >
                                 {isLoading ? 'Sending…' : 'Resend verification email'}
                             </button>
@@ -598,10 +606,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             {mode === 'signin'
                                 ? 'Enter Studio'
                                 : mode === 'magic-link'
-                                    ? 'Send Magic Link'
+                                    ? 'Send the link'
                                     : mode === 'forgot'
-                                        ? 'Send Reset Link'
-                                        : 'Create Account'} <ArrowRight aria-hidden />
+                                        ? 'Send reset link'
+                                        : 'Create account'} <ArrowRight aria-hidden />
                         </Button>
                     </form>
                     </>)}
@@ -620,13 +628,13 @@ const AUTH_HEADINGS: Record<'signin' | 'signup' | 'forgot' | 'magic-link' | 'req
     signin: { title: 'Welcome back', body: 'Sign in with your email or username.' },
     signup: { title: 'Create your account' },
     forgot: { title: 'Reset your password', body: 'Enter your email to receive a reset link.' },
-    'magic-link': { title: 'Sign in with a magic link', body: 'Enter your email and we will send a secure sign-in link.' },
+    'magic-link': { title: 'Email me a sign-in link', body: 'Enter your email and we will send a secure sign-in link.' },
     'request-access': { title: 'Request access' }
 };
 
 /** A link inside a sentence: ink, underlined, the focus outline. */
 const textLink = `${RADIUS_CONTROL} text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${FOCUS_RING}`;
-/** A small secondary step (magic link, reset, back): muted text, 44 px tall under a coarse pointer. */
+/** A small secondary step (sign-in link, reset, back): muted text, 44 px tall under a coarse pointer. */
 const quietAction = `inline-flex items-center ${RADIUS_CONTROL} text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] hover:underline ${DENSITY.coarse} ${FOCUS_RING}`;
 
 /**

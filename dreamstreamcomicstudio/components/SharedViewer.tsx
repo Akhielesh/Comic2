@@ -25,7 +25,8 @@ export const signInHref = (shareToken: string): string => `/?next=${encodeURICom
  * - `login_required`: the owner asks readers to sign in (401, or `loginRequired` on another status);
  * - `not_active`: the link no longer opens a comic for this reader: revoked or never existed (404), expired
  *   (410), not shared with this account (403), or a Comic Studio comic that has its own studio link (409);
- * - `error`: it could not be opened right now (offline, a server error): the reader may try again.
+ * - `error`: it could not be opened right now (offline, a server error): the reader may try again. `message` is
+ *   the raw client or server text: kept for the console, never shown (the card says what happened in plain words).
  */
 export type SharedViewerNotice =
     | { status: 'loading' }
@@ -50,7 +51,8 @@ export const sharedViewerNoticeFor = (err: unknown): Exclude<SharedViewerNotice,
 const NOT_ACTIVE_COPY: Record<'gone' | 'expired' | 'no_access' | 'studio', { title: string; body: string }> = {
     gone: { title: 'This link isn’t active', body: 'The person who shared it may have turned it off. Ask them for a new link.' },
     expired: { title: 'This link has expired', body: 'Shared links can be set to end after a while. Ask the person who shared it for a new one.' },
-    no_access: { title: 'This comic isn’t shared with you', body: 'It was shared with specific people. If you think that includes you, sign in with that account or ask the creator.' },
+    // 403 reaches only a reader who is already signed in (server/src/routes/sharing.ts): no sign-in advice here.
+    no_access: { title: 'This comic isn’t shared with you', body: 'You’re signed in with an account it wasn’t shared with. Ask the creator to share it with this account.' },
     studio: { title: 'This comic has a newer link', body: 'It’s shared from Comic Studio now. Ask the creator for its studio link.' }
 };
 
@@ -115,7 +117,7 @@ export const SharedViewerStateView: React.FC<SharedViewerStateViewProps> = ({ no
         actions = goHome;
     } else {
         icon = <RefreshCw />;
-        title = 'We couldn’t open this comic';
+        title = 'Couldn’t open this comic';
         body = 'Something got in the way while checking the link. Check your connection, then try again.';
         actions = (
             <>
@@ -129,14 +131,13 @@ export const SharedViewerStateView: React.FC<SharedViewerStateViewProps> = ({ no
         );
     }
 
+    // A load failure is an alert (redesign §8: "Couldn't …" + Try again, role=alert); the settled answers about the
+    // link (sign in, not active) are calm statuses.
     return (
-        <div role="status" data-shared-state={notice.status} className="flex min-w-0 flex-col items-center gap-2 text-center">
+        <div role={notice.status === 'error' ? 'alert' : 'status'} data-shared-state={notice.status} className="flex min-w-0 flex-col items-center gap-2 text-center">
             <StateIconTile>{icon}</StateIconTile>
             <H className={STATE_TITLE}>{title}</H>
             <p className={cn(STATE_DESCRIPTION, 'max-w-md')}>{body}</p>
-            {notice.status === 'error' && notice.message ? (
-                <p className="m-0 max-w-md text-[length:var(--ds-text-sm)] text-[var(--ds-muted)] [overflow-wrap:anywhere]">{notice.message}</p>
-            ) : null}
             {actions ? <div className="mt-4 flex flex-wrap items-center justify-center gap-2">{actions}</div> : null}
         </div>
     );
@@ -173,7 +174,11 @@ export const SharedViewer: React.FC<SharedViewerProps> = ({
                     allowDownload: res.share.allowDownload,
                 });
             } catch (err: unknown) {
-                if (active) setState(sharedViewerNoticeFor(err));
+                if (!active) return;
+                const notice = sharedViewerNoticeFor(err);
+                // The raw text ("Failed to fetch", "Internal error") is for whoever debugs, not for the reader.
+                if (notice.status === 'error') console.warn('The share link could not be opened.', notice.message ?? '');
+                setState(notice);
             }
         };
         validate();
