@@ -142,8 +142,11 @@ Comic Studio handle (profiles, comments, the gallery) and is never changed by a 
 Stream Studio used to keep its own copy of the display name (and events, nursery
 alert opt-ins, call settings) in `localStorage`, and no sign-out cleared it — so it
 greeted the last person by name. Now `live/accountPurge.ts` wipes everything
-personal Stream Studio keeps on a device (device preferences such as theme, lens and
-tours stay) when:
+personal Stream Studio keeps on a device, including guest passes from nurseries' share
+links (`ds-monitor-guest-<nursery>`: a working pass to watch that nursery under the name
+typed for it; a guest who never signed in keeps theirs, since nothing purges a device no
+account owns), while device preferences such as theme, lens, tours and the device's
+monitor name stay, when:
 - you sign out in Stream Studio, or in the main app (`contexts/AuthContext.tsx`);
 - Stream Studio loads with no session but a previous owner (`ds-live-owner`), or a
   different person signs in;

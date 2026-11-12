@@ -140,6 +140,31 @@ describe('retire', () => {
     expect(b.storage.keys()).toEqual(['dreamstream_auth_token', 'ds-theme']);
   });
 
+  it('account: a guest pass from a share link goes too, as signing out here would remove it', async () => {
+    const b = loadBridge();
+    seed(b.storage);
+    b.storage.setItem(`ds-monitor-guest-${A}`, '{"token":"room-issued","name":"Sam"}');
+    await b.send({ op: 'retire', scope: 'account', uid: 'u1', reason: 'signout' });
+    expect(b.storage.getItem(`ds-monitor-guest-${A}`)).toBeNull();
+  });
+
+  it('account: unsaved recordings from before entries carried an owner go to the account signing out first, as every wipe in the app settles them (accountPurge settleUnownedRecordings), so the next person here isn\'t offered them', async () => {
+    const b = loadBridge();
+    seed(b.storage);
+    const old = { name: 'ds-rec-old', file: 'old.webm', mime: 'video/webm', eventId: 'e1', title: "X's stream", at: 1, durMs: 1, bytes: 1 };
+    const tagged = { ...old, name: 'ds-rec-tagged', owner: 'u2' };
+    b.storage.setItem('ds-live-unsaved-recordings', JSON.stringify([old, tagged]));
+    await b.send({ op: 'retire', scope: 'account', uid: 'u1', reason: 'signout' });
+    expect(b.storage.getItem('ds-live-owner')).toBeNull();
+    expect(JSON.parse(b.storage.getItem('ds-live-unsaved-recordings')!)).toEqual([{ ...old, owner: 'u1' }, tagged]);
+    // Only the account scope changes the owner, so only it settles them.
+    const a = loadBridge();
+    seed(a.storage);
+    a.storage.setItem('ds-live-unsaved-recordings', JSON.stringify([old]));
+    await a.send({ op: 'retire', scope: 'alerts', uid: 'u1', reason: 'covered' });
+    expect(JSON.parse(a.storage.getItem('ds-live-unsaved-recordings')!)).toEqual([old]);
+  });
+
   it('never for another account, and never without knowing whose sign-out it is', async () => {
     const b = loadBridge();
     seed(b.storage, 'someone-else');
@@ -169,5 +194,14 @@ describe('kept in step with live/accountPurge.ts', () => {
     expect(PURGE_SRC).toMatch(/OWNER_KEY = 'ds-live-owner'/);
     expect(list(SRC, 'EXACT')).toEqual(list(PURGE_SRC, 'EXACT'));
     expect(list(SRC, 'PREFIXES')).toEqual(list(PURGE_SRC, 'PREFIXES'));
+  });
+
+  it('settles unowned recordings first, on the same registry key and the same rule (an entry with no owner field gets the device owner, or null)', () => {
+    expect(PURGE_SRC).toContain("export const UNSAVED_RECORDINGS_KEY = 'ds-live-unsaved-recordings';");
+    expect(SRC).toContain("var UNSAVED = 'ds-live-unsaved-recordings';");
+    expect(PURGE_SRC).toMatch(/export function purgeLiveAccountData\(\): void \{\s*settleUnownedRecordings\(\);/);
+    expect(SRC).toMatch(/var wipeAccount = d\.scope === 'account';\s*if \(wipeAccount\) settleUnownedRecordings\(s\);\s*keys\(s\)\.forEach/);
+    expect(PURGE_SRC).toContain("(r as Record<string, unknown>).owner === undefined;");
+    expect(SRC).toContain("return !!r && typeof r === 'object' && r.owner === undefined;");
   });
 });

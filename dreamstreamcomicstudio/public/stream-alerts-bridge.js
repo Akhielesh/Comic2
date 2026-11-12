@@ -25,7 +25,8 @@
   // What a Stream Studio account leaves on a device — the same lists as live/accountPurge.ts
   // (a test keeps them in step).
   var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-unconfirmed-revokes', 'ds-live-viewer-name', 'ds-call-names', 'ds-calls-ok', 'ds-live-owner'];
-  var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-track-queue-', 'ds-usage-'];
+  var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-monitor-guest-', 'ds-track-queue-', 'ds-usage-'];
+  var UNSAVED = 'ds-live-unsaved-recordings';
 
   function storage() {
     try {
@@ -79,6 +80,28 @@
     return { ok: true, endpoint: sub ? sub.endpoint : null, nids: nids, ring: ring, owner: owner };
   }
 
+  /**
+   * Before the owner goes: unsaved recordings left from before recordings carried an owner go to the
+   * account that holds this device (or to none), as live/accountPurge.ts settleUnownedRecordings does
+   * before every wipe there, so whoever opens Stream Studio here next isn't offered them.
+   */
+  function settleUnownedRecordings(s) {
+    try {
+      var list = JSON.parse(s.getItem(UNSAVED) || '[]');
+      if (!Array.isArray(list)) return;
+      var untagged = function (r) {
+        return !!r && typeof r === 'object' && r.owner === undefined;
+      };
+      if (!list.some(untagged)) return;
+      var owner = s.getItem(OWNER);
+      s.setItem(UNSAVED, JSON.stringify(list.map(function (r) {
+        return untagged(r) ? Object.assign({}, r, { owner: owner }) : r;
+      })));
+    } catch (e) {
+      /* storage unavailable or unreadable */
+    }
+  }
+
   async function retire(d) {
     var s = storage();
     var uid = typeof d.uid === 'string' && d.uid ? d.uid : null;
@@ -97,6 +120,7 @@
     }
     if (s) {
       var wipeAccount = d.scope === 'account';
+      if (wipeAccount) settleUnownedRecordings(s);
       keys(s).forEach(function (k) {
         var alerts = k.indexOf('ds-monitor-push-') === 0 || k === RING;
         var account = wipeAccount && (EXACT.indexOf(k) !== -1 || PREFIXES.some(function (p) { return k.indexOf(p) === 0; }));

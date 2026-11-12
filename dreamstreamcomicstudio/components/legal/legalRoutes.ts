@@ -156,7 +156,17 @@ export const pushLegalPath = (id: LegalDocId, section?: string): void => {
     if (entryHasBackLayers()) return;
     const path = legalPath(id);
     const fragment = section ? `#${section}` : '';
-    if (window.location.pathname === path && window.location.hash === fragment && !window.location.search) return;
+    if (window.location.pathname === path && !window.location.search) {
+      // The document is already shown, maybe at a #section after a table-of-contents jump: a new
+      // entry would be one Back only returns to the same page from. The current entry takes the
+      // fragment asked for, with its state (so its mark), and the page goes where the link points,
+      // since the view doesn't change and the document doesn't land anywhere by itself.
+      if (window.location.hash !== fragment) window.history.replaceState(window.history.state, '', `${path}${fragment}`);
+      const target = section ? document.getElementById(section) : null;
+      if (target) target.scrollIntoView?.();
+      else if (!section) (document.scrollingElement ?? document.documentElement)?.scrollTo?.({ top: 0 });
+      return;
+    }
     window.history.pushState(legalEntryState(), '', `${path}${fragment}`);
   } catch {
     clearFragment();

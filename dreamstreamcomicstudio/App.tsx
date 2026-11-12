@@ -442,8 +442,8 @@ const App: React.FC = () => {
   // and phone sheet (the reader has left its back-stack layer when this runs), the home page's and
   // the Comics landing's footers, and the sign-up form's consent links. The document gets its own
   // entry above the page's, so Back (the browser's, or the document's own button) shows that page
-  // again (the comic, Home, the sign-up form) instead of skipping it or leaving the site, and a
-  // /share/<token> address is never overwritten.
+  // again (the comic, Home, the sign-in/sign-up page, whose fields start empty again) instead of
+  // skipping it or leaving the site, and a /share/<token> address is never overwritten.
   const openLegal = (doc: LegalDocId) => () => {
     pushLegalPath(doc);
     setCurrentView(doc);

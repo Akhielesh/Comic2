@@ -53,7 +53,9 @@ describe('email templates', () => {
     for (const part of [out.html, out.text]) {
       expect(part).not.toMatch(/won.t hear from us again|One click to confirm|lock in your spot/i);
       expect(part).toMatch(/press Confirm/);
-      expect(part).toContain('you may get up to 3 of these a day');
+      // 3 a day per inbox key (emailStore.inboxKey folds only +tags and Gmail dots), so other spellings
+      // that reach one inbox (Proton's dots, me.com/icloud.com, catch-alls) each get their own 3.
+      expect(part).toMatch(/you may get up to 3 of these a day, or more if it(?:'|&#39;)s entered in other spellings that reach the same inbox\./);
       // Ignoring it means no updates, not that nothing happens: the address is already stored, and a
       // service announcement can still reach it (the Privacy Policy's emails section says so).
       expect(part).not.toMatch(/nothing happens/i);

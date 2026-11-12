@@ -1,4 +1,7 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -132,6 +135,22 @@ describe('legal links outside the shared footer open the document on its own ent
         await browserBack();
         await waitFor(() => expect(viewText()).toBe('View: auth'));
         expect(address()).toBe('/?view=auth');
+    });
+
+    it('Back returns to the sign-up page, but with its fields empty again (AuthPage keeps them in its own state, and the document replaces it): App\'s openLegal says so', async () => {
+        arriveFromElsewhere('/?view=auth');
+        render(<Shell initial="auth" />);
+        const email = () => document.querySelector('input[type="email"]') as HTMLInputElement;
+        fireEvent.change(email(), { target: { value: 'invitee@example.com' } });
+        expect(email().value).toBe('invitee@example.com');
+        fireEvent.click(screen.getAllByRole('button', { name: 'Terms of Service' })[0]);
+        await heading('Terms of Service');
+        await browserBack();
+        await waitFor(() => expect(viewText()).toBe('View: auth'));
+        expect(email().value).toBe('');
+        const app = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../App.tsx'), 'utf8');
+        expect(app).toContain('again (the comic, Home, the sign-in/sign-up page, whose fields start empty again) instead of');
+        expect(app).not.toContain('again (the comic, Home, the sign-up form) instead of');
     });
 
     it('the home page opened cold → its footer "Privacy Policy" → the browser\'s Back → the home page, still on DreamStream', async () => {

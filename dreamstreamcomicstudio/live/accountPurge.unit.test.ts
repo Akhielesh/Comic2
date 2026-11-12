@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { claimDevice, OWNER_KEY, purgeLiveAccountData } from './accountPurge';
+import { claimDevice, OWNER_KEY, purgeLiveAccountData, takeOverDevice } from './accountPurge';
+import { holdsGuestPass } from './accessGate';
+import { loadGuest } from './monitor/guest';
 import { unsavedRecordingsOf, type UnsavedRecording } from './recorder';
 
 const read = (rel: string) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', rel), 'utf8');
@@ -14,16 +16,17 @@ const seed = () => {
   localStorage.setItem('ds-monitor-push-n1', '1');
   localStorage.setItem('ds-track-queue-n1', '[]');
   localStorage.setItem('ds-call-ring', '1');
+  // A guest pass from a nursery's share link: a working pass to watch that nursery as this person.
+  localStorage.setItem('ds-monitor-guest-n2', '{"token":"g"}');
   // Device things that aren't personal stay.
   localStorage.setItem('ds-live-theme', 'dark');
-  localStorage.setItem('ds-monitor-guest-n2', '{"token":"g"}');
   localStorage.setItem('ds-live-tour-welcome-done', '1');
 };
 
 describe('Stream Studio sign-out wipe', () => {
   beforeEach(() => localStorage.clear());
 
-  it('removes the name, events, nursery data and call settings — keeps device preferences', () => {
+  it('removes the name, events, nursery data (guest passes included) and call settings — keeps device preferences', () => {
     seed();
     purgeLiveAccountData();
     expect(localStorage.getItem('ds-live-prefs')).toBeNull();
@@ -31,9 +34,34 @@ describe('Stream Studio sign-out wipe', () => {
     expect(localStorage.getItem('ds-monitor-push-n1')).toBeNull();
     expect(localStorage.getItem('ds-track-queue-n1')).toBeNull();
     expect(localStorage.getItem('ds-call-ring')).toBeNull();
+    expect(localStorage.getItem('ds-monitor-guest-n2')).toBeNull();
     expect(localStorage.getItem('ds-live-theme')).toBe('dark');
-    expect(localStorage.getItem('ds-monitor-guest-n2')).not.toBeNull();
     expect(localStorage.getItem('ds-live-tour-welcome-done')).toBe('1');
+  });
+
+  it('a guest pass from a share link goes with the account (the Cookies notice says so): the next person here can\'t watch that nursery as them; a guest who never signed in keeps theirs', () => {
+    const NID = '11111111-2222-4333-8444-555555555555';
+    const pass = JSON.stringify({ token: 'room-issued', name: 'Grandma', role: 'viewer', until: Date.now() + 3_600_000, nursery: { name: 'Nursery', baby: 'Mia' } });
+    const watch = { view: 'monitor-watch', nid: NID } as unknown as Parameters<typeof holdsGuestPass>[0];
+    // Signed in as A on a shared device, A joined a nursery A isn't a member of with its link.
+    localStorage.setItem(OWNER_KEY, 'u-a');
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    expect(holdsGuestPass(watch)).toBe(true);
+    purgeLiveAccountData(); // A signs out
+    expect(loadGuest(NID)).toBeNull();
+    expect(holdsGuestPass(watch)).toBe(false);
+    // The same on an account switch and on the next load after a sign-out elsewhere.
+    localStorage.setItem(OWNER_KEY, 'u-a');
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    takeOverDevice('u-b');
+    expect(loadGuest(NID)).toBeNull();
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    expect(claimDevice(null)).toBe(true);
+    expect(loadGuest(NID)).toBeNull();
+    // Nobody signed in here: a share-link guest's own pass stays, load after load.
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    expect(claimDevice(null)).toBe(false);
+    expect(loadGuest(NID)?.name).toBe('Grandma');
   });
 
   it('removes this device’s usage too: a nursery’s relay data (parents only), last nights, the month’s ledger, hosted meetings, notices', () => {

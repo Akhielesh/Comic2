@@ -35,6 +35,7 @@ import {
     isLegalDocId,
     isOnLegalPage,
     keepLegalEntryMark,
+    legalBackGoesBack,
     legalDocForPath,
     legalEntryState,
     legalPath,
@@ -507,12 +508,21 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(AI_PROVIDERS.find((p) => p.name === 'OpenRouter')!.purpose).toContain("Chat Studio's memory notes are written through it whenever the chat, or your pick under Settings → API & Models, uses OpenRouter");
         expect(AI_PROVIDERS.find((p) => p.name === 'Ideogram, Pixazo (Flux)')!.purpose).toContain('In the classic editor and Page Studio, Ideogram also when the Gemini image models fail');
         expect(textOf(subs.querySelector('#ai-models') as HTMLElement)).toContain("NVIDIA also does Comic Studio's writing steps");
-        const cookies = textOf(renderDoc('cookies').main.querySelector('#your-choices') as HTMLElement);
+        const cookiesMain = renderDoc('cookies').main;
+        const cookies = textOf(cookiesMain.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
         expect(cookies).toContain('One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there or, if there was none, is offered to anyone who opens Stream Studio on that device');
         // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
-        expect(cookies).toContain('the names of people you called and the name you used as a viewer) and ends its alert subscription. Three things stay.');
-        expect(cookies).toContain("This browser's baby-monitor encryption keys stay: its own keys, its copies of nursery keys, and which cameras it has seen encrypt");
+        // Guest passes from share links go with the account (accountPurge PREFIXES), and the list of what
+        // stays no longer claims to be three things: device settings stay too.
+        expect(cookies).toContain("nursery data, guest passes from a nursery's share link, call settings, the names of people you called and the name you used as a viewer) and ends its alert subscription.");
+        expect(cookies).toContain('A guest who joined with a share link without signing in keeps their pass on that device until it ends or a parent ends it. These stay after a sign-out.');
+        expect(cookies).not.toContain('Three things stay');
+        expect(cookies).toContain("This browser's baby-monitor encryption data stays: its own keys, its copies of nursery keys, the counters its encryption uses, and which cameras it has seen encrypt");
+        expect(cookies).toContain('Device settings stay too: your preferences (theme, camera lens, tours seen, the tracker\'s units and similar), the name this device goes by in the baby monitor, and the folder you picked for saving recordings.');
+        expect(read('live/accountPurge.ts')).toMatch(/const PREFIXES = \[[^\]]*'ds-monitor-guest-'/);
+        for (const kept of ['ds-monitor-device', 'ds-relay-seq-']) expect(read('live/accountPurge.ts'), kept).not.toContain(`'${kept}`);
+        expect(textOf(cookiesMain.querySelector('#what-we-store') as HTMLElement)).toContain('guest passes for nurseries you joined with a share link');
         expect(cookies).toContain("Changes to your call favourites and blocks that haven't reached our server yet stay, for your account only, until they do.");
         expect(cookies).toContain('Each is offered only to the account its studio was opened for.');
         expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them.');
@@ -525,7 +535,10 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(textOf(privacyMain.querySelector('#ai-processing') as HTMLElement)).toContain('Free models in particular may keep what they receive and learn from it, that is, use it to train or improve their models.');
         expect(privacy).toContain('The Contact form in Settings sends our database the email address you enter, your message, a phone number if you add one, and your account, so we can reply by email.');
         expect(textOf(privacyMain.querySelector('#retention') as HTMLElement)).toMatch(/Messages sent with the Contact form in Settings\s*How long\s*Not deleted automatically today; email us to have yours deleted\./);
-        expect(privacy).toContain('You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list: what you paste or upload (up to the first 24,000 characters) is sent with the list to an AI model, the same way as the notes written from Chat Studio');
+        // What an import sends: pasted text up to its first 24,000 characters, but from an export file the
+        // text the user wrote from anywhere in it (services/memoryImport.ts; legalFacts.test.ts runs it).
+        expect(privacy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first 24,000 characters; from a data-export file (such as ChatGPT's or Claude's conversations file) or other JSON, it sends the text you wrote, taken from anywhere in the file: your own messages in its past conversations and its memory and instruction entries, but not the assistant's replies, up to 24,000 characters. That is sent with the list to an AI model, the same way as the notes written from Chat Studio");
+        expect(privacy).not.toContain('what you paste or upload (up to the first');
     });
 
     it('Privacy: API keys, the assistant, usage events, location, images, emails, events and sign-in records', () => {
@@ -931,6 +944,55 @@ describe('Back from a legal page shows the view the entry names (App routing in 
         pageBack();
         await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
         expect(address()).toBe('/?view=gallery');
+    });
+
+    it('a link to a section of another document leaves keyboard focus on that section, as a jump on the same page does (not on <body>)', async () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        window.history.replaceState({}, '', '/?view=gallery');
+        render(<Shell initial="gallery" />);
+        clickFooter('Terms of Service');
+        await heading('Terms of Service');
+        const link = screen.getByRole('link', { name: 'Children section of the Privacy Policy' });
+        link.focus();
+        fireEvent.click(link);
+        await heading('Privacy Policy');
+        const children = document.getElementById('children') as HTMLElement;
+        expect(document.activeElement).toBe(children);
+        expect(children.getAttribute('tabindex')).toBe('-1');
+        // A jump on the page shown lands the same way.
+        const toc = within(screen.getByRole('navigation', { name: 'On this page' })).getAllByRole('link');
+        fireEvent.click(toc[2]);
+        expect(document.activeElement?.id).toBe((toc[2].getAttribute('href') as string).slice(1));
+    });
+
+    it('after a table-of-contents jump, a link to the document already shown adds no entry: it drops the #section, goes to the top, and one Back leaves the document', async () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        const toTop = vi.fn();
+        const el = document.scrollingElement ?? document.documentElement;
+        const scrollTo = (el as HTMLElement & { scrollTo?: unknown }).scrollTo;
+        (el as HTMLElement & { scrollTo: unknown }).scrollTo = toTop;
+        try {
+            window.history.replaceState({}, '', '/?view=gallery');
+            const before = window.history.length;
+            render(<Shell initial="gallery" />);
+            clickFooter('Privacy Policy');
+            await heading('Privacy Policy');
+            const toc = within(screen.getByRole('navigation', { name: 'On this page' })).getAllByRole('link');
+            fireEvent.click(toc[3]);
+            expect(window.location.hash).toBe(toc[3].getAttribute('href'));
+            toTop.mockClear();
+            // The same document again (the shared footer and the header both push through pushLegalPath).
+            fireEvent.click(screen.getByRole('button', { name: 'Header: Privacy Policy' }));
+            expect(window.history.length).toBe(before + 1);
+            expect(`${window.location.pathname}${window.location.hash}`).toBe('/privacy');
+            expect(legalBackGoesBack()).toBe(true);
+            expect(toTop).toHaveBeenCalledWith({ top: 0 });
+            window.history.back();
+            await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+            expect(address()).toBe('/?view=gallery');
+        } finally {
+            (el as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
+        }
     });
 
     it('a document loaded cold, then a table-of-contents entry: the Back button goes to the Dashboard, and its address keeps no #section', () => {

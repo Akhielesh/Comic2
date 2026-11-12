@@ -16,6 +16,7 @@
 //    the phone share sheet, or download + open drive.google.com.
 import React, { useEffect, useRef, useState } from 'react';
 import { openAuth, useAccount } from '../account';
+import { deviceOwner } from '../accountPurge';
 import { uploadRecording } from '../api';
 import {
   CloudCopyError,
@@ -63,36 +64,63 @@ import { Btn, Meter, cx, type PushToast } from '../ui/primitives';
 
 const DISCARD_KEY = 'ds-live-discard-later';
 
-/** Downloads read the disk copy lazily — delete it later, not right away. */
-function discardLater(name: string | null): void {
-  if (!name) return;
-  removeUnsaved(name);
-  try {
-    const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as { name: string; at: number }[];
-    list.push({ name, at: Date.now() });
-    localStorage.setItem(DISCARD_KEY, JSON.stringify(list.slice(-20)));
-  } catch { /* storage unavailable */ }
+type DiscardItem = { name: string; at: number };
+
+/** The disk copies waiting to be deleted (discardLater). Throws when the list can't be read. */
+function readDiscardList(): DiscardItem[] {
+  const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as unknown;
+  if (!Array.isArray(list)) throw new Error('not a list');
+  return list as DiscardItem[];
 }
 
 /**
- * Run on app start: purge disk copies of recordings downloaded >1 h ago, then any disk copy no list
- * names any more (recorder.ts sweepOrphanRecordings; the ones still waiting here are spared).
+ * Downloads read the disk copy lazily — delete it later, not right away. The name goes on this list
+ * before it leaves the unsaved registry, so it is always on one of the two: the start-up sweep
+ * (sweepOrphanRecordings) lists a disk copy neither names as a recording to recover. No cap: a
+ * name dropped from here would come back as an unsaved recording.
+ */
+function discardLater(name: string | null): void {
+  if (!name) return;
+  try {
+    localStorage.setItem(DISCARD_KEY, JSON.stringify([...readDiscardList(), { name, at: Date.now() }]));
+  } catch { /* storage unavailable */ }
+  removeUnsaved(name);
+}
+
+/**
+ * Run on app start: purge disk copies of recordings downloaded >1 h ago, then list again any disk
+ * copy no list names any more (recorder.ts sweepOrphanRecordings, which reads this list itself, after
+ * reading the disk). Only the names deleted here leave the list, re-read first, so a name another tab
+ * added meanwhile stays on it.
  */
 export async function sweepDiscardedRecordings(): Promise<void> {
-  const keep: { name: string; at: number }[] = [];
+  // Whose data this device holds as the app starts, read before anything here awaits (see
+  // sweepOrphanRecordings): a recording listed again goes to that account.
+  const owner = deviceOwner();
+  let due: string[];
   try {
-    const list = JSON.parse(localStorage.getItem(DISCARD_KEY) || '[]') as { name: string; at: number }[];
-    for (const item of list) {
-      if (Date.now() - item.at > 60 * 60_000) await discardOpfsRecording(item.name);
-      else keep.push(item);
-    }
-    localStorage.setItem(DISCARD_KEY, JSON.stringify(keep));
+    due = readDiscardList().filter((item) => Date.now() - item.at > 60 * 60_000).map((item) => item.name);
   } catch {
     // Storage unavailable or unreadable: without this list nothing can tell an orphan from a
     // download in progress, so no disk copy is touched.
     return;
   }
-  await sweepOrphanRecordings(keep.map((item) => item.name));
+  for (const name of due) await discardOpfsRecording(name);
+  if (due.length) {
+    try {
+      const done = new Set(due);
+      localStorage.setItem(DISCARD_KEY, JSON.stringify(readDiscardList().filter((item) => !done.has(item.name))));
+    } catch {
+      return;
+    }
+  }
+  await sweepOrphanRecordings(() => {
+    try {
+      return readDiscardList().map((item) => item.name);
+    } catch {
+      return null;
+    }
+  }, owner);
 }
 
 type Target = StudioPrefs['saveTarget'];

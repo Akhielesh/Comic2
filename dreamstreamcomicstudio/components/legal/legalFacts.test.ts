@@ -15,6 +15,7 @@ import { assistantChrome } from '../../services/assistantChrome';
 import { FAIR_USE } from '../../shared/stream/usage';
 import { IMAGE_MODELS } from '../../services/imageModels';
 import { inboxKey } from '../../server/src/services/emailStore';
+import { prepareMemoryImportContent } from '../../services/memoryImport';
 import { TOOL_SERVICES } from './SubprocessorsPage';
 import {
     ASSISTANT_SCRIPT_PREVIEW_CHARS,
@@ -184,8 +185,32 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         expect(store).toContain('const key = `${scope}:${inboxKey(email)}`;');
         // Both routes let the claim go once the send is over.
         for (const f of ['server/src/routes/interest.ts', 'server/src/routes/newsletter.ts']) expect(read(f), f).toContain('result.sent();');
-        // The confirmation email's own "up to 3 of these a day" is the throttle's number.
-        expect(read('shared/email/templates.ts')).toContain(`export const NEWSLETTER_CONFIRM_MAX_PER_DAY = ${CONFIRM_EMAIL_LIMITS.maxPerDay};`);
+        // The confirmation email's own "up to 3 of these a day" is the throttle's number, per inbox key:
+        // spellings the key doesn't fold (Proton's dots, me.com/icloud.com, Fastmail subdomains,
+        // catch-alls) reach one inbox with 3 each, and the email says "or more" for them.
+        const templates = read('shared/email/templates.ts');
+        expect(templates).toContain(`export const NEWSLETTER_CONFIRM_MAX_PER_DAY = ${CONFIRM_EMAIL_LIMITS.maxPerDay};`);
+        expect(inboxKey('v.ic@proton.me')).not.toBe(inboxKey('vic@proton.me'));
+        expect(inboxKey('vic@me.com')).not.toBe(inboxKey('vic@icloud.com'));
+        expect(templates).toContain("you may get up to ${NEWSLETTER_CONFIRM_MAX_PER_DAY} of these a day, or more if it's entered in other spellings that reach the same inbox.");
+    });
+
+    it('answer timing and the cap boundary: SECURITY.md states the residuals the code leaves (the slowest 5% of sends with 20+ samples, the hold a send raises, an hour\'s window; several refusals at one cap boundary, and a few sends over a cap)', () => {
+        const store = read('server/src/services/interestStore.ts');
+        expect(store).toContain('return Math.max(answerFloorMs, sorted[Math.ceil(sorted.length * 0.95) - 1]);');
+        expect(store).toContain('export const SENT_SAMPLE_WINDOW_MS = 60 * 60_000;');
+        expect(read('server/src/routes/interest.ts')).toMatch(/noteSentDuration\(startedAt\);[\s\S]{0,300}await holdAnswer\(startedAt\);/);
+        // The mailer counts only rows logged as sent, at send time.
+        expect(read('server/src/services/emailStore.ts')).toMatch(/export const getUsage[\s\S]{0,800}\.eq\('status', 'sent'\)/);
+        expect(read('server/src/services/mailer.ts')).toContain('const usage = await getUsage();');
+        const doc = read('docs/email/SECURITY.md');
+        expect(doc).toContain('the 95th percentile of the sends in the last hour (`SENT_SAMPLE_WINDOW_MS`, at most 50 of them)');
+        expect(doc).toContain('with 20 or more sends in the hour the hold leaves out the slowest 5% (it is the 2nd or 3rd slowest), so about one send in 20 answers later than a throttled request would');
+        expect(doc).toContain('a slow one also raises the hold for the answers after it, which a request made right after it can see');
+        expect(doc).toContain('That can hit several requests at one boundary, and the count at their check need only be within the number of sends then finishing, not exactly one under');
+        expect(doc).toContain('so the count can end a few over a cap (by at most the sends in flight together)');
+        for (const stale of ['a send slower than every recent one', 'at most once per boundary', 'over-cap sends are skipped + alerted, never delivered']) expect(doc).not.toContain(stale);
+        expect(store).not.toContain('Only a send slower than all of that still answers later.');
     });
 
     it('the early-access receipt goes at most once a day per inbox and shares the public-form budget (the page says "at most one such email a day to one inbox")', () => {
@@ -279,7 +304,7 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(read('components/PrivacyPolicy.tsx')).toContain("is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
     });
 
-    it('turning memory off stops memory search and saving notes, but not the requests that write them or the in-app list (the page says which)', () => {
+    it('turning memory off stops memory search and saving notes to the account\'s memory, but not the requests that write them, nor the in-app list, which keeps growing, syncs to the account and goes with every request (the page says which)', () => {
         const memory = read('server/src/services/userMemory.ts');
         const block = memory.slice(memory.indexOf('export const buildUserMemoryBlock'));
         // Off: nothing is searched (no Gemini embedding) and no saved note is sent.
@@ -287,19 +312,34 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         // Off: a written note is dropped only after the model wrote it.
         const remember = memory.slice(memory.indexOf('export const rememberUserMemories'), memory.indexOf('export const retrieveUserMemories'));
         expect(remember).toContain('if (!(await isMemoryEnabled(userId))) return 0;');
-        // Neither write path asks first.
+        // A setting that can't be read counts as on ("handles the request as if memory were on").
+        const enabled = memory.slice(memory.indexOf('export const isMemoryEnabled'), memory.indexOf('export const setMemoryEnabled'));
+        expect(enabled).toMatch(/catch \(err\) \{\s*logger\.warn\('user_memory_prefs_read_failed'[^\n]*\n\s*return true;/);
+        // Neither write path asks first, and POST /memory returns what the model wrote either way.
         const route = read('server/src/routes/chat.ts');
         const handler = route.slice(route.indexOf("chatRouter.post('/memory'"), route.indexOf("chatRouter.get('/memory/list'"));
         const auto = route.slice(route.indexOf('const maybeAutoRemember'), route.indexOf('const maybeAutoRemember') + 2500);
         for (const path of [handler, auto]) expect(path).not.toContain('isMemoryEnabled');
+        expect(handler).toContain('res.json({ memory: updated || existing });');
+        // Chat Studio puts that result into the in-app list without checking the setting...
+        const chat = read('components/chat/AIChatPlatform.tsx');
+        const update = chat.slice(chat.indexOf('const updateMemoryInBackground'), chat.indexOf('const updateMemoryInBackground') + 1200);
+        expect(update).toMatch(/void updateChatMemory\(recent, current\)\s*\.then\(\(\{ memory: updated \}\) => \{\s*if \(updated && updated\.trim\(\) && updated\.trim\(\) !== current\.trim\(\)\) \{\s*setChatMemory\(updated, user\.id\);/);
+        expect(update).not.toMatch(/enabled|isMemoryEnabled/);
+        // ...a change to it schedules a sync, and the synced snapshot carries it to the account.
+        expect(read('services/chatStorage.ts')).toMatch(/export const setChatMemory[\s\S]{0,400}notifyChatDataChanged\(\)/);
+        expect(read('contexts/AuthContext.tsx')).toContain('setChatDataChangeListener(');
+        expect(read('services/cloudSync.ts')).toMatch(/chat: \{\s*memory: getChatMemory\(userId\),/);
         // The in-app list is the browser's own and goes with every request.
-        expect(read('components/chat/AIChatPlatform.tsx')).toContain('composeSystemPrompt(getChatMemory(');
+        expect(chat).toContain('composeSystemPrompt(getChatMemory(');
         const policy = read('components/PrivacyPolicy.tsx');
-        expect(policy).toContain('Once it is turned off, no notes are saved to your account or sent with your requests, and your messages are no longer sent to Gemini to search them; the requests that write notes still go out (their result is not saved), and the list in Settings → Memory in Chat Studio is still kept in your browser and sent with your requests.');
+        expect(policy).toContain('Once it is turned off, no notes are added to it, the notes in it are no longer sent with your requests, and your messages are no longer sent to Gemini to search them. If our server can\'t read that setting at the moment of a request (a temporary error), it handles the request as if memory were on. Turning it off doesn\'t stop the list in Settings → Memory in Chat Studio: Chat Studio still sends the latest messages to an AI model to write notes into that list, and the list is kept in your browser, synced to your account when you\'re signed in, and sent with your requests. After an answer, the latest messages are also still sent to an AI model to write notes for the memory on your account, but what it writes is not saved.');
+        expect(policy).not.toContain('no notes are saved to your account or sent with your requests');
+        expect(policy).not.toContain('their result is not saved');
         expect(policy).toContain('whichever provider you choose (unless memory is turned off for your account)');
     });
 
-    it(`the quick-finder sends the selected text (first ${QUICK_FINDER.selectionChars} characters) to Chat Studio's backend on every page but ${QUICK_FINDER.hiddenOn.join(', ')}, so memory search, connected-account context and memory notes apply`, () => {
+    it(`the quick-finder sends the selected text (first ${QUICK_FINDER.selectionChars} characters) to Chat Studio's backend on every page App shows but ${QUICK_FINDER.hiddenOn.join(', ')} (never in Stream Studio, a separate entry), so memory search, connected-account context and memory notes apply`, () => {
         const app = read('App.tsx');
         const show = /const showQuickFinder = ([^;]+);/.exec(app)?.[1] ?? '';
         expect([...show.matchAll(/effectiveView !== '([a-z-]+)'/g)].map((m) => m[1]).sort()).toEqual([...QUICK_FINDER.hiddenOn].sort());
@@ -315,9 +355,15 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(route).toContain('userMemory: Boolean(p.userId),');
         expect(route).toContain('connectorContext: Boolean(p.userId),');
         expect(route.match(/maybeAutoRemember\(req, p, result\.text \|\| ''\);/g)).toHaveLength(3);
+        // Only App mounts it: Stream Studio is its own entry (live.html → live/main.tsx → LiveApp), and
+        // nothing under live/ imports QuickFinder or App.
+        expect(read('vite.config.ts')).toMatch(/main: [^\n]*index\.html[\s\S]{0,200}live: [^\n]*live\.html/);
+        expect(read('live.html')).toContain('/live/main.tsx');
+        for (const f of sourceFiles('live', /\.tsx?$/)) expect(read(f), f).not.toMatch(/QuickFinder|from ['"](?:\.\.\/)+App['"]/);
         const policy = read('components/PrivacyPolicy.tsx');
         expect(policy).toContain('<li><strong>The quick-finder:</strong> when you select text on a page while signed in');
-        expect(policy).toContain('It works on every page except the sign-in pages and shared or public comic pages');
+        expect(policy).toContain('It works on every page of the main site and the Comic Studio site except the sign-in pages and shared or public comic pages: in Comic Studio, Page Studio, Settings, the legal pages and Chat Studio too. It is not in Stream Studio.');
+        expect(policy).not.toContain('It works on every page except');
         expect(policy).toContain('and so can the quick-finder (the Explain, Summarize and similar actions offered when you select text on a page');
         expect(policy).toContain('the text of each message you send in Chat Studio or through the quick-finder while signed in');
         expect(read('components/legal/SubprocessorsPage.tsx')).toContain('the text of each message you send in Chat Studio or through the quick-finder while signed in');
@@ -355,7 +401,7 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(read('components/legal/SubprocessorsPage.tsx')).toContain('today by ${MEMORY_NOTE_MODEL.label}, or ${MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
     });
 
-    it(`importing memories from another AI tool sends what you paste or upload (first ${MEMORY_IMPORT_MAX_CHARS} characters) with the in-app list through the app-wide pick, like the notes written from Chat Studio; the merged list replaces yours only when you accept it`, () => {
+    it(`importing memories from another AI tool sends pasted text (first ${MEMORY_IMPORT_MAX_CHARS} characters) or, from an export file, the user's own text from anywhere in it (up to ${MEMORY_IMPORT_MAX_CHARS}), with the in-app list through the app-wide pick, like the notes written from Chat Studio; the merged list replaces yours only when you accept it`, () => {
         expect(constValue('server/src/routes/chat.ts', 'MAX_IMPORT_CONTENT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
         expect(constValue('services/memoryImport.ts', 'MAX_IMPORT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
         const route = read('server/src/routes/chat.ts');
@@ -375,8 +421,24 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(modal).toContain('const res = await importChatMemory(importSource, content, existing);');
         expect(modal).toContain('setPreview(merged);');
         expect(modal).toMatch(/const applyImport = \(\) => \{\s*if \(!preview\) return;\s*commit\(preview\);/);
+        // What the browser sends: plain text cut at its first 24,000 characters; from an export (JSON),
+        // the user's own text from anywhere in it (their messages in past conversations, memory and
+        // instruction entries), never the assistant's replies, cut at 24,000.
+        const filler = 'x'.repeat(40_000);
+        expect(prepareMemoryImportContent(`${filler}tail`)).toBe(filler.slice(0, MEMORY_IMPORT_MAX_CHARS));
+        const turn = (role: string, text: string) => ({ author: { role }, content: { parts: [text] } });
+        const exportFile = JSON.stringify([
+            { title: 'Old chat', mapping: { a: { message: turn('assistant', `ASSISTANT ${filler}`) } } },
+            { title: 'Later chat', mapping: { b: { message: turn('user', 'I live in Lisbon and work as a nurse') }, c: { message: turn('assistant', 'Noted, nurse in Lisbon!') } } }
+        ]);
+        expect(exportFile.indexOf('I live in Lisbon')).toBeGreaterThan(MEMORY_IMPORT_MAX_CHARS);
+        const sent = prepareMemoryImportContent(exportFile);
+        expect(sent).toContain('I live in Lisbon and work as a nurse');
+        expect(sent).not.toMatch(/ASSISTANT|Noted, nurse/);
+        expect(prepareMemoryImportContent(JSON.stringify([{ author: { role: 'user' }, content: { parts: [filler] } }])).length).toBe(MEMORY_IMPORT_MAX_CHARS);
         const policy = read('components/PrivacyPolicy.tsx');
-        expect(policy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list: what you paste or upload (up to the first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters) is sent with the list to an AI model, the same way as the notes written from Chat Studio, to merge the two, and the merged list replaces yours only if you accept it.");
+        expect(policy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters; from a data-export file (such as ChatGPT's or Claude's conversations file) or other JSON, it sends the text you wrote, taken from anywhere in the file: your own messages in its past conversations and its memory and instruction entries, but not the assistant's replies, up to {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters. That is sent with the list to an AI model, the same way as the notes written from Chat Studio, to merge the two, and the merged list replaces yours only if you accept it.");
+        expect(policy).not.toContain('what you paste or upload (up to the first');
         expect(policy).toContain('memory notes (including memories you import from another AI tool)');
         expect(policy).toContain('and memories you import from another AI tool to merge them into your list');
     });

@@ -3,8 +3,13 @@
  *
  * Signing out — here or in the main DreamStream app — must not leave the last
  * person's name, events, nursery data or alert subscription behind for the
- * next person on a shared device. Device preferences that aren't personal
- * (theme, camera lens, tours seen, guest passes for share links) stay.
+ * next person on a shared device. That includes the guest passes this device
+ * got from nurseries' share links ('ds-monitor-guest-<nursery>'): each is a
+ * working pass to watch that nursery under the name typed for it, so the next
+ * person here could otherwise watch as them. A guest who never signs in keeps
+ * theirs (nothing to sign out of). Device preferences that aren't personal
+ * (theme, camera lens, tours seen, this device's name for the monitor, the
+ * folder picked for saving recordings) stay.
  *
  * What stays, and the Cookies notice and the Privacy Policy say so:
  *  - recordings that reached the disk but were never saved (live/recorder.ts): they are the host's
@@ -44,11 +49,11 @@ const EXACT = [
   OWNER_KEY,
 ];
 /**
- * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue —
- * and this device's usage (live/usage/): a nursery's relay data a parent read, last nights,
- * the month's ledger, hosted meetings, notices shown.
+ * Per-nursery data: alert opt-ins, setup progress, zones, stats, the tracker's offline queue, guest
+ * passes from share links — and this device's usage (live/usage/): a nursery's relay data a parent
+ * read, last nights, the month's ledger, hosted meetings, notices shown.
  */
-const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-track-queue-', 'ds-usage-'];
+const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-monitor-guest-', 'ds-track-queue-', 'ds-usage-'];
 
 /**
  * Unsaved recordings left from before recordings carried an owner, settled once, before anything

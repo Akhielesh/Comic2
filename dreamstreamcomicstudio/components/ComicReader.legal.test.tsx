@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project } from '../types';
@@ -110,5 +113,20 @@ describe("a shared comic's reader (SharedViewer)", () => {
     expect(apiGet).toHaveBeenCalledWith('/shares/token/tok-legal');
     expect(fireEvent.click(link)).toBe(false);
     await waitFor(() => expect(onOpenLegal).toHaveBeenCalledWith('copyright'));
+  });
+
+  it('loads the share again when Back shows it (App remounts it): the CHANGELOG promises "without reloading" only for comics from your comics or a public link', async () => {
+    apiGet.mockResolvedValue({ project, share: { allowDownload: false } });
+    const props = { shareToken: 'tok-again', onNavigate: vi.fn(), onOpenPrivacy: vi.fn(), onOpenTerms: vi.fn(), onOpenFaq: vi.fn(), onOpenLegal: vi.fn() };
+    const first = render(<SharedViewer {...props} />);
+    await screen.findByRole('link', { name: 'Copyright' });
+    first.unmount();
+    render(<SharedViewer {...props} />);
+    expect(screen.getByText(/Loading shared comic/)).toBeInTheDocument();
+    await screen.findByRole('link', { name: 'Copyright' });
+    expect(apiGet.mock.calls.filter(([url]) => url === '/shares/token/tok-again')).toHaveLength(2);
+    const changelog = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'CHANGELOG.md'), 'utf8');
+    expect(changelog).toContain('Back to a\n  comic opened from your comics or a public link shows it again without reloading it or counting\n  another view. A comic opened from a share link (`/share/…`) loads again.');
+    expect(changelog).not.toContain('and Back to the\n  comic shows it again without reloading it');
   });
 });

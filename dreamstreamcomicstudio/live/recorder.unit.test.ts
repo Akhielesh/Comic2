@@ -13,15 +13,15 @@ import {
   unsavedRecordingsOf,
   type UnsavedRecording,
 } from './recorder';
-import { sweepDiscardedRecordings } from './components/SaveSheet';
+import { autoSave, sweepDiscardedRecordings } from './components/SaveSheet';
 
 // Unsaved recordings on a shared device, through the real DiskRecorder and registry over a fake
 // private file system (OPFS), recording worker and MediaRecorder. What the Privacy Policy and the
 // Cookies notice say about them is what these check.
 
 const HOUR = 60 * 60_000;
-/** OPFS: entry name → size and last write. */
-const files = new Map<string, { bytes: number; modified: number }>();
+/** OPFS: entry name → size and last write (`empty`: a file nothing was ever written to). */
+const files = new Map<string, { bytes: number; modified: number; empty?: boolean }>();
 const chunk = (text: string) => ({ size: text.length, arrayBuffer: async () => new TextEncoder().encode(text).buffer }) as unknown as Blob;
 
 class FakeWorker {
@@ -59,11 +59,13 @@ class FakeMediaRecorder extends EventTarget {
   }
 }
 
+/** Runs inside the next getDirectory() call: another tab acting while this one awaits it. */
+let duringGetDirectory: (() => void) | null = null;
 const root = {
   async getFileHandle(name: string) {
     const f = files.get(name);
     if (!f) throw new DOMException('not found', 'NotFoundError');
-    return { getFile: async () => new File([new Uint8Array(f.bytes || 1)], name, { type: 'video/webm', lastModified: f.modified }) };
+    return { getFile: async () => new File([new Uint8Array(f.empty ? 0 : f.bytes || 1)], name, { type: 'video/webm', lastModified: f.modified }) };
   },
   async removeEntry(name: string) {
     files.delete(name);
@@ -76,6 +78,7 @@ const root = {
 beforeEach(() => {
   localStorage.clear();
   files.clear();
+  duringGetDirectory = null;
   const g = globalThis as Record<string, unknown>;
   g.Worker = FakeWorker;
   g.MediaRecorder = FakeMediaRecorder;
@@ -86,7 +89,16 @@ beforeEach(() => {
   URL.revokeObjectURL = () => undefined;
   Object.defineProperty(navigator, 'storage', {
     configurable: true,
-    value: { getDirectory: async () => root, persist: async () => true, estimate: async () => ({ quota: 1e12, usage: 0 }) },
+    value: {
+      getDirectory: async () => {
+        const other = duringGetDirectory;
+        duringGetDirectory = null;
+        other?.();
+        return root;
+      },
+      persist: async () => true,
+      estimate: async () => ({ quota: 1e12, usage: 0 }),
+    },
   });
 });
 
@@ -165,18 +177,110 @@ describe('every unsaved recording stays listed until it is saved or discarded, a
     expect(otherAccountsUnsaved()).toEqual({ count: 0, bytes: 0 });
   });
 
-  it('on app start, a disk copy no list names (from the old 10-entry cap, or a crash) is deleted once nothing has written it for an hour', async () => {
+  it('on app start, a disk copy no list names (from the old 10-entry cap, or a crash) is listed again, never deleted; only an empty one goes', async () => {
+    localStorage.setItem(OWNER_KEY, 'u-a');
     const listed = await recordPart('kept.webm', 'u-a');
-    files.set('ds-rec-orphan-old', { bytes: 5, modified: Date.now() - 2 * HOUR }); // pushed off the old list
+    const old = 'ds-rec-1760000000000-streamstudio-ev-42-2025-10-09-08-53-20-part2.webm';
+    files.set(old, { bytes: 5, modified: Date.now() - 2 * HOUR }); // pushed off the old list
     files.set('ds-rec-orphan-new', { bytes: 5, modified: Date.now() - 60_000 }); // another tab is still recording it
     files.set('ds-rec-downloading', { bytes: 5, modified: Date.now() - 2 * HOUR }); // waiting on the discard-later list
+    files.set('ds-rec-empty', { bytes: 0, modified: Date.now() - 2 * HOUR, empty: true }); // nothing was ever recorded into it
     files.set('not-a-recording', { bytes: 5, modified: 0 });
     localStorage.setItem('ds-live-discard-later', JSON.stringify([{ name: 'ds-rec-downloading', at: Date.now() - 60_000 }]));
     localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([...registry(), entry('ds-rec-file-gone', 'u-b')]));
     await sweepDiscardedRecordings();
-    expect([...files.keys()].sort()).toEqual([listed, 'ds-rec-downloading', 'ds-rec-orphan-new', 'not-a-recording'].sort());
-    // An entry whose disk copy is gone is dropped, whoever made it.
-    expect(registry().map((r) => r.name)).toEqual([listed]);
+    // Only the empty file is deleted.
+    expect([...files.keys()].sort()).toEqual([listed, old, 'ds-rec-downloading', 'ds-rec-orphan-new', 'not-a-recording'].sort());
+    // The one pushed off the old list is an unsaved recording again, rebuilt from its name, for the
+    // account that holds the device (as settleUnownedRecordings would give it); an entry whose disk
+    // copy is gone is dropped, whoever made it.
+    expect(registry().map((r) => r.name)).toEqual([listed, old]);
+    expect(registry()[1]).toEqual({
+      name: old,
+      file: 'streamstudio-ev-42-2025-10-09-08-53-20-part2.webm',
+      mime: 'video/webm',
+      eventId: 'ev-42',
+      title: 'Recovered recording',
+      at: 1760000000000,
+      durMs: files.get(old)!.modified - 1760000000000,
+      bytes: 5,
+      owner: 'u-a',
+    });
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name)).toEqual([listed, old]);
+  });
+
+  it('production kept only the 10 newest entries: the first start of this version offers all 11 kept recordings again, none is deleted', async () => {
+    // As the earlier version left a device: 11 kept recordings (days old), entries without
+    // an owner, and the registry naming only the 10 newest.
+    const names = Array.from({ length: 11 }, (_, i) => `ds-rec-${1760000000000 + i * HOUR}-streamstudio-e1-2025-10-09-0${i % 10}-00-00.webm`);
+    for (const [i, name] of names.entries()) files.set(name, { bytes: 2_000, modified: Date.now() - (3 * 24 - i) * HOUR });
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(names.slice(-10).map((name, i) => ({ ...entry(name), at: 1760000000000 + (i + 1) * HOUR }))));
+    localStorage.setItem(OWNER_KEY, 'u-host');
+    claimDevice('u-host');
+    await sweepDiscardedRecordings();
+    expect(files.size).toBe(11);
+    expect((await listUnsavedRecordings('u-host')).map((r) => r.name).sort()).toEqual([...names].sort());
+    expect(registry().every((r) => r.owner === 'u-host')).toBe(true);
+    // A tab still running the earlier version drops the overflow again (slice(-10)): the next start
+    // lists it again.
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(registry().slice(-10)));
+    await sweepDiscardedRecordings();
+    expect(files.size).toBe(11);
+    expect(registry()).toHaveLength(11);
+  });
+
+  it('a recording listed again goes to the account whose data the device held as the app started, even when this load\'s account check hands the device to someone else meanwhile (as settleUnownedRecordings decides)', async () => {
+    const name = 'ds-rec-1760000000000-streamstudio-e1-2025-10-09-08-00-00.webm';
+    files.set(name, { bytes: 5, modified: Date.now() - 3 * 24 * HOUR }); // dropped by the old 10-entry cap
+    localStorage.setItem(OWNER_KEY, 'u-a'); // A never signed out under the earlier version
+    // B opens Stream Studio here: the account check claims the device while the sweep awaits the disk.
+    duringGetDirectory = () => claimDevice('u-b');
+    await sweepDiscardedRecordings();
+    expect(registry().map((r) => [r.name, r.owner])).toEqual([[name, 'u-a']]);
+    expect(await listUnsavedRecordings('u-b')).toEqual([]);
+    expect(otherAccountsUnsaved('u-b').count).toBe(1);
+  });
+
+  it('a download another tab finishes while the sweep starts is never listed again or deleted: the name goes on the discard-later list before it leaves the registry', async () => {
+    const name = 'ds-rec-1760000000000-streamstudio-e1-2025-10-09-08-00-00.webm';
+    files.set(name, { bytes: 5, modified: Date.now() - 3 * 24 * HOUR }); // a recording kept three days ago
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([{ ...entry(name), owner: 'u-a' }]));
+    const writes: string[] = [];
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+      writes.push(k);
+      return setItem.call(this, k, v);
+    };
+    try {
+      // Tab A downloads it (Unsaved recordings → Save → Download) while tab B's sweep awaits the disk.
+      duringGetDirectory = () => {
+        void autoSave({ data: new Blob(['x']), file: 'x.webm', mime: 'video/webm', bytes: 5, durMs: 1, opfsName: name, eventId: 'e1', title: 't' }, 'download');
+      };
+      await sweepDiscardedRecordings();
+    } finally {
+      Storage.prototype.setItem = setItem;
+    }
+    expect(writes.indexOf('ds-live-discard-later')).toBeLessThan(writes.indexOf('ds-live-unsaved-recordings'));
+    expect(files.has(name)).toBe(true);
+    expect(registry()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('ds-live-discard-later') || '[]').map((i: { name: string }) => i.name)).toEqual([name]);
+  });
+
+  it('the start-up sweep never overwrites a name another tab put on the discard-later list meanwhile', async () => {
+    files.set('ds-rec-done', { bytes: 5, modified: Date.now() - 3 * HOUR });
+    files.set('ds-rec-new-download', { bytes: 5, modified: Date.now() - 3 * HOUR });
+    localStorage.setItem('ds-live-discard-later', JSON.stringify([{ name: 'ds-rec-done', at: Date.now() - 2 * HOUR }]));
+    // While the sweep deletes the expired copy, another tab adds a download of its own.
+    duringGetDirectory = () => {
+      const list = JSON.parse(localStorage.getItem('ds-live-discard-later') || '[]');
+      localStorage.setItem('ds-live-discard-later', JSON.stringify([...list, { name: 'ds-rec-new-download', at: Date.now() }]));
+    };
+    await sweepDiscardedRecordings();
+    expect(files.has('ds-rec-done')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('ds-live-discard-later') || '[]').map((i: { name: string }) => i.name)).toEqual(['ds-rec-new-download']);
+    // Still waiting there, so not listed again as an unsaved recording.
+    expect(files.has('ds-rec-new-download')).toBe(true);
+    expect(registry()).toEqual([]);
   });
 
   it('with a list it can\'t read, the sweep touches nothing', async () => {

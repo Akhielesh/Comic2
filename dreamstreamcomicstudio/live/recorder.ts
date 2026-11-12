@@ -398,46 +398,96 @@ export async function discardOtherAccountsUnsaved(owner: string | null = deviceO
   return others.length;
 }
 
-/** A disk copy no list names, and nothing has written for this long, is an orphan. */
+/** A disk copy no list names is left alone until nothing has written it for this long. */
 const ORPHAN_AFTER_MS = 60 * 60_000;
 
+/** `ds-rec-<ms>-<file>`: DiskRecorder.start's name, and StudioView's file name in it (media.ts recordingFilename). */
+const DISK_NAME = /^ds-rec-(\d{10,})-(.+)$/;
+const FILE_NAME = /^streamstudio-(.+)-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(?:-part\d+)?\.(webm|mp4)$/;
+
 /**
- * Run on app start (SaveSheet's sweepDiscardedRecordings calls it): delete disk copies of recordings
- * that no list names any more, and forget entries whose disk copy is gone. Orphans come from before
- * the registry kept every entry (it kept only the 10 newest and dropped the rest without their
- * files), from a recording whose disk copy couldn't be read back, and from a crash between creating
- * the file and listing it. A file is left alone while it may still be in use: `keep` names the ones
- * another list still holds (SaveSheet deletes those itself, after a download had time to read them),
- * one written in the last hour is spared, and one another tab is still recording into is locked
- * (its removal fails).
+ * An entry for a disk copy no list names, rebuilt from its name (when it started, the event, the file
+ * name) and the file (its size; its last write, for a duration). It goes to `owner`: the account whose
+ * Stream Studio data was on this device when the sweep started, or none, as an entry from before
+ * recordings carried an owner is settled (accountPurge settleUnownedRecordings), so the usual listing
+ * rules apply.
  */
-export async function sweepOrphanRecordings(keep: readonly string[] = []): Promise<void> {
+function recoveredEntry(name: string, f: File, owner: string | null): UnsavedRecording {
+  const m = DISK_NAME.exec(name);
+  const file = m ? m[2] : name.slice(PREFIX.length) || name;
+  const at = m ? Number(m[1]) : f.lastModified;
+  const parts = FILE_NAME.exec(file);
+  const ext = parts?.[2] ?? (/\.mp4$/i.test(file) ? 'mp4' : 'webm');
+  return {
+    name,
+    file,
+    mime: `video/${ext}`,
+    eventId: parts?.[1] ?? '',
+    title: 'Recovered recording',
+    at,
+    durMs: Math.max(0, f.lastModified - at),
+    bytes: f.size,
+    owner,
+  };
+}
+
+/**
+ * Run on app start (SaveSheet's sweepDiscardedRecordings calls it). A disk copy no list names is
+ * listed again, never deleted: it is a recording someone kept (the registry once held only the 10
+ * newest and dropped the rest without their files, and a tab still running that version keeps doing
+ * so), or one left by a crash or a disk copy that couldn't be read back. Only an empty file is
+ * deleted. `discardLater` reads the names SaveSheet still holds to delete itself (after a download had
+ * time to read them); those are left to it. Both lists are read after the disk is enumerated, and
+ * again right before each file is touched, so a name moving from one list to the other in another
+ * tab meanwhile is always seen (SaveSheet's discardLater adds to its list before it leaves the
+ * registry). A file written in the last hour is left alone (another tab may be recording into it),
+ * and when either list can't be read nothing is touched. Entries whose disk copy is gone are dropped.
+ * A recording listed again goes to `owner` (default: the device's owner as the sweep starts; SaveSheet
+ * reads it before its own first await, so on app start that is before this load's account check can
+ * hand the device to someone else, as settleUnownedRecordings would decide).
+ */
+export async function sweepOrphanRecordings(
+  discardLater: () => readonly string[] | null = () => [],
+  owner: string | null = deviceOwner(),
+): Promise<void> {
   if (!opfsSupported()) return;
   try {
     const root = await navigator.storage.getDirectory();
     const names = (root as unknown as { keys?: () => AsyncIterable<string> }).keys?.();
     if (!names) return;
-    // The list first: a recording another tab starts meanwhile is on disk but not in this read, so it
-    // is never taken for a missing entry, and its fresh file is spared below. A list that can't be
-    // read names nothing reliably: then no file is touched.
-    const listed = readUnsavedOrNull();
-    if (!listed) return;
+    // The registry as it was before the disk is read, to tell which entries lost their disk copy: a
+    // recording another tab starts meanwhile is on disk but not in this read, so it is never taken
+    // for a missing entry.
+    const before = readUnsavedOrNull();
+    if (!before) return;
     const onDisk = new Set<string>();
     for await (const name of names) if (name.startsWith(PREFIX)) onDisk.add(name);
-    const named = new Set([...listed.map((r) => r.name), ...keep]);
+    /** Every name either list holds now, or null when one can't be read. */
+    const namedNow = (): Set<string> | null => {
+      const listed = readUnsavedOrNull();
+      const waiting = listed && discardLater();
+      return listed && waiting ? new Set([...listed.map((r) => r.name), ...waiting]) : null;
+    };
+    const named = namedNow();
+    if (!named) return;
+    for (const r of before) named.add(r.name);
     for (const name of onDisk) {
       if (named.has(name)) continue;
       try {
         const f = await (await root.getFileHandle(name)).getFile();
-        if (Date.now() - f.lastModified > ORPHAN_AFTER_MS) await root.removeEntry(name);
+        if (Date.now() - f.lastModified <= ORPHAN_AFTER_MS) continue;
+        const current = namedNow();
+        if (!current || current.has(name)) continue;
+        if (f.size === 0) await root.removeEntry(name);
+        else upsertUnsaved(recoveredEntry(name, f, owner));
       } catch {
-        /* in use (another tab is recording into it) or already gone */
+        /* in use (another tab is recording into it), unreadable or already gone: left as it is */
       }
     }
     // Entries whose disk copy is gone (whoever made them) are dropped, re-reading the list so an
     // entry another tab added meanwhile stays.
-    if (listed.some((r) => !onDisk.has(r.name))) {
-      const gone = new Set(listed.filter((r) => !onDisk.has(r.name)).map((r) => r.name));
+    if (before.some((r) => !onDisk.has(r.name))) {
+      const gone = new Set(before.filter((r) => !onDisk.has(r.name)).map((r) => r.name));
       writeUnsaved(readUnsaved().filter((r) => !gone.has(r.name)));
     }
   } catch {

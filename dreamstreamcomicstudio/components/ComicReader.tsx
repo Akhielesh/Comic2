@@ -374,6 +374,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
+  // Where the reader is, kept current for the save on close (below): an effect cleanup with no deps
+  // would see only the first render's mode and page, and by then the scroll box is already detached.
+  const lastPosition = useRef({ projectId: project.id, mode: readerMode, pageIndex, scrollTop: 0 });
+  const positionLoaded = useRef(false);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const touchMulti = useRef(false);
   const textLayout = project.state.textLayout || 'caption';
@@ -383,14 +387,18 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
   useEffect(() => {
     loadReaderState(project.id).then((state) => {
+      positionLoaded.current = true;
       if (!state) return;
       setReaderMode(state.mode);
       if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
       if (typeof state.scrollTop === 'number') {
+        lastPosition.current.scrollTop = state.scrollTop || 0;
         requestAnimationFrame(() => {
           if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
         });
       }
+    }, () => {
+      positionLoaded.current = true;
     });
   }, [project.id]);
 
@@ -456,10 +464,19 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   }, [pageIndex, readerMode, pages]);
 
-  useEffect(() => {
-    return () => {
-      persistReaderState();
-    };
+  useLayoutEffect(() => {
+    lastPosition.current = { ...lastPosition.current, projectId: project.id, mode: readerMode, pageIndex };
+  });
+
+  // Closing the reader (or leaving it for another page, such as a legal document) saves where it was,
+  // so opening the comic again shows it as it was left. A layout cleanup runs before the scroll box
+  // is detached; the scroll debounce is cancelled so it can't write a later scrollTop of 0. Nothing is
+  // saved before the stored position has loaded, which would overwrite it with the defaults.
+  useLayoutEffect(() => () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    if (!positionLoaded.current) return;
+    const { projectId, mode, pageIndex: page, scrollTop } = lastPosition.current;
+    saveReaderState({ projectId, mode, pageIndex: page, scrollTop: scrollRef.current?.scrollTop ?? scrollTop, updatedAt: Date.now() });
   }, []);
 
   useEffect(() => {
@@ -531,6 +548,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;
+    lastPosition.current.scrollTop = scrollRef.current?.scrollTop || 0;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       persistReaderState({ scrollTop: scrollRef.current?.scrollTop || 0 });

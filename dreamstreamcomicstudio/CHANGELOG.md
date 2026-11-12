@@ -32,9 +32,23 @@ All notable user-facing changes. Format loosely follows
   spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
+- **Legal suite, sixth review (2026-11-12):** Stream Studio no longer deletes recordings on
+  start: a kept recording an earlier version dropped from its list (it kept only the 10 newest)
+  is listed again under Unsaved recordings as "Recovered recording", and only empty files are
+  deleted. Signing out of Stream Studio or DreamStream now also removes guest passes from
+  nurseries' share links, and a sign-out on Stream Studio's own host settles older unsaved
+  recordings first, as one in the app does. The comic reader keeps your page, mode and scroll
+  position when you open a legal document from it and come back. A link to a section of another
+  legal document moves keyboard focus to that section, and a link to the document already shown
+  goes to its top without adding a history entry. The Privacy Policy now says what turning memory
+  off doesn't stop (the in-app list, synced to your account), what a memory import sends from an
+  export file, and that the quick-finder isn't in Stream Studio; the Cookies notice lists what stays
+  after a sign-out in full. The confirmation email no longer promises at most 3 a day for spellings
+  we can't recognise as one inbox. One slow send now holds form answers for an hour at most.
 - **Legal suite, DreamStream review (2026-11-12):** all six documents now open in the app from
-  the comic reader's footer (four used to load a new page and leave the comic), and Back to the
-  comic shows it again without reloading it or counting another view. The Stream Studio hand-off
+  the comic reader's footer (four used to load a new page and leave the comic), and Back to a
+  comic opened from your comics or a public link shows it again without reloading it or counting
+  another view. A comic opened from a share link (`/share/…`) loads again. The Stream Studio hand-off
   for stream-only accounts and the date-of-birth prompt wait until you leave a legal page. The
   Privacy Policy now says free models may keep and learn from what they receive, and it
   describes the Contact form in Settings (with a retention row) and importing memories from

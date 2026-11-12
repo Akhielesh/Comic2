@@ -46,10 +46,20 @@ const decodeFragment = (raw: string): string => {
 const showSection = (id: string): boolean => {
     const target = id ? document.getElementById(id) : null;
     if (!target || !replaceLegalFragment(id)) return false;
+    landOn(target);
+    return true;
+};
+
+/**
+ * Scroll to a section and move keyboard focus there, as the browser's own fragment navigation
+ * would: Tab carries on from the section, and a screen reader starts reading it. Used for a jump
+ * on the page shown (showSection) and for a section of another document once it opens
+ * (useLandOnFragment), so both kinds of section link leave focus in the same place.
+ */
+const landOn = (target: HTMLElement): void => {
     target.scrollIntoView?.();
     if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
     target.focus?.({ preventScroll: true });
-    return true;
 };
 
 export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
@@ -182,7 +192,11 @@ interface LegalDocumentProps extends LegalPageProps {
     sections: LegalSection[];
 }
 
-/** Jump to the URL's #fragment once the (lazily loaded) page is in the DOM; otherwise start at the top. */
+/**
+ * Land on the URL's #fragment once the (lazily loaded) page is in the DOM, focus included (landOn):
+ * a link to a section of another document unmounts the link that was clicked, which would otherwise
+ * leave focus on <body>. Otherwise start at the top.
+ */
 const useLandOnFragment = () => {
     useEffect(() => {
         const raw = window.location.hash.slice(1);
@@ -193,7 +207,7 @@ const useLandOnFragment = () => {
         }
         // A mangled shared link (e.g. #%) must not take the whole page down.
         const target = document.getElementById(decodeFragment(raw));
-        if (target) target.scrollIntoView?.();
+        if (target) landOn(target);
         else top();
     }, []);
 };

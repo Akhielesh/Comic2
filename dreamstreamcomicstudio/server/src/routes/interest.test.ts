@@ -293,6 +293,7 @@ const {
   CONFIRM_EMAIL_BUDGET_SHARE,
   INTEREST_CONFIRM_THROTTLE,
   answerTargetMs,
+  SENT_SAMPLE_WINDOW_MS,
   checkConfirmThrottle,
   holdAnswer,
   noteSentDuration,
@@ -994,6 +995,22 @@ describe('POST /api/interest — per-inbox claim, the mailer cap, and answer tim
       vi.useRealTimers();
       resetInterestGuardsForTests({ answerFloorMs: 0 });
     }
+  });
+
+  it('one slow send holds every answer only while it is recent: an hour later the hold is back at the floor (it never waits for 19 more sends)', () => {
+    resetInterestGuardsForTests(); // production settings
+    const t0 = 5_000_000_000;
+    noteSentDuration(t0 - 14_000, t0); // a deploy restarted the backend and the first send took 14 s
+    expect(answerTargetMs(t0)).toBe(14_000);
+    noteSentDuration(t0 + 60_000 - 800, t0 + 60_000);
+    expect(answerTargetMs(t0 + 30 * 60_000)).toBe(14_000); // still recent: the slowest of under 20 sends
+    expect(answerTargetMs(t0 + SENT_SAMPLE_WINDOW_MS + 1)).toBe(ANSWER_FLOOR_MS);
+    // A send's own time still counts before its answer is held, so a slow one is never told apart
+    // from a throttled answer at that moment.
+    noteSentDuration(t0 + 2 * SENT_SAMPLE_WINDOW_MS - 9_000, t0 + 2 * SENT_SAMPLE_WINDOW_MS);
+    expect(answerTargetMs(t0 + 2 * SENT_SAMPLE_WINDOW_MS)).toBe(9_000);
+    expect(SENT_SAMPLE_WINDOW_MS).toBe(60 * 60_000);
+    resetInterestGuardsForTests({ answerFloorMs: 0 });
   });
 });
 
