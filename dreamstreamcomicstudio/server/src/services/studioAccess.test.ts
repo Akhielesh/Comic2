@@ -47,6 +47,8 @@ describe('studio access', () => {
     const comic = r.studios.find((s) => s.id === 'comic_studio')!;
     expect(comic.detail).toBe('Access was turned off for this account');
     expect(comic.action?.label).toBe('Ask an admin for access');
+    // The one support mailbox (lead decision D9; components/legal/contacts.ts SUPPORT_EMAIL, spelled by hand here).
+    expect(comic.action?.href).toBe('mailto:support@dreamstreamstudio.ai?subject=Studio%20access');
     expect(r.studios.find((s) => s.id === 'chat_studio')?.detail).toBe('Not part of your account yet');
   });
 
