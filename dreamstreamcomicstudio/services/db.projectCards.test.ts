@@ -9,7 +9,7 @@ vi.mock('./supabase', async () => ({ supabase: (await import('./projectRows.test
 
 const db = await import('./db');
 const { isStudioV4Project, resolveProjectView, studioPageProgress } = await import('./studioDeepLink');
-const { PROJECT_CARD_SELECT, PROJECT_CARD_STATE_KEYS, isCardOnly, loadProjectState, loadProjects } = db;
+const { PROJECT_CARD_SELECT, PROJECT_CARD_STATE_KEYS, isCardOnly, loadProjectState, loadProjects, markCardOnly, markStateLoaded } = db;
 
 const BIG_STYLE = `data:image/png;base64,${'A'.repeat(200_000)}`;
 
@@ -192,12 +192,18 @@ describe('loadProjects (cards)', () => {
     expect(old.authorName).toBe('mira');
   });
 
-  it('flags every listed id card-only; loadProjectState returns the full state and clears the flag', async () => {
-    await loadProjects();
-    for (const id of ['studio-1', 'classic-1', 'pagestudio-1', 'old-1']) expect(isCardOnly(id)).toBe(true);
+  it('flags nothing itself (the holder flags in the same step); loadProjectState returns the full state', async () => {
+    for (const id of ['studio-1', 'classic-1', 'pagestudio-1', 'old-1']) markStateLoaded(id);
+    const listed = await loadProjects();
+    // A list read anywhere else (a future caller) never makes the open comic's pending save refused.
+    for (const id of ['studio-1', 'classic-1', 'pagestudio-1', 'old-1']) expect(isCardOnly(id)).toBe(false);
+    for (const card of listed) markCardOnly(card.id);
     const full = await loadProjectState('classic-1');
     expect(full.state).toEqual(classicState);
     expect(full.updatedAt).toBe(Date.parse('2026-10-05T00:00:00.000Z'));
+    // Nor does the state load clear it: the holder does, when it puts the state in memory.
+    expect(isCardOnly('classic-1')).toBe(true);
+    markStateLoaded('classic-1');
     expect(isCardOnly('classic-1')).toBe(false);
     expect(isCardOnly('studio-1')).toBe(true);
     const [, stateQuery] = fakeSupabase.queriesOn('projects');
@@ -205,7 +211,7 @@ describe('loadProjects (cards)', () => {
   });
 
   it('a failed state load leaves the id card-only', async () => {
-    await loadProjects();
+    for (const card of await loadProjects()) markCardOnly(card.id);
     fakeSupabase.state.failures.push({ when: (q) => q.columns === 'state,updated_at', error: { code: '57014', message: 'timeout' } });
     await expect(loadProjectState('classic-1')).rejects.toMatchObject({ code: '57014' });
     expect(isCardOnly('classic-1')).toBe(true);

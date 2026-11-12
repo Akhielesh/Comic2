@@ -9,7 +9,7 @@ import { fakeSupabase } from './projectRows.testkit';
 
 vi.mock('./supabase', async () => ({ supabase: (await import('./projectRows.testkit')).fakeSupabase.client }));
 
-const { CardSaveRefusedError, isCardOnly, loadProjectState, loadProjects, saveProject } = await import('./db');
+const { CardSaveRefusedError, isCardOnly, loadProjectState, loadProjects, markCardOnly, markStateLoaded, saveProject } = await import('./db');
 
 const sb = {
   get upserts() {
@@ -85,8 +85,20 @@ describe('saveProject never writes a card over a full row (EGRESS-DB E1)', () =>
     ];
   });
 
+  // The project manager flags the cards it holds (markCardOnly) in the same step as it holds them.
+  const listCards = async () => {
+    const cards = await loadProjects();
+    for (const card of cards) markCardOnly(card.id);
+    return cards;
+  };
+  const loadFull = async (id: string) => {
+    const loaded = await loadProjectState(id);
+    markStateLoaded(id);
+    return loaded;
+  };
+
   it('refuses a listed card, and a state rebuilt from it, without any upsert', async () => {
-    const [card] = await loadProjects();
+    const [card] = await listCards();
     expect(isCardOnly('card-1')).toBe(true);
     await expect(saveProject(card)).rejects.toBeInstanceOf(CardSaveRefusedError);
     await expect(saveProject({ ...card, name: 'Renamed' })).rejects.toMatchObject({ code: 'CARD_ONLY', projectId: 'card-1' });
@@ -99,8 +111,8 @@ describe('saveProject never writes a card over a full row (EGRESS-DB E1)', () =>
   });
 
   it('saves once the full state is loaded, with the full state', async () => {
-    const [card] = await loadProjects();
-    const { state, updatedAt } = await loadProjectState('card-1');
+    const [card] = await listCards();
+    const { state, updatedAt } = await loadFull('card-1');
     await saveProject({ ...card, state, updatedAt, name: 'Renamed' });
     expect(sb.upserts).toHaveLength(1);
     expect(sb.upserts[0]).toMatchObject({ id: 'card-1', name: 'Renamed' });
@@ -109,18 +121,18 @@ describe('saveProject never writes a card over a full row (EGRESS-DB E1)', () =>
   });
 
   it('a reload flags the id card-only again', async () => {
-    await loadProjects();
-    await loadProjectState('card-1');
+    await listCards();
+    await loadFull('card-1');
     expect(isCardOnly('card-1')).toBe(false);
-    const [card] = await loadProjects();
+    const [card] = await listCards();
     expect(isCardOnly('card-1')).toBe(true);
     await expect(saveProject(card)).rejects.toBeInstanceOf(CardSaveRefusedError);
     expect(sb.upserts).toHaveLength(0);
   });
 
   it('refuses a state built from a card even after the full state is loaded (the marker survives a spread)', async () => {
-    const [card] = await loadProjects();
-    await loadProjectState('card-1');
+    const [card] = await listCards();
+    await loadFull('card-1');
     expect(isCardOnly('card-1')).toBe(false);
     const derived = { ...card, state: { ...card.state, isFeatured: true } };
     await expect(saveProject(derived)).rejects.toBeInstanceOf(CardSaveRefusedError);

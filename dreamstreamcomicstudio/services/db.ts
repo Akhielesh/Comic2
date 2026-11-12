@@ -6,6 +6,7 @@ import { isMissingPrivateProfileTableError } from "./profilePrivate";
 import { buildApiUrl } from "./clientConfig";
 import { isStudioV4Project } from "./studioDeepLink";
 import { isContentRating } from "../shared/comic/safety";
+import { CARD_STATE, isCardState } from './projectCardState';
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -498,14 +499,8 @@ const PROJECT_CARD_SELECT_LEGACY = ['id,user_id,name,cover_image_url,is_public,c
 
 const CARD_ARRAY_KEYS: ReadonlySet<string> = new Set(['panels', 'styleVariants', 'scenes', 'characters', 'items', 'locations', 'comments']);
 
-/**
- * Marks a state object built from a library card. Being an enumerable symbol key, it survives a spread
- * (`{ ...card.state, isFeatured: true }`) but never reaches JSON or storage, so a state DERIVED from a card is
- * recognised (and refused by saveProject) even after the card's id has had its full state loaded.
- */
-export const CARD_STATE = Symbol.for('dreamstream.projectCardState');
-export const isCardState = (state: unknown): boolean =>
-  typeof state === 'object' && state !== null && (state as Record<symbol, unknown>)[CARD_STATE] === true;
+// The card marker (CARD_STATE, isCardState) lives in services/projectCardState.ts; re-exported here.
+export { CARD_STATE, isCardState };
 
 /** The state a card row stands for: its projected keys, arrays defaulted to [] and the script to ''. */
 export const projectCardStateOf = (row: Record<string, unknown>): Project['state'] => {
@@ -558,11 +553,16 @@ export const galleryCardStateOf = (row: Record<string, unknown>): Project['state
 };
 
 /**
- * Ids whose in-memory project is a card (a state subset). The save guard is keyed by the id, not by
- * the state object, so a state rebuilt from a card (a spread, an update) is still refused.
+ * Ids whose in-memory project is a card (a state subset), or a full copy older than the row: saveProject refuses
+ * them. The save guard is keyed by the id, not by the state object, so a state rebuilt from a card (a spread, an
+ * update) is still refused. The project manager (hooks/useProjectManager.ts) owns the flags: it sets and clears
+ * them in the same synchronous step as the in-memory change they describe, so no update can land in between.
  */
 const cardOnlyIds = new Set<string>();
 export const isCardOnly = (id: string): boolean => cardOnlyIds.has(id);
+export const markCardOnly = (id: string): void => {
+  cardOnlyIds.add(id);
+};
 export const markStateLoaded = (id: string): void => {
   cardOnlyIds.delete(id);
 };
@@ -640,16 +640,15 @@ export const deleteProject = async (projectId: string): Promise<void> => {
 };
 
 /**
- * The signed-in user's library as cards (see PROJECT_CARD_SELECT). Every listed id is flagged card-only;
- * `fullBefore` holds the listed ids that were not flagged a moment before (so a caller can keep a full
- * project it already holds). Both happen synchronously right before this resolves.
+ * The signed-in user's library as cards (see PROJECT_CARD_SELECT). It flags nothing: the caller that keeps the
+ * cards in memory marks them card-only (markCardOnly) in the same step as it holds them.
  */
-export const loadProjectCards = async (): Promise<{ projects: Project[]; fullBefore: ReadonlySet<string> }> => {
+export const loadProjectCards = async (): Promise<Project[]> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
     // Auth-first mode: dashboard data is user-owned and stored in Supabase.
-    return { projects: [], fullBefore: new Set() };
+    return [];
   }
 
   const selectCards = (columns: string) => supabase
@@ -664,16 +663,11 @@ export const loadProjectCards = async (): Promise<{ projects: Project[]; fullBef
 
   const rows = ((data || []) as unknown[]).filter(isProjectCardRow);
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
-  const projects = rows.map((row) => mapProjectRow({ ...row, state: projectCardStateOf(row) } as ProjectRow, profileMap));
-  const fullBefore = new Set<string>();
-  for (const project of projects) {
-    if (!cardOnlyIds.has(project.id)) fullBefore.add(project.id);
-    cardOnlyIds.add(project.id);
-  }
-  return { projects, fullBefore };
+  return rows.map((row) => mapProjectRow({ ...row, state: projectCardStateOf(row) } as ProjectRow, profileMap));
 };
 
-export const loadProjects = async (): Promise<Project[]> => (await loadProjectCards()).projects;
+/** The library as cards (no full state, no card-only flag): see loadProjectCards. */
+export const loadProjects = (): Promise<Project[]> => loadProjectCards();
 
 export const reloadProjects = async (): Promise<Project[]> => {
   return loadProjects();
@@ -681,7 +675,8 @@ export const reloadProjects = async (): Promise<Project[]> => {
 
 /**
  * One comic's full state (the only read that ships `versions`): for opening, duplicating, changing or
- * generating a comic listed as a card. Clears the id's card-only flag right before it resolves.
+ * generating a comic listed as a card. It does not clear the card-only flag: the caller does, in the same step as
+ * it puts the state in memory (markStateLoaded).
  */
 export const loadProjectState = async (projectId: string): Promise<{ state: Project['state']; updatedAt: number }> => {
   const { data: { user } } = await supabase.auth.getUser();
@@ -698,7 +693,6 @@ export const loadProjectState = async (projectId: string): Promise<{ state: Proj
   if (!isRecord(data) || !isRecord(data.state) || typeof data.updated_at !== 'string') {
     throw new Error('This comic could not be loaded.');
   }
-  markStateLoaded(projectId);
   return { state: data.state as unknown as Project['state'], updatedAt: new Date(data.updated_at).getTime() };
 };
 

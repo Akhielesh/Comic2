@@ -5,11 +5,13 @@ import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
 import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
 import {
   CARD_STATE,
+  PROJECT_CARD_STATE_KEYS,
   createGenerationNotification,
   isCardState,
   loadProjectCards,
   loadProjectState,
   isCardOnly,
+  markCardOnly,
   markStateLoaded,
   saveProject,
   deleteProject as deleteProjectRecord,
@@ -296,29 +298,91 @@ export const withoutStudioVisibility = (project: Project, updates: Partial<Proje
 };
 
 type ProjectUpdate = Partial<Project> | ((prev: Project) => Partial<Project>);
+/** An update waiting for its comic's full state, with the library card that was in memory when it was made. */
+type QueuedUpdate = { updates: ProjectUpdate; card?: Project };
 
 export const STATE_LOAD_FAILED_SAVE = "Couldn't load this comic to save your change. Try again.";
 export const STATE_LOAD_FAILED = "Couldn't load this comic. Try again.";
+/** A change made on a comic shown from its library card after it failed to open: nothing of it is saved. */
+export const STATE_NOT_OPENED_SAVE = "This comic didn't open, so your change wasn't saved. Open it again to keep editing.";
 
-/** A short notice the app shell does not render itself (the hook has no UI): one at a time, gone after 6 s. */
+/** How long an open waits before each retry of a full-state load that failed (the app shows its loader meanwhile). */
+export const OPEN_RETRY_DELAYS_MS = [600, 1800] as const;
+
+export const PROJECT_NOTICE_ID = 'project-state-notice';
+
+/**
+ * A short notice the app shell does not render itself (the hook has no UI): one at a time, gone after 6 s. The
+ * outer element places it (fixed, on the toast layer); the TOAST recipe, which is `relative` for its own edge and
+ * countdown, styles the inner one, so it never pulls the notice back into the page flow.
+ */
 const showProjectNotice = (message: string) => {
   if (typeof document === 'undefined' || !document.body) return;
-  const id = 'project-state-notice';
-  document.getElementById(id)?.remove();
+  document.getElementById(PROJECT_NOTICE_ID)?.remove();
+  const place = document.createElement('div');
+  place.id = PROJECT_NOTICE_ID;
+  place.className = `pointer-events-none fixed bottom-6 left-1/2 w-max max-w-[calc(100vw-32px)] -translate-x-1/2 ${Z.toast}`;
   const el = document.createElement('div');
-  el.id = id;
   el.setAttribute('role', 'alert');
-  el.className = `${TOAST} ${Z.toast} fixed bottom-6 left-1/2 w-max max-w-[calc(100vw-32px)] -translate-x-1/2`;
+  el.className = TOAST;
   el.textContent = message;
-  document.body.appendChild(el);
-  window.setTimeout(() => el.remove(), 6000);
+  place.appendChild(el);
+  document.body.appendChild(place);
+  window.setTimeout(() => place.remove(), 6000);
+};
+
+const CARD_KEYS: ReadonlySet<string> = new Set<string>(PROJECT_CARD_STATE_KEYS);
+/** The Page Studio keys a card carries (projectCardStateOf): its pages and the active page. */
+const CARD_PAGE_STUDIO_KEYS: ReadonlySet<string> = new Set(['pages', 'activePageId']);
+/** Display URLs a save strips (sanitizeProjectForStorage): their value never reaches the row. */
+const STRIPPED_ON_SAVE: ReadonlySet<string> = new Set(['coverImageUrl', 'coverTemplateImageUrl', 'styleImageUrl']);
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * An update made while only a comic's library card was in memory, resolved against the full state that has since
+ * loaded (`next`, over `full`) and against that card (`fromCard`). It changes a key the card does not carry (or a
+ * Page Studio key other than its pages) to the value it also gives the card: a value that does not depend on the
+ * comic it is applied to, so it was computed from the card, from keys the card lacks (an image-tag map rebuilt from
+ * nothing, a version list of one, a style built from defaults). Changes to the card's own keys, and changes computed
+ * from the comic itself (`prev`), never match.
+ */
+const changesKeysTheCardLacks = (full: ComicState, next: ComicState | undefined, fromCard: ComicState | undefined): boolean => {
+  if (!next || next === full) return false;
+  const before = full as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const card = (fromCard ?? {}) as unknown as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (CARD_KEYS.has(key) || STRIPPED_ON_SAVE.has(key) || Object.is(before[key], after[key])) continue;
+    if (key === 'pageStudio') {
+      const was = (before.pageStudio ?? {}) as Record<string, unknown>;
+      const now = (after.pageStudio ?? {}) as Record<string, unknown>;
+      const onCard = (card.pageStudio ?? {}) as Record<string, unknown>;
+      for (const sub of new Set([...Object.keys(was), ...Object.keys(now)])) {
+        if (CARD_PAGE_STUDIO_KEYS.has(sub) || Object.is(was[sub], now[sub])) continue;
+        if (sameValue(now[sub], onCard[sub])) return true;
+      }
+      continue;
+    }
+    if (sameValue(after[key], card[key])) return true;
+  }
+  return false;
 };
 
 type HasImage = { id?: unknown; imageId?: string; imageUrl?: string };
 
 /**
- * The signed preview URLs a library card already holds, carried onto the full state that replaces it (same image
- * id only), so a card changed from the dashboard keeps its cover. In memory only: a save strips every URL.
+ * The signed URLs the in-memory copy already holds (a library card's previews, or an opened comic's images),
+ * carried onto the state loaded to replace it (same image id only), so a card changed from the dashboard keeps its
+ * cover and a refreshed comic keeps its pictures. In memory only: a save strips every URL.
  */
 const carryCardDisplayUrls = (card: ComicState, full: ComicState): ComicState => {
   const overlay = <T extends HasImage>(target: T[] | undefined, from: T[] | undefined): T[] | undefined => {
@@ -335,10 +399,17 @@ const carryCardDisplayUrls = (card: ComicState, full: ComicState): ComicState =>
   if (!next.coverTemplateImageUrl && card.coverTemplateImageUrl && next.coverTemplateImageId && next.coverTemplateImageId === card.coverTemplateImageId) {
     next.coverTemplateImageUrl = card.coverTemplateImageUrl;
   }
+  if (!next.styleImageUrl && card.styleImageUrl && next.styleImageId && next.styleImageId === card.styleImageId) next.styleImageUrl = card.styleImageUrl;
   const panels = overlay(full.panels, card.panels);
   if (panels) next.panels = panels;
   const variants = overlay(full.styleVariants, card.styleVariants);
   if (variants) next.styleVariants = variants;
+  const characters = overlay(full.characters, card.characters);
+  if (characters) next.characters = characters;
+  const items = overlay(full.items, card.items);
+  if (items) next.items = items;
+  const locations = overlay(full.locations, card.locations);
+  if (locations) next.locations = locations;
   if (full.pageStudio?.pages && card.pageStudio?.pages) {
     const pages = overlay(full.pageStudio.pages, card.pageStudio.pages);
     if (pages) next.pageStudio = { ...full.pageStudio, pages };
@@ -352,13 +423,24 @@ export const useProjectManager = () => {
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingSavesRef = useRef<Map<string, Project>>(new Map());
+  // Saves sent and not yet answered, per id (a 2.5 MB upsert can take a while on a slow uplink).
+  const inflightSavesRef = useRef<Map<string, Set<Promise<void>>>>(new Map());
+  // When each id's last save was answered: a library list requested before then may predate it.
+  const lastSaveSettledRef = useRef<Map<string, number>>(new Map());
+  // A visibility (isPublic) change made here, per id: `settledAt` is Infinity until the save that carries it is
+  // answered. Until a library list newer than that, the local value wins over the row's.
+  const visibilityEditsRef = useRef<Map<string, { seq: number; settledAt: number }>>(new Map());
+  const visibilitySeqRef = useRef(0);
   // The project list as of the last change, kept synchronously (React state lags a render): the card-only
   // decisions below must see what a save would see.
   const projectsRef = useRef<Project[]>([]);
-  // Updates made to a card while its full state loads, applied in order once it is in (EGRESS-DB E1).
-  const queuedUpdatesRef = useRef<Map<string, ProjectUpdate[]>>(new Map());
+  // Updates made while a comic's full state loads, applied in order once it is in (EGRESS-DB E1).
+  const queuedUpdatesRef = useRef<Map<string, QueuedUpdate[]>>(new Map());
   const stateLoadsRef = useRef<Map<string, Promise<Project | undefined>>>(new Map());
   const deletedIdsRef = useRef<Set<string>>(new Set());
+  // Comics whose open failed while only their card was in memory: App then shows the card in the workspace
+  // (its best-effort fallback), and every change made there would be computed from keys the card lacks.
+  const openFailedIdsRef = useRef<Set<string>>(new Set());
 
   const commitProjects = (next: Project[] | ((prev: Project[]) => Project[])) => {
     const value = typeof next === 'function' ? next(projectsRef.current) : next;
@@ -367,13 +449,37 @@ export const useProjectManager = () => {
     return value;
   };
 
-  const persist = (project: Project) => {
-    saveProject(project).catch((error) => console.warn('[projects] save failed', project.id, error));
+  const persist = (project: Project): Promise<void> => {
+    const id = project.id;
+    const visibilitySeq = visibilityEditsRef.current.get(id)?.seq;
+    const run = saveProject(project).catch((error) => console.warn('[projects] save failed', id, error));
+    const inflight = inflightSavesRef.current.get(id) ?? new Set<Promise<void>>();
+    inflight.add(run);
+    inflightSavesRef.current.set(id, inflight);
+    void run.then(() => {
+      inflight.delete(run);
+      if (inflight.size === 0 && inflightSavesRef.current.get(id) === inflight) inflightSavesRef.current.delete(id);
+      const settledAt = Date.now();
+      lastSaveSettledRef.current.set(id, settledAt);
+      const visibility = visibilityEditsRef.current.get(id);
+      if (visibility && visibility.seq === visibilitySeq && visibility.settledAt === Infinity) visibility.settledAt = settledAt;
+    });
+    return run;
   };
 
+  /** True when a change of this comic made here is waiting to save, saving, or was saved after `since`. */
+  const hasLocalSaveSince = (id: string, since: number) =>
+    pendingSavesRef.current.has(id) ||
+    (inflightSavesRef.current.get(id)?.size ?? 0) > 0 ||
+    (lastSaveSettledRef.current.get(id) ?? -Infinity) >= since;
+
   const scheduleSave = (project: Project) => {
-    // A card is never saved (saveProject would refuse it too): its full state loads first.
-    if (isCardOnly(project.id)) return;
+    // Unreachable by design (a flagged id's changes are queued, and the flags change in the same step as the
+    // state): a card, or a copy older than the row, is never saved (saveProject would refuse it too).
+    if (isCardOnly(project.id)) {
+      console.warn('[projects] a change reached the save of a comic whose full state is not loaded', project.id);
+      return;
+    }
     pendingSavesRef.current.set(project.id, project);
     const existing = saveTimersRef.current.get(project.id);
     if (existing) clearTimeout(existing);
@@ -381,7 +487,7 @@ export const useProjectManager = () => {
       const latest = pendingSavesRef.current.get(project.id);
       pendingSavesRef.current.delete(project.id);
       saveTimersRef.current.delete(project.id);
-      if (latest) persist(latest);
+      if (latest) void persist(latest);
     }, SAVE_DEBOUNCE_MS);
     saveTimersRef.current.set(project.id, handle);
   };
@@ -391,7 +497,7 @@ export const useProjectManager = () => {
       saveTimersRef.current.forEach((handle) => clearTimeout(handle));
       saveTimersRef.current.clear();
       pendingSavesRef.current.forEach((project) => {
-        persist(project);
+        void persist(project);
       });
       pendingSavesRef.current.clear();
     };
@@ -468,7 +574,7 @@ export const useProjectManager = () => {
     };
 
     if (didStateMigrationRequireSave(project.state, migratedState)) {
-      persist(hydratedProject);
+      void persist(hydratedProject);
     }
 
     return hydratedProject;
@@ -644,6 +750,28 @@ export const useProjectManager = () => {
     };
   };
 
+  /**
+   * A full comic held in memory, with the row columns the server writes (moderation holds, a classic public share,
+   * like and view counters) taken from the library card: none of those writes changes updated_at, and a save sends
+   * is_public back, so a stale value would undo a hold (and the database would then refuse every save) or unpublish
+   * a share. The local isPublic stays only while a change of it made here may be newer than the list. A copy older
+   * than the row (`stale`) takes the row's name, cover and time as well.
+   */
+  const withRowColumns = (held: Project, card: Project, requestedAt: number, stale: boolean): Project => {
+    const visibility = visibilityEditsRef.current.get(held.id);
+    const localVisibility = !!visibility && visibility.settledAt >= requestedAt;
+    const next: Project = {
+      ...held,
+      likesCount: card.likesCount,
+      viewsCount: card.viewsCount,
+      contentRating: card.contentRating,
+      ...(localVisibility ? {} : { isPublic: card.isPublic }),
+      ...(stale ? { name: card.name, coverImage: card.coverImage, updatedAt: card.updatedAt, authorName: card.authorName } : {})
+    };
+    if (next.contentRating === undefined) delete next.contentRating;
+    return next;
+  };
+
   const loadAllProjects = async () => {
     try {
       setProjectsLoaded(false);
@@ -653,23 +781,33 @@ export const useProjectManager = () => {
         return;
       }
 
-      const { projects: cards, fullBefore } = await loadProjectCards();
-      // Synchronous from here until the decision is recorded: loadProjectCards has just flagged every listed id
-      // card-only. A full project this tab already holds stays (and is flagged full again) when the row has not
-      // changed since, or when an edit of it is waiting to save; any other listed comic becomes its card, so a
-      // newer remote edit always forces a fresh load before the next save.
+      const requestedAt = Date.now();
+      const cards = await loadProjectCards();
+      // Synchronous from here until every listed id is flagged, so no update lands between a decision and its flag.
+      // A full comic held in memory is never replaced by its card (a workspace may be showing it, and an edit made
+      // there from a card would be computed from keys the card lacks). It stays full when the row has not changed
+      // since, or when a change of it made here is waiting, saving, or saved after this list was asked for.
+      // Otherwise the row changed elsewhere: the copy stays in memory, flagged, so its next change or open loads the
+      // newer state first. Every other listed comic is a card, flagged.
       const held = new Map(projectsRef.current.map((p) => [p.id, p]));
-      const kept = new Map<string, Project>();
+      const fullHeld = new Set<string>();
+      const staleHeld = new Set<string>();
       for (const card of cards) {
         const existing = held.get(card.id);
-        if (!existing || !fullBefore.has(card.id)) continue;
-        if (existing.updatedAt === card.updatedAt || pendingSavesRef.current.has(card.id)) {
-          markStateLoaded(card.id);
-          kept.set(card.id, existing);
+        if (existing && !isCardState(existing.state)) {
+          const current = !isCardOnly(card.id) && (existing.updatedAt === card.updatedAt || hasLocalSaveSince(card.id, requestedAt));
+          if (current) {
+            fullHeld.add(card.id);
+          } else {
+            staleHeld.add(card.id);
+            markCardOnly(card.id);
+          }
+        } else {
+          markCardOnly(card.id);
         }
       }
 
-      const fresh = await Promise.all(cards.filter((card) => !kept.has(card.id)).map(hydrateCardThumbnails));
+      const fresh = await Promise.all(cards.filter((card) => !fullHeld.has(card.id) && !staleHeld.has(card.id)).map(hydrateCardThumbnails));
       const freshById = new Map(fresh.map((card) => [card.id, card]));
       commitProjects((prev) => {
         const live = new Map(prev.map((p) => [p.id, p]));
@@ -677,11 +815,11 @@ export const useProjectManager = () => {
         for (const card of cards) {
           if (deletedIdsRef.current.has(card.id)) continue;
           const current = live.get(card.id);
-          if (kept.has(card.id)) {
-            next.push(current ?? kept.get(card.id)!);
-          } else if (!isCardOnly(card.id) && current) {
-            // Its full state loaded while the previews were signed: keep it, never a card over it.
-            next.push(current);
+          if (current && !isCardState(current.state)) {
+            // Full in memory (held, or loaded while the previews were signed): never a card over it.
+            // A copy the row had moved past takes the row's name and cover too, unless a change made here since
+            // (applied once its newer state loaded during the previews) is on its way to the row.
+            next.push(withRowColumns(current, card, requestedAt, staleHeld.has(card.id) && !hasLocalSaveSince(card.id, requestedAt)));
           } else {
             next.push(freshById.get(card.id) ?? card);
           }
@@ -725,18 +863,36 @@ export const useProjectManager = () => {
     return merged;
   };
 
-  /** Apply one update to a project whose full state is in memory, then schedule its save. */
-  const applyUpdate = (id: string, updates: ProjectUpdate) => {
+  /**
+   * Apply one update to a project whose full state is in memory, then schedule its save. `card` is the library card
+   * that was in memory when a queued update was made: an update that sets a key the card lacks to a value computed
+   * from the card (changesKeysTheCardLacks) is dropped, never saved over the full state.
+   */
+  const applyUpdate = (id: string, updates: ProjectUpdate, card?: Project) => {
     let updated: Project | undefined;
+    let refused = false;
     commitProjects(prevProjects => prevProjects.map(p => {
       if (p.id !== id) return p;
       let newValues = typeof updates === 'function' ? updates(p) : updates;
       if (newValues?.state && isCardState(newValues.state) && !isCardState(p.state)) {
         newValues = { ...newValues, state: overFullState(p.state, newValues.state) };
       }
-      updated = { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
-      return updated;
+      if (card && newValues?.state) {
+        const onCard = typeof updates === 'function' ? updates(card) : updates;
+        if (changesKeysTheCardLacks(p.state, newValues.state, onCard?.state)) {
+          refused = true;
+          return p;
+        }
+      }
+      const next = { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
+      if (next.isPublic !== p.isPublic) {
+        visibilitySeqRef.current += 1;
+        visibilityEditsRef.current.set(id, { seq: visibilitySeqRef.current, settledAt: Infinity });
+      }
+      updated = next;
+      return next;
     }));
+    if (refused) console.warn('[projects] dropped a change computed from the library card, not the comic', id);
     if (updated) scheduleSave(updated);
   };
 
@@ -744,25 +900,42 @@ export const useProjectManager = () => {
     const queued = queuedUpdatesRef.current.get(id);
     if (!queued) return;
     queuedUpdatesRef.current.delete(id);
-    for (const updates of queued) applyUpdate(id, updates);
+    for (const { updates, card } of queued) applyUpdate(id, updates, card);
+  };
+
+  /** True while the in-memory copy may not be saved: a card, or a full copy older than the row. */
+  const needsStateLoad = (id: string) => {
+    if (isCardOnly(id)) return true;
+    const current = projectsRef.current.find((p) => p.id === id);
+    return !!current && isCardState(current.state);
+  };
+
+  /** Saves of this comic still in flight: a state load waits for them, so it never reads what they replace. */
+  const settleSaves = async (id: string) => {
+    const inflight = inflightSavesRef.current.get(id);
+    if (inflight?.size) await Promise.all([...inflight]);
   };
 
   /**
-   * The comic with its full state (EGRESS-DB E1): a card loads its state once (one request per id at a time),
-   * replaces the card with it, then applies the updates queued meanwhile. A full project resolves as it is.
-   * Rejects when the state cannot be loaded; the queued updates are then dropped, with a notice.
+   * The comic with its full state (EGRESS-DB E1): a card (or a copy older than the row) loads its state once (one
+   * request per id at a time), after any save of it in flight, and is replaced by it in the same step as its flag is
+   * cleared; then the updates queued meanwhile apply. A full project resolves as it is. Rejects when the state cannot
+   * be loaded; the queued updates are then dropped, with a notice.
    */
   const ensureProjectState = (id: string): Promise<Project | undefined> => {
     if (!projectsRef.current.some((p) => p.id === id)) return Promise.resolve(undefined);
-    if (!isCardOnly(id)) {
+    if (!needsStateLoad(id)) {
       flushQueuedUpdates(id);
       return Promise.resolve(projectsRef.current.find((p) => p.id === id));
     }
     const inflight = stateLoadsRef.current.get(id);
     if (inflight) return inflight;
-    const run = loadProjectState(id)
+    const run = settleSaves(id)
+      .then(() => loadProjectState(id))
       .then(({ state, updatedAt }) => {
-        // loadProjectState has just flagged the id full: the card is replaced in this same turn.
+        if (deletedIdsRef.current.has(id) || !projectsRef.current.some((p) => p.id === id)) return undefined;
+        markStateLoaded(id);
+        openFailedIdsRef.current.delete(id);
         commitProjects((prev) => prev.map((p) => (p.id === id ? { ...p, state: carryCardDisplayUrls(p.state, state), updatedAt } : p)));
         flushQueuedUpdates(id);
         return projectsRef.current.find((p) => p.id === id);
@@ -782,12 +955,21 @@ export const useProjectManager = () => {
   };
 
   const updateProject = (id: string, updates: ProjectUpdate) => {
-    if (!projectsRef.current.some((p) => p.id === id)) return;
-    if (isCardOnly(id)) {
+    const current = projectsRef.current.find((p) => p.id === id);
+    if (!current) return;
+    if (openFailedIdsRef.current.has(id) && isCardState(current.state)) {
+      // The comic failed to open and a workspace may be showing its card: whatever it computes there is built from
+      // keys the card lacks (an image-tag map from nothing, a version list of one), so nothing of it is saved, and
+      // no load is started that would let it land on the full state. Opening the comic again retries.
+      showProjectNotice(STATE_NOT_OPENED_SAVE);
+      return;
+    }
+    if (needsStateLoad(id)) {
       // A card holds a subset of the comic: the change waits for the full state, so it is never saved over it.
+      const entry: QueuedUpdate = { updates, card: isCardState(current.state) ? current : undefined };
       const queue = queuedUpdatesRef.current.get(id);
-      if (queue) queue.push(updates);
-      else queuedUpdatesRef.current.set(id, [updates]);
+      if (queue) queue.push(entry);
+      else queuedUpdatesRef.current.set(id, [entry]);
       void ensureProjectState(id).catch(() => undefined);
       return;
     }
@@ -802,6 +984,7 @@ export const useProjectManager = () => {
     saveTimersRef.current.delete(id);
     pendingSavesRef.current.delete(id);
     queuedUpdatesRef.current.delete(id);
+    openFailedIdsRef.current.delete(id);
     void deleteProjectRecord(id);
   };
 
@@ -835,7 +1018,22 @@ export const useProjectManager = () => {
     persist(copy);
   };
 
+  // A comic that failed to open is still returned as its card (App's fallback shows it, with its own way back to
+  // the library); updateProject refuses every change made on it until it opens.
   const getProject = (id: string) => projects.find(p => p.id === id);
+
+  /** ensureProjectState for an open: a failed load is retried (OPEN_RETRY_DELAYS_MS) while the app shows its loader. */
+  const loadStateForOpen = async (projectId: string): Promise<Project | undefined> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await ensureProjectState(projectId);
+      } catch (error) {
+        const delay = OPEN_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined || !projectsRef.current.some((p) => p.id === projectId)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  };
 
   const hydrateProjectAssets = async (projectId: string): Promise<Project | undefined> => {
     const target = projectsRef.current.find((p) => p.id === projectId);
@@ -843,12 +1041,26 @@ export const useProjectManager = () => {
     // v4 studio comics sign their own assets through /api/comic (see hydrateStudioCover).
     if (isStudioV4Project(target)) return target;
     // Opening a comic listed as a card loads its full state first (rejects when it cannot).
-    const full = await ensureProjectState(projectId);
+    let full: Project | undefined;
+    try {
+      full = await loadStateForOpen(projectId);
+    } catch (error) {
+      if (projectsRef.current.some((p) => p.id === projectId && isCardState(p.state))) openFailedIdsRef.current.add(projectId);
+      showProjectNotice(STATE_LOAD_FAILED);
+      throw error;
+    }
+    openFailedIdsRef.current.delete(projectId);
     if (!full) return undefined;
     if (isStudioV4Project(full)) return full;
     const hydrated = await hydrateProject(full);
-    commitProjects((prev) => prev.map((p) => (p.id === projectId ? hydrated : p)));
-    return hydrated;
+    commitProjects((prev) => prev.map((p) => {
+      if (p.id !== projectId) return p;
+      // The row columns a reload took meanwhile stay; a change that landed while the images were signed (a
+      // generation tick) is kept too, and only the signed URLs carry over onto it.
+      if (p.state === full!.state || isCardState(p.state)) return { ...p, state: hydrated.state };
+      return { ...p, state: carryCardDisplayUrls(hydrated.state, p.state) };
+    }));
+    return projectsRef.current.find((p) => p.id === projectId) ?? hydrated;
   };
 
   const startGeneration = async (projectId: string) => {

@@ -212,7 +212,7 @@ describe('useProjectManager with library cards', () => {
     expect(isCardOnly('classic-1')).toBe(true);
   });
 
-  it('opening a card loads its full state once; an unchanged row keeps it across a reload, a changed one discards it', async () => {
+  it('opening a card loads its full state once; an unchanged row keeps it across a reload, a changed one flags it stale', async () => {
     const hook = await mount();
     let opened: Awaited<ReturnType<typeof hook.result.current.hydrateProjectAssets>>;
     await act(async () => {
@@ -230,15 +230,17 @@ describe('useProjectManager with library cards', () => {
     expect((listed(hook, 'classic-1').state as unknown as Record<string, unknown>).versions).toEqual(VERSIONS);
     expect(isCardOnly('classic-1')).toBe(false);
 
-    // Edited elsewhere (newer updated_at): the reload takes the card, and the next change loads the new state.
+    // Edited elsewhere (newer updated_at): the reload never puts the card over the full comic (a workspace may be
+    // showing it), but flags it, so the next change loads the new state first.
     const stored = fakeSupabase.state.tables.projects.find((r) => r.id === 'classic-1')!;
     stored.updated_at = '2026-10-06T00:00:00.000Z';
     stored.state = { ...classicState, script: 'Edited on another device' };
     await act(async () => {
       await hook.result.current.reloadProjects();
     });
-    expect('versions' in listed(hook, 'classic-1').state).toBe(false);
+    expect((listed(hook, 'classic-1').state as unknown as Record<string, unknown>).versions).toEqual(VERSIONS);
     expect(isCardOnly('classic-1')).toBe(true);
+    expect(listed(hook, 'classic-1').updatedAt).toBe(Date.parse('2026-10-06T00:00:00.000Z'));
     const before = upserts().length;
     act(() => hook.result.current.updateProject('classic-1', { name: 'After remote edit' }));
     await waitFor(() => expect(upserts()).toHaveLength(before + 1), { timeout: 2000 });

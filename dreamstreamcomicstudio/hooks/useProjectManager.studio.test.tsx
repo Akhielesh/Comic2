@@ -6,12 +6,16 @@ const db = vi.hoisted(() => {
   const mock = {
     loadProjects: vi.fn(),
     // The list as the library reads it (EGRESS-DB E1). These rows stand for comics already held in full
-    // (isCardOnly is false), so this suite pins the v4 rules alone; the card rules have their own tests
-    // (useProjectManager.test.ts, services/db.projectCards.test.ts).
-    loadProjectCards: vi.fn(async () => ({ projects: await mock.loadProjects(), fullBefore: new Set<string>() })),
+    // (isCardOnly is false, and no state carries the card marker), so this suite pins the v4 rules alone; the card
+    // rules have their own tests (useProjectManager.test.ts, services/db.projectCards.test.ts).
+    loadProjectCards: vi.fn(async () => mock.loadProjects()),
     loadProjectState: vi.fn(),
     isCardOnly: vi.fn(() => false),
+    isCardState: vi.fn(() => false),
+    markCardOnly: vi.fn(),
     markStateLoaded: vi.fn(),
+    CARD_STATE: Symbol.for('dreamstream.projectCardState'),
+    PROJECT_CARD_STATE_KEYS: ['studioVersion', 'pipelineMode', 'panels'],
     saveProject: vi.fn(),
     deleteProject: vi.fn(),
     getImageUrl: vi.fn(),
