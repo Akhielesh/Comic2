@@ -393,6 +393,43 @@ describe('signed URLs', () => {
   });
 });
 
+describe('signed URLs: the give-up is final for a request already queued (dev 99b870c4, kept by A4 #6)', () => {
+  it('a variant queued for signing, then given up on by its image errors before the debounce fires, is never signed', async () => {
+    const VARIANT = 'u/proj/pages/p1.480.webp';
+    const doc = normalizeDoc(
+      makeSampleDoc((d) => {
+        d.pages[0].render.asset = { ...d.pages[0].render.asset!, variants: [{ path: VARIANT, w: 480, h: 720 }] };
+      })
+    );
+    const { result } = await setup({ doc, urls: { 'u/proj/pages/p1.png': 'https://cdn/p1', [VARIANT]: 'https://cdn/p1-480?v=0' } });
+    vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(1);
+    const asset = result.current.doc!.pages[0].render.asset!;
+    const img = document.createElement('img');
+    img.src = result.current.urlFor(asset, { width: 300 })!;
+    expect(img.src).toBe('https://cdn/p1-480?v=0');
+    document.body.appendChild(img);
+    // Deterministic: only the signing debounce is faked, so every error lands before it fires.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // MAX_SIGN_ATTEMPTS (3) + 1 load failures within the window: the first queues a re-sign, the fourth gives up.
+      act(() => {
+        for (let i = 0; i < 4; i += 1) img.dispatchEvent(new Event('error'));
+      });
+      expect(result.current.isUnsignable(VARIANT)).toBe(true);
+      expect(api.signStudioUrls).not.toHaveBeenCalled();
+      await act(async () => {
+        vi.advanceTimersByTime(1000); // past SIGN_DEBOUNCE_MS: flushSigning runs with the variant still queued
+        await Promise.resolve();
+      });
+      expect(api.signStudioUrls).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      img.remove();
+    }
+    expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1');
+  });
+});
+
 // ── Caps, variants, client actions, publication ──────────────────────────────
 
 describe('caps and BYOK', () => {
