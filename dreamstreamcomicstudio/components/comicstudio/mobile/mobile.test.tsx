@@ -11,7 +11,7 @@ import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetF
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
 import { ModeToggle, MODE_HINT } from './ModeToggle';
-import { SAVINGS_COPY, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
+import { SAVINGS_COPY, SavingsBreakdown, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
 import { FormFactorProvider, formFactorFor } from './useFormFactor';
 import { HEADER_BANNER_MIN_ORDER, HEADER_SLOT_ORDER } from './headerSlots';
 import { feature } from './index';
@@ -529,36 +529,57 @@ describe('SavingsChip (decisions-final #6)', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('a quiet chip that opens the breakdown with the copy', () => {
-    render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Saved \$0\.30 by software/ }));
-    expect(screen.getByRole('dialog', { name: 'Saved by software' })).toHaveTextContent(SAVINGS_COPY);
+  it('draws no header chip at any width: "Saved" in the header means the save state only (declutter F3)', () => {
+    for (const ff of [DESKTOP, formFactorFor({ w: 900, h: 700 }), PHONE]) {
+      const { container, unmount } = render(
+        <FormFactorProvider value={ff}>
+          <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
+        </FormFactorProvider>
+      );
+      // First sight never flashes, and there is no chip to show instead.
+      expect(container).toBeEmptyDOMElement();
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(document.body.textContent || '').not.toMatch(/\bSaved\b/);
+      unmount();
+    }
+  });
+
+  it('the breakdown (shown in the Spending sheet at every width) carries the copy and the savings', () => {
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(screen.getByText('Saved by software')).toBeInTheDocument();
+    expect(screen.getByText('$0.30')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(SAVINGS_COPY))).toBeInTheDocument();
     expect(screen.getByText('Moved 3 balloons')).toBeInTheDocument();
   });
 
-  it('governed users read the saving as a share of their usage — never dollars, also before the status loads', () => {
+  it('governed users read the breakdown as a share of their usage — never dollars, also before the status loads', () => {
     showUsagePrices(1);
-    const { unmount } = render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    const chip = screen.getByRole('button', { name: /^Saved (≈[\d.]+%|<0\.1%) of your usage by software/ });
-    expect(chip.textContent).not.toMatch(/\$/);
-    fireEvent.click(chip);
-    expect(screen.getByRole('dialog', { name: 'Saved by software' }).textContent).not.toMatch(/\$/);
+    const { unmount } = render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).toMatch(/Saved (≈[\d.]+%|<0\.1%) of your usage/);
+    expect(document.body.textContent).not.toMatch(/\$/);
     unmount();
     resetUsageStatus();
-    render(
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).not.toMatch(/\$/);
+  });
+
+  it('desktops and tablets: a new saving shows the same calm toast under the header (the chip that flashed is gone)', async () => {
+    const { rerender } = render(
       <FormFactorProvider value={DESKTOP}>
         <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
       </FormFactorProvider>
     );
-    expect(screen.getByRole('button', { name: /^Saved some of your usage by software/ }).textContent).toBe('Saved');
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
+      </FormFactorProvider>
+    );
+    const toast = await waitFor(() => screen.getByRole('status'));
+    expect(toast).toHaveTextContent(SAVINGS_COPY);
+    expect(toast.parentElement).toBe(document.body);
+    // No phone override on a desktop: the root's own header height (56 px) applies.
+    expect(toast.style.getPropertyValue('--header-h')).toBe('');
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('phones: no header chip; a new saving shows the copy as a calm toast', async () => {

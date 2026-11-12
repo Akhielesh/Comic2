@@ -9,10 +9,15 @@
 //   dual-screen  foldables spanning two segments: chat and board each in their own segment
 // Both panes stay mounted (the hidden one is `inert`), so scroll, drafts and tab scroll survive.
 //
-// The header carries back, the editable title, quality, the truthful spend chip (with a by-kind
-// breakdown and BYOK note), Read and the ⋯ menu (settings, resync, install). On phones it keeps only
+// The header carries back, the editable title, the truthful spend chip (with a by-kind breakdown, the
+// savings and the BYOK note) and the ⋯ menu (settings, resync, install). On phones it keeps only
 // Back · Title · Share · $ · ⋯ — everything else moves into ⋯, a thumb-reachable bottom sheet (with Comic History on,
 // headers narrower than HISTORY_HEADER_ICON_MIN_WIDTH carry History there too).
+// One home per action (declutter DC-1, PROGRAM3 D22; docs/design/clean-and-smooth.md C2):
+//  - Read shows only while the board (whose Read tab is the reader) is out of sight, and only once a page is drawn;
+//  - the quality chip shows only below HEADER_QUALITY_CHIP_BELOW (1024 px), where the composer's own chip steps
+//    aside for room; from 1024 the composer chip is the home, with a ⋯ Quality row as the always-there fallback;
+//  - "Saved" in the header means the save state only: money saved by software lives in the Spending sheet.
 // Feature controls (Share, Easy/Pro, savings, a model-status pill) join through the header slot
 // registry (features.ts, contract §13.2) interleaved by `order`; slots ordered ≥ 1000 render as a
 // full-width calm banner strip under the header (mobile/headerSlots.ts).
@@ -90,6 +95,11 @@ const ImmersiveReader = React.lazy(() => import('./immersive/ImmersiveReader').t
 
 /** Below this width the phone header moves the spend chip into the ⋯ menu (the title keeps ≥ 100 px). */
 export const SPEND_CHIP_MIN_WIDTH = 360;
+/**
+ * The header's quality chip shows only below this width (PROGRAM3 D22, declutter F2): from here the composer's
+ * quality chip is on screen beside it, the same setting twice. Phones keep their ⋯ Quality row.
+ */
+export const HEADER_QUALITY_CHIP_BELOW = 1024;
 /** The full-screen reader re-signs image URLs after an image error at most this often. */
 export const READER_REFRESH_MS = 30_000;
 
@@ -274,6 +284,11 @@ const QUALITY_DOT: Record<string, string> = { draft: 'bg-sky-500', standard: 'bg
 // Fine pointers keep the calm 32 px pill; touch gets a real 44 px target (mobile.md §2.4).
 const headerBtn = `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5 press`;
 const headerIconBtn = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:w-11 press`;
+/**
+ * headerIconBtn's family (borderless, no fill) for a phone control that also shows a short figure: the wallet's
+ * "≈4%" or "$0.42" (declutter F4: a filled pill between two flat icons read as pressed).
+ */
+const headerIconTextBtn = `inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full px-1.5 text-[12.5px] font-medium text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:h-11 coarse:min-w-11 press`;
 
 type HeaderSheet = 'quality' | 'spend' | 'menu' | null;
 
@@ -285,6 +300,11 @@ export interface StudioHeaderProps {
   onRead: () => void;
   /** The Read entry is unavailable (nothing drawn yet) — say why instead of opening an empty reader. */
   readHint?: string;
+  /**
+   * The board is on screen (split "Both"/"Board", foldables): its Read tab is the reader, so the header carries
+   * no Read of its own (declutter F1). Omitted: treated as out of sight.
+   */
+  boardVisible?: boolean;
   onOpenSettings: () => void;
   paneMode: PaneMode;
   onPaneMode: (mode: PaneMode) => void;
@@ -299,10 +319,11 @@ export interface StudioHeaderProps {
 /**
  * The studio header. `variant` (from the form factor):
  *  - compact  phones: Back · Title · slots · $ · ⋯ (quality, spending, Read, Easy/Pro, settings in ⋯)
- *  - medium   split below 1024: icon-only quality/Read, Easy/Pro in ⋯, pane switcher
- *  - regular  1024+: today's desktop header (pane switcher on touch tablets)
+ *  - medium   split below 1024: icon-only quality, Easy/Pro in ⋯, pane switcher
+ *  - regular  1024+: today's desktop header (pane switcher on touch tablets), quality in the composer and ⋯
+ * Read (icon-only below regular) shows only while the board is out of sight and a page is drawn.
  */
-export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, onOpenSettings, paneMode, onPaneMode, ask }) => {
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask }) => {
   const [open, setOpen] = useState<HeaderSheet>(null);
   const variant: HeaderVariant = headerVariantFor(ff);
   const compact = variant !== 'regular';
@@ -329,6 +350,12 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const cost = useCostFormat(studio);
   const pillShare = shortSpend(cost, doc.spend.totalUsd);
   const showSpendChip = !phone || ff.width >= SPEND_CHIP_MIN_WIDTH;
+  // One home per action (C2): the quality chip below 1024 only (the composer chip from there, F2); Read only
+  // while the board — whose Read tab is the reader — is out of sight, and only once there is a page (F1, F5).
+  const showQualityChip = !phone && ff.width < HEADER_QUALITY_CHIP_BELOW;
+  const showRead = !phone && !boardVisible && !readHint;
+  // The phone wallet joins the flat icon family (F4); icon-only when it shows no figure.
+  const walletIconOnly = cost.governed && !(pillShare && doc.spend.totalUsd > 0);
   const showBack = ff.layout !== 'single-rail'; // the rail carries Back in phone landscape
 
   // Book-posture foldables: no control may straddle the hinge (mobile.md §3.6). Back + title end just
@@ -355,15 +382,28 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const hingeW = hinge ? Math.max(0, hinge.end - hinge.start) : 0;
 
   const rows: MenuRow[] = [];
-  if (phone) {
+  // Phones, and every header without the chip: quality stays one tap from ⋯ (a narrow or hidden chat pane hides the
+  // composer's chip too, so this row is the home that is always there).
+  if (!showQualityChip) {
     rows.push({
       id: 'quality',
       label: 'Quality',
       icon: <Sparkles className="h-4 w-4" />,
-      detail: qualityText,
+      // models.md §4.1 L0 where the chip is not: "{Tier} · {Model}", with the lock glyph once the comic is locked.
+      detail: lock ? (
+        <span className="inline-flex max-w-full items-center gap-1">
+          <span className="truncate">{qualityText}</span>
+          <Lock className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="sr-only">, locked for this comic</span>
+        </span>
+      ) : (
+        qualityText
+      ),
       opensSheet: true,
       onSelect: () => setOpen('quality')
     });
+  }
+  if (phone) {
     rows.push({
       id: 'spend',
       label: 'Spending',
@@ -405,7 +445,8 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const spendSheet = (
     <div className="mx-auto w-fit max-w-full">
       <SpendBreakdown doc={doc} cost={cost} />
-      {phone && saved > 0 && (
+      {/* Money saved by software lives here at every width, never as a "Saved" chip in the header (F3). */}
+      {saved > 0 && (
         <div className="border-t border-[var(--ds-hairline-soft)]">
           <SavingsBreakdown doc={doc} cost={cost} />
         </div>
@@ -452,7 +493,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
 
       <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
         {slotRange(-Infinity, H.quality)}
-        {!phone && (
+        {showQualityChip && (
           <div ref={qualityRef} className="relative">
             <button
               type="button"
@@ -462,10 +503,10 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
               aria-label={`Quality: ${qualityText}${lock ? ', locked for this comic' : ''}`}
               className={headerBtn}
               title="Quality"
+              data-action="quality"
             >
               <span className={cx('h-2 w-2 rounded-full', QUALITY_DOT[tier] || QUALITY_DOT.standard)} aria-hidden />
-              {variant === 'regular' && <span className="min-w-0 max-w-[13rem] truncate">{qualityText}</span>}
-              {variant === 'regular' && lock && <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" aria-hidden />}
+              {lock && <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" aria-hidden />}
               <ChevronDown className="h-3 w-3 text-[var(--ds-muted)]" aria-hidden />
             </button>
           </div>
@@ -481,7 +522,8 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
               aria-expanded={open === 'spend'}
               aria-label={spentLabel(cost, doc.spend.totalUsd)}
               title={cost.governed ? 'What this comic has used of your usage' : undefined}
-              className={cx(headerBtn, 'tabular-nums', phone && 'px-2.5')}
+              className={cx(phone ? (walletIconOnly ? headerIconBtn : headerIconTextBtn) : headerBtn, 'tabular-nums')}
+              data-wallet={phone ? 'flat' : 'pill'}
             >
               {cost.governed ? (
                 <>
@@ -496,8 +538,8 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
         )}
         {slotRange(H.spend, H.read)}
 
-        {!phone && (
-          <button type="button" onClick={onRead} className={headerBtn} aria-label="Read the comic" title={readHint || 'Read the comic'}>
+        {showRead && (
+          <button type="button" onClick={onRead} className={headerBtn} aria-label="Read the comic" title="Read the comic" data-action="read">
             <BookOpen className="h-3.5 w-3.5" aria-hidden />
             {variant === 'regular' && <span>Read</span>}
           </button>
@@ -536,7 +578,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
         onClose={close}
         label="Quality"
         title="Quality"
-        anchorRef={phone ? menuRef : qualityRef}
+        anchorRef={showQualityChip ? qualityRef : menuRef}
         placement="below"
         align="end"
         className="w-[min(25rem,calc(100vw-1.5rem))]"
@@ -1144,6 +1186,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
         onBack={onBack}
         onRead={onRead}
         readHint={readHint}
+        boardVisible={!boardHiddenFromChat}
         onOpenSettings={() => setSettingsOpen(true)}
         paneMode={paneMode}
         onPaneMode={setPaneMode}

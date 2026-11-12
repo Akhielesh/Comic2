@@ -3,23 +3,23 @@
 // the total is `doc.spend.savedUsd` (the server adds a SpendEntry.savedUsd for a reuse of an identical
 // render, or a free step picked over a quoted paid one). Nothing saved → nothing shown.
 //
-//  - Tablets/desktop: a quiet chip after the spend chip; it briefly says the copy when a new saving
-//    lands (aria-live), and opens a small breakdown.
-//  - Phones: no header chip (the ⋯ menu and the spend sheet show the total); a new saving shows the
-//    same line as a calm transient toast under the header.
+// Declutter (DC-1, F3): the header never says "Saved" for anything but the save state, because next to a
+// title "Saved" reads as "your work is saved". So the header slot draws no chip at any width:
+//  - the total and its breakdown live in the Spending sheet (ComicStudio's spend chip / ⋯ Spending row) at
+//    every width (`SavingsBreakdown`);
+//  - a new saving shows the copy as a calm transient toast under the header (role="status"), on every form
+//    factor — the one moment the signal matters. First sight never flashes.
 //  - Money is printed for THIS user (conversation/cost.ts): governed users read a share of their usage
 //    ("Saved ≈0.5% of your usage") or just the copy — never dollars, also before their status loads.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Leaf } from 'lucide-react';
-import { OVERLINE, STATUS_CHIP_TONE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { compactUsageShare } from '../../../services/costDisplay';
 import type { StudioController } from '../types';
-import { AdaptiveSheet } from './sheets/AdaptiveSheet';
-import { isPhoneLayout } from './formFactor';
 import { useFormFactor } from './useFormFactor';
 import { phoneChromeVars } from './shell/phoneChrome';
 
@@ -58,7 +58,7 @@ const useSavingsFlash = (total: number): boolean => {
 /** "Saved ≈0.5% of your usage" → "≈0.5%" for a narrow spot; undefined when it isn't a readable share. */
 const shortShare = (cost: CostFormat, usd: number): string | undefined => (cost.governed ? compactUsageShare(cost.exact(usd)) : cost.exact(usd));
 
-/** The breakdown shown from the chip (also used by the phone ⋯ menu's spend sheet). */
+/** The breakdown in the Spending sheet (ComicStudio), at every width. */
 export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({ doc, cost: costProp }) => {
   const fallback = useCostFormat({ caps: null });
   const cost = costProp ?? fallback;
@@ -93,76 +93,31 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = 
   );
 };
 
-export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { caps?: StudioController['caps']; byok?: boolean }; compact?: boolean }> = ({
-  studio,
-  compact = false
-}) => {
+/**
+ * The header slot's content: no chip (F3), only the transient toast when a new saving lands. `compact` is kept for
+ * the slot contract and changes nothing: the toast is the same on every form factor.
+ */
+export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { caps?: StudioController['caps']; byok?: boolean }; compact?: boolean }> = ({ studio }) => {
   const ff = useFormFactor();
-  const cost = useCostFormat(studio);
   const total = savedTotal(studio.doc);
   const flash = useSavingsFlash(total);
-  const [open, setOpen] = useState(false);
-  const anchorRef = useRef<HTMLSpanElement>(null);
-  const doc = studio.doc;
-  if (!doc || total <= 0) return null;
-
-  if (isPhoneLayout(ff.layout)) {
-    if (!flash || typeof document === 'undefined') return null;
-    return createPortal(
-      <div
-        role="status"
-        className={`pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal`}
-        // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
-        // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait).
-        style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
-        data-savings-toast
-      >
-        <span className="flex items-center gap-1.5">
-          <Leaf className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />
-          <span className="truncate">{SAVINGS_COPY}</span>
-        </span>
-      </div>,
-      document.body
-    );
-  }
-
-  // Dollars for admins / own key; a share of the usage for governed users (just "Saved" while unknown).
-  const amount = shortShare(cost, total);
-  const spoken = cost.governed ? (/^Saved /.test(cost.saved(total)) ? cost.saved(total) : 'Saved some of your usage') : `Saved ${cost.exact(total)}`;
-  return (
-    <span ref={anchorRef} className="relative inline-flex shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={`${spoken} by software — ${SAVINGS_COPY}`}
-        title={SAVINGS_COPY}
-        className={cx(
-          'inline-flex h-8 items-center gap-1 rounded-full border px-2.5 text-[12px] font-medium tabular-nums transition-colors hover:bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3',
-          STATUS_CHIP_TONE.healthy,
-          flash && 'ring-2 ring-[color:color-mix(in_srgb,var(--ds-success)_25%,transparent)]'
-        )}
-      >
-        <Leaf className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        {compact ? amount ?? 'Saved' : amount ? `Saved ${amount}` : 'Saved'}
-      </button>
-      {/* The copy, briefly, when a new saving lands — under the chip, never widening the header. */}
-      <span aria-live="polite" className="sr-only">
-        {flash ? `${SAVINGS_COPY}. ${spoken} so far.` : ''}
+  if (!studio.doc || total <= 0 || !flash || typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      role="status"
+      className={`pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal`}
+      // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
+      // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait; the root's
+      // 56 px on tablets and desktops).
+      style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
+      data-savings-toast
+    >
+      <span className="flex items-center gap-1.5">
+        <Leaf className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />
+        <span className="truncate">{SAVINGS_COPY}</span>
       </span>
-      {flash && !open && (
-        <span
-          aria-hidden
-          className={`pointer-events-none absolute right-0 top-full z-30 mt-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] studio-reveal`}
-        >
-          {SAVINGS_COPY}
-        </span>
-      )}
-      <AdaptiveSheet open={open} onClose={() => setOpen(false)} label="Saved by software" title="Saved by software" anchorRef={anchorRef} placement="below" align="end">
-        <SavingsBreakdown doc={doc} cost={cost} />
-      </AdaptiveSheet>
-    </span>
+    </div>,
+    document.body
   );
 };
 

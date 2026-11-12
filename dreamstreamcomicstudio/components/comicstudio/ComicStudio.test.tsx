@@ -44,6 +44,11 @@ const PHONE = formFactorFor({ w: 390, h: 844, coarse: true });
 const FOLD_COVER = formFactorFor({ w: 344, h: 882, coarse: true });
 const PHONE_LANDSCAPE = formFactorFor({ w: 852, h: 393, coarse: true });
 const IPAD_PORTRAIT = formFactorFor({ w: 820, h: 1180, coarse: true });
+/** A split window below 1024 (fine pointer): the medium header, which keeps the icon-only quality chip. */
+const MEDIUM = formFactorFor({ w: 900, h: 800 });
+/** A regular header that still offers the pane switcher (below 1200): Chat only hides the board. */
+const LAPTOP = formFactorFor({ w: 1100, h: 800 });
+const DESK = formFactorFor({ w: 1280, h: 800 });
 
 /** Mount the shell under a pinned form factor (the QA harness does the same). */
 const mountAt = (ff: FormFactor, studio: FakeStudio, onBack = vi.fn()) => {
@@ -114,16 +119,21 @@ describe('ComicStudio shell', () => {
     expect(studio.patch).toHaveBeenCalledTimes(1);
   });
 
-  it('Read opens the read tab', () => {
+  it('Read in the header (board out of sight) opens the Read tab and brings the board back', () => {
+    window.localStorage.setItem('cs.split.mode.expanded', 'chat');
     const studio = makeFakeStudio();
-    mount(studio);
-    fireEvent.click(screen.getByRole('button', { name: 'Read the comic' }));
+    mountAt(LAPTOP, studio);
+    expect(pane('board')).toHaveAttribute('inert');
+    const read = within(screen.getByRole('banner')).getByRole('button', { name: 'Read the comic' });
+    expect(read).toHaveAttribute('data-action', 'read');
+    fireEvent.click(read);
     expect(studio.setTab).toHaveBeenCalledWith('read');
+    expect(pane('board')).not.toHaveAttribute('inert');
   });
 
   it('the quality pill opens the quality panel', () => {
     const studio = makeFakeStudio();
-    mount(studio);
+    mountAt(MEDIUM, studio);
     fireEvent.click(screen.getByTitle('Quality'));
     const panel = screen.getByRole('dialog', { name: 'Quality' });
     fireEvent.click(within(panel).getByRole('radio', { name: /Draft/ }));
@@ -216,7 +226,7 @@ describe('ComicStudio shell', () => {
   it('the quality sheet gets the caps (admins see dollars at once)', () => {
     resetUsageStatus();
     const studio = makeFakeStudio({ caps: { ...makeFakeStudio().caps, admin: true } });
-    mount(studio);
+    mountAt(MEDIUM, studio);
     fireEvent.click(within(document.querySelector('header')!).getByRole('button', { name: /^Quality:/ }));
     expect(screen.getByRole('dialog', { name: 'Quality' }).textContent).toMatch(/\$\d/);
   });
@@ -535,12 +545,135 @@ describe('ComicStudio on other form factors', () => {
     expect(within(header).getByRole('button', { name: 'More' })).toBeInTheDocument();
   });
 
-  it('desktop keeps the classic header: quality, spend, Read and no pane switcher', () => {
+  it('desktop: spend and ⋯ in the header, no pane switcher; quality lives in the composer (and ⋯), Read on the board', () => {
     mountAt(formFactorFor({ w: 1440, h: 900 }), makeFakeStudio());
     const header = screen.getByRole('banner');
-    expect(within(header).getByTitle('Quality')).toHaveTextContent('Standard');
-    expect(within(header).getByRole('button', { name: 'Read the comic' })).toHaveTextContent('Read');
+    expect(header).toHaveAttribute('data-header', 'regular');
+    expect(within(header).getByRole('button', { name: /^Spent / })).toBeInTheDocument();
+    expect(within(header).queryByTitle('Quality')).toBeNull();
+    expect(within(header).queryByRole('button', { name: 'Read the comic' })).toBeNull();
     expect(within(header).queryByRole('radiogroup', { name: 'Panes' })).toBeNull();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'studio-main');
+  });
+});
+
+// Declutter DC-1 (PROGRAM3 §3.2 DC-1 and D22; declutter F1–F5; docs/design/clean-and-smooth.md C2: one home per action).
+describe('declutter: one home per action in the studio header', () => {
+  const undrawn = () => {
+    const doc = makeSampleDoc();
+    doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'none' as const, asset: undefined } }));
+    return doc;
+  };
+  const withSavings = () => {
+    const doc = makeSampleDoc();
+    return {
+      ...doc,
+      spend: {
+        ...doc.spend,
+        savedUsd: 0.3,
+        entries: [{ id: 'sv1', kind: 'edit', label: 'Moved 3 balloons', usd: 0, at: 1, savedUsd: 0.3 } as never, ...doc.spend.entries]
+      }
+    };
+  };
+  /** Everything the header says, word-separated: each text node, plus every label and tooltip inside it. */
+  const headerWords = (header: HTMLElement) => {
+    const texts: string[] = [];
+    const walker = document.createTreeWalker(header, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n.textContent || '');
+    const attrs = Array.from(header.querySelectorAll('*')).flatMap((el) => [el.getAttribute('aria-label') || '', el.getAttribute('title') || '']);
+    return [...texts, ...attrs].join(' ');
+  };
+
+  it('at 1280 with the board visible the header has no Read and no Quality button; the composer chip is quality’s one home', () => {
+    mountAt(DESK, makeFakeStudio());
+    const header = screen.getByRole('banner');
+    expect(pane('board')).not.toHaveAttribute('inert');
+    expect(within(header).queryByRole('button', { name: 'Read the comic' })).toBeNull();
+    expect(within(header).queryByRole('button', { name: /^Quality/ })).toBeNull();
+    expect(within(header).queryByTitle('Quality')).toBeNull();
+    expect(header.querySelector('[data-action="read"], [data-action="quality"]')).toBeNull();
+    // The same setting is offered once on screen: the composer's chip.
+    expect(screen.getAllByRole('button', { name: /^Quality/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /^Quality/ }).closest('header')).toBeNull();
+  });
+
+  it('from 1024, quality stays one tap away when the composer chip is out of sight: ⋯ › Quality opens the same panel', () => {
+    const studio = makeFakeStudio();
+    mountAt(DESK, studio);
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'More' }));
+    fireEvent.click(within(screen.getByRole('menu', { name: 'More' })).getByRole('menuitem', { name: /Quality/ }));
+    const panel = screen.getByRole('dialog', { name: 'Quality' });
+    fireEvent.click(within(panel).getByRole('radio', { name: /Draft/ }));
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'settings', patch: { quality: 'draft' } }]);
+  });
+
+  it('below 1024 the header keeps its icon-only quality chip (the composer chip steps aside there) and ⋯ does not repeat it', () => {
+    mountAt(MEDIUM, makeFakeStudio());
+    const header = screen.getByRole('banner');
+    expect(header).toHaveAttribute('data-header', 'medium');
+    expect(within(header).getByRole('button', { name: /^Quality:/ })).toHaveAttribute('data-action', 'quality');
+    fireEvent.click(within(header).getByRole('button', { name: 'More' }));
+    expect(within(screen.getByRole('menu', { name: 'More' })).queryByRole('menuitem', { name: /Quality/ })).toBeNull();
+  });
+
+  it('the phone keeps its ⋯ Quality row and no header chip', () => {
+    mountAt(PHONE, makeFakeStudio());
+    const header = screen.getByRole('banner');
+    expect(within(header).queryByRole('button', { name: /^Quality/ })).toBeNull();
+    fireEvent.click(within(header).getByRole('button', { name: 'More' }));
+    fireEvent.click(within(screen.getByRole('menu', { name: 'More' })).getByRole('menuitem', { name: /Quality/ }));
+    expect(screen.getByRole('dialog', { name: 'Quality' })).toBeInTheDocument();
+  });
+
+  it('Read shows only while the board is out of sight, and only once a page is drawn (F1, F5)', () => {
+    // Board visible (Both): the board's Read tab is the reader.
+    const both = mountAt(LAPTOP, makeFakeStudio());
+    expect(within(screen.getByRole('banner')).queryByRole('button', { name: 'Read the comic' })).toBeNull();
+    both.unmount();
+    // Board hidden, nothing drawn: no dead control in the top bar.
+    window.localStorage.setItem('cs.split.mode.expanded', 'chat');
+    const empty = mountAt(LAPTOP, makeFakeStudio({ doc: undrawn() }));
+    expect(within(screen.getByRole('banner')).queryByRole('button', { name: 'Read the comic' })).toBeNull();
+    empty.unmount();
+    // Board hidden, a page drawn: Read is the way back to the reader.
+    mountAt(LAPTOP, makeFakeStudio());
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Read the comic' })).toHaveTextContent('Read');
+  });
+
+  it('the header never says "Saved" for anything but the save state; the savings live in the Spending sheet at every width (F3)', () => {
+    for (const ff of [DESK, MEDIUM, PHONE]) {
+      const view = mountAt(ff, makeFakeStudio({ doc: withSavings() }));
+      const header = screen.getByRole('banner');
+      expect(headerWords(header)).not.toMatch(/\bsaved\b/i);
+      fireEvent.click(within(header).getByRole('button', { name: /^Spent / }));
+      const sheet = screen.getByRole('dialog', { name: 'Spending' });
+      expect(within(sheet).getByText('Saved by software')).toBeInTheDocument();
+      expect(within(sheet).getByText('Moved 3 balloons')).toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it('phones: the wallet joins the flat icon family, never a filled pill between two flat icons (F4)', () => {
+    showUsagePrices(1);
+    const doc = makeSampleDoc();
+    doc.spend = { ...doc.spend, totalUsd: 0, entries: [], byKind: {} };
+    const view = mountAt(PHONE, makeFakeStudio({ doc }));
+    const header = screen.getByRole('banner');
+    const wallet = within(header).getByRole('button', { name: /^Spent / });
+    const more = within(header).getByRole('button', { name: 'More' });
+    expect(wallet).toHaveAttribute('data-wallet', 'flat');
+    // Icon only: exactly the ⋯ button's family.
+    expect(wallet.className).toContain(more.className);
+    view.unmount();
+    // With a figure ("≈4%" / "$0.42") it keeps the family: no border, no fill.
+    showDollarPrices();
+    const pricedView = mountAt(PHONE, makeFakeStudio());
+    const priced = within(screen.getByRole('banner')).getByRole('button', { name: /^Spent / });
+    expect(priced.className).not.toMatch(/(^|\s)border(\s|$)/);
+    expect(priced.className).not.toContain('bg-[var(--ds-surface-soft)]');
+    pricedView.unmount();
+    // Tablets and desktops keep the pill, the header's one status chip.
+    mountAt(DESK, makeFakeStudio());
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: /^Spent / })).toHaveAttribute('data-wallet', 'pill');
   });
 });
