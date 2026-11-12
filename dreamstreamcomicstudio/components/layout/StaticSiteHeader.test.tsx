@@ -22,6 +22,7 @@ vi.mock('../TokenAvailabilityPill', () => ({ TokenAvailabilityPill: () => <span 
 import { DENSITY, HEADER_GLASS, OVERLAY, SEGMENTED_TRACK, STICKY_HEADER } from '../chat/studioDesign';
 import { expectClasses } from '../ds/ds.testkit';
 import { BRAND_MARK_SRC } from './BrandLockup';
+import { LEGAL_LINK, LegalMicroLinks } from './LegalMicroLinks';
 import { MENU_TOGGLE, StaticSiteHeader } from './StaticSiteHeader';
 
 const classesIn = (root: Element): string[] => [root, ...root.querySelectorAll('*')].flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/)).filter(Boolean);
@@ -156,6 +157,14 @@ describe('signed in', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Your profile and settings' }));
     expect(p.onOpenProfile).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /Request Access/ })).toBeNull();
+  });
+});
+
+describe('the legal line', () => {
+  it('every link is a 44 x 44 target under a coarse pointer, short words too', () => {
+    render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
+    for (const name of ['Privacy Policy', 'Terms & Conditions', 'FAQs']) expectClasses(screen.getByRole('button', { name }), LEGAL_LINK, DENSITY.coarseSquare);
+    expectClasses(screen.getByRole('link', { name: 'Contact' }), DENSITY.coarseSquare);
   });
 });
 
