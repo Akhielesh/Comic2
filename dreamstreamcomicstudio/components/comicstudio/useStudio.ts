@@ -1253,6 +1253,13 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [urls, requestSign, assetWithVariants]
   );
 
+  // The signer gave up on this path (never stored, broken, out of attempts): exactly urlFor's test for skipping a
+  // variant, so a chat tile can say so instead of waiting forever (PF-2 #7). Refs only: stable, never fetches.
+  const isUnsignable = useCallback(
+    (path: string): boolean => unsignableRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS,
+    []
+  );
+
   // An <img> anywhere in the studio failed to load one of our URLs: it expired or was
   // revoked — re-sign that path (capture phase: image errors don't bubble).
   useEffect(() => {
@@ -1671,6 +1678,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       errorCode: state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,
@@ -1742,6 +1750,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,

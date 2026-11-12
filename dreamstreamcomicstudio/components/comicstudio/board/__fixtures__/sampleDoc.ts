@@ -187,6 +187,7 @@ export const makeStudio = (doc: ComicDoc | null = makeSampleDoc(), overrides: Pa
   error: null,
   clearError: vi.fn(),
   urlFor: vi.fn(fakeUrlFor),
+  isUnsignable: () => false,
   send: vi.fn(async () => undefined),
   act: vi.fn(async () => undefined),
   patch: vi.fn(async () => undefined),

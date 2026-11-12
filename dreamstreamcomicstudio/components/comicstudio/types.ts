@@ -181,6 +181,12 @@ export interface StudioController {
    * opts.width picks the smallest variant ≥ width × min(dpr, 2); no opts ⇒ original (back-compat).
    */
   urlFor(asset?: AssetRef | string | null, opts?: { width?: number }): string | undefined;
+  /**
+   * Whether the signer has given up on this stored path for good (never stored, broken, out of sign attempts): the
+   * same condition urlFor uses to skip a variant. Chat tiles read it (conversation/cards/renderTile unsignableOf) and
+   * say "Preview unavailable", still, instead of a shimmer that never ends (PF-2 #7). Reads refs only: no request.
+   */
+  isUnsignable(path: string): boolean;
 
   /**
    * Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. The live controller
