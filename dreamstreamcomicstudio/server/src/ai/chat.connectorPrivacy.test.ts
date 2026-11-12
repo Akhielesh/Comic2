@@ -2,7 +2,8 @@
 // The chat engine's part in connected-account privacy (ai/privacy):
 //   - long-term memory: `userMemoryExcludeConnected` reaches the memory lookup as
 //     `excludeConnected`, so a free-model turn of a connected user gets only the memory that was
-//     not distilled from connected content (services/userMemory.ts);
+//     not distilled from connected content (services/userMemory.ts), and `userMemoryNoQueryEmbedding`
+//     reaches it as `noQueryEmbedding` (the query stays off the Gemini embedding API);
 //   - the connector RAG block: the result says `connectorContextUsed: true` exactly when the block
 //     was added to the prompt, which routes/chat.ts reads to mark the reply as connected content.
 // No network: the provider is a fake behind the gateway; memory and the connector RAG block are spies.
@@ -88,6 +89,14 @@ describe('runChat: memory without the rows distilled from connected content', ()
     // A direct provider has no per-request control: its request is unchanged.
     await runChat({ ...base, provider: 'openai' as never, model: 'vendor-direct-model' });
     expect('dataCollection' in fake.requests[0]).toBe(false);
+  });
+
+  it('userMemoryNoQueryEmbedding reaches the lookup as noQueryEmbedding (false without it)', async () => {
+    await runChat({ ...base, userMemoryNoQueryEmbedding: true });
+    expect(memory.build.mock.calls[0][2]).toMatchObject({ noQueryEmbedding: true, excludeConnected: false });
+    memory.build.mockClear();
+    await runChat(base);
+    expect(memory.build.mock.calls[0][2]).toMatchObject({ noQueryEmbedding: false });
   });
 
   it('no memory at all when userMemory is off', async () => {

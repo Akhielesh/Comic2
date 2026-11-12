@@ -195,6 +195,14 @@ export interface RunChatParams {
    */
   userMemoryExcludeConnected?: boolean;
   /**
+   * With userMemory: never send the memory query (the last user message) to the Gemini embedding
+   * API; retrieval uses full-text search and recency instead (services/userMemory.ts
+   * noQueryEmbedding). routes/chat.ts sets it for a conversation that carries, or may carry,
+   * connected-account content while `gemini` is not confirmed (CONNECTOR_PROVIDERS_CONFIRMED), and
+   * for every withheld turn of a user with connections.
+   */
+  userMemoryNoQueryEmbedding?: boolean;
+  /**
    * Explicit opt-in to inject RAG context from the user's connected ACCOUNT
    * connectors (Gmail/Drive/Calendar/…). When set with userId, the top matching
    * normalized items are retrieved (scoped to the user) and injected as a system
@@ -665,6 +673,7 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
     const memoryBlock = await Promise.race([
       buildUserMemoryBlock(params.userId, memoryQuery, {
         excludeConnected: params.userMemoryExcludeConnected === true,
+        noQueryEmbedding: params.userMemoryNoQueryEmbedding === true,
         report: memoryReport
       }).catch(() => null),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500))

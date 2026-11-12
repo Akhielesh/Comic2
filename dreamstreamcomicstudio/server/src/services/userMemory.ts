@@ -175,6 +175,14 @@ export interface MemoryRetrieveOptions {
    */
   excludeConnected?: boolean;
   /**
+   * Never embed the query: the vector search needs the query (the turn's last user message) sent to
+   * the Gemini embedding API with the platform key, so this skips that call and uses the full-text /
+   * recency fallback instead. Set by routes/chat.ts when the conversation carries, or may carry,
+   * connected-account content and the owner has not confirmed `gemini` (CONNECTOR_PROVIDERS_CONFIRMED,
+   * ai/privacy/providerPolicies.ts), and on every withheld turn of a user with connections.
+   */
+  noQueryEmbedding?: boolean;
+  /**
    * Filled in by buildUserMemoryBlock: `connected` turns true when the block it returned includes a
    * row distilled from connected content, so the engine can deny data collection for that call
    * (ai/chat.ts). Callers that pass nothing are unchanged.
@@ -222,7 +230,7 @@ const fetchRecent = async (userId: string, limit = RETRIEVE_LIMIT, opts: MemoryR
   return (data || []) as UserMemoryRow[];
 };
 
-/** Raw memory rows relevant to a query (vector → FTS → recency). */
+/** Raw memory rows relevant to a query (vector → FTS → recency; FTS → recency with `noQueryEmbedding`). */
 export const retrieveUserMemories = async (
   userId: string,
   queryText: string,
@@ -231,7 +239,7 @@ export const retrieveUserMemories = async (
   const query = (queryText || '').trim();
   try {
     if (query) {
-      const queryEmbedding = await embedText(query, 'RETRIEVAL_QUERY');
+      const queryEmbedding = opts.noQueryEmbedding ? null : await embedText(query, 'RETRIEVAL_QUERY');
       if (queryEmbedding) {
         const rows = await fetchByVector(userId, queryEmbedding, opts);
         if (rows.length) return rows;
