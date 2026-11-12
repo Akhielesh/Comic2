@@ -6,23 +6,15 @@ WebGPU when available, WASM otherwise. Audio never leaves the device; no API key
 or external inference service is involved. A browser-native Web Speech engine is
 offered as the "instant" alternative in the mic settings menu.
 
-## Serving the model from our app (fully self-hosted)
+## Where the model comes from
 
-`whisperEngine.ts` sets `env.localModelPath = '/models/'`, so weights placed under
-`public/models/` are served by the app itself and the Hugging Face CDN is never
-contacted. To pin a model in-app:
-
-```
-public/models/onnx-community/whisper-base/
-  config.json  generation_config.json  tokenizer.json  tokenizer_config.json
-  preprocessor_config.json
-  onnx/encoder_model_quantized.onnx  onnx/decoder_model_merged_quantized.onnx
-```
-
-(Names must match what transformers.js requests for the chosen dtype; copy them
-from the browser network tab or the HF repo.) Without local files, the model
-downloads once from the CDN and is persisted in the browser Cache API, so every
-later session is instant and offline-capable either way.
+The first use downloads the weights once from Hugging Face, and transformers.js keeps
+them in the browser Cache API, so later sessions start from the cache and work offline.
+`whisperEngine.ts` keeps transformers.js's local-model lookup **off**: our origin answers a
+missing `/models/…` file with the app's `index.html` (HTTP 200), which used to break every
+load (F11). It also drops any such page an older build cached. Self-hosting the weights
+waits for an R2 lane (the Pages limit is 25 MiB per file; the decoders are larger). Full
+doc: `docs/features/voice-dictation.md`.
 
 ## Pieces
 

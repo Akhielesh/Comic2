@@ -97,31 +97,35 @@ menu (chevron next to the mic) offers the engine choice plus three Whisper sizes
 tiny "Fast ~40 MB", base "Balanced ~80 MB" (recommended/default), small "Accurate
 ~250 MB" (`DictationButton.tsx:25-46`).
 
-## Model self-hosting under `public/models/`
+## Where the weights come from (no local `/models/` lookup)
 
-`whisperEngine.ts:45-48` sets:
+`loadWhisper` (`services/dictation/whisperEngine.ts`) sets:
 
 ```ts
-env.allowLocalModels = true;
-env.localModelPath = '/models/';
+env.allowLocalModels = false;
 env.useBrowserCache = true;
 ```
 
-Weights placed under `public/models/<model-id>/…` are served by the app itself and
-the Hugging Face CDN is never contacted. Expected layout (file names must match what
-transformers.js requests for the chosen dtype — copy from the browser network tab or
-the HF repo):
+The first use downloads the model once from Hugging Face (`huggingface.co`, which
+redirects to its CDN), and transformers.js keeps the files in the browser **Cache API**,
+so later sessions start from the cache and work offline. Our own origin is never asked
+for model files.
 
-```
-public/models/onnx-community/whisper-base/
-  config.json  generation_config.json  tokenizer.json  tokenizer_config.json
-  preprocessor_config.json
-  onnx/encoder_model_quantized.onnx  onnx/decoder_model_merged_quantized.onnx
-```
+Why local lookup is off (production bug F11, fixed): it used to be on with
+`localModelPath = '/models/'`, so transformers.js first asked our origin for
+`/models/onnx-community/whisper-*/config.json`. `public/models/` holds no Whisper files,
+and the site's SPA fallback (`public/_redirects`: `/* /index.html 200`) answers a missing
+file with `index.html`, HTTP **200** `text/html`, which the `/models/*` rule in
+`public/_headers` marks `immutable`. transformers.js falls back to the hub only on a 404, so
+it parsed the HTML as JSON and the load failed. It also stored that page in its cache under
+the local path, which it reads before the hub URL on every later load. So, once per page
+before the first load, `dropPoisonedModelCache` deletes the `transformers-cache` entries
+under our origin's `/models/onnx-community/` (the real weights are cached under their
+`huggingface.co` URLs and are kept). Tests: `services/dictation/whisperEngine.test.ts`.
 
-Without local files, the model downloads once from the CDN and persists in the
-browser **Cache API**, so later sessions are instant and offline-capable either way.
-(As of this writing `public/models/` is not populated — the CDN+cache path is live.)
+Self-hosting the weights needs more than files in `public/models/`: the Pages limit is
+25 MiB per file and the decoders are larger (base q8 is 53.7 MB), so it waits for a
+read-only R2 lane, with local lookup turned back on and SHA-256 pinning then.
 
 ## Permissions-Policy change
 
@@ -163,5 +167,5 @@ Status machine: `idle → starting → recording → transcribing → idle`, plu
 `@huggingface/transformers` is **dynamically imported** inside `loadWhisper`
 (`whisperEngine.ts:44`), so Vite splits it into its own lazy chunk — the chat bundle
 pays nothing until dictation is first used. Model weights are runtime fetches (Cache
-API / `public/models/`), never part of the JS bundle. The recorder and hook are tiny
+API), never part of the JS bundle. The recorder and hook are tiny
 and statically imported.
