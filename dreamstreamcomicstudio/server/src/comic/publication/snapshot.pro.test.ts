@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ComicDoc, MotionClip, Page, PageLayer } from '../../../../shared/comic/doc.js';
+import type { ComicDoc, Line, MotionClip, Page, PageLayer } from '../../../../shared/comic/doc.js';
+import { resolveLetterStyle } from '../../../../shared/comic/lettering/style.js';
 import { buildSnapshot, contentFingerprint, layoutGeometryOf, planSnapshot, publicLayers, publicMotion, readerMotionPublished, snapshotPaths } from './snapshot.js';
 import { legacyPublishedDoc } from './__fixtures__/ship2Books.js';
 
@@ -168,6 +169,19 @@ describe('frames and lines', () => {
     expect(snapshot.pages[0].panels[1].lines[0].styleId).toBe('st_villain');
     expect(snapshot.pages[0].panels[0].lines[0]).not.toHaveProperty('styleId');
     expect(snapshot.letterStyle!.named).toEqual({ st_villain: { name: 'Villain', patch: { italic: true } } });
+  });
+
+  it('a published page resolves the same lettering as the studio for a linked line (PE-LETTER wave note 20)', () => {
+    const doc = proDoc();
+    doc.letterStyle!.named!.st_villain.patch = { italic: true, textColor: '#aa0000', weight: 800 };
+    const { snapshot } = snap(doc);
+    const studioLine = doc.pages[0].panels[1].lines[0];
+    const publicLine = snapshot.pages[0].panels[1].lines[0] as unknown as Line;
+    const studio = resolveLetterStyle(doc, studioLine);
+    expect(resolveLetterStyle({ letterStyle: snapshot.letterStyle, format: doc.format }, publicLine)).toEqual(studio);
+    // The saved style decides the look: the same line without its link resolves differently.
+    expect(studio).toMatchObject({ italic: true, textColor: '#aa0000', weight: 800 });
+    expect(resolveLetterStyle(doc, { ...studioLine, styleId: undefined })).not.toEqual(studio);
   });
 });
 
