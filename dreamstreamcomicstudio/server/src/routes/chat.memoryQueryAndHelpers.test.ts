@@ -4,8 +4,10 @@
 //     Gemini key (services/userMemory.ts). A conversation that carries, or may carry, connected content
 //     (a user with a connection, marked history, a failed connection lookup) never sends that query to
 //     Gemini until the owner lists `gemini` in CONNECTOR_PROVIDERS_CONFIRMED, and a withheld (free) turn
-//     of a user with connections never embeds it at all. Memory still reaches the turn through word
-//     search and recency. A user with no connection keeps the vector search.
+//     of a user with connections never embeds it at all — the usage-budget free re-plan included, and a
+//     failed connection lookup counting as connections. Memory still reaches the turn through word
+//     search and recency. A user with no connection keeps the vector search, and the gate reuses the
+//     turn's own connection and provenance lookups (no extra query on the turn's path).
 //  B. Every chat helper (enhance, title, memory, auto-memory, memory import, follow-ups) calls the
 //     resolved provider's own model: a direct provider used to receive the OpenRouter slug and fail
 //     silently. OpenRouter and NVIDIA are unchanged; a withheld helper still sends nothing.
@@ -13,7 +15,7 @@
 // Harness: the real chat route, engine, gateway, providers and memory service; only `fetch` to the
 // model and embedding endpoints is faked (no network, no paid call), plus Supabase (the two memory
 // tables and the vector RPC, in memory), the connector lookups and the wallet ledger.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
@@ -24,7 +26,9 @@ const sb = vi.hoisted(() => ({
   rows: [] as MemRow[],
   /** Each user_memories read: its full-text query (undefined for the recency query). */
   reads: [] as { userId?: unknown; textSearch?: string }[],
-  rpc: [] as { name: string; args: Record<string, unknown> }[]
+  rpc: [] as { name: string; args: Record<string, unknown> }[],
+  /** Every other table a test touched (each read then fails: there is no database). */
+  otherTables: [] as string[]
 }));
 vi.mock('../services/supabase.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/supabase.js')>()),
@@ -34,7 +38,10 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
         const q: Record<string, unknown> = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: { enabled: true }, error: null }) };
         return q;
       }
-      if (table !== 'user_memories') throw new Error('no database in tests');
+      if (table !== 'user_memories') {
+        sb.otherTables.push(table);
+        throw new Error('no database in tests');
+      }
       const f: { eq: [string, unknown][]; neq: [string, unknown][]; textSearch?: string } = { eq: [], neq: [] };
       const run = (limit: number) => {
         sb.reads.push({ userId: f.eq.find(([k]) => k === 'user_id')?.[1], textSearch: f.textSearch });
@@ -85,10 +92,16 @@ vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
 }));
 
 // The connector lookups: who has which connection; `failing` users' lookups throw.
-const conn = vi.hoisted(() => ({ rows: new Map<string, { connector_id: string; status: string }[]>(), failing: new Set<string>() }));
+const conn = vi.hoisted(() => ({
+  rows: new Map<string, { connector_id: string; status: string }[]>(),
+  failing: new Set<string>(),
+  /** Each listConnections call, by user. */
+  lookups: [] as string[]
+}));
 vi.mock('../connectors/store.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../connectors/store.js')>()),
   listConnections: async (userId: string) => {
+    conn.lookups.push(userId);
     if (conn.failing.has(userId)) throw new Error('connections store down');
     return conn.rows.get(userId) ?? [];
   },
@@ -143,16 +156,20 @@ vi.mock('../services/billingLedger.js', () => ({
   getBillingSummary: vi.fn()
 }));
 vi.mock('../services/costEstimator.js', () => {
-  const est = (model?: string) => ({
-    currency: 'USD',
-    ctPerUsd: 10_000,
-    markup: 1.3,
-    estimatedProviderCostUsd: 0.001,
-    estimatedBillableUsd: 0.0013,
-    estimatedCt: 13,
-    lines: [],
-    modelPricing: { model }
-  });
+  // Like the real estimator, a `:free` model is $0 (the metered re-plan test reserves it at $0).
+  const est = (model?: string) => {
+    const usd = /:free$/.test(model || '') ? 0 : 0.001;
+    return {
+      currency: 'USD',
+      ctPerUsd: 10_000,
+      markup: 1.3,
+      estimatedProviderCostUsd: usd,
+      estimatedBillableUsd: usd * 1.3,
+      estimatedCt: Math.round(usd * 13_000),
+      lines: [],
+      modelPricing: { model }
+    };
+  };
   return {
     buildEstimateFromRequestBody: (provider: string, model: string, operation: string, _body: unknown, explicit: Record<string, unknown> = {}) => ({ provider, model, operation, ...explicit }),
     estimateCharge: async (seed: { model?: string }) => est(seed.model),
@@ -171,7 +188,8 @@ const { TEXT_FALLBACK } = await import('../ai/autoRouter.js');
 const { CONNECTED_MEMORY_PRODUCT } = await import('../ai/privacy/connectorData.js');
 
 // ── The fake endpoints: every request is recorded per vendor ───────────────────────────────────────
-type Sent = { url: string; body: Record<string, any> };
+/** `lookups`: the connection and provenance-store lookups made so far (the turn's own path, at its model call). */
+type Sent = { url: string; body: Record<string, any>; lookups?: { connections: number; provenance: number } };
 const net = vi.hoisted(() => ({
   embeds: [] as { taskType: string; text: string }[],
   openrouter: [] as Sent[],
@@ -208,7 +226,11 @@ const fakeFetch = async (input: unknown, init?: { body?: string }) => {
   if (url.startsWith('https://generativelanguage.googleapis.com/')) return openAiShape(net.gemini, 'Ocean Tides Explained');
   if (url.startsWith('https://integrate.api.nvidia.com/')) return openAiShape(net.nvidia, 'Ocean Tides Explained');
   if (url.startsWith('https://openrouter.ai/')) {
-    net.openrouter.push({ url, body });
+    net.openrouter.push({
+      url,
+      body,
+      lookups: { connections: conn.lookups.length, provenance: sb.otherTables.filter((t) => t === 'chat_connector_replies').length }
+    });
     const data = { model: body.model, choices: [{ message: { content: 'Here is your answer.' } }], usage: { ...usage, cost: 0.001 } };
     if (body.stream) {
       const sse =
@@ -254,6 +276,8 @@ beforeEach(() => {
   sb.rows = [];
   sb.reads = [];
   sb.rpc = [];
+  sb.otherTables = [];
+  conn.lookups = [];
   for (const k of ['embeds', 'openrouter', 'nvidia', 'anthropic', 'openai', 'gemini'] as const) net[k].length = 0;
 });
 
@@ -282,7 +306,7 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
   } catch {
     parsed = null;
   }
-  return { status: res.status, json: parsed };
+  return { status: res.status, json: parsed, text };
 };
 
 const QUESTION = 'What should the launch plan include this quarter?';
@@ -358,6 +382,122 @@ describe('A. the memory query stays off the Gemini embedding API when the conver
     expect(queryEmbeds()).toHaveLength(0);
     expect(sb.rpc).toHaveLength(0);
     await autoMemorySent(2);
+  });
+
+  it('a withheld (free) turn after a failed connection lookup never embeds the query, even with gemini confirmed (fail closed)', async () => {
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'gemini';
+    const id = user('lookupFails');
+    const r = await post('/api/chat', ASK, { 'x-test-user': id, 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    expect(/:free$/.test(String(turnBody().model))).toBe(true);
+    expect(queryEmbeds()).toHaveLength(0);
+    expect(sb.rpc).toHaveLength(0);
+    expect(sb.reads.some((q) => q.userId === id && typeof q.textSearch === 'string' && q.textSearch.includes('launch'))).toBe(true);
+    const system = systemOf(turnBody());
+    expect(system).toContain(PLAIN_FACT);
+    expect(system).not.toContain(CONNECTED_FACT);
+    await autoMemorySent(1);
+  });
+
+  it('a reply the provenance store recorded counts as connected content on any provider (no embedding until gemini is confirmed)', async () => {
+    const { recordConnectorReply } = await import('../ai/privacy/replyProvenance.js');
+    const reply = 'Dana asked to move the launch to Friday.';
+    const history = [
+      { role: 'user', content: 'Summarise my unread email' },
+      { role: 'assistant', content: reply },
+      { role: 'user', content: QUESTION }
+    ];
+    // OpenRouter: the turn's own provenance lookup answers it.
+    const viaOpenRouter = user('plain');
+    await recordConnectorReply(viaOpenRouter, reply);
+    expect((await post('/api/chat', { messages: history }, { 'x-test-user': viaOpenRouter })).status).toBe(200);
+    expect(queryEmbeds()).toHaveLength(0);
+    await autoMemorySent(1);
+
+    // A direct provider the owner confirmed makes no provenance lookup of its own: the memory gate asks.
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'anthropic';
+    const viaAnthropic = user('plain');
+    await recordConnectorReply(viaAnthropic, reply);
+    const headers = { 'x-test-user': viaAnthropic, 'x-test-keys': 'anthropic', 'X-Text-Source': 'anthropic' };
+    expect((await post('/api/chat', { messages: history }, headers)).status).toBe(200);
+    expect(net.anthropic.length).toBeGreaterThan(0);
+    expect(queryEmbeds()).toHaveLength(0);
+    expect(sb.rpc).toHaveLength(0);
+    await autoMemorySent(1, net.anthropic);
+  });
+
+  it('the gate reuses the turn’s own lookups: one connection lookup and one provenance lookup before the model call', async () => {
+    const id = user('plain');
+    const history = [
+      { role: 'user', content: 'Tell me about launch plans' },
+      { role: 'assistant', content: 'A launch plan names goals, dates and owners.' },
+      { role: 'user', content: QUESTION }
+    ];
+    expect((await post('/api/chat', { messages: history }, { 'x-test-user': id })).status).toBe(200);
+    const call = net.openrouter.find((s) => systemOf(s.body).includes('USER MEMORY'));
+    expect(call?.lookups).toEqual({ connections: 1, provenance: 1 });
+    // Nothing says the conversation may carry connected content: the vector search still runs.
+    expect(queryEmbeds()).toEqual([{ taskType: 'RETRIEVAL_QUERY', text: QUESTION }]);
+    await autoMemorySent(1);
+  });
+});
+
+describe('A. the usage-budget free re-plan is a withheld turn: it never embeds the memory query', () => {
+  // Metering on, and a budget that refuses every paid hold (a $0 free hold passes): reserveChat
+  // re-plans the turn onto free models after prepareChat decided on the paid plan.
+  beforeEach(() => {
+    allowance.__setMeteringEnabledForTests(true);
+    allowance.setUsageBudgetRpc({
+      tryReserve: async ({ estimateUsd }) =>
+        estimateUsd > 0
+          ? { governed: true, allowed: false, period: 'lifetime', pct_used: 100, pct_left: 0 }
+          : { governed: true, allowed: true, pct_used: 100, pct_left: 0 },
+      status: async () => ({ governed: true, budget_usd: 10, spent_usd: 10, inflight_usd: 0 }),
+      adminList: async () => []
+    });
+  });
+  afterEach(() => {
+    allowance.setUsageBudgetRpc(null);
+    allowance.__setMeteringEnabledForTests(false);
+  });
+
+  /** Every model call went to a free model (the paid plan never reached the provider). */
+  const allFree = () =>
+    net.openrouter.length > 0 &&
+    net.openrouter.every((s) => [s.body.model, ...(s.body.models || [])].every((m: unknown) => /:free$/.test(String(m))));
+
+  it('POST /: a connected user with gemini confirmed (the paid plan would embed): word search, no embedContent request', async () => {
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'gemini';
+    const id = user('connected');
+    const r = await post('/api/chat', ASK, { 'x-test-user': id });
+    expect(r.status).toBe(200);
+    expect((r.json?.notices || []).some((n: { tool?: string }) => n.tool === 'usage_budget')).toBe(true);
+    expect(allFree()).toBe(true);
+    expect(queryEmbeds()).toHaveLength(0);
+    expect(sb.rpc).toHaveLength(0);
+    const system = systemOf(turnBody());
+    expect(system).toContain(PLAIN_FACT);
+    expect(system).not.toContain(CONNECTED_FACT);
+  });
+
+  it('/stream: the same re-plan over SSE never embeds the query either', async () => {
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'gemini';
+    const id = user('connected');
+    const r = await post('/api/chat/stream', ASK, { 'x-test-user': id });
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('usage_budget');
+    expect(allFree()).toBe(true);
+    expect(queryEmbeds()).toHaveLength(0);
+    expect(sb.rpc).toHaveLength(0);
+    expect(systemOf(turnBody())).toContain(PLAIN_FACT);
+  });
+
+  it('a user with no connection keeps the vector search on the re-plan (nothing to withhold)', async () => {
+    const id = user('plain');
+    const r = await post('/api/chat', ASK, { 'x-test-user': id });
+    expect(r.status).toBe(200);
+    expect(allFree()).toBe(true);
+    expect(queryEmbeds()).toEqual([{ taskType: 'RETRIEVAL_QUERY', text: QUESTION }]);
   });
 });
 

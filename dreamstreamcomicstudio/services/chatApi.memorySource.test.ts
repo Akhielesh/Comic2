@@ -1,6 +1,7 @@
-// updateChatMemory carries the chat's model source, as generateChatTitle and fetchFollowUps do, so
-// POST /api/chat/memory merges on that provider and key (routes/chat.ts resolveChatProvider) instead of
-// the server's auto pick. The field is sent only when given; `memoryConnected` is unchanged.
+// updateChatMemory carries the turn's model source, as generateChatTitle and fetchFollowUps carry theirs,
+// so POST /api/chat/memory merges on that provider and key (routes/chat.ts resolveChatProvider) instead
+// of the server's auto pick. The field is sent only when given; `memoryConnected` is unchanged. The call
+// site (AIChatPlatform passes reqSource) is covered by components/chat/AIChatPlatform.memorySource.test.tsx.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));

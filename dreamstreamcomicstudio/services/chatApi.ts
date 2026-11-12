@@ -160,8 +160,9 @@ export const updateChatMemory = (
     /** `memory` was distilled from connected-account content (the sticky flag): the merge follows that policy. */
     memoryConnected?: boolean;
     /**
-     * The chat's model source (as /title and /followups send it): the merge runs on that provider and
-     * its key, under the same connected-account rules. Sent only when given (the server's auto pick otherwise).
+     * The model source the turn ran on (AIChatPlatform passes reqSource, as the auto-title gets it): the
+     * merge runs on that provider and its key, under the same connected-account rules. Sent only when
+     * given (the server's auto pick otherwise).
      */
     source?: string;
   }

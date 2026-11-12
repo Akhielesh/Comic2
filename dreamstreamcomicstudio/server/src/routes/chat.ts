@@ -260,8 +260,11 @@ type PreparedChat = {
   /**
    * Server memory retrieval must not embed its query (the last user message) through the platform
    * Gemini key: the conversation carries, or may carry, connected-account content and `gemini` is not
-   * confirmed, or the turn withholds connected content from a user with connections. Retrieval then
-   * uses full-text search and recency (services/userMemory.ts noQueryEmbedding).
+   * confirmed (CONNECTOR_PROVIDERS_CONFIRMED). Retrieval then uses full-text search and recency
+   * (services/userMemory.ts noQueryEmbedding). A withheld turn of a user with (or maybe with)
+   * connections never embeds it either, whatever is confirmed: runChatParams derives that half from
+   * connectorPrivacy, so it also covers the usage-budget free re-plan (freeModelsOnlyPlan), which
+   * withholds the turn after prepareChat ran.
    */
   memoryNoQueryEmbedding?: boolean;
 };
@@ -394,10 +397,13 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const unconfirmedProvider = unconfirmedPlatformProvider(req, resolved.provider);
   // The client's long-term memory (composed into systemPrompt) was distilled from connected content.
   const memoryConnected = body.memoryConnected === true;
-  const knownHistoryLookup: Promise<boolean> =
+  // Whether the provenance-store lookup runs for this turn (its answer is reused for server memory below).
+  const historyLookupRuns = Boolean(
     !markedHistory && priorAssistantTurn && (resolved.provider === 'openrouter' || unconfirmedProvider) && req.user?.id
-      ? historyHasConnectorReply(req.user.id, incoming)
-      : Promise.resolve(false);
+  );
+  const knownHistoryLookup: Promise<boolean> = historyLookupRuns
+    ? historyHasConnectorReply(req.user.id, incoming)
+    : Promise.resolve(false);
   let connectionsMemo: Promise<ConnectionRow[] | null> | undefined;
   const connectorRows = (): Promise<ConnectionRow[] | null> =>
     (connectionsMemo ??= req.user?.id ? listConnections(req.user.id).catch(() => null) : Promise.resolve([]));
@@ -1000,15 +1006,20 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
 
   // Server memory retrieval embeds its query, the last user message (≤ 8,000 chars), with the platform
   // Gemini key (services/userMemory.ts). That message can carry connected content (a follow-up chip
-  // built from a connected reply, a pasted item), so the query is never embedded on a withheld turn of
-  // a user with (or maybe with) connections, nor, until the owner confirms `gemini`
-  // (CONNECTOR_PROVIDERS_CONFIRMED), for any conversation that may carry connected content (the same
-  // test the helpers use; marked history and known connections answer it without a lookup).
+  // built from a connected reply, a pasted item), so until the owner confirms `gemini`
+  // (CONNECTOR_PROVIDERS_CONFIRMED) the query is never embedded for a conversation that may carry
+  // connected content: the test conversationMayCarryConnectorData makes for the helpers, answered from
+  // what this turn already looked up (marked or known history, the memoized connection rows, a failed
+  // lookup counting as connected), so a turn adds no lookup of its own on the usual path. A withheld
+  // turn never embeds it at all for a user with (or maybe with) connections: runChatParams.
+  const memoryMayCarryConnectorData = async (): Promise<boolean> => {
+    if (historyConnectorData || hasConnections !== false) return true;
+    const rows = await connectorRows();
+    if (rows === null || rows.length > 0) return true;
+    return historyLookupRuns ? historyKnown : historyHasConnectorReply(req.user?.id, incoming);
+  };
   const memoryNoQueryEmbedding =
-    Boolean(req.user?.id) &&
-    ((withheldTurn && hasConnections !== false) ||
-      (!connectorProviderConfirmed('gemini') &&
-        (historyConnectorData || hasConnections === true || (await conversationMayCarryConnectorData(req.user?.id, incoming)))));
+    Boolean(req.user?.id) && !connectorProviderConfirmed('gemini') && (await memoryMayCarryConnectorData());
 
   return {
     prepared: {
@@ -1179,9 +1190,14 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   // (services/userMemory.ts excludeConnected) — whether or not the user still has connections.
   userMemory: Boolean(p.userId),
   userMemoryExcludeConnected: Boolean(p.connectorPrivacy?.withheld),
-  // …and its query stays off the Gemini embedding API when the conversation may carry connected
-  // content (see prepareChat memoryNoQueryEmbedding): word search and recency instead.
-  userMemoryNoQueryEmbedding: Boolean(p.memoryNoQueryEmbedding),
+  // …and its query stays off the Gemini embedding API (word search and recency instead) when the
+  // conversation may carry connected content and `gemini` is not confirmed (prepareChat), and on every
+  // turn that withholds connected content from a user with (or maybe with) connections, whatever is
+  // confirmed. Derived here from connectorPrivacy, so the usage-budget free re-plan (freeModelsOnlyPlan
+  // marks the turn withheld after prepareChat ran) is covered on POST / and /stream alike.
+  userMemoryNoQueryEmbedding: Boolean(
+    p.memoryNoQueryEmbedding || (p.connectorPrivacy?.withheld && p.connectorPrivacy.hasConnections !== false)
+  ),
   // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
   // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
   // it's safe to enable for any signed-in user. (Was declared but never set → connector

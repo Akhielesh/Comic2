@@ -197,9 +197,10 @@ export interface RunChatParams {
   /**
    * With userMemory: never send the memory query (the last user message) to the Gemini embedding
    * API; retrieval uses full-text search and recency instead (services/userMemory.ts
-   * noQueryEmbedding). routes/chat.ts sets it for a conversation that carries, or may carry,
-   * connected-account content while `gemini` is not confirmed (CONNECTOR_PROVIDERS_CONFIRMED), and
-   * for every withheld turn of a user with connections.
+   * noQueryEmbedding). routes/chat.ts (runChatParams) sets it for a conversation that carries, or may
+   * carry, connected-account content while `gemini` is not confirmed (CONNECTOR_PROVIDERS_CONFIRMED),
+   * and for every withheld turn of a user with (or maybe with) connections, whatever is confirmed: a
+   * free turn, an unconfirmed direct provider, and the usage-budget free re-plan.
    */
   userMemoryNoQueryEmbedding?: boolean;
   /**

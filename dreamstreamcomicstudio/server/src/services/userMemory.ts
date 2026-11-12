@@ -179,7 +179,8 @@ export interface MemoryRetrieveOptions {
    * the Gemini embedding API with the platform key, so this skips that call and uses the full-text /
    * recency fallback instead. Set by routes/chat.ts when the conversation carries, or may carry,
    * connected-account content and the owner has not confirmed `gemini` (CONNECTOR_PROVIDERS_CONFIRMED,
-   * ai/privacy/providerPolicies.ts), and on every withheld turn of a user with connections.
+   * ai/privacy/providerPolicies.ts), and on every withheld turn of a user with (or maybe with)
+   * connections, the usage-budget free re-plan included, whatever is confirmed.
    */
   noQueryEmbedding?: boolean;
   /**

@@ -984,7 +984,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     answerText: string,
     chatOwner: string | undefined,
     answerConnectorData = false,
-    /** The chat's model source: the merge runs on it, as the title and follow-ups do. */
+    /**
+     * The model source this turn ran on (reqSource, as the auto-title gets it): the merge runs on that
+     * provider and its key, under the server's connected-account gates. In Auto (the session has no
+     * source, locked or not) that is the source Auto picked, not the server's own pick.
+     */
     source?: string
   ) => {
     if (!user?.id || !answerText.trim()) return;
@@ -1228,7 +1232,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
-      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true, session.source || undefined);
+      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true, reqSource);
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever, and keep the

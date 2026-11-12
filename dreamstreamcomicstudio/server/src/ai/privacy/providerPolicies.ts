@@ -11,7 +11,8 @@
 // services/userMemory.ts stores memory distilled from connected content without a Gemini embedding
 // until 'gemini' is listed. The memory query (the turn's last user message) is gated too: routes/chat.ts
 // sets `noQueryEmbedding` for a conversation that may carry connected content until 'gemini' is listed,
-// and on every withheld turn of a user with connections, so retrieval falls back to word search.
+// and on every withheld turn of a user with (or maybe with) connections, the usage-budget free re-plan
+// included, whatever is listed, so retrieval falls back to word search.
 
 import type { ProviderId } from '../../../../shared/providers.js';
 
