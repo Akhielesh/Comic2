@@ -131,6 +131,14 @@ describe('EmptyArt', () => {
     expect(new Set(Object.values(all)).size).toBe(VARIANTS.length);
     expect(all).toMatchSnapshot();
   });
+
+  it('accent="currentColor" draws the spot in one ink (the comics landing: one colour, its hero spark)', () => {
+    for (const v of VARIANTS) {
+      const { container, unmount } = render(<EmptyArt variant={v} accent="currentColor" />);
+      expect(container.querySelector('svg')!.innerHTML).not.toContain('#D97757');
+      unmount();
+    }
+  });
 });
 
 describe('textures', () => {

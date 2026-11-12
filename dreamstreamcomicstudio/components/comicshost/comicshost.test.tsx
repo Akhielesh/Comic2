@@ -181,11 +181,30 @@ describe('ComicsLanding', () => {
     expect(screen.getByTestId('comics-hero-art')).toHaveAttribute('aria-hidden');
   });
 
+  it('the first view has one primary: the hero spark; the header’s Sign in / My comics is never an accent fill (C1)', () => {
+    for (const signedIn of [false, true]) {
+      const { unmount, container } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const header = container.querySelector('header')!;
+      const fills = [...header.querySelectorAll('button')].filter((b) => b.className.includes('bg-[var(--ds-accent)]'));
+      expect(fills.map((b) => b.textContent?.trim())).toEqual([]);
+      expect(within(header).getByRole('button', { name: signedIn ? 'My comics' : 'Sign in' })).toBeInTheDocument();
+      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', 'create');
+      unmount();
+    }
+  });
+
+  it('the feature spots are drawn in one ink: no terracotta beside the hero spark (DS-3 #5)', () => {
+    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const spots = container.querySelectorAll('svg[data-empty-art]');
+    expect(spots.length).toBeGreaterThanOrEqual(4);
+    for (const svg of spots) expect(svg.innerHTML.toLowerCase()).not.toContain('#d97757');
+  });
+
   it('primary buttons put the on-accent ink on the accent fill, never hard white (white on near-white in Atlas dark)', () => {
     for (const signedIn of [false, true]) {
       const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
       const primaries = screen.getAllByRole('button').filter((b) => b.className.includes('bg-[var(--ds-accent)]'));
-      expect(primaries.length).toBeGreaterThanOrEqual(2);
+      expect(primaries.length).toBeGreaterThanOrEqual(1);
       for (const b of primaries) {
         expect(b.className.split(/\s+/)).not.toContain('text-white');
         expect(b.className).toContain('text-[var(--ds-on-accent)]');

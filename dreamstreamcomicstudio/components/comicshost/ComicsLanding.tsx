@@ -151,7 +151,8 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
               Library
             </button>
             {signedIn ? (
-              <button type="button" onClick={onOpenComics} className={primaryButton}>
+              // The hero's spark CTA is the one primary in the first view (C1): the header's entry is secondary.
+              <button type="button" onClick={onOpenComics} className={secondaryButton}>
                 My comics
               </button>
             ) : (
@@ -159,7 +160,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                 <button type="button" onClick={onRequestAccess} className={`hidden sm:inline-flex ${quietLink}`}>
                   Request access
                 </button>
-                <button type="button" onClick={onSignIn} className={primaryButton}>
+                <button type="button" onClick={onSignIn} className={secondaryButton}>
                   <LogIn size={16} aria-hidden /> Sign in
                 </button>
               </>
@@ -219,7 +220,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
             <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {FEATURES.map((f) => (
                 <li key={f.title} className={`min-w-0 ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 ${SHADOW_SOFT}`}>
-                  <EmptyArt variant={f.art} />
+                  <EmptyArt variant={f.art} accent="currentColor" />
                   <h3 className="mt-3 text-base font-semibold">{f.title}</h3>
                   <p className="mt-1.5 text-sm leading-relaxed text-[var(--ds-muted)]">{f.body}</p>
                 </li>
