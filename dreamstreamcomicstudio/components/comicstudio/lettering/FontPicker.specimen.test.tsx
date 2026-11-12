@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { PRO_FONT_IDS } from '../../../shared/comic/lettering/proFonts';
 import { FONT_SPECIMENS } from './fontSpecimens';
 import { FontPicker, LATIN_FONTS } from './FontPicker';
+import { DENSITY } from '../../chat/studioDesign';
 
 vi.mock('../../../shared/comic/ops', async (orig) => ({ ...(await orig<Record<string, unknown>>()), PRO_EDIT_OPS_PATCHABLE: true }));
 
@@ -77,5 +78,15 @@ describe('FontPicker open list: specimens, not faces', () => {
     expect(options.length).toBe(list.querySelectorAll('[data-font-specimen]').length);
     expect(PRO_FONT_IDS.every((f) => list.querySelector(`[data-font-specimen="${f}"]`))).toBe(true);
     expect(constructed).toEqual([]);
+  });
+});
+
+// Last: the loader caches faces per module (see the control above).
+describe('FontPicker trigger: a touch target', () => {
+  it('is at least 36 px with a fine pointer and the 44 px touch size under a coarse one (it was a fixed h-9 on phones)', () => {
+    render(<FontPicker value="comic-neue" lang="en" onChange={() => undefined} />);
+    const trigger = document.querySelector<HTMLElement>('[data-slot="font-picker-trigger"]')!;
+    expect(trigger.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-h-9', ...DENSITY.coarse.split(' ')]));
+    expect(trigger.className.split(/\s+/)).not.toContain('h-9');
   });
 });

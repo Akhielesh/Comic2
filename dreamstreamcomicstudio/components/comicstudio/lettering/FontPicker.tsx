@@ -12,7 +12,7 @@ import { fontSpecimenStyle } from './fontSpecimens';
 import { PRO_FONT_ROLES } from '../../../shared/comic/lettering/proFonts';
 import { proFieldsWritable, proFontIds } from '../editor/inspector/proSwitch';
 import { cx } from '../board/ui';
-import { RADIUS_PILL } from '../../chat/studioDesign';
+import { DENSITY, RADIUS_PILL } from '../../chat/studioDesign';
 
 const ROLE: Record<LatinFontId, string> = {
   'comic-neue': 'Classic dialogue',
@@ -168,7 +168,8 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
         aria-expanded={open}
         aria-labelledby={`${id}-label ${id}-value`}
         onClick={() => setOpen((v) => !v)}
-        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
+        className={`flex min-h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] ${DENSITY.coarse}`}
+        data-slot="font-picker-trigger"
       >
         <span id={`${id}-value`} className="min-w-0 flex-1 truncate" style={{ fontFamily: value ? fontFamilyStack(value) : undefined }}>
           {value ? labelOf(value) : 'Mixed'}
