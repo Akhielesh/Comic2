@@ -132,6 +132,35 @@ describe('composePage: one page node tree (shared/comic/panelize/compose.ts)', (
     expect(items).toEqual(['frame:2', 'ly_in_p2', 'frame:3', 'frame:1', 'ly_free_lo', 'ly_free_hi']);
   });
 
+  it('compose math: a square cut in a wide frame is cropped to the frame’s shape, centred; zoom and pan move inside the cut', () => {
+    const square = (fit?: { s: number; x: number; y: number }) =>
+      framedDoc((page) => {
+        page.render.asset = { ...page.render.asset!, w: 1000, h: 1000 };
+        page.render.cuts!.cuts[0] = { ...page.render.cuts!.cuts[0], box: { x: 0, y: 0, w: 1, h: 1 } };
+        page.panels[0].frame = { box: { x: 0, y: 0, w: 1, h: 0.25 }, ...(fit ? { fit } : {}) };
+      });
+    const piece = (fit?: { s: number; x: number; y: number }) => {
+      const d = square(fit);
+      return composePage(d, d.pages[0]).pieces[0];
+    };
+    // Book 2:3, frame full width × a quarter height → 8:3 physically: the full width of the square, 37.5 % of it high.
+    expect(piece().src).toEqual({ x: 0, y: 0.3125, w: 1, h: 0.375 });
+    expect(piece({ s: 2, x: 0, y: 0 }).src).toEqual({ x: 0.25, y: 0.4063, w: 0.5, h: 0.1875 });
+    expect(piece({ s: 2, x: -1, y: 1 }).src).toEqual({ x: 0, y: 0.8125, w: 0.5, h: 0.1875 });
+    // Upscale: how much the picture is enlarged at the drawing's width (zoom 2 doubles it).
+    expect(piece({ s: 2, x: 0, y: 0 }).upscale).toBeCloseTo(2 * piece().upscale!, 2);
+  });
+
+  it('still pages draw the rest pose: a page’s motion never changes what composes or draws', () => {
+    const still = layeredDoc([LAYERS.shape]);
+    const moving = layeredDoc([LAYERS.shape]);
+    moving.pages[0].motion = { clips: [{ id: 'mc_1', target: { k: 'layer', id: 'ly_box' }, role: 'loop', preset: 'float', at: { anchor: 'page', ms: 0 } }] } as never;
+    expect(composeScene(moving, moving.pages[0])).toEqual(composeScene(still, still.pages[0]));
+    const legacy = makeQaDoc('lake-1p');
+    legacy.pages[0].motion = { clips: [] };
+    expect(pageComposes(legacy.pages[0])).toBe(false);
+  });
+
   it('opaque kinds are never drawn; guide-only layers only for the editor', () => {
     const doc = layeredDoc([LAYERS.opaque, LAYERS.guide]);
     const page = doc.pages[0];
