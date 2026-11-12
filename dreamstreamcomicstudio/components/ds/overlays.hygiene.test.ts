@@ -51,3 +51,67 @@ describe('the overlay sources hold the design-system rules', () => {
     expect([...used].filter((token) => !new RegExp(`${token}\\s*:`).test(css))).toEqual([]);
   });
 });
+
+/**
+ * Bundle cost (master plan §1.6 risk 6: components/ds adds at most 25 KB gz to the first load). The Radix overlays are
+ * about 42 KB gz together, so they must cost nothing to a chunk that does not use them, also once the components/ds
+ * barrel re-exports them (a wave note): their top-level forwardRef / createContext calls are marked pure and the Radix
+ * roots are plain re-exports, so importing an unrelated primitive through such a barrel drops every overlay. The Toast
+ * host (mounted at the App root, so on the first load) uses no Radix and stays small.
+ */
+describe('the overlays cost nothing where they are not used', () => {
+  const ALREADY_LOADED = /^(react|react-dom|lucide-react|tailwind-merge|clsx)(\/|$)/;
+  const OVERLAYS = ['Dialog', 'AlertDialog', 'Menu', 'Popover', 'Tooltip', 'Toast'];
+  /** Bundles `modules.entry` (virtual modules import each other as `virtual:<name>`); returns the inputs kept and the gz size. */
+  async function bundle(modules: Record<string, string>, alsoExternal: RegExp | null = null) {
+    const { build } = await import('esbuild');
+    const { gzipSync } = await import('node:zlib');
+    const result = await build({
+      entryPoints: ['virtual:entry'],
+      bundle: true,
+      minify: true,
+      write: false,
+      format: 'esm',
+      jsx: 'automatic',
+      metafile: true,
+      logLevel: 'silent',
+      define: { 'process.env.NODE_ENV': '"production"' },
+      plugins: [
+        {
+          name: 'virtual-and-externals',
+          setup(b) {
+            b.onResolve({ filter: ALREADY_LOADED }, (a) => ({ path: a.path, external: true }));
+            if (alsoExternal) b.onResolve({ filter: alsoExternal }, (a) => ({ path: a.path, external: true }));
+            b.onResolve({ filter: /^virtual:/ }, (a) => ({ path: a.path.slice('virtual:'.length), namespace: 'virtual' }));
+            b.onLoad({ filter: /.*/, namespace: 'virtual' }, (a) => ({ contents: modules[a.path], resolveDir: path.join(APP_ROOT, 'components/ds'), loader: 'tsx' }));
+          }
+        }
+      ]
+    });
+    const out = Object.values(result.metafile!.outputs)[0];
+    return { kept: Object.entries(out.inputs).filter(([, v]) => v.bytesInOutput > 0).map(([f]) => f), gz: gzipSync(result.outputFiles[0].contents).length };
+  }
+  const radixIn = (kept: string[]) => kept.filter((f) => /@radix-ui|@floating-ui|react-remove-scroll|aria-hidden/.test(f));
+
+  it('a Button imported through a barrel that re-exports every overlay carries no Radix', { timeout: 30_000 }, async () => {
+    const barrel = [...OVERLAYS.map((m) => `export * from './${m}';`), "export { Button } from './Button';"].join('\n');
+    const { kept } = await bundle({ barrel, entry: "import { Button } from 'virtual:barrel';\nconsole.log(Button);" });
+    expect(kept.some((f) => f.endsWith('components/ds/Button.tsx'))).toBe(true);
+    expect(radixIn(kept)).toEqual([]);
+  });
+
+  it('the probe is real: a used Dialog does bring Radix', { timeout: 30_000 }, async () => {
+    const { kept } = await bundle({ entry: "import { DialogContent } from './Dialog';\nconsole.log(DialogContent);" });
+    expect(radixIn(kept).length).toBeGreaterThan(5);
+  });
+
+  it('the Toast host (first load) uses no Radix and stays under 4 KB gz', { timeout: 30_000 }, async () => {
+    // Button, IconButton, the recipes and cn are on the first load already: only the Toast module itself is measured.
+    const { kept, gz } = await bundle(
+      { entry: "import { ToastHost, toast } from './Toast';\nconsole.log(ToastHost, toast);" },
+      /^\.{1,2}\/(?:\.\.\/)*(?:chat\/studioDesign|recipes|Button|IconButton|useReducedMotion|lib\/utils)$/
+    );
+    expect(radixIn(kept)).toEqual([]);
+    expect(gz).toBeLessThan(4 * 1024);
+  });
+});

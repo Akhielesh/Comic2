@@ -53,17 +53,17 @@ export function dialogMotion(reduce: boolean): { scrim: string; panel: string } 
   return reduce ? { scrim: '', panel: '' } : { scrim: 'ds-fade-in', panel: 'ds-scale-in' };
 }
 
-export const Dialog = DialogPrimitive.Root;
+export { Root as Dialog } from '@radix-ui/react-dialog';
 export type DialogProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>;
 
-export const DialogTrigger = React.forwardRef<
+export const DialogTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Trigger>
 >(function DialogTrigger(props, ref) {
   return <DialogPrimitive.Trigger ref={ref} data-slot="dialog-trigger" {...props} />;
 });
 
-export const DialogClose = React.forwardRef<
+export const DialogClose = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Close>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Close>
 >(function DialogClose(props, ref) {
@@ -81,7 +81,7 @@ export interface DialogContentProps extends React.ComponentPropsWithoutRef<typeo
   scrimClassName?: string;
 }
 
-export const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(function DialogContent(
+export const DialogContent = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(function DialogContent(
   { className, children, size = 'default', hideClose = false, closeLabel = 'Close', scrimClassName, ...props },
   ref
 ) {
@@ -113,14 +113,14 @@ export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLD
 }
 
 /** The dialog's name: an <h2> with DIALOG_TITLE (no colour of its own; the panel's ink). */
-export const DialogTitle = React.forwardRef<
+export const DialogTitle = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(function DialogTitle({ className, ...props }, ref) {
   return <DialogPrimitive.Title ref={ref} data-slot="dialog-title" className={cn(DIALOG_TITLE_CLASSES, className)} {...props} />;
 });
 
-export const DialogDescription = React.forwardRef<
+export const DialogDescription = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
 >(function DialogDescription({ className, ...props }, ref) {

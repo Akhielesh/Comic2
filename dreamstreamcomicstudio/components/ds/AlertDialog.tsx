@@ -22,10 +22,10 @@ export type AlertDialogActionVariant = 'default' | 'destructive';
 /** The alert panel's header has no close button to leave room for. */
 export const ALERT_DIALOG_HEADER = 'pr-0';
 
-export const AlertDialog = AlertDialogPrimitive.Root;
+export { Root as AlertDialog } from '@radix-ui/react-alert-dialog';
 export type AlertDialogProps = React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Root>;
 
-export const AlertDialogTrigger = React.forwardRef<
+export const AlertDialogTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Trigger>
 >(function AlertDialogTrigger(props, ref) {
@@ -38,7 +38,7 @@ export interface AlertDialogContentProps extends React.ComponentPropsWithoutRef<
   scrimClassName?: string;
 }
 
-export const AlertDialogContent = React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Content>, AlertDialogContentProps>(
+export const AlertDialogContent = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Content>, AlertDialogContentProps>(
   function AlertDialogContent({ className, size = 'sm', scrimClassName, ...props }, ref) {
     const motion = dialogMotion(useReducedMotion());
     return (
@@ -59,14 +59,14 @@ export function AlertDialogFooter({ className, ...props }: React.HTMLAttributes<
   return <div data-slot="alert-dialog-footer" className={cn(DIALOG_FOOTER, className)} {...props} />;
 }
 
-export const AlertDialogTitle = React.forwardRef<
+export const AlertDialogTitle = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Title>
 >(function AlertDialogTitle({ className, ...props }, ref) {
   return <AlertDialogPrimitive.Title ref={ref} data-slot="alert-dialog-title" className={cn(DIALOG_TITLE_CLASSES, className)} {...props} />;
 });
 
-export const AlertDialogDescription = React.forwardRef<
+export const AlertDialogDescription = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Description>
 >(function AlertDialogDescription({ className, ...props }, ref) {
@@ -79,7 +79,7 @@ export interface AlertDialogActionProps extends React.ComponentPropsWithoutRef<t
 }
 
 /** The confirm button: closes the dialog after its onClick (call `event.preventDefault()` there to keep it open). */
-export const AlertDialogAction = React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Action>, AlertDialogActionProps>(
+export const AlertDialogAction = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Action>, AlertDialogActionProps>(
   function AlertDialogAction({ className, variant = 'default', ...props }, ref) {
     return (
       <AlertDialogPrimitive.Action
@@ -94,7 +94,7 @@ export const AlertDialogAction = React.forwardRef<React.ElementRef<typeof AlertD
 );
 
 /** Cancel: the outline button, focused when the dialog opens. */
-export const AlertDialogCancel = React.forwardRef<
+export const AlertDialogCancel = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Cancel>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>
 >(function AlertDialogCancel({ className, ...props }, ref) {

@@ -239,7 +239,7 @@ export interface ToastCardProps {
 }
 
 /** One toast card (the host's, or a static one in a scene). */
-export const ToastCard = React.forwardRef<HTMLDivElement, ToastCardProps>(function ToastCard(
+export const ToastCard = /* @__PURE__ */ React.forwardRef<HTMLDivElement, ToastCardProps>(function ToastCard(
   { title, message, tone = 'healthy', action, duration = 0, onDismiss, leaving = false, onExited, className },
   ref
 ) {

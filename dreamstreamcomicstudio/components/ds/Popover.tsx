@@ -21,25 +21,24 @@ import { useReducedMotion } from './useReducedMotion';
 
 export const POPOVER_PANEL = `${OVERLAY} ${Z.popover} w-72 max-w-[calc(100vw-1rem)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-4 outline-none origin-[var(--radix-popover-content-transform-origin)] [overflow-wrap:anywhere]`;
 
-export const Popover = PopoverPrimitive.Root;
+export { Root as Popover, Anchor as PopoverAnchor } from '@radix-ui/react-popover';
 export type PopoverProps = React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Root>;
-export const PopoverAnchor = PopoverPrimitive.Anchor;
 
-export const PopoverTrigger = React.forwardRef<
+export const PopoverTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Trigger>
 >(function PopoverTrigger(props, ref) {
   return <PopoverPrimitive.Trigger ref={ref} data-slot="popover-trigger" {...props} />;
 });
 
-export const PopoverClose = React.forwardRef<
+export const PopoverClose = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Close>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Close>
 >(function PopoverClose(props, ref) {
   return <PopoverPrimitive.Close ref={ref} data-slot="popover-close" {...props} />;
 });
 
-export const PopoverContent = React.forwardRef<
+export const PopoverContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(function PopoverContent({ className, align = 'center', sideOffset = 6, collisionPadding = 8, ...props }, ref) {

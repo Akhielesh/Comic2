@@ -42,8 +42,8 @@ export const TOOLTIP_PANEL = `${Z.tooltip} w-fit max-w-[min(20rem,calc(100vw-1re
 /** The arrow takes the panel's ink (the inverse surface restates it in the dark skin). */
 export const TOOLTIP_ARROW = 'fill-[var(--ds-ink)]';
 
-const InProvider = createContext(false);
-const PressContext = createContext<((open: boolean) => void) | null>(null);
+const InProvider = /* @__PURE__ */ createContext(false);
+const PressContext = /* @__PURE__ */ createContext<((open: boolean) => void) | null>(null);
 
 export type TooltipProviderProps = React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Provider>;
 
@@ -78,7 +78,7 @@ export function Tooltip({ open: openProp, defaultOpen = false, onOpenChange, ...
 }
 
 /** The trigger (usually `asChild` around a button). Adds the long-press path for touch. */
-export const TooltipTrigger = React.forwardRef<
+export const TooltipTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Trigger>
 >(function TooltipTrigger({ onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onContextMenu, onClickCapture, ...props }, ref) {
@@ -153,7 +153,7 @@ export const TooltipTrigger = React.forwardRef<
 });
 
 /** The label: portalled, inverted ink, with an arrow; enters with a fade (none under reduced motion). */
-export const TooltipContent = React.forwardRef<
+export const TooltipContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof TooltipPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
 >(function TooltipContent({ className, sideOffset = 6, collisionPadding = 8, children, ...props }, ref) {

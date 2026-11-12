@@ -42,20 +42,17 @@ export const MENU_SHORTCUT = 'ml-auto pl-4 text-[length:var(--ds-text-xs)] track
 const inset = (on: boolean | undefined) => (on ? '' : undefined);
 const entrance = (reduce: boolean) => (reduce ? '' : 'ds-scale-in');
 
-export const Menu = MenuPrimitive.Root;
+export { Root as Menu, Group as MenuGroup, RadioGroup as MenuRadioGroup, Sub as MenuSub } from '@radix-ui/react-dropdown-menu';
 export type MenuProps = React.ComponentPropsWithoutRef<typeof MenuPrimitive.Root>;
-export const MenuGroup = MenuPrimitive.Group;
-export const MenuRadioGroup = MenuPrimitive.RadioGroup;
-export const MenuSub = MenuPrimitive.Sub;
 
-export const MenuTrigger = React.forwardRef<
+export const MenuTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Trigger>
 >(function MenuTrigger(props, ref) {
   return <MenuPrimitive.Trigger ref={ref} data-slot="menu-trigger" {...props} />;
 });
 
-export const MenuContent = React.forwardRef<
+export const MenuContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Content>
 >(function MenuContent({ className, sideOffset = 4, collisionPadding = 8, ...props }, ref) {
@@ -81,7 +78,7 @@ export interface MenuItemProps extends React.ComponentPropsWithoutRef<typeof Men
   variant?: MenuItemVariant;
 }
 
-export const MenuItem = React.forwardRef<React.ElementRef<typeof MenuPrimitive.Item>, MenuItemProps>(function MenuItem(
+export const MenuItem = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof MenuPrimitive.Item>, MenuItemProps>(function MenuItem(
   { className, inset: isInset, variant = 'default', ...props },
   ref
 ) {
@@ -97,7 +94,7 @@ export const MenuItem = React.forwardRef<React.ElementRef<typeof MenuPrimitive.I
   );
 });
 
-export const MenuCheckboxItem = React.forwardRef<
+export const MenuCheckboxItem = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.CheckboxItem>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.CheckboxItem>
 >(function MenuCheckboxItem({ className, children, ...props }, ref) {
@@ -113,7 +110,7 @@ export const MenuCheckboxItem = React.forwardRef<
   );
 });
 
-export const MenuRadioItem = React.forwardRef<
+export const MenuRadioItem = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.RadioItem>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.RadioItem>
 >(function MenuRadioItem({ className, children, ...props }, ref) {
@@ -129,14 +126,14 @@ export const MenuRadioItem = React.forwardRef<
   );
 });
 
-export const MenuLabel = React.forwardRef<
+export const MenuLabel = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Label>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Label> & { inset?: boolean }
 >(function MenuLabel({ className, inset: isInset, ...props }, ref) {
   return <MenuPrimitive.Label ref={ref} data-slot="menu-label" data-inset={inset(isInset)} className={cn(MENU_GROUP_LABEL, className)} {...props} />;
 });
 
-export const MenuSeparator = React.forwardRef<
+export const MenuSeparator = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.Separator>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.Separator>
 >(function MenuSeparator({ className, ...props }, ref) {
@@ -148,7 +145,7 @@ export function MenuShortcut({ className, ...props }: React.HTMLAttributes<HTMLS
   return <span data-slot="menu-shortcut" aria-hidden="true" className={cn(MENU_SHORTCUT, className)} {...props} />;
 }
 
-export const MenuSubTrigger = React.forwardRef<
+export const MenuSubTrigger = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.SubTrigger> & { inset?: boolean }
 >(function MenuSubTrigger({ className, inset: isInset, children, ...props }, ref) {
@@ -160,7 +157,7 @@ export const MenuSubTrigger = React.forwardRef<
   );
 });
 
-export const MenuSubContent = React.forwardRef<
+export const MenuSubContent = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof MenuPrimitive.SubContent>,
   React.ComponentPropsWithoutRef<typeof MenuPrimitive.SubContent>
 >(function MenuSubContent({ className, collisionPadding = 8, ...props }, ref) {
