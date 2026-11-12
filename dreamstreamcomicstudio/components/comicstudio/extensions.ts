@@ -12,6 +12,7 @@
 import type React from 'react';
 import type { Card, ComicDoc, Msg, StudioTab } from '../../shared/comic/doc';
 import type { StudioCaps } from '../../shared/comic/capabilities';
+import type { CardSettle, SettleCost } from '../../shared/comic/settle';
 import type { StudioController } from './types';
 
 export interface CardProps<C extends Card = Card> {
@@ -24,6 +25,15 @@ export interface CardRegistration {
   type: Card['type'];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Component: React.ComponentType<CardProps<any>>;
+  /**
+   * Settled cards (PROGRAM3 SETTLE-0; lead decision D3, CHANGED): the one line this card reads once the chat has moved
+   * past it, in words only (prices through `cost`, so governed users never see `$`). Optional: without it the line comes
+   * from shared/comic/settle.ts summaryOf. A settled card has no controls and no details, so there is no `Settled`
+   * component to register; return null to keep summaryOf's line. Only called for a card whose settle state is
+   * 'settled'; never mounts `Component`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  settledSummary?: (card: any, doc: ComicDoc, settle: CardSettle, cost: SettleCost | null) => string | null;
 }
 
 export interface BoardTabRegistration {
