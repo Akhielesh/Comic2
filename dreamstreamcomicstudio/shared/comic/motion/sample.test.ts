@@ -10,8 +10,8 @@ import { emptyRender, normalizeDoc, type ComicDoc, type Page, type PageLayer } f
 import { estimateMeasure, letteringAspect, planLettering } from '../lettering/layout';
 import { MOTION_LIMITS } from '../limits';
 import { lineRevealMs, pageBeats, panelBeatOf } from './beats';
-import { CAMERA_MOVES, MOTION_PRESETS, presetDefaults } from './presets';
-import { cameraAt, planMotion, poseEntries, revealRect, revealSpans, revealWordCount, sampleAt, samplePlan } from './sample';
+import { CAMERA_MOVES, MOTION_PRESETS, presetDefaults, visibilityOf } from './presets';
+import { cameraAt, planMotion, poseEntries, revealRect, revealSpans, revealWordCount, sampleAt, samplePlan, type MotionPlan } from './sample';
 import type { MotionClip, PageMotion } from './types';
 
 const overlayDoc = (mutate?: (d: ComicDoc) => void): ComicDoc =>
@@ -40,6 +40,43 @@ const animated = (clips: MotionClip[], extra: Omit<PageMotion, 'clips'> = {}, do
 };
 
 const sample = (doc: ComicDoc, page: Page, ms: number, seed?: number) => sampleAt(doc, page, pageBeats(doc, page), ms, seed === undefined ? {} : { seed });
+
+/**
+ * The flashes a player draws on `key` in its busiest second, read frame by frame off the pose map (what the reader sees:
+ * opacity, reveal and a collapsed scale), independently of budget.ts: a swing is a change of at least 0.1 against the
+ * last turn, a flash two swings.
+ */
+const drawnFlashes = (plan: MotionPlan, key: string, toMs: number, stepMs = 1): number => {
+  const times: number[] = [];
+  const first = samplePlan(plan, 0).get(key);
+  let dir = 0;
+  let hi = first ? visibilityOf(first) : 1;
+  let lo = hi;
+  let ext = hi;
+  for (let ms = 0; ms <= toMs; ms += stepMs) {
+    const pose = samplePlan(plan, ms).get(key);
+    const v = pose ? visibilityOf(pose) : 1;
+    let turned = false;
+    if (dir === 0) {
+      hi = Math.max(hi, v);
+      lo = Math.min(lo, v);
+      if (hi - v >= 0.1) [dir, ext, turned] = [-1, v, true];
+      else if (v - lo >= 0.1) [dir, ext, turned] = [1, v, true];
+    } else if (dir > 0) {
+      if (v > ext) ext = v;
+      else if (ext - v >= 0.1) [dir, ext, turned] = [-1, v, true];
+    } else if (v < ext) ext = v;
+    else if (v - ext >= 0.1) [dir, ext, turned] = [1, v, true];
+    if (turned) times.push(ms);
+  }
+  let best = 0;
+  let l = 0;
+  for (let h = 0; h < times.length; h += 1) {
+    while (times[h] - times[l] >= 1000) l += 1;
+    best = Math.max(best, h - l + 1);
+  }
+  return Math.floor(best / 2);
+};
 
 const BUSY = [
   clip('mc_pop', { preset: 'pop', target: { k: 'line', id: 'pg_1_l1' } }),
@@ -281,6 +318,40 @@ describe('a linked balloon chain animates as one unit keyed by its head', () => 
     expect(mid.get('line:pg_1_l3')!.r).not.toBe(0);
   });
 
+  /** The data-link-group units svgMarkup draws for a page (each a list of line ids). */
+  const drawnGroups = (doc: ComicDoc, page: Page): string[][] => {
+    const plans = planLettering(doc, page, letteringAspect(doc, page), estimateMeasure);
+    const groups: string[][] = [];
+    const walk = (nodes: readonly SvgNode[]) => {
+      for (const n of nodes) {
+        const g = n.attrs?.['data-link-group'];
+        if (typeof g === 'string') groups.push(g.split(' '));
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(letteringNodes(plans, { aspect: letteringAspect(doc, page) }));
+    return groups;
+  };
+  const withText = (doc: ComicDoc, lineId: string, text: string): ComicDoc => ({
+    ...doc,
+    pages: doc.pages.map((p, i) => (i ? p : { ...p, panels: p.panels.map((pl) => ({ ...pl, lines: pl.lines.map((l) => (l.id === lineId ? { ...l, text } : l)) })) }))
+  });
+
+  it('a chain broken by a line the lettering does not draw is two balloons here too', () => {
+    // l3 ← l4 ← l5 with l4 empty: svgMarkup draws l3 and l5 alone, so a clip on l5 moves l5, keyed by l5.
+    const broken = withText(chainDoc(), 'pg_1_l4', '   ');
+    expect(drawnGroups(broken, broken.pages[0])).toEqual([]);
+    const { page } = animated([clip('mc_t', { role: 'emphasis', preset: 'pulse', target: { k: 'line', id: 'pg_1_l5' } })], {}, broken);
+    expect([...sample(broken, page, 99_999).keys()]).toEqual(['line:pg_1_l5']);
+    expect(planMotion(broken, page, pageBeats(broken, page)).clips[0].startMs).toBe(lineRevealMs(pageBeats(broken, page), 'pg_1_l5'));
+    // With the head empty, the chain that is drawn is l4 ← l5, keyed by l4.
+    const headless = withText(chainDoc(), 'pg_1_l3', '');
+    const groups = drawnGroups(headless, headless.pages[0]);
+    expect(groups.map((g) => [...g].sort())).toEqual([['pg_1_l4', 'pg_1_l5']]);
+    const onTail = animated([clip('mc_t', { role: 'emphasis', preset: 'pulse', target: { k: 'line', id: 'pg_1_l5' } })], {}, headless);
+    expect([...sample(headless, onTail.page, 99_999).keys()]).toEqual(['line:pg_1_l4']);
+  });
+
   it('the unit is the lettering’s own data-link-group, and its head is in it', () => {
     const doc = chainDoc();
     const page = doc.pages[0];
@@ -312,6 +383,104 @@ describe('flashes never pass 3 Hz at draw time', () => {
     // Two slow flickers on one target add up past the limit: both are calmed.
     const twice = animated([slow, { ...slow, id: 'mc_slow2', at: { anchor: 'page', ms: 100 } }]);
     expect(new Set(Array.from({ length: 300 }, (_, i) => sample(twice.doc, twice.page, i * 4).get('panel:pg_1_p2')!.o))).toEqual(new Set([1]));
+  });
+});
+
+describe('entrances and exits play once (a repeat would flash)', () => {
+  it('a repeated pop, zoom punch, pop-out or zoom-out draws no flash, and settles after one play', () => {
+    for (const [role, preset] of [
+      ['enter', 'pop'],
+      ['enter', 'zoom-punch'],
+      ['exit', 'pop-out'],
+      ['exit', 'zoom-out']
+    ] as const) {
+      const { doc, page } = animated([clip('mc_r', { role, preset, repeat: 5, target: { k: 'panel', id: 'pg_1_p1' }, at: { anchor: 'page', ms: 1000 } })]);
+      const plan = planMotion(doc, page, pageBeats(doc, page));
+      const dur = MOTION_PRESETS[preset].dur;
+      expect(drawnFlashes(plan, 'panel:pg_1_p1', 1000 + dur * 6 + 1000), preset).toBe(0);
+      const after = samplePlan(plan, 1000 + dur + 1).get('panel:pg_1_p1')!;
+      expect(after.o, preset).toBe(role === 'enter' ? 1 : 0);
+    }
+  });
+
+  it('a 100 ms fade repeated 20 times fades in once and stays (it drew 10 flashes a second when it replayed)', () => {
+    const { doc, page } = animated([clip('mc_f', { preset: 'fade', dur: 100, repeat: 20, target: { k: 'panel', id: 'pg_1_p1' }, at: { anchor: 'page', ms: 0 } })]);
+    const plan = planMotion(doc, page, pageBeats(doc, page));
+    expect(drawnFlashes(plan, 'panel:pg_1_p1', 3000)).toBe(0);
+    for (let ms = 100; ms < 3000; ms += 7) expect(samplePlan(plan, ms).get('panel:pg_1_p1')!.o).toBe(1);
+  });
+
+  it('a repeated typewriter types once: the text never vanishes and comes back', () => {
+    const { doc, page } = animated([clip('mc_t', { preset: 'typewriter', dur: 200, repeat: 10, target: { k: 'line', id: 'pg_1_l4' } })]);
+    const beats = pageBeats(doc, page);
+    const start = lineRevealMs(beats, 'pg_1_l4')!;
+    const plan = planMotion(doc, page, beats);
+    let last = 0;
+    for (let ms = start; ms < start + 2400; ms += 5) {
+      const r = samplePlan(plan, ms).get('line:pg_1_l4')!.reveal;
+      expect(r).toBeGreaterThanOrEqual(last);
+      last = r;
+    }
+    expect(last).toBe(1);
+  });
+});
+
+describe('the flash guard reads what the reader sees, with the player’s own seed', () => {
+  it('a flicker the sanitizer passes at seed 0 never draws more than 3 flashes a second, whatever seed the player uses', () => {
+    const { doc, page } = animated([clip('mc_f', { role: 'emphasis', preset: 'flicker', dur: 700, repeat: 6, params: { flashes: 2 }, target: { k: 'panel', id: 'pg_1_p2' }, at: { anchor: 'page', ms: 0 } })]);
+    const beats = pageBeats(doc, page);
+    for (let seed = 0; seed <= 40; seed += 1) {
+      const plan = planMotion(doc, page, beats, { seed });
+      const drawn = drawnFlashes(plan, 'panel:pg_1_p2', 700 * 7 + 100, 2);
+      expect(drawn, `seed ${seed}`).toBeLessThanOrEqual(MOTION_LIMITS.flashHzMax);
+      if (!plan.clips[0].holdOpacity) expect(drawn, `seed ${seed}`).toBe(3);
+    }
+  });
+
+  it('a keyed shrink to nothing ten times a second is held: the object stays in sight and still moves', () => {
+    const vanish = clip('mc_v', { role: 'loop', preset: 'float', dur: 100, params: { amount: 0.05 }, keys: [{ t: 0, s: 1 }, { t: 0.5, s: 0 }, { t: 1, s: 1 }], target: { k: 'panel', id: 'pg_1_p1' }, at: { anchor: 'page', ms: 0 } });
+    const { doc, page } = animated([vanish]);
+    const plan = planMotion(doc, page, pageBeats(doc, page));
+    expect(plan.clips[0].holdOpacity).toBe(true);
+    expect(drawnFlashes(plan, 'panel:pg_1_p1', 2000)).toBe(0);
+    const dys = new Set(Array.from({ length: 50 }, (_, i) => samplePlan(plan, i * 3).get('panel:pg_1_p1')!.dy));
+    expect(dys.size).toBeGreaterThan(5);
+  });
+
+  it('a flickering panel and a flickering balloon inside it add up: both are held; apart, each still flickers', () => {
+    const flick = (id: string, target: MotionClip['target']) => clip(id, { role: 'emphasis', preset: 'flicker', dur: 1000, params: { flashes: 3 }, target, at: { anchor: 'page', ms: 0 } });
+    const nested = animated([flick('mc_p', { k: 'panel', id: 'pg_1_p3' }), flick('mc_l', { k: 'line', id: 'pg_1_l4' })]);
+    const plan = planMotion(nested.doc, nested.page, pageBeats(nested.doc, nested.page));
+    expect(plan.clips.map((c) => c.holdOpacity)).toEqual([true, true]);
+    expect(drawnFlashes(plan, 'panel:pg_1_p3', 1200)).toBe(0);
+    expect(drawnFlashes(plan, 'line:pg_1_l4', 1200)).toBe(0);
+    const apart = animated([flick('mc_p', { k: 'panel', id: 'pg_1_p1' }), flick('mc_l', { k: 'line', id: 'pg_1_l4' })]);
+    const free = planMotion(apart.doc, apart.page, pageBeats(apart.doc, apart.page));
+    expect(free.clips.map((c) => c.holdOpacity)).toEqual([false, false]);
+    expect(drawnFlashes(free, 'panel:pg_1_p1', 1200)).toBe(3);
+  });
+
+  it('re-planning after an edit is cheap: every clip’s flash count is read once', () => {
+    const keyed = Array.from({ length: MOTION_LIMITS.clipsPerPage }, (_, i) =>
+      clip(`mc_${i}`, {
+        role: 'loop',
+        preset: 'blink',
+        dur: 300 + i,
+        target: { k: 'panel', id: `pg_1_p${(i % 3) + 1}` },
+        at: { anchor: 'page', ms: 0 },
+        keys: Array.from({ length: MOTION_LIMITS.keysPerClip }, (_, k) => ({ t: k / (MOTION_LIMITS.keysPerClip - 1), o: k % 2 ? 0.2 : 1, s: 1 + (k % 3) / 10 }))
+      })
+    );
+    const { doc, page } = animated(keyed);
+    const beats = pageBeats(doc, page);
+    planMotion(doc, page, beats, { seed: 5 });
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 5; i += 1) {
+      const t0 = performance.now();
+      planMotion(doc, page, beats, { seed: 5 });
+      best = Math.min(best, performance.now() - t0);
+    }
+    expect(best).toBeLessThan(10);
   });
 });
 

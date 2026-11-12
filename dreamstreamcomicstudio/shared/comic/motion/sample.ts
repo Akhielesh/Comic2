@@ -6,8 +6,9 @@
 //   - a clip's time is its anchor (the line's reveal, a panel's shot, the page's start: beats.ts) plus its offset, so it
 //     follows its reveal when dialogue grows;
 //   - an entrance holds its first frame until it starts (hidden) and its last after it ends (as drawn); an exit holds
-//     the object as drawn until it starts and gone after; an emphasis plays 1 + repeat times from rest back to rest;
-//     a loop cycles for as long as the page shows;
+//     the object as drawn until it starts and gone after; both play exactly once (a stored repeat is ignored: replaying
+//     would snap the object from shown back to hidden, a flash); an emphasis plays 1 + repeat times from rest back to
+//     rest; a loop cycles for as long as the page shows;
 //   - keyframes override the preset channel by channel (presets.ts clipCurveAt); every channel and timing is clamped
 //     to the MOTION_LIMITS write bounds (the load normalizers keep any finite stored value, so players clamp);
 //   - several clips on one target compose: offsets and turns add, scales and opacities multiply, the smallest reveal
@@ -17,7 +18,9 @@
 //     ease) and lines with no balloon (in-art lettering, empty text);
 //   - a linked balloon chain (svgMarkup `data-link-group`) is keyed and animated by its head: a clip on any member
 //     moves the whole chain, timed from the head's reveal;
-//   - a target whose clips would flash more often than MOTION_LIMITS.flashHzMax keeps its opacity as drawn.
+//   - the flash guard: a target, or a panel's area, whose clips would flash more often than MOTION_LIMITS.flashHzMax
+//     keeps its visibility as drawn (opaque, revealed, never squeezed out of sight); its movement still plays. It reads
+//     the same verdict as PE-SERVER's pageFlashCheck (budget.ts flashVerdict), with the player's own seed.
 // Typewriter, word cascade and ink wipe return a reveal fraction plus the line's direction (right to left for Arabic
 // and Urdu): the player masks the drawn lettering (revealSpans, revealWordCount, revealRect), never re-lays the text.
 //
@@ -28,8 +31,8 @@ import type { Box, ComicDoc, Line, Page, Panel } from '../doc.js';
 import { knownLayersOf } from '../doc.js';
 import { dirOf } from '../languages.js';
 import { MOTION_LIMITS } from '../limits.js';
-import { lineChainHeads, lineRevealMs, panelBeatOf, REVEAL_LEAD_MS, type PageBeats } from './beats.js';
-import { clipFlashHz } from './budget.js';
+import { isLetteredText, lineChainHeads, lineRevealMs, panelBeatOf, REVEAL_LEAD_MS, type PageBeats } from './beats.js';
+import { clipFlashSwings, flashVerdict, type FlashEntry } from './budget.js';
 import { applyEase } from './easing.js';
 import {
   cameraMoveOf,
@@ -79,7 +82,8 @@ export interface PlannedClip {
   /** When it starts, ms from the page's start (its anchor + its offset). */
   startMs: number;
   dir: MotionDir;
-  /** The flash guard: this clip's opacity stays as drawn. */
+  /** The flash guard: this clip keeps the object visible as drawn (opaque, revealed, never squeezed out of sight:
+   *  presets.ts clipCurveAt); its movement still plays. */
   holdOpacity: boolean;
 }
 
@@ -145,7 +149,8 @@ const indexPage = (doc: Pick<ComicDoc, 'format'>, page: Page): PageIndex => {
   return { lines, panels, layers, heads: lineChainHeads(page), overlay: doc.format?.lettering === 'overlay', docLang: doc.format?.language || 'en' };
 };
 
-const hasText = (line: Line): boolean => typeof line.text === 'string' && !!line.text.trim();
+/** The lettering draws a balloon for a line whose text survives normalizeLetteringText (layout.ts planLettering). */
+const hasText = (line: Line): boolean => isLetteredText(line.text);
 
 /** What a clip's target is drawn as on this page, or undefined when it is not drawn here (inert). */
 const resolveTarget = (index: PageIndex, target: MotionClip['target']): ResolvedTarget | undefined => {
@@ -195,7 +200,9 @@ export const planMotion = (doc: Pick<ComicDoc, 'format'>, page: Page, beats: Pag
   const index = indexPage(doc, page);
   const seed = opts.seed ?? 0;
   const planned: PlannedClip[] = [];
-  const hzByKey = new Map<string, number>();
+  const entries: FlashEntry[] = [];
+  const everyPanel = index.panels.size ? [...index.panels] : ['page'];
+  const guard = !opts.instant && !opts.settled;
   for (const clip of (page.motion?.clips || []).slice(0, MOTION_LIMITS.clipsPerPage)) {
     const pc = playableClip(clip, seed);
     if (!pc) continue;
@@ -205,13 +212,10 @@ export const planMotion = (doc: Pick<ComicDoc, 'format'>, page: Page, beats: Pag
     const anchor = anchorMs(clip, t, beats);
     if (anchor === undefined) continue;
     planned.push({ key: t.key, pc, startMs: anchor + pc.offsetMs, dir: t.dir, holdOpacity: false });
-    if (!opts.instant && !opts.settled) {
-      const hz = clipFlashHz(clip);
-      if (hz > 0) hzByKey.set(t.key, (hzByKey.get(t.key) ?? 0) + hz);
-    }
+    if (guard) entries.push({ clip, key: t.key, regions: t.panelId ? [t.panelId] : everyPanel, swings: clipFlashSwings(clip, seed) });
   }
-  // The flash guard: a target whose clips together would flash past the limit keeps its opacity as drawn.
-  for (const p of planned) if ((hzByKey.get(p.key) ?? 0) > MOTION_LIMITS.flashHzMax) p.holdOpacity = true;
+  // The flash guard: whatever the verdict holds (a target or a panel area past the limit) keeps its visibility.
+  if (guard) for (const i of flashVerdict(entries).held) planned[i].holdOpacity = true;
   const camera: PlannedCamera[] = [];
   if (!opts.instant && !opts.settled) {
     const seen = new Set<string>();
@@ -239,10 +243,10 @@ export const plannedClipAt = (p: PlannedClip, ms: number, instant = false): Pres
   const tau = ms - p.startMs;
   const at = (phase: number) => clipCurveAt(pc, phase, ctx, p.holdOpacity);
   if (role === 'enter' || role === 'exit') {
+    // Once: hidden (or as drawn) before, the curve during, its last frame after.
     if (!(tau >= 0)) return at(0);
-    const run = pc.durMs * (1 + pc.repeat);
-    if (instant || tau >= run) return at(1);
-    return at((tau % pc.durMs) / pc.durMs);
+    if (instant || tau >= pc.durMs) return at(1);
+    return at(tau / pc.durMs);
   }
   if (instant || !(tau >= 0)) return { ...REST_CHANNELS };
   if (role === 'emphasis') {
@@ -258,7 +262,8 @@ const r6 = (v: number): number => {
   return out === 0 ? 0 : out;
 };
 
-/** The pose map of a planned page at `ms` (ms from the page's start; a non-finite ms reads as after everything). */
+/** The pose map of a planned page at `ms` (ms from the page's start): NaN reads as the page's start, +Infinity as after
+ *  everything (every entrance and exit done, loops at their first frame), −Infinity as before everything. */
 export const samplePlan = (plan: MotionPlan, ms: number): Map<string, Pose> => {
   const t = plan.settled ? Number.POSITIVE_INFINITY : Number.isNaN(ms) ? 0 : ms;
   const acc = new Map<string, Pose>();

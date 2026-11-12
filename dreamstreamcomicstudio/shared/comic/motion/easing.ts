@@ -4,6 +4,9 @@
 //
 // The Atlas curves are the app's own motion tokens (Atlas globals.css): ease (.2,.8,.2,1), enter (.16,1,.3,1) and
 // spring (.34,1.36,.64,1). in, out and in-out are the CSS keywords; damped is a closed-form damped spring.
+//
+// The curve table is built at module level, so its factories are marked pure (@__NO_SIDE_EFFECTS__, /* @__PURE__ */):
+// a bundle that takes nothing from this file drops it.
 
 import { EASE_IDS, type EaseId } from './types.js';
 
@@ -16,7 +19,7 @@ const clampT = (t: number): number => (t > 0 ? (t < 1 ? t : 1) : 0);
  * A CSS cubic-bezier(x1, y1, x2, y2) as a function of t: solves x(u) = t for u (Newton, falling back to bisection) and
  * returns y(u). x1 and x2 must lie in 0..1 (as in CSS), so x(u) is monotone and the solve has one root.
  */
-export const cubicBezier = (x1: number, y1: number, x2: number, y2: number): EaseFn => {
+export const cubicBezier = /* @__NO_SIDE_EFFECTS__ */ (x1: number, y1: number, x2: number, y2: number): EaseFn => {
   const cx = 3 * x1;
   const bx = 3 * (x2 - x1) - cx;
   const ax = 1 - cx - bx;
@@ -60,7 +63,7 @@ export const cubicBezier = (x1: number, y1: number, x2: number, y2: number): Eas
  * linear correction so f(1) is exactly 1. ζ is the damping ratio (0 < ζ < 1 overshoots), ω the natural frequency in
  * radians per unit t.
  */
-export const dampedSpring = (zeta: number, omega: number): EaseFn => {
+export const dampedSpring = /* @__NO_SIDE_EFFECTS__ */ (zeta: number, omega: number): EaseFn => {
   const z = Math.min(0.99, Math.max(0.05, zeta));
   const w = Math.max(1, omega);
   const wd = w * Math.sqrt(1 - z * z);
@@ -83,24 +86,26 @@ export const EASE_BEZIERS: Readonly<Partial<Record<EaseId, readonly [number, num
   'in-out': [0.42, 0, 0.58, 1]
 };
 
+const DAMPED_ZETA = 0.5;
+const DAMPED_OMEGA = 14;
 /** The damped spring's ratio and frequency (about 16 % overshoot, settled by t = 1). */
-export const DAMPED_SPRING = { zeta: 0.5, omega: 14 } as const;
+export const DAMPED_SPRING = { zeta: DAMPED_ZETA, omega: DAMPED_OMEGA } as const;
 
-const bez = (id: EaseId): EaseFn => {
+const bez = /* @__NO_SIDE_EFFECTS__ */ (id: EaseId): EaseFn => {
   const p = EASE_BEZIERS[id]!;
   return cubicBezier(p[0], p[1], p[2], p[3]);
 };
 
 /** Every ease id this build plays (EASE_IDS, exhaustive). */
 export const EASINGS: Readonly<Record<EaseId, EaseFn>> = {
-  ease: bez('ease'),
-  enter: bez('enter'),
-  spring: bez('spring'),
+  ease: /* @__PURE__ */ bez('ease'),
+  enter: /* @__PURE__ */ bez('enter'),
+  spring: /* @__PURE__ */ bez('spring'),
   linear: clampT,
-  in: bez('in'),
-  out: bez('out'),
-  'in-out': bez('in-out'),
-  damped: dampedSpring(DAMPED_SPRING.zeta, DAMPED_SPRING.omega)
+  in: /* @__PURE__ */ bez('in'),
+  out: /* @__PURE__ */ bez('out'),
+  'in-out': /* @__PURE__ */ bez('in-out'),
+  damped: /* @__PURE__ */ dampedSpring(DAMPED_ZETA, DAMPED_OMEGA)
 };
 
 /** True for an ease id this build plays. A stored id it does not know makes its clip inert (types.ts). */

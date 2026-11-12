@@ -6,17 +6,24 @@
 //   - its parameter schema (number ranges, enums, booleans) and defaults: the PE-SERVER sanitizer checks stored params
 //     against it (presetParamIssues) and every player resolves them through it (resolvePresetParams), so a stored value
 //     outside the range is clamped at draw time;
-//   - the flashes one cycle makes for given params (WCAG 2.3.1: budget.ts clipFlashHz divides by the cycle length);
+//   - the flashes one cycle makes for given params (WCAG 2.3.1; presets.test.ts holds it against the drawn curve, and
+//     budget.ts clipFlashHz reads the drawn curve itself);
 //   - its default duration and ease.
 //
 // Channels: dx, dy are offsets in page fractions; s is the scale (1 = as drawn), sy an extra vertical factor (squash and
 // stretch only; 1 otherwise); r is degrees clockwise; o opacity 0..1; reveal 0..1 is how much of the text a reveal
 // preset shows (typewriter, word cascade, ink wipe). A reveal is a clip mask over the drawn lettering in the line's own
 // direction (right to left for Arabic and Urdu: sample.ts sets the pose's `dir`), never a re-layout of the text, so
-// shaping and LetterPlans stay untouched. Entrances run from hidden (t = 0) to as drawn (t = 1); exits the other way;
-// emphases and loops start and end as drawn. Camera channels move the camera frame: dx, dy shift it, s zooms in.
+// shaping and LetterPlans stay untouched. Entrances run from hidden (t = 0) to as drawn (t = 1) and exits the other way,
+// each exactly once (a stored repeat is ignored); emphases and loops start and end as drawn. Camera channels move the camera frame: dx, dy shift it, s zooms in.
 //
-// Deterministic: randomness (jitter, flicker, camera shake) comes from the seed, never Math.random. No DOM.
+// Deterministic: randomness (jitter, camera shake) comes from the seed, never Math.random, and never decides when
+// anything flashes: what the flash rule reads (visibilityOf) is the same for every seed, so the server's seed-0 count
+// bounds every player. No DOM.
+//
+// Bundling: the tables below are built at module level, so each is marked pure (/* @__PURE__ */, @__NO_SIDE_EFFECTS__)
+// and a bundle that imports nothing from this file drops all of it. Labels never import the engine: words.ts is the
+// metadata-only leaf for that (History, undo, the reader chunk).
 
 import type {
   CameraMoveId,
@@ -46,7 +53,7 @@ export interface PresetChannels {
 }
 
 /** As drawn: no offset, no scale, no turn, fully opaque, fully revealed. */
-export const REST_CHANNELS: Readonly<PresetChannels> = Object.freeze({ dx: 0, dy: 0, s: 1, sy: 1, r: 0, o: 1, reveal: 1 });
+export const REST_CHANNELS: Readonly<PresetChannels> = /* @__PURE__ */ Object.freeze({ dx: 0, dy: 0, s: 1, sy: 1, r: 0, o: 1, reveal: 1 });
 
 export type PresetParamSpec =
   | { kind: 'number'; min: number; max: number; default: number; int?: true }
@@ -74,7 +81,7 @@ export interface PresetDef<Id extends string = string> {
   /** True when the clip's ease is ignored: a flashing preset keeps its rhythm, so the flashes counted are the ones drawn. */
   fixedEase?: true;
   params: PresetParamSchema;
-  /** Flashes (pairs of opposing opacity changes of at least FLASH_OPACITY_DELTA) one cycle makes for these params. */
+  /** Flashes (pairs of opposing visibility changes of at least FLASH_OPACITY_DELTA) one cycle makes for these params. */
   flashes: (params: PresetParams) => number;
   /** Set on the reveal presets: how the reveal channel uncovers the lettering. */
   mask?: RevealMask;
@@ -84,13 +91,29 @@ export interface PresetDef<Id extends string = string> {
 export type MotionPresetDef = PresetDef<MotionPresetId>;
 export type CameraMoveDef = PresetDef<CameraMoveId>;
 
-/** An opacity change this large counts toward a flash (WCAG 2.3.1 reads a 10 % change in luminance as one). */
+/** A change of visibility this large (visibilityOf: opacity, reveal, a collapsing scale) counts toward a flash (WCAG
+ *  2.3.1 reads a 10 % change in luminance as one). */
 export const FLASH_OPACITY_DELTA = 0.1;
+/** Squeezed under this on either axis, an object reads as gone: the flash rule fades its visibility to 0 below it, and
+ *  the flash guard never lets a held clip shrink past it. */
+export const FLASH_HIDDEN_SCALE = 0.25;
+
+/**
+ * How much of an object shows at one instant, 0..1, as the flash rule reads it (budget.ts clipFlashHz): its opacity,
+ * times its reveal, times how far its narrower axis is from collapsing (1 at FLASH_HIDDEN_SCALE or more, 0 at 0). An
+ * object that blinks out by fading, by un-revealing or by shrinking to nothing flashes the same.
+ */
+export const visibilityOf = (c: Pick<PresetChannels, 'o' | 'reveal' | 's' | 'sy'>): number => {
+  const narrow = Math.min(Math.abs(c.s), Math.abs(c.s * c.sy));
+  const v = c.o * c.reveal * Math.min(1, narrow / FLASH_HIDDEN_SCALE);
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+};
 
 // ── Helpers (pure) ──────────────────────────────────────────────────────────
 
 const clamp01 = (v: number): number => (v > 0 ? (v < 1 ? v : 1) : 0);
-const TAU = Math.PI * 2;
+/** 2π, as a literal: a top-level read of Math.PI is a side effect to a bundler, and this file must shake out. */
+const TAU = 6.283185307179586;
 const ch = (p: Partial<PresetChannels>): PresetChannels => ({ ...REST_CHANNELS, ...p });
 const num = (params: PresetParams, key: string): number => params[key] as number;
 const word = (params: PresetParams, key: string): string => params[key] as string;
@@ -149,15 +172,15 @@ const offsetOf = (dir: string, ctx: PresetContext): { x: number; y: number } => 
 };
 
 const none = (): number => 0;
-const dips = (key: string) => (params: PresetParams): number => (num(params, key) >= FLASH_OPACITY_DELTA ? 1 : 0);
+const dips = /* @__NO_SIDE_EFFECTS__ */ (key: string) => (params: PresetParams): number => (num(params, key) >= FLASH_OPACITY_DELTA ? 1 : 0);
 /** Seeded jitter: a step `k` of `steps` gets its own offset in −1..1 on each axis. */
 const jitterAt = (t: number, steps: number, seed: number): { x: number; y: number } => {
   const k = Math.min(steps - 1, Math.max(0, Math.floor(t * steps)));
   return { x: seeded01(seed, 2 * k) * 2 - 1, y: seeded01(seed, 2 * k + 1) * 2 - 1 };
 };
 
-const n = (min: number, max: number, def: number, int?: true): PresetParamSpec => ({ kind: 'number', min, max, default: def, ...(int ? { int } : {}) });
-const e = (values: readonly string[], def: string): PresetParamSpec => ({ kind: 'enum', values, default: def });
+const n = /* @__NO_SIDE_EFFECTS__ */ (min: number, max: number, def: number, int?: true): PresetParamSpec => ({ kind: 'number', min, max, default: def, ...(int ? { int } : {}) });
+const e = /* @__NO_SIDE_EFFECTS__ */ (values: readonly string[], def: string): PresetParamSpec => ({ kind: 'enum', values, default: def });
 
 // ── Curves ──────────────────────────────────────────────────────────────────
 
@@ -241,10 +264,12 @@ const EMPHASIS: Record<EmphasisPresetId, Omit<MotionPresetDef, 'id' | 'role'>> =
     fixedEase: true,
     params: { flashes: n(1, 8, 3, true), depth: n(0, 1, 0.8) },
     flashes: (p) => (num(p, 'depth') >= FLASH_OPACITY_DELTA ? num(p, 'flashes') : 0),
-    at: (t, p, seed) => {
+    // Evenly spaced dips, the same for every seed: when a flicker flashes never depends on who draws it, so the
+    // sanitizer's count (seed 0) is every player's count.
+    at: (t, p) => {
       const count = num(p, 'flashes');
       const k = Math.min(count - 1, Math.max(0, Math.floor(clamp01(t) * count)));
-      const centre = (k + 0.3 + 0.4 * seeded01(seed, k)) / count;
+      const centre = (k + 0.5) / count;
       return ch({ o: Math.abs(t - centre) < 0.12 / count ? 1 - num(p, 'depth') : 1 });
     }
   },
@@ -351,19 +376,22 @@ const CAMERA: Record<CameraMoveId, Omit<CameraMoveDef, 'id' | 'role'>> = {
   }
 };
 
-const withIds = <K extends string, D extends PresetDef>(table: Record<K, Omit<D, 'id' | 'role'>>, role: D['role']): Record<K, D> =>
+const withIds = /* @__NO_SIDE_EFFECTS__ */ <K extends string, D extends PresetDef>(table: Record<K, Omit<D, 'id' | 'role'>>, role: D['role']): Record<K, D> =>
   Object.fromEntries((Object.keys(table) as K[]).map((id) => [id, Object.freeze(Object.assign({}, table[id], { id, role }))])) as unknown as Record<K, D>;
 
 /** Every clip preset this build plays, by id (exhaustive over MOTION_PRESET_IDS: each table is keyed by its group's ids). */
-export const MOTION_PRESETS: Readonly<Record<MotionPresetId, MotionPresetDef>> = Object.freeze({
-  ...withIds<EnterPresetId, MotionPresetDef>(ENTER, 'enter'),
-  ...withIds<EmphasisPresetId, MotionPresetDef>(EMPHASIS, 'emphasis'),
-  ...withIds<ExitPresetId, MotionPresetDef>(EXIT, 'exit'),
-  ...withIds<LoopPresetId, MotionPresetDef>(LOOP, 'loop')
-});
+export const MOTION_PRESETS: Readonly<Record<MotionPresetId, MotionPresetDef>> = /* @__PURE__ */ Object.freeze(
+  /* @__PURE__ */ Object.assign(
+    {} as Record<MotionPresetId, MotionPresetDef>,
+    /* @__PURE__ */ withIds<EnterPresetId, MotionPresetDef>(ENTER, 'enter'),
+    /* @__PURE__ */ withIds<EmphasisPresetId, MotionPresetDef>(EMPHASIS, 'emphasis'),
+    /* @__PURE__ */ withIds<ExitPresetId, MotionPresetDef>(EXIT, 'exit'),
+    /* @__PURE__ */ withIds<LoopPresetId, MotionPresetDef>(LOOP, 'loop')
+  )
+);
 
 /** Every camera move this build plays, by id (exhaustive over CAMERA_MOVE_IDS). */
-export const CAMERA_MOVES: Readonly<Record<CameraMoveId, CameraMoveDef>> = Object.freeze(withIds<CameraMoveId, CameraMoveDef>(CAMERA, 'camera'));
+export const CAMERA_MOVES: Readonly<Record<CameraMoveId, CameraMoveDef>> = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ withIds<CameraMoveId, CameraMoveDef>(CAMERA, 'camera'));
 
 const own = (table: object, id: unknown): id is string => typeof id === 'string' && Object.prototype.hasOwnProperty.call(table, id);
 
@@ -487,10 +515,10 @@ export const countFlashes = (values: readonly number[], periodic = false, delta 
 };
 
 /** Every preset id with its group, for pickers and the server registry (MOTION_PRESET_IDS order, then camera moves). */
-export const PRESET_REGISTRY: readonly { id: string; role: PresetDef['role'] }[] = [
+export const PRESET_REGISTRY: readonly { id: string; role: PresetDef['role'] }[] = /* @__PURE__ */ (() => [
   ...MOTION_PRESET_IDS.map((id) => ({ id, role: MOTION_PRESETS[id].role })),
   ...CAMERA_MOVE_IDS.map((id) => ({ id, role: 'camera' as const }))
-];
+])();
 
 // ── Clips: one stored clip made playable (the draw-time clamp) and its curve ─────────────────────────────────────
 //
@@ -510,7 +538,8 @@ export interface PlayableClip {
   offsetMs: number;
   /** One play (ms, MOTION_LIMITS.durMin..durMax). */
   durMs: number;
-  /** Extra plays (0..MOTION_LIMITS.repeatMax; a loop cycles for as long as the page shows). */
+  /** Extra plays of an emphasis (0..MOTION_LIMITS.repeatMax). Always 0 for an entrance or an exit, which play once
+   *  (a repeat would snap the object from shown back to hidden: a flash); a loop cycles for as long as the page shows. */
   repeat: number;
   /** Keys, t-sorted, each channel clamped to its write bound. */
   keys: MotionKey[];
@@ -575,7 +604,7 @@ export const playableClip = (clip: MotionClip, seed = 0): PlayableClip | undefin
     ease,
     offsetMs: Math.round(within(finiteOr(clip.at?.ms, 0), L.atMsMin, L.atMsMax)),
     durMs: Math.round(within(finiteOr(clip.dur, def.dur), L.durMin, L.durMax)),
-    repeat: Math.round(within(finiteOr(clip.repeat, 0), 0, L.repeatMax)),
+    repeat: def.role === 'enter' || def.role === 'exit' ? 0 : Math.round(within(finiteOr(clip.repeat, 0), 0, L.repeatMax)),
     keys,
     seed: (seedOf(clip.id) ^ (seed | 0)) | 0
   };
@@ -607,9 +636,21 @@ const keyedAt = (keys: readonly MotionKey[], name: 'x' | 'y' | 's' | 'r' | 'o', 
 export const keysSetOpacity = (pc: Pick<PlayableClip, 'keys'>): boolean => pc.keys.some((k) => k.o !== undefined);
 
 /**
+ * The flash guard's hold on one instant's channels: fully opaque, fully revealed, and neither axis squeezed under
+ * FLASH_HIDDEN_SCALE, so visibilityOf reads 1 whatever the clip does. Offsets, turns and scaling above that still play.
+ */
+const holdVisible = (c: PresetChannels): void => {
+  c.o = 1;
+  c.reveal = 1;
+  if (!(c.s >= FLASH_HIDDEN_SCALE)) c.s = FLASH_HIDDEN_SCALE;
+  if (!(c.s * c.sy >= FLASH_HIDDEN_SCALE)) c.sy = FLASH_HIDDEN_SCALE / c.s;
+};
+
+/**
  * A playable clip's channels at phase p (0..1 of one play): the preset through the clip's ease (a flashing preset keeps
- * its own rhythm), then every channel a key sets taken from the keys, each inside its write bound. `holdOpacity` keeps
- * opacity as drawn (the flash guard: a clip that would flash too often never does).
+ * its own rhythm), then every channel a key sets taken from the keys, each inside its write bound. `holdOpacity` is
+ * the flash guard (sample.ts): the clip keeps the object visible as drawn (opaque, revealed, never squeezed out of
+ * sight; holdVisible), so a clip that would flash too often never does; its movement still plays.
  */
 export const clipCurveAt = (pc: PlayableClip, p: number, ctx: PresetContext, holdOpacity = false): PresetChannels => {
   const phase = within(finiteOr(p, 0), 0, 1);
@@ -621,6 +662,6 @@ export const clipCurveAt = (pc: PlayableClip, p: number, ctx: PresetContext, hol
       if (v !== undefined) c[channel] = v;
     }
   }
-  if (holdOpacity) c.o = 1;
+  if (holdOpacity) holdVisible(c);
   return clampChannels(c);
 };

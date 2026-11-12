@@ -14,7 +14,9 @@ import * as exporter from '../../../components/comicstudio/export/motionComic';
 import { makeQaDoc, QA_FIXTURES } from '../../../components/comicstudio/testing/qaFixtures';
 import { emptyRender, type Box, type ComicDoc, type Page, type Panel, type PanelSize, type ShotType } from '../doc';
 import { MOTION_LIMITS } from '../limits';
+import { normalizeLetteringText } from '../textLayout';
 import {
+  isLetteredText,
   lineChainHeads,
   lineRevealMs,
   pageBeats,
@@ -261,5 +263,40 @@ describe('page beats helpers', () => {
       ['pg_1_l4', 'pg_1_l3']
     ]);
     expect(lineChainHeads(page).size).toBe(0);
+  });
+
+  it('chains are read as the lettering reads them: only drawn lines and valid stored balloons take part', () => {
+    const page = drawn().pages[0];
+    const chained = (patch: (p: Page) => Page): Page =>
+      patch({
+        ...page,
+        balloons: [
+          ...page.balloons.filter((b) => b.lineId !== 'pg_1_l5'),
+          { lineId: 'pg_1_l4', x: 0.5, y: 0.6, w: 0.2, linkTo: 'pg_1_l3' },
+          { lineId: 'pg_1_l5', x: 0.6, y: 0.8, w: 0.2, linkTo: 'pg_1_l4' }
+        ]
+      });
+    const text = (id: string, t: string) => (p: Page): Page => ({ ...p, panels: p.panels.map((pl) => ({ ...pl, lines: pl.lines.map((l) => (l.id === id ? { ...l, text: t } : l)) })) });
+    // An empty middle line is not drawn: l3 and l5 are two single balloons, no chain at all.
+    expect(lineChainHeads(chained(text('pg_1_l4', ' \n\t '))).size).toBe(0);
+    // An empty head: the drawn chain is l4 ← l5, headed by l4.
+    expect([...lineChainHeads(chained(text('pg_1_l3', '')))]).toEqual([
+      ['pg_1_l4', 'pg_1_l4'],
+      ['pg_1_l5', 'pg_1_l4']
+    ]);
+    // A line's link comes from its first VALID stored balloon: a zero-width one is skipped, as the lettering skips it.
+    const first = chained((p) => ({ ...p, balloons: [{ lineId: 'pg_1_l5', x: 0.6, y: 0.8, w: 0, linkTo: 'pg_1_l1' }, ...p.balloons] }));
+    expect(lineChainHeads(first).get('pg_1_l5')).toBe('pg_1_l3');
+    // l4's own balloon is unusable, so l4 links to no one (the lettering places it fresh); l5 still links to l4.
+    const broken = chained((p) => ({ ...p, balloons: p.balloons.map((b) => (b.lineId === 'pg_1_l4' ? { ...b, x: Number.NaN } : b)) }));
+    expect([...lineChainHeads(broken)]).toEqual([
+      ['pg_1_l4', 'pg_1_l4'],
+      ['pg_1_l5', 'pg_1_l4']
+    ]);
+  });
+
+  it('isLetteredText is exactly "normalizeLetteringText leaves something"', () => {
+    const cases: unknown[] = ['', ' ', '\t\n\r\f\v', ' \r\n ', 'a', ' a ', '\u00a0', '\u200b', '\u2028', '\u3000', '…', 'سلام', 'e\u0301', '\n\nx\n', undefined, null, 4, {}];
+    for (const c of cases) expect(isLetteredText(c), JSON.stringify(c)).toBe(!!normalizeLetteringText(c));
   });
 });

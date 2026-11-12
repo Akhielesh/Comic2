@@ -14,7 +14,7 @@
 // A clip's time is its anchor (a line's reveal, a panel's shot, the page's start) plus its offset, so when dialogue grows
 // the reveal moves and the clip moves with it. Pure: no DOM, no clock.
 
-import type { Box, ComicDoc, Page, Panel, PanelSize, ShotType } from '../doc.js';
+import type { Balloon, Box, ComicDoc, Page, Panel, PanelSize, ShotType } from '../doc.js';
 import { MOTION_LIMITS } from '../limits.js';
 import { panelBoxesFor } from '../pageGeometry.js';
 import { panelReadingOrder } from '../readingOrder.js';
@@ -178,22 +178,46 @@ export const panelBeatAt = (beats: PageBeats, ms: number): PanelBeat | undefined
   beats.panels.find((p) => ms >= p.startMs && ms < p.startMs + p.durationMs);
 
 /**
+ * True when the lettering draws this text: exactly when textLayout.ts normalizeLetteringText leaves anything (it only
+ * folds spaces, tabs, form and line feeds; beats.test.ts holds the two equal). Mirrored, not imported, so the motion
+ * engine pulls no text layout into a bundle that only needs a label.
+ */
+export const isLetteredText = (text: unknown): boolean => typeof text === 'string' && /[^ \t\f\v\r\n]/.test(text);
+
+/** A stored balloon the lettering places from (layout.ts planLettering validBalloon: a finite spot and a width). */
+const validBalloon = (b: unknown): b is Balloon => {
+  if (!b || typeof b !== 'object') return false;
+  const v = b as Balloon;
+  return typeof v.lineId === 'string' && [v.x, v.y, v.w].every((n) => typeof n === 'number' && Number.isFinite(n)) && v.w > 0;
+};
+
+/**
  * Linked balloons (speech chains; Balloon.linkTo points to the PREVIOUS line, so l1 ← l2 ← l3) by their head, the line
  * the chain starts from. The lettering draws a chain as ONE group (svgMarkup `data-link-group`), so motion keys and
- * moves a chain by its head. Groups are joined the way the lettering joins them (svgMarkup groupsOf: every link
- * between two lines on the page joins their groups). The head is the member that links to no one, the first in the
- * page's balloon order; a malformed cycle (every member links on) falls back to its first member, so the answer is the
- * same on every run. Only lines in a chain of two or more appear; a link to a line that is not on the page is ignored.
+ * moves a chain by its head. The links are read exactly as the lettering reads them (layout.ts planLettering): only
+ * the lines it draws take part (isLetteredText), a line's link comes from its first valid stored balloon
+ * (validBalloon), and a link to a line it does not draw is dropped, so a chain broken by an empty line is two balloons
+ * here too. Groups are joined the way svgMarkup groupsOf joins them (every remaining link joins two groups). The head
+ * is the member that links to no one; a malformed cycle (every member links on) falls back to its first member in the
+ * page's line order, so the answer is the same on every run. Only lines in a chain of two or more appear.
  */
 export const lineChainHeads = (page: Pick<Page, 'panels' | 'balloons'>): Map<string, string> => {
-  const lineIds = new Set<string>();
-  for (const panel of page.panels || []) for (const l of panel.lines || []) lineIds.add(l.id);
-  const linkOf = new Map<string, string | undefined>();
-  for (const b of page.balloons || []) {
-    if (!b || !lineIds.has(b.lineId) || linkOf.has(b.lineId)) continue;
-    linkOf.set(b.lineId, typeof b.linkTo === 'string' ? b.linkTo : undefined);
+  const order: string[] = [];
+  const drawn = new Set<string>();
+  for (const panel of page.panels || []) {
+    for (const l of panel.lines || []) {
+      if (!l || typeof l.id !== 'string' || drawn.has(l.id) || !isLetteredText(l.text)) continue;
+      drawn.add(l.id);
+      order.push(l.id);
+    }
   }
-  const order = [...linkOf.keys()];
+  const linkOf = new Map<string, string>();
+  const stored = new Set<string>();
+  for (const b of page.balloons || []) {
+    if (!validBalloon(b) || stored.has(b.lineId)) continue;
+    stored.add(b.lineId);
+    if (drawn.has(b.lineId) && typeof b.linkTo === 'string' && b.linkTo !== b.lineId && drawn.has(b.linkTo)) linkOf.set(b.lineId, b.linkTo);
+  }
   const parent = new Map(order.map((id) => [id, id]));
   const find = (id: string): string => {
     let cur = id;
@@ -206,17 +230,13 @@ export const lineChainHeads = (page: Pick<Page, 'panels' | 'balloons'>): Map<str
     }
     return cur;
   };
-  const links = (id: string): boolean => {
-    const to = linkOf.get(id);
-    return !!to && to !== id && linkOf.has(to);
-  };
-  for (const id of order) if (links(id)) parent.set(find(id), find(linkOf.get(id)!));
+  for (const [id, to] of linkOf) parent.set(find(id), find(to));
   const groups = new Map<string, string[]>();
   for (const id of order) groups.set(find(id), [...(groups.get(find(id)) || []), id]);
   const out = new Map<string, string>();
   for (const members of groups.values()) {
     if (members.length < 2) continue;
-    const head = members.find((id) => !links(id)) ?? members[0];
+    const head = members.find((id) => !linkOf.has(id)) ?? members[0];
     for (const id of members) out.set(id, head);
   }
   return out;

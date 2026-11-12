@@ -21,11 +21,13 @@ import {
   REST_CHANNELS,
   seeded01,
   seedOf,
+  visibilityOf,
   type PresetChannels,
   type PresetDef,
   type PresetParams
 } from './presets';
-import { CAMERA_MOVE_IDS, MOTION_PRESET_IDS, MOTION_PRESETS_BY_ROLE, type MotionClip } from './types';
+import { clipFlashHz } from './budget';
+import { CAMERA_MOVE_IDS, MOTION_PRESET_IDS, MOTION_PRESETS_BY_ROLE, type EaseId, type MotionClip } from './types';
 
 const LTR = { dir: 'ltr' as const };
 const RTL = { dir: 'rtl' as const };
@@ -46,9 +48,9 @@ const paramCorners = (def: PresetDef): PresetParams[] => {
   return out;
 };
 
-/** The opacity curve one cycle draws, as the flash rule reads it (emphasis from and back to rest; loops closed). */
+/** The visibility curve one cycle draws, as the flash rule reads it (emphasis from and back to rest; loops closed). */
 const sampledFlashes = (def: PresetDef, params: PresetParams, seed: number): number => {
-  const os = Array.from({ length: 2001 }, (_, i) => def.at(i / 2000, params, seed, LTR).o);
+  const os = Array.from({ length: 2001 }, (_, i) => visibilityOf(def.at(i / 2000, params, seed, LTR)));
   if (def.role === 'emphasis') return countFlashes([1, ...os, 1]);
   return countFlashes(os, def.role === 'loop');
 };
@@ -155,6 +157,33 @@ describe('preset curves', () => {
     expect(presetFlashesPerCycle('nope')).toBe(0);
   });
 
+  it('what the flash rule reads never depends on the seed: every preset at every corner draws one visibility curve', () => {
+    for (const def of all()) {
+      for (const params of paramCorners(def)) {
+        const curve = (seed: number) => Array.from({ length: 401 }, (_, i) => visibilityOf(def.at(i / 400, params, seed, LTR)));
+        const at0 = curve(0);
+        for (const seed of SEEDS) expect(curve(seed), `${def.id} ${JSON.stringify(params)} seed ${seed}`).toEqual(at0);
+      }
+    }
+  });
+
+  it('flicker, blink and the twinkle keep their rhythm under any ease (fixedEase): the same curve and the same count', () => {
+    const grid = Array.from({ length: 241 }, (_, i) => i / 240);
+    for (const preset of ['flicker', 'blink', 'sparkle-twinkle'] as const) {
+      const c = (ease: EaseId): MotionClip => ({ id: 'mc_fx', target: { k: 'panel', id: 'p1' }, role: MOTION_PRESETS[preset].role as MotionClip['role'], preset, at: { anchor: 'page', ms: 0 }, dur: 900, repeat: 2, ease });
+      const curve = (ease: EaseId) => grid.map((p) => clipCurveAt(playableClip(c(ease))!, p, LTR));
+      const linear = curve('linear');
+      expect(new Set(linear.map((v) => v.o)).size, preset).toBeGreaterThan(1);
+      for (const ease of ['spring', 'in', 'out', 'damped', 'ease'] as const) {
+        expect(curve(ease), `${preset} ${ease}`).toEqual(linear);
+        expect(clipFlashHz(c(ease)), `${preset} ${ease}`).toBe(clipFlashHz(c('linear')));
+      }
+    }
+    // A preset without fixedEase does follow its clip's ease (the control for the test above).
+    const pulse = (ease: EaseId) => clipCurveAt(playableClip({ id: 'mc_p', target: { k: 'panel', id: 'p1' }, role: 'emphasis', preset: 'pulse', at: { anchor: 'page', ms: 0 }, ease })!, 0.3, LTR).s;
+    expect(pulse('in')).not.toBe(pulse('linear'));
+  });
+
   it('the default flashing presets stay at or under 3 flashes a second', () => {
     for (const id of ['flicker', 'blink', 'sparkle-twinkle'] as const) {
       const def = MOTION_PRESETS[id];
@@ -245,7 +274,11 @@ describe('playable clips (the draw-time clamp) and their curve', () => {
     expect(playableClip(clip({ ease: 'wobble' as MotionClip['ease'] }))).toBeUndefined();
     const pc = playableClip(clip({ dur: 99_999, repeat: 400, at: { anchor: 'page', ms: -50_000 } }))!;
     expect(pc.durMs).toBe(MOTION_LIMITS.durMax);
-    expect(pc.repeat).toBe(MOTION_LIMITS.repeatMax);
+    // An entrance or an exit plays once, whatever repeat is stored; an emphasis repeats up to the write bound.
+    expect(pc.repeat).toBe(0);
+    expect(playableClip(clip({ role: 'exit', preset: 'fade-out', repeat: 3 }))!.repeat).toBe(0);
+    expect(playableClip(clip({ role: 'emphasis', preset: 'pulse', repeat: 400 }))!.repeat).toBe(MOTION_LIMITS.repeatMax);
+    expect(playableClip(clip({ role: 'emphasis', preset: 'pulse', repeat: 2.6 }))!.repeat).toBe(3);
     expect(pc.offsetMs).toBe(MOTION_LIMITS.atMsMin);
     expect(playableClip(clip({}))!.durMs).toBe(MOTION_PRESETS.pop.dur);
     expect(playableClip(clip({}))!.ease(0.5)).toBe(playableClip(clip({ ease: 'spring' }))!.ease(0.5));
@@ -270,7 +303,13 @@ describe('playable clips (the draw-time clamp) and their curve', () => {
     const mid = clipCurveAt(pc, 0.2, LTR);
     expect(mid.o).toBeCloseTo(MOTION_PRESETS.slide.at(0.2, presetDefaults(MOTION_PRESETS.slide.params), 0, LTR).o, 9);
     expect(mid.dx).toBeCloseTo(-1 + 0.2 * 2, 9);
-    // The flash guard keeps opacity as drawn.
+    // The flash guard keeps the object visible as drawn: opaque, revealed, and never squeezed out of sight.
     expect(clipCurveAt(pc, 0.1, LTR, true).o).toBe(1);
+    const vanish = playableClip(clip({ preset: 'typewriter', keys: [{ t: 0, s: 0, o: 0 }, { t: 1, s: 0, o: 0 }] }))!;
+    const held = clipCurveAt(vanish, 0.5, LTR, true);
+    expect(visibilityOf(clipCurveAt(vanish, 0.5, LTR))).toBe(0);
+    expect(visibilityOf(held)).toBe(1);
+    expect(held.reveal).toBe(1);
+    expect(held.dx).toBe(clipCurveAt(vanish, 0.5, LTR).dx);
   });
 });
