@@ -428,8 +428,11 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
       </div>
     );
   } else if (hasImage && url) {
+    // Keyed by the stored file, as the board's ImageFrame is: the reveal gate looks for its <img> when it mounts, so
+    // a redraw landing in this same tile (the old picture stays up while it draws) mounts a fresh gate and develops,
+    // while a re-signed url for the same file (path unchanged) keeps the picture on screen (MO-1 #4, risk h).
     body = (
-      <ImageDevelop active={isFreshRender(render)} className="h-full w-full" rounded="rounded-none">
+      <ImageDevelop key={render?.asset?.path || url.split(/[?#]/)[0]} active={isFreshRender(render)} className="h-full w-full" rounded="rounded-none">
         <img
           src={url}
           srcSet={srcSet}

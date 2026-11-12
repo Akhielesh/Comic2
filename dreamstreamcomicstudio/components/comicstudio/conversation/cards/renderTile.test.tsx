@@ -123,6 +123,100 @@ describe('RenderThumb images', () => {
   });
 });
 
+describe('RenderThumb develops each new picture once it has arrived (MO-1 x PF-2: useImageReveal on the children path)', () => {
+  type Played = { el: Element; finish: () => void; cancel: ReturnType<typeof vi.fn> };
+  let played: Played[] = [];
+  let decodes: Array<() => void> = [];
+  const realAnimate = (Element.prototype as unknown as { animate?: unknown }).animate;
+  const realDecode = (HTMLImageElement.prototype as unknown as { decode?: unknown }).decode;
+
+  beforeEach(() => {
+    played = [];
+    decodes = [];
+    (Element.prototype as unknown as { animate?: unknown }).animate = function (this: Element) {
+      let finish!: () => void;
+      const finished = new Promise<void>((r) => (finish = r));
+      const cancel = vi.fn();
+      played.push({ el: this, finish, cancel });
+      return { finished, cancel } as unknown as Animation;
+    };
+    (HTMLImageElement.prototype as unknown as { decode?: unknown }).decode = vi.fn(() => new Promise<void>((r) => decodes.push(r)));
+  });
+  afterEach(() => {
+    if (realAnimate === undefined) delete (Element.prototype as unknown as { animate?: unknown }).animate;
+    else (Element.prototype as unknown as { animate?: unknown }).animate = realAnimate;
+    if (realDecode === undefined) delete (HTMLImageElement.prototype as unknown as { decode?: unknown }).decode;
+    else (HTMLImageElement.prototype as unknown as { decode?: unknown }).decode = realDecode;
+  });
+
+  const develop = (container: HTMLElement) => container.querySelector('[data-develop]') as HTMLElement;
+  const arrive = async (img: HTMLElement) => {
+    act(() => {
+      fireEvent.load(img);
+    });
+    await act(async () => {
+      for (const r of decodes.splice(0)) r();
+      await Promise.resolve();
+    });
+  };
+  const settle = async () => {
+    await act(async () => {
+      for (const a of played) a.finish();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  const thumb = (asset: AssetRef, url: string, status: RenderState['status'] = 'ready') => (
+    <RenderThumb render={{ status, history: [], asset, updatedAt: Date.now() }} label="Page 2" aspect="2 / 3" url={url} />
+  );
+
+  it('a tile whose small file is signed late mounts its <img> with the gate and develops it', async () => {
+    const asset = stored('late');
+    const { container, rerender } = render(<RenderThumb render={{ status: 'ready', history: [], asset, updatedAt: Date.now() }} label="Page 2" aspect="2 / 3" url={undefined} />);
+    expect(container.querySelector('.studio-shimmer')).not.toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    rerender(thumb(asset, 'https://cdn.test/u/x/p/late_w480.webp'));
+    expect(develop(container)).toHaveAttribute('data-develop', 'loading');
+    expect(played).toEqual([]);
+    await arrive(screen.getByAltText('Page 2'));
+    expect(develop(container)).toHaveAttribute('data-develop', 'revealed');
+    expect(played.length).toBeGreaterThan(0);
+    await settle();
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+  });
+
+  it('a redraw that lands in the same tile waits for the new art and develops it; a re-signed url does neither', async () => {
+    const one = stored('one');
+    const { container, rerender } = render(thumb(one, 'https://cdn.test/u/x/p/one_w480.webp'));
+    await arrive(screen.getByAltText('Page 2'));
+    await settle();
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+    const firstDevelop = played.length;
+    expect(firstDevelop).toBeGreaterThan(0);
+
+    // The same file, signed again (a new query string): it stays on screen and does not develop again.
+    rerender(thumb(one, 'https://cdn.test/u/x/p/one_w480.webp?sig=2'));
+    expect(develop(container)).toHaveAttribute('data-develop', 'revealed');
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+    expect(played).toHaveLength(firstDevelop);
+
+    // The redraw is drawing: the old picture stays up (rendering + url) …
+    rerender(thumb(one, 'https://cdn.test/u/x/p/one_w480.webp?sig=2', 'rendering'));
+    expect(screen.getByAltText('Page 2')).toHaveAttribute('src', 'https://cdn.test/u/x/p/one_w480.webp?sig=2');
+    // … then the new picture arrives in the same tile: it is held until it has loaded and decoded, then develops.
+    const two = stored('two');
+    rerender(thumb(two, 'https://cdn.test/u/x/p/two_w480.webp'));
+    expect(develop(container)).toHaveAttribute('data-develop', 'loading');
+    expect(container.querySelector('[data-develop-placeholder]')).not.toBeNull();
+    expect(played).toHaveLength(firstDevelop);
+    await arrive(screen.getByAltText('Page 2'));
+    expect(develop(container)).toHaveAttribute('data-develop', 'revealed');
+    expect(played.length).toBeGreaterThan(firstDevelop);
+    await settle();
+    expect(container.querySelector('[data-develop-placeholder]')).toBeNull();
+  });
+});
+
 describe('CastAvatar (perf F2)', () => {
   const character = (sheet: RenderState) => ({ ...makeSampleDoc().cast[0], sheet });
 
