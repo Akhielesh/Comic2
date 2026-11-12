@@ -300,8 +300,12 @@ export const STATUS_TEXT: Record<BookSlot['status'], string> = {
   custom: 'Custom art'
 };
 
-/** "Book · Cover ✓ · 3 pages · 7 versions · $0.55 spent · $0.06 saved by software". Real totals only; `money` prints for the viewer. */
-export function dockSummary(doc: ComicDoc, money: (usd: number) => string = failClosedMoney): string {
+/**
+ * "Book · Cover ✓ · 3/12 pages drawn · 7 versions · $0.55 spent · $0.06 saved by software". Real totals only; `money`
+ * prints for the viewer. `{ pages: false }` leaves out the page count (the timeline's summary: the Pages tab badge
+ * already says it); an empty book still says "no pages yet".
+ */
+export function dockSummary(doc: ComicDoc, money: (usd: number) => string = failClosedMoney, opts: { pages?: boolean } = {}): string {
   const clips = bookClips(doc);
   const pages = clips.filter((c) => c.kind === 'page');
   const drawn = pages.filter((c) => c.drawn).length;
@@ -309,7 +313,8 @@ export function dockSummary(doc: ComicDoc, money: (usd: number) => string = fail
   const versions = clips.reduce((n, c) => n + c.versions, 0);
   const parts = ['Book'];
   parts.push(cover?.drawn ? 'Cover ✓' : 'No cover yet');
-  parts.push(pages.length ? `${drawn}/${pages.length} ${pages.length === 1 ? 'page' : 'pages'} drawn` : 'no pages yet');
+  if (!pages.length) parts.push('no pages yet');
+  else if (opts.pages !== false) parts.push(`${drawn}/${pages.length} ${pages.length === 1 ? 'page' : 'pages'} drawn`);
   if (versions) parts.push(plural(versions, 'version'));
   // Inside a phrase, the unknown-share wording reads as a noun ("some of your usage spent").
   if (doc.spend.totalUsd > 0) parts.push(`${amountInSentence(money(doc.spend.totalUsd), 'some of your usage')} spent`);

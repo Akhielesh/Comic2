@@ -124,9 +124,6 @@ export const stripScrollDelta = (view: { left: number; right: number }, clip: { 
   return 0;
 };
 
-/** "3/12 pages drawn" — dockSummary's page-count part (bookModel.ts). */
-const PAGE_COUNT_PART = /^\d+\/\d+ pages? drawn$/;
-
 /**
  * The dock's summary line: dockSummary without its "Book" lead (the toggle beside it says Book) and without the
  * page count (declutter F7: the Pages tab badge and the Pages heading already say "6/12"; one count, one place).
@@ -134,9 +131,9 @@ const PAGE_COUNT_PART = /^\d+\/\d+ pages? drawn$/;
  * `money` prints for the viewer (governed users never see dollars).
  */
 export const timelineSummary = (doc: ComicDoc, money?: (usd: number) => string): string =>
-  dockSummary(doc, money)
+  dockSummary(doc, money, { pages: false })
     .split(' · ')
-    .filter((part, i) => i > 0 && !PAGE_COUNT_PART.test(part))
+    .slice(1)
     .join(' · ');
 
 /** The summary row's destinations, by their board tab id. */
