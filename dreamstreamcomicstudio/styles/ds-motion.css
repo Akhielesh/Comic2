@@ -24,7 +24,7 @@
  *     .ds-draw               on an SVG icon: strokes it in (--ds-draw-length, default 24)
  *     .ds-flash              a brief ink wash on a row that just changed
  *     .ds-stagger            direct children rise in one after another: the first twelve by position,
- *                            or set --ds-i on a child to place it
+ *                            or set --ds-i on a child to place it; the thirteenth on simply appear
  *     .ds-reveal             rises in as it scrolls into view, on the scroll timeline alone (no JS): it
  *                            is plainly visible wherever scroll-driven animations are missing, and it
  *                            moves `translate`, so hover lifts on the same element still work
@@ -186,7 +186,7 @@
 }
 
 /* Lists: direct children arrive one after another. --ds-i places a child explicitly; otherwise the first
-   twelve are staggered by position and the rest arrive together with the twelfth. */
+   twelve are staggered by position and the rest are simply there (DS-R1: only the first 12 animate). */
 .ds-stagger > * {
   animation: ds-rise-in var(--ds-motion-enter-slow) var(--ds-ease-enter) backwards;
   animation-delay: calc(var(--ds-i, 12) * var(--ds-motion-stagger));
@@ -204,6 +204,8 @@
 .ds-stagger > :nth-child(10) { --ds-i: 9; }
 .ds-stagger > :nth-child(11) { --ds-i: 10; }
 .ds-stagger > :nth-child(12) { --ds-i: 11; }
+/* From the thirteenth on, children are simply there (animation-name only: this stops motion, it adds none). */
+.ds-stagger > :nth-child(n+13) { animation-name: none; }
 
 /* Scroll reveal: CSS only where the browser has scroll-driven animations; elsewhere (and before any JS)
    the content is simply visible. A fixed range, so tall panels arrive as promptly as short ones; capped
@@ -553,5 +555,13 @@
 
   .ds-lift:hover {
     transform: none;
+  }
+
+  /* The scroll-driven edge fade would otherwise stay in document.getAnimations() (DS-R1). */
+  .ds-fade-edge-x,
+  .ds-fade-edge-y {
+    animation: none;
+    mask-image: none;
+    -webkit-mask-image: none;
   }
 }

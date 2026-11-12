@@ -469,6 +469,39 @@ The hooks and primitives that go with them (Atlas `hooks/` and `components/effec
 | `useImageReveal(key, { enabled })` (MO-1) | art never animates before it arrives. Phases: `loading`, then `decoding` (`img.decode()` pending), then `revealed`, or `error`. A cached picture reveals in the same frame (`fromCache`, no entrance); a box with no `<img>` reveals at once, flagged `empty` (no entrance); a stuck decode reveals 1 s after load. Entrances use `playEntrance`: Web Animations, opacity and transform only, on the compositor, timed by `motionMs` / `motionEase` on the `--ds-motion-*` tokens. No entrance animates a filter; `allowFilterEffects` is the gate for any future filter (none on coarse pointers, low power — Save-Data, or ≤ 4 cores with ≤ 2 GB — or art wider than 640 px). Reduced motion means a decode-gated swap with no entrance. The `<img>` is looked up when the element or the key changes, so key the component by its picture |
 - The switch's off track is ink at 18 % over the page (Atlas's `--switch-background`, #d4d4d4 / #3a3a3a).
 
+### Content kit (DS-R1)
+
+The content kit is the shared vocabulary for the library, Discover, the media bin and the studio layout. No screen uses it
+yet (DS-R4 onward); its scene is `qa/app/scenes/ds-content.tsx`, and `components/ds/content.test.tsx`,
+`layout.test.ts`, `models.test.tsx`, `storage.test.ts` and `useOnline.test.ts` pin it. Inspector and FilterSheet stay
+out of the barrel (they pull in the mobile sheets, like `./sheet`); import them by path.
+
+**21 components:** ComicCard, CoverImage (and RevealImage), MediaTile, CardGrid, Shelf, SearchField, FilterChips,
+SelectionBar, Lightbox, InlineMeta, Row, NavTrack, Sidebar, StatusBanner, StatusPill, SplitPane, SourceBadge,
+PresetTile, PresetGrid, Inspector, FilterSheet. **6 models:** `layoutFor` (layout.ts), the storage key registry
+(storage.ts), `announce` (announce.ts), `useOnline` / `useConnectivity`, `useSelection` and `useScrollRestore`.
+
+The rules:
+- One primary control inside the card's h3, with Read and Open outside it. A selected card's spark ring is drawn inside
+  the art (`MediaTile ring="inside"`, an overlay over the picture), since a container that clips the tile would cut an
+  outside ring. The spark appears only as `SPARK_RING_ON_ART`: a ring, never a fill.
+- The row variant is 72 px (`library.listRowPx`) with a 48×64 cover and a one-line title.
+- CoverImage: a reserved box; artColor via `ART_PLACEHOLDER` / `--ds-art`; lazy unless `priority`; w480 / w1080;
+  it resolves once in view; publication cards take `pub/` paths only, with handed-in URLs only from known origins
+  (storage, same origin, `coverOrigins`); a decode-gated reveal keyed per picture (`useImageReveal`).
+- CardGrid: an explicit-column list (`role="list"`) with arrow keys only in selection mode, where only the first 12
+  items of a first page rise in (`CARD_GRID_STAGGER_MAX`). `.ds-stagger` likewise animates only its first 12 children.
+- Shelf: hidden when empty, arrows on fine pointers, a polite error row.
+- `layoutFor` is the single source for chrome, nav, the Director (tabletop: the place gets the top segment), columns and
+  the inspector.
+- SplitPane: per-pane ranges, saved when a drag ends.
+- `useScrollRestore` waits for content and never overwrites the position while waiting.
+- The storage key registry names every stored key; `useOnline` follows the browser and the appStatus network signal,
+  with a 30 s "unreachable" hold that the next request to get any answer ends (`services/apiClient.ts` safeFetch calls
+  `markReachable()`); it never polls. One polite announcer for the whole app.
+- Amounts arrive formatted, and the kit never prints a currency.
+- The edge fades (`.ds-fade-edge-x/-y`) and every entrance stop under reduced motion in the one reduced-motion block.
+
 ## Guards and the ratchet (DS-0 owns the code)
 
 App-wide guards in `tests/config`, scanning `components/**`, `App.tsx` and `qa/**` (tests and specs
@@ -531,7 +564,7 @@ and dark, with and without the Atlas skin: no overflow, no coarse target under 4
 The gallery shows every primitive in every variant and state in the page theme and, while the page is
 light, again in a dark panel. The overlays have their own scene, `qa/app/scenes/ds-overlays.tsx` (DS-1c): a trigger for
 each (they start closed, so an open modal never hides the page from the smoke), the Toast host and a static card in
-every status. A new primitive is not done until the gallery shows it
+every status. The content kit has its own scene too, `qa/app/scenes/ds-content.tsx` (DS-R1). A new primitive is not done until the gallery shows it
 (`components/ds/gallery.test.tsx` checks every primitive is there).
 
 Clutter ratchet: `--project=declutter` (tests/e2e/declutter.spec.ts, baseline tests/e2e/baselines/declutter.json; 320,

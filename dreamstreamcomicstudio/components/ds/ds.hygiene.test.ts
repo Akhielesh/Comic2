@@ -20,7 +20,7 @@ import { APP_ROOT, parseRules, indexCss, tokenBlocks } from '../../tests/config/
 import { findCompetingInks, findHandRolledOverlines } from '../../tests/config/classLists';
 
 const DS_DIR = path.join(APP_ROOT, 'components/ds');
-const SCENES = ['qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx'].map((f) => path.join(APP_ROOT, f));
+const SCENES = ['qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx', 'qa/app/scenes/ds-content.tsx'].map((f) => path.join(APP_ROOT, f));
 const isTest = (f: string) => /\.(test|spec)\.[tj]sx?$/.test(f);
 
 function sources(): Array<{ rel: string; text: string }> {
@@ -65,7 +65,7 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
 
   it('scans the primitives and the gallery scene', () => {
     expect(files.length).toBeGreaterThan(20);
-    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx']));
+    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx', 'qa/app/scenes/ds-content.tsx']));
   });
 
   it('the scanner catches each forbidden spelling (planted samples)', () => {

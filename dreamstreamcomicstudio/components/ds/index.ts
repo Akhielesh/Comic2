@@ -54,3 +54,32 @@ export { Collapse, COLLAPSE_BASE, COLLAPSE_CLOSED, COLLAPSE_OPEN, COLLAPSE_SETTL
 export { usePresence, PRESENCE_EXIT_MS } from './usePresence';
 export { useImageReveal, decodeImage, allowFilterEffects, canPlayEntrances, isCoarsePointer, isLowPowerDevice, motionEase, motionMs, parseMotionMs, playEntrance, readRevealEnvironment, revealTokenFallbacks, REVEAL_DECODE_TIMEOUT_MS, REVEAL_FILTER_MAX_WIDTH_PX, type DecodeImage, type ImageReveal, type ImageRevealOptions, type ImageRevealPhase, type RevealEnvironment } from './useImageReveal';
 export { useReducedMotion, prefersReducedMotion } from './useReducedMotion';
+
+// Content kit (DS-R1). Inspector and FilterSheet stay out of the barrel (they pull in the mobile sheets); import them by path.
+export { ComicCard, COMIC_CARD, COMIC_CARD_PRIMARY, COMIC_CARD_ROW, type ComicCardAction, type ComicCardProps, type ComicCardVariant } from './ComicCard';
+export { CoverImage, RevealImage, useNearViewport, isPublicationCoverSource, publicationCoverOrigins, revealKeyOf, artBoxStyle, COVER_BOX, COVER_WIDTHS, PUBLICATION_PATH_RE, type CoverImageProps, type CoverSources, type CoverWidth, type RevealImageProps } from './CoverImage';
+export { MediaTile, MEDIA_TILE, MEDIA_TILE_RING_INSIDE, ON_ART_LABEL, type MediaTileProps } from './MediaTile';
+export { CardGrid, CARD_GRID, CARD_GRID_STAGGER_MAX, focusTargetOf, nextGridIndex, type CardGridProps } from './CardGrid';
+export { Shelf, useFinePointer, type ShelfProps } from './Shelf';
+export { SearchField, SEARCH_MAX_LENGTH, type SearchFieldProps } from './SearchField';
+export { FilterChips, FILTER_CHIP, FILTER_CHIP_ON, type FilterChipOption, type FilterChipsProps } from './FilterChips';
+export { SelectionBar, selectionText, type SelectionBarProps } from './SelectionBar';
+export { Lightbox, SWIPE_MIN_PX, type LightboxItem, type LightboxProps } from './Lightbox';
+export { InlineMeta, INLINE_META, type InlineMetaProps } from './InlineMeta';
+export { Row, ROW_PRIMARY, type RowProps } from './Row';
+export { NavTrack, NAV_TRACK_ITEM, navTrackItemName, type NavTrackDot, type NavTrackItem, type NavTrackProps } from './NavTrack';
+export { Sidebar, SIDEBAR, type SidebarGroup, type SidebarProps } from './Sidebar';
+export { StatusBanner, STATUS_BANNER_SIZE, type StatusBannerProps, type StatusBannerTone } from './StatusBanner';
+export { StatusPill, PILL_PRIORITY, pickPillState, pillName, pillStatus, type StatusPillProps, type StatusPillState } from './StatusPill';
+export { SplitPane, splitBounds, type SplitPaneProps } from './SplitPane';
+export { SourceBadge, type SourceBadgeProps } from './SourceBadge';
+export { PresetTile, PRESET_TILE, type PresetSemantics, type PresetTileProps } from './PresetTile';
+export { PresetGrid, type PresetGridProps, type PresetOption } from './PresetGrid';
+
+// Content kit models (DS-R1)
+export { layoutFor, postureOf, gutterFor, studioContentHeight, columnsStyle, CHROME, COARSE_HIT_AREA, CONTAINER_MAX_PX, GRID_GAP_PX, PAGES_TILE_PX, TEXT_MAX_PX, type AppNavKind, type DirectorLayout, type DirectorPlacement, type InspectorLayout, type InspectorMode, type LayoutPosture, type LayoutTable, type StudioNavKind } from './layout';
+export { storageKeys, scopedKey, storageArea, readStored, writeStored, removeStored, storedBoolean, storedNumberIn, storedOneOf, useStoredState, type StorageArea, type StorageKey, type StorageScope } from './storage';
+export { announce, announcedText, countWords, resetAnnouncer, useAnnounce, ANNOUNCE_GAP_MS, type AnnounceUrgency } from './announce';
+export { useOnline, useConnectivity, markReachable, readConnectivity, UNREACHABLE_HOLD_MS, type Connectivity, type OfflineReason } from './useOnline';
+export { useSelection, selectionReducer, EMPTY_SELECTION, type Selection, type SelectionAction, type SelectionState } from './useSelection';
+export { useScrollRestore, readScrollPosition, writeScrollPosition, RESTORE_ATTEMPTS } from './useScrollRestore';
