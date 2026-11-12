@@ -16,7 +16,7 @@ vi.mock('../services/supabase', () => ({
   getAuthRedirectUrl: () => 'https://dreamstreamstudio.ai/auth/callback'
 }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('./WaitlistForm', () => ({ WaitlistForm: () => <div data-testid="waitlist" /> }));
+vi.mock('./WaitlistForm', () => ({ WaitlistForm: ({ variant }: { variant?: string }) => <div data-testid="waitlist" data-variant={variant} /> }));
 vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
 
 import { AuthPage } from './AuthPage';
@@ -126,8 +126,13 @@ describe('AuthPage on Atlas', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
     fireEvent.click(screen.getByRole('radio', { name: 'Request access' }));
     expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
-    expect(screen.getByTestId('waitlist')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    // The access request is the waitlist form on the DS primitives, not the legacy home page's comic form.
+    expect(screen.getByTestId('waitlist')).toHaveAttribute('data-variant', 'atlas');
+    // "Already have an account? Sign in" is a button, so the inline-link exception does not cover it: 44 px square
+    // under a coarse pointer, like the other small steps on the card.
+    const signIn = screen.getByRole('button', { name: 'Sign in' });
+    for (const cls of DENSITY.coarseSquare.split(' ')) expect(signIn.className.split(/\s+/)).toContain(cls);
+    fireEvent.click(signIn);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
   });
 });

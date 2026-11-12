@@ -1,16 +1,26 @@
 import React, { useState } from 'react';
-import { Loader2, ArrowRight, Check, Mail } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowRight, Check, CheckCircle2, Mail, MailCheck } from 'lucide-react';
 import { submitWaitlistEmail, WaitlistKind, type ProductInterest } from '../services/waitlist';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
+import { cn } from '../lib/utils';
+import { CHIP_VARIANT, FOCUS_RING, RADIUS_CONTROL, STATUS_INK, STATUS_SURFACE } from './chat/studioDesign';
+import { Button } from './ds/Button';
+import { Field } from './ds/Field';
+import { FILTER_CHIP, FILTER_CHIP_ON } from './ds/FilterChips';
+import { Input, Textarea } from './ds/Input';
 
 interface WaitlistFormProps {
   /** 'updates' = stay-in-the-loop, 'access' = request early access. */
   kind?: WaitlistKind;
   /** Free-form tag stored with the row so we know which surface it came from. */
   source?: string;
-  /** 'light' for pale backgrounds, 'dark' for the black footer band. */
-  variant?: 'light' | 'dark';
+  /**
+   * 'light' for pale backgrounds, 'dark' for the black footer band (both the legacy home page's look), 'atlas' for
+   * a surface already on the Atlas language (the sign-in card's "Request access"): the DS field, chips and button,
+   * the status callouts, every target 44 px under a coarse pointer.
+   */
+  variant?: 'light' | 'dark' | 'atlas';
   placeholder?: string;
   buttonLabel?: string;
   className?: string;
@@ -87,6 +97,90 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       resetTurnstile();
     }
   };
+
+  const toggleInterest = (id: ProductInterest) =>
+    setInterests((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+  const editEmail = (value: string) => {
+    setEmail(value);
+    if (status === 'error' || status === 'account-exists' || status === 'already-invited') setStatus('idle');
+  };
+
+  if (variant === 'atlas') {
+    // The same form and the same submit, composed from the DS primitives (no comic chrome on an Atlas surface).
+    const callout = `flex items-start gap-2 ${RADIUS_CONTROL} border p-3 text-[length:var(--ds-text-base)]`;
+    if (status === 'success') {
+      return (
+        <div role="status" className={cn(callout, STATUS_SURFACE.healthy, className)}>
+          <CheckCircle2 aria-hidden className={`mt-0.5 size-4 shrink-0 ${STATUS_INK.healthy}`} />
+          <span className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{message}</span>
+        </div>
+      );
+    }
+    return (
+      <form onSubmit={handleSubmit} className={cn('w-full space-y-4', className)}>
+        <Field label="Email" required>
+          <Input type="email" autoComplete="email" value={email} onChange={(e) => editEmail(e.target.value)} placeholder={placeholder} />
+        </Field>
+        <fieldset className="min-w-0">
+          <legend className="text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-ink)]">
+            What do you want first access to? <span className="font-normal text-[var(--ds-muted)]">(optional)</span>
+          </legend>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {PRODUCT_OPTIONS.map(({ id, label }) => {
+              const selected = interests.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={selected}
+                  data-state={selected ? 'on' : 'off'}
+                  onClick={() => toggleInterest(id)}
+                  className={`${cn(FILTER_CHIP, selected ? FILTER_CHIP_ON : cn(CHIP_VARIANT.outline, 'hover:border-[var(--ds-control-border-hover)] hover:text-[var(--ds-ink)]'))} ${FOCUS_RING}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+        <Field label="Anything you'd want to see? (optional)">
+          <Textarea value={feedback} onChange={(e) => setFeedback(e.target.value)} maxLength={1000} rows={2} />
+        </Field>
+        {turnstileEnabled() && <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action="waitlist" />}
+        {status === 'error' && message && (
+          <div role="alert" className={cn(callout, STATUS_SURFACE.error)}>
+            <AlertCircle aria-hidden className={`mt-0.5 size-4 shrink-0 ${STATUS_INK.error}`} />
+            <span className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{message}</span>
+          </div>
+        )}
+        {status === 'already-invited' && (
+          <div role="status" className={cn(callout, STATUS_SURFACE.active)}>
+            <MailCheck aria-hidden className={`mt-0.5 size-4 shrink-0 ${STATUS_INK.active}`} />
+            <span className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">
+              {message || 'You already have access — follow the instructions in your invite email to set up your account.'}
+            </span>
+          </div>
+        )}
+        {status === 'account-exists' && (
+          <div role="status" className={cn(callout, 'flex-wrap items-center', STATUS_SURFACE.active)}>
+            <span className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{message || 'You already have an account — sign in instead.'}</span>
+            {onSignIn ? (
+              <Button variant="link" size="sm" onClick={onSignIn} className="px-0">
+                Sign in
+              </Button>
+            ) : (
+              <a href="/" className={`${RADIUS_CONTROL} text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${FOCUS_RING}`}>
+                Sign in
+              </a>
+            )}
+          </div>
+        )}
+        <Button type="submit" loading={status === 'loading'} className="w-full">
+          {buttonLabel} <ArrowRight aria-hidden />
+        </Button>
+      </form>
+    );
+  }
 
   if (status === 'success') {
     return (

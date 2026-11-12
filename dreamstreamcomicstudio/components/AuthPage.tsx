@@ -387,12 +387,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             <WaitlistForm
                                 kind="access"
                                 source="auth-request-access"
+                                variant="atlas"
                                 buttonLabel="Request access"
                                 onSignIn={chooseSignIn}
                             />
                             <p className="text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
                                 Already have an account?{' '}
-                                <button type="button" onClick={chooseSignIn} className={`${textLink} font-medium`}>
+                                <button type="button" onClick={chooseSignIn} className={`inline-flex items-center justify-center ${textLink} font-medium ${DENSITY.coarseSquare}`}>
                                     Sign in
                                 </button>
                             </p>
