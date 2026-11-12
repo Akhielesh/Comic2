@@ -72,11 +72,16 @@ const domHash = (doc: ComicDoc, pageIndex: number, reader: boolean): string => {
 
 /** Canvas contexts the exporter creates, in order (main page canvas and offscreen layers). */
 let made: FakeCtx[] = [];
+/** The art "loads" at its recorded pixel size (the QA path names it too: qa/<seed>-<w>x<h>.png). */
+const sizes = new Map<string, { w: number; h: number }>();
 
 const rasterHash = async (doc: ComicDoc, pageIndex: number): Promise<string | undefined> => {
   const page = doc.pages[pageIndex];
   const url = fakeUrlFor(page.render.asset);
   if (!url) return undefined;
+  const asset = page.render.asset!;
+  const qa = parseQaImagePath(asset.path);
+  sizes.set(url, { w: asset.w ?? qa?.w ?? 1000, h: asset.h ?? qa?.h ?? 1500 });
   made = [];
   const layers = fakeLayers();
   await renderPageToBlob(doc, page, url, { measure: estimateMeasure, makePath: fakePath, createLayer: layers.createLayer, mime: 'image/jpeg', quality: 0.9 });
@@ -113,17 +118,17 @@ describe('legacy pages render and export byte-identically (PE-COMPOSE golden ove
     vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, cb: BlobCallback, type?: string) {
       cb(new Blob([`${this.width}x${this.height}`], { type: type || 'image/png' }));
     });
-    // The art "loads" at the size its QA path names (qa/<seed>-<w>x<h>.png).
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => new Response(new Blob([String(url)], { type: 'image/png' }), { status: 200 }))
+      vi.fn(async (url: string) => new Response(String(url), { status: 200, headers: { 'content-type': 'image/png' } }))
     );
     vi.stubGlobal(
       'createImageBitmap',
       vi.fn(async (blob: Blob) => {
         const url = await blob.text();
-        const parsed = parseQaImagePath(url.replace(/^https:\/\/cdn\.test\//, '').replace(/\?.*$/, ''));
-        return { width: parsed?.w ?? 1000, height: parsed?.h ?? 1500, label: 'art', close: () => undefined };
+        const size = sizes.get(url.replace(/[?&]cs_export=1$/, ''));
+        if (!size) throw new Error(`golden: no recorded size for ${url}`);
+        return { width: size.w, height: size.h, label: 'art', close: () => undefined };
       })
     );
   });
