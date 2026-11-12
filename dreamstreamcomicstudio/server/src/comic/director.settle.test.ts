@@ -5,8 +5,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Card, ComicDoc, Gate, Msg } from '../../../shared/comic/doc.js';
-import { conversationForDirector, recordOptionAnswer } from './director.js';
-import { newSession, plannedDoc } from './orchestrator.fakes.js';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
+import { conversationForDirector, recordOptionAnswer, runDirectorTurn } from './director.js';
+import { newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 
 vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -102,5 +103,35 @@ describe('conversationForDirector outcomes (SETTLE-CORE #2 (e), amendment A)', (
     const filler = Array.from({ length: 30 }, (_, i) => msg(`f${i}`, i % 2 ? 'assistant' : 'user', `m${i}`));
     const long: ComicDoc = { ...doc, conversation: [...filler, ...doc.conversation] };
     expect(text(long, true)).toContain('; no option picked]');
+  });
+});
+
+describe('runDirectorTurn wires SETTLED_CARDS to the viewer (SETTLE-CORE #2: admins first)', () => {
+  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  /** One director turn for an admin or not; returns the session and the model call's history as text. */
+  const turn = async (admin: boolean, text: string) => {
+    // A user message first: the model's history opens on a user turn, so the card's message is in the window.
+    const doc: ComicDoc = { ...plannedDoc(), conversation: [msg('u0', 'user', 'start'), msg('a1', 'assistant', 'Pick one.', [optionsCard()]), msg('u1', 'user', 'other'), msg('a2', 'assistant', 'Sure.')] };
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [{ text: 'Got it.' }] });
+    const ctx = testContext(session, { llm, caps: { ...DEFAULT_CAPS, admin } });
+    await runDirectorTurn(ctx, { text, attachments: [] });
+    return { session, history: JSON.stringify(llm.calls[0].messages) };
+  };
+
+  it("an admin's director reads a settled card with its outcome; anyone else reads the old words", async () => {
+    const on = await turn(true, 'next please');
+    expect(on.history).toContain('[asked: Which ink? — options: Noir ink / Bright ink; no option picked]');
+    const off = await turn(false, 'next please');
+    expect(off.history).toContain('[asked: Which ink? — options: Noir ink / Bright ink]');
+    expect(off.history).not.toContain('no option picked');
+  });
+
+  it("an admin's late free-text answer to a passed card keeps the card; anyone else still answers it (today)", async () => {
+    const on = await turn(true, 'Noir ink');
+    const card = (d: ComicDoc) => d.conversation[1].cards!.find((c) => c.id === 'q') as Extract<Card, { type: 'options' }>;
+    expect(card(on.session.doc).answered).toBeUndefined();
+    const off = await turn(false, 'Noir ink');
+    expect(card(off.session.doc).answered).toEqual(['c1']);
   });
 });

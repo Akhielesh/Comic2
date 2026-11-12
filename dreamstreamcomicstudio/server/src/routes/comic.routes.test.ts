@@ -1242,6 +1242,27 @@ describe('message pipeline: screen → intent router → director', () => {
     expect(vi.mocked(runDirectorTurn).mock.calls.every(([, input]) => input.optionAnswerHandled === true)).toBe(true);
   });
 
+  it("SETTLED_CARDS follows the viewer: an admin's tap on a passed card keeps it; anyone else still answers it (SETTLE-CORE #2)", async () => {
+    const passed = (owner: string) => {
+      const doc = plannedDoc();
+      doc.conversation = [
+        { id: 'a0', role: 'assistant', text: 'Which ink?', at: 1, cards: [{ type: 'options', id: 'card_ink', question: 'Which ink?', choices: [{ id: 'ink_noir', label: 'Noir ink' }, { id: 'ink_bright', label: 'Bright ink' }] }] },
+        { id: 'u1', role: 'user', text: 'something else', at: 2 },
+        { id: 'a1', role: 'assistant', text: 'Sure.', at: 3 }
+      ];
+      return seed(doc, owner);
+    };
+    const inkCard = () => store.docs.get('proj-1')!.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>;
+    passed('admin-1');
+    llm.script.director = [{ text: 'Noted.' }];
+    await stream('proj-1', { kind: 'message', text: 'Noir ink', card: { id: 'card_ink', choiceIds: ['ink_noir'] } }, 'admin-1');
+    expect(inkCard().answered).toBeUndefined();
+    passed('user-1');
+    llm.script.director = [{ text: 'Noted.' }];
+    await stream('proj-1', { kind: 'message', text: 'Noir ink', card: { id: 'card_ink', choiceIds: ['ink_noir'] } });
+    expect(inkCard().answered).toEqual(['ink_noir']);
+  });
+
   it('the real intent hook makes no LLM call for "show me the pages"', async () => {
     seed();
     const { events } = await stream('proj-1', { kind: 'message', text: 'show me the pages' });
