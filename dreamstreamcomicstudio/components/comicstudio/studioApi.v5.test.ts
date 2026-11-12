@@ -81,6 +81,17 @@ describe('caps', () => {
     expect(asCaps({ maxAlternatives: 99 })?.maxAlternatives).toBe(5);
   });
 
+  it('asCaps keeps the Pro Edit switches (proMotion, proStickers, readerMotion) the server sends as booleans, and nothing else', () => {
+    const caps = asCaps({ proMotion: true, proStickers: false, readerMotion: true });
+    expect(caps?.proMotion).toBe(true);
+    expect(caps?.proStickers).toBe(false);
+    expect(caps?.readerMotion).toBe(true);
+    // An older server, or a malformed value: absent, i.e. off.
+    const bare = asCaps({ proMotion: 'on', proStickers: 1, readerMotion: null });
+    expect(bare).toEqual(DEFAULT_CAPS);
+    for (const key of ['proMotion', 'proStickers', 'readerMotion']) expect(key in (bare ?? {}), key).toBe(false);
+  });
+
   it('loadStudioProject returns caps only when the server sends them', async () => {
     api.get.mockResolvedValueOnce({ doc: sampleDoc, urls: {} });
     expect(await loadStudioProject('proj_1')).not.toHaveProperty('caps');

@@ -19,7 +19,7 @@
 // is refused with 409 LIMIT (server work — renders, spend, messages — always lands).
 
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
-import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
+import { STEER_LIMITS, type OpsOrigin, type StudioEvent, type StudioFocus } from '../../../shared/comic/events.js';
 import { DOC_LIMITS as SHARED_DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import {
@@ -43,7 +43,7 @@ import {
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
 import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
-import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
+import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioErrorCode, type StudioEventListener, type StudioSessionApi } from './types.js';
 // --- history (versions plan §4.1; H0 seam: no-op hooks until H2) ---
 import { createHistoryHooks, type HistoryHooks } from './history/hooks.js';
 
@@ -373,6 +373,64 @@ export const archiveEvictionNotice = (count: number, now: number, opts: { histor
   };
 };
 
+// ── Live agent (agent-editor plan §3 A2): the turn reservation, the steer inbox and the recent-commit ring ──
+
+/** A note the creator sent while the director was working (POST /steer), waiting for the director's next round. */
+export interface SteerNote {
+  /** The user message it was committed as (marked `steered`). */
+  msgId: string;
+  text: string;
+  focus?: StudioFocus;
+  at: number;
+  /** The safety screen's note for the director (an adapt verdict or an IP steer), said with the note. */
+  safetyNote?: string;
+}
+
+/** Why the steer inbox takes no note right now: no director turn is reading it (NOT_RUNNING), or it is full (BUSY). */
+export type SteerRefusal = Extract<StudioErrorCode, 'NOT_RUNNING' | 'BUSY'>;
+
+/** One committed batch, as the recent-commit ring keeps it (A2): what the conflict guard (A3) reads after a turn's startRev. */
+export interface RecentCommit {
+  rev: number;
+  origin?: OpsOrigin;
+  ops: DocOp[];
+  at: number;
+}
+
+/** Ring-buffer bound of recentCommits (plan §3 A2: last 300 commits, size-bounded). */
+export const RECENT_COMMITS_MAX = 300;
+/**
+ * The ring's size bound: the serialized ops it may hold (≈ bytes of JSON). The newest commit is always kept, however
+ * big; older ones leave first. recentCommitsComplete says when a gap means the ring no longer covers a turn.
+ * LEAD TO CONFIRM: the plan says only "size-bounded"; 1 MB is a sixth of DOC_LIMITS.docBytesMax, held per cached
+ * session (evicted after SESSION_IDLE_MS idle).
+ */
+export const RECENT_COMMITS_BYTES = 1_000_000;
+
+/**
+ * Message text longer than this is a pasted script: the stream route saves it as the source script instead of keeping
+ * it in the conversation (routes/comic.ts prepareMessage). One number for the three places that must agree: that
+ * threshold, the longest steer note (routes/comic.ts MAX_STEER_CHARS) and the longest text a "Send my note" chip says
+ * (director.ts unreadSteerReply), so a note sent again is always an ordinary message, never a pasted script.
+ */
+export const LONG_MESSAGE_CHARS = STEER_LIMITS.noteChars;
+
+/** Steer notes waiting for `session`'s running turn (empty for a session without an inbox, e.g. a test double). */
+export const takeSteerOf = (session: StudioSessionApi): SteerNote[] =>
+  session instanceof StudioSession ? session.takeSteer() : [];
+
+/** Commits after `sinceRev` on `session` (empty for a session without the ring, e.g. a test double). */
+export const recentCommitsOf = (session: StudioSessionApi, sinceRev: number): RecentCommit[] =>
+  session instanceof StudioSession ? session.recentCommits(sinceRev) : [];
+
+/**
+ * Open `session`'s steer inbox for a director turn (the director, right before its first model call). Returns the close,
+ * which hands back the notes the turn never read (the director answers for them, never silently). A session double
+ * has no inbox: nothing opens and the close returns [].
+ */
+export const openSteerOf = (session: StudioSessionApi): (() => SteerNote[]) =>
+  session instanceof StudioSession ? session.openSteer() : () => [];
+
 // ── Session ──────────────────────────────────────────────────────────────────
 
 export interface StudioSessionOptions {
@@ -426,6 +484,15 @@ export class StudioSession implements StudioSessionApi {
   /** Turn mutex: the tail of the queue of exclusive work. */
   private lockTail: Promise<void> = Promise.resolve();
   private exclusiveDepth = 0;
+  /** A message request that passed the BUSY check and has not reached the turn lock yet (reserveTurn, G19). */
+  private reserved = false;
+  /** The running director turn's steer inbox; null while no director turn reads it (POST /steer → NOT_RUNNING). */
+  private steerInbox: SteerNote[] | null = null;
+  /** Notes POST /steer is screening right now, each holding an inbox seat (holdSteerSeat). */
+  private steerPending = 0;
+  /** The last commits, oldest first (≤ RECENT_COMMITS_MAX entries, ≤ RECENT_COMMITS_BYTES of ops). */
+  private readonly recent: { commit: RecentCommit; bytes: number }[] = [];
+  private recentBytes = 0;
   /** Jobs/turns in flight (eviction guard). */
   private activeWork = 0;
   private lastActiveAt: number;
@@ -450,9 +517,9 @@ export class StudioSession implements StudioSessionApi {
     return this.controller;
   }
 
-  /** True while a director turn (or other exclusive work) holds the turn lock. */
+  /** True while a director turn (or other exclusive work) holds the turn lock, or a message request reserved it. */
   get turnRunning(): boolean {
-    return this.exclusiveDepth > 0;
+    return this.exclusiveDepth > 0 || this.reserved;
   }
 
   get subscriberCount(): number {
@@ -486,8 +553,10 @@ export class StudioSession implements StudioSessionApi {
     const at = this.now();
     const before = this.current;
     const next = applyOps(before, ops, at);
-    this.checkSize(next, ops, opts?.origin);
+    const opsBytes = JSON.stringify(ops).length;
+    this.checkSize(next, opsBytes, opts?.origin);
     this.current = { ...next, rev: before.rev + 1, updatedAt: at };
+    this.remember({ rev: this.current.rev, ...(opts?.origin ? { origin: opts.origin } : {}), ops, at }, opsBytes);
     this.touch();
     this.emit({
       type: 'ops',
@@ -509,15 +578,16 @@ export class StudioSession implements StudioSessionApi {
     return this.current;
   }
 
-  /** Doc size guard (DOC_LIMITS.docBytesWarn / docBytesMax), cheap between periodic re-measures. */
-  private checkSize(next: ComicDoc, ops: DocOp[], origin?: OpsOrigin): void {
+  /** Doc size guard (DOC_LIMITS.docBytesWarn / docBytesMax), cheap between periodic re-measures. `opsBytes`: the
+   *  commit's serialized ops (measured once in commit(), shared with the recent-commit ring). */
+  private checkSize(next: ComicDoc, opsBytes: number, origin?: OpsOrigin): void {
     const measure = () => {
       this.approxBytes = JSON.stringify(next).length;
       this.commitsSinceMeasure = 0;
     };
     this.commitsSinceMeasure += 1;
     if (this.approxBytes < 0 || this.commitsSinceMeasure >= DOC_BYTES_REMEASURE_EVERY) measure();
-    else this.approxBytes += JSON.stringify(ops).length;
+    else this.approxBytes += opsBytes;
     if (this.approxBytes > SHARED_DOC_LIMITS.docBytesMax && (origin === 'user' || origin === 'director')) {
       measure();
       if (this.approxBytes > SHARED_DOC_LIMITS.docBytesMax) {
@@ -603,6 +673,118 @@ export class StudioSession implements StudioSessionApi {
       this.activeWork = Math.max(0, this.activeWork - 1);
       this.touch();
     };
+  }
+
+  // ── Live agent (agent-editor plan §3 A2) ──
+
+  /**
+   * Drain the steer inbox (≤ STEER_LIMITS.inbox notes, oldest first). The director calls it after each tool round and
+   * before its next model call, and once more when its model has finished (one extra round, ≤ STEER_LIMITS.extraRounds).
+   * Empty while no director turn has the inbox open.
+   */
+  takeSteer(): SteerNote[] {
+    if (!this.steerInbox?.length) return [];
+    return this.steerInbox.splice(0, this.steerInbox.length);
+  }
+
+  /**
+   * Why a new steer note would be refused right now, or null when it may go ahead: NOT_RUNNING while no director turn
+   * reads the inbox, BUSY when the notes waiting plus the notes being screened (holdSteerSeat) already fill
+   * STEER_LIMITS.inbox. POST /steer asks before its (async) safety screen, so a note nobody will read is refused for free.
+   */
+  steerRefusal(): SteerRefusal | null {
+    if (!this.steerInbox) return 'NOT_RUNNING';
+    return this.steerInbox.length + this.steerPending >= STEER_LIMITS.inbox ? 'BUSY' : null;
+  }
+
+  /**
+   * Hold an inbox seat for a note POST /steer is about to screen (the screen may call the capped safety classifier):
+   * null when steerRefusal() refuses (ask it why), else the release, which is idempotent. The route releases the seat
+   * once the screen is over and before pushSteer. So however many steer requests arrive at once, at most
+   * STEER_LIMITS.inbox notes are being screened or waiting for the turn.
+   */
+  holdSteerSeat(): (() => void) | null {
+    if (this.steerRefusal()) return null;
+    this.steerPending += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.steerPending -= 1;
+    };
+  }
+
+  /**
+   * Queue a note for the running director turn: false when no director turn reads the inbox or STEER_LIMITS.inbox notes
+   * already wait (the hard bound; seats only bound the screens). POST /steer commits the note only when this says true.
+   */
+  pushSteer(note: SteerNote): boolean {
+    if (!this.steerInbox || this.steerInbox.length >= STEER_LIMITS.inbox) return false;
+    this.steerInbox.push(note);
+    return true;
+  }
+
+  /**
+   * Open the steer inbox for the director turn that is about to call its model (one inbox per session: the turn lock
+   * runs one director turn at a time). The returned close is idempotent; it closes the inbox and hands back the notes
+   * the turn never read, so the director can answer for them (a steered note is never stranded silently).
+   */
+  openSteer(): () => SteerNote[] {
+    const inbox: SteerNote[] = [];
+    this.steerInbox = inbox;
+    let closed = false;
+    return () => {
+      if (closed) return [];
+      closed = true;
+      if (this.steerInbox === inbox) this.steerInbox = null;
+      return inbox.splice(0, inbox.length);
+    };
+  }
+
+  /**
+   * Reserve the turn synchronously, before the stream route's first await (closes the BUSY race, G19): returns the
+   * release, or null when a turn already runs or is reserved (→ BUSY). While held, `turnRunning` is true and the session
+   * counts as busy (never evicted). The release is idempotent; the route calls it once the turn has the lock and ended,
+   * or on any refusal or failure before that.
+   */
+  reserveTurn(): (() => void) | null {
+    if (this.turnRunning) return null;
+    this.reserved = true;
+    const done = this.retain();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.reserved = false;
+      done();
+    };
+  }
+
+  /**
+   * Commits after `sinceRev`, oldest first, from a ring of the last RECENT_COMMITS_MAX commits (filled in commit(),
+   * bounded by RECENT_COMMITS_BYTES too). The conflict guard reads the creator's (origin 'user') commits after a turn's
+   * startRev. When the ring has dropped some of them, recentCommitsComplete(sinceRev) is false.
+   */
+  recentCommits(sinceRev: number): RecentCommit[] {
+    const out: RecentCommit[] = [];
+    for (const entry of this.recent) if (entry.commit.rev > sinceRev) out.push(entry.commit);
+    return out;
+  }
+
+  /** True when recentCommits(sinceRev) holds EVERY commit after `sinceRev` (none was dropped from the ring). */
+  recentCommitsComplete(sinceRev: number): boolean {
+    if (this.current.rev <= sinceRev) return true;
+    const oldest = this.recent[0]?.commit.rev;
+    return oldest !== undefined && oldest <= sinceRev + 1;
+  }
+
+  /** Add one commit to the ring, then drop the oldest past the count or size bound (the newest always stays). */
+  private remember(commit: RecentCommit, bytes: number): void {
+    this.recent.push({ commit, bytes });
+    this.recentBytes += bytes;
+    while (this.recent.length > 1 && (this.recent.length > RECENT_COMMITS_MAX || this.recentBytes > RECENT_COMMITS_BYTES)) {
+      this.recentBytes -= this.recent.shift()!.bytes;
+    }
   }
 
   /** Whether the cache may drop this session. */

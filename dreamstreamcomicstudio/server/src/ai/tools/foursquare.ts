@@ -10,6 +10,7 @@
 import type { PlaceResult, PlacesResultsArtifact } from '../../../../apiTypes.js';
 import { FOURSQUARE_API_KEY, FOURSQUARE_API_VERSION } from '../../config.js';
 import { isNameQuery, nameSearchTerm, rankByNameMatch } from './places.js';
+import { fetchJson } from './http.js';
 
 const SEARCH_URL = 'https://places-api.foursquare.com/places/search';
 const DEFAULT_RADIUS_M = 2500;
@@ -116,46 +117,35 @@ export const findPlacesFoursquare = async (
     throw new Error('I need a location — name a place or enable location.');
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
-  const onAbort = () => controller.abort();
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-  }
-  try {
-    const res = await fetch(`${SEARCH_URL}?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${FOURSQUARE_API_KEY}`,
-        'X-Places-Api-Version': FOURSQUARE_API_VERSION,
-        Accept: 'application/json'
-      },
-      signal: controller.signal
-    });
-    if (!res.ok) throw new Error(`Foursquare returned ${res.status}`);
-    const json = await res.json();
-    let results = parseFoursquare(json);
-    // A proper-name query ("mezeh") shows ONLY name matches (ranked) and titles
-    // the card with the name itself — never padded with unrelated nearby spots.
-    // When nothing matches the name we keep Foursquare's own relevance order.
-    let nameMatched = false;
-    if (isNameQuery(args.query)) {
-      const t = nameSearchTerm(args.query).toLowerCase();
-      const named = results.filter((p) => p.name.toLowerCase().includes(t));
-      if (named.length) {
-        results = rankByNameMatch(named, t);
-        nameMatched = true;
-      }
+  // Through fetchJson so the provider budget (lib/providerUsage.ts: 'foursquare') meters and
+  // caps every call — a budget hit throws, and find_places falls back to OpenStreetMap.
+  const json = await fetchJson<unknown>(`${SEARCH_URL}?${params.toString()}`, {
+    timeoutMs: 12_000,
+    accept: 'application/json',
+    headers: {
+      Authorization: `Bearer ${FOURSQUARE_API_KEY}`,
+      'X-Places-Api-Version': FOURSQUARE_API_VERSION
+    },
+    signal
+  });
+  let results = parseFoursquare(json);
+  // A proper-name query ("mezeh") shows ONLY name matches (ranked) and titles
+  // the card with the name itself — never padded with unrelated nearby spots.
+  // When nothing matches the name we keep Foursquare's own relevance order.
+  let nameMatched = false;
+  if (isNameQuery(args.query)) {
+    const t = nameSearchTerm(args.query).toLowerCase();
+    const named = results.filter((p) => p.name.toLowerCase().includes(t));
+    if (named.length) {
+      results = rankByNameMatch(named, t);
+      nameMatched = true;
     }
-    // Derive a friendlier anchor for the map from the first result if we used "near me".
-    const anchor = args.userLocation
-      ? { lat: args.userLocation.lat, lng: args.userLocation.lng }
-      : results[0]
-        ? { lat: results[0].lat, lng: results[0].lng }
-        : undefined;
-    return { query: nameMatched ? args.query : args.label, near, anchor, results };
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
   }
+  // Derive a friendlier anchor for the map from the first result if we used "near me".
+  const anchor = args.userLocation
+    ? { lat: args.userLocation.lat, lng: args.userLocation.lng }
+    : results[0]
+      ? { lat: results[0].lat, lng: results[0].lng }
+      : undefined;
+  return { query: nameMatched ? args.query : args.label, near, anchor, results };
 };

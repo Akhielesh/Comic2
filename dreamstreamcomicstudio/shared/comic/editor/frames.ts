@@ -15,6 +15,7 @@ import {
   artModeOf,
   cutFor,
   frameStyleOf,
+  knownLayersOf,
   normalizeUnitBox,
   type Box,
   type ComicDoc,
@@ -162,9 +163,12 @@ const finish = (ctx: Ctx, ops: DocOp[], label: string, notes: string[] = []): Ed
   return editOf(ctx.doc, [...all, ...planFollowups(ctx, all)], label, notes);
 };
 
-/** The plain-words reason a locked overlay kept in one of these panels refuses an edit that would change it. */
+/**
+ * The plain-words reason a locked overlay kept in one of these panels refuses an edit that would change it. Only layers
+ * this build knows: a frame edit never touches an opaque one (a newer build's kind, PE-0), so its lock never refuses.
+ */
 const lockedLayerIn = (page: Page, test: (layer: PageLayer) => boolean): string | undefined => {
-  const layer = (page.layers ?? []).find((l) => l.locked && test(l));
+  const layer = knownLayersOf(page).find((l) => l.locked && test(l));
   return layer ? `${layerWord(layer)} is locked. Unlock it to change it.` : undefined;
 };
 
@@ -531,7 +535,8 @@ function planSplit(ctx: Ctx, panelId: string, dir: SplitDir, at: number, newSide
   // Overlays kept in the panel go with the half holding their centre; a locked one is not moved to another panel.
   const movesLocked = lockedLayerIn(page, (l) => l.clip === panelId && containsPoint(fresh, centreOf(l.box)));
   if (movesLocked) return movesLocked;
-  for (const layer of page.layers ?? []) {
+  // Opaque layers (a newer build's kinds, PE-0) stay exactly as written: the server refuses a patch on one.
+  for (const layer of knownLayersOf(page)) {
     if (layer.clip === panelId && containsPoint(fresh, centreOf(layer.box))) ops.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { clip: newId } });
   }
   // The new panel shifts every later panel by one place: cuts matched by position are named first (the slice above
@@ -608,7 +613,8 @@ export function joinFramesEdit(doc: ComicDoc, page: Page, aId: string, bId: stri
     notes.push(`Panel ${drop.n}'s plan (what happens, who is in it) was merged into panel ${keep.n}.`);
   }
   ops.push({ op: 'panel_remove', pageId: page.id, id: drop.id, linesTo: keep.id });
-  for (const layer of page.layers ?? []) if (layer.clip === drop.id) ops.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { clip: keep.id } });
+  // Opaque layers stay as written (panel_remove leaves them too): only known overlays follow to the kept panel.
+  for (const layer of knownLayersOf(page)) if (layer.clip === drop.id) ops.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { clip: keep.id } });
   // Removing a panel shifts the later ones: cuts matched by position are named first.
   return finish(ctx, withNamedCuts(page, ops), `Join ${panelsWord(page, [aId, bId])}`, notes);
 }

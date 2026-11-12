@@ -56,6 +56,21 @@ import {
   shouldShowIosFullscreenNote
 } from '../../../services/fullscreen';
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
+import { pageProgress, pageVisualStatus } from '../board/boardModel';
+
+/**
+ * One "drawn" definition (declutter F7; PROGRAM3 B25): the board's — drawn and current (`pageProgress`) —
+ * plus how many drawn pages are out of date. The reader used to count every page with art, so the board
+ * said 6 and the reader 7 for the same comic.
+ */
+export const drawnCount = (doc: ComicDoc): { ready: number; total: number; outOfDate: number } => ({
+  ...pageProgress(doc),
+  outOfDate: doc.pages.filter((p) => !!p.render.asset?.path && pageVisualStatus(doc, p) === 'stale').length
+});
+
+/** "6 of 12 pages drawn", plus " · 1 out of date" when some drawn pages no longer match their script. */
+export const drawnLabel = (d: { ready: number; total: number; outOfDate: number }): string =>
+  `${d.ready} of ${d.total} ${d.total === 1 ? 'page' : 'pages'} drawn${d.outOfDate ? ` · ${d.outOfDate} out of date` : ''}`;
 
 export type ReaderChrome = 'docked' | 'auto-hide';
 export type InlineLayoutChoice = 'auto' | 'single' | 'spread';
@@ -203,6 +218,7 @@ const ScrollPage: React.FC<{
           srcWidth={(w) => slotImageSource(item, w, img)?.url}
           loading={eager ? 'eager' : 'lazy'}
           develop={false}
+          stillLoading
           paper={paper}
           onImageError={onImageError}
         />
@@ -215,7 +231,8 @@ const ScrollPage: React.FC<{
       {url ? (
         <img src={url} alt={`Cover of ${doc.cover.title || doc.brief.title}`} loading={eager ? 'eager' : 'lazy'} className="absolute inset-0 h-full w-full object-contain" onError={onImageError} />
       ) : (
-        <div className="studio-shimmer absolute inset-0" role="img" aria-label="Loading cover" />
+        // Still paper, never a shimmer: the reader animates transform and opacity only.
+        <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: 'var(--ds-reader-paper-back)' }} />
       )}
     </div>
   );
@@ -844,7 +861,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   }
 
   // ── Labels ────────────────────────────────────────────────────────────────
+  // Pages in the reading order (anything with art, an out-of-date page included): page numbering.
   const drawnPages = items.filter((i) => i.kind === 'page').length;
+  // "Drawn" means one thing everywhere (the board's Pages badge, the timeline, here): drawn AND current.
+  // An out-of-date page still reads (it has art) and is counted apart: "6 of 12 pages drawn · 1 out of date".
+  const drawn = drawnCount(doc);
   const shown = (currentView?.items ?? []).map((i) => items[i]).filter(Boolean);
   const shownLabel = atEnd
     ? t('theEnd').replace(/\.$/, '')
@@ -943,9 +964,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             {t('readsRightToLeft')}
           </span>
         )}
-        {drawnPages < doc.pages.length && (
-          <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')}>
-            {drawnPages} of {doc.pages.length} pages drawn
+        {drawn.ready < drawn.total && (
+          <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')} data-testid="reader-drawn">
+            {drawnLabel(drawn)}
           </span>
         )}
         {fallback.length > 0 && (
@@ -1297,9 +1318,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
               </>
             )}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[7] h-0.5 bg-[var(--ds-well-strong)]" aria-hidden>
+              {/* Full width, scaled from the reading edge: transform only, never an animated width (reader.md §5.3). */}
               <div
-                className={cx('h-full bg-[var(--ds-accent)]', !reduced && 'transition-[width] duration-300')}
-                style={{ width: `${views.length > 1 ? (viewIdx / (views.length - 1)) * 100 : 100}%`, marginLeft: rtl ? 'auto' : undefined }}
+                data-testid="reader-progress"
+                className={cx('h-full w-full bg-[var(--ds-accent)]', !reduced && 'transition-transform duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)]')}
+                style={{ transform: `scaleX(${views.length > 1 ? Math.round((viewIdx / (views.length - 1)) * 10000) / 10000 : 1})`, transformOrigin: rtl ? 'right' : 'left' }}
               />
             </div>
           </div>

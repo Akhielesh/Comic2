@@ -111,7 +111,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 items={[
                   { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
                   { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
-                  { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
+                  { label: 'Library', description: 'Browse public comics from creators', icon: <LayoutGrid size={16} />, onClick: onViewComics },
                   ...(comicsAppHref
                     ? [{ label: 'Comic Studio', description: 'Its own home at comics.dreamstreamstudio.ai', icon: <ExternalLink size={16} />, onClick: openComicsApp }]
                     : []),

@@ -7,8 +7,9 @@ import { normalizeDoc, type Card } from '../../../shared/comic/doc';
 import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
 import { quoteRenderPages } from '../../../shared/comic/plan';
 import { noticeChipState, noticeChips } from '../conversation/cards/NoticeCard';
-import { QA_FIXTURES, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
-import { clearQaOps, makeQaUrlFor, parseQaParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
+import { QA_FIXTURES, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
+import { SLUG_RE } from '../../../shared/comic/publication';
+import { clearQaOps, makeQaUrlFor, parseQaParams, qaDocFromParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
 import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
 
 const setDpr = (v: number) => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: v });
@@ -27,7 +28,7 @@ describe('parseQaParams', () => {
 
   it('reads every documented parameter and rejects junk', () => {
     const p = parseQaParams('?surface=editor&fixture=deep-40p&tab=cast&page=7&lang=te&theme=dark&state=streaming&mode=pro&rtl=1&public=not-found&img=png&still=1');
-    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, history: false });
+    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true });
     const bad = parseQaParams('?surface=admin&fixture=../../etc&tab=x&page=-3&lang=<script>&state=boom&kit=<img src=x>');
     expect(bad).toMatchObject({ surface: 'studio', fixture: 'heist-12p', tab: 'pages', page: null, lang: null, state: 'idle', kit: null });
     expect(parseQaParams('?surface=kit&kit=refs-drawer')).toMatchObject({ surface: 'kit', kit: 'refs-drawer' });
@@ -35,6 +36,36 @@ describe('parseQaParams', () => {
     expect(parseQaParams('?surface=reader&share=1').share).toBe(true);
     expect(parseQaParams('?surface=reader&share=yes').share).toBe(false);
     expect(parseQaParams('?p=4').page).toBe(4);
+  });
+});
+
+describe('variants=0 (pages and cover stored without variants, RD-A #12)', () => {
+  it('only an exact `variants=0` turns the variants off', () => {
+    expect(parseQaParams('?surface=reader&variants=0').variants).toBe(false);
+    for (const q of ['', '?surface=reader', '?variants=1', '?variants=no', '?variants=']) expect(parseQaParams(q).variants, q).toBe(true);
+  });
+
+  it('strips asset.variants from every page and the cover of the chosen fixture; sheets and the style board keep theirs', () => {
+    const plain = qaDocFromParams(parseQaParams('?fixture=heist-12p'));
+    const bare = qaDocFromParams(parseQaParams('?fixture=heist-12p&variants=0'));
+    const drawn = (d: typeof plain) => d.pages.filter((p) => p.render.asset);
+    expect(drawn(plain).length).toBeGreaterThan(3);
+    expect(drawn(plain).every((p) => (p.render.asset?.variants?.length ?? 0) > 0)).toBe(true);
+    expect(drawn(bare).map((p) => p.id)).toEqual(drawn(plain).map((p) => p.id));
+    expect(drawn(bare).filter((p) => p.render.asset && 'variants' in p.render.asset)).toEqual([]);
+    expect(plain.cover.render.asset?.variants?.length).toBeGreaterThan(0);
+    expect(bare.cover.render.asset && 'variants' in bare.cover.render.asset).toBe(false);
+    // Everything else, the originals included, is the same fixture.
+    expect(bare.cast).toEqual(plain.cast);
+    expect(bare.style).toEqual(plain.style);
+    expect(drawn(bare).map((p) => p.render.asset?.path)).toEqual(drawn(plain).map((p) => p.render.asset?.path));
+    expect(qaImagePaths(bare).filter((path) => /-p\d+-480x/.test(path))).toEqual([]);
+  });
+
+  it('every surface builds its doc through it: the scene (studio, board, editor, readers) has no page variants', () => {
+    const scene = qaSceneFromParams(parseQaParams('?surface=reader&fixture=heist-12p&page=1&variants=0'));
+    expect(scene.doc?.pages.some((p) => p.render.asset?.variants)).toBe(false);
+    expect(qaSceneFromParams(parseQaParams('?surface=reader&fixture=heist-12p')).doc?.pages.some((p) => p.render.asset?.variants)).toBe(true);
   });
 });
 
@@ -82,6 +113,37 @@ describe('fixtures', () => {
     expect(stress.spend.totalUsd).toBe(1234.56);
     expect(makeQaDoc('empty').pages).toHaveLength(0);
     expect(makeQaDoc('heist-12p', { rtl: true }).format.readingDirection).toBe('rtl');
+  });
+
+  it('chat-14 is the production chat-image shape: 9 drawn pages, the cover and 4 drawn sheets, each with 480w and 1080w, all in the chat (PF-2 #8)', () => {
+    const doc = makeQaDoc('chat-14');
+    const assets = [...doc.pages.map((p) => p.render), doc.cover.render, ...doc.cast.map((c) => c.sheet)];
+    expect(doc.pages).toHaveLength(9);
+    expect(doc.cast).toHaveLength(4);
+    expect(assets).toHaveLength(14);
+    for (const r of assets) {
+      expect(r.status).toBe('ready');
+      expect(r.asset?.variants?.map((v) => v.w)).toEqual([480, 1080]);
+    }
+    // The chat's renders card reaches every one of them (the studio.chat.images e2e floor is 14 images).
+    const renders = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.type === 'renders') as Extract<Card, { type: 'renders' }>;
+    const targets = new Set(renders.targets.map((t) => (t.kind === 'cover' ? 'cover' : `${t.kind}:${'id' in t ? t.id : ''}`)));
+    for (const p of doc.pages) expect(targets.has(`page:${p.id}`), p.id).toBe(true);
+    for (const c of doc.cast) expect(targets.has(`sheet:${c.id}`), c.id).toBe(true);
+    expect(targets.has('cover')).toBe(true);
+    // Nothing to draw: no open gate.
+    expect(doc.gate).toBeNull();
+  });
+
+  it('cast roles are free text, never the tier words the chips already show (DC-0 #6)', () => {
+    for (const name of QA_FIXTURES) {
+      const roles = makeQaDoc(name).cast.map((c) => c.role);
+      expect(roles.filter((r) => r === 'Lead' || r === 'Support'), name).toEqual([]);
+      expect(roles.every((r) => typeof r === 'string' && r.trim().length > 0), name).toBe(true);
+    }
+    expect(makeQaDoc('heist-12p').cast.map((c) => c.role)).toEqual(['Pickpocket with a plan', 'Getaway driver', 'Saffron seller', 'Lookouts on the ledge']);
+    // The stress cast still carries its long role on every third member.
+    expect(makeQaDoc('stress').cast[0].role).toMatch(/^Retired lighthouse keeper/);
   });
 
   it('every heist page status is represented and ready pages are not stale', () => {
@@ -233,6 +295,89 @@ describe('useQaController', () => {
     expect(pending.pendingMessage).toMatchObject({ status: 'failed' });
     const editor = qaSceneFromParams(parseQaParams('?surface=editor&page=3'));
     expect(editor.focusedPageId).toBe('pg_3');
+  });
+
+  it('state=queued: the director is working and Up next holds real, editable notes (A1, for the DS harness)', async () => {
+    expect(parseQaParams('?state=queued').state).toBe('queued');
+    const { result } = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('?state=queued'))));
+    const c = result.current;
+    expect(c).toMatchObject({ messageBusy: true, turnLocked: true, queueHold: null, queueSendingNow: null, queueRetriesLeft: true, queueSteers: false });
+    expect(c.queue?.map((n) => n.id)).toEqual(['qn_1', 'qn_2', 'qn_3']);
+    expect(c.queue?.[1].focus).toEqual({ pageId: c.doc!.pages[1].id });
+    act(() => result.current.editQueued!('qn_1', 'Make the rain much heavier'));
+    act(() => result.current.moveQueued!('qn_3', -1));
+    act(() => result.current.removeQueued!('qn_2'));
+    expect(result.current.queue?.map((n) => [n.id, n.text.slice(0, 25)])).toEqual([
+      ['qn_1', 'Make the rain much heavie'],
+      ['qn_3', 'After that, try a quieter']
+    ]);
+    // A message typed while the director works joins Up next.
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.send('One more: a lightning flash on page 1');
+    });
+    expect(outcome).toBe('queued');
+    expect(result.current.queue).toHaveLength(3);
+    await act(async () => void (await result.current.sendNow!('qn_3')));
+    expect(result.current.queueSendingNow).toBe('qn_3');
+    expect(qaOps().filter((o) => o.kind === 'queue').map((o) => (o.payload as { action: string }).action)).toEqual(['edit', 'move', 'remove', 'send_now']);
+    // Every other state has no queue at all (today's behaviour), and a send there is recorded only.
+    const idle = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('')))).result.current;
+    expect('queue' in idle).toBe(false);
+    expect('turnLocked' in idle).toBe(false);
+  });
+
+  it('share=live / share=live-public: the comic is published, so the Share sheet has a live owner view (offline link)', () => {
+    expect(parseQaParams('?share=live')).toMatchObject({ live: 'unlisted', share: true });
+    expect(parseQaParams('?share=live-public')).toMatchObject({ live: 'public', share: true });
+    for (const q of ['', '?share=1', '?share=yes', '?share=LIVE', '?share=live-private']) expect(parseQaParams(q).live, q).toBeNull();
+    for (const [q, visibility] of [['?share=live', 'unlisted'], ['?share=live-public', 'public']] as const) {
+      const scene = qaSceneFromParams(parseQaParams(q));
+      expect(scene.live).toBe(visibility);
+      expect(scene.doc!.publication).toMatchObject({ visibility, status: 'live', slug: QA_PUBLICATION_SLUG });
+      // The mirror is one the doc keeps (normalizeDoc drops a malformed one).
+      expect(normalizeDoc(scene.doc!).publication).toEqual(scene.doc!.publication);
+      const view = renderHook(() => useQaController(scene)).result.current.publication!;
+      expect(view).toMatchObject({ visibility, status: 'live', slug: QA_PUBLICATION_SLUG, behind: false, readiness: { ok: true } });
+      expect(view.slug).toMatch(SLUG_RE);
+      // Nothing the sheet shows reaches outside the harness: the link is on this origin and the preview has no picture.
+      expect(view.url).toBe(`${window.location.origin}/c/${QA_PUBLICATION_SLUG}`);
+      expect(view.ogImageUrl).toBeUndefined();
+      expect(view.card?.coverUrl).toBeUndefined();
+    }
+    // Private (as before): no publication anywhere.
+    const scene = qaSceneFromParams(parseQaParams('?share=1'));
+    expect(scene).not.toHaveProperty('live');
+    expect(scene.doc!.publication).toBeUndefined();
+    expect(renderHook(() => useQaController(scene)).result.current.publication).toBeNull();
+    expect(qaSceneFromParams(parseQaParams('?state=loading&share=live'))).not.toHaveProperty('live');
+  });
+
+  it('state=conflict: the last reply carries a two-item conflict card with the guard on (A3, for the 320 px smoke)', () => {
+    expect(parseQaParams('?state=conflict').state).toBe('conflict');
+    const scene = qaSceneFromParams(parseQaParams('?state=conflict'));
+    expect(scene.caps).toEqual({ liveAgent: { queue: false, steer: false, conflicts: true } });
+    expect(qaSceneFromParams(parseQaParams('?state=conflict&history=1')).caps).toEqual({ history: true, liveAgent: { queue: false, steer: false, conflicts: true } });
+    const last = scene.doc!.conversation[scene.doc!.conversation.length - 1];
+    expect(last.role).toBe('assistant');
+    const card = last.cards?.[0] as Extract<Card, { type: 'conflict' }>;
+    expect(card.type).toBe('conflict');
+    expect(card.items.map((it) => it.id)).toEqual(['cf_qa_line', 'cf_qa_panel']);
+    expect(card.more).toBe(2);
+    // Real ids on the fixture: Show me opens that page, and "Use the director's" has a held-back edit to apply.
+    const page = scene.doc!.pages.find((p) => p.id === card.items[0].where.pageId)!;
+    expect(page.panels.some((p) => p.lines.some((l) => l.id === card.items[0].where.lineId))).toBe(true);
+    expect(card.items[0].proposed).toHaveLength(1);
+    expect(card.items[1]).toMatchObject({ tooBig: true, proposed: [] });
+    // normalizeDoc keeps the card whole (a malformed one would be dropped on load).
+    const kept = normalizeDoc(scene.doc!).conversation.at(-1)!.cards?.[0];
+    expect(kept).toEqual(card);
+    // It is the open question Up next waits on; the controller is not busy, so its buttons work.
+    const c = renderHook(() => useQaController(scene)).result.current;
+    expect(c.messageBusy).toBe(false);
+    expect(c.caps.liveAgent?.conflicts).toBe(true);
+    // Every other state keeps the fixture's conversation as it was.
+    expect(qaSceneFromParams(parseQaParams('')).doc!.conversation.some((m) => m.cards?.some((x) => x.type === 'conflict'))).toBe(false);
   });
 
   it('recordQaOp stores JSON copies (later mutation never rewrites history)', () => {

@@ -6,6 +6,9 @@
 // drawable traits only; the lint (manifest.test.ts) forbids artist, studio and brand names.
 // Style previews are compiled from STYLE_PRESETS so a preset edit changes the prompt hash and
 // the next build's quote shows that the preview will be redrawn.
+// Every preset gets three core samples (styles.md §5–§6.2, Program 3 ST-4): the shared scene
+// (`style.<id>`), the same original character as a bust (`style.<id>.cast`) and a content-neutral
+// swatch (`anchor.<id>`), all 1K 4:5 so a Styles card can cross-fade between them.
 
 import type { AspectRatio, Resolution } from '../../../../shared/comic/doc.js';
 import { hashString } from '../../../../shared/comic/doc.js';
@@ -14,11 +17,12 @@ import {
   LIBRARY_MANIFEST_VERSION,
   LIBRARY_MIN_SCORE,
   styleAnchorId,
+  styleCastId,
   stylePreviewId,
   type LibraryKind,
   type LibraryTheme
 } from '../../../../shared/comic/library.js';
-import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets.js';
+import { STYLE_PRESETS, spotAccentOf, type StylePreset } from '../../../../shared/comic/stylePresets.js';
 
 export interface LibraryManifestEntry {
   /** LIBRARY_ID_RE, e.g. "style.watercolor-storybook". */
@@ -70,6 +74,18 @@ export const HOUSE_STYLE_DARK =
   'Calm editorial spot illustration on a deep warm charcoal (#1F1E1D) ground with soft cream linework, ' +
   'a single terracotta accent (#D97757) used sparingly, generous negative space, low contrast, no pure white areas, friendly and quiet.';
 
+/**
+ * The one original character every style draws (the girl from SAMPLE_SCENE), so the cast samples
+ * compare styles on the same face. Invented for the platform; no user content, no existing character.
+ */
+export const CAST_SUBJECT =
+  'A head-and-shoulders character bust of the same small girl in every style: about eight years old, a short dark bob with a straight fringe, ' +
+  'a round face with a few freckles, a hooded raincoat with big toggle buttons, holding a folded paper boat up in both hands. ' +
+  'Three-quarter view, a curious half-smile, looking just past the viewer, a plain softly toned background.';
+
+/** "style.<id>.cast" (shared/comic/library.ts): re-exported for the manifest's callers and tests. */
+export { styleCastId };
+
 const PAGE_PREFIX = `A complete comic book page. Thin black panel borders, clean white gutters, consistent characters across panels. ${NO_TEXT}`;
 
 const presetById = (id: string): StylePreset => {
@@ -86,6 +102,35 @@ const colorModeLine = (p: StylePreset): string =>
       ? 'Use only the listed inks.'
       : '';
 
+/**
+ * Spot-colour looks say WHERE the one accent goes, as a positive instruction (image models follow
+ * those better than prohibitions). `where` names the sample's focal object.
+ */
+const spotLine = (p: StylePreset, where: string): string => {
+  const accent = spotAccentOf(p.palette);
+  return accent
+    ? `Black ink on paper white with grey tones, and a single spot colour, ${hueName(accent)} (${accent}), used only on ${where}; everything else stays black, white and grey.`
+    : 'Strictly black and white with grey tones only.';
+};
+
+/** A plain colour word for a hex accent ("red", "blue", …), so the prompt names the hue as well as its code. */
+export const hueName = (hex: string): string => {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return 'accent';
+  const n = parseInt(m[1], 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => c / 255);
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d < 0.08) return 'grey';
+  const h = (max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60;
+  const names: Array<[number, string]> = [[15, 'red'], [40, 'orange'], [65, 'yellow'], [160, 'green'], [195, 'teal'], [255, 'blue'], [290, 'violet'], [335, 'magenta'], [360, 'red']];
+  return names.find(([end]) => h < end)?.[1] || 'red';
+};
+
+/** The colour sentence of a style sample: the spot clause for spot-colour looks, else the mode line. */
+const sampleColourLine = (p: StylePreset, where: string, bw: string): string =>
+  p.tags?.colour === 'spot' ? spotLine(p, where) : p.colorMode === 'bw' ? bw : colorModeLine(p);
+
 /** Style preview prompt, compiled from the preset (assets.md §3.3 A). */
 export const stylePreviewPrompt = (p: StylePreset): string =>
   [
@@ -93,20 +138,34 @@ export const stylePreviewPrompt = (p: StylePreset): string =>
     SAMPLE_SCENE,
     `Render it in exactly this style: ${p.spec}`,
     `Linework: ${p.linework}. Key colours: ${p.palette.join(', ')}.`,
-    colorModeLine(p),
+    sampleColourLine(p, "the girl's raincoat and the paper boat", colorModeLine(p)),
     `Avoid: ${p.avoid.join(', ')}.`,
     NO_TEXT
   ]
     .filter(Boolean)
     .join('\n');
 
-/** Optional content-neutral swatch usable as a style board (assets.md §3.3 G). */
+/** Character bust in the preset's style: the same original girl for every style (styles.md §6.2). */
+export const styleCastPrompt = (p: StylePreset): string =>
+  [
+    'Comic art style sample: a single character portrait, no panel borders.',
+    CAST_SUBJECT,
+    `Render it in exactly this style: ${p.spec}`,
+    `Linework: ${p.linework}. Key colours: ${p.palette.join(', ')}.`,
+    sampleColourLine(p, 'the raincoat', 'Strictly black and white with grey tones only; the raincoat reads as a light grey.'),
+    `Avoid: ${p.avoid.join(', ')}.`,
+    NO_TEXT
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+/** Content-neutral swatch usable as a style board (assets.md §3.3 G); core since ST-4. */
 export const styleAnchorPrompt = (p: StylePreset): string =>
   [
     'A style reference swatch sheet with no characters: a teacup, a potted plant, a window with curtains, a folded cloth and a stone step, arranged as a still life.',
     `Rendered in exactly this style: ${p.spec}`,
     `Linework: ${p.linework}. Key colours: ${p.palette.join(', ')}.`,
-    p.colorMode === 'bw' ? 'Strictly black and white with grey tones only.' : p.colorMode === 'limited' ? 'Use only the listed inks.' : '',
+    sampleColourLine(p, 'the teacup', 'Strictly black and white with grey tones only.'),
     NO_TEXT
   ]
     .filter(Boolean)
@@ -124,8 +183,24 @@ const STYLE_TAGS: Record<string, string[]> = {
   'cozy-anime': ['anime', 'cozy'],
   'indie-risograph': ['riso', 'zine'],
   'cartoon-strip': ['strip', 'humor'],
-  'dark-fantasy': ['gothic', 'fantasy']
+  'dark-fantasy': ['gothic', 'fantasy'],
+  'ink-one-colour': ['spot-colour', 'ink'],
+  'mono-wash': ['spot-colour', 'wash'],
+  'ink-wash': ['bw', 'brush'],
+  'indian-miniature': ['miniature', 'mythology'],
+  woodcut: ['bw', 'printmaking'],
+  dieselpunk: ['deco', 'retro'],
+  brutalist: ['geometric', 'limited'],
+  'surreal-dream': ['surreal', 'dream'],
+  'chalk-pastel': ['pastel', 'moody'],
+  retrofuturism: ['retro', 'poster'],
+  'mythic-icon': ['mythic', 'iconic'],
+  cyberpunk: ['neon', 'sci-fi']
 };
+
+/** Index tags of a style sample: kind word, preset id, look words and the taxonomy chips' keys. */
+const styleTags = (p: StylePreset, ...lead: string[]): string[] =>
+  [...new Set([...lead, p.id, ...(STYLE_TAGS[p.id] || []), ...(p.tags ? [p.tags.colour, p.tags.medium] : [])])];
 
 const styleEntries = (): LibraryManifestEntry[] =>
   STYLE_PRESETS.map((p) => ({
@@ -137,13 +212,32 @@ const styleEntries = (): LibraryManifestEntry[] =>
     aspect: '4:5',
     theme: 'any',
     presetId: p.id,
-    tags: ['style', p.id, ...(STYLE_TAGS[p.id] || [])],
+    tags: styleTags(p, 'style'),
     alt: `${p.name} style sample: a girl and her dog on a canal bridge at dusk`,
     subject: 'A small girl in a raincoat and her scruffy little terrier on an old stone footbridge over a canal at dusk.',
     mustHave: ['a small girl in a raincoat', 'a small scruffy terrier', 'a stone footbridge over a canal', 'a folded paper boat on the water'],
     minScore: LIBRARY_MIN_SCORE
   }));
 
+const castEntries = (): LibraryManifestEntry[] =>
+  STYLE_PRESETS.map((p) => ({
+    id: styleCastId(p.id),
+    kind: 'style_preview',
+    prompt: styleCastPrompt(p),
+    model: 'nano-banana-2.1',
+    resolution: '1K',
+    aspect: '4:5',
+    theme: 'any',
+    presetId: p.id,
+    tags: styleTags(p, 'style', 'cast'),
+    alt: `${p.name} style sample: a portrait of a girl in a hooded raincoat holding a paper boat`,
+    subject: CAST_SUBJECT,
+    mustHave: ['one small girl, head and shoulders', 'a hooded raincoat', 'a folded paper boat'],
+    minScore: LIBRARY_MIN_SCORE
+  }));
+
+// Core since ST-4 (the Styles card's third sample and the preset style board), and drawn at 4:5 like
+// the other two samples: production has no library rows yet, so the aspect change redraws nothing.
 const anchorEntries = (): LibraryManifestEntry[] =>
   STYLE_PRESETS.map((p) => ({
     id: styleAnchorId(p.id),
@@ -151,13 +245,13 @@ const anchorEntries = (): LibraryManifestEntry[] =>
     prompt: styleAnchorPrompt(p),
     model: 'nano-banana-2.1',
     resolution: '1K',
-    aspect: '1:1',
+    aspect: '4:5',
     theme: 'any',
     presetId: p.id,
-    tags: ['anchor', p.id],
+    tags: styleTags(p, 'anchor'),
     alt: `${p.name} style swatch: a still life of a teacup, a plant and a window`,
     mustHave: ['a teacup', 'a potted plant', 'a window with curtains'],
-    optional: true
+    minScore: LIBRARY_MIN_SCORE
   }));
 
 interface GenreSpec {
@@ -493,7 +587,11 @@ const textureEntries = (): LibraryManifestEntry[] =>
     minScore: LIBRARY_MIN_SCORE
   }));
 
-/** Every manifest entry: 38 core + 12 optional style anchors, in build order. */
+/**
+ * Every manifest entry, in build order: 98 core (24 style scenes, 9 empty states, 4 onboarding,
+ * 3 textures, 8 genre pages, 2 covers, then 24 character busts and 24 swatches). The scenes lead
+ * so a run cut short by its budget still fills the tiles people see first.
+ */
 export const LIBRARY_MANIFEST: readonly LibraryManifestEntry[] = Object.freeze([
   ...styleEntries(),
   ...emptyEntries(),
@@ -501,6 +599,7 @@ export const LIBRARY_MANIFEST: readonly LibraryManifestEntry[] = Object.freeze([
   ...textureEntries(),
   ...genreEntries(),
   ...coverEntries(),
+  ...castEntries(),
   ...anchorEntries()
 ]);
 

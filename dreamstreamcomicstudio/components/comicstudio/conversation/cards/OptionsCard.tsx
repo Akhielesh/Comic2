@@ -6,11 +6,17 @@
 // a panel-layout glyph, a page stack, a style preview, a cast avatar or a balloon swatch — so
 // "4 panels or 6?" and "which look?" are answered by seeing, not reading. Visuals are drawn
 // procedurally or from the platform library (free; no AI call).
+//
+// Live agent (agent-editor plan §3 A3.3): "Which line?" and "Where?" questions show the comic itself — a `balloon`
+// visual is a crop of the page around that balloon (or the line's words in a bubble while the page is not drawn), and a
+// `spot` visual is a page thumbnail with one of the nine cells of the page or of a panel highlighted.
 
 import React, { useState } from 'react';
 import { Check, CornerDownLeft } from 'lucide-react';
-import { findCharacter, type Card, type ComicDoc, type OptionChoice, type OptionVisual } from '../../../../shared/comic/doc';
+import { POS9, findCharacter, type Box, type Card, type ComicDoc, type OptionChoice, type OptionVisual, type Pos9 } from '../../../../shared/comic/doc';
 import { LETTERING_PRESETS, type LetteringPresetId } from '../../../../shared/comic/lettering/style';
+import { aspectRatioOf } from '../../../../shared/comic/models';
+import { panelBoxesFor } from '../../../../shared/comic/pageGeometry';
 import { stylePreviewId } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
 import { LibraryImage } from '../../library/LibraryImage';
@@ -18,6 +24,7 @@ import { BubblePreview } from '../../library/procedural/BubblePreview';
 import { LayoutGlyph } from '../../library/procedural/LayoutGlyph';
 import { PresetThumb } from '../../library/procedural/PresetThumb';
 import type { ComicStudioController } from '../../useStudio';
+import { sendOutcomeOf } from '../../messageQueue';
 import { CardShell, ChipButton, PrimaryButton, cx } from '../ui';
 import { CastAvatar, KindIcon } from './castVisual';
 
@@ -64,6 +71,104 @@ export const PagesGlyph: React.FC<{ count: number; size?: number }> = ({ count, 
   );
 };
 
+type UrlFor = ComicStudioController['urlFor'];
+
+/** The page's drawn image URL (a small variant), or undefined while it is not drawn or not signed yet. */
+const pageImage = (doc: ComicDoc | null, pageId: string, urlFor: UrlFor): { page: ComicDoc['pages'][number]; src?: string } | undefined => {
+  const page = doc?.pages.find((p) => p.id === pageId);
+  if (!page) return undefined;
+  const asset = page.render.status !== 'none' ? page.render.asset : undefined;
+  return { page, src: asset ? urlFor(asset, { width: 480 }) : undefined };
+};
+
+const quoteOf = (text: string, max = 44): string => {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return `“${t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`}”`;
+};
+
+/**
+ * A `balloon` visual: a crop of the drawn page centred on that balloon, with the balloon outlined, so "Which line?" is
+ * answered by seeing where it is. While the page is not drawn (or the balloon not placed yet) it is the line's words in
+ * a bubble. Null when the line is gone (the tile's label still answers).
+ */
+export const BalloonVisual: React.FC<{ pageId: string; lineId: string; doc: ComicDoc | null; urlFor: UrlFor }> = ({ pageId, lineId, doc, urlFor }) => {
+  const at = pageImage(doc, pageId, urlFor);
+  const line = at?.page.panels.flatMap((p) => p.lines).find((l) => l.id === lineId);
+  if (!at || !line || !doc) return null;
+  const balloon = at.page.balloons.find((b) => b.lineId === lineId);
+  if (at.src && balloon) {
+    const aspect = aspectRatioOf(doc.format.pageAspect);
+    // A window about twice the balloon's width, centred on the balloon (its height ≈ 0.6 × its width on the page).
+    const cw = Math.min(1, Math.max(0.3, balloon.w * 2.2));
+    const cx = Math.min(1, Math.max(0, balloon.x + balloon.w / 2));
+    const cy = Math.min(1, Math.max(0, balloon.y + 0.3 * balloon.w * aspect));
+    return (
+      <span className="relative block h-full w-full overflow-hidden bg-[var(--ds-well)]" data-visual="balloon">
+        <img
+          src={at.src}
+          alt=""
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+          className="pointer-events-none absolute left-1/2 top-1/2 max-w-none select-none"
+          style={{ width: `${(100 / cw).toFixed(2)}%`, transform: `translate(-${(cx * 100).toFixed(2)}%, -${(cy * 100).toFixed(2)}%)` }}
+        />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 aspect-[5/3] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border-2 border-[var(--ds-accent)]"
+          style={{ width: `${Math.min(96, (balloon.w / cw) * 100).toFixed(1)}%` }}
+        />
+      </span>
+    );
+  }
+  return (
+    <span className="grid h-full w-full place-items-center px-2" data-visual="balloon">
+      <span className="line-clamp-2 max-w-full rounded-[1.1rem] border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-1 text-center text-[11px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">
+        {quoteOf(line.text)}
+      </span>
+    </span>
+  );
+};
+
+/** One of the nine cells of `frame` (a page-fraction box), row by row from the top left. */
+export const cellOf = (frame: Box, cell: Pos9): Box => {
+  const i = Math.max(0, POS9.indexOf(cell));
+  const col = i % 3;
+  const row = Math.floor(i / 3);
+  return { x: frame.x + (col * frame.w) / 3, y: frame.y + (row * frame.h) / 3, w: frame.w / 3, h: frame.h / 3 };
+};
+
+const WHOLE_PAGE: Box = { x: 0, y: 0, w: 1, h: 1 };
+
+/**
+ * A `spot` visual: the page (drawn, or its panel outlines) with one cell highlighted — of the whole page (frame
+ * 'page') or of panel `panelN` (frame 'panel', its frame outlined). Null when the page is gone.
+ */
+export const SpotVisual: React.FC<{ visual: Extract<OptionVisual, { kind: 'spot' }>; doc: ComicDoc | null; urlFor: UrlFor }> = ({ visual, doc, urlFor }) => {
+  const at = doc ? pageImage(doc, visual.pageId, urlFor) : undefined;
+  if (!at || !doc) return null;
+  const aspect = aspectRatioOf(doc.format.pageAspect);
+  const W = 100 * aspect;
+  const H = 100;
+  const boxes = panelBoxesFor(doc, at.page);
+  const panel = visual.frame === 'panel' && typeof visual.panelN === 'number' ? boxes[visual.panelN - 1] : undefined;
+  const frame = panel ?? WHOLE_PAGE;
+  const cell = cellOf(frame, POS9.includes(visual.cell) ? visual.cell : 'center');
+  const r = (b: Box) => ({ x: b.x * W, y: b.y * H, width: b.w * W, height: b.h * H });
+  return (
+    <svg viewBox={`0 0 ${W.toFixed(2)} ${H}`} className="block h-full max-w-full" aria-hidden focusable="false" data-visual="spot">
+      <rect x={0} y={0} width={W} height={H} style={{ fill: 'var(--ds-surface)', stroke: 'var(--ds-hairline)' }} strokeWidth={1} />
+      {at.src ? (
+        <image href={at.src} x={0} y={0} width={W} height={H} preserveAspectRatio="xMidYMid slice" />
+      ) : (
+        boxes.map((b, i) => <rect key={i} {...r(b)} rx={1.5} style={{ fill: 'none', stroke: 'var(--ds-muted)' }} strokeWidth={0.8} />)
+      )}
+      {panel && <rect {...r(panel)} rx={1.5} style={{ fill: 'none', stroke: 'var(--ds-ink)' }} strokeWidth={1.6} data-frame="panel" />}
+      <rect {...r(cell)} rx={1.5} style={{ fill: 'var(--ds-accent)', fillOpacity: 0.4, stroke: 'var(--ds-accent)' }} strokeWidth={1.6} data-cell={visual.cell} />
+    </svg>
+  );
+};
+
 /** The picture for one option visual (null when it can't be drawn; the tile still works). */
 export const OptionVisualArt: React.FC<{ visual: OptionVisual; doc: ComicDoc | null; urlFor: ComicStudioController['urlFor'] }> = ({ visual, doc, urlFor }) => {
   switch (visual.kind) {
@@ -105,6 +210,10 @@ export const OptionVisualArt: React.FC<{ visual: OptionVisual; doc: ComicDoc | n
       if (!preset?.base) return null;
       return <BubblePreview style={preset.base} kind="speech" size={52} />;
     }
+    case 'balloon':
+      return typeof visual.pageId === 'string' && typeof visual.lineId === 'string' ? <BalloonVisual pageId={visual.pageId} lineId={visual.lineId} doc={doc} urlFor={urlFor} /> : null;
+    case 'spot':
+      return typeof visual.pageId === 'string' && typeof visual.cell === 'string' ? <SpotVisual visual={visual} doc={doc} urlFor={urlFor} /> : null;
     default:
       return null;
   }
@@ -121,7 +230,11 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
   const answered = serverAnswered.length ? serverAnswered : localAnswer || [];
   const isAnswered = answered.length > 0;
   const wasChosen = (c: OptionChoice) => answered.includes(c.id) || answered.includes(c.label);
-  const disabled = isAnswered || studio.messageBusy || !studio.doc;
+  // With the live queue on (agent-editor plan §3 A1) an answer can go whenever the server's turn lock is free — also
+  // while renders still stream — and never while it is held (a director turn, a plan_pages run): send() would refuse it.
+  // Without the queue, today's rule: not while a message is in flight.
+  const turnBusy = studio.turnLocked ?? studio.messageBusy;
+  const disabled = isAnswered || turnBusy || !studio.doc;
 
   const answer = (ids: string[], text: string) => {
     const reply = text.trim();
@@ -129,7 +242,16 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
     setLocalAnswer(ids.length ? ids : [reply]);
     // Name the card this answers (DIR-8): the server records it on THIS card — a typed answer
     // too — instead of guessing from the text (two open cards can share a label).
-    void studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
+    const sent = studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
+    // Refused (the turn was locked after all; send() says why): the card opens again so the question can be answered,
+    // with a typed answer back in its box.
+    void Promise.resolve(sent)
+      .then(sendOutcomeOf, () => 'refused' as const)
+      .then((outcome) => {
+        if (outcome !== 'refused') return;
+        setLocalAnswer(null);
+        if (!ids.length) setCustom((prev) => (prev.trim() ? prev : reply));
+      });
   };
 
   const toggle = (c: OptionChoice) => setPicked((prev) => (prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]));
@@ -143,7 +265,8 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
           {choices.map((c) => {
             const chosen = card.multi ? picked.includes(c.id) || wasChosen(c) : wasChosen(c);
             const art = isVisual(c.visual) ? <OptionVisualArt visual={c.visual} doc={studio.doc} urlFor={studio.urlFor} /> : null;
-            const fill = isVisual(c.visual) && c.visual.kind === 'preset';
+            // Pictures of the comic itself (a style preview, a balloon crop, a page spot) fill the tile edge to edge.
+            const fill = isVisual(c.visual) && (c.visual.kind === 'preset' || c.visual.kind === 'balloon' || c.visual.kind === 'spot');
             return (
               <button
                 key={c.id}

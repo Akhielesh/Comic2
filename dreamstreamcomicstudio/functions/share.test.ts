@@ -18,7 +18,6 @@ const SHELL = `<!DOCTYPE html>
     <meta name="description" content="Make comics with an AI director." />
     <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)" />
     <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script type="importmap">
 {
   "imports": { "react": "https://aistudiocdn.com/react@^19.2.0" }

@@ -51,7 +51,7 @@ const publishAction: ActionHandler<A<'publish'>> = {
     try {
       const { view, blockers, firstTime } = await publishWithOutcome(ctx, action.request);
       setCard(ctx, action.cardId, { status: 'done', result: { ...(view.url ? { url: view.url } : {}), ...(blockers.length ? { blockers } : {}) } });
-      const who = view.visibility === 'public' ? 'anyone with the link, and it’s listed in the public gallery' : 'anyone with the link';
+      const who = view.visibility === 'public' ? 'anyone with the link, and it’s listed in the Library' : 'anyone with the link';
       // Honest about what the safety check left out (the owner consented to page exclusions; a
       // blocked cover is dropped automatically, so say so).
       const coverLeftOut = blockers.some((b) => b.target.kind === 'cover') ? ' The cover didn’t pass the content check, so readers start at page 1 — redraw it and tap Update to add it.' : '';
@@ -79,7 +79,7 @@ const updateAction: ActionHandler<A<'update_publication'>> = {
     try {
       const view = await updatePublication(ctx, action.patch);
       setCard(ctx, action.cardId, { status: 'done', result: view.url ? { url: view.url } : {} });
-      const text = `Link settings saved${action.patch.visibility ? ` — it's now ${view.visibility === 'public' ? 'public (in the gallery)' : 'unlisted (link only)'}` : ''}.`;
+      const text = `Link settings saved${action.patch.visibility ? ` — it's now ${view.visibility === 'public' ? 'in the Library + link' : 'Link only'}` : ''}.`;
       say(ctx, opts, text, 'success');
       return done(text);
     } catch (err) {

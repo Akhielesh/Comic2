@@ -1,8 +1,8 @@
 // Shared layout assertions (P1-QA): mobile.md §10.3 + the visualqa.md §0/§7 detector, as ONE scanner.
 //
 // `scanLayout(page, opts)` runs a single in-page pass and returns findings for the requested checks:
-//   overflow       page-level horizontal scroll (scrollWidth > innerWidth + 1)
-//   offscreen      a visible element beyond [−1, innerWidth+1] with no overflow-x container around it
+//   overflow       page-level horizontal scroll (scrollWidth > the layout width + 1; clientWidth, not innerWidth)
+//   offscreen      a visible element beyond [−1, width+1] with no overflow-x container around it
 //   clip           text/controls clipped by a non-scrolling overflow:hidden ancestor (line-clamp and
 //                  ellipsis count as intended truncation; the walk stops at scroll containers)
 //   self-clip      text cut by its own overflow:hidden without an ellipsis / line clamp
@@ -14,13 +14,15 @@
 //   popover        a dialog / menu / listbox / tooltip box outside the viewport
 //   balloon-*      a lettered balloon outside its comic page; two balloons overlapping > 8 %
 //   editor-aside   the page editor's tools aside overflowing its dialog or the viewport
-//   phone-content  phones: the board panel / message list gets < 45 % of the viewport height
+//   phone-content  phones: the board panel / message list (an app scene: its <main>) gets < 45 % of the viewport height
 //   hit-target     coarse pointers: probes at the centre ±(21, 21) must all land on the control
 //   hover-only     touch: a live control drawn at < 0.6 effective opacity (revealed only by hover)
 //   safe-area      an interactive element inside the emulated notch / home-indicator bands
 //   hinge          dual-screen: an interactive element straddling the fold; panes off their segments
 //   landmarks      exactly one visible <main>; a <nav> whenever the tab bar or rail is shown
 //   layout-class   the studio root's data-layout differs from the device's expected layout
+//   one-spark      more than one spark fill (`[data-slot="button"][data-variant="create"]`) visible in the viewport
+//                  (the colour layer's "one spark per view", CL-0; sparkGuard holds the static half per file)
 // `runAxe` adds axe-core serious/critical violations (color-contrast included) as `axe` findings.
 // `expectLayoutClean` triages findings against tests/e2e/allowlist.json and fails softly on new ones.
 
@@ -44,6 +46,11 @@ export interface ScanOptions {
   expectLayout?: string | null;
   /** Phone content share floor (visualqa P1-6). */
   minContentShare?: number;
+  /**
+   * What `phone-content` measures. Default: the studio's board panel and message list. App scenes (DS-1b, redesign
+   * plan M2) pass their `<main>`: the page's content must keep ≥ minContentShare of a phone's height after chrome.
+   */
+  contentSelector?: string | null;
 }
 
 /** Every DOM check (axe and console are added by expectLayoutClean). */
@@ -57,12 +64,15 @@ interface DetectArgs {
   expectLayout: string | null;
   phone: boolean;
   minContentShare: number;
+  contentSelector: string | null;
 }
 
 /* The in-page detector. Self-contained: Playwright ships its source to the page. */
 function detect(args: DetectArgs) {
   const on = (c: string) => args.checks.includes(c);
-  const vw = window.innerWidth;
+  // The layout viewport's real width: on isMobile projects Chromium widens innerWidth to fit overflowing content
+  // (up to 4x), so measuring against it hid every horizontal overflow on phones. clientWidth stays at the device width.
+  const vw = document.documentElement.clientWidth || window.innerWidth;
   const vh = window.innerHeight;
   const out: Array<{ check: string; sig: string; label: string; ctx: string; testid?: string; rect?: number[]; detail?: string }> = [];
   const de = document.documentElement;
@@ -127,7 +137,7 @@ function detect(args: DetectArgs) {
   // ── overflow / offscreen ───────────────────────────────────────────────────
   if (on('overflow')) {
     const sw = Math.max(de.scrollWidth, document.body.scrollWidth);
-    if (sw > vw + 1) out.push({ check: 'overflow', sig: 'html', label: 'document', ctx: '', detail: `scrollWidth=${sw} innerWidth=${vw}` });
+    if (sw > vw + 1) out.push({ check: 'overflow', sig: 'html', label: 'document', ctx: '', detail: `scrollWidth=${sw} layoutWidth=${vw}` });
   }
   if (on('offscreen')) {
     const reported: Element[] = [];
@@ -144,7 +154,7 @@ function detect(args: DetectArgs) {
       }
       if (contained || reported.some((p) => p.contains(el))) continue;
       reported.push(el);
-      push('offscreen', el, `left=${Math.round(r.left)} right=${Math.round(r.right)} innerWidth=${vw}`);
+      push('offscreen', el, `left=${Math.round(r.left)} right=${Math.round(r.right)} layoutWidth=${vw}`);
     }
   }
 
@@ -403,7 +413,10 @@ function detect(args: DetectArgs) {
 
   // ── phone content share ────────────────────────────────────────────────────
   if (on('phone-content') && args.phone) {
-    const candidates = [document.getElementById('board-panel'), document.querySelector('section[aria-label="Conversation"] [data-scroll], section[aria-label="Conversation"] .overflow-y-auto')].filter(
+    const picked: Array<Element | null> = args.contentSelector
+      ? Array.from(document.querySelectorAll(args.contentSelector))
+      : [document.getElementById('board-panel'), document.querySelector('section[aria-label="Conversation"] [data-scroll], section[aria-label="Conversation"] .overflow-y-auto')];
+    const candidates = picked.filter(
       (x): x is HTMLElement => !!x && visible(x) && !dormant(x)
     );
     for (const el of candidates) {
@@ -418,6 +431,9 @@ function detect(args: DetectArgs) {
     'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="tab"], [role="radio"], [role="checkbox"], [role="menuitem"], [role="menuitemradio"], [role="slider"], [role="switch"], [tabindex="0"]';
   const interactive = Array.from(document.querySelectorAll(INTERACTIVE)).filter((el) => {
     if (dormant(el) || (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    // A tab panel takes tabindex=0 so the keyboard can reach its text (WAI-ARIA tabs); it is a focus stop, not
+    // something to tap, so it is not held to the 44 px touch size.
+    if (el.getAttribute('role') === 'tabpanel') return false;
     if (el.getAttribute('type') === 'file' && cs(el).display !== 'none' && el.getBoundingClientRect().width < 2) return false;
     const r = el.getBoundingClientRect();
     return r.width >= 1 && r.height >= 1 && cs(el).display !== 'none';
@@ -594,6 +610,19 @@ function detect(args: DetectArgs) {
     const navs = Array.from(document.querySelectorAll('nav, [role="navigation"]')).filter((n) => visible(n) && !dormant(n));
     if (navShown && navs.length === 0) out.push({ check: 'landmarks', sig: 'nav', label: 'tab bar or rail without a nav landmark', ctx: '' });
   }
+  // ── one spark per view (CL-0 #5) ───────────────────────────────────────────
+  // A create fill counts when it is rendered (not display:none / visibility:hidden, through `visible`) and its box
+  // intersects the viewport; one off screen below the fold is another view.
+  if (on('one-spark')) {
+    const sparks = Array.from(document.querySelectorAll('[data-slot="button"][data-variant="create"]')).filter((el) => {
+      if (!visible(el) || dormant(el)) return false;
+      const r = el.getBoundingClientRect();
+      return r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
+    });
+    if (sparks.length > 1) {
+      for (const el of sparks.slice(1)) push('one-spark', el, `${sparks.length} spark fills in the ${vw}×${vh} viewport: ${sparks.map((s) => labelOf(s) || sig(s)).join(' | ')}`);
+    }
+  }
   if (on('layout-class') && args.expectLayout) {
     const root = document.querySelector('.gesture-root[data-layout]:not([data-testid="immersive-reader"])') || document.querySelector('[data-layout]');
     const got = root?.getAttribute('data-layout') || 'none';
@@ -612,7 +641,8 @@ export async function scanLayout(page: Page, opts: ScanOptions = {}): Promise<Fi
     hinge: opts.hinge ?? null,
     expectLayout: opts.expectLayout ?? null,
     phone: d ? d.kind === 'phone' : false,
-    minContentShare: opts.minContentShare ?? 0.45
+    minContentShare: opts.minContentShare ?? 0.45,
+    contentSelector: opts.contentSelector ?? null
   };
   return (await page.evaluate(detect, args)) as Finding[];
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { createContext, useCallback, useContext, useState, useSyncExternalStore } from 'react';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes';
 import { LiveDataContext } from './kit';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact, StockComparisonArtifact, ReactComponentArtifact, LegacyCodeStudioArtifact } from '../../../apiTypes';
@@ -62,16 +62,85 @@ import { TripBudget } from './TripBudget';
 import { LocalCheatsheet } from './LocalCheatsheet';
 import { LoyaltyWallet } from './LoyaltyWallet';
 import { WidgetStack } from './WidgetStack';
-import { ClarifyCard } from './ClarifyCard';
+import { ClarifyCard, clarifySettled } from './ClarifyCard';
 import { GameCard } from './GameCard';
 import { EmailTerminal } from './EmailTerminal';
 import { EmailCompose } from './EmailCompose';
 import { CalendarAgenda } from './CalendarAgenda';
-import { CalendarEventDraft } from './CalendarEventDraft';
+import { CalendarEventDraft, calendarDraftSettled } from './CalendarEventDraft';
 import { EmailDraftCard } from './EmailDraftCard';
 import { DeckDraftCard } from './DeckDraftCard';
 import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact } from '../../../apiTypes';
 import type { EmailDraftArtifact, DeckDraftArtifact } from '../../../apiTypes';
+import { artifactStateKey, type ChatArtifactState } from '../../../services/chatStorage';
+import { artifactWriteKey, isArtifactWriteInFlight, subscribeChatStreams } from '../../../services/chatStreams';
+
+// --- The turn an artifact sits on (CHAT-0, settle §6) ----------------------------------------------
+//
+// Most artifacts are content and never settle (quiz, flashcards, charts, games). The few that ACT for
+// the user — a calendar write, the clarifying questions — must know their turn: whether the
+// conversation has moved on (lead decision D3: a passed card keeps no controls and collapses to one
+// line), and what already happened (a calendar event added, answers sent), so a reload, a remounted
+// view or another device never offers the action again.
+
+/** What an acting artifact knows about its turn. Absent outside a chat (the Gallery, recipes). */
+export interface ArtifactTurn {
+  /** A later user message exists: the conversation moved on. */
+  passed: boolean;
+  /** This chat is generating an answer right now. */
+  busy: boolean;
+  /** This artifact's recorded outcome on its turn. */
+  state?: ChatArtifactState;
+  /** A write for this artifact is in flight (possibly started by a view that has since unmounted). */
+  writing: boolean;
+  /** Record (or clear, with null) this artifact's outcome on its turn — saved even after the view unmounts. */
+  settle: (state: ChatArtifactState | null) => void;
+  /** This artifact's key in the in-flight write registry (services/chatStreams). */
+  writeKey: string;
+}
+
+/** One assistant turn, as AIChatPlatform describes it to its artifacts. */
+export interface ArtifactTurnRef {
+  sessionId: string;
+  turnId: string;
+  passed: boolean;
+  busy: boolean;
+  /** The answer version shown (artifactState is kept per version). */
+  variant: number;
+  artifactState?: Record<string, ChatArtifactState>;
+  settle: (key: string, state: ChatArtifactState | null) => void;
+}
+
+/**
+ * Provided by the chat view: the turn a list of artifacts belongs to, looked up by the very array the
+ * stored turn holds (ChatMessageView renders `turn.artifacts` as is), so no message component has to
+ * thread a turn id through.
+ */
+export interface ArtifactTurnsValue {
+  turnFor: (artifacts: ChatArtifact[]) => ArtifactTurnRef | null;
+}
+
+export const ArtifactTurnsContext = createContext<ArtifactTurnsValue | null>(null);
+
+/** Artifact types that act for the user, with when each one has settled. */
+const ACTING_TYPES: Record<string, (data: unknown, turn: ArtifactTurn) => boolean> = {
+  calendar_event_draft: (d, turn) => calendarDraftSettled(d as CalendarEventDraftArtifact, turn),
+  clarify: (d, turn) => clarifySettled(d as ClarifyArtifact, turn)
+};
+
+/** The ArtifactTurn of artifact `index` of a turn (for the cards that act). */
+export const artifactTurnOf = (ref: ArtifactTurnRef, index: number, writing?: boolean): ArtifactTurn => {
+  const key = artifactStateKey(ref.variant, index);
+  const writeKey = artifactWriteKey(ref.sessionId, ref.turnId, key);
+  return {
+    passed: ref.passed,
+    busy: ref.busy,
+    state: ref.artifactState?.[key],
+    writing: writing ?? isArtifactWriteInFlight(writeKey),
+    settle: (state) => ref.settle(key, state),
+    writeKey
+  };
+};
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -80,7 +149,7 @@ import type { EmailDraftArtifact, DeckDraftArtifact } from '../../../apiTypes';
 // here MUST also have a live demo in ComponentGallery.tsx. If you add a renderer
 // without a gallery demo, the coverage test fails. See ComponentGallery for the
 // other half of the contract.
-const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.ReactNode> = {
+const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number, turn?: ArtifactTurn) => React.ReactNode> = {
   weather: (d, k) => <WeatherStation key={k} data={d as WeatherArtifact} />,
   video_results: (d, k) => <VideoResults key={k} data={d as VideoResultsArtifact} />,
   map: (d, k) => <MapArtifactCard key={k} data={d as MapArtifact} />,
@@ -137,13 +206,13 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   local_cheatsheet: (d, k) => <LocalCheatsheet key={k} data={d as LocalCheatsheetArtifact} />,
   loyalty_wallet: (d, k) => <LoyaltyWallet key={k} data={d as LoyaltyWalletArtifact} />,
   widget_stack: (d, k) => <WidgetStack key={k} data={d as WidgetStackArtifact} renderEmbedded={renderArtifactNode} />,
-  clarify: (d, k) => <ClarifyCard key={k} data={d as ClarifyArtifact} />,
+  clarify: (d, k, turn) => <ClarifyCard key={k} data={d as ClarifyArtifact} turn={turn} />,
   game: (d, k) => <GameCard key={k} data={d as GameArtifact} />,
   email_inbox: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
   email_unread: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
   email_compose: (d, k) => <EmailCompose key={k} data={d as EmailComposeArtifact} />,
   calendar_agenda: (d, k) => <CalendarAgenda key={k} data={d as CalendarAgendaArtifact} />,
-  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />,
+  calendar_event_draft: (d, k, turn) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} turn={turn} />,
   // Shared-platform drafts (server: ai/tools/platformTools.ts): agents draft, people send or download.
   email_draft: (d, k) => <EmailDraftCard key={k} data={d as EmailDraftArtifact} />,
   deck_draft: (d, k) => <DeckDraftCard key={k} data={d as DeckDraftArtifact} />
@@ -222,7 +291,7 @@ export const DENSITY_AWARE_TYPES = new Set([
 // `origin` (the tool call that produced it) and that tool is refresh-whitelisted,
 // the widget gets a live-refresh control (WidgetFrame) and cards can re-query with
 // patched args (e.g. news topic chips) via useLiveData() — no model round-trip.
-const LiveArtifact: React.FC<{ artifact: ChatArtifact }> = ({ artifact }) => {
+const LiveArtifact: React.FC<{ artifact: ChatArtifact; turn?: ArtifactTurn }> = ({ artifact, turn }) => {
   const [current, setCurrent] = useState(artifact);
   const [refreshing, setRefreshing] = useState(false);
   const [asOf, setAsOf] = useState<string | undefined>(undefined);
@@ -250,7 +319,7 @@ const LiveArtifact: React.FC<{ artifact: ChatArtifact }> = ({ artifact }) => {
     [origin, current.type]
   );
 
-  const node = ARTIFACT_RENDERERS[current.type]?.(current.data, 0) ?? null;
+  const node = ARTIFACT_RENDERERS[current.type]?.(current.data, 0, turn) ?? null;
   if (node === null) return null;
   // The AI can pre-pick a glance card by emitting `density: 'compact'` in the data.
   const hint = (current.data as { density?: string } | null | undefined)?.density;
@@ -269,13 +338,16 @@ const LiveArtifact: React.FC<{ artifact: ChatArtifact }> = ({ artifact }) => {
   );
 };
 
-const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode => {
+const renderArtifact = (artifact: ChatArtifact, key: number, turn?: ArtifactTurn): React.ReactNode => {
   if (!ARTIFACT_RENDERERS[artifact.type]) return null;
+  // A settled acting card is one quiet line with no controls (D3): no widget chrome either (no
+  // density toggle, no resize handle, no refresh).
+  const settled = turn && ACTING_TYPES[artifact.type]?.(artifact.data, turn);
   // Every artifact is wrapped so a malformed `data` payload (artifact.data is `unknown`)
   // can't blank the whole message — it degrades to a small inline notice instead.
   return (
     <ArtifactBoundary key={key} label={artifact.type}>
-      <LiveArtifact artifact={artifact} />
+      {settled ? ARTIFACT_RENDERERS[artifact.type](artifact.data, key, turn) : <LiveArtifact artifact={artifact} turn={turn} />}
     </ArtifactBoundary>
   );
 };
@@ -291,11 +363,29 @@ const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical
 // stack — this is the chat's answer to "I'm scrolling through quite a bit".
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
+  const turns = useContext(ArtifactTurnsContext);
+  const ref = artifacts && artifacts.length ? turns?.turnFor(artifacts) ?? null : null;
+  // Re-render when a write of one of THIS turn's acting artifacts starts or ends (a calendar Confirm
+  // started by a view that has since unmounted), and only then.
+  const writeKeys = ref && artifacts ? artifacts.map((a, i) => (ACTING_TYPES[a.type] ? artifactTurnOf(ref, i, false).writeKey : '')).filter(Boolean) : [];
+  const writing = useSyncExternalStore(
+    subscribeChatStreams,
+    () => writeKeys.filter(isArtifactWriteInFlight).join('|'),
+    () => ''
+  );
   if (!artifacts || artifacts.length === 0) return null;
-  if (artifacts.length === 1) return <>{renderArtifact(artifacts[0], 0)}</>;
+  const inFlight = new Set(writing ? writing.split('|') : []);
+  const turnOf = (i: number): ArtifactTurn | undefined => {
+    if (!ref || !ACTING_TYPES[artifacts[i].type]) return undefined;
+    const t = artifactTurnOf(ref, i, false);
+    return { ...t, writing: inFlight.has(t.writeKey) };
+  };
+  if (artifacts.length === 1) return <>{renderArtifact(artifacts[0], 0, turnOf(0))}</>;
+  // Keys and turn state follow each artifact's index in the TURN (not in the filtered list).
   const items = artifacts
-    .filter((a) => ARTIFACT_RENDERERS[a.type])
-    .map((a, i) => ({ key: i, node: renderArtifact(a, i), wide: WIDE_IN_GALLERY.has(a.type) }));
+    .map((a, i) => ({ a, i }))
+    .filter(({ a }) => ARTIFACT_RENDERERS[a.type])
+    .map(({ a, i }) => ({ key: i, node: renderArtifact(a, i, turnOf(i)), wide: WIDE_IN_GALLERY.has(a.type) }));
   if (items.length === 0) return null;
   if (items.length === 1) return <>{items[0].node}</>;
   return <WidgetGallery items={items} />;

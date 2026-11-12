@@ -88,12 +88,20 @@ Mobile: one column with a `Chat | Board` segmented switch; the composer stays do
    continuity anchor). Each page gets a vision QC pass + balloon layout.
 7. **Edit**: open a page → Mark up (drag a box) + instruction, or say "in page 3 panel
    2 make it night". Versions are kept; restore any time. Edit balloons by dragging.
-8. **Cover**, **Read**, **Export** (print-quality PDF via print view, PNG pages ZIP).
+8. **Cover**, **Read**, **Export** (print-quality PDF via print view, PNG pages ZIP, motion comic video).
 
 ### Option panels (Gemini-style, pop above the composer)
 - **Format**: kind (Comic/Manga/Webtoon/Strip/Storybook), page aspect, page count
   (1–40), panels per page (Auto/3–6), lettering (Overlay/In-art), reading direction.
-- **Style**: preset grid (`shared/comic/stylePresets.ts`) + "Describe your own".
+- **Style**: 24 styles (shared/comic/stylePresets.ts) with colour/medium tags; Ink + one colour and Modern mono wash
+  for black and white with one accent; or "Describe your own". Library manifest: 98 core images; each style has a
+  scene style.<id>, a cast bust style.<id>.cast and a swatch anchor.<id>, all 1K 4:5. Style chips use UK spelling
+  (colour, watercolour); the kept v5 style names keep their original spelling. S2a lead decisions (ST-4): the chip
+  labels are 'Watercolour', 'Full colour', 'Spot colour' and the owner-named 'Ink + one colour', while the v5 names
+  'Storybook watercolor' and 'Cozy anime' stay as stored; the stylePresets contract changes are accepted
+  (`StylePreset.tags` is required; the medium tags gain a fifth value, 'pastel'; anchors are 4:5, not 1:1, a prompt
+  hash change, with no library rows in production to redraw). `COMIC_LIBRARY_PRESET_BOARD` stays a boolean, off
+  (docs/infrastructure/ENV_MATRIX.md); its staged form is deferred.
 - **Quality**: Draft / Standard / Pro with model nickname, per-page price, speed.
 The director can also *open* a panel for the user by emitting an `options` card.
 Changing a panel = a `patch` action (instant, no LLM), and the director sees it next turn.
@@ -560,9 +568,19 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
 `ComicStudio.tsx` (shell), `useStudio.ts` (state + stream), `studioApi.ts`,
 `conversation/*` (pane, message, composer with voice + option panels, cards),
 `board/*` (Story, Cast, Style, Pages, Read, PageEditor with Mark-up + balloon editing,
-BalloonLayer), `export/*` (print view, PNG ZIP). Design: calm-studio glass tokens
+BalloonLayer), `export/*` (print view, PNG ZIP, motion comic video). Design: calm-studio glass tokens
 (`components/chat/studioDesign.ts`, `--ds-*`). The comic *content* (pages, balloons)
 uses comic lettering (`font-comic`); chrome never does.
+
+**Motion comic video** (Read › Motion comic, 9:16 / 1:1 / 16:9): free, made in the browser. Panels play in the order the page reads (right to left for manga books, the same order as Guided View). Each panel holds at least its shot's minimum (establishing 3.5 s … insert 1.8 s; splash +1 s), and reading time wins when the lines need longer. Colours come from the reader-room tokens. The 'Made with DreamStream' end card can be turned off (timeline.outro). Each export logs one `motion_comic_export` telemetry event with counts and timings only.
+S2a lead decisions (AV-0): the end card's brand line is paper, not the legacy terracotta (under the Atlas skin
+`--ds-accent` is ink, which would not show on the dark room; terracotta can return through a theme-independent brand
+token, AV-4); the shot-type holds stay (so every motion comic gets a little longer); the end card is on by default.
+The PE-MOTION engine and export goldens are deferred to their master-plan owners: they compare against this exporter
+(today except panel order; `buildMotionTimeline(doc, { shotHolds: false })` is that reading), and the export baseline
+is taken only after AV-0.
+
+Chat tiles (conversation/cards/renderTile.tsx tileSources) load the ≤ 480w variant through board/ImageFrame frameSources, lazily, and never show the full original while that variant is being signed. Art stored before variants loads its original (data-heavy-img). A variant the signer gave up on reads 'Preview unavailable' (via the controller's isUnsignable). Drawing tiles show elapsed time against the model's usual time on one shared 1 s clock: no fetch, paused in hidden tabs, stopped when idle or stuck. The model name is printed once per view, under the live tile. 'Taking longer than usual' starts at the board's threshold (2.5x the usual time). Past 10x a tile reads 'Still drawing' in its pill, holds still and offers a free 'Check again' (the studio refresh), with no lines under it. A queued tile adds no lines either, and a compact style tile keeps only the dot in its pill (the word is spoken). Only the page's first drawing tile pings and sweeps (one live pulse per view).
 
 ## 8. Legacy & rollout
 - Dashboard "New comic" creates a v4 project. Existing projects open the classic

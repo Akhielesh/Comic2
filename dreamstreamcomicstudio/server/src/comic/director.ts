@@ -8,8 +8,10 @@
 // The director never sees or writes image prompts; the job runner compiles those from
 // the doc. See docs/features/comic-studio-v4.md §6.8.
 
-import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
-import type { StudioFocus } from '../../../shared/comic/events.js';
+import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type NextStep, type RefAsset } from '../../../shared/comic/doc.js';
+import { conflictGuardOn } from '../../../shared/comic/capabilities.js';
+import { STEER_LIMITS, type StudioFocus } from '../../../shared/comic/events.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
 import { unitPrice } from '../../../shared/comic/plan.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
@@ -37,11 +39,73 @@ import {
 } from './replies.js';
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
+import { conflictCardFor, conflictCardText } from './conflictGuard.js';
+import { CONFLICT_PROMPT_LINE, decidedLine } from './decided.js';
+import { LONG_MESSAGE_CHARS, openSteerOf, takeSteerOf, type SteerNote } from './session.js';
 import { toolGroups } from './tools/index.js';
-import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
+import {
+  guardModelReply,
+  modelAdviceOf,
+  modelAdviceReply,
+  modelFactLines,
+  outageCardText,
+  outageNextSteps,
+  pushOutageSteps,
+  R5_FAILURES,
+  type OutageCard
+} from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
+
+/**
+ * The user turn a drained steer inbox becomes (agent-editor plan §3 A2): one message, numbered when there are several.
+ * With `doc`, a note's focus (the page or balloons the creator had selected when they sent it) follows it as a Focus
+ * line, and so does its safety note (an adapt verdict or an IP steer from the screen), like a chat message's.
+ */
+export const steerNoteText = (notes: readonly SteerNote[], doc?: ComicDoc): string => {
+  const items = notes
+    .map((n) => ({
+      text: n.text.trim(),
+      extra: [doc && n.focus ? focusLine(doc, n.focus) : '', (n.safetyNote || '').trim()].filter(Boolean)
+    }))
+    .filter((n) => n.text);
+  if (items.length <= 1) return [`(The user added while you were working:) ${items[0]?.text ?? ''}`.trim(), ...(items[0]?.extra ?? [])].join('\n');
+  return `(The user added while you were working:)\n${items.map((n, i) => [`${i + 1}. ${n.text}`, ...n.extra.map((e) => `   ${e}`)].join('\n')).join('\n')}`;
+};
+
+/**
+ * What the reply says about steer notes the turn never read (they came in as it ended, after a question, a failure or
+ * a Stop): one honest line and the chips that send them on (a steered note is never dropped without a word). A turn
+ * reads every note it can; this covers the rest. A chip's text is sent as an ordinary message, so it stays within
+ * LONG_MESSAGE_CHARS (longer text would be saved as the source script): the notes go as one numbered message when that
+ * fits, else one chip per note ("Send note 1", "Send note 2", …; each note is ≤ MAX_STEER_CHARS, the same number).
+ */
+export const unreadSteerReply = (notes: readonly SteerNote[], why: 'ended' | 'stopped'): { line: string; steps: NextStep[] } => {
+  const texts = notes.map((n) => n.text.trim()).filter(Boolean);
+  if (!texts.length) return { line: '', steps: [] };
+  const one = texts.length === 1;
+  const said =
+    why === 'stopped'
+      ? one
+        ? 'I stopped before reading the note you added.'
+        : `I stopped before reading the ${texts.length} notes you added.`
+      : one
+        ? "Your added note came in as I was finishing, so I haven't done it yet."
+        : `Your ${texts.length} added notes came in as I was finishing, so I haven't done them yet.`;
+  // POST /steer caps a note at LONG_MESSAGE_CHARS; the clip only guards a note that came some other way.
+  const sendable = (text: string) => text.slice(0, LONG_MESSAGE_CHARS);
+  if (one) return { line: `${said} Tap “Send my note” to send it now.`, steps: [{ label: 'Send my note', say: sendable(texts[0]) }] };
+  const combined = `(Sent while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+  if (combined.length <= LONG_MESSAGE_CHARS) {
+    return { line: `${said} Tap “Send my notes” to send them now.`, steps: [{ label: 'Send my notes', say: combined }] };
+  }
+  // Too long for one message: one chip per note, so none turns into a pasted script.
+  return {
+    line: `${said} They're too long for one message, so each has its own chip — tap “Send note 1” and the others to send them now.`,
+    steps: texts.map((t, i) => ({ label: `Send note ${i + 1}`, say: sendable(t) }))
+  };
+};
 /** Tool calls honored in a single round; extras are refused so one round can't fan out unboundedly. */
 export const MAX_CALLS_PER_ROUND = 12;
 /** Conversation messages the director sees verbatim each turn. */
@@ -135,7 +199,9 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
 /**
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
- * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected.
+ * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected. With
+ * `opts.contradictions` (the conflict guard is on, conflictGuardOn) the tail also carries the DECIDED line (decided.ts:
+ * what the creator settled) before OPEN QUESTIONS, and the open question may be a contradiction of it (A3).
  *
  * The summary has a body (story, cast, places, pages) and a tail (feature lines, the user's
  * focus, the money settings and spend — with the governed "never in dollars" instruction —
@@ -148,7 +214,7 @@ export function summarizeDocForDirector(
   doc: ComicDoc,
   byok = false,
   extraLines: readonly string[] = [],
-  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter } = {}
+  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter; contradictions?: boolean } = {}
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
@@ -173,7 +239,11 @@ export function summarizeDocForDirector(
   if (doc.planStatus === 'none') tail.push(`Planning the pages: ${planPagesQuoteText(doc, c, byok)}`);
   tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
   if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
-  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
+  if (opts.contradictions) {
+    const decided = decidedLine(doc);
+    if (decided) tail.push(decided);
+  }
+  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText, { contradictions: opts.contradictions === true, focus: opts.focus }) : '';
   if (open) tail.push(open);
   const tailText = tail.join('\n');
 
@@ -270,6 +340,8 @@ const cardText = (card: Card, cardDoc?: ComicDoc): string => {
       return `[${card.tone}: ${clip(card.text, 200)}]`;
     case 'model_outage':
       return outageCardText(card);
+    case 'conflict':
+      return conflictCardText(card);
     default:
       return '';
   }
@@ -540,33 +612,53 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
   }
   session.commit([{ op: 'message', msg: userMsg }]);
   const msgId = newId('msg');
+  const body: TurnBody = { userMsg, msgId, startedAt, userText, attachments, unread: [] };
   try {
-    await directorTurnBody(ctx, input, { userMsg, msgId, startedAt, userText, attachments });
+    await directorTurnBody(ctx, input, body);
   } catch (err) {
     // Never silent, even when something outside the model loop breaks (a malformed doc, a seam that
-    // throws): the user's message always gets an honest answer and a way to try again.
-    if (ctx.signal.aborted || session.doc.conversation.some((m) => m.id === msgId)) return;
+    // throws): the user's message always gets an honest answer and a way to try again. Steer notes the
+    // turn never read are answered for here too (only a Stop with nothing left unread ends quietly).
+    if (session.doc.conversation.some((m) => m.id === msgId)) return;
+    const unread = unreadSteerReply(body.unread, ctx.signal.aborted ? 'stopped' : 'ended');
+    if (ctx.signal.aborted) {
+      if (unread.line) {
+        session.commit([{ op: 'message', msg: { id: msgId, role: 'assistant', text: `Stopped.\n\n${unread.line}`, at: Date.now(), nextSteps: unread.steps } }]);
+      }
+      return;
+    }
     logger.error('comic_director_turn_crashed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    const steps = [...unread.steps, ...(userText ? [{ label: 'Try again', say: userText }] : [])];
     session.commit([
       {
         op: 'message',
         msg: {
           id: msgId,
           role: 'assistant',
-          text: "Sorry — I couldn't finish that just now. Try again in a moment.",
+          text: ["Sorry — I couldn't finish that just now. Try again in a moment.", unread.line].filter(Boolean).join('\n\n'),
           at: Date.now(),
           cards: [noticeCard('error', 'The studio assistant hit a snag. Please try again.')],
-          ...(userText ? { nextSteps: [{ label: 'Try again', say: userText }] } : {})
+          ...(steps.length ? { nextSteps: steps } : {})
         }
       }
     ]);
   }
 }
 
+/** One turn's fixed inputs, plus the steer notes it never read (set when its loop ends, read by the crash path). */
+interface TurnBody {
+  userMsg: Msg;
+  msgId: string;
+  startedAt: number;
+  userText: string;
+  attachments: AssetRef[];
+  unread: SteerNote[];
+}
+
 async function directorTurnBody(
   ctx: StudioContext,
   input: DirectorTurnInput,
-  t: { userMsg: Msg; msgId: string; startedAt: number; userText: string; attachments: AssetRef[] }
+  t: TurnBody
 ): Promise<void> {
   const session = ctx.session;
   const { userMsg, msgId, startedAt, userText, attachments } = t;
@@ -594,7 +686,9 @@ async function directorTurnBody(
     startedAt,
     runs: [],
     bgErrors: [],
-    ipNames
+    ipNames,
+    // The creator's commits after this rev win over the director's (agent-editor plan §3 A3, conflictGuard.ts).
+    startRev: before.rev
   });
   // Core tools + the feature groups active this turn (contract §12.1).
   const toolset = buildTurnToolset(ctx, turn, toolGroups());
@@ -607,13 +701,16 @@ async function directorTurnBody(
 
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
-  const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
+  // With the conflict guard on, the model also hears the A3 rule: ask once before overriding DECIDED or a Conflict: result.
+  const contradictions = conflictGuardOn(ctx.caps);
+  const rules = [...toolset.promptRules, ...(contradictions ? [CONFLICT_PROMPT_LINE] : [])];
+  const prompt = rules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${rules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
   const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
   const system = [
     prompt,
-    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost }),
+    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost, contradictions }),
     memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
   ]
     .filter(Boolean)
@@ -695,10 +792,17 @@ async function directorTurnBody(
 
   let failure: StudioError | null = null;
   let cancelled = false;
+  // Steering (agent-editor plan §3 A2): from here to the end of the loop, POST /steer queues notes for this turn.
+  const closeSteer = openSteerOf(session);
+  let unread: SteerNote[] = [];
+  /** Extra rounds a note that came in during the model's final answer bought (≤ STEER_LIMITS.extraRounds). */
+  let extraRounds = 0;
+  /** Tool rounds allowed: MAX_TOOL_ROUNDS, plus one per extra round that starts at the limit (so a late note can act). */
+  let toolRoundCap = MAX_TOOL_ROUNDS;
   try {
     let rounds = 0;
     for (;;) {
-      const allowTools = rounds < MAX_TOOL_ROUNDS && !turn.askedUser;
+      const allowTools = rounds < toolRoundCap && !turn.askedUser;
       // On the forced final round we KEEP sending the tool specs: the history already holds
       // assistant tool_calls and their tool results, and some providers (Anthropic) reject a
       // request that carries those but defines no tools. We discard any tool call made here
@@ -718,7 +822,22 @@ async function directorTurnBody(
       const said = (result.text || '').trim();
       if (said) spoken.push(said);
       const calls = allowTools ? result.toolCalls || [] : [];
-      if (!calls.length) break;
+      if (!calls.length) {
+        // The model has answered. A note the creator sent while it was answering gets one more round instead of
+        // being stranded (at most STEER_LIMITS.extraRounds per turn): the answer so far stays, the note follows it.
+        if (!turn.askedUser && extraRounds < STEER_LIMITS.extraRounds && !ctx.signal.aborted) {
+          const late = takeSteerOf(session);
+          if (late.length) {
+            extraRounds += 1;
+            toolRoundCap = Math.max(toolRoundCap, rounds + 1);
+            // An empty answer adds no assistant turn (providers merge the user turns that then meet).
+            if (said) messages.push({ role: 'assistant', content: result.text || said });
+            messages.push({ role: 'user', content: steerNoteText(late, session.doc) });
+            continue;
+          }
+        }
+        break;
+      }
       rounds += 1;
       messages.push({
         role: 'assistant',
@@ -764,6 +883,23 @@ async function directorTurnBody(
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       // ask_user ends the turn: the question and its chips are the reply.
       if (turn.askedUser) break;
+      // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call
+      // (drained only when that call follows, so a note is never taken into a turn that is ending; a note that arrives
+      // during the final answer buys an extra round above, and one the turn never reads is answered for in the reply).
+      // At the tool limit the next call must answer in words, so a note read there could not act: it buys one more tool
+      // round (an extra round, ≤ STEER_LIMITS.extraRounds). With none left it stays unread, and the reply's "Send my
+      // note" chip answers for it.
+      const atToolCap = rounds >= toolRoundCap;
+      if (!atToolCap || extraRounds < STEER_LIMITS.extraRounds) {
+        const steered = takeSteerOf(session);
+        if (steered.length) {
+          if (atToolCap) {
+            extraRounds += 1;
+            toolRoundCap = rounds + 1;
+          }
+          messages.push({ role: 'user', content: steerNoteText(steered, session.doc) });
+        }
+      }
     }
   } catch (err) {
     const error = err instanceof StudioError ? err : new StudioError('INTERNAL', 'The studio assistant hit a snag. Please try again.', { cause: err });
@@ -775,7 +911,17 @@ async function directorTurnBody(
   } finally {
     flushHeld(true);
     unwatch();
+    // No later note joins this turn (POST /steer answers NOT_RUNNING and the client queues it); the reply answers for
+    // any it never read.
+    unread = closeSteer();
+    t.unread = unread;
   }
+
+  // Conflicts (agent-editor plan §3 A3): what the creator changed mid-turn was kept; one card asks about the rest.
+  // conflictCardFor is null until the guard (wave 1 A3 CONFLICT) holds anything back.
+  // Asked on a Stopped turn too: the edits it held back are never dropped without a word (never silent).
+  const conflictCard = conflictCardFor(turn);
+  if (conflictCard) turn.cards.push(conflictCard);
 
   const after = session.doc;
   let text = spoken.join('\n\n').trim();
@@ -834,7 +980,7 @@ async function directorTurnBody(
       else if (!turn.nextSteps.some((s) => s.client?.type === 'open_model_picker')) pushNextSteps(turn, modelAdviceReply(advice, cost).steps.filter((s) => s.client));
     }
   }
-  if (cancelled && !text && !cards.length) {
+  if (cancelled && !text && !cards.length && !unread.length) {
     recordTextSpend(ctx, tracker, 'chat', 'Director');
     return;
   }
@@ -864,14 +1010,31 @@ async function directorTurnBody(
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
   // A Try-again chip only when trying again can work; a used-up allowance would fail the same way.
   if (failure && userText && !notTransient) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
+  // Notes the turn never read: one honest line, and their chips first (they never fall off the chip cap). On an
+  // outage or R5 turn the retry/wait chip leads on purpose (models.md §3.6 G; a note sent now would meet the same
+  // outage), so the note chips follow the first outage chip instead.
+  const unreadReply = unreadSteerReply(unread, cancelled ? 'stopped' : 'ended');
+  if (unread.length) logger.info('comic_steer_unread', { projectId: ctx.projectId, count: unread.length, cancelled });
+  const replySteps = cancelled ? [] : turn.nextSteps;
+  let noteAt = 0;
+  if (unreadReply.steps.length && replySteps.length && (outages.length || (advice && (advice.streak.count >= R5_FAILURES || advice.outage)))) {
+    let outageLabels = new Set<string>();
+    try {
+      outageLabels = new Set(outageNextSteps(after, byok).map((s) => s.label));
+    } catch {
+      /* the picker chip still marks the outage chips */
+    }
+    noteAt = replySteps.findIndex((s) => outageLabels.has(s.label) || s.client?.type === 'open_model_picker') + 1;
+  }
+  const nextSteps = [...replySteps.slice(0, noteAt), ...unreadReply.steps, ...replySteps.slice(noteAt)].slice(0, DOC_LIMITS.nextSteps);
   const final: Msg = {
     id: msgId,
     role: 'assistant',
-    text: spokeBeforeStop ? `${text} (stopped)` : text,
+    text: [spokeBeforeStop ? `${text} (stopped)` : text, unreadReply.line].filter(Boolean).join('\n\n'),
     at: Date.now(),
     ...(cards.length ? { cards } : {}),
     ...(!cancelled && !failure ? { suggestions: suggestNextSteps(after) } : {}),
-    ...(!cancelled && turn.nextSteps.length ? { nextSteps: turn.nextSteps } : {})
+    ...(nextSteps.length ? { nextSteps } : {})
   };
   const ops = [{ op: 'message' as const, msg: final }];
   session.commit(ops);

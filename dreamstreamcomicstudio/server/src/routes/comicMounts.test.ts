@@ -242,6 +242,8 @@ describe('early refusals (requireAuth 401, rate-limit 429) leave one structured 
     expect(comicRoutePattern('/api/comic/models/nano-banana-2.1')).toBe('/api/comic/models/:id');
     expect(comicRoutePattern('/api/comic/projects/0b9c-uuid/refs/u%2Fx%2Fref.webp')).toBe('/api/comic/projects/:id/refs/:id');
     expect(comicRoutePattern('/api/moderation/comic-cases/c_1/appeal')).toBe('/api/moderation/comic-cases/:id/appeal');
+    // A2: early 401/429 refusals on the steer route log its pattern, not ':id'.
+    expect(comicRoutePattern('/api/comic/projects/p1/steer')).toBe('/api/comic/projects/:id/steer');
     expect(refusalIpHash('1.2.3.4', 0)).toBe(refusalIpHash('1.2.3.4', 1000));
     expect(refusalIpHash('1.2.3.4', 0)).not.toBe(refusalIpHash('1.2.3.5', 0));
     const next = vi.fn();

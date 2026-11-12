@@ -1,3 +1,7 @@
+/* The shared motion and effect classes (styles/ds-motion.css, bridge D7). An @import must come before every
+   other statement, so it sits above the Tailwind directives: Vite inlines it here, and the Tailwind
+   utilities that follow still win a tie with its classes. */
+@import './styles/ds-motion.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -19,17 +23,19 @@
 }
 
 /* The NEW page swings in from the turning edge and settles flat — reads as a real
-   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction). */
+   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction).
+   Transform and opacity only (reader RD-0 F7): the old filter: brightness() stops repainted the page every
+   frame; the opacity ramp already carries the "lands from the dark" feel. */
 @keyframes pageFlipNext {
-  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 @keyframes pageFlipPrev {
-  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 .animate-fade-in {
@@ -119,14 +125,11 @@
 
 /* ---- Studio Motion Kit: skeleton shimmer (components/studio/kit/Shimmer.tsx) ---- */
 @keyframes studioShimmer { 0% { background-position: -180% 0; } 100% { background-position: 180% 0; } }
+/* The block and glint are the skeleton tokens (bridge D4): today's slate by default, Atlas's muted block
+   under the skin (which restates the same declarations below). */
 .studio-shimmer {
-  background-color: rgba(148, 163, 184, 0.12);
-  background-image: linear-gradient(
-    100deg,
-    rgba(148, 163, 184, 0) 30%,
-    rgba(148, 163, 184, 0.22) 50%,
-    rgba(148, 163, 184, 0) 70%
-  );
+  background-color: var(--ds-skeleton);
+  background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%);
   background-size: 180% 100%;
   background-repeat: no-repeat;
   animation: studioShimmer 1.5s ease-in-out infinite;
@@ -145,15 +148,16 @@
 .studio-reveal { animation: studioReveal 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 .studio-pop { animation: studioPop 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 
-/* Stagger: each direct child reveals with a small incremental delay. */
-.studio-stagger > * { animation: studioReveal 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+/* Stagger: each direct child reveals one stagger step after the one before (M1a: the entrance and step
+   tokens, not the old literal 0.5 s and 50 ms; the seventh child on arrive together). */
+.studio-stagger > * { animation: studioReveal var(--ds-motion-enter) var(--ds-ease-enter) both; }
 .studio-stagger > *:nth-child(1) { animation-delay: 0s; }
-.studio-stagger > *:nth-child(2) { animation-delay: 0.05s; }
-.studio-stagger > *:nth-child(3) { animation-delay: 0.1s; }
-.studio-stagger > *:nth-child(4) { animation-delay: 0.15s; }
-.studio-stagger > *:nth-child(5) { animation-delay: 0.2s; }
-.studio-stagger > *:nth-child(6) { animation-delay: 0.25s; }
-.studio-stagger > *:nth-child(n+7) { animation-delay: 0.3s; }
+.studio-stagger > *:nth-child(2) { animation-delay: var(--ds-motion-stagger); }
+.studio-stagger > *:nth-child(3) { animation-delay: calc(2 * var(--ds-motion-stagger)); }
+.studio-stagger > *:nth-child(4) { animation-delay: calc(3 * var(--ds-motion-stagger)); }
+.studio-stagger > *:nth-child(5) { animation-delay: calc(4 * var(--ds-motion-stagger)); }
+.studio-stagger > *:nth-child(6) { animation-delay: calc(5 * var(--ds-motion-stagger)); }
+.studio-stagger > *:nth-child(n+7) { animation-delay: calc(6 * var(--ds-motion-stagger)); }
 
 @media (prefers-reduced-motion: reduce) {
   .studio-reveal, .studio-pop, .studio-stagger > * { animation: none; }
@@ -244,11 +248,26 @@
 @keyframes hiwBounceArrow { 0%,100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
 @keyframes hiwDotTravel { 0% { offset-distance: 0%; } 100% { offset-distance: 100%; } }
 
+/* The How It Works headline accent: the info / danger / warning tokens by default (the old brand blue, red and
+   yellow, now tokens; bridge D4; info is a neutral grey since the colour layer, so the sweep runs grey → red →
+   amber), the heading's own ink under the skin (below), where hue never decorates. */
 .hiw-gradient-text {
-  background-image: linear-gradient(100deg,#2867ff,#ff3b3b,#f9c80e,#2867ff);
+  background-image: linear-gradient(100deg, var(--ds-info), var(--ds-danger), var(--ds-warning), var(--ds-info));
   background-size: 300% 300%;
   -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: hiwGradientPan 8s ease infinite;
+}
+/* How It Works stays a light page in dark, so with the kill switch off (no skin) its headline would paint the
+   default DARK stops (#e5e5e5, #f87171, #fbbf24: 1.3 / 2.8 / 1.6:1 on white; the neutral info made the first
+   stop worse than the old blue's 2.5). Pin the light :root values of the three stops on the words, as the
+   legacy-bubble pin below does for its markdown: 7.8 / 4.8 / 3.2:1 on white (tokenContrast.test.ts keeps them
+   equal to :root and ≥ 3:1). Spelled on the root's theme class (the whole document is dark, this page is not);
+   it sets token values only, so the paint rule above still reads tokens (atlasSkin bridge D4). Under the skin the
+   gradient is off and the words take the heading's ink. */
+:root.dark .hiw-gradient-text {
+  --ds-info: #525252;
+  --ds-danger: #dc2626;
+  --ds-warning: #d97706;
 }
 .hiw-flow-dash { stroke-dasharray: 10 14; animation: hiwFlowDash 18s linear infinite; }
 .hiw-pulse-ring { animation: hiwPulseRing 2.4s ease-out infinite; }
@@ -314,17 +333,17 @@
 .message-body h2:first-child,
 .message-body h3:first-child { margin-top: 0; }
 
+/* Links read the readable info ink (bridge D4): a neutral grey ≥ 4.5:1 in both default themes since the colour
+   layer (it was the blue-700 / blue-300 pair), near-ink under the skin; always bold and underlined, so a link is
+   never told by colour alone. */
 .message-body a {
-  color: #2563eb;
+  color: var(--ds-info-text);
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 2px;
   word-break: break-word;
 }
-.message-body a:hover { color: #1d4ed8; }
-/* Brighter link blues on the dark studio surface (blue-600/700 vanish on it). */
-.dark .message-body a { color: #60a5fa; }
-.dark .message-body a:hover { color: #93c5fd; }
+.message-body a:hover { color: var(--ds-ink); }
 
 .message-body code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -335,11 +354,13 @@
   border-radius: 4px;
   padding: 0.05rem 0.3rem;
 }
+/* Code blocks: a recessed well with a hairline (bridge D4; the comic kit's black slab and 2 px black
+   border are gone), the page ink on it in both themes. */
 .message-body pre {
-  background: #18181b;
-  color: #f8fafc;
-  border: 2px solid #000;
-  border-radius: 0.6rem;
+  background: var(--ds-well-strong);
+  color: var(--ds-ink);
+  border: 1px solid var(--ds-hairline);
+  border-radius: var(--ds-radius-control);
   padding: 0.85rem 1rem;
   overflow-x: auto;
   margin: 0.6rem 0;
@@ -450,8 +471,11 @@
   --ds-warning-text: #a84e0a;                /* amber-700 nudged darker: ≥ 4.5:1 on hover and tint rows */
   --ds-danger: #dc2626;
   --ds-danger-text: #b91c1c;
-  --ds-info: #2563eb;
-  --ds-info-text: #1d4ed8;
+  /* Info is neutral (colour layer "Ink & Spark", decision D7): the old blue (#2563eb / #1d4ed8) sat ΔE 6.4 from
+     the spark under normal vision and 3.7 under deuteranopia, so an info chip read as a creation cue. Grey, as
+     under Atlas; info always carries its word or icon. tokenContrast.test.ts "colour layer" gates the gap. */
+  --ds-info: #525252;
+  --ds-info-text: #404040;
   --ds-ring: #c2643f;                        /* focus ring: the accent hover, ≥ 3:1 (non-text) on paper, glass and wells (the old 45 % tint was 1.6:1) */
   --ds-font-sans: Inter, sans-serif;         /* = tailwind `font-sans` */
   --ds-font-display: Inter, sans-serif;      /* headings inherit the body face today */
@@ -471,7 +495,13 @@
   --ds-ease: cubic-bezier(0.4, 0, 0.2, 1);   /* = tailwind's default transition curve */
   --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
   --ds-tooltip-delay: 300ms;
-  --ds-surface-blur: 12px;                   /* = backdrop-blur-md (GLASS) */
+  /* Wave 9 (bridge D3): glass and the header blur are separate tokens. --ds-glass-blur frosts the floating
+     surfaces (GLASS, GLASS_STRONG, MENU; = backdrop-blur-md here, 0 under the skin: Atlas surfaces are opaque);
+     --ds-header-blur is the sticky header's frosted layer (HEADER_GLASS) in every skin. --ds-surface-blur is
+     the old single token, kept as an alias of the glass blur for branches cut before the split. */
+  --ds-glass-blur: 12px;
+  --ds-header-blur: 18px;
+  --ds-surface-blur: var(--ds-glass-blur);
   /* Wave 5 port (Atlas acd9fdfc, docs/design/atlas-skin.md "Wave 5 port"). Nothing outside a skin reads
      these yet except through the new studioDesign recipes; the defaults are what the page paints today. */
   --ds-control-border: var(--ds-hairline);       /* a field's edge (FIELD); the skin makes it 3:1 */
@@ -493,6 +523,53 @@
   --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1); /* long-tail ease-out for entrances */
   --ds-motion-enter: 280ms;                      /* fades, scale-ins, slide-ins */
   --ds-motion-exit: 160ms;                       /* anything leaving (quicker than it arrived) */
+  /* DS-1a (docs/design/design-system.md). Atlas names its 280 ms entrance --motion-enter-quick and its
+     420 ms page / section entrance --motion-enter: -enter-quick is an alias of the existing 280 ms token
+     (which keeps its name and value), -enter-slow is the 420 ms one, -stagger the step between list
+     items (Atlas --motion-stagger-step). */
+  --ds-motion-enter-quick: var(--ds-motion-enter);
+  --ds-motion-enter-slow: 420ms;
+  --ds-motion-stagger: 40ms;
+  /* The label on a solid danger fill (the destructive Button and Badge): white on the red in light; the
+     dark theme's light red takes the light ink instead (white on it is 2.8:1). tokenContrast.test.ts. */
+  --ds-on-danger: #ffffff;
+  /* Wave 9 (bridge §3.2): the defaults ARE the Atlas values, so a page reads the same with or without the
+     skin. Charts: five monochrome series steps, ink first (data-viz picks a step, never a hue). The grid
+     backdrop's dots are ink at 14 % (Atlas .atlas-grid-backdrop); the spotlight pool takes the ink. Two
+     radii above the panel: the hero frame (28 px) and the feature card (16 px). */
+  --ds-chart-1: #0a0a0a;
+  --ds-chart-2: #525252;
+  --ds-chart-3: #858585;
+  --ds-chart-4: #b0b0b0;
+  --ds-chart-5: #d4d4d4;
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);
+  --ds-spot-ink: var(--ds-ink);
+  --ds-radius-hero: 28px;
+  --ds-radius-feature: 16px;
+  /* Colour layer "Ink & Spark" (a DreamStream extension, not from Atlas; docs/design/design-system.md § Colour
+     layer). Black ink on white paper, and colour as a SPOT with one meaning each: the spark marks creation (the
+     one "start making" fill per view, what is being drawn now, a selection on the art) and is never on a price or a
+     control that spends; hues 1–5 tell series and tags apart (fixed order, a legend always); --ds-art is a comic's
+     own colour around it (components set it inline). The values are the same with and without the skin, like the
+     chart steps; the var()-derived ones are restated in every block. tokenContrast.test.ts ("colour layer") and
+     huePalette.test.ts prove them in all six contexts; sparkGuard.test.ts keeps the spark rare. */
+  --ds-spark: #3d44e8;                                                  /* oklch(0.50 0.24 272) ultramarine */
+  --ds-spark-hover: #3438cc;
+  --ds-on-spark: #ffffff;                                               /* the label on a spark fill: 6.58:1, 8.13 on the hover */
+  --ds-spark-text: #3d44e8;                                             /* spark as text or an icon beside text: ≥ 5.04:1 */
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas));   /* selected / making tint */
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 24%, transparent);       /* shadows and sweeps only, never under text */
+  --ds-hue-1: #3d44e8;                                                  /* categorical, fixed order: ultramarine (the spark family) */
+  --ds-hue-2: #d13d91;                                                  /* magenta */
+  --ds-hue-3: #db6b04;                                                  /* orange (deepened: clears 3:1 on the paper) */
+  --ds-hue-4: #079a94;                                                  /* teal */
+  --ds-hue-5: #9548cc;                                                  /* violet */
+  --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
+     picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
+     because every colour token has one: tests/config/dsColours.test.ts). */
+  --ds-develop-light: rgb(255 255 255);
+  --ds-develop-sheen: rgba(255,255,255,0.18);
 }
 .dark {
   --ds-canvas: #262624;
@@ -520,13 +597,82 @@
   --ds-warning-text: #fbbf24;
   --ds-danger: #f87171;
   --ds-danger-text: #fca5a5;       /* red-300: ≥ 4.5:1 on dark glass, its tint and a highlighted menu row on a raised sheet (wave 8; #fb8b8b was 4.15 there) */
-  --ds-info: #60a5fa;
-  --ds-info-text: #93c5fd;
+  --ds-info: #e5e5e5;               /* neutral, as Atlas dark (#a3a3a3 sat ΔE 14.5 from the dark spark: under the 15 floor) */
+  --ds-info-text: #e5e5e5;
   --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
   --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
   --ds-scrim: rgba(0,0,0,0.60);
+  --ds-on-danger: #1a1915;         /* ink on the light red #f87171: 6.4:1 (white was 2.8:1) */
+  --ds-chart-1: #fafafa;
+  --ds-chart-2: #b8b8b8;
+  --ds-chart-3: #8a8a8a;
+  --ds-chart-4: #5e5e5e;
+  --ds-chart-5: #3d3d3d;
+  /* Colour layer (see :root): the dark spark is a light ultramarine under an ink label. */
+  --ds-spark: #8b9bfe;                                                  /* oklch(0.72 0.145 275) */
+  --ds-spark-hover: #a3b2fe;
+  --ds-on-spark: #0a0a0a;                                               /* ink on the light ultramarine: 7.75:1, 9.76 on the hover */
+  --ds-spark-text: #abb9fe;
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas));
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 30%, transparent);
+  --ds-hue-1: #5568fd;                                                  /* one step lighter than the report's #5265f9: 3.06:1 on the default dark card (2.93) */
+  --ds-hue-2: #d84497;
+  --ds-hue-3: #df6e07;
+  --ds-hue-4: #04a19b;
+  --ds-hue-5: #a155da;
+  --ds-art: var(--ds-well-strong);
+  /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
+  --ds-develop-light: rgb(255 255 255 / 0.55);
+  --ds-develop-sheen: rgba(255,255,255,0.15);
 }
 .dark { color-scheme: dark; }
+/* Legacy-kit form controls keep the light scheme in dark. Since bridge D5 dark applies on every page, so the
+   pre-Atlas pages (dashboard, settings), which keep their light surfaces in dark, now open in it directly.
+   A bare <input>/<select>/<textarea> there took the dark UA field colour from the rule above but kept the
+   page's slate-900 ink: typed text was #0f172a on #3b3b3b (1.5:1). The kit marks its controls with
+   `border-black` (tests/config/legacyKitGuard.test.ts), so this matches only them, until their package moves
+   them to the DS Field. */
+.dark :is(input, select, textarea).border-black { color-scheme: light; }
+/* The legacy Universal Assistant's answer bubble (UniversalAssistant.tsx: `bg-white border-2 border-black`,
+   slate-800 ink; services/assistantChrome.ts mounts it on every legacy view) stays white in dark, but its
+   markdown (.message-body, below) reads the theme tokens: in dark the link was 1.17:1 (#ededed) with the skin
+   and 1.80:1 (#93c5fd) without, a code block 1.18:1 and a table header 1.19:1. Pin the light values the
+   markdown reads inside that bubble only (the token chat's own bubbles keep the theme). Goes with the
+   legacy-kit package, like the control rule above. */
+.dark .bg-white.border-black .message-body {
+  --ds-ink: #1a1915;
+  --ds-muted: #67635a;
+  --ds-hairline: rgba(0,0,0,0.10);
+  --ds-well: rgba(0,0,0,0.03);
+  --ds-well-strong: rgba(0,0,0,0.04);
+  --ds-info-text: #404040;
+}
+/* A `.dark` subtree inside a light page (a dark demo panel, a preview): the tokens :root derives with var()
+   computed there with the LIGHT sources and inherit as fixed colours, so a nested panel kept the light
+   segment pill, field edges and danger mark under the dark ink (1.2:1 in the ds-gallery scene). Restated here
+   they recompute on the subtree. On <html> the :root rules already do it; zero specificity, so any skin
+   block on the same element still wins. atlasSkin.test.ts keeps this list equal to :root's var() tokens. */
+:where(.dark:not(:root)) {
+  --ds-accent-fill: var(--ds-accent);
+  --ds-shadow-soft: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  --ds-shadow-panel: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  --ds-surface-blur: var(--ds-glass-blur);
+  --ds-control-border: var(--ds-hairline);
+  --ds-control-border-hover: var(--ds-hairline);
+  --ds-focus: var(--ds-ring);
+  --ds-overlay-edge: var(--ds-hairline);
+  --ds-shadow-overlay: var(--ds-shadow-soft);
+  --ds-danger-mark: var(--ds-danger);
+  --ds-segment-pill: var(--ds-raised);
+  --ds-segment-track: var(--ds-well-strong);
+  --ds-overlay-hover: var(--ds-hover);
+  --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 35%, transparent);
+  --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 6%, transparent);
+  --ds-toast-edge: var(--ds-overlay-edge);
+  --ds-motion-enter-quick: var(--ds-motion-enter);
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);
+  --ds-spot-ink: var(--ds-ink);
+}
 
 /* ---- Accent contrast: route the existing accent utilities to the readable tokens ----
    tests/config/tokenContrast.test.ts proves the token pairs (≥ 4.5:1, both themes, both skins) and
@@ -583,6 +729,7 @@
   --tap-min: 44px;              /* coarse-pointer minimum hit size (HIG 44pt, M3 48dp) */
   --tabbar-h: 56px;             /* phone bottom tab bar (plus --sa-bottom-eff) */
   --rail-w: 72px;               /* landscape-phone navigation rail (plus --sa-left) */
+  --sidebar-w: 240px;           /* the wide-screen sidebar (≥ 1440: places + sub-views; redesign plan §5.1) */
   --header-h: 56px;             /* 48px compact width, 44px compact height */
   --sheet-radius: 20px;
   --sheet-grabber: 36px;
@@ -591,10 +738,41 @@
   --ds-text-sm: 0.8125rem;
   --ds-text-base: 0.875rem;
   --ds-text-lg: 1rem;
+  /* DS-1a: the heading steps (Atlas --text-xl / -2xl / -3xl: 20 / 24 / 30 px; studioDesign TEXT_XL…). */
+  --ds-text-xl: 1.25rem;
+  --ds-text-2xl: 1.5rem;
+  --ds-text-3xl: 1.875rem;
+  /* DS-1a: the stacking ladder (studioDesign Z). Screens never spell a z-index; they take a layer.
+     stage = the base of the canvas / page content (its own layers stack 1–30 inside it); chrome and the
+     sticky header 40; the full-screen page editor 70 and reader 80; a sheet's scrim 85 and the sheet 86
+     (mobile/sheets/BottomSheet.tsx keeps the same 70 / 80 / 85 / 86 ladder); popovers and menus 90,
+     toasts 95, tooltips 100. Atlas has no z tokens. */
+  --ds-z-stage: 0;
+  --ds-z-chrome: 40;
+  --ds-z-header: 40;
+  --ds-z-editor: 70;
+  --ds-z-reader: 80;
+  --ds-z-scrim: 85;
+  --ds-z-sheet: 86;
+  --ds-z-popover: 90;
+  --ds-z-toast: 95;
+  --ds-z-tooltip: 100;
+  /* DS-1a: control row heights (studioDesign DENSITY): compact 28, comfortable 36 (Atlas's default
+     h-9 button), touch 44 — every interactive control under a coarse pointer (= --tap-min). */
+  --ds-density-compact: 28px;
+  --ds-density-comfortable: 36px;
+  --ds-density-touch: 44px;
   /* Reader surfaces — identical in both themes (a dark "room" and warm paper). */
   --ds-reader-room: #0e0d0c;
   --ds-reader-paper-back: #f3eee4;
   --ds-reader-endpaper: #efe6d2;
+  /* The reader's keyboard-focus colour: the reader ink, so a ring on the paper is AA in both themes (the
+     paper does not change with the theme): 11:1 on the page back, 10:1 on the endpaper
+     (tokenContrast.test.ts). Content-side like the paper: no skin restyles it. Paper only: it is 1.5:1 on
+     --ds-reader-room, so controls over the room use --ds-reader-hud-focus
+     (components/comicstudio/immersive/readerDesigns.css, ≥ 3:1 on the room and its glass), never this; the
+     End card is a page and uses --ds-reader-focus. */
+  --ds-reader-focus: #3b3026;
 }
 @supports not (height: 100dvh) {
   :root { --app-h: 100vh; }
@@ -823,8 +1001,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-font-sans: "IBM Plex Sans", sans-serif;
   --ds-font-display: "Space Grotesk", sans-serif;
   --ds-radius-panel: 0.75rem;           /* 12 px cards (--radius-xl) */
-  --ds-radius-control: 0.625rem;        /* 10 px controls (--radius-lg = radius − 2) */
-  --ds-radius-chip: 0.625rem;           /* 10 px chips and badges */
+  --ds-radius-control: 0.5rem;          /* 8 px controls: Atlas rounded-md (bridge D1; was 10 px --radius-lg) */
+  --ds-radius-chip: 0.5rem;             /* 8 px chips and badges (bridge D1) */
   --ds-radius-sm: 0.25rem;              /* 4 px */
   --ds-shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.05);                                   /* --atlas-soft-shadow */
   --ds-shadow-panel: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);   /* --atlas-panel-shadow */
@@ -838,7 +1016,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-ease: cubic-bezier(0.2, 0.8, 0.2, 1);           /* --motion-ease */
   --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1); /* --motion-spring */
   --ds-tooltip-delay: 300ms;
-  --ds-surface-blur: 18px;              /* the sticky header's blur (its only frosted glass) */
+  --ds-glass-blur: 0;                   /* opaque surfaces: no frosted glass anywhere but the header (bridge D3) */
+  --ds-header-blur: 18px;               /* the sticky header's blur, its only frosted glass */
+  --ds-surface-blur: var(--ds-glass-blur);
   /* Wave 5 (acd9fdfc). Fields: an edge that clears 3:1 against the page (--control-border; the
      hairline is for cards and dividers). Focus: the solid ink (Atlas draws keyboard focus on every
      primitive as a 2 px foreground outline; --ds-ring stays its --ring for inset item rings).
@@ -868,6 +1048,59 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-text-sm: 0.8125rem;
   --ds-text-base: 0.875rem;             /* --text-sm: the Atlas body size */
   --ds-text-lg: 1rem;                   /* --text-base */
+  --ds-text-xl: 1.25rem;                /* --text-xl (wave 8: Tailwind's 20 px) */
+  --ds-text-2xl: 1.5rem;                /* --text-2xl */
+  --ds-text-3xl: 1.875rem;              /* --text-3xl */
+  /* DS-1a. Motion: Atlas's --motion-enter-quick (an alias of the 280 ms entrance, restated so it follows
+     this block), --motion-enter (420 ms) and --motion-stagger-step. The danger label: white on Atlas's
+     red in both themes. Atlas has no z or density tokens: the ladder and the row heights are restated
+     with the same values so every token has a skin value (atlasSkin.test.ts). */
+  --ds-motion-enter-quick: var(--ds-motion-enter);
+  --ds-motion-enter-slow: 420ms;                                       /* --motion-enter */
+  --ds-motion-stagger: 40ms;                                           /* --motion-stagger-step */
+  --ds-on-danger: #ffffff;                                             /* --destructive under text-white */
+  --ds-z-stage: 0;
+  --ds-z-chrome: 40;
+  --ds-z-header: 40;
+  --ds-z-editor: 70;
+  --ds-z-reader: 80;
+  --ds-z-scrim: 85;
+  --ds-z-sheet: 86;
+  --ds-z-popover: 90;
+  --ds-z-toast: 95;
+  --ds-z-tooltip: 100;
+  --ds-density-compact: 28px;
+  --ds-density-comfortable: 36px;                                      /* the h-9 button */
+  --ds-density-touch: 44px;
+  /* Wave 9 (bridge §3.2): the same values as the defaults. */
+  --ds-chart-1: #0a0a0a;
+  --ds-chart-2: #525252;
+  --ds-chart-3: #858585;
+  --ds-chart-4: #b0b0b0;
+  --ds-chart-5: #d4d4d4;
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);  /* .atlas-grid-backdrop */
+  --ds-spot-ink: var(--ds-ink);                                        /* --atlas-spot-ink */
+  --ds-radius-hero: 28px;
+  --ds-radius-feature: 16px;
+  /* Colour layer (a DreamStream extension; Atlas has no spark, hue or art names): the same values as :root,
+     restated so the var()-derived ones follow this block's canvas and well. */
+  --ds-spark: #3d44e8;                                                  /* oklch(0.50 0.24 272) ultramarine */
+  --ds-spark-hover: #3438cc;
+  --ds-on-spark: #ffffff;                                               /* the label on a spark fill: 6.58:1, 8.13 on the hover */
+  --ds-spark-text: #3d44e8;                                             /* spark as text or an icon beside text: ≥ 5.04:1 */
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas));   /* selected / making tint */
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 24%, transparent);       /* shadows and sweeps only, never under text */
+  --ds-hue-1: #3d44e8;                                                  /* categorical, fixed order: ultramarine (the spark family) */
+  --ds-hue-2: #d13d91;                                                  /* magenta */
+  --ds-hue-3: #db6b04;                                                  /* orange (deepened: clears 3:1 on the paper) */
+  --ds-hue-4: #079a94;                                                  /* teal */
+  --ds-hue-5: #9548cc;                                                  /* violet */
+  --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
+     picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
+     because every colour token has one: tests/config/dsColours.test.ts). */
+  --ds-develop-light: rgb(255 255 255);
+  --ds-develop-sheen: rgba(255,255,255,0.18);
 }
 
 /* ---- Tokens, dark (Atlas .dark: the same system inverted — #0a0a0a paper, #fafafa ink) ---- */
@@ -925,6 +1158,28 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 40%, transparent); /* dark:border-destructive-foreground/40 */
   --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 8%, transparent);  /* dark:bg-destructive-foreground/[0.08] */
   --ds-toast-edge: rgba(255,255,255,0.12);                             /* toast: dark:border-white/[0.12] */
+  --ds-on-danger: #ffffff;                                             /* white on the deep red (the default dark theme's label is ink) */
+  --ds-chart-1: #fafafa;
+  --ds-chart-2: #b8b8b8;
+  --ds-chart-3: #8a8a8a;
+  --ds-chart-4: #5e5e5e;
+  --ds-chart-5: #3d3d3d;
+  /* Colour layer (see :root), restated for the skin's dark canvas and well. */
+  --ds-spark: #8b9bfe;                                                  /* oklch(0.72 0.145 275) */
+  --ds-spark-hover: #a3b2fe;
+  --ds-on-spark: #0a0a0a;                                               /* ink on the light ultramarine: 7.75:1, 9.76 on the hover */
+  --ds-spark-text: #abb9fe;
+  --ds-spark-soft: color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas));
+  --ds-spark-glow: color-mix(in srgb, var(--ds-spark) 30%, transparent);
+  --ds-hue-1: #5568fd;                                                  /* one step lighter than the report's #5265f9: 3.06:1 on the default dark card (2.93) */
+  --ds-hue-2: #d84497;
+  --ds-hue-3: #df6e07;
+  --ds-hue-4: #04a19b;
+  --ds-hue-5: #a155da;
+  --ds-art: var(--ds-well-strong);
+  /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
+  --ds-develop-light: rgb(255 255 255 / 0.55);
+  --ds-develop-sheen: rgba(255,255,255,0.15);
 }
 
 /* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast
@@ -956,8 +1211,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    snapshot cross-fades over --ds-motion-theme on the compositor, and `ds-no-transitions` holds every
    element's own transition for that one style change, so the hundreds of TRANSITION colour fades
    never start. Under reduced motion, without the API, for a boot sync or a system-theme correction
-   the theme simply switches (still with transitions held). Only on the comics host, where <html>
-   carries the skin; the apex roots switch at once as before. The tokens are plain custom
+   the theme simply switches (still with transitions held). On every host, since <html> carries the
+   skin everywhere (bridge D5; with the kill switch off, only on the comics host, and the apex roots
+   then switch at once as before). The tokens are plain custom
    properties on purpose: registered and transitioned (D0) they restyled every element per frame. */
 html[data-ds-skin="atlas"].ds-theme-transition::view-transition-old(root),
 html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
@@ -990,13 +1246,17 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 /* Tailwind's `font-sans` (Inter) inside the skin is the chrome face too; lettering fonts
    (font-comic / font-display = Comic Neue / Bangers) are content and untouched. */
 [data-ds-skin="atlas"] .font-sans { font-family: var(--ds-font-sans); }
-/* Headings in the display face (HEADING carries .ds-font-display); they wrap into even lines,
-   running text avoids a lone last word. The text-wrap-style longhands on purpose: the shorthand
-   would also reset text-wrap-mode and break a `whitespace-nowrap` parent. */
-[data-ds-skin="atlas"] :is(h1, h2, h3, h4, .ds-font-display) {
+/* The display face (Space Grotesk) only where a recipe asks for it: .ds-font-display, which FONT_DISPLAY,
+   HEADING and the page / public titles carry (bridge D2: Atlas sets its display face with .atlas-display
+   alone; card, sheet and empty-state titles are the body face, semibold). Headings wrap into even lines,
+   running text avoids a lone last word. The text-wrap-style longhands on purpose: the shorthand would also
+   reset text-wrap-mode and break a `whitespace-nowrap` parent. Never Tailwind `font-display` (Bangers,
+   lettering content). */
+[data-ds-skin="atlas"] .ds-font-display {
   font-family: var(--ds-font-display);
   text-wrap-style: balance;
 }
+[data-ds-skin="atlas"] :is(h1, h2, h3, h4) { text-wrap-style: balance; }
 [data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote) { text-wrap-style: pretty; }
 /* Selection is inverted ink; inverted surfaces (ink or accent fills) flip it back so a selection
    never disappears into its own background. */
@@ -1088,6 +1348,16 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 [data-ds-skin="atlas"] .studio-shimmer {
   background-color: var(--ds-skeleton);
   background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%);
+}
+/* The How It Works gradient headline words take the heading's own ink under the skin (bridge D4): plain
+   text, the same colour as the rest of the h1. Not --ds-ink: How It Works is a legacy page whose light
+   surfaces and slate-900 heading do not follow the theme, so in dark the token painted the two words
+   #fafafa inside a #0f172a heading (1.04:1 where the gradient reaches white). */
+[data-ds-skin="atlas"] .hiw-gradient-text {
+  background-image: none;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+  animation: none;
 }
 /* Toasts (studioDesign TOAST*): a time-left bar that drains as one compositor animation over
    --ds-toast-duration (set inline per toast), held while the toast carries data-paused (set with its
@@ -1199,8 +1469,6 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/35:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/40:hover { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
 [data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/50:hover { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
-[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\] { background-color: var(--ds-accent); }
-[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\].text-white { color: var(--ds-on-accent); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/25 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/30 { --tw-ring-color: var(--ds-ring); }
 [data-ds-skin="atlas"] .ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }

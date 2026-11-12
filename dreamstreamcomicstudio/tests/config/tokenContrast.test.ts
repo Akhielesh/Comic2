@@ -48,6 +48,7 @@ import {
   topLevelSplit,
   withAlpha
 } from './cssTokens';
+import { separation } from './paletteChecks';
 
 const rules = parseRules(css);
 const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
@@ -194,8 +195,38 @@ function pairs(): Pair[] {
     for (const tone of TONES) {
       for (const [bg, c] of statusSurfaces(ctx, tone)) out.push({ ctx, fg: `--ds-${tone}-text`, bg, ratio: ratio(over(token(`--ds-${tone}-text`, ctx), c), c), min: 4.5 });
     }
+    // DS-1a: the label on a solid danger fill (studioDesign DANGER_FILL: the destructive Button and Badge)
+    // and on its hover mix (DANGER_FILL_HOVER), each painted over the page.
+    for (const [name, fill] of dangerFills()) {
+      const bg = over(resolve(fill, ctx), token('--ds-canvas', ctx));
+      out.push({ ctx, fg: '--ds-on-danger', bg: name, ratio: ratio(token('--ds-on-danger', ctx), bg), min: 4.5 });
+    }
+    // The colour layer (CL-0): spark text on every surface and on its own soft tint (SPARK_SOFT_BG, opaque); the
+    // label on a spark fill (SPARK_FILL, the `create` Button) and its hover, also at the 90 % of a secondary label.
+    for (const [bg, c] of [...surfaces(ctx), ['spark-soft', token('--ds-spark-soft', ctx)] as const]) {
+      out.push({ ctx, fg: '--ds-spark-text', bg, ratio: ratio(token('--ds-spark-text', ctx), c), min: 4.5 });
+    }
+    for (const fill of ['--ds-spark', '--ds-spark-hover']) {
+      const bg = over(token(fill, ctx), token('--ds-canvas', ctx));
+      const on = token('--ds-on-spark', ctx);
+      out.push({ ctx, fg: '--ds-on-spark', bg: fill, ratio: ratio(on, bg), min: 4.5 });
+      out.push({ ctx, fg: '--ds-on-spark at 90 %', bg: fill, ratio: ratio(over(withAlpha(on, 0.9), bg), bg), min: 4.5 });
+    }
   }
   return out;
+}
+
+/** The two fills DANGER_FILL / DANGER_FILL_HOVER paint, read from the recipes (a class value back to CSS). */
+function dangerFills(): Array<[string, string]> {
+  const value = (cls: string, prefix: string) => {
+    const m = new RegExp(`(?:^|\\s)${prefix.replace(/[[\]()]/g, '\\$&')}\\[(?:color:)?(.+?)\\](?:\\s|$)`).exec(cls);
+    if (!m) throw new Error(`tokenContrast: no ${prefix}[…] in "${cls}"`);
+    return m[1].replace(/_/g, ' ');
+  };
+  return [
+    ['danger fill', value(design.DANGER_FILL, 'bg-')],
+    ['danger fill hover', value(design.DANGER_FILL_HOVER, 'hover:bg-')]
+  ];
 }
 const label = (p: Pair) => `${p.ctx}: ${p.fg} on ${p.bg}`;
 
@@ -212,6 +243,22 @@ describe('token contrast — every text token on every surface it is used on (WC
   it('body and label text reach 4.5:1 everywhere (light, dark, Atlas light, Atlas dark) — no exceptions', () => {
     const failing = measure().filter((p) => !p.exempt && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
+  });
+
+  it('the label on a solid danger fill (DS-1a: destructive Button and Badge) is in the matrix in every context, fill and hover', () => {
+    const danger = measure().filter((p) => p.fg === '--ds-on-danger');
+    expect(danger.map((p) => `${p.ctx}: ${p.bg}`)).toEqual(
+      Object.keys(CONTEXTS).flatMap((ctx) => [`${ctx}: danger fill`, `${ctx}: danger fill hover`])
+    );
+    expect(danger.filter((p) => p.ratio < 4.5).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    // Why the token exists: white on the default dark theme's light red is far under 4.5:1.
+    expect(ratio(hexColor('#ffffff'), token('--ds-danger', 'default dark'))).toBeLessThan(3);
+    // The recipes spell the fill, its label and the hover mix the matrix reads.
+    expect(design.DANGER_FILL).toBe('bg-[var(--ds-danger)] text-[var(--ds-on-danger)]');
+    expect(dangerFills()).toEqual([
+      ['danger fill', 'var(--ds-danger)'],
+      ['danger fill hover', 'color-mix(in srgb,var(--ds-danger) 88%,var(--ds-ink))']
+    ]);
   });
 
   it('--ds-faint is in the matrix too: below 4.5:1 everywhere, and the only exempt token', () => {
@@ -432,7 +479,6 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   };
   const DECORATIVE: Record<string, string> = {
     'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle',
-    'peer-checked:bg-[#D97757]': 'comicstudio/immersive/ReaderSettingsSheet.tsx: a switch track',
     'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'
   };
 
@@ -658,10 +704,13 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
   });
 
   it('every text constant reads a token this matrix measures', () => {
-    // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas.
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-canvas', ...TONES.map((t) => `--ds-${t}-text`)]);
+    // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas. --ds-spark
+    // is gated as a mark (≥ 3:1), not as text, so it is NOT a measured text token: words in the spark use SPARK_TEXT
+    // (--ds-spark-text, ≥ 4.5:1). Its one text-[…] spelling is MAKING_DOT, skipped by name below.
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`)]);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
+      if (name === 'MAKING_DOT') continue; // a mark: currentColor of LiveDot, gated ≥ 3:1 in the colour-layer describe
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
       for (const v of values) for (const t of textTokens(v)) expect(measured.has(t), `${name} uses ${t}`).toBe(true);
     }
@@ -835,6 +884,28 @@ describe('token contrast — non-text: the focus ring and accent state borders r
     // The old translucent rings really failed (45 % / 50 % terracotta: 1.6 and 2.2:1).
     expect(ratio(over(resolveColor('rgba(217,119,87,0.45)'), token('--ds-canvas', 'default light')), token('--ds-canvas', 'default light'))).toBeLessThan(3);
     expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the reader focus colour (--ds-reader-focus, M1a) is AA on the reader paper in every context: ≥ 4.5:1 on the page back and the endpaper', () => {
+    // The reader's paper is content and the same in both themes and both skins, so the ring colour is one
+    // value; the floor here is the text one (4.5:1), above WCAG 1.4.11's 3:1 for a focus indicator.
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      for (const paper of ['--ds-reader-paper-back', '--ds-reader-endpaper']) {
+        const r = ratio(token('--ds-reader-focus', ctx), token(paper, ctx));
+        expect(r, `${ctx}: --ds-reader-focus on ${paper} = ${r.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // The default focus colours were not enough there (the brand ring on the paper is under 3:1).
+    expect(ratio(token('--ds-ring', 'default dark'), token('--ds-reader-paper-back', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the reader focus colour is for the paper only: under 3:1 on the reader room, so it is never a ring over the room', () => {
+    // Pinned so the name does not invite using it for every reader ring: controls over the room draw
+    // --ds-reader-hud-focus (readerDesigns.css).
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const r = ratio(token('--ds-reader-focus', ctx), token('--ds-reader-room', ctx));
+      expect(r, `${ctx}: --ds-reader-focus on --ds-reader-room = ${r.toFixed(2)}`).toBeLessThan(3);
+    }
   });
 
   it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {
@@ -1121,5 +1192,283 @@ describe('Atlas wave 5 outcomes — "increase contrast" strengthens both hairlin
         expect(step(more) - step(base), `${more} ${line}`).toBeGreaterThan(0.25);
       }
     }
+  });
+});
+
+// ── The colour layer "Ink & Spark" (CL-0; design.md §3, V.2-4…9; decision D7) ───────────────────
+/**
+ * The studio is black ink on white paper, with colour as a spot: the spark (creation only), hues 1–5 (series and
+ * tags) and the art tint. Every pairing is measured here in all SIX contexts (default light and dark, Atlas light
+ * and dark, and Atlas under "increase contrast" in both), not the four the report computed (V.2-5).
+ */
+const SPARK_TOKENS = ['--ds-spark', '--ds-spark-hover', '--ds-on-spark', '--ds-spark-text', '--ds-spark-soft', '--ds-spark-glow'] as const;
+const HUE_TOKENS = ['--ds-hue-1', '--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-hue-5'] as const;
+const LAYER_TOKENS = [...SPARK_TOKENS, ...HUE_TOKENS, '--ds-art'] as const;
+/** Every status colour a spark could be mistaken for: the fills and marks, and the readable text inks. */
+const STATUS_COLOURS = ['--ds-success', '--ds-warning', '--ds-danger', '--ds-danger-mark', '--ds-info', '--ds-success-text', '--ds-warning-text', '--ds-danger-text', '--ds-info-text'] as const;
+/** The separation floors (design §3.11, PROGRAM3 CL-0): normal vision ≥ 15, the worse of protanopia and deuteranopia ≥ 8. */
+const SPARK_STATUS_NORMAL = 15;
+const SPARK_STATUS_CVD = 8;
+/** An opaque colour as #rrggbb (painted over the canvas first where translucent). */
+const hexOf = (c: Rgba): string => `#${[c.r, c.g, c.b].map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('')}`;
+const opaque = (name: string, ctx: ContextName) => hexOf(over(token(name, ctx), token('--ds-canvas', ctx)));
+/** The Progress track (components/ds/Progress.tsx PROGRESS_TRACK: the accent at 15 % over the page). */
+const progressTrack = (ctx: ContextName) => over(withAlpha(token('--ds-accent', ctx), 0.15), token('--ds-canvas', ctx));
+
+describe('token contrast — the colour layer "Ink & Spark" in all six contexts', () => {
+  // Measured inside the tests (as above), so a missing layer token fails a named test.
+  let cachedLayer: Pair[] | null = null;
+  const measureLayer = () => (cachedLayer ??= pairs());
+
+  it('defines the twelve tokens in all four blocks, the same values with and without the skin (light = light, dark = dark)', () => {
+    for (const block of [ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK]) expect(LAYER_TOKENS.filter((k) => !block.has(k))).toEqual([]);
+    for (const k of LAYER_TOKENS) {
+      expect(ATLAS_LIGHT.get(k), `${k} light`).toBe(ROOT_TOKENS.get(k));
+      expect(ATLAS_DARK.get(k), `${k} dark`).toBe(DARK_TOKENS.get(k));
+    }
+    // "Increase contrast" changes nothing in the layer: every value already clears its bar (below).
+    for (const block of [ATLAS_LIGHT_MORE, ATLAS_DARK_MORE]) expect(LAYER_TOKENS.filter((k) => block.has(k))).toEqual([]);
+    // The values D7 chose: ultramarine #3d44e8 in light, #8b9bfe in dark (the logo stays terracotta: --ds-accent).
+    expect(ROOT_TOKENS.get('--ds-spark')).toBe('#3d44e8');
+    expect(DARK_TOKENS.get('--ds-spark')).toBe('#8b9bfe');
+    expect(ROOT_TOKENS.get('--ds-accent')).toBe(BRAND);
+  });
+
+  it('spark text and the label on a spark fill are in the matrix in every context, and every pair reaches 4.5:1', () => {
+    const all = measureLayer();
+    for (const ctx of ALL_CONTEXTS) {
+      const text = all.filter((p) => p.ctx === ctx && p.fg === '--ds-spark-text');
+      expect(text.length, ctx).toBe(surfaces(ctx).size + 1);
+      expect(text.some((p) => p.bg === 'spark-soft'), `${ctx}: spark text on spark-soft`).toBe(true);
+      expect(all.filter((p) => p.ctx === ctx && p.fg.startsWith('--ds-on-spark')).map((p) => `${p.fg} on ${p.bg}`)).toEqual([
+        '--ds-on-spark on --ds-spark', '--ds-on-spark at 90 % on --ds-spark', '--ds-on-spark on --ds-spark-hover', '--ds-on-spark at 90 % on --ds-spark-hover'
+      ]);
+    }
+    const failing = all.filter((p) => /spark/.test(p.fg) && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
+    expect(failing).toEqual([]);
+  });
+
+  it('the worst light spark text pairs are the ones V.2-4 corrected (the report left out two surfaces): ≥ 5.04 default, ≥ 5.12 Atlas', () => {
+    const worst = (ctx: ContextName) => measureLayer().filter((p) => p.ctx === ctx && p.fg === '--ds-spark-text').sort((a, b) => a.ratio - b.ratio)[0];
+    expect(worst('default light').bg).toBe('active on sidebar');
+    expect(worst('default light').ratio).toBeCloseTo(5.04, 1);
+    expect(worst('atlas light').bg).toBe('active on surface-soft/canvas');
+    expect(worst('atlas light').ratio).toBeCloseTo(5.12, 1);
+  });
+
+  it('spark as a mark or a ring (MAKING_DOT, SPARK_RING_ON_ART, Progress tone="making") is ≥ 3:1 on every backdrop, its soft tint and the progress track', () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const spark = token('--ds-spark', ctx);
+      const backdrops = new Map([...surfaces(ctx), ['spark-soft', token('--ds-spark-soft', ctx)], ['progress track', progressTrack(ctx)]]);
+      for (const [bg, c] of backdrops) {
+        const r = ratio(spark, c);
+        if (r < 3) under.push(`${ctx}: --ds-spark on ${bg} = ${r.toFixed(2)}`);
+      }
+    }
+    expect(under).toEqual([]);
+  });
+
+  it('hues 1–5 are ≥ 3:1 on the canvas and on a card in every context (charts sit there, never on a raised chip)', () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const s = surfaces(ctx);
+      for (const hue of HUE_TOKENS) {
+        for (const bg of ['canvas', 'surface/canvas']) {
+          const r = ratio(token(hue, ctx), s.get(bg)!);
+          if (r < 3) under.push(`${ctx}: ${hue} on ${bg} = ${r.toFixed(2)}`);
+        }
+      }
+    }
+    expect(under).toEqual([]);
+    // The report's dark slot 1 (#5265f9) was 2.93:1 on the default dark card: the one step lighter #5568fd clears it.
+    expect(ratio(hexColor('#5265f9'), surfaces('default dark').get('surface/canvas')!)).toBeLessThan(3);
+    expect(lookup('--ds-hue-1', 'default dark')).toBe('#5568fd');
+  });
+
+  it('the raised-chip caveat is real: on the default dark raised chip slots 1, 2 and 5 fall under 3:1 (so charts never sit on one)', () => {
+    const raised = surfaces('default dark').get('raised')!;
+    const under = HUE_TOKENS.filter((h) => ratio(token(h, 'default dark'), raised) < 3);
+    expect(under).toEqual(['--ds-hue-1', '--ds-hue-2', '--ds-hue-5']);
+  });
+
+  it(`spark vs every status colour: ΔE ≥ ${SPARK_STATUS_NORMAL} under normal vision and ≥ ${SPARK_STATUS_CVD} under protanopia / deuteranopia, fill and text, in every context`, () => {
+    const close: string[] = [];
+    let pairs = 0;
+    for (const ctx of ALL_CONTEXTS) {
+      for (const spark of ['--ds-spark', '--ds-spark-text']) {
+        for (const status of STATUS_COLOURS) {
+          const sep = separation(opaque(spark, ctx), opaque(status, ctx));
+          pairs += 1;
+          if (sep.normal < SPARK_STATUS_NORMAL || sep.cvd < SPARK_STATUS_CVD) {
+            close.push(`${ctx}: ${spark} ${opaque(spark, ctx)} vs ${status} ${opaque(status, ctx)}: normal ${sep.normal.toFixed(1)}, ${sep.cvdKind} ${sep.cvd.toFixed(1)}`);
+          }
+        }
+      }
+    }
+    expect(pairs).toBe(ALL_CONTEXTS.length * 2 * STATUS_COLOURS.length);
+    expect(close).toEqual([]);
+  });
+
+  it('why the default skin’s info went neutral (V.2-6): the old blue, and the report’s dark grey, sit too close to the spark', () => {
+    // The old default info blue against the spark: ΔE 6.4 normal / 3.7 deutan (light), 5.2 / 0.7 (dark).
+    expect(separation('#3d44e8', '#2563eb').normal).toBeLessThan(SPARK_STATUS_NORMAL);
+    expect(separation('#3d44e8', '#2563eb').cvd).toBeLessThan(SPARK_STATUS_CVD);
+    expect(separation('#8b9bfe', '#60a5fa').cvd).toBeLessThan(SPARK_STATUS_CVD);
+    // The report recommended #a3a3a3 for dark: equal lightness to the spark, so only chroma separates them (14.5).
+    expect(separation('#8b9bfe', '#a3a3a3').normal).toBeLessThan(SPARK_STATUS_NORMAL);
+    // What ships: a neutral grey in every context (no chroma), so info never reads as the creation colour.
+    for (const ctx of ALL_CONTEXTS) {
+      for (const n of ['--ds-info', '--ds-info-text']) {
+        const c = token(n, ctx);
+        expect(Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b), `${ctx} ${n} is grey`).toBeLessThanOrEqual(3);
+      }
+    }
+  });
+
+  it('How It Works (a light page in dark): with the kill switch off in default dark, every headline gradient stop is ≥ 3:1 on white (the light stops are pinned)', () => {
+    const paint = rules.filter((r) => r.parents.length === 0 && r.selector === '.hiw-gradient-text');
+    expect(paint).toHaveLength(1);
+    const stops = [...paint[0].body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1]);
+    expect(stops).toEqual(['--ds-info', '--ds-danger', '--ds-warning', '--ds-info']);
+    const pinSelector = (s: string) => /\.dark\b[^,]*\s\.hiw-gradient-text$/.test(s);
+    expect(rules.filter((r) => pinSelector(r.selector)).map((r) => r.selector)).toEqual([':root.dark .hiw-gradient-text']);
+    const pinned = tokensOf(rules, pinSelector);
+    const white = hexColor('#ffffff');
+    const under: string[] = [];
+    for (const stop of new Set(stops)) {
+      // The words see the pin when there is one, else the default dark token.
+      const value = pinned.get(stop);
+      expect(value, `${stop} is pinned`).toBeDefined();
+      expect(value, `${stop} pins the light :root value`).toBe(lookup(stop, 'default light'));
+      const r = ratio(resolve(value ?? lookup(stop, 'default dark'), 'default dark'), white);
+      if (r < 3) under.push(`${stop} ${value} = ${r.toFixed(2)}`);
+    }
+    expect(under).toEqual([]);
+    // Without the pin the words would read the dark stops: the neutral info is 1.3:1 on white (the old blue was 2.5).
+    expect(ratio(token('--ds-info', 'default dark'), white)).toBeLessThan(1.5);
+  });
+
+  it('the spark stays out of the ink system: focus, ring, accent, charts, status and reader tokens read no layer token', () => {
+    const leaks: string[] = [];
+    for (const [blockName, block] of Object.entries({ ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE })) {
+      for (const [k, v] of block) {
+        if ((LAYER_TOKENS as readonly string[]).includes(k)) continue;
+        if (/var\(--ds-(?:spark|hue-|art\b)/.test(v)) leaks.push(`${blockName} ${k}: ${v}`);
+      }
+    }
+    expect(leaks).toEqual([]);
+    for (const ctx of ALL_CONTEXTS) {
+      const spark = hexOf(token('--ds-spark', ctx));
+      for (const n of ['--ds-focus', '--ds-ring', '--ds-accent', '--ds-accent-fill', '--ds-accent-text']) expect(opaque(n, ctx), `${ctx} ${n}`).not.toBe(spark);
+      // The chart steps stay the monochrome ramp (a chart picks a step, never a hue; the hues are a separate job).
+      for (const n of ['--ds-chart-1', '--ds-chart-2', '--ds-chart-3', '--ds-chart-4', '--ds-chart-5']) {
+        const c = token(n, ctx);
+        expect(Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b), `${ctx} ${n}`).toBe(0);
+      }
+    }
+  });
+
+  it('the spark soft tint and glow follow the block’s own page (restated in every block, so a nested skin recomputes them)', () => {
+    expect(hexOf(token('--ds-spark-soft', 'atlas light'))).toBe('#eff0fd');
+    expect(hexOf(token('--ds-spark-soft', 'default light'))).toBe('#ebebf4');
+    expect(hexOf(token('--ds-spark-soft', 'atlas dark'))).toBe('#1f2131');
+    expect(hexOf(token('--ds-spark-soft', 'default dark'))).toBe('#363947');
+    for (const ctx of ALL_CONTEXTS) expect(token('--ds-spark-glow', ctx).a, ctx).toBeLessThanOrEqual(0.3);
+    // The art tint defaults to the strong well: neutral until a component sets the comic's colour inline.
+    for (const ctx of ALL_CONTEXTS) expect(token('--ds-art', ctx), ctx).toEqual(token('--ds-well-strong', ctx));
+  });
+});
+
+// ── The reader rooms (RD-A rows; reader.md §4.2 "Rooms" and V2 N1) ──────────────────────────────
+/**
+ * The immersive reader's room-side chrome (the HUD, its focus, the progress hairline) sits on the ROOM, not on the
+ * page, so it is measured against the room and the HUD glass. The Night and Day rows read
+ * cs/immersive/readerDesigns.css (RD-A): the reader root block (Night: glass, accent, hud-focus over index.css's
+ * --ds-reader-room) and the `[data-reader-room="day"]` block (Day: room, glass, accent, hud-focus). Each value
+ * resolves inside its reader block first, then index.css. `ink` is the HUD TEXT (ReaderHud `glass`: white on the
+ * Night glass; the reader ink on the Day glass, RD-2), pinned from the spec: it is never readerDesigns.css's
+ * --ds-reader-ink, which is the PAPER ink. The webtoon and clean Day rooms are not in that file yet: spec pins
+ * (reader.md §4.2) until RD-2. Content tokens: never the spark.
+ */
+const READER_RULES = parseRules(readFileSync(ROOT + 'components/comicstudio/immersive/readerDesigns.css', 'utf8')).filter((r) => r.parents.length === 0);
+const READER_NIGHT = tokensOf(READER_RULES, (s) => s === '[data-reader-root]');
+const READER_DAY = tokensOf(READER_RULES, (s) => s === '[data-reader-root][data-reader-room="day"]');
+interface ReaderRoom {
+  /** The reader-block tokens a value resolves against before index.css (empty for a spec pin). */
+  scope: Map<string, string>;
+  room: string;
+  glass: string;
+  ink: string;
+  hudFocus: string;
+  accent: string;
+}
+function fileRoom(scope: Map<string, string>, ink: string): ReaderRoom {
+  const read = (name: string): string => {
+    const value = scope.get(name);
+    if (value === undefined) throw new Error(`readerDesigns.css defines no ${name} for this room`);
+    return value;
+  };
+  return { scope, room: scope.get('--ds-reader-room') ?? 'var(--ds-reader-room)', glass: read('--ds-reader-glass'), ink, hudFocus: read('--ds-reader-hud-focus'), accent: read('--ds-reader-accent') };
+}
+const specRoom = (room: string): ReaderRoom => ({ scope: new Map(), room, glass: 'rgba(255,255,255,0.74)', ink: '#3b3026', hudFocus: '#3b3026', accent: '#3b3026' });
+const READER_ROOMS: Record<string, ReaderRoom> = {
+  night: fileRoom(READER_NIGHT, '#ffffff'),
+  'day (hardcover, issue, manga, zine, picturebook, strip)': fileRoom(new Map([...READER_NIGHT, ...READER_DAY]), '#3b3026'),
+  'day (webtoon)': specRoom('#ffffff'),
+  'day (clean)': specRoom('#f4f4f2')
+};
+/** A reader-room value in one context: the room's own reader block first, then index.css. */
+const roomColor = (r: ReaderRoom, value: string, ctx: ContextName): Rgba => resolveColor(value, (n) => r.scope.get(n) ?? lookup(n, ctx));
+
+describe('token contrast — the reader rooms (HUD ink, room-side focus; RD-A)', () => {
+  it('today’s Night room is the index.css reader room, the same in every context (content, not chrome)', () => {
+    for (const ctx of ALL_CONTEXTS) expect(lookup('--ds-reader-room', ctx), ctx).toBe(lookup('--ds-reader-room', 'default light'));
+    // The reader root inherits the room and the paper back from :root (only the dormant Day block sets a room):
+    // the motion comic export reads both from document.documentElement (AV-0).
+    expect(READER_NIGHT.has('--ds-reader-room')).toBe(false);
+    expect(READER_RULES.filter((r) => r.body.includes('--ds-reader-paper-back'))).toEqual([]);
+  });
+
+  it('HUD ink on the HUD glass is ≥ 4.5:1 in every room, in every context', () => {
+    for (const ctx of ALL_CONTEXTS) {
+      for (const [name, r] of Object.entries(READER_ROOMS)) {
+        const glass = over(roomColor(r, r.glass, ctx), roomColor(r, r.room, ctx));
+        expect(ratio(roomColor(r, r.ink, ctx), glass), `${ctx}, ${name}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('the reading room accent and focus (--ds-reader-accent, --ds-reader-hud-focus) are ≥ 3:1 on the room and the HUD glass, in every room and every context (RD-A N1)', () => {
+    for (const ctx of ALL_CONTEXTS) {
+      for (const [name, r] of Object.entries(READER_ROOMS)) {
+        const bg = roomColor(r, r.room, ctx);
+        const glass = over(roomColor(r, r.glass, ctx), bg);
+        for (const [token, value] of [['--ds-reader-accent', r.accent], ['--ds-reader-hud-focus', r.hudFocus]] as const) {
+          expect(ratio(roomColor(r, value, ctx), bg), `${ctx}, ${name}: ${token} on the room`).toBeGreaterThanOrEqual(3);
+          expect(ratio(roomColor(r, value, ctx), glass), `${ctx}, ${name}: ${token} on the HUD glass`).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+  });
+
+  it('why the room needs its own focus pair (V2 N1): the Atlas light accent on the Night room is invisible', () => {
+    // The app accent the reader used to draw there: 1.02:1 in Atlas light.
+    expect(ratio(token('--ds-accent', 'atlas light'), roomColor(READER_ROOMS.night, READER_ROOMS.night.room, 'atlas light'))).toBeLessThan(1.1);
+  });
+
+  it('the classic reader’s page flip animates only transform and opacity (RD-0 F7: no per-frame filter repaint)', () => {
+    for (const name of ['pageFlipNext', 'pageFlipPrev']) {
+      const frames = rules.filter((r) => r.parents.includes(`@keyframes ${name}`));
+      expect(frames.length, name).toBe(3);
+      const props = new Set(frames.flatMap((r) => r.body.split(';').map((d) => d.split(':')[0].trim()).filter(Boolean)));
+      expect([...props].sort(), name).toEqual(['opacity', 'transform']);
+    }
+  });
+
+  it('no reader token reads the colour layer (the comic page keeps --ds-reader-*; the art supplies the colour)', () => {
+    const reader = [...ROOT_TOKENS, ...READER_NIGHT, ...READER_DAY].filter(([k]) => k.startsWith('--ds-reader-'));
+    expect(reader.length).toBeGreaterThanOrEqual(4);
+    expect(reader.filter(([, v]) => /--ds-(?:spark|hue-|art\b)/.test(v))).toEqual([]);
   });
 });

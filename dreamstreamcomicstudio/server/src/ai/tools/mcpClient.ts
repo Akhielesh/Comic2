@@ -8,12 +8,22 @@
 // guards block private/loopback hosts and require https. Full streaming-SSE servers
 // and OAuth flows are follow-ups.
 
-import { lookup } from 'node:dns/promises';
 import type { McpServerConfig } from '../../../../apiTypes.js';
 import type { ChatTool, ToolExecResult } from './registry.js';
 import { capToolOutput, MCP_TOOL_OUTPUT_MAX } from './capToolOutput.js';
+import { envDesignMcpServers } from '../studio/designSystem.js';
+import { isPrivateAddress, pinnedFetch, resolveHost } from './safeNet.js';
+import { readTextCapped } from './cappedBody.js';
 
 const MCP_TIMEOUT_MS = 15_000;
+/**
+ * Largest JSON-RPC response read (after any Content-Encoding is undone). Room for a tool's base64
+ * image; a bigger body (or a small compressed one that inflates past it) stops at the cap and the
+ * call fails — it is never held in memory whole.
+ */
+export const MCP_MAX_RESPONSE_BYTES = 8_000_000;
+/** An error body is only quoted (200 chars), so only a little of it is read. */
+const MCP_ERROR_BODY_BYTES = 16_384;
 const TOOLS_CACHE_TTL_MS = 5 * 60_000;
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -53,40 +63,27 @@ export const isSafeMcpUrl = (
   return { ok: true };
 };
 
-// Block private/loopback/link-local/CGNAT/metadata ranges (IPv4 + IPv4-mapped IPv6 + IPv6).
-const isPrivateIp = (ip: string): boolean => {
-  const addr = ip.toLowerCase().startsWith('::ffff:') ? ip.slice(7) : ip;
-  if (addr.includes('.')) {
-    const [a, b] = addr.split('.').map(Number);
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true; // link-local incl. 169.254.169.254 cloud metadata
-    if (a === 192 && b === 168) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-    return false;
-  }
-  const low = addr.toLowerCase();
-  return low === '::1' || low === '::' || low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80');
-};
-
-// Resolve the host and ensure NO resolved IP is private. Closes the DNS-rebinding bypass of
-// the hostname-string guard above (a public name pointing at 169.254.169.254/127.0.0.1).
+// Resolve the host and ensure NO resolved IP is private (a public name pointing at
+// 169.254.169.254/127.0.0.1 is refused with a clear error before anything is sent). The
+// connection itself is pinned too: untrusted requests go through pinnedFetch (safeNet.ts),
+// whose lookup hook re-checks the address the socket actually connects to, so a rebinding
+// answer between this check and the connect is refused as well.
 // Trusted (operator-configured) servers skip this.
 const assertResolvedHostSafe = async (url: string, allowInternal: boolean): Promise<void> => {
   if (allowInternal) return;
   let hostname: string;
   try {
-    hostname = new URL(url).hostname;
+    hostname = new URL(url).hostname.replace(/^\[|\]$/g, '');
   } catch {
     throw new Error('invalid URL');
   }
   let addrs: { address: string }[] = [];
   try {
-    addrs = await lookup(hostname, { all: true });
+    addrs = await resolveHost(hostname);
   } catch {
     throw new Error('MCP server host could not be resolved');
   }
-  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) {
+  if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) {
     throw new Error('MCP server resolves to a private/internal address');
   }
 };
@@ -105,7 +102,8 @@ export const assertSafePublicUrl = async (url: string): Promise<void> => {
  * Fetch a USER-supplied URL with the full SSRF gate applied to EVERY redirect hop
  * (default `redirect: 'follow'` would let a public site 302 the server into
  * 127.0.0.1 / cloud metadata). Validates, fetches with manual redirects, and
- * re-validates each Location before following, up to maxRedirects.
+ * re-validates each Location before following, up to maxRedirects. Every hop connects
+ * through pinnedFetch, so the IP the socket reaches is the one that passed the check.
  */
 export const fetchPublicUrl = async (
   url: string,
@@ -115,10 +113,11 @@ export const fetchPublicUrl = async (
   let current = url;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     await assertSafePublicUrl(current);
-    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const res = await pinnedFetch(current, { ...init, redirect: 'manual' });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (!location) return res;
+      await res.body?.cancel().catch(() => undefined); // free the hop's connection
       current = new URL(location, current).toString();
       continue;
     }
@@ -162,14 +161,18 @@ const rpc = async (
   params: Record<string, unknown> | undefined,
   session: { sessionId?: string; protocolVersion?: string } | undefined,
   isNotification: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  allowInternal = false
 ): Promise<{ result: any; sessionId?: string }> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
+  // Operator-configured servers (allowInternal) may live on internal hosts, so they use the
+  // plain fetch; every other server connects only to the address its lookup checked.
+  const send = allowInternal ? fetch : pinnedFetch;
   try {
-    const res = await fetch(server.url, {
+    const res = await send(server.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -197,10 +200,11 @@ const rpc = async (
     }
     if (isNotification) return { result: null, sessionId: sid };
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
+      const body = await readTextCapped(res, MCP_ERROR_BODY_BYTES).then((r) => r.text, () => '');
       throw new Error(`MCP ${method} failed: ${res.status} ${body.slice(0, 200)}`);
     }
-    const text = await res.text();
+    const { text, truncated } = await readTextCapped(res, MCP_MAX_RESPONSE_BYTES);
+    if (truncated) throw new Error(`MCP ${method} response too large (over ${Math.round(MCP_MAX_RESPONSE_BYTES / 1_000_000)} MB)`);
     const json = parseRpcBody(text);
     if (json?.error) throw new Error(`MCP ${method} error: ${json.error.message || 'unknown'}`);
     return { result: json?.result, sessionId: sid };
@@ -210,7 +214,7 @@ const rpc = async (
   }
 };
 
-const handshake = async (server: McpServerConfig, signal?: AbortSignal): Promise<McpSession> => {
+const handshake = async (server: McpServerConfig, signal?: AbortSignal, allowInternal = false): Promise<McpSession> => {
   const init = await rpc(
     server,
     'initialize',
@@ -221,14 +225,15 @@ const handshake = async (server: McpServerConfig, signal?: AbortSignal): Promise
     },
     undefined,
     false,
-    signal
+    signal,
+    allowInternal
   );
   // Honor the version the server negotiated (it may downgrade); fall back to ours.
   const negotiated =
     typeof init.result?.protocolVersion === 'string' ? init.result.protocolVersion : PROTOCOL_VERSION;
   const session: McpSession = { sessionId: init.sessionId, protocolVersion: negotiated };
   // Best-effort "initialized" notification (some servers require it before tools/list).
-  await rpc(server, 'notifications/initialized', undefined, session, true, signal).catch(() => undefined);
+  await rpc(server, 'notifications/initialized', undefined, session, true, signal, allowInternal).catch(() => undefined);
   return session;
 };
 
@@ -241,16 +246,18 @@ export const listMcpTools = async (
   signal?: AbortSignal,
   allowInternal = false
 ): Promise<McpTool[]> => {
+  // The URL check runs before the cache: a list cached for an operator (trusted) server must
+  // never be handed to an untrusted caller of the same URL.
+  const safe = isSafeMcpUrl(server.url, { allowInternal });
+  if (!safe.ok) throw new Error(`MCP server URL rejected: ${safe.reason}`);
   const key = cacheKey(server);
   const cached = toolsCache.get(key);
   if (cached && Date.now() - cached.at < TOOLS_CACHE_TTL_MS) return cached.tools;
 
-  const safe = isSafeMcpUrl(server.url, { allowInternal });
-  if (!safe.ok) throw new Error(`MCP server URL rejected: ${safe.reason}`);
   await assertResolvedHostSafe(server.url, allowInternal);
 
-  const session = await handshake(server, signal);
-  const { result } = await rpc(server, 'tools/list', {}, session, false, signal);
+  const session = await handshake(server, signal, allowInternal);
+  const { result } = await rpc(server, 'tools/list', {}, session, false, signal, allowInternal);
   const tools: McpTool[] = Array.isArray(result?.tools)
     ? result.tools
         .filter((t: any) => t && typeof t.name === 'string')
@@ -268,8 +275,8 @@ const callMcpTool = async (
   signal?: AbortSignal
 ): Promise<ToolExecResult> => {
   await assertResolvedHostSafe(server.url, allowInternal);
-  const session = await handshake(server, signal);
-  const { result } = await rpc(server, 'tools/call', { name: toolName, arguments: args }, session, false, signal);
+  const session = await handshake(server, signal, allowInternal);
+  const { result } = await rpc(server, 'tools/call', { name: toolName, arguments: args }, session, false, signal, allowInternal);
   const content = Array.isArray(result?.content) ? result.content : [];
 
   // Map the FULL MCP content array — previously only text survived, so image/data tools
@@ -324,6 +331,34 @@ const mcpToolName = (serverId: string, tool: string) => `mcp_${serverId}_${tool}
  * Servers flagged `trusted` (operator-configured, e.g. a self-hosted sidecar) may use http/internal
  * hosts; user-supplied servers stay behind the strict https + public-host SSRF guard.
  */
+
+/**
+ * Whether a server may skip the user-URL SSRF guard. The `trusted` flag alone is not enough —
+ * it travels on objects a request body can shape — so it counts only for a URL the operator
+ * configured (envDesignMcpServers, read from env at call time). Exported for tests.
+ */
+export const mayUseInternalHosts = (
+  server: { url: string; trusted?: boolean },
+  operatorUrls: ReadonlySet<string> = new Set(envDesignMcpServers().map((s) => s.url))
+): boolean => server.trusted === true && operatorUrls.has(server.url);
+
+/**
+ * A trusted server as the operator configured it: same id/name for tool naming, but the URL and
+ * headers come from the env entry (the one whose headers match, else the first for that URL).
+ */
+const withOperatorConfig = <S extends McpServerConfig & { trusted?: boolean }>(
+  server: S,
+  operatorServers: readonly { url: string; headers?: Record<string, string> }[]
+): S => {
+  const sameUrl = operatorServers.filter((o) => o.url === server.url);
+  const want = JSON.stringify(server.headers || {});
+  const op = sameUrl.find((o) => JSON.stringify(o.headers || {}) === want) || sameUrl[0];
+  if (!op) return server;
+  const next: S = { ...server, url: op.url };
+  if (op.headers) next.headers = op.headers;
+  else delete next.headers;
+  return next;
+};
 // Cap tools imported from a single server so one chatty server can't flood the model's
 // tool list (and blow past provider tool limits).
 const MAX_TOOLS_PER_SERVER = 40;
@@ -351,9 +386,15 @@ export const buildMcpTools = async (
 
   // Discover servers in PARALLEL — a slow/broken one no longer serializes latency across
   // all of them (and never fails the chat: per-server failures are isolated).
+  const operatorServers = envDesignMcpServers();
+  const operatorUrls = new Set(operatorServers.map((s) => s.url));
   const settled = await Promise.allSettled(
-    servers.map(async (server): Promise<ChatTool[]> => {
-      const allowInternal = Boolean(server.trusted);
+    servers.map(async (requested): Promise<ChatTool[]> => {
+      const allowInternal = mayUseInternalHosts(requested, operatorUrls);
+      // The internal (unpinned, http-allowed) path talks to the operator's server exactly as the
+      // operator configured it: its URL and ITS headers (env *_HEADERS), never headers a request
+      // body attached to a copy of that URL (e.g. a connector-scoping header of the caller's choosing).
+      const server = allowInternal ? withOperatorConfig(requested, operatorServers) : requested;
       if (!isSafeMcpUrl(server.url, { allowInternal }).ok) return [];
       const tools = await listMcpTools(server, signal, allowInternal);
       return tools.slice(0, MAX_TOOLS_PER_SERVER).map((tool) => wrap(server, tool, allowInternal));

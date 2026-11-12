@@ -47,7 +47,12 @@ const maskEmail = (email?: string) => {
   return `${visible}***@${domain}`;
 };
 
-const resolveSafeAccountSummary = async (
+/**
+ * The account summary the assistant sees, built server-side. Admin comes only from the billing
+ * plan the server holds (tier 'admin'), never from an email address: anyone can sign up with
+ * the old hard-coded test address. Exported for tests.
+ */
+export const resolveSafeAccountSummary = async (
   user: { id: string; email?: string }
 ): Promise<AssistantAccountSummary> => {
   const account: AssistantAccountSummary = {
@@ -73,7 +78,7 @@ const resolveSafeAccountSummary = async (
     if (usageResult) {
       const tier = usageResult.plan.id;
       account.planTier = tier;
-      account.isAdmin = tier === 'admin' || user.email === 'admin@test.com';
+      account.isAdmin = tier === 'admin';
       account.usage = {
         dailyRemainingCt: usageResult.usage.dailyRemainingCt,
         availableCt: usageResult.wallet.availableCt,
@@ -81,12 +86,13 @@ const resolveSafeAccountSummary = async (
       };
       account.billing = usageResult;
     } else {
-      account.planTier = user.email === 'admin@test.com' ? 'admin' : 'free';
-      account.isAdmin = user.email === 'admin@test.com';
+      account.planTier = 'free';
+      account.isAdmin = false;
     }
   } catch {
-    account.planTier = user.email === 'admin@test.com' ? 'admin' : 'free';
-    account.isAdmin = user.email === 'admin@test.com';
+    // No billing answer: the safe default, never a guess from the email.
+    account.planTier = 'free';
+    account.isAdmin = false;
   }
 
   return account;

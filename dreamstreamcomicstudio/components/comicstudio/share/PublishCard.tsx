@@ -65,7 +65,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
     <CardShell
       title={heading}
       icon={visibility === 'public' ? <Globe2 className="h-4 w-4" aria-hidden /> : <Link2 className="h-4 w-4" aria-hidden />}
-      right={!destructive ? (visibility === 'public' ? 'Public gallery' : 'Anyone with the link') : undefined}
+      right={!destructive ? (visibility === 'public' ? 'Library + link' : 'Link only') : undefined}
       aria-label={heading}
     >
       {card.status === 'pending' && !destructive && (
@@ -126,7 +126,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
       )}
       {card.status === 'failed' && (
         <p role="alert" className="m-0 mb-3 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
-          {card.result?.error || "That didn't work. Nothing changed."}
+          {card.result?.error || 'That didn’t work. Nothing changed.'}
         </p>
       )}
       {card.status === 'declined' && <p className="m-0 text-[13px] text-[var(--ds-muted)]">Not published — nothing changed.</p>}

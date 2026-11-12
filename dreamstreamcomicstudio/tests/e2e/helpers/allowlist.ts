@@ -33,6 +33,7 @@ export const CHECK_IDS = [
   'hinge',
   'landmarks',
   'layout-class',
+  'one-spark',
   'axe',
   'console'
 ] as const;

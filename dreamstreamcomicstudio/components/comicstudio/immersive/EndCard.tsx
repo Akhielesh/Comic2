@@ -1,7 +1,8 @@
 // The End card (reader.md §6.3): the last page of the book. "The End", the title, the creator's credits
 // line (or the public author name — never an email), who starred, and what to do next: read again,
 // Guided replay, share, another language, download, make your own. Focus lands on the heading when
-// the reader arrives here.
+// the reader arrives here. The End card is a page: its focus ring is the paper's (--ds-reader-focus, ≥ 4.5:1
+// on the paper in both themes), never the app accent (white on the paper in the dark theme).
 
 import React from 'react';
 import { Download, Languages, RotateCcw, ScanEye, Share2, Sparkles } from 'lucide-react';
@@ -26,7 +27,7 @@ export interface EndCardProps {
 }
 
 const btn =
-  'press inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
+  'press inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
 
 export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters, language, onReadAgain, onGuidedReplay, onShare, onDownload, downloadBusy, dense }) => {
   const heading = React.useRef<HTMLHeadingElement>(null);

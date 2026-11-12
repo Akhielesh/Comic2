@@ -139,7 +139,7 @@ import {
   type SpendEstimate
 } from '../../../shared/comic/models.js';
 import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
-import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
+import { STYLE_PRESETS, briefWantsSpotColour, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
@@ -2224,17 +2224,30 @@ type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
 const restoredStatus = (prev: ImageJob['prev']): RenderState['status'] =>
   prev.status === 'queued' || prev.status === 'rendering' ? (prev.hasAsset ? 'ready' : 'none') : prev.status;
 
-/** Best-matching preset for a doc that never chose a style (genre/tone/kind/color fit). */
+/** A bestFor tag as a whole word or phrase: 'Indiana' never scores the 'indian' tag. */
+const storyHasTag = (story: string, tag: string): boolean => {
+  const escaped = tag.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(story);
+};
+
+/**
+ * Best-matching preset for a doc that never chose a style (genre/tone/kind/color fit). The spot
+ * looks (Ink + one colour, Mono wash) are b/w art: they lead only a b/w-plus-accent brief and
+ * take the b/w nudge down on a full-colour comic, so the no-style fallback never draws a colour
+ * comic in black and white.
+ */
 export const pickDefaultPreset = (doc: ComicDoc): StylePreset => {
   const story = [doc.brief.genre, doc.brief.tone, doc.brief.audience, doc.brief.premise, doc.brief.logline, doc.brief.setting]
     .map((s) => clean(s, 2000).toLowerCase())
     .join(' ');
+  const spot = briefWantsSpotColour(doc);
   const score = (p: StylePreset) => {
     let s = 0;
     if (p.kind && p.kind === doc.format.kind) s += 3;
-    for (const tag of p.bestFor) if (story.includes(tag.toLowerCase())) s += 2;
-    if (doc.format.colorMode === 'bw') s += p.colorMode === 'bw' ? 3 : -4;
-    else if (p.colorMode === 'bw') s -= 3;
+    for (const tag of p.bestFor) if (storyHasTag(story, tag)) s += 2;
+    if (p.tags.colour === 'spot' && spot) s += 10;
+    else if (doc.format.colorMode === 'bw') s += p.colorMode === 'bw' ? 3 : -4;
+    else if (p.colorMode === 'bw' || (p.tags.colour === 'spot' && doc.format.colorMode !== 'limited')) s -= 3;
     if (doc.format.colorMode === 'limited' && p.colorMode === 'limited') s += 2;
     return s;
   };

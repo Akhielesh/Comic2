@@ -97,7 +97,7 @@ describe('public index', () => {
     const res = await fetch(url);
     const body = await res.json();
     expect(body.assets.map((a: { id: string }) => a.id)).toEqual(['style.test-one']);
-    expect(JSON.stringify(body)).not.toMatch(/prompt|Test scene/);
+    expect(JSON.stringify(body)).not.toMatch(/runId|adminId|costUsd|cost_usd|final_prompt/); expect(body.assets[0].provenance).toMatchObject({ model: 'nano-banana-2.1', seed: null, seedSupported: false, prompt: expect.stringMatching(/^Test scene one/) });
     const etag = res.headers.get('etag')!;
     expect(etag).toMatch(/^"\w+"$/);
     expect((await fetch(url, { headers: { 'if-none-match': etag } })).status).toBe(304);
@@ -177,10 +177,14 @@ describe('admin console API', () => {
     expect(t.repo.assets.get('1:style.test-one')!.published).toBeNull();
   });
 
-  it('no platform key → 503 with an honest message', async () => {
+  it('no admin spend key → 503 with an honest message', async () => {
+    // testLibrary wires the admin spend guard production always wires (ST-A wave note 10), so the refusal is the
+    // production one: it names the key and its env var (never a value) and says nothing was spent.
     t = testLibrary({ keys: null });
     const res = await post('/api/comic/admin/library/runs', { confirm: true });
     expect(res.status).toBe(503);
-    expect((await res.json()).error.message).toMatch(/platform image key/);
+    const message: string = (await res.json()).error.message;
+    expect(message).toMatch(/model-test key \(DREAMSTREAMSTUDIO_MODELTEST\) isn't set/);
+    expect(message).toMatch(/nothing was spent/);
   });
 });

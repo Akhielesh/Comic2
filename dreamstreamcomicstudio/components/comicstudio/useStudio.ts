@@ -24,10 +24,24 @@
 //   - uploadRef streams the bytes via XHR with real progress and abort, and applies the
 //     server's ref ops directly (no refetch).
 //   - The owner's publication view is fetched lazily and refreshed when the doc's mirror changes.
+//
+// Live agent (agent-editor plan §3 A1, behind caps.liveAgent.queue):
+//   - send() resolves what it did with the message (SendOutcome) as soon as that is decided: 'sent' once the stream
+//     has started, 'queued' / 'held' when the note went to Up next, 'refused' when nothing was sent or queued (the
+//     composer keeps the draft). With the queue off, a send while a turn is in flight is 'refused' and nothing else
+//     changes (it used to return silently).
+//   - While the server's turn lock is held (a director turn whose reply has not landed, or plan_pages), notes queue.
+//     When the reply lands the queue drains as ONE message (D1), split only by differing focus; it holds while the last
+//     message failed before the server took it (the drain never replaces that failed bubble), and for an open
+//     question or spend gate, after Stop, after a reload (never auto-sent) and after a BUSY from another tab (a bounded
+//     retry). BUSY puts the notes back in Up next instead of showing a failed bubble.
+//   - sendNow(id): with caps.liveAgent.steer and a steer function, the note joins the running turn
+//     (studioApi.steerStudio, A2; injectable through UseStudioDeps); otherwise Stop the director, then send (D2).
+//   - The queue is saved per project in sessionStorage (messageQueue.ts), every access in try/catch.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
-import type { StreamRequest, StudioEvent, StudioFocus } from '../../shared/comic/events';
+import { STEER_LIMITS, type AttachmentTarget, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
 import {
   mapAssetRefs,
   variantFor,
@@ -38,7 +52,7 @@ import {
   type RefOwner,
   type RenderTarget
 } from '../../shared/comic/doc';
-import { DEFAULT_CAPS, historyEnabled, type StudioCaps } from '../../shared/comic/capabilities';
+import { DEFAULT_CAPS, historyEnabled, liveQueueOn, steerOn, type StudioCaps } from '../../shared/comic/capabilities';
 import { getImageModel } from '../../shared/comic/models';
 import type { PublicationOwnerView } from '../../shared/comic/publication';
 import type {
@@ -49,6 +63,7 @@ import type {
   RefUploadOptions,
   RefUploadResult,
   SendOptions,
+  SendOutcome,
   StreamOutcome,
   StudioActOutcome,
   StudioController,
@@ -62,6 +77,7 @@ import {
   isAbortError,
   loadStudioProject,
   signStudioUrls,
+  steerStudio,
   streamStudio,
   toStudioApiError,
   uploadStudioRef
@@ -71,8 +87,11 @@ import {
   initialStudioState,
   isDirectUrl,
   isMessageBusy,
+  isPlanning,
   isTargetRendering,
+  isTurnLocked,
   needsRefresh,
+  queueOf,
   renderingCount,
   studioReducer,
   tabForOps,
@@ -90,6 +109,23 @@ import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from
 import { handleHistoryIntent, historyUndoFallback, matchHistoryIntent, type HistoryIntentHost } from './history/intents';
 import { requestOpenHistory } from './history/index';
 import type { VersionRow } from '../../shared/comic/history/types';
+// --- live agent: the message queue (agent-editor plan §3 A1) ---
+import {
+  add as addToQueue,
+  batchesForDrain,
+  drainRequest,
+  holdReason,
+  QUEUE_LIMITS,
+  QUEUE_RETRY_MS,
+  readStoredQueue,
+  withoutQueuePrefix,
+  writeStoredQueue,
+  type DrainRequest,
+  type QueueAddRefusal,
+  type QueueHold,
+  type QueuedNote
+} from './messageQueue';
+import { composeInStudio } from './conversation/composerBus';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -109,10 +145,25 @@ export interface OptionCardAnswer {
 /** send()'s options: SendOptions plus the option card the message answers. */
 export type MessageSendOptions = SendOptions & { card?: OptionCardAnswer };
 
+/** A message about to start a director turn (send(), a drained batch, Send now). */
+interface OutgoingMessage {
+  text: string;
+  files: PendingAttachment[];
+  inbox: string[];
+  targets?: AttachmentTarget[];
+  focus?: StudioFocus;
+  card?: OptionCardAnswer;
+  /** The notes it carries, put back in Up next if the server answers BUSY (plan §3 A1). */
+  requeue?: { notes: QueuedNote[]; at: 'head' | 'tail' };
+}
+
 /** Extra state the conversation pane uses on top of the shared StudioController contract. */
 export interface ComicStudioController extends StudioController {
-  /** As StudioController's, plus the option card the message answers (MessageSendOptions.card). */
-  send(text: string, opts?: MessageSendOptions | PendingAttachment[]): Promise<void>;
+  /**
+   * As StudioController's, plus the option card the message answers (MessageSendOptions.card). The live controller
+   * resolves a SendOutcome as soon as it is decided (plan §3 A1); test fakes may resolve void (read it as 'sent').
+   */
+  send(text: string, opts?: MessageSendOptions | PendingAttachment[]): Promise<SendOutcome | void>;
   /** A director turn is streaming (the composer waits; actions may still run). */
   messageBusy: boolean;
   /** The user's message, shown until the server records it (or marked failed). */
@@ -133,6 +184,49 @@ export interface ComicStudioController extends StudioController {
   /** Comic History: the latest moment the server saved (the `history` event) — an open History panel updates live. */
   lastHistoryVersion?: VersionRow;
 }
+
+/** The steer call (studioApi.steerStudio, A2): a note for the running director turn (plan §3 A2). */
+export type SteerStudioFn = (projectId: string, req: SteerRequest) => Promise<SteerResponse>;
+
+/** Injectable dependencies (tests; the live wiring uses the defaults). */
+export interface UseStudioDeps {
+  /** Overrides the steer call; absent = DEFAULT_STEER. */
+  steerStudio?: SteerStudioFn;
+}
+
+/**
+ * The steer call "Send now" uses while caps.liveAgent.steer is on: POST /projects/:id/steer (studioApi.steerStudio, A2).
+ * Steering itself stays behind COMIC_STEER; with it off the caps say so and "Send now" is D2 (Stop the director, then
+ * send).
+ */
+const DEFAULT_STEER: SteerStudioFn | undefined = steerStudio;
+
+/** Never silent: why a note could not go to Up next (the message itself is kept where it was typed). */
+const QUEUE_REFUSAL_COPY: Record<QueueAddRefusal | 'inline' | 'card', string> = {
+  empty: 'There’s nothing to add to Up next yet.',
+  full: `Up next is full (${QUEUE_LIMITS.notes} notes). Send or remove one, then add this again.`,
+  too_long: 'That’s too long to wait in Up next. Send it once the director finishes this step.',
+  too_many_photos: `Up to ${QUEUE_LIMITS.inboxPaths} photos can wait with one note. Send the rest once the director finishes this step.`,
+  inline: 'Script files and photos that didn’t upload can’t wait in Up next. Send this once the director finishes this step.',
+  card: 'Answer that question once the director finishes this step.'
+};
+
+/**
+ * "Send now" with steering on, when the note cannot join the running step (POST /steer's refusals, agent-editor plan
+ * §3 A2). Every refusal keeps the note: the 409s and a long note go next without stopping the director; a cooldown keeps
+ * it in its place.
+ */
+export const STEER_GOES_NEXT_COPY = {
+  BUSY: `The director already has ${STEER_LIMITS.inbox} notes in hand — yours stays in Up next and goes when it finishes.`,
+  LIMIT: 'That note is long, so it goes as its own message once the director finishes.'
+} as const;
+
+/**
+ * Up next off and a message is in flight: a send from the board, the timeline or the lettering inspector is refused,
+ * and keepRefusedInComposer moves its words to the message box (the composer's own Send is disabled while busy). This
+ * says why the words moved there instead of going.
+ */
+export const BUSY_REFUSED_COPY = 'The director is still working on your last message, so this one is waiting in the message box. Send it when it finishes.';
 
 /** Don't auto-switch the board tab within this long of the user picking one. */
 export const MANUAL_TAB_HOLD_MS = 20_000;
@@ -290,8 +384,10 @@ export const withTimeZone = (request: StreamRequest, caps: StudioCaps): StreamRe
 };
 
 
-export function useStudio(projectId: string): ComicStudioController {
+export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStudioController {
   const [state, dispatch] = useReducer(studioReducer, undefined, initialStudioState);
+  const depsRef = useRef(deps);
+  depsRef.current = deps;
   const stateRef = useRef(state);
   stateRef.current = state;
   /** The doc the user sees, including edits queued earlier in this same tick (undo baselines). */
@@ -312,6 +408,16 @@ export function useStudio(projectId: string): ComicStudioController {
   const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** What the last Stop stopped (the server decides the same way): the director turn in flight, or all drawing. */
   const cancelScopeRef = useRef<'turn' | 'drawing'>('drawing');
+  /** The project whose saved queue has been read: only then may the queue be written back (a switch never wipes it). */
+  const queueReadyRef = useRef<string | null>(null);
+  /** The next Stop is "Send now"'s (D2): it must not hold the rest of the queue. */
+  const stopForSendNowRef = useRef(false);
+  /**
+   * Queued notes "Send now" is steering into the running turn, until the steer call answers. The drain leaves them
+   * out: the server may already have put a note in that turn's inbox when the turn ends first, and the note must not
+   * also go as a new message.
+   */
+  const steeringRef = useRef(new Set<string>());
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
@@ -381,6 +487,7 @@ export function useStudio(projectId: string): ComicStudioController {
     const ctrl = new AbortController();
     abortStreams();
     messageInFlightRef.current = null;
+    queueReadyRef.current = null;
     actionsInFlightRef.current.clear();
     patchQueueRef.current.splice(0).forEach((p) => p.resolve());
     patchInFlightRef.current = false;
@@ -403,6 +510,14 @@ export function useStudio(projectId: string): ComicStudioController {
           setCapsFromServer(true);
         }
         d({ type: 'load_success', doc, urls, now: Date.now() });
+        // Live queue: notes this tab saved before a reload come back held ("2 notes were waiting"), never auto-sent.
+        if (mountedRef.current && generation === generationRef.current) {
+          if (liveQueueOn(loadedCaps ?? null)) {
+            const stored = readStoredQueue(projectId);
+            if (stored.length) d({ type: 'queue_restore', notes: stored });
+          }
+          queueReadyRef.current = projectId;
+        }
       })
       .catch((err) => {
         if (isAbortError(err)) return;
@@ -747,64 +862,160 @@ export function useStudio(projectId: string): ComicStudioController {
 
   // ── Messages ───────────────────────────────────────────────────────────────
 
-  const send = useCallback(
-    async (text: string, opts?: MessageSendOptions | PendingAttachment[]) => {
-      // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
-      const o: MessageSendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
-      const clean = (typeof text === 'string' ? text : '').trim();
-      const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
-      const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
-      if (!clean && !files.length && !inbox.length) return;
-      // A typed "undo" is the editor's job: instant, free, never sent to the director (contract §13.1).
-      if (!files.length && !inbox.length && TYPED_UNDO_RE.test(clean)) {
-        typedUndo();
-        return;
-      }
-      // Comic History typed intents ("show history", "undo the last AI change"): handled locally, free.
-      if (!files.length && !inbox.length && historyEnabled(capsRef.current)) {
-        const intent = matchHistoryIntent(clean);
-        if (intent && handleHistoryIntent(intent, historyHost())) return;
-      }
-      if (messageInFlightRef.current || !stateRef.current.base) return;
+  /**
+   * Start a director turn with this message: the pending bubble shows at once and the stream runs. Resolves when the
+   * stream ends; send() does not wait for that (it reports 'sent' as soon as the stream has started).
+   */
+  const startMessage = useCallback(
+    (m: OutgoingMessage): Promise<StreamOutcome> => {
       const streamId = localId('stream');
       messageInFlightRef.current = streamId;
-      const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
-      const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
-      const card = o.card && typeof o.card.id === 'string' && o.card.id ? o.card : undefined;
+      const targets = m.targets && m.targets.length ? m.targets : undefined;
       dispatch({
         type: 'message_pending',
         message: {
           id: localId('pending'),
-          text: clean,
-          attachments: files,
+          text: m.text,
+          attachments: m.files,
           // Kept so "Try again" re-sends exactly this message (uploads, targets, what it was about).
-          ...(inbox.length ? { inboxPaths: inbox } : {}),
+          ...(m.inbox.length ? { inboxPaths: m.inbox } : {}),
           ...(targets ? { attachmentTargets: targets } : {}),
-          ...(focus ? { focus } : {}),
-          ...(card ? { card } : {}),
+          ...(m.focus ? { focus: m.focus } : {}),
+          ...(m.card ? { card: m.card } : {}),
+          ...(m.requeue ? { requeue: m.requeue } : {}),
           at: Date.now(),
           status: 'sending',
           streamId
         }
       });
-      const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
+      const attachments = [...m.files, ...m.inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
       const request: StreamRequest & { card?: OptionCardAnswer } = {
         kind: 'message',
-        text: clean,
+        text: m.text,
         ...(attachments.length ? { attachments } : {}),
         ...(targets ? { attachmentTargets: targets } : {}),
-        ...(focus ? { focus } : {}),
-        ...(card ? { card } : {})
+        ...(m.focus ? { focus: m.focus } : {}),
+        ...(m.card ? { card: m.card } : {})
       };
-      try {
-        await runStream('message', request, { streamId });
-      } finally {
+      return runStream('message', request, { streamId }).finally(() => {
         // Only this stream's own marker: a later message may already be in flight (see below).
         if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
-      }
+      });
     },
-    [runStream, typedUndo, historyHost]
+    [runStream]
+  );
+
+  /**
+   * A queued send the creator asked for past a failed message ("Send anyway", "Send now") takes that failed bubble's
+   * place. Its words are never dropped (G20): they go back into the message box, after any draft, and a notice says so.
+   */
+  const keepFailedWords = useCallback((): void => {
+    const failed = stateRef.current.pendingMessage;
+    if (!failed || failed.status !== 'failed') return;
+    const parts = failed.requeue?.notes.length ? failed.requeue.notes.map((n) => n.text) : [failed.text];
+    const words = parts
+      .map((t) => withoutQueuePrefix((typeof t === 'string' ? t : '').trim()))
+      .filter(Boolean)
+      .join('\n\n');
+    const photos = (failed.attachments?.length ?? 0) + (failed.inboxPaths?.length ?? 0);
+    if (words) composeInStudio({ text: words, append: true, focus: false });
+    say({
+      kind: 'info',
+      text: words
+        ? `Your message that didn’t go is back in the message box${photos ? '. Add its photos again to send them' : ''}.`
+        : 'The photos from the message that didn’t go weren’t sent. Add them again to send them.'
+    });
+  }, [say]);
+
+  /** Send one drained batch of queued notes (or the note "Send now" picked); BUSY puts them back at the head. */
+  const sendQueued = useCallback(
+    (batch: QueuedNote[]): void => {
+      if (!batch.length) return;
+      const req: DrainRequest = drainRequest(batch);
+      keepFailedWords();
+      dispatch({ type: 'queue_take', ids: batch.map((n) => n.id) });
+      void startMessage({
+        text: req.text,
+        files: [],
+        inbox: req.inboxPaths ?? [],
+        ...(req.attachmentTargets ? { targets: req.attachmentTargets } : {}),
+        ...(req.focus ? { focus: req.focus } : {}),
+        requeue: { notes: batch, at: 'head' }
+      });
+    },
+    [startMessage, keepFailedWords]
+  );
+
+  const send = useCallback(
+    async (text: string, opts?: MessageSendOptions | PendingAttachment[]): Promise<SendOutcome> => {
+      // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
+      const o: MessageSendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
+      const clean = (typeof text === 'string' ? text : '').trim();
+      const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
+      const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
+      if (!clean && !files.length && !inbox.length) return 'refused';
+      // A typed "undo" is the editor's job: instant, free, never sent to the director (contract §13.1).
+      if (!files.length && !inbox.length && TYPED_UNDO_RE.test(clean)) {
+        typedUndo();
+        return 'sent';
+      }
+      // Comic History typed intents ("show history", "undo the last AI change"): handled locally, free.
+      if (!files.length && !inbox.length && historyEnabled(capsRef.current)) {
+        const intent = matchHistoryIntent(clean);
+        if (intent && handleHistoryIntent(intent, historyHost())) return 'sent';
+      }
+      const s = stateRef.current;
+      if (!s.base) return 'refused';
+      const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
+      const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
+      const card = o.card && typeof o.card.id === 'string' && o.card.id ? o.card : undefined;
+      const message: OutgoingMessage = { text: clean, files, inbox, ...(targets ? { targets } : {}), ...(focus ? { focus } : {}), ...(card ? { card } : {}) };
+
+      if (!liveQueueOn(capsRef.current)) {
+        // Queue off: one turn at a time, as before — but say so ('refused'), so the composer keeps the draft, and tell
+        // the creator why the words went to the message box instead.
+        if (messageInFlightRef.current) {
+          say({ kind: 'info', text: BUSY_REFUSED_COPY });
+          return 'refused';
+        }
+        void startMessage(message);
+        return 'sent';
+      }
+
+      // Queue on (plan §3 A1). Notes already waiting go first: a new message joins them while the turn is locked,
+      // while BUSY from another tab holds them, and while they are about to drain (their order is kept). A failed
+      // message holds them, so "Try again" (which comes back through here) goes before them.
+      const q = queueOf(s);
+      const locked = !!messageInFlightRef.current || isTurnLocked(s);
+      const failed = s.pendingMessage?.status === 'failed';
+      const drainsNext =
+        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed }));
+      // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
+      const note: QueuedNote | null =
+        files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
+      // An options-card answer belongs to the question on screen: on a free turn it goes now, even while notes wait to
+      // drain. Only a locked turn refuses it (the server would answer BUSY).
+      if (locked || (drainsNext && !card)) {
+        if (!note) {
+          say({ kind: 'info', text: QUEUE_REFUSAL_COPY[card ? 'card' : 'inline'] });
+          return 'refused';
+        }
+        const added = addToQueue(q.notes, note);
+        if (!added.added) {
+          say({ kind: 'info', text: QUEUE_REFUSAL_COPY[added.reason ?? 'full'] });
+          return 'refused';
+        }
+        dispatch({ type: 'queue_add', note });
+        return q.held ? 'held' : 'queued';
+      }
+      // A Stop hold left on an empty queue ends with the next turn the creator starts.
+      if (!q.notes.length && q.held) dispatch({ type: 'queue_clear' });
+      // Sent straight away; if another tab or device holds the turn (BUSY) it waits in Up next instead of failing.
+      void startMessage({ ...message, ...(note ? { requeue: { notes: [note], at: 'tail' as const } } : {}) });
+      return 'sent';
+    },
+    [startMessage, typedUndo, historyHost, say]
   );
 
   const retryPendingMessage = useCallback(() => {
@@ -825,11 +1036,15 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Cancel ─────────────────────────────────────────────────────────────────
 
   const cancel = useCallback(async () => {
+    const forSendNow = stopForSendNowRef.current;
+    stopForSendNowRef.current = false;
     if (stateRef.current.cancelling) return;
     const generation = generationRef.current;
     const d = guarded(generation);
     d({ type: 'cancel_start' });
     if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+    // Live queue: Stop means the notes wait for a tap ("Stopped. 2 notes are waiting"), unless this Stop is "Send now"'s.
+    if (liveQueueOn(capsRef.current) && isTurnLocked(stateRef.current) && !forSendNow) d({ type: 'queue_hold', held: 'stopped' });
     // The server stops the director turn in flight and what it queued (renders an earlier turn
     // started keep drawing) — or, with no turn in flight, every queued render. Images already
     // drawing finish (they are paid) and the streams close once they land.
@@ -943,7 +1158,11 @@ export function useStudio(projectId: string): ComicStudioController {
     signTimerRef.current = null;
     const now = Date.now();
     const urls = stateRef.current.urls;
-    const paths = [...wantedRef.current].filter((p) => !signingRef.current.has(p) && !urlIsFresh(urls[p], now));
+    // requestSign's cap is checked again here: a path queued before the image error that gave up on it (a broken
+    // file) must not be signed once more when the debounce fires.
+    const paths = [...wantedRef.current].filter(
+      (p) => !signingRef.current.has(p) && (signAttemptsRef.current.get(p) || 0) < MAX_SIGN_ATTEMPTS && !urlIsFresh(urls[p], now)
+    );
     wantedRef.current.clear();
     if (!paths.length || !stateRef.current.base) return;
     const generation = generationRef.current;
@@ -1036,6 +1255,13 @@ export function useStudio(projectId: string): ComicStudioController {
       return entry?.url;
     },
     [urls, requestSign, assetWithVariants]
+  );
+
+  // The signer gave up on this path (never stored, broken, out of attempts): exactly urlFor's test for skipping a
+  // variant, so a chat tile can say so instead of waiting forever (PF-2 #7). Refs only: stable, never fetches.
+  const isUnsignable = useCallback(
+    (path: string): boolean => unsignableRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS,
+    []
   );
 
   // An <img> anywhere in the studio failed to load one of our URLs: it expired or was
@@ -1182,7 +1408,7 @@ export function useStudio(projectId: string): ComicStudioController {
       }
       if (step.client) return runClientAction(step.client);
       const text = (typeof step.say === 'string' && step.say.trim() ? step.say : step.label || '').trim();
-      if (text) return send(text);
+      if (text) await send(text);
     },
     [act, runClientAction, send]
   );
@@ -1287,6 +1513,163 @@ export function useStudio(projectId: string): ComicStudioController {
   }, [messageBusy]);
   const { canUndo, canRedo, undoLabel, redoLabel } = undoApi;
 
+  // ── Live queue: "Up next" (agent-editor plan §3 A1) ────────────────────────
+  // Declared after the effect above on purpose: when a reply lands, that effect frees the in-flight marker first and
+  // the drain below runs in the same commit.
+
+  const queueOn = liveQueueOn(caps);
+  const queueState = queueOf(state);
+  const turnLocked = isTurnLocked(state);
+  const planning = isPlanning(state);
+  const queueNotes = queueState.notes;
+  // The creator's last message failed before the server took it: the drain must not put a new message in its place.
+  const pendingFailed = state.pendingMessage?.status === 'failed';
+  // What the Up next block says. While a director turn runs only an event hold (Stop, BUSY, a reload) applies; a
+  // question, a gate or a failed message is judged once the turn is free.
+  const queueHold: QueueHold | null =
+    !queueOn || !queueNotes.length
+      ? null
+      : messageBusy
+        ? queueState.held
+        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed });
+  const hasBase = !!state.base;
+  /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
+  const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
+  /** Bumped when a steer call answers, so the drain looks again at a note it left out while that call was open. */
+  const [steerSettled, bumpSteerSettled] = useReducer((n: number) => n + 1, 0);
+
+  // Drain: the turn is free and nothing holds the queue → the first batch goes as ONE message (D1). "Send anyway"
+  // passes a question, a gate or a failed message once (its words go back to the message box); "Send now" (D2, after
+  // the Stop) sends its one note whatever holds.
+  useEffect(() => {
+    if (!queueOn || !hasBase || turnLocked || messageInFlightRef.current || switching) return;
+    const q = queueOf(stateRef.current);
+    if (!q.notes.length) {
+      // A Stop pressed with nothing waiting holds only what is typed while it stops: once that turn is over, it ends.
+      if (q.held) dispatch({ type: 'queue_clear' });
+      return;
+    }
+    // A note whose steer call is still open waits for its answer: 200 means the server took it into the turn (it leaves
+    // Up next); NOT_RUNNING, BUSY or LIMIT put it first (queue_express). Either answer runs this effect again.
+    const ready = q.notes.filter((n) => !steeringRef.current.has(n.id));
+    if (!ready.length) return;
+    const express = q.express ? ready.find((n) => n.id === q.express) : undefined;
+    if (express) {
+      sendQueued([express]);
+      return;
+    }
+    const hold = holdReason({ doc: stateRef.current.doc, held: q.held, failed: stateRef.current.pendingMessage?.status === 'failed' });
+    if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
+    sendQueued(batchesForDrain(ready)[0] ?? []);
+  }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued, steerSettled]);
+
+  // BUSY from another tab or device: try again a few times, spaced out (bounded — never an idle timer), then wait
+  // for "Try again".
+  const busyRetries = queueState.busyRetries;
+  const heldElsewhere = queueOn && queueState.held === 'elsewhere' && queueNotes.length > 0;
+  useEffect(() => {
+    if (!heldElsewhere || busyRetries < 1 || busyRetries > QUEUE_LIMITS.busyRetries) return;
+    const delay = QUEUE_RETRY_MS[Math.min(busyRetries, QUEUE_RETRY_MS.length) - 1];
+    const timer = setTimeout(() => dispatch({ type: 'queue_retry' }), delay);
+    return () => clearTimeout(timer);
+  }, [heldElsewhere, busyRetries]);
+
+  // Saved per project in this tab, so a reload can offer the notes back (never sent on its own).
+  useEffect(() => {
+    if (!queueOn || queueReadyRef.current !== projectId || switching) return;
+    writeStoredQueue(projectId, queueNotes);
+  }, [queueOn, queueNotes, projectId, switching]);
+
+  const editQueued = useCallback((id: string, text: string) => dispatch({ type: 'queue_edit', id, text }), []);
+  const moveQueued = useCallback((id: string, dir: -1 | 1) => dispatch({ type: 'queue_move', id, dir: dir < 0 ? -1 : 1 }), []);
+  const moveQueuedTo = useCallback((id: string, index: number) => dispatch({ type: 'queue_move_to', id, index }), []);
+  const removeQueued = useCallback((id: string) => dispatch({ type: 'queue_remove', id }), []);
+  const clearQueue = useCallback(() => dispatch({ type: 'queue_clear' }), []);
+  /** "Send anyway" / "Send" / "Try again": the hold lifts and the queue drains as soon as the turn is free. */
+  const releaseQueue = useCallback(() => dispatch({ type: 'queue_release' }), []);
+
+  /**
+   * "Send now" on a queued note. The turn is free (the queue is only held): it goes at once. A director turn is running:
+   * with steering on (caps.liveAgent.steer and a steer call) the note joins that turn. The steer route's refusals (plan
+   * §3 A2) keep the note: NOT_RUNNING (the turn just ended or has not reached the director yet), BUSY (the director
+   * already holds STEER_LIMITS.inbox notes) and LIMIT (longer than STEER_LIMITS.noteChars; such a note never tries) put
+   * it first in Up next to go as a message when the turn ends, without stopping the director; COOLDOWN says why and
+   * keeps it where it is; a note refused for its content keeps it with the reason. NOT_AVAILABLE (steering switched off
+   * on the server) and any other failure fall back to D2 with a calm notice. Steering off, or a note with photos (a
+   * steer carries text only): Stop the director, then send it (D2). A plan_pages run is never stopped from here: the
+   * note goes the moment the plan is in.
+   */
+  const sendNow = useCallback(
+    async (id: string): Promise<SendOutcome> => {
+      const s = stateRef.current;
+      const note = queueOf(s).notes.find((n) => n.id === id);
+      if (!note || !s.base) return 'refused';
+      if (!messageInFlightRef.current && !isTurnLocked(s)) {
+        sendQueued([note]);
+        return 'sent';
+      }
+      const steer = depsRef.current.steerStudio ?? DEFAULT_STEER;
+      if (isMessageBusy(s) && steerOn(capsRef.current) && steer && !note.inboxPaths?.length) {
+        // Too long to join the step (the server would answer LIMIT): it goes first, as its own message, when it ends.
+        if (note.text.length > STEER_LIMITS.noteChars) {
+          dispatch({ type: 'queue_express', id });
+          say({ kind: 'info', text: STEER_GOES_NEXT_COPY.LIMIT });
+          return 'queued';
+        }
+        const generation = generationRef.current;
+        // Until the call answers, the drain leaves this note out (the turn may end before the answer arrives).
+        steeringRef.current.add(id);
+        try {
+          await steer(projectRef.current, { text: note.text, ...(note.focus ? { focus: note.focus } : {}) });
+          if (generation === generationRef.current) dispatch({ type: 'queue_remove', id });
+          return 'sent';
+        } catch (err) {
+          if (generation !== generationRef.current) return 'refused';
+          const e = toStudioApiError(err, 'project');
+          // Refused for what it says: the words are the problem, so the note stays for the creator to change.
+          if (e.kind === 'content_policy' || e.code === 'CONTENT_POLICY') {
+            dispatch({ type: 'set_error', message: e.message, ...(e.code ? { code: e.code } : {}) });
+            return 'refused';
+          }
+          // A cooldown: the words are fine but nothing can go yet. The note keeps its place; nothing stops.
+          if (e.code === 'COOLDOWN') {
+            dispatch({ type: 'set_error', message: e.message, code: e.code });
+            return 'refused';
+          }
+          // NOT_RUNNING (the turn just ended), BUSY (the director already has its notes) or LIMIT (too long for a step):
+          // it goes first, as a message, when the turn ends — the director is never stopped for it.
+          if (e.code === 'NOT_RUNNING' || e.code === 'BUSY' || e.code === 'LIMIT') {
+            dispatch({ type: 'queue_express', id });
+            if (e.code !== 'NOT_RUNNING') say({ kind: 'info', text: e.message || STEER_GOES_NEXT_COPY[e.code] });
+            return 'queued';
+          }
+          // Anything else (steering switched off on the server, the network): fall back to D2 — Stop the director, then
+          // send it — and say so calmly.
+          dispatch({ type: 'queue_express', id });
+          const stillWorking = isMessageBusy(stateRef.current);
+          say({ kind: 'info', text: stillWorking ? 'Couldn’t add it to this step, so the director stops and it goes next.' : 'Couldn’t add it to this step, so it goes next.' });
+          if (stillWorking) {
+            stopForSendNowRef.current = true;
+            void cancel();
+          }
+          return 'queued';
+        } finally {
+          // Answered (after the dispatches above): the drain may take the note again. The bump re-runs it even when
+          // the answer changed nothing in Up next (COOLDOWN, a content refusal) and the turn already ended.
+          steeringRef.current.delete(id);
+          if (mountedRef.current) bumpSteerSettled();
+        }
+      }
+      dispatch({ type: 'queue_express', id });
+      if (isMessageBusy(s)) {
+        stopForSendNowRef.current = true;
+        void cancel();
+      }
+      return 'queued';
+    },
+    [sendQueued, cancel, say]
+  );
+
   return useMemo(
     () => ({
       doc,
@@ -1299,6 +1682,7 @@ export function useStudio(projectId: string): ComicStudioController {
       errorCode: state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,
@@ -1339,7 +1723,25 @@ export function useStudio(projectId: string): ComicStudioController {
       publicationLoading,
       refreshPublication,
       readerRequest,
-      ...(state.lastHistoryVersion ? { lastHistoryVersion: state.lastHistoryVersion } : {})
+      ...(state.lastHistoryVersion ? { lastHistoryVersion: state.lastHistoryVersion } : {}),
+      // Live queue (plan §3 A1): present only while caps.liveAgent.queue is on (absent = today's behaviour).
+      ...(queueOn
+        ? {
+            queue: queueNotes,
+            queueHold,
+            queueSendingNow: queueState.express,
+            queueRetriesLeft: queueState.busyRetries <= QUEUE_LIMITS.busyRetries,
+            queueSteers,
+            turnLocked,
+            editQueued,
+            moveQueued,
+            moveQueuedTo,
+            removeQueued,
+            clearQueue,
+            releaseQueue,
+            sendNow
+          }
+        : {})
     }),
     [
       doc,
@@ -1352,6 +1754,7 @@ export function useStudio(projectId: string): ComicStudioController {
       state.errorCode,
       clearError,
       urlFor,
+      isUnsignable,
       send,
       act,
       patch,
@@ -1392,7 +1795,21 @@ export function useStudio(projectId: string): ComicStudioController {
       publicationLoading,
       refreshPublication,
       readerRequest,
-      state.lastHistoryVersion
+      state.lastHistoryVersion,
+      queueOn,
+      queueNotes,
+      queueHold,
+      queueState.express,
+      queueState.busyRetries,
+      queueSteers,
+      turnLocked,
+      editQueued,
+      moveQueued,
+      moveQueuedTo,
+      removeQueued,
+      clearQueue,
+      releaseQueue,
+      sendNow
     ]
   );
 }

@@ -9,19 +9,20 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ReaderItem } from '../reader/readerModel';
-import { decideRelease } from './flipPhysics';
+import { cubicBezier, decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
 import { cameraDuration, cameraFor, spotlightRect, stopAtPoint, IDENTITY_CAMERA, type Camera, type GuidedStop } from './guidedModel';
-import { durationFor, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
+import { durationFor, recordBlankTurn, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
 import { emptyLeafRefs, PageLeaf, type LeafExtraRefs } from './PageLeaf';
 import { playPageTurn } from './paperSound';
 import { bookGeometry, letterbox, type BookGeometry, type BookView, type LayoutDecision } from './readerLayout';
 import { isDoubleTap, scrollsInside, tapCommand, WheelAccumulator, type ReaderCommand } from './readerInput';
 import type { ReaderEvent, ReaderState } from './readerMachine';
-import { gutterFor, ReaderSlot, type SlotImage, type SlotRefs } from './ReaderSlot';
+import { gutterFor, ReaderSlot, slotImageSource, slotStandIn, type SlotImage, type SlotRefs } from './ReaderSlot';
 import { contentKey, LAYER_Z, mountWindow, planTurn, roleOf, type TurnPlan, type TurnStyle } from './turnPlan';
 import { Spotlight, useCameraAnimator } from './GuidedCamera';
-import { useCachedImage, pickVariant } from './pageImageCache';
+import { holdUntilDecoded, pageImageCache, useCachedImage, pickVariant } from './pageImageCache';
+import { READER_TOKEN_DEFAULTS, readReaderTokens, type ReaderMotionTokens } from './readerTokens';
 import type { WidthClass } from '../mobile/formFactor';
 
 export interface BookStageProps {
@@ -60,10 +61,18 @@ export interface BookStageProps {
   warmViews?: number[];
   /** A riffle/goto target palette etc. — the stage reports which items are on screen. */
   onVisibleItems?(items: number[]): void;
+  /** The paper a page with no picture yet shows (ReaderSlot `paperTone`; reader.md §8.1). */
+  paperTone?: string;
 }
 
 const INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], [data-no-turn]';
 const DRAG_SLOP = 6;
+/** The page-block edge: its thickest (px at layout scale 1) and how much each view adds. */
+export const EDGE_MAX = 6;
+export const edgeThickness = (views: number): number => Math.min(EDGE_MAX, 0.6 * Math.max(0, views));
+
+/** What a view needs decoded before it can show art: per item, its alternatives (source, original). */
+type ViewNeeds = { item: number; alts: string[]; standIn?: string; source?: { path: string; url?: string } }[];
 
 interface DragInfo {
   pointerId: number;
@@ -92,7 +101,22 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wheel = useRef(new WheelAccumulator());
-  const camera = useCameraAnimator(wrapperRef, spotRef);
+  const camera = useCameraAnimator(wrapperRef, spotRef, size);
+  // Reader motion tokens (readerDesigns.css), read once per mount from the computed style; TS defaults until then.
+  const tokens = useRef<ReaderMotionTokens>(READER_TOKEN_DEFAULTS);
+  const curves = useRef({ paper: cubicBezier(...READER_TOKEN_DEFAULTS.easePaper), camera: cubicBezier(...READER_TOKEN_DEFAULTS.easeCamera) });
+  useLayoutEffect(() => {
+    const t = readReaderTokens(stageRef.current);
+    tokens.current = t;
+    curves.current = { paper: cubicBezier(...t.easePaper), camera: cubicBezier(...t.easeCamera) };
+  }, []);
+  /** A tapped turn waiting (≤ 300 ms) for its pages to decode: which corner shows the progress arc. */
+  const [gate, setGate] = useState<{ dir: 1 | -1 } | null>(null);
+  const gateCancel = useRef<(() => void) | null>(null);
+  const cancelGate = () => {
+    gateCancel.current?.();
+    gateCancel.current = null;
+  };
   const [layoutScale, setLayoutScale] = useState(1);
   const [cameraIdle, setCameraIdle] = useState(true);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,6 +145,32 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   );
   const geom1 = useMemo(() => geomAt(state.view, 1), [geomAt, state.view]);
   const geomL = useMemo(() => geomAt(state.view, layoutScale), [geomAt, state.view, layoutScale]);
+
+  // ── Never blank (reader.md §8): what a view still needs decoded ──────────
+  /** The view's pages that have nothing sharp decoded yet (their source, the original), with their stand-ins. */
+  const viewNeeds = (v: number): ViewNeeds => {
+    const out: ViewNeeds = [];
+    for (const s of geomAt(v).slots) {
+      if (s.content.kind !== 'item') continue;
+      const it = items[s.content.index];
+      // Withheld pages have no source (slotImageSource): never fetched, nothing to wait for.
+      const source = it ? slotImageSource(it, letterbox(s.w, s.h, s.contentAspect).w, { ...img, original: false }) : undefined;
+      if (!it || !source) continue;
+      const alts = source.path === it.asset.path ? [source.path] : [source.path, it.asset.path];
+      if (alts.some((p) => pageImageCache.isDecoded(p))) continue;
+      out.push({ item: s.content.index, alts, source, standIn: slotStandIn(it, img, source.path)?.path });
+    }
+    return out;
+  };
+  /** Every page of the view shows art: its page, or at least its stand-in. */
+  const viewHasArt = (v: number): boolean => viewNeeds(v).every((n) => !!n.standIn && pageImageCache.isDecoded(n.standIn));
+  /** Warm a page's original (guided close-ups use it) at idle priority. */
+  const prefetchOriginal = (i: number) => {
+    const it = items[i];
+    if (!it || img.saveData) return;
+    const source = slotImageSource(it, 0, { ...img, original: true });
+    if (source?.url && source.path === it.asset.path) void pageImageCache.ensure(source.path, source.url, 'idle');
+  };
 
   // ── Turn plan ─────────────────────────────────────────────────────────────
   const plan: TurnPlan | null = useMemo(() => {
@@ -202,14 +252,21 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       return;
     }
     setCameraIdle(false);
+    // fit: 'width' scrolls the stage; the camera and its spotlight work from the top of the page.
+    if (guidedOn && fit === 'width' && stageRef.current) stageRef.current.scrollTop = 0;
+    // A close zoom lands on the original (layoutScale > 1.6): warm it now, during the glide, so the swap
+    // to full resolution is not a wait after the camera settles (reader.md §8.5).
+    if (guidedOn && stop && target.s > 1.6) prefetchOriginal(stop.itemIndex);
     // Reduced motion: the camera cuts (no glide) behind a 140 ms fade (reader.md §8).
     const wrap = wrapperRef.current;
-    if (reduced && wrap && typeof wrap.animate === 'function') wrap.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+    if (reduced && wrap && typeof wrap.animate === 'function') wrap.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: tokens.current.spotFadeReduced, easing: 'ease-out' });
     const zoomOutForTurn = busy && guidedOn;
+    const zooming = Math.abs(Math.log(target.s / Math.max(1e-6, from.s))) > 0.05;
     camera.move({
       to: target,
       durationMs: reduced ? 0 : zoomOutForTurn ? 300 : cameraDuration(from, target, size.w, size.h),
-      ease: Math.abs(Math.log(target.s / Math.max(1e-6, from.s))) > 0.05 ? 'camera' : 'paper',
+      ease: zooming ? 'camera' : 'paper',
+      easing: zooming ? curves.current.camera : curves.current.paper,
       spotFor,
       onDone: () => settleCrisp(target)
     });
@@ -236,6 +293,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   const ready = layoutScale === 1 && cameraIdle;
   useLayoutEffect(() => {
     if (!plan || motion.kind === 'idle') {
+      cancelGate();
+      setGate(null);
       if (engine.current) {
         engine.current.destroy();
         engine.current = null;
@@ -245,6 +304,11 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
     // A cancel of a running auto turn, or a drag release: steer the existing engine.
     if (engine.current && engineMotion.current && motion.kind === 'settle') {
+      // A turn still waiting at the gate never starts: it springs back from where it is (flat).
+      if (gateCancel.current) {
+        cancelGate();
+        setGate(null);
+      }
       const prev = engineMotion.current as ReaderState['motion'];
       if (prev.kind === 'turn' && motion.outcome === 'cancel') engine.current.springBack();
       engineMotion.current = motion;
@@ -252,6 +316,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
     if (engine.current && engineMotion.current === motion) return;
     if (!ready) return; // guided: zoom out first, the camera effect brings us back here
+    cancelGate();
     if (engine.current) {
       engine.current.destroy();
       engine.current = null;
@@ -301,12 +366,17 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         spineX,
         bookW: geom1.book.w,
         slotX,
-        durationMs: durationFor(plan.kind, layout === 'spread', chained),
-        grabY: motion.kind === 'drag' ? motion.grab.y : undefined
+        durationMs: durationFor(plan.kind, layout === 'spread', chained, tokens.current),
+        grabY: motion.kind === 'drag' ? motion.grab.y : undefined,
+        tokens: tokens.current
       },
       els,
       {
-        onDone: () => dispatch({ type: 'TURN_DONE' }),
+        onDone: (outcome) => {
+          // QA: a turn that lands on a page with nothing decoded (no page, no stand-in) is a blank turn.
+          if (outcome === 'commit' && !viewHasArt(plan.to)) recordBlankTurn();
+          dispatch({ type: 'TURN_DONE' });
+        },
         onFrames: (deltas, kind) => {
           recordTurnPerf(kind, deltas);
           props.onFrames(deltas, kind);
@@ -316,9 +386,31 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     engine.current = eng;
     engineMotion.current = motion;
     if (motion.kind === 'turn') {
-      eng.startAuto();
-      // The swish plays as the paper lifts (not when it lands).
-      if (sound && !reduced) playPageTurn(plan.kind === 'board' ? 'heavy' : 'turn');
+      const start = () => {
+        if (engine.current !== eng) return;
+        setGate(null);
+        eng.startAuto();
+        // The swish plays as the paper lifts (not when it lands).
+        if (sound && !reduced) playPageTurn(plan.kind === 'board' ? 'heavy' : 'turn');
+      };
+      // Never blank (reader.md §8.2): a tapped turn whose pages are not decoded yet waits up to 300 ms for
+      // them (asked for at once, at top priority), then turns anyway onto the stand-in or the paper. A
+      // chained turn (flipping fast) and a drag never wait.
+      const needs = chained ? [] : viewNeeds(plan.to);
+      if (!needs.length) start();
+      else {
+        for (const n of needs) if (n.source?.url) void pageImageCache.ensure(n.source.path, n.source.url, 'now');
+        let went = false;
+        const cancel = holdUntilDecoded(pageImageCache, needs.map((n) => n.alts), tokens.current.turnGate, () => {
+          went = true;
+          gateCancel.current = null;
+          start();
+        });
+        if (!went) {
+          gateCancel.current = cancel;
+          setGate({ dir: plan.dir });
+        }
+      }
     } else if (motion.kind === 'drag') {
       const d = drag.current;
       const frame = leafFrame(spineX, 0, W, H, plan.mirrored);
@@ -337,6 +429,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
 
   useEffect(
     () => () => {
+      gateCancel.current?.();
       engine.current?.destroy();
       if (tapTimer.current) clearTimeout(tapTimer.current);
       if (settleTimer.current) clearTimeout(settleTimer.current);
@@ -715,7 +808,12 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   const viewsAfter = Math.max(0, views.length - 1 - state.view);
   const leftCount = rtl ? viewsAfter : viewsBefore;
   const rightCount = rtl ? viewsBefore : viewsAfter;
-  const edge = (n: number) => Math.min(6, 0.6 * n);
+  // Page-block edges (reader.md §5.3, V2 N5): a fixed 6 px clipping box at each book edge; the striped
+  // stack inside it slides (translateX, compositor-only) so `thickness` px of it shows. Whole pixels keep the
+  // 1 px stripes crisp. Nothing about the box itself changes as you read.
+  const edgeBox = EDGE_MAX * L;
+  const edgeShift = (n: number) => Math.round(edgeBox - edgeThickness(n) * L);
+  const edgeMotion = reduced ? undefined : 'transform var(--ds-reader-edge-motion, 200ms) var(--ds-ease, ease)';
   const front = plan?.frontKey ? mounted.get(plan.frontKey) : undefined;
   const frontSlot = front ? geomAt(front.view, L).slots[front.slotIdx] : undefined;
   const backSlotX = (() => {
@@ -739,7 +837,13 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       tabIndex={fit === 'width' ? 0 : undefined}
       aria-label={fit === 'width' ? 'Page — scroll to read' : undefined}
       role={fit === 'width' ? 'region' : undefined}
-      className={fit === 'width' ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-accent)]' : 'absolute inset-0 select-none overflow-hidden'}
+      // fit:width lays the page edge to edge, so its inset ring sits on the page itself: two-tone (a room-dark
+      // band at the edge, the light ring inside it) reads on white paper and on the room alike.
+      className={
+        fit === 'width'
+          ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-reader-hud-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-room)]'
+          : 'absolute inset-0 select-none overflow-hidden'
+      }
       style={{ touchAction: fit === 'width' ? 'pan-y' : 'none', overscrollBehavior: 'contain', cursor: drag.current && !drag.current.peek ? 'grabbing' : undefined }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -753,32 +857,50 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
           <>
             <div
               aria-hidden
-              className="pointer-events-none absolute"
+              data-testid="page-edge-left"
+              className="pointer-events-none absolute overflow-hidden"
               style={{
-                left: bookX - edge(leftCount) * L,
+                left: bookX - edgeBox,
                 top: bookY + 2 * L,
-                width: edge(leftCount) * L,
+                width: edgeBox,
                 height: H - 4 * L,
-                background: 'repeating-linear-gradient(to right, var(--ds-reader-edge) 0, var(--ds-reader-edge) 1px, var(--ds-reader-edge-line) 1px, var(--ds-reader-edge-line) 2px)',
-                transition: reduced ? undefined : 'width 300ms ease, left 300ms ease',
                 borderRadius: '2px 0 0 2px',
                 opacity: layout === 'spread' && geom1.slots[0]?.content.kind === 'blank' ? 0 : 1
               }}
-            />
+            >
+              <div
+                data-edge-stack
+                className="absolute inset-0"
+                style={{
+                  background: 'repeating-linear-gradient(to right, var(--ds-reader-edge) 0, var(--ds-reader-edge) 1px, var(--ds-reader-edge-line) 1px, var(--ds-reader-edge-line) 2px)',
+                  transform: `translateX(${edgeShift(leftCount)}px)`,
+                  transition: edgeMotion
+                }}
+              />
+            </div>
             <div
               aria-hidden
-              className="pointer-events-none absolute"
+              data-testid="page-edge-right"
+              className="pointer-events-none absolute overflow-hidden"
               style={{
                 left: bookX + geomL.book.w,
                 top: bookY + 2 * L,
-                width: edge(rightCount) * L,
+                width: edgeBox,
                 height: H - 4 * L,
-                background: 'repeating-linear-gradient(to right, var(--ds-reader-edge-line) 0, var(--ds-reader-edge-line) 1px, var(--ds-reader-edge) 1px, var(--ds-reader-edge) 2px)',
-                transition: reduced ? undefined : 'width 300ms ease',
                 borderRadius: '0 2px 2px 0',
                 opacity: layout === 'spread' && geom1.slots[1]?.content.kind === 'blank' ? 0 : 1
               }}
-            />
+            >
+              <div
+                data-edge-stack
+                className="absolute inset-0"
+                style={{
+                  background: 'repeating-linear-gradient(to right, var(--ds-reader-edge-line) 0, var(--ds-reader-edge-line) 1px, var(--ds-reader-edge) 1px, var(--ds-reader-edge) 2px)',
+                  transform: `translateX(${-edgeShift(rightCount)}px)`,
+                  transition: edgeMotion
+                }}
+              />
+            </div>
           </>
         )}
         {/* Soft bed shadows under each side that has a page. */}
@@ -836,6 +958,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
                 ariaLabel={itemIndex >= 0 && items[itemIndex]?.kind === 'page' && pageCount ? `${label} of ${pageCount}` : label}
                 img={imgFull}
                 prio={isCurrent ? 'now' : 'next'}
+                reduced={reduced}
+                swapMs={tokens.current.standInSwap}
+                tone={props.paperTone}
                 paper={paper}
                 letteringAriaHidden
                 visibleLineIds={visibleLines && visibleLines.itemIndex === itemIndex ? visibleLines.ids : undefined}
@@ -865,8 +990,41 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
             />
           )}
         </div>
+        {gate && <TurnGateArc dir={gate.dir} rtl={rtl} x={bookX} y={bookY} w={geomL.book.w} h={H} />}
       </div>
       <Spotlight ref={spotRef} reduced={reduced} />
+    </div>
+  );
+};
+
+/**
+ * The turn gate's progress arc (reader.md §8.2): a 1 px arc on a small glass disc at the corner the page
+ * will lift from, spinning by transform only, shown while a tapped turn waits (≤ 300 ms) for its pages. It
+ * fades in after 80 ms, so a page that is ready a moment later never flashes it.
+ */
+const TurnGateArc: React.FC<{ dir: 1 | -1; rtl: boolean; x: number; y: number; w: number; h: number }> = ({ dir, rtl, x, y, w, h }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof el.animate !== 'function') return;
+    const spin = el.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 900, iterations: Infinity, easing: 'linear' });
+    const show = el.parentElement?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, delay: 80, fill: 'backwards', easing: 'linear' });
+    return () => {
+      spin.cancel();
+      show?.cancel();
+    };
+  }, []);
+  // Forward lifts the outer edge in reading order (right in LTR, left in RTL); backward the other one.
+  const right = (dir > 0) !== rtl;
+  const size = 22;
+  return (
+    <div
+      aria-hidden
+      data-testid="turn-gate"
+      className="pointer-events-none absolute grid place-items-center rounded-full bg-[var(--ds-reader-glass)]"
+      style={{ left: right ? x + w - size - 10 : x + 10, top: y + h - size - 10, width: size, height: size }}
+    >
+      <div ref={ref} className="h-3.5 w-3.5 rounded-full border border-[var(--ds-reader-hud-focus)] border-t-transparent" />
     </div>
   );
 };

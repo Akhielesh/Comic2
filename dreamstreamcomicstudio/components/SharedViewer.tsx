@@ -13,6 +13,9 @@ interface SharedViewerProps {
     onOpenFaq: () => void;
 }
 
+/** Sign in, then come back to this link: App's ?next= hand-back follows a same-origin path after sign-in. */
+export const signInHref = (shareToken: string): string => `/?next=${encodeURIComponent(`/share/${shareToken}`)}`;
+
 type ViewerState =
     | { status: 'loading' }
     | { status: 'login_required' }
@@ -71,7 +74,7 @@ export const SharedViewer: React.FC<SharedViewerProps> = ({
                     You need to be logged in to view this shared comic. Sign in or create an account to continue.
                 </p>
                 <button
-                    onClick={() => onNavigate?.('login')}
+                    onClick={() => window.location.assign(signInHref(shareToken))}
                     className="flex items-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl border-4 border-white/20 font-display text-lg hover:bg-brand-blue/80 transition-colors shadow-comic"
                 >
                     <LogIn size={20} /> Sign In

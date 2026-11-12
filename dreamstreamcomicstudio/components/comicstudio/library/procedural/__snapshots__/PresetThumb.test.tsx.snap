@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PresetThumb: the 12 ST-4 looks > brutalist renders clean, self-contained SVG (procedural snapshot) 1`] = `"d9be8fc6"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > chalk-pastel renders clean, self-contained SVG (procedural snapshot) 1`] = `"7e3cdde7"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > cyberpunk renders clean, self-contained SVG (procedural snapshot) 1`] = `"60a0b61d"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > dieselpunk renders clean, self-contained SVG (procedural snapshot) 1`] = `"e64f75b4"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > indian-miniature renders clean, self-contained SVG (procedural snapshot) 1`] = `"c906b5e0"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > ink-one-colour renders clean, self-contained SVG (procedural snapshot) 1`] = `"873b2b09"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > ink-wash renders clean, self-contained SVG (procedural snapshot) 1`] = `"7b848fc5"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > mono-wash renders clean, self-contained SVG (procedural snapshot) 1`] = `"83af2260"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > mythic-icon renders clean, self-contained SVG (procedural snapshot) 1`] = `"6706c37f"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > retrofuturism renders clean, self-contained SVG (procedural snapshot) 1`] = `"1e296944"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > surreal-dream renders clean, self-contained SVG (procedural snapshot) 1`] = `"0279258e"`;
+
+exports[`PresetThumb: the 12 ST-4 looks > woodcut renders clean, self-contained SVG (procedural snapshot) 1`] = `"ae374875"`;

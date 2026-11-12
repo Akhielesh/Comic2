@@ -20,7 +20,7 @@
 
 import { ddgWebSearch, type WebResult } from './duckduckgo.js';
 import { TtlCache } from '../../lib/cache.js';
-import { ProviderBudgetError, assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
+import { ProviderBudgetError, assertProviderBudget, noteProviderCall, releaseProviderReservation } from '../../lib/providerUsage.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const PER_PROVIDER_TIMEOUT_MS = 7_000;
@@ -274,8 +274,12 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
       assertProviderBudget(meterUrl);
       const results = await p.run(query, t.signal, limit);
       // null = the provider skipped (e.g. a keyed provider with no key). A skip is NOT an
-      // attempt — don't list it as tried or meter it, and don't let it mask an outage.
-      if (results === null) continue;
+      // attempt — give back the slot the budget check reserved, don't list it as tried, and
+      // don't let it mask an outage.
+      if (results === null) {
+        releaseProviderReservation(meterUrl);
+        continue;
+      }
       noteProviderCall(meterUrl, true);
       tried.push(p.name);
       if (results.length) {

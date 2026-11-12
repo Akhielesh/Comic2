@@ -60,11 +60,16 @@ Build new visuals from the dependency-free Primitive Kit in
 gauges, RangeTabs, TrendPill, theme/palette, formatters, density). Charts are inline
 SVG — no charting libraries.
 
-**House style for widgets is the macOS "calm studio" glass language** (same family
-as `components/chat/studioDesign.ts`): `Surface` shell (rounded-2xl, hairline,
-frosted glass, soft ambient shadow), `tabular-nums` for columnar numbers. **Never**
-use the legacy comic styles inside chat widgets: no `border-2 border-black`, no
-`shadow-comic`, no `font-display`/`font-comic`.
+**House style for widgets is the Atlas language** (approved by the owner as "Atlas
+everywhere"; `docs/design/design-system.md`, `docs/design/atlas-skin.md`): **opaque
+surfaces** — a hairline, a soft shadow, the panel radius — with **blur only on the sticky
+header** (`STICKY_HEADER` / `HEADER_GLASS`, `--ds-header-blur`; `GLASS`, `GLASS_STRONG` and
+`MENU` read `--ds-glass-blur`, which is 0 under the skin). **Tokens and recipes only**:
+compose from the `components/ds` primitives and the `studioDesign.ts` recipes, never a
+spelled hue, radius, duration or z-index; `tabular-nums` for columnar numbers. **No comic
+chrome outside content**: no `border-2 border-black`, no `shadow-comic`, no
+`font-display` (Bangers) / `font-comic` — lettering and comic art are content and keep their
+faces; the display face for chrome is `FONT_DISPLAY` / `HEADING` only.
 
 **Colors MUST come from the theme tokens** (light + Claude-style dark themes, set
 as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
@@ -72,31 +77,48 @@ as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
 `bg-[var(--ds-canvas|sidebar|surface|surface-soft|surface-strong|raised|well)]`,
 `border-[var(--ds-hairline)]`/`[var(--ds-hairline-soft)]`,
 `hover:bg-[var(--ds-hover)]`, accent `bg-[var(--ds-accent)]`
-`hover:bg-[var(--ds-accent-hover)]`. Never hardcode the paper/ink hexes; never put
-a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use
-`bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the old literal `bg-[#D97757]/10`.
+`hover:bg-[var(--ds-accent-hover)]`, or the **named `ds` colours** (`bg-ds-surface`,
+`text-ds-muted`, `border-ds-hairline`; `tailwind.config.cjs`), which **make `/NN` legal**:
+`text-ds-ink/60` compiles to a `color-mix()` over the token. Never hardcode the paper/ink
+hexes; never put a slash opacity on a bare `var()` arbitrary value (`text-[var(--ds-ink)]/60`
+is invalid CSS) — accent tints use `bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the
+old literal `bg-[#D97757]/10`. Charts read `--ds-chart-1…5` (monochrome steps, ink first).
+Colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer): ink on paper, colour as a spot. The spark (`--ds-spark*`, SPARK_FILL / the Button `create` variant, MAKING_DOT / MAKING_SWEEP / MAKING_TEXT, `Progress tone="making"`, SPARK_RING_ON_ART) means creation only: one fill per view (never in a list), never on a price or a control that spends (Approve, Draw, Redraw, Translate, Get more), never the panel, never the reader (tests/config/sparkGuard.test.ts). Series and tags use `--ds-hue-1…5` (HUE_DOT/HUE_FILL/HUE_STROKE or `hueClass(kind, i)`, 0-based, fixed order, a legend always); `--ds-art` is a comic's own tint (ART_PLACEHOLDER, ART_GLOW).
 
-**Design skins** (`docs/design/atlas-skin.md`): Comic Studio renders in the Atlas
-language through one attribute, `data-ds-skin="atlas"`, set on `<html>` at boot on the
-comics host (`services/dsSkin.ts`) and on the Comic Studio / reader roots everywhere; a
-skin is one block of `--ds-*` overrides at the end of `index.css`, so nothing outside
-the attribute changes. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
+**Design skins** (`docs/design/atlas-skin.md`): the whole app renders in the Atlas
+language through one attribute, `data-ds-skin="atlas"`, which `index.html` ships on `<html>`
+for every host (and the boot sets on the comics host, `services/dsSkin.ts`; the Comic Studio
+and reader roots carry it too); a skin is one block of `--ds-*` overrides at the end of
+`index.css`. The build kill switch `VITE_DS_SKIN_EVERYWHERE=off` strips only the attribute (the
+token block; the comics host still boots it): dark on every page from first paint
+(`public/theme-boot.js` + the root `initTheme()` in `index.tsx`) and the bridge token moves stay, and
+reverting those is a code change. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
 `--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
 readable status text, always with a word or icon; `--ds-danger-mark` for dots and edges),
 `--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge|hover`, `--ds-scrim`,
 `--ds-segment-pill|track`,
-`--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm`,
+`--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm|feature|hero`,
 `--ds-shadow-soft|panel|lift|overlay`, `--ds-motion-fast|medium|slow|panel|modal|theme|enter|exit`,
-`--ds-ease(-enter)`, `--ds-surface-blur` — via the `studioDesign.ts` constants (`RADIUS_*`,
+`--ds-motion-enter-quick|enter-slow|stagger`, `--ds-ease(-enter)`, `--ds-glass-blur`, `--ds-header-blur`,
+`--ds-on-danger`, `--ds-z-*`, `--ds-density-*`, `--ds-text-xl|2xl|3xl`, `--ds-chart-1…5`, `--ds-grid-dot`,
+`--ds-spot-ink` — via the `studioDesign.ts` constants (`RADIUS_*`,
 `SHADOW_SOFT`, `TRANSITION`, `TONE_*`, `PRESS`, and the Atlas wave 5 recipes `FOCUS_RING`,
 `FIELD*`, `OVERLAY`, `SCRIM`, `CHIP*`, `STATUS_*`, `SEGMENTED_*`, `SECTION_*`, `TOAST*`, and the
 wave 8 recipes `OVERLINE` (every small uppercase eyebrow label), `STATUS_EDGE` and `DIALOG_TITLE` /
-`DIALOG_TITLE_FROM_SM` (centred modal titles only; sheet headers stay 15 px)),
-never by spelling out `rounded-2xl` / `duration-200` / a hue (a selected segment is
+`DIALOG_TITLE_FROM_SM` (centred modal titles only; sheet headers stay 15 px), and the DS-1a and
+bridge recipes `Z`, `DENSITY`, `TEXT_XL/2XL/3XL`, `DANGER_FILL(_HOVER)`, `LIFT`, `RISE_IN`,
+`STICKY_HEADER`, `HEADER_GLASS`, `SEGMENTED_ACTIVE_FILL`), and the shared motion classes in
+`styles/ds-motion.css` (`.ds-rise-in`, `.ds-stagger`, `.ds-live-dot`, … one reduced-motion block). New
+UI composes the primitives in `components/ds` (docs/design/design-system.md: Button, Field, Segmented,
+Tabs, Card, states, `LiveDot`, `CountUp`, `Collapse`, `useInViewPause`); no local `cx` (compose with
+`cn`, and never the Tailwind 3 aliases cn cannot dedupe: `components/ds/cnAliases.test.ts`); z-index
+only via `Z`. Never spell out `rounded-2xl` / `duration-200` / a hue (a selected segment is
 `SEGMENTED_ACTIVE` on `bg-[var(--ds-segment-track)]`, never a raised fill). Status text and icons use
 the readable `TONE_TEXT` / `TONE_CHIP` / `STATUS_*` inks, never a raw `text-red-…`/`text-amber-…`:
 `tests/config/statusInkGuard.test.ts` and `overlineGuard.test.ts` fail on a new hand-rolled use (their
-allowlists pin each entry, with the reason). A token derived with
+allowlists pin each entry, with the reason), and `legacyKitGuard`, `terracottaGuard`, `localCxGuard` and
+`zLadderGuard` ratchet the whole app (components/**, App.tsx, qa/**) against `tests/config/baselines/*.json`,
+which only shrink (`UPDATE_BASELINES=1`; see the README there). A token derived with
 `var()` inherits as a computed colour: a skin block or a subtree that changes its source must restate
 it. Theme changes go through `services/theme.ts` (under the skin: one view-transition cross-fade).
 

@@ -172,7 +172,8 @@ describe('VersionsCard (chat)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use v2 · Free' }));
     expect(studio.patch).toHaveBeenCalled();
     rerender(<VersionsCard card={{ type: 'versions', id: 'c1', target: { kind: 'page', id: 'pg_gone' } }} message={msg} studio={studio} />);
-    expect(screen.getByText(/no longer in the comic/)).toBeInTheDocument();
+    // The bin is named by the tab it lives in (Assets, DS-R0).
+    expect(screen.getByText(/no longer in the comic/)).toHaveTextContent('check Assets → Deleted');
     vi.restoreAllMocks();
   });
 });

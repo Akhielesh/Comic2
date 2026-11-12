@@ -14,7 +14,7 @@
     "build:server": "tsc -p server/tsconfig.json",
     "start:server": "node server/dist/server/src/index.js",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "qa:build": "QA_BUILD=1 vite build --outDir dist-qa",
     "qa:mobile": "npm run qa:build && playwright test -c tests/e2e/playwright.config.ts",

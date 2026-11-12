@@ -3,7 +3,8 @@
 // turns as a rigid board; slide/fade transitions; an opposite key mid-turn springs back; destroy() leaves
 // the elements exactly as React rendered them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { durationFor, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
+import { blankTurnCount, durationFor, recordBlankTurn, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
+import { READER_TOKEN_DEFAULTS } from './readerTokens';
 import type { TurnPlan } from './turnPlan';
 
 const W = 400;
@@ -167,6 +168,23 @@ describe('timing and perf', () => {
     expect(durationFor('board', true, false)).toBe(820);
     expect(durationFor('slide', false, false)).toBe(420);
     expect(durationFor('paper', false, true)).toBe(364);
+    // One fade (reader.md F8): the DS entrance, 280 ms — not 300 here and 180 in TURN_MS.
+    expect(durationFor('fade', false, false)).toBe(280);
+  });
+
+  it('a riffle takes its leaf time and stagger from the reader tokens (not literals)', () => {
+    const leaves = [0, 1, 2].map(() => ({ front: part(), back: part() }));
+    const p = plan({ kind: 'riffle', riffle: 3 } as Partial<TurnPlan>);
+    const onDone = vi.fn();
+    const engine = new TurnEngine(
+      { plan: p, W, H, spineX: W, bookW: 2 * W, durationMs: 560, tokens: { riffleLeaf: 100, riffleStep: 50, easePaper: READER_TOKEN_DEFAULTS.easePaper } },
+      { front: part(), back: part(), cast: el(), castBox: el(), shadow: el(), book: el(), incoming: [], outgoing: [], leaves },
+      { onDone }
+    );
+    engine.startAuto();
+    // 100 + 2 × 50 = 200 ms (the defaults would take 180 + 2 × 70 = 320 ms).
+    vi.advanceTimersByTime(260);
+    expect(onDone).toHaveBeenCalledWith('commit');
   });
 
   it('records per-turn frame stats for the QA harness', () => {
@@ -175,5 +193,11 @@ describe('timing and perf', () => {
     expect(entry.fps90).toBeGreaterThanOrEqual(55);
     expect((window as unknown as { __comicReaderPerf: unknown[] }).__comicReaderPerf.length).toBeGreaterThan(0);
     expect(recordTurnPerf('paper', [16])).toBeNull();
+  });
+
+  it('counts blank turns on the QA log (reader.md §8.9: __comicReaderPerf.blankTurns)', () => {
+    const before = blankTurnCount();
+    expect(recordBlankTurn()).toBe(before + 1);
+    expect((window as unknown as { __comicReaderPerf: { blankTurns: number } }).__comicReaderPerf.blankTurns).toBe(before + 1);
   });
 });

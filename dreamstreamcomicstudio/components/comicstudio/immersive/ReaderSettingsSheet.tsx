@@ -41,7 +41,7 @@ function Choice<T extends string | number>({ label, value, options, onChange, hi
             title={o.title}
             onClick={() => onChange(o.value)}
             className={[
-              'press min-h-11 min-w-0 flex-1 rounded-xl px-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] disabled:opacity-40',
+              'press min-h-11 min-w-0 flex-1 rounded-xl px-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)] disabled:opacity-40',
               o.value === value ? 'bg-white text-black' : 'text-white/90 hover:bg-white/15'
             ].join(' ')}
           >
@@ -62,8 +62,9 @@ const Toggle: React.FC<{ label: string; checked: boolean; onChange(v: boolean): 
     </span>
     <span className="relative inline-flex shrink-0 items-center">
       <input type="checkbox" className="peer sr-only" checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} />
-      <span className="h-6 w-11 rounded-full bg-white/25 transition-colors peer-checked:bg-[#D97757] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-accent)]" />
-      <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5 motion-reduce:transition-none" />
+      {/* On: the room's accent track with a room-dark knob (never a hue: the reader stays ink and paper). */}
+      <span className="h-6 w-11 rounded-full bg-white/25 transition-colors peer-checked:bg-[var(--ds-reader-accent)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-reader-hud-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-black" />
+      <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5 peer-checked:bg-[var(--ds-reader-room)] motion-reduce:transition-none" />
     </span>
   </label>
 );
@@ -106,12 +107,12 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
         {p.compact && (p.onShare || p.onDownload) && (
           <div className="flex gap-2">
             {p.onShare && (
-              <button type="button" onClick={p.onShare} className="press inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white/15 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]">
+              <button type="button" onClick={p.onShare} className="press inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white/15 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
                 <Share2 className="h-4 w-4" aria-hidden /> Share
               </button>
             )}
             {p.onDownload && (
-              <button type="button" onClick={p.onDownload} disabled={p.downloadBusy} className="press inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white/15 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] disabled:opacity-50">
+              <button type="button" onClick={p.onDownload} disabled={p.downloadBusy} className="press inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white/15 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)] disabled:opacity-50">
                 <Download className="h-4 w-4" aria-hidden /> {p.downloadBusy ? 'Preparing…' : 'Download'}
               </button>
             )}
@@ -180,7 +181,7 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             ]}
           />
         </div>
-        <button type="button" onClick={p.onShortcuts} className="press inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white/10 text-[13px] outline-none hover:bg-white/15 focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]">
+        <button type="button" onClick={p.onShortcuts} className="press inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white/10 text-[13px] outline-none hover:bg-white/15 focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
           <Keyboard className="h-4 w-4" aria-hidden /> Keyboard shortcuts
         </button>
       </div>

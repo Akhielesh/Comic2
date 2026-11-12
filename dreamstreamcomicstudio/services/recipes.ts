@@ -48,6 +48,8 @@ export interface RunRecipeRequest {
   model?: string;
   source?: string;
   systemPrompt?: string;
+  /** The memory in `systemPrompt` was distilled from connected-account content (ChatRequest.memoryConnected). */
+  memoryConnected?: boolean;
 }
 
 /**
@@ -79,6 +81,8 @@ export interface RecipeRunOutcome {
   artifacts?: ChatArtifact[];
   structured?: unknown;
   activities?: string[];
+  /** Connected-account content entered this run's reply (the server marked it; echo it on the turn). */
+  connectorData?: boolean;
   error?: string;
 }
 
@@ -89,7 +93,12 @@ export interface RecipeRunOutcome {
  */
 export const runRecipe = async (
   req: RunRecipeRequest,
-  handlers: { onDelta?: (chunk: string) => void; onTrace?: (trace: unknown) => void } = {},
+  handlers: {
+    onDelta?: (chunk: string) => void;
+    onTrace?: (trace: unknown) => void;
+    /** The opening `meta` event (its `connectorPrivacy` flag, for a run the user stops before `final`). */
+    onMeta?: (meta: { connectorPrivacy?: boolean }) => void;
+  } = {},
   signal?: AbortSignal
 ): Promise<RecipeRunOutcome> => {
   const res = await runRecipeStream(req, signal);
@@ -105,6 +114,7 @@ export const runRecipe = async (
     artifacts?: ChatArtifact[];
     structured?: unknown;
     activities?: string[];
+    connectorData?: boolean;
   } | null = null;
 
   await readSSEStream(res.body, ({ event, data }) => {
@@ -114,7 +124,9 @@ export const runRecipe = async (
     } catch {
       return;
     }
-    if (event === 'delta' && typeof parsed.content === 'string') {
+    if (event === 'meta') {
+      handlers.onMeta?.(parsed as { connectorPrivacy?: boolean });
+    } else if (event === 'delta' && typeof parsed.content === 'string') {
       text += parsed.content;
       handlers.onDelta?.(parsed.content);
     } else if (event === 'trace') {
@@ -137,6 +149,7 @@ export const runRecipe = async (
       artifacts: final.artifacts,
       structured: final.structured,
       activities: final.activities,
+      ...(final.connectorData === true ? { connectorData: true } : {}),
       error
     };
   }

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2, MessageSquare, Pencil, X } from 'lucide-react';
 import { AppStep, Project } from '../types';
 import { Button } from './Button';
+import { HEADING } from './chat/studioDesign';
 // Lazy load ProjectInfoModal
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
@@ -260,7 +261,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 <LayoutGrid className="w-8 h-8 text-black" />
               </div>
               <div>
-                <h1 className="text-4xl font-display text-black">My Comics</h1>
+                <h1 className={`text-4xl ${HEADING}`}>My comics</h1>
                 <p className="text-slate-600 font-comic font-bold">Manage your studio projects</p>
               </div>
             </div>

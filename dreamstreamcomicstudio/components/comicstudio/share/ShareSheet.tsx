@@ -10,13 +10,13 @@
 // role="dialog" aria-modal, focus trap, Esc closes, focus returns to the trigger, body scroll
 // locked; reduced motion disables the slide. No horizontal overflow from 320 px.
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
+import { ExternalLink, Languages, LayoutGrid, Link2Off, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { DIALOG_TITLE, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
+import { DIALOG_TITLE, FOCUS_RING, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
@@ -24,7 +24,7 @@ import { PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
-import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, pageIdsFor, shareLinkFor, statusLine } from './shareModel';
+import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, LIBRARY_HREF, pageIdsFor, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
 import { ChangesSincePublishLink } from '../history/ChangesSincePublishLink';
 
 export interface ShareSheetProps {
@@ -74,6 +74,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // conversation streams constantly) never re-runs the focus effect and yanks focus to Close.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const hintId = useId();
 
   // Layout follows the viewport (rotation, foldable posture, window resize).
   useLayoutEffect(() => {
@@ -159,7 +160,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
         setPublishAs(null);
         setConfirm(null);
       } catch (err) {
-        setError((err as Error)?.message || "That didn't work. Nothing changed — try again.");
+        setError((err as Error)?.message || 'That didn’t work. Nothing changed — try again.');
         // A refusal can still teach us something (the safety check records which page it
         // blocked): refresh readiness so "Publish without page N" can appear right away.
         studio.refreshPublication().catch(() => undefined);
@@ -234,8 +235,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       {(
         [
           ['private', 'Private'],
-          ['unlisted', 'Anyone with link'],
-          ['public', 'Public gallery']
+          ['unlisted', 'Link only'],
+          ['public', 'Library + link']
         ] as const
       ).map(([v, label]) => {
         const on = (publishAs ?? current) === v;
@@ -245,6 +246,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             type="button"
             role="radio"
             aria-checked={on}
+            aria-describedby={v === 'private' ? undefined : `${hintId}-${v}`}
             disabled={busy || (suspended && v !== 'private')}
             onClick={() => choose(v)}
             className={cx(
@@ -258,16 +260,22 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       })}
     </div>
   );
+  // What the chosen way means, under the choices. Each hint also describes its own radio (aria-describedby reads a hidden hint too).
+  const visibilityHints = (['unlisted', 'public'] as const).map((v) => (
+    <p key={v} id={`${hintId}-${v}`} hidden={(publishAs ?? current) !== v} className="m-0 !mt-1.5 text-[12px] text-[var(--ds-muted)]">
+      {VISIBILITY_HINT[v]}
+    </p>
+  ));
 
   const confirmBox =
     confirm === 'public' ? (
-      <div role="alertdialog" aria-label="List it in the public gallery?" className="rounded-xl border border-[#D97757]/35 bg-[#D97757]/[0.07] p-3">
+      <div role="alertdialog" aria-label="List it in the Library?" className="rounded-xl border border-[color:color-mix(in_srgb,var(--ds-accent)_35%,transparent)] bg-[var(--ds-accent-soft)] p-3">
         <p className="m-0 text-[13px] text-[var(--ds-ink)]">
-          List it in the public gallery? Anyone can find and read it there, not just people with the link. Readers still can’t edit. A quick safety check runs first.
+          List it in the Library? Anyone can find and read it there, not just people with the link. The link keeps working, and readers still can’t edit. A quick safety check runs first.
         </p>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
           <button type="button" onClick={() => setConfirm(null)} className="min-h-[44px] rounded-xl px-4 text-[14px] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">
-            Keep it unlisted
+            Keep it link only
           </button>
           <button
             type="button"
@@ -275,7 +283,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             onClick={() => void run(() => updatePublication(doc.id, { visibility: 'public' }))}
             className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-4 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
           >
-            {busy ? 'Working…' : 'Make it public'}
+            {busy ? 'Working…' : 'List it in the Library'}
           </button>
         </div>
       </div>
@@ -348,9 +356,31 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     />
   );
 
+  // Published: the link comes first (copy, QR, Share…), and a listed comic also links to its shelf in the Library.
+  // The wide dialog keeps its QR in the left column; every other layout shows it here, ahead of the choices.
+  const linkFirst = live && view && !publishAs && (
+    <>
+      <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />
+      {fallback}
+      {layout !== 'wide' && qr}
+      {current === 'public' && (
+        <a
+          href={LIBRARY_HREF}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`!mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-1 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] touch-manipulation ${FOCUS_RING}`}
+        >
+          <LayoutGrid className="h-4 w-4" aria-hidden /> See it in the Library
+        </a>
+      )}
+    </>
+  );
+
   const controls = (
     <div className="min-w-0 space-y-4">
+      {linkFirst}
       {visibilityControl}
+      {visibilityHints}
       {suspended && view?.suspendedReason && (
         <p className="m-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">{view.suspendedReason}</p>
       )}
@@ -380,8 +410,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
               </div>
             </div>
           )}
-          {live && view && <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />}
-          {fallback}
           {live && view && (
             // Settings the server changes in place (PATCH): the link, the snapshot and readers' places stay.
             <section aria-label="Link settings" className="min-w-0">
@@ -404,7 +432,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             </section>
           )}
           {!live && !suspended && (
-            <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Anyone with link” to get a read-only link people can open on any device.</p>
+            <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.</p>
           )}
           {error && (
             <p role="alert" className="m-0 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
@@ -462,7 +490,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       <div className="min-w-0 space-y-4">
         {controls}
         {!publishAs && preview}
-        {!publishAs && live && qr}
       </div>
     );
 

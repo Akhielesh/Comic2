@@ -17,6 +17,8 @@
 //   stress       visualqa's stress doc: 160-char title, unbroken words, 12 long-named cast members,
 //                54-char model id, $1234.56 spend, notices with long URLs, 20 pages
 //   empty        a brand-new comic (nothing planned yet)
+//   chat-14      the production chat-image shape (PF-2 #8): 9 drawn pages, the cover and 4 drawn character sheets,
+//                every one with its 480w and 1080w variants, all reached by the chat's cards (renders, cast, recap)
 //
 // Images are referenced by path `qa/<seed>-<w>x<h>.png`; the harness serves them (sharp-generated PNGs
 // under Playwright, SVG data URLs when opened by hand). Each page/cover asset carries 480w and 1080w
@@ -32,6 +34,8 @@ import {
   type Card,
   type Character,
   type ComicDoc,
+  type ConflictCard,
+  type ConflictItem,
   type Gate,
   type ComicKind,
   type Line,
@@ -42,11 +46,12 @@ import {
 } from '../../../shared/comic/doc';
 import { checkPagePlan, heldBackOf, splitHeldBack } from '../../../shared/comic/pagePlanCheck';
 import { pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan';
+import type { PublicationMirror, PublicationOwnerView } from '../../../shared/comic/publication';
 
 export const QA_NOW = 1_760_000_000_000;
 export const QA_PROJECT_ID = 'proj_qa';
 
-export const QA_FIXTURES = ['lake-1p', 'heist-12p', 'deep-40p', 'webtoon-20p', 'stress', 'empty'] as const;
+export const QA_FIXTURES = ['lake-1p', 'heist-12p', 'deep-40p', 'webtoon-20p', 'stress', 'empty', 'chat-14'] as const;
 export type QaFixtureName = (typeof QA_FIXTURES)[number];
 export const isQaFixture = (v: unknown): v is QaFixtureName => typeof v === 'string' && (QA_FIXTURES as readonly string[]).includes(v);
 
@@ -107,8 +112,8 @@ const STRESS_CAST = [
   'Supercalifragilisticexpialidocious Otter'
 ];
 
-const sheetState = (i: number, stress: boolean, seed: string): RenderState => {
-  switch (i % 4) {
+const sheetState = (i: number, stress: boolean, seed: string, allReady = false): RenderState => {
+  switch (allReady ? 0 : i % 4) {
     case 0:
       return { status: 'ready', history: [qaAsset(`${seed}-sheet${i}-old`, 1536, 1024)], asset: qaAsset(`${seed}-sheet${i}`, 1536, 1024), updatedAt: QA_NOW };
     case 1:
@@ -124,11 +129,17 @@ const sheetState = (i: number, stress: boolean, seed: string): RenderState => {
   }
 };
 
-const makeCast = (names: string[], density: Density, seed: string): Character[] =>
+/**
+ * Free-text roles, as creators write them (DC-0 #6): never the tier words "Lead" / "Support", which the cast chips
+ * already show and the clutter probe would count as a cut duplicate. Fixtures name their own; others cycle these.
+ */
+const FREE_ROLES = ['Getaway driver', 'Safecracker', 'Lookout on the water tower', 'Fence who knows everyone', 'Night-shift guard', 'Rival thief'] as const;
+
+const makeCast = (names: string[], density: Density, seed: string, roles: readonly string[] = FREE_ROLES, sheetsReady = false): Character[] =>
   names.map((name, i) => ({
     id: `ch_${i}`,
     name,
-    role: density === 'stress' && i % 3 === 0 ? 'Retired lighthouse keeper who secretly runs the lakeside detective agency' : i === 0 ? 'Lead' : 'Support',
+    role: density === 'stress' && i % 3 === 0 ? 'Retired lighthouse keeper who secretly runs the lakeside detective agency' : roles[i % roles.length],
     tier: i < 2 ? 'lead' : i < 6 ? 'support' : 'extra',
     look: {
       summary:
@@ -140,7 +151,7 @@ const makeCast = (names: string[], density: Density, seed: string): Character[] 
     },
     ...(density === 'stress' ? { voice: 'Speaks in breathless run-on sentences, mixes up animal names, giggles mid-word' } : {}),
     refs: [],
-    sheet: sheetState(i, density === 'stress', seed),
+    sheet: sheetState(i, density === 'stress', seed, sheetsReady),
     ...(i === 3 ? { kind: 'animal' as const, count: 3 } : {})
   }));
 
@@ -447,6 +458,10 @@ interface DocOpts {
   density: Density;
   seed: string;
   castNames: string[];
+  /** Each character's free-text role (cycled); FREE_ROLES when absent. */
+  castRoles?: readonly string[];
+  /** Every character sheet drawn (otherwise they cycle ready / drawing / failed / none). */
+  sheetsReady?: boolean;
   statuses: RenderState['status'][];
   panels: (i: number) => number;
   balloons: 'edge' | 'tidy' | 'none';
@@ -516,7 +531,7 @@ const buildDoc = (o: DocOpts): ComicDoc => {
           savedUsd: 0.12
         }
   };
-  doc.cast = makeCast(o.castNames, o.density, o.seed);
+  doc.cast = makeCast(o.castNames, o.density, o.seed, o.castRoles, o.sheetsReady);
   doc.pages = makePages({
     count: o.pages,
     density: o.density,
@@ -581,6 +596,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'lake',
         castNames: ['Baby Bea', 'Mother Duck', 'Frog', 'Ducklings'],
+        castRoles: ['Toddler who wanders off to the water', 'Worried mother', 'Frog who sings opera', 'Followers in a row'],
         statuses: ['ready'],
         panels: () => 4,
         balloons: 'edge',
@@ -599,6 +615,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'deep',
         castNames: ['Maya', 'Arjun', 'Vendor'],
+        castRoles: ['Rooftop runner', 'Safecracker', 'Market informant'],
         statuses: ['ready'],
         panels: (i) => 3 + (i % 3),
         balloons: 'tidy',
@@ -616,6 +633,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'toon',
         castNames: ['Kai', 'Mira'],
+        castRoles: ['Pearl diver', 'Lighthouse keeper'],
         statuses: ['ready'],
         panels: () => 2,
         balloons: 'tidy',
@@ -647,6 +665,25 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
     case 'empty':
       doc = normalizeDoc(createEmptyDoc(QA_PROJECT_ID, 'Untitled comic', QA_NOW));
       break;
+    case 'chat-14':
+      doc = buildDoc({
+        title: 'Monsoon Courier',
+        kind: 'comic',
+        aspect: '2:3',
+        pages: 9,
+        density: 'normal',
+        seed: 'chat14',
+        castNames: ['Maya', 'Arjun', 'Vendor', 'Pigeons'],
+        castRoles: ['Courier on a bicycle', 'Rival courier', 'Tea stall owner', 'Flock on the wires'],
+        sheetsReady: true,
+        statuses: ['ready'],
+        panels: (i) => 3 + (i % 3),
+        balloons: 'tidy',
+        conversation: true,
+        gate: false,
+        logline: 'A courier races the monsoon across the city with one parcel.'
+      });
+      break;
     case 'heist-12p':
     default:
       doc = buildDoc({
@@ -657,6 +694,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
         density: 'normal',
         seed: 'heist',
         castNames: ['Maya', 'Arjun', 'Vendor', 'Pigeons'],
+        castRoles: ['Pickpocket with a plan', 'Getaway driver', 'Saffron seller', 'Lookouts on the ledge'],
         statuses: READY_HEAVY,
         panels: (i) => 3 + (i % 3),
         balloons: 'tidy',
@@ -668,6 +706,20 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
   }
   if (opts.rtl) doc = { ...doc, format: { ...doc.format, readingDirection: 'rtl' } };
   return doc;
+};
+
+/**
+ * The doc with no stored variants on any page or on the cover (`variants=0`, RD-A #12): a comic stored before the
+ * server kept 480w / 1080w variants, so the reader has no stand-in and stands on its toned paper instead. Character
+ * sheets, the style board and options keep theirs.
+ */
+export const withoutVariants = (doc: ComicDoc): ComicDoc => {
+  const strip = (r: RenderState): RenderState => {
+    if (!r.asset?.variants) return r;
+    const { variants: _drop, ...asset } = r.asset;
+    return { ...r, asset };
+  };
+  return { ...doc, pages: doc.pages.map((p) => ({ ...p, render: strip(p.render) })), cover: { ...doc.cover, render: strip(doc.cover.render) } };
 };
 
 /** Every image path a fixture references (originals and variants), for pre-generation and tests. */
@@ -689,4 +741,107 @@ export const qaImagePaths = (doc: ComicDoc): string[] => {
   doc.pages.forEach((p) => addRender(p.render));
   addRender(doc.cover.render);
   return [...out];
+};
+
+// ── Scene layers (qaController `share=live…`, `state=conflict`) ──────────────
+
+/** The QA publication's link slug (17 alphanumerics, SLUG_RE). */
+export const QA_PUBLICATION_SLUG = 'QaLiveLink0000001';
+
+/**
+ * `share=live` / `share=live-public`: the comic is published — Link only (unlisted) or Library + link (public) — so the
+ * studio's Share sheet opens on its link-first block (the link card, the QR, and "See it in the Library" when listed).
+ * `doc.publication` is the server-written mirror; `qaPublicationView` is what the sheet reads.
+ */
+export const withQaPublication = (doc: ComicDoc, visibility: 'unlisted' | 'public'): ComicDoc => {
+  const publication: PublicationMirror = {
+    visibility,
+    status: 'live',
+    slug: QA_PUBLICATION_SLUG,
+    publishedRev: doc.rev,
+    publishedAt: QA_NOW - 3_600_000,
+    languages: [doc.format.language || 'en']
+  };
+  return { ...doc, publication };
+};
+
+/**
+ * The owner view of that publication (GET …/publication), offline: the link is on this origin (nothing leaves the
+ * harness), the preview card has no picture to fetch, and the readiness says every drawn page is publishable.
+ */
+export const qaPublicationView = (doc: ComicDoc, visibility: 'unlisted' | 'public', origin: string): PublicationOwnerView => {
+  const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
+  const lang = doc.format.language || 'en';
+  return {
+    visibility,
+    status: 'live',
+    slug: QA_PUBLICATION_SLUG,
+    url: `${origin.replace(/\/+$/, '')}/c/${QA_PUBLICATION_SLUG}`,
+    languages: [lang],
+    defaultLang: lang,
+    allowDownload: true,
+    allowEmbed: true,
+    showCreator: false,
+    publishedRev: doc.rev,
+    docRev: doc.rev,
+    behind: false,
+    publishedAt: QA_NOW - 3_600_000,
+    firstPublishedAt: QA_NOW - 86_400_000,
+    readiness: {
+      ok: true,
+      drawnPages: drawn,
+      plannedPages: doc.pages.length,
+      missing: [],
+      stalePages: [],
+      safety: { status: 'cleared', blockedPages: [], reasons: [] },
+      languages: [{ lang, publishable: true, blocking: [] }]
+    },
+    stats: { views: 128, uniques7d: 41, completes7d: 17, byChannel7d: { whatsapp: 22, direct: 12, x: 7 }, daily: [{ day: '2026-10-29', views: 51 }, { day: '2026-10-30', views: 77 }] },
+    rating: 'PG-13',
+    card: { title: doc.brief.title, description: doc.brief.logline || '' }
+  };
+};
+
+/**
+ * `state=conflict` (agent-editor plan §3 A3, D3): the last reply carries a two-item conflict card — a balloon both sides
+ * changed (with a held-back edit "Use the director's" can apply) and a panel description whose edit was too big to keep
+ * — plus "…and 2 more", so the card's widest layout can be measured. Synthetic words only.
+ */
+export const qaConflictCard = (doc: ComicDoc): ConflictCard | null => {
+  const page = doc.pages.find((p) => p.panels.some((panel) => panel.lines.length > 0)) ?? null;
+  const panel = page?.panels.find((p) => p.lines.length > 0);
+  const line = panel?.lines[0];
+  if (!page || !panel || !line) return null;
+  const items: ConflictItem[] = [
+    {
+      id: 'cf_qa_line',
+      where: { pageId: page.id, panelId: panel.id, lineId: line.id, label: `page ${page.n} · panel ${panel.n} · line 1` },
+      mine: line.text || 'We go now, before the market wakes up.',
+      theirs: 'Now. Before the whole market wakes up and every stallholder on Spice Lane sees us running.',
+      proposed: [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch: { text: 'Now. Before the whole market wakes up and every stallholder on Spice Lane sees us running.' } }]
+    },
+    {
+      id: 'cf_qa_panel',
+      where: { pageId: page.id, panelId: panel.id, label: `page ${page.n} · panel ${panel.n}` },
+      mine: panel.action || 'Maya ducks under the awning.',
+      theirs: 'Wide shot from the rooftops: Maya ducks under a saffron-coloured awning as the pigeons scatter over the lane.',
+      proposed: [],
+      tooBig: true
+    }
+  ];
+  return { type: 'conflict', id: 'card_qa_conflict', items, more: 2 };
+};
+
+/** The doc with that card on a new last reply (unchanged when the fixture has no lettered panel). */
+export const withQaConflict = (doc: ComicDoc): ComicDoc => {
+  const card = qaConflictCard(doc);
+  if (!card) return doc;
+  const msg: Msg = {
+    id: 'm_qa_conflict',
+    role: 'assistant',
+    text: 'I redrew the rooftop beat, but you changed two of the same things while I worked. Yours stay unless you pick mine:',
+    at: QA_NOW,
+    cards: [card]
+  };
+  return { ...doc, conversation: [...doc.conversation, msg] };
 };

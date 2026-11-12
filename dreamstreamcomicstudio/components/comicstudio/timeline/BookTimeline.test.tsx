@@ -345,9 +345,9 @@ describe('BookTimeline', () => {
     });
   });
 
-  it('the dock’s Media shortcut appears only once the comic has an image (no dead button before)', () => {
+  it('the dock’s Assets shortcut appears only once the comic has an image (no dead button before)', () => {
     const { unmount } = setup();
-    expect(screen.getByRole('button', { name: 'Open Media: every image in this comic' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Assets: every image in this comic' })).toBeInTheDocument();
     unmount();
     const bare = makeSampleDoc();
     bare.pages = bare.pages.map((p) => ({ ...p, render: emptyRender() }));
@@ -358,7 +358,7 @@ describe('BookTimeline', () => {
     bare.conversation = [];
     setup(bare);
     expect(screen.getByRole('button', { name: 'Book' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Open Media/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Open Assets/ })).toBeNull();
   });
 
   describe('touch: long-press lifts a clip so scrolling never turns into a move', () => {
@@ -450,7 +450,7 @@ describe('the History link in the summary row (Comic History; lead decision on H
   it('follows its siblings exactly: 28 px on fine pointers (nothing for the 36 px row to clip), 44 px on coarse pointers', () => {
     setup(makeSampleDoc(), { caps: ON });
     const history = screen.getByRole('button', { name: HISTORY });
-    const media = screen.getByRole('button', { name: 'Open Media: every image in this comic' });
+    const media = screen.getByRole('button', { name: 'Open Assets: every image in this comic' });
     expect(history.className).toBe(media.className);
     const row = history.parentElement!;
     expect(row.className).toMatch(/(^|\s)h-9(\s|$)/);
@@ -487,7 +487,7 @@ describe('the History link in the summary row (Comic History; lead decision on H
     setup(makeSampleDoc(), { caps: { ...DEFAULT_CAPS } });
     expect(screen.queryByRole('button', { name: /Open History/ })).toBeNull();
     expect(document.querySelector('[data-history-entry]')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Open Media: every image in this comic' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Assets: every image in this comic' })).toBeInTheDocument();
   });
 
   it('the compact dock has no summary row, so no History link', () => {

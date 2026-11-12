@@ -60,7 +60,12 @@ export type StudioErrorCode =
   /** 409: the comic's image model is locked; only the user's confirmed change_image_model action may change it. */
   | 'MODEL_LOCKED'
   /** 409: a render run is under way; the model cannot change until it finishes or is stopped. */
-  | 'RUN_ACTIVE';
+  | 'RUN_ACTIVE'
+  // Live agent A2 (POST /projects/:id/steer, session.ts SteerRefusal)
+  /** 409: no director turn is reading the steer inbox; the client sends the note as a message when the turn ends. */
+  | 'NOT_RUNNING'
+  /** 409: STEER_LIMITS.inbox notes already wait or are being screened; the note stays in Up next. */
+  | 'BUSY';
 
 export class StudioError extends Error {
   readonly code: StudioErrorCode;

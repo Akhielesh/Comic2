@@ -100,7 +100,7 @@ const GOOGLE_FONTS_CSS = 'https://fonts.googleapis.com';
 const GOOGLE_FONTS_FILES = 'https://fonts.gstatic.com';
 /** Google Drive resumable uploads go from the browser straight to Google (live/driveUpload.ts). */
 const GOOGLE_APIS = 'https://www.googleapis.com';
-/** jsPDF + html2canvas (index.html, SRI-pinned). */
+/** jsPDF + html2canvas: services/legacyPdfLoader.ts injects them on demand (SRI-pinned, PF-1); keep cdnjs while the classic wizard exports PDFs. */
 const CDNJS = 'https://cdnjs.cloudflare.com';
 /** Embeds the comic / chat app shows (components/chat/videoEmbed.ts, Sandpack). Report-Only there. */
 const MAIN_FRAME_ORIGINS = ['https://www.youtube-nocookie.com', 'https://www.youtube.com', 'https://player.vimeo.com', 'https://*.codesandbox.io'];

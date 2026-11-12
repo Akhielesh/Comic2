@@ -18,6 +18,7 @@ import {
   getRender,
   isPageStale,
   isTargetStale,
+  letterStyleOf,
   renderTargetKey,
   targetLabel,
   totalPanels,
@@ -27,9 +28,13 @@ import {
   type NextStep,
   type RenderTarget
 } from '../../../shared/comic/doc.js';
+import type { StudioFocus } from '../../../shared/comic/events.js';
+import { LANGUAGES } from '../../../shared/comic/languages.js';
+import { LETTERING_PRESETS, type LetteringPresetId } from '../../../shared/comic/lettering/style.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { formatUsd, type ImageJobKind } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, estimateDocJobs, pageTargets } from '../../../shared/comic/plan.js';
+import { letteringPresetName, ownLooks, pinnedBalloons, pinnedLabel } from './decided.js';
 import type { DirectorTurn } from './tools.js';
 
 // ── Text helpers ─────────────────────────────────────────────────────────────
@@ -261,7 +266,27 @@ export function recapLine(doc: ComicDoc): string {
 
 // ── Material gaps (director.md §3.3) ─────────────────────────────────────────
 
-export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent';
+/**
+ * The four contradiction gaps (agent-editor plan §3 A3.2; behind COMIC_CONFLICT_GUARD): the request would override
+ * something the creator already settled. Each tells the director to ask ONE Keep / Change question, quoting the earlier
+ * decision, and never to override silently.
+ */
+export type ContradictionGap = 'contradiction_pages' | 'contradiction_style' | 'contradiction_pinned' | 'contradiction_note';
+export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent' | ContradictionGap;
+
+/** What the OPEN QUESTIONS line may consider beyond the four classic gaps. */
+export interface GapOptions {
+  /** The contradiction gaps (caps.liveAgent.conflicts, conflictGuardOn); off = exactly the classic gaps. */
+  contradictions?: boolean;
+  /** What the creator has selected (a pinned balloon they ask to move). */
+  focus?: StudioFocus;
+}
+
+/** One contradiction, with the director-facing words that quote the earlier decision. */
+export interface Contradiction {
+  gap: ContradictionGap;
+  text: string;
+}
 
 const VAGUE_GROUP_RE =
   /\b(?:other|some|more|lots of|many|few|several|different|cute|little|baby|forest|farm|sea|ocean|jungle|wild|pet)?\s*(animals|creatures|critters|pets|beasts|friends|toys|vehicles|robots|monsters|sea creatures|bugs|insects|birds)\b/i;
@@ -269,10 +294,312 @@ const PAGE_COUNT_RE = /\b(\d{1,2}|one|single|two|three|four|five|six|seven|eight
 const PURPOSE_RE =
   /\b(this|these|that|those|here)(?:'s| is| are)\b|\b(?:is|are|it'?s|that'?s) (?:me|my|our|him|her|them|the)\b|\bme\b|\bmy (?:son|daughter|kid|baby|child|dog|cat|pet|friend|mom|dad|family)\b|\b(style|reference|ref|look like|inspired|place|location|background|setting)\b|\bas (?:the )?[A-Z]/i;
 
-/** Open questions, highest priority first (only the first is surfaced per turn). */
-export function materialGaps(doc: ComicDoc, userText: string): MaterialGap[] {
+// ── Contradictions (agent-editor plan §3 A3.2) ──
+//
+// Every reader below needs POSITIVE context. A gap costs the creator a Keep / Change question, so a number, an audience
+// word, a language name or a preset name only counts when the sentence clearly SETS it ("make it 4 pages", "for teens",
+// "write it in Hindi", "switch the lettering to manga"). Everyday edits that merely mention one ("redo 2 pages", "the
+// kids look for the dog", "she shouts in English", "keep the dialogue minimal") stay silent. A miss behaves exactly as
+// before the gaps existed; a false question is the failure to avoid (the flag's rollout criterion).
+
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, single: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  fifteen: 15, twenty: 20
+};
+const NUMBER_WORD = '(?:\\d{1,2}|one|single|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)';
+/** A number + "page(s)": "4 pages", "a 6-page comic", "one page". Group 1 the number, group 2 the joiner. */
+const COUNT_RE = new RegExp(`\\b(${NUMBER_WORD})(-| )(?:page|pager)s?\\b`, 'gi');
+/** "page count to 4", "number of pages: 6", "pages: 6" (a note; not "pages: 2 and 3 are dark"), the number in group 1 or 2. */
+const COUNT_NAMED_RE = new RegExp(`\\b(?:page count|number of pages)\\s*(?:is|of|to|at|:|=)?\\s*(${NUMBER_WORD})\\b(?!\\s*(?:panels?|words?|lines?)\\b)|\\bpages\\s*[:=]\\s*(${NUMBER_WORD})\\b(?=\\s*(?:$|[.,;)]))`, 'i');
+/** Words just before a number that SET the length, whatever follows: "make it 4 pages", "cut it down to 3 pages". */
+const COUNT_SET_BEFORE_RE =
+  /(?:\bmake (?:it|this|the (?:comic|book|story|whole thing))|\bturn (?:it|this|the (?:comic|book|story)) into|\b(?:cut|trim|shorten|reduce|bring|take) (?:it |this |the (?:comic|book|story) )?(?:down |back )?to|\b(?:expand|extend|stretch|grow|increase|bump|lengthen) (?:it |this |the (?:comic|book|story) )?(?:up )?to|\bchange (?:it|this|the page count|the length|the comic|the story) to|\bkeep (?:it|this|the (?:comic|book|story)) (?:at|to)|\b(?:go|going|come) (?:down |up |back )?to|\bfrom \w+ to|\b(?:should|must|will|would|could|can|to) (?:only |just )?be)(?: (?:only|just|exactly))?(?: a| an)?\s*$/i;
+/** Weaker words before a number: they set the length only when the count ends its clause ("I want 4 pages."). */
+const COUNT_ASK_BEFORE_RE =
+  /(?:\b(?:it|this|that|everything|(?:the )?(?:comic|story|book|whole thing)) (?:in|into|on|as|across|over)|\b(?:should|must|could|would|will|to|let'?s|can|it|comic|story|book) (?:only )?(?:have|has)|\b(?:want|need|prefer|would like|'d like)(?: it(?: to be)?)?(?: only| just)?|\blet'?s (?:do|go with|go for|try|say)|\b(?:go|going) (?:with|for)|\bhow about|\bmaybe)(?: a| an)?\s*$/i;
+/** A clause that is only the count, after optional filler ("4 pages please", "ok, 6 pages", "actually just 2 pages"). */
+const COUNT_CLAUSE_START_RE = /^\s*(?:(?:ok(?:ay)?|yes|yeah|yep|sure|so|actually|then|and|hmm+|um+|well)[,!]?\s+)*(?:a |an |just |only |exactly )?$/i;
+/** What may follow a count that ends its clause. */
+const COUNT_ENDS_CLAUSE_RE =
+  /^\s*(?:$|[.,!?;:)–—]|(?:please|thanks|thank you|or (?:so|less|fewer|more)|max(?:imum)?|at most|tops|instead(?! of)|total|in total|long|is (?:enough|plenty|fine|good|better|best)|would be (?:better|great|good|best|fine)|(?:comic|story|book|version|one-shot)s?)\b)/i;
+/** After a hyphenated count: a format noun or the end of the clause ("a 6-page comic"; not "the 2-page spread"). */
+const COUNT_FORMAT_AFTER_RE =
+  /^\s*(?:$|[.,!?;:)–—]|(?:comic|story|book|version|zine|strip|webtoon|manga|short|one-shot|graphic novel|pitch|issue|chapter|thing|piece)s?\b)/i;
+/** After any count: it names a length ("4 pages long", "6 pages in total"). */
+const COUNT_LENGTH_AFTER_RE = /^\s*(?:long\b|(?:in )?total\b(?=\s*(?:$|[.,!?;:)]|please\b)))/i;
+
+const countOf = (raw: string): number | undefined => {
+  const w = raw.toLowerCase();
+  const n = /^\d+$/.test(w) ? Number(w) : NUMBER_WORDS[w];
+  return n && n >= 1 && n <= DOC_LIMITS.pages ? n : undefined;
+};
+
+/**
+ * The page count a sentence SETS ("make it 4 pages", "a one-shot", "an 8-page comic", "I want 6 pages.", "6 pages
+ * please"), or undefined. A number that names pages to work on ("redo 2 pages", "make 2 pages brighter", "my 4 pages
+ * look great", "the first 2 pages") is not a count: only positive context counts, never a list of exceptions.
+ */
+export function requestedPageCount(text: string): number | undefined {
+  const t = clean(text);
+  if (/\bone[- ]shot\b/i.test(t)) return 1;
+  let found: number | undefined;
+  for (const m of t.matchAll(COUNT_RE)) {
+    const at = m.index ?? 0;
+    const head = t.slice(0, at);
+    const before = head.slice(-48);
+    const after = t.slice(at + m[0].length);
+    const clauseStart = COUNT_CLAUSE_START_RE.test(head.split(/[,;:(.!?—–]/).pop() ?? '');
+    const sets =
+      (m[2] === '-' && COUNT_FORMAT_AFTER_RE.test(after)) ||
+      COUNT_LENGTH_AFTER_RE.test(after) ||
+      COUNT_SET_BEFORE_RE.test(before) ||
+      ((clauseStart || COUNT_ASK_BEFORE_RE.test(before)) && COUNT_ENDS_CLAUSE_RE.test(after));
+    if (!sets) continue;
+    found = countOf(m[1]) ?? found;
+  }
+  if (found !== undefined) return found;
+  const named = COUNT_NAMED_RE.exec(t);
+  return named ? countOf(named[1] ?? named[2]) : undefined;
+}
+
+/** The words a creator uses for each lettering preset (its id and the distinctive part of its name). */
+const PRESET_ALIASES: Record<LetteringPresetId, string[]> = {
+  classic: ['classic'],
+  manga: ['manga'],
+  storybook: ['storybook', 'story book'],
+  noir: ['noir'],
+  webtoon: ['webtoon'],
+  retro_pulp: ['retro pulp', 'pulp'],
+  // "minimal" is everyday speech ("keep the dialogue minimal"): only "minimal preset" / "minimal lettering style".
+  minimal: [],
+  handwritten: ['handwritten', 'hand-written', 'hand written']
+};
+/** The lettering nouns a preset switch names ("the manga lettering", "noir fonts", "the webtoon preset"). */
+const LETTER_NOUN = '(?:lettering(?: style| preset)?|letters|fonts?|preset)';
+/** A verb that switches something ("switch", "use", "go with", "make it"). */
+const SWITCH_VERB = '(?:switch|swap|change|use|using|go with|try|make it|make the (?:lettering|letters|fonts?|text)|set the (?:lettering|letters|fonts?|preset)|pick|choose|apply|give it|prefer|move to)';
+/** One word with no punctuation around it, so a comma ends the reach ("set in a noir city, use big fonts" is no ask). */
+const W = "\\s+[\\w'’-]+";
+const presetAsk = (alias: string): RegExp[] => {
+  const w = alias.replace(/[-\s]+/g, '[-\\s]?');
+  return [
+    // A switch verb within six words before the alias, and a lettering noun within four words of it (either side).
+    new RegExp(`\\b${SWITCH_VERB}\\b(?:${W}){0,5}?\\s+${w}\\b(?=(?:${W}){0,3}?\\s+${LETTER_NOUN}\\b)`, 'i'),
+    new RegExp(`\\b${SWITCH_VERB}\\b(?:${W}){0,5}?\\s+${LETTER_NOUN}\\b(?:${W}){0,3}?\\s+${w}\\b`, 'i'),
+    // The whole message is the ask: "handwritten fonts please", "manga lettering!".
+    new RegExp(`^(?:(?:a|the|some)\\s+)?${w}\\s+${LETTER_NOUN}(?:\\s+(?:please|instead|now|for (?:the |this )?(?:comic|book|story)))?\\s*[.!]?$`, 'i')
+  ];
+};
+const PRESET_ASKS = (Object.keys(PRESET_ALIASES) as LetteringPresetId[]).map((id) => ({ id, res: PRESET_ALIASES[id].flatMap(presetAsk) }));
+const MINIMAL_ASK_RE = /\bminimal(?:ist)?\s+(?:preset|lettering (?:style|preset))\b|\b(?:preset|lettering (?:style|preset))\s*(?::|to|is)?\s*(?:the\s+)?minimal(?:ist)?\b/i;
+
+/** The lettering preset a sentence asks to switch to ("use the manga lettering", "switch the fonts to noir"), or undefined. */
+export function requestedLetteringPreset(text: string): LetteringPresetId | undefined {
+  const t = clean(text);
+  if (!t) return undefined;
+  for (const { id, res } of PRESET_ASKS) {
+    if (!Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, id)) continue;
+    if (res.some((re) => re.test(t))) return id;
+  }
+  if (Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, 'minimal') && MINIMAL_ASK_RE.test(t)) return 'minimal';
+  return undefined;
+}
+
+/** A place on the page, never an adjective ("the top left", "the corner"; not "the top line", "the left balloon"). */
+const PLACE =
+  '(?:the\\s+)?(?:very\\s+|far\\s+)?(?:top|bottom|left|right|corner|middle|cent(?:er|re)|side|edge|upper|lower)\\b(?!\\s+(?:line|balloon|bubble|panel|one|row|text|caption|speech|part|word)s?\\b)';
+/** A request to move or re-place a balloon ("move it to the top", "put it in the corner", "nudge it", "a bit lower"). */
+const MOVE_RE = new RegExp(
+  [
+    '\\b(?:move|moving|reposition|drag|nudge|arrange|rearrange|re-?arrange|re-?layout|lay (?:it |them )?out|re-?letter|auto[- ]?(?:place|layout))\\b',
+    '\\bspread (?:(?:them|it|the (?:balloons|bubbles|lines))\\s+)?out\\b',
+    '\\btidy (?:up )?(?:the )?(?:balloons|bubbles|lettering|layout)\\b',
+    '\\b(?:redo|re-?do|change|new|auto) (?:the )?(?:balloon |bubble )?layout\\b',
+    // put / place / position / shift / slide only with a place after them ("put more emotion in this line" is no move).
+    `\\b(?:put|place|position|shift|slide)\\b(?=[^.?!]{0,40}\\b(?:(?:to|at|in|into|on|onto|near|next to|above|below|under|over|toward|towards)\\s+${PLACE}|(?:to|into)\\s+(?:panel \\d+|the other panel)\\b))`,
+    '\\b(?:shift|slide)\\s+(?:(?:it|this|that|them|the (?:balloon|bubble|caption|text|line)s?)\\s+)?(?:up|down|left|right|higher|lower|over|aside|closer|away)\\b',
+    `\\b(?:to|at|in|into) the\\s+(?:very\\s+|far\\s+)?(?:top|bottom|left|right|corner|middle|cent(?:er|re))\\b(?!\\s+(?:line|balloon|bubble|panel|one|row|text|caption|speech|part|word)s?\\b)`,
+    '\\b(?:higher|lower|further (?:up|down|left|right))\\b(?=\\s*(?:up|down)?\\s*(?:on the page|in the panel)?\\s*(?:$|[.,!?;)]|please\\b))'
+  ].join('|'),
+  'i'
+);
+/** A page-wide re-place ("rearrange the balloons on page 1", "re-letter page 2"): a real move verb, never "put". */
+const PAGE_MOVE_RE = /\b(?:move|moving|rearrange|re-?arrange|re-?letter|re-?layout|arrange|tidy|spread|auto[- ]?(?:place|layout)|reposition|shuffle|lay (?:it |them )?out)\b/i;
+const PAGE_REF_RE = /\bpages? (\d{1,3})\b/gi;
+const ALL_BALLOONS_RE = /\b(?:all|every|the) (?:balloons|bubbles|lettering|dialogue|lines)\b|\bre-?letter\b|\bre-?layout\b|\brearrange\b/i;
+
+const AUDIENCE: { bucket: string; re: RegExp }[] = [
+  { bucket: 'all ages', re: /\b(?:all ages|everyone|whole family|families|family[- ]friendly|rated g|g[- ]rated)\b/i },
+  { bucket: 'kids', re: /\b(?:kids?|children|child|toddlers?|preschool(?:ers)?|little ones|babies|ages? (?:[1-9]|1[0-2])\s*(?:[-–to]+\s*(?:[1-9]|1[0-2]))?\b(?!\s*\+))/i },
+  { bucket: 'teens', re: /\b(?:teens?|teenagers?|young adults?|ya|ages? 1[3-7]\b|pg-13)\b/i },
+  { bucket: 'adults', re: /\b(?:adults?|grown[- ]ups?|mature|ages? (?:18|21)\+?|rated r|r[- ]rated)\b/i }
+];
+const AUDIENCE_NOUN =
+  '(?:kids?|children|toddlers?|preschoolers?|little ones|babies|teens?|teenagers?|young adults?|adults?|grown[- ]ups?|mature readers|everyone|all ages|families|the whole family)';
+/** "For" + an audience that ends its phrase ("for kids", "for my kids 2–6", "suitable for teens"; not "look for the dog"). */
+const AUDIENCE_FOR_RE = new RegExp(
+  `\\b(?:for|aimed at|suited to|meant for|made for)\\s+(?:my |our |young |little |older |small )?(${AUDIENCE_NOUN}|ages? \\d{1,2}(?:\\s*(?:\\+|[-–]|to)\\s*\\d{0,2})?)(?=\\s*(?:$|[.,!?;:)]|\\d|please\\b|only\\b|aged?\\b|ages?\\b|under\\b|over\\b|who\\b|that\\b|to (?:read|enjoy)\\b|instead\\b|and (?:up|older)\\b|rather\\b|now\\b))`,
+  'i'
+);
+/** An audience-shaped book ("a teen comic", "a kids story", "children's book", "the family version"). */
+const AUDIENCE_BOOK_RE = /\b(kids?|kid'?s|children'?s|teen|teenage|young adult|ya|adult|grown[- ]up|family|all[- ]ages|mature)\s+(?:comic|book|story|strip|audience|version|edition|readers|readership)s?\b/i;
+/** "the audience is teens", "audience: adults". */
+const AUDIENCE_IS_RE = /\baudience(?:\s+(?:is|should be|of|are)|\s*:)\s+([^.,;!?]{1,40})/i;
+/** "ages 8–12", "age 13+", "for ages 6" (a range, a plus or "for"; a bare "age 8" or "ages 8 and 10" is a character's). */
+const AUDIENCE_AGES_RE = /\bfor\s+ages?\s+(\d{1,2})\b|\bages?\s+(\d{1,2})\s*(?:\+|[-–]\s*\d{1,2}\b|to\s+\d{1,2}\b)/i;
+/** A rating ("rated PG-13", "rated T", "R-rated", "family-friendly", "all ages"). */
+const AUDIENCE_RATING_RE = /\brated\s+(g|pg-13|r|e|everyone|t|teen|m|mature)\b|\b(pg-13|g[- ]rated|r[- ]rated|family[- ]friendly|all[- ]ages)\b/i;
+const RATING_BUCKET: Record<string, string> = { g: 'all ages', e: 'all ages', everyone: 'all ages', 'pg-13': 'teens', t: 'teens', teen: 'teens', r: 'adults', m: 'adults', mature: 'adults' };
+
+const bucketOf = (phrase: string): string | undefined => AUDIENCE.find(({ re }) => re.test(phrase))?.bucket;
+const ageBucket = (n: number): string => (n <= 12 ? 'kids' : n <= 17 ? 'teens' : 'adults');
+
+/**
+ * The audience a sentence SETS ("for kids 2–6", "a teen comic", "rated PG-13", "the audience is adults"), as a bucket,
+ * or undefined ("the kids look for the dog" sets nothing). A brief note is already a fact ("kids 2–6", "audience:
+ * teens"), so `note` reads the bare audience word.
+ */
+export function statedAudience(text: string, note = false): string | undefined {
+  const t = clean(text);
+  if (!t) return undefined;
+  if (note) return bucketOf(t);
+  const rating = AUDIENCE_RATING_RE.exec(t);
+  if (rating) {
+    const r = (rating[1] ?? rating[2]).toLowerCase().replace(/\s+/g, '-');
+    const bucket = RATING_BUCKET[r] ?? bucketOf(r.replace(/-/g, ' '));
+    if (bucket) return bucket;
+  }
+  const ages = AUDIENCE_AGES_RE.exec(t);
+  if (ages) return ageBucket(Number(ages[1] ?? ages[2]));
+  for (const re of [AUDIENCE_FOR_RE, AUDIENCE_BOOK_RE, AUDIENCE_IS_RE]) {
+    const m = re.exec(t);
+    const bucket = m ? bucketOf(m[1]) ?? bucketOf(m[0]) : undefined;
+    if (bucket) return bucket;
+  }
+  return undefined;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Per language: the bare name (a note) and the phrases that SET the comic's language (a request). */
+const LANGUAGE_READERS = LANGUAGES.map((l) => {
+  const name = escapeRe(l.english);
+  return {
+    english: l.english,
+    bare: new RegExp(`\\b${name}\\b`, 'i'),
+    asks: [
+      new RegExp(`\\b(?:write|make|redo|turn|change|switch|do|put|keep|have)\\s+(?:it|this|everything|the (?:whole )?(?:comic|book|story|dialogue|text|lines|words|script|speech))\\s+(?:in|into|to)\\s+${name}\\b`, 'i'),
+      new RegExp(`\\b${name}\\s+(?:language|comic|book|version|only)\\b`, 'i'),
+      new RegExp(`\\blanguage(?:\\s+(?:is|to|should be)|\\s*:)?\\s+${name}\\b`, 'i')
+    ]
+  };
+});
+
+/**
+ * The language a sentence SETS for the comic ("write it in Hindi", "a Telugu comic", "language: Tamil"), or
+ * undefined ("the sign says hello in Hindi" and "she shouts in English" set nothing). A brief note (`note`) is a fact,
+ * so the bare name counts there ("Telugu dialogue").
+ */
+export function statedLanguage(text: string, note = false): string | undefined {
+  const t = clean(text);
+  if (!t || /\btranslat/i.test(t)) return undefined; // a translation is another edition, never the comic's own language
+  for (const l of LANGUAGE_READERS) {
+    if (note ? l.bare.test(t) : l.asks.some((re) => re.test(t))) return l.english;
+  }
+  return undefined;
+}
+
+/** The slot values a sentence states: page count, audience, language. */
+const slotsOf = (text: string, note = false) => ({ pages: requestedPageCount(text), audience: statedAudience(text, note), language: statedLanguage(text, note) });
+
+/**
+ * The contradictions in a request, most important first (plan §3 A3.2). Deterministic, free, no model call:
+ * - contradiction_pinned: the target is a balloon the creator pinned or locked;
+ * - contradiction_pages: a new page count while the plan is approved or pages are drawn;
+ * - contradiction_style: a lettering preset switch while the comic has its own kind, speaker or line looks;
+ * - contradiction_note: a page count, audience or language that differs from an earlier brief note.
+ */
+export function contradictionsOf(doc: ComicDoc, userText: string, focus?: StudioFocus): Contradiction[] {
   const text = clean(userText);
-  const gaps: MaterialGap[] = [];
+  if (!text) return [];
+  const out: Contradiction[] = [];
+
+  // Pinned or locked balloons the request would move.
+  if (MOVE_RE.test(text)) {
+    const selected = new Set((focus?.lineIds || []).filter((id) => typeof id === 'string'));
+    const pageNs = new Set([...text.matchAll(PAGE_REF_RE)].map((m) => Number(m[1])));
+    // A page-wide re-place needs a real move verb and the page's balloons as its object ("rearrange the balloons on
+    // page 1"); "put the dialogue in Hindi" moves nothing.
+    const pageWide = PAGE_MOVE_RE.test(text) && ALL_BALLOONS_RE.test(text);
+    const wholePages = new Set(pageWide ? doc.pages.filter((p) => pageNs.has(p.n) || (focus?.pageId === p.id && !selected.size)).map((p) => p.id) : []);
+    const hit = pinnedBalloons(doc).filter((p) => selected.has(p.line.id) || wholePages.has(p.page.id));
+    if (hit.length) {
+      const locked = hit.some((p) => p.locked);
+      const shown = hit.slice(0, 3).map(pinnedLabel).join('; ');
+      out.push({
+        gap: 'contradiction_pinned',
+        text: `the user asked to move ${hit.length === 1 ? 'a balloon' : `${hit.length} balloons`} they ${locked ? 'pinned or locked' : 'pinned'} by hand (${shown}${hit.length > 3 ? '; …' : ''}) — ask_user once: "Keep ${hit.length === 1 ? 'it' : 'them'} where ${hit.length === 1 ? 'it is' : 'they are'}" / "Move ${hit.length === 1 ? 'it' : 'them'}" before moving; until then leave pinned balloons where they are. Never move them silently.`
+      });
+    }
+  }
+
+  // A new page count against an approved plan or drawn pages.
+  const asked = requestedPageCount(text);
+  const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
+  const current = doc.pages.length || doc.format.pageCount;
+  if (asked !== undefined && asked !== current && (doc.planStatus === 'approved' || drawn > 0)) {
+    const what = doc.planStatus === 'approved' ? `the approved plan has ${plural(current, 'page')}` : `the comic has ${plural(current, 'page')}`;
+    out.push({
+      gap: 'contradiction_pages',
+      text: `the user asked for ${plural(asked, 'page')}, but ${what}${drawn ? ` (${drawn} drawn)` : ''} — ask_user once: "Keep ${plural(current, 'page')}" / "Change to ${plural(asked, 'page')}", saying what changes (the plan is rewritten${drawn ? '; drawn pages may need redrawing, which costs' : ''}). Never change it silently.`
+    });
+  }
+
+  // A lettering preset switch over the comic's own looks.
+  const preset = requestedLetteringPreset(text);
+  const ls = letterStyleOf(doc);
+  if (preset && preset !== ls.presetId) {
+    const looks = ownLooks(doc);
+    // Only the looks a switch DROPS (the base and kind looks); speaker, line and saved-style looks stay on top of any
+    // preset, so a comic with only those switches without a question.
+    if (looks.base || looks.kinds.length) {
+      const dropped = [...(looks.base ? ['the base look'] : []), ...looks.kinds];
+      out.push({
+        gap: 'contradiction_style',
+        text: `the user asked for the ${letteringPresetName(preset)} lettering, but the comic has its own looks for ${joinList(dropped.slice(0, 5))} on top of ${letteringPresetName(ls.presetId)} — ask_user once: "Keep my looks" (stay on ${letteringPresetName(ls.presetId)}) / "Switch to ${letteringPresetName(preset)}" (drops the base and kind looks; speaker and line looks stay on top), naming those looks. Never drop them silently.`
+      });
+    }
+  }
+
+  // The same slot as an earlier brief note, with a different value.
+  const now = slotsOf(text);
+  const notes = doc.brief.notes.map((n) => clean(n)).filter(Boolean);
+  const slotWords: Record<keyof typeof now, string> = { pages: 'the page count', audience: 'the audience', language: 'the language' };
+  for (const slot of ['pages', 'audience', 'language'] as const) {
+    const value = now[slot];
+    if (value === undefined) continue;
+    // The latest earlier note that states this slot.
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const before = slotsOf(notes[i], true)[slot];
+      if (before === undefined) continue;
+      if (before !== value) {
+        const said = slot === 'pages' ? plural(value as number, 'page') : String(value);
+        const was = slot === 'pages' ? plural(before as number, 'page') : String(before);
+        out.push({
+          gap: 'contradiction_note',
+          text: `the user now says ${slotWords[slot]} is ${said}, but an earlier note says “${clip(notes[i], 120)}” (${was}) — ask_user once: "Keep ${was}" / "Change to ${said}", quoting that note. Never override it silently.`
+        });
+      }
+      break;
+    }
+    if (out.some((c) => c.gap === 'contradiction_note')) break;
+  }
+  return out;
+}
+
+/** Open questions, highest priority first (only the first is surfaced per turn). Contradictions lead when enabled. */
+export function materialGaps(doc: ComicDoc, userText: string, opts: GapOptions = {}): MaterialGap[] {
+  const text = clean(userText);
+  const gaps: MaterialGap[] = opts.contradictions ? contradictionsOf(doc, userText, opts.focus).map((c) => c.gap) : [];
   const lastUser = [...doc.conversation].reverse().find((m) => m.role === 'user');
   const attached = lastUser?.attachments?.map((a) => a.path) || [];
   if (attached.length) {
@@ -293,17 +620,24 @@ export function materialGaps(doc: ComicDoc, userText: string): MaterialGap[] {
   return gaps;
 }
 
-const GAP_TEXT: Record<MaterialGap, string> = {
+const GAP_TEXT: Record<Exclude<MaterialGap, ContradictionGap>, string> = {
   attachments_purpose: 'the user attached images without saying what they are — ask who/what they show (a character, the style to follow, or a place) unless it is obvious.',
   vague_group: 'the user mentioned a vague group (e.g. "other animals") — pick 2–3 that fit, cast them (kind, count), name them in your reply; do not ask open-ended.',
   page_count: 'no page count yet — propose one (default first) in an ask_user, or pick a sensible one and say so.',
   spend_intent: 'the user gave feedback on drawn art — ask which fix they want (free options first, paid ones with prices) before spending anything.'
 };
 
-/** The OPEN QUESTIONS line for the doc summary ('' when nothing is open). */
-export const openQuestionsLine = (doc: ComicDoc, userText: string): string => {
+/**
+ * The OPEN QUESTIONS line for the doc summary ('' when nothing is open). With `opts.contradictions` (the conflict
+ * guard's flag) a contradiction comes first, in words that quote the earlier decision.
+ */
+export const openQuestionsLine = (doc: ComicDoc, userText: string, opts: GapOptions = {}): string => {
+  if (opts.contradictions) {
+    const first = contradictionsOf(doc, userText, opts.focus)[0];
+    if (first) return `OPEN QUESTIONS: ${first.text}`;
+  }
   const first = materialGaps(doc, userText)[0];
-  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first]}` : '';
+  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first as Exclude<MaterialGap, ContradictionGap>]}` : '';
 };
 
 // ── Run outcomes (honest replies about renders this turn started) ────────────

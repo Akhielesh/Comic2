@@ -46,6 +46,28 @@ export interface StudioCaps {
    *  studioCapsFor. Unset env = ANCHOR_KINDS_OFF (every kind off). The client passes it to summarizeBook's
    *  `consistency` option and quoteRenderPages' `anchors`, so its quotes use the server's kinds. Absent = every kind off. */
   anchorKinds?: AnchorKinds;
+  // --- live agent, dialogue and the Pro editor v2 (agent-editor plan §5; K3). Optional: absent = off (an older server) ---
+  /** The live agent's parts: the visible message queue (A1), server steering (A2/A4), the conflict guard and card (A3).
+   *  Filled by access.ts from COMIC_LIVE_QUEUE / COMIC_STEER / COMIC_CONFLICT_GUARD (stages off | admins | all). */
+  liveAgent?: LiveAgentCaps;
+  /** Clear dialogue edits answered with no model call (B3 fast path; COMIC_DIALOGUE_FAST). */
+  dialogueFast?: boolean;
+  /** The Pro editor v2: docked inspector, numeric fields, Layers, rotation, named styles (C-*; COMIC_PRO_EDITOR_V2). */
+  proEditorV2?: boolean;
+  // --- Pro Edit (master plan §2.10; PE-0). Optional: absent = off (an older server). Filled by access.ts. ---
+  /** The Easy Animate row, the Animate timeline, motion in the editor and "Export this page as video" (COMIC_PRO_MOTION). */
+  proMotion?: boolean;
+  /** The Stickers tab (COMIC_PRO_STICKERS; after the licence gate and the credits block). */
+  proStickers?: boolean;
+  /** Readers play the creator's motion (COMIC_READER_MOTION; stages off | all only: readers are not signed in). */
+  readerMotion?: boolean;
+}
+
+/** agent-editor plan §3 Track A, one switch per part (each its own flag stage). */
+export interface LiveAgentCaps {
+  queue: boolean;
+  steer: boolean;
+  conflicts: boolean;
 }
 
 /** "Usage left" for the header meter and quotes (percentages only — no USD ever reaches a governed user). */
@@ -109,3 +131,118 @@ export const maxAlternativesOf = (caps: Pick<StudioCaps, 'maxAlternatives'> | nu
 /** Caps with history turned on when `on` (and the SAME object when off, so nothing changes on the wire). */
 export const withHistoryCaps = (caps: StudioCaps, on: boolean): StudioCaps =>
   on ? { ...caps, history: true, maxAlternatives: maxAlternativesOf(caps) } : caps;
+
+// --- live agent, dialogue and the Pro editor v2 (agent-editor plan §5; owner decision D9; K3) ---
+
+/** Who a feature flag admits (the shared/platform/flags.ts stage pattern, with 'all' for everyone). */
+export type FlagStage = 'off' | 'admins' | 'all';
+
+/** The server env var behind each studio flag. The client never reads env: it reads the caps access.ts fills. */
+export const LIVE_FLAG_ENV = {
+  queue: 'COMIC_LIVE_QUEUE',
+  steer: 'COMIC_STEER',
+  conflicts: 'COMIC_CONFLICT_GUARD',
+  dialogueFast: 'COMIC_DIALOGUE_FAST',
+  proEditorV2: 'COMIC_PRO_EDITOR_V2'
+} as const;
+export type LiveFlag = keyof typeof LIVE_FLAG_ENV;
+
+/** Stage when the env var is unset or unreadable (plan §5, D9): the queue, the conflict guard and the Pro editor v2 start
+ *  with admins; steering (D2) and the dialogue fast path (D4) start off. */
+export const LIVE_FLAG_DEFAULTS: Readonly<Record<LiveFlag, FlagStage>> = {
+  queue: 'admins',
+  steer: 'off',
+  conflicts: 'admins',
+  dialogueFast: 'off',
+  proEditorV2: 'admins'
+};
+
+/**
+ * One env value → a stage. 'off' | 'admins' | 'all' (case and spaces ignored); 'everyone' = 'all'; a bare switch
+ * ('on', 'true', '1', 'yes') turns a flag on for ADMINS only (D4: "admins when on"; everyone needs an explicit 'all');
+ * 'false' / '0' / 'no' = off; unset or anything else → `fallback`. Pure; never throws.
+ */
+export const parseFlagStage = (value: unknown, fallback: FlagStage): FlagStage => {
+  if (typeof value !== 'string') return fallback;
+  const v = value.trim().toLowerCase();
+  if (v === 'off' || v === 'false' || v === '0' || v === 'no') return 'off';
+  if (v === 'admins' || v === 'admin' || v === 'on' || v === 'true' || v === '1' || v === 'yes') return 'admins';
+  if (v === 'all' || v === 'everyone') return 'all';
+  return fallback;
+};
+
+/** Whether a stage admits this user (admin status decides 'admins'). */
+export const stageAllows = (stage: FlagStage, isAdmin: boolean): boolean => stage === 'all' || (stage === 'admins' && isAdmin);
+
+/** The live-agent, dialogue and Pro editor v2 caps for one user, from the server env (access.ts studioCapsFor). */
+export const liveCapsFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  isAdmin: boolean
+): Required<Pick<StudioCaps, 'liveAgent' | 'dialogueFast' | 'proEditorV2'>> => {
+  const on = (flag: LiveFlag) => stageAllows(parseFlagStage(env[LIVE_FLAG_ENV[flag]], LIVE_FLAG_DEFAULTS[flag]), isAdmin);
+  return {
+    liveAgent: { queue: on('queue'), steer: on('steer'), conflicts: on('conflicts') },
+    dialogueFast: on('dialogueFast'),
+    proEditorV2: on('proEditorV2')
+  };
+};
+
+type LiveCapsView = Pick<StudioCaps, 'liveAgent' | 'dialogueFast' | 'proEditorV2'> | null | undefined;
+/** Readers (absent = off, so DEFAULT_CAPS and an older server leave every new behaviour off). */
+export const liveQueueOn = (caps: LiveCapsView): boolean => caps?.liveAgent?.queue === true;
+export const steerOn = (caps: LiveCapsView): boolean => caps?.liveAgent?.steer === true;
+export const conflictGuardOn = (caps: LiveCapsView): boolean => caps?.liveAgent?.conflicts === true;
+export const dialogueFastOn = (caps: LiveCapsView): boolean => caps?.dialogueFast === true;
+export const proEditorV2On = (caps: LiveCapsView): boolean => caps?.proEditorV2 === true;
+
+// --- Pro Edit (master plan §2.10; PE-0): the motion, stickers and reader-motion flags ---
+
+/** The server env var behind each Pro Edit flag (read by access.ts; the client reads caps only). */
+export const PRO_FLAG_ENV = {
+  proMotion: 'COMIC_PRO_MOTION',
+  proStickers: 'COMIC_PRO_STICKERS',
+  readerMotion: 'COMIC_READER_MOTION'
+} as const;
+export type ProFlag = keyof typeof PRO_FLAG_ENV;
+
+/** Every Pro Edit flag starts off (§2.10): motion goes to admins after S3, stickers after D6 and the licence gate,
+ *  reader motion to everyone once the reduced-motion and Calm checks pass on the public reader. */
+export const PRO_FLAG_DEFAULTS: Readonly<Record<ProFlag, FlagStage>> = {
+  proMotion: 'off',
+  proStickers: 'off',
+  readerMotion: 'off'
+};
+
+/** The COMIC_READER_MOTION values that turn reader motion on for everyone (case and spaces ignored). */
+const READER_MOTION_ON: ReadonlySet<string> = new Set(['on', 'true', '1', 'all', 'everyone']);
+
+/**
+ * COMIC_READER_MOTION's stage: 'off' | 'all' only. A bare switch ('on', 'true', '1') or 'all' / 'everyone' turns it on
+ * for EVERYONE: unlike the other flags there is no admins-only reading of a bare 'on', since that would leave a
+ * switched-on flag silently off. 'admins' stays OFF for readers: the public reader serves signed-out readers, whose
+ * admin status cannot be checked, so an admins stage cannot be honoured there, and it must never widen to everyone.
+ * Unset, 'off' and any other value are off (PRO_FLAG_DEFAULTS.readerMotion is 'off').
+ */
+export const readerMotionStage = (value: unknown): 'off' | 'all' =>
+  typeof value === 'string' && READER_MOTION_ON.has(value.trim().toLowerCase()) ? 'all' : 'off';
+
+/** The Pro Edit caps for one user, from the server env (access.ts studioCapsFor). The W0 stage pattern: off | admins |
+ *  all for motion and stickers (a bare switch = admins only), off | all for reader motion (a bare switch = everyone;
+ *  readerMotionStage). */
+export const proCapsFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  isAdmin: boolean
+): Required<Pick<StudioCaps, 'proMotion' | 'proStickers' | 'readerMotion'>> => {
+  const on = (flag: Exclude<ProFlag, 'readerMotion'>) => stageAllows(parseFlagStage(env[PRO_FLAG_ENV[flag]], PRO_FLAG_DEFAULTS[flag]), isAdmin);
+  return {
+    proMotion: on('proMotion'),
+    proStickers: on('proStickers'),
+    readerMotion: readerMotionStage(env[PRO_FLAG_ENV.readerMotion]) === 'all'
+  };
+};
+
+type ProCapsView = Pick<StudioCaps, 'proMotion' | 'proStickers' | 'readerMotion'> | null | undefined;
+/** Readers (absent = off, so DEFAULT_CAPS and an older server leave every Pro Edit behaviour off). */
+export const proMotionOn = (caps: ProCapsView): boolean => caps?.proMotion === true;
+export const proStickersOn = (caps: ProCapsView): boolean => caps?.proStickers === true;
+export const readerMotionOn = (caps: ProCapsView): boolean => caps?.readerMotion === true;

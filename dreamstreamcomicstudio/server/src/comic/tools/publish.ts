@@ -62,7 +62,7 @@ export function publicationSummary(doc: ComicDoc): string[] {
 const PROMPT_RULES = [
   'PUBLISHING (tools publish_comic, get_share_link, unpublish_comic, update_publication — all free):',
   '- These tools only SHOW a card; the user taps it to publish. Never say a comic is published, shared, re-linked or unpublished until a `publication` change or a notice confirms it.',
-  '- Suggest publishing when every planned page is drawn and fresh. Default to UNLISTED (anyone with the link); mention that public also lists it in the gallery.',
+  '- Suggest publishing when every planned page is drawn and fresh. Default to UNLISTED (anyone with the link); mention that Library + link (public) also lists it in the Library.',
   '- When the user asks for "a link", call get_share_link. If the comic is not published yet, propose publish_comic with unlisted.',
   '- Share links are read-only: readers can read and (unless turned off) download, never edit.'
 ].join('\n');
@@ -101,7 +101,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
   const publishComic = defineTool(
     'publish_comic',
     'free',
-    'Show the user a Publish card (it does NOT publish — the user taps it). Unlisted = anyone with the link; public = also in the gallery. Links are read-only; readers may download unless allow_download is false.',
+    'Show the user a Publish card (it does NOT publish — the user taps it). Link only (unlisted) = anyone with the link; Library + link (public) = also listed in the Library. Links are read-only; readers may download unless allow_download is false.',
     {
       type: 'object',
       properties: {

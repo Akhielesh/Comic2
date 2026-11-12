@@ -14,12 +14,10 @@ import { ExtractWorldResponse } from '../../apiTypes';
 import { syncCharacterDescription, syncItemDescription, syncLocationDescription } from '../../services/worldSchema';
 import { AgentStageShell } from '../AgentStageShell';
 import { shouldAutoRunComicAgent } from '../../services/comicAgentSettings';
+import { legacyPdfErrorMessage, loadHtml2Canvas, loadJsPdf, loadLegacyPdf } from '../../services/legacyPdfLoader';
+import { STATUS_INK, STATUS_SURFACE } from '../ds/recipes';
 
 const CharacterLibraryModal = React.lazy(() => import('../modals/CharacterLibraryModal').then(module => ({ default: module.CharacterLibraryModal })));
-
-// Declare HTML2Canvas and jsPDF for downloadable cards
-declare const html2canvas: any;
-declare const jspdf: any;
 
 const LoaderIcon = () => (
   <svg className="animate-spin h-8 w-8 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -109,6 +107,10 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [worldDiagnostics, setWorldDiagnostics] = useState<ExtractWorldResponse['diagnostics']>();
   const [worldDiagnosticsAcknowledged, setWorldDiagnosticsAcknowledged] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+  // Card downloads load the PDF tools on first use (services/legacyPdfLoader.ts). One export at a time;
+  // a load or capture that fails says so calmly above the board instead of failing silently.
+  const [exportingKey, setExportingKey] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
   const autoConfirmedWorldRef = useRef(false);
 
@@ -403,22 +405,24 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
   const downloadCardAs = async (elementId: string, name: string, format: 'pdf' | 'image') => {
     const element = document.getElementById(elementId);
-    if (!element) return;
+    if (!element || exportingKey) return;
+    setExportNotice(null);
+    setExportingKey(`${elementId}:${format}`);
 
     try {
+      const [html2canvas, jsPDF] = await Promise.all([loadHtml2Canvas(), format === 'pdf' ? loadJsPdf() : Promise.resolve(null)]);
       const canvas = await html2canvas(element, {
         scale: 2,
         backgroundColor: '#ffffff',
         ignoreElements: (el: HTMLElement) => el.dataset.exportIgnore === 'true'
       });
-      if (format === 'image') {
+      if (!jsPDF) {
         const imgData = canvas.toDataURL('image/png');
         const link = document.createElement('a');
         link.download = `${name.replace(/\s+/g, '_')}_card.png`;
         link.href = imgData;
         link.click();
       } else {
-        const { jsPDF } = jspdf;
         const pdf = new jsPDF('p', 'mm', 'a5');
         const imgData = canvas.toDataURL('image/png');
         const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -426,8 +430,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
         pdf.save(`${name.replace(/\s+/g, '_')}_card.pdf`);
       }
-    } catch (e) { console.error("Download failed", e); }
-
+    } catch (e) {
+      console.warn('Card download did not finish.', e);
+      setExportNotice(legacyPdfErrorMessage(e));
+    } finally {
+      setExportingKey(null);
+    }
   };
 
   const handleSaveToLibrary = async (character: Character) => {
@@ -453,30 +461,40 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   };
 
   const downloadSelectedAsPDF = async () => {
-    if (selectedIds.size === 0) return;
-    const { jsPDF } = jspdf;
-    const pdf = new jsPDF('p', 'mm', 'a5');
-    let isFirstPage = true;
+    if (selectedIds.size === 0 || exportingKey) return;
+    setExportNotice(null);
+    setExportingKey('selected');
 
-    for (const id of selectedIds) {
-      const element = document.getElementById(`card-${id}`);
-      if (element) {
-        if (!isFirstPage) {
-          pdf.addPage();
+    try {
+      const { jsPDF, html2canvas } = await loadLegacyPdf();
+      const pdf = new jsPDF('p', 'mm', 'a5');
+      let isFirstPage = true;
+
+      for (const id of selectedIds) {
+        const element = document.getElementById(`card-${id}`);
+        if (element) {
+          if (!isFirstPage) {
+            pdf.addPage();
+          }
+          const canvas = await html2canvas(element, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            ignoreElements: (el: HTMLElement) => el.dataset.exportIgnore === 'true'
+          });
+          const imgData = canvas.toDataURL('image/png');
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+          isFirstPage = false;
         }
-        const canvas = await html2canvas(element, {
-          scale: 2,
-          backgroundColor: '#ffffff',
-          ignoreElements: (el: HTMLElement) => el.dataset.exportIgnore === 'true'
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        isFirstPage = false;
       }
+      pdf.save(`DreamStream_Collection.pdf`);
+    } catch (e) {
+      console.warn('Collection download did not finish.', e);
+      setExportNotice(legacyPdfErrorMessage(e));
+    } finally {
+      setExportingKey(null);
     }
-    pdf.save(`DreamStream_Collection.pdf`);
   };
 
   const toggleSelection = (id: string) => {
@@ -612,10 +630,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             </label>
           </div>
 
+          {/* Img/PDF show busy with aria-busy + disabled, not the Button spinner: its 24 px icon would widen
+              these ~75 px cells at 320 px while the PDF tools load. */}
           <div className="grid grid-cols-3 gap-2 mt-auto">
             <Button size="sm" variant="secondary" onClick={() => generateEntityImage(type, entity.id)} icon={<Wand2 size={14} />}>Gen</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} icon={<ImageIcon size={14} />}>Img</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} icon={<Download size={14} />}>PDF</Button>
+            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:image`} icon={<ImageIcon size={14} />}>Img</Button>
+            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:pdf`} icon={<Download size={14} />}>PDF</Button>
 
             {type === 'characters' && (
               <Button size="sm" variant="secondary" onClick={() => handleSaveToLibrary(entity)} icon={<UploadCloud size={14} />}>Save</Button>
@@ -747,7 +767,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             </Button>
           )}
           {selectedIds.size > 0 ? (
-            <Button variant="secondary" onClick={downloadSelectedAsPDF} className="w-full border-2 border-black" icon={<Download />}>Download {selectedIds.size}</Button>
+            <Button variant="secondary" onClick={downloadSelectedAsPDF} disabled={exportingKey !== null} isLoading={exportingKey === 'selected'} className="w-full border-2 border-black" icon={<Download />}>Download {selectedIds.size}</Button>
           ) : (
             <Button variant="secondary" onClick={handleGenerateAll} isLoading={isBatchGenerating} className="w-full border-2 border-black" icon={<Wand2 />}>Generate refs</Button>
           )}
@@ -774,6 +794,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             Add
           </Button>
         </div>
+
+        {exportNotice && (
+          <p role="status" className={`mx-5 mt-4 rounded-lg border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
+            {exportNotice}
+          </p>
+        )}
 
         <div className="flex-1 overflow-y-auto p-5">
           {requiresContaminationAck && (

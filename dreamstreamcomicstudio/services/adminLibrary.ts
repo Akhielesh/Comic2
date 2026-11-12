@@ -32,6 +32,11 @@ export interface LibraryStartResult {
   run: LibraryRunView | null;
   quote: LibraryQuote;
   message: string;
+  /**
+   * A start that passed with a warning (an unlimited model-test key: only the app's monthly cap applies). The same
+   * sentence also ends `message`, so an older console still shows it; the console shows it as a warning (ST-A #11).
+   */
+  warning?: string;
 }
 
 export const getLibraryManifest = (signal?: AbortSignal): Promise<LibraryManifestView> => get<LibraryManifestView>(`${BASE}/manifest`, { signal });

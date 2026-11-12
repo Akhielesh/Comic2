@@ -96,6 +96,15 @@ import {
   normalizeScene,
   normalizeUnitBox,
   pageSpecHash,
+  // --- Pro Edit (PE-0) ---
+  isOpaqueLayer,
+  normalizeCameraMoves,
+  normalizeMotionClip,
+  normalizePageMotion,
+  type MotionClip,
+  type MotionClipPatch,
+  type PageMotion,
+  type PageMotionPatch,
   type ConsistencySettings,
   type FrameStyle,
   type LineKind,
@@ -106,7 +115,7 @@ import {
   type Scene,
   type ShotType
 } from './doc.js';
-import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, MAX_BALLOON_SNAPSHOT, PRO_PAGE_LIMITS } from './limits.js';
+import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, MAX_BALLOON_SNAPSHOT, MOTION_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 // --- Ship 2 (K2a): frames carry their lettering and overlays along (pure; space.ts never imports this module) ---
 import { panelPointMap, type PointMap } from './panelize/space.js';
 import {
@@ -279,7 +288,17 @@ export type DocOp =
   /** Book-wide consistency settings (null clears a key). */
   | { op: 'consistency'; patch: ConsistencyPatch }
   /** "Looks fine" on a finding of the page's current check (dismissed false/null brings it back). */
-  | { op: 'finding'; pageId: string; id: string; patch: { dismissed: boolean | null } };
+  | { op: 'finding'; pageId: string; id: string; patch: { dismissed: boolean | null } }
+
+  // --- Pro Edit (master plan §2.3; PE-0): page motion. Free content edits (no spend, no asset). Each has an exact inverse
+  //     in undo.ts. Known to every build from PE-0 on (an old tab that receives one refetches); client-patchable only once
+  //     PRO_EDIT_OPS_PATCHABLE is flipped, after the server sanitizer (PE-SERVER) is deployed. ---
+  /** Upsert (patch; null clears an optional key) or delete (patch null) one clip ('mc_…') of the page's motion; `index`
+   *  places a new one. A clip is valid only with a target, role, preset and start (normalizeMotionClip). */
+  | { op: 'motion'; pageId: string; id: string; patch: MotionClipPatch | null; index?: number }
+  /** The page's camera moves (the list is replaced; null clears it) and hold (null clears it); patch null clears both.
+   *  The clips stay (the `motion` op owns them). */
+  | { op: 'page_motion'; pageId: string; patch: PageMotionPatch | null };
 
 /** Where a line goes back to when a panel is removed (panel_remove.lineHomes; 0-based index in that panel). */
 export interface PanelLineHome {
@@ -391,7 +410,22 @@ export type StudioAction =
   | ApplyFindingAction
   | FlattenPageAction
   // --- history (versions plan §3.3): free, non-spend ---
-  | HistoryStudioAction;
+  | HistoryStudioAction
+  // --- live agent (agent-editor plan §3 A3; K3): free, non-spend ---
+  | ResolveConflictAction;
+
+/**
+ * Answer a conflict card (agent-editor plan §3 A3; owner decision D3: the creator's edit always wins until they say
+ * otherwise). 'mine' keeps what the creator wrote and closes the items; 'theirs' re-sanitizes the director's held-back
+ * ops against the CURRENT doc and commits them with origin 'director' (undoable). Free; never a spend.
+ */
+export interface ResolveConflictAction {
+  type: 'resolve_conflict';
+  cardId: string;
+  /** Items of that card this answer covers (the card's [Keep mine] / [Use the director's] answer all of them). */
+  itemIds: string[];
+  choice: 'mine' | 'theirs';
+}
 
 /** The type names live in doc.ts (single source for client + server; doc.ts validates a stored card's
  *  `blockedAction` against them and cannot import this module). Re-exported here, where StudioAction is
@@ -414,6 +448,17 @@ export const PRO_PAGE_PATCH_OPS: readonly DocOp['op'][] = [
  */
 export const PRO_PAGE_OPS_PATCHABLE = true;
 
+// --- Pro Edit (master plan §2.3, §2.10; PE-0) ---
+/** The Pro Edit ops: page motion (free content edits; no spend, no new asset). Objects ride the existing `layer` op. */
+export const PRO_EDIT_OPS: readonly DocOp['op'][] = ['motion', 'page_motion'];
+/**
+ * One-line switch (master plan §2.10): the Pro Edit ops join CLIENT_PATCHABLE_OPS. OFF until the S2 integration flips it,
+ * after PE-SERVER's sanitizer (server/src/comic/sanitize/motion.ts) is deployed. Off, a client batch carrying one is
+ * refused ("can't be changed directly"); every build still applies them when the server streams them (KNOWN_DOC_OPS)
+ * and computes their inverses (undo.ts), so the contract ships ahead of any writer.
+ */
+export const PRO_EDIT_OPS_PATCHABLE = false;
+
 /** Ops a client may send in `patch` — free content edits: no spend, no renders, no billing, no new assets. */
 export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>([
   // existing 17
@@ -426,11 +471,13 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
   'ref_add', 'ref_patch', 'ref_move', 'ref_remove', 'ref_transfer',
   'edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term',
   // --- Ship 2 (K2a) ---
-  ...(PRO_PAGE_OPS_PATCHABLE ? PRO_PAGE_PATCH_OPS : [])
+  ...(PRO_PAGE_OPS_PATCHABLE ? PRO_PAGE_PATCH_OPS : []),
+  // --- Pro Edit (PE-0): off until PE-SERVER is deployed ---
+  ...(PRO_EDIT_OPS_PATCHABLE ? PRO_EDIT_OPS : [])
 ]);
-/** Ops undo.ts inverts: every client-patchable op, and the Ship 2 ops whether or not they are patchable yet. Every
- *  inverse it returns is one of these. */
-export const INVERTIBLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>([...CLIENT_PATCHABLE_OPS, ...PRO_PAGE_PATCH_OPS]);
+/** Ops undo.ts inverts: every client-patchable op, and the Ship 2 and Pro Edit ops whether or not they are patchable
+ *  yet. Every inverse it returns is one of these. */
+export const INVERTIBLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>([...CLIENT_PATCHABLE_OPS, ...PRO_PAGE_PATCH_OPS, ...PRO_EDIT_OPS]);
 /** Server-only (contract test asserts none of these is patchable). */
 export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
   'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
@@ -439,9 +486,10 @@ export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
   'history_restore'
 ];
 
-/** Every op name this build applies (patchable ∪ server-only ∪ the Ship 2 ops). A client that receives any other op name
- *  refetches the doc instead of trusting its mirror (versions plan §11: old tabs, newer server). */
-export const KNOWN_DOC_OPS: ReadonlySet<string> = new Set<string>([...CLIENT_PATCHABLE_OPS, ...SERVER_ONLY_OPS, ...PRO_PAGE_PATCH_OPS]);
+/** Every op name this build applies (patchable ∪ server-only ∪ the Ship 2 ops ∪ the Pro Edit ops). A client that
+ *  receives any other op name refetches the doc instead of trusting its mirror (versions plan §11: old tabs, newer
+ *  server). */
+export const KNOWN_DOC_OPS: ReadonlySet<string> = new Set<string>([...CLIENT_PATCHABLE_OPS, ...SERVER_ONLY_OPS, ...PRO_PAGE_PATCH_OPS, ...PRO_EDIT_OPS]);
 export const isKnownDocOp = (op: unknown): boolean =>
   !!op && typeof op === 'object' && typeof (op as { op?: unknown }).op === 'string' && KNOWN_DOC_OPS.has((op as { op: string }).op);
 
@@ -913,14 +961,17 @@ const applyPageDuplicate = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_duplic
       return nb;
     });
   const copy: Page = remapPanelIds(
-    {
-      ...deepCopy(src),
-      id: op.newId,
-      n: 0,
-      panels,
-      balloons,
-      render: { ...src.render, history: [] }
-    },
+    remapMotionLines(
+      {
+        ...deepCopy(src),
+        id: op.newId,
+        n: 0,
+        panels,
+        balloons,
+        render: { ...src.render, history: [] }
+      },
+      lineMap
+    ),
     new Map(src.panels.map((p, i) => [p.id, panels[i].id]))
   );
   const idx = clampInt(op.after ?? src.n, 0, doc.pages.length, src.n);
@@ -937,6 +988,15 @@ const applyPageDuplicate = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_duplic
     return lines === e.lines && eb === e.balloons ? e : { ...e, lines, balloons: eb };
   });
   return next;
+};
+
+/** page_duplicate (Pro Edit): the copy's clips aimed at a line aim at that line's copy. Layer targets keep their ids
+ *  (layer ids are unique per page); panel targets follow remapPanelIds. */
+const remapMotionLines = (page: Page, lineMap: Map<string, string>): Page => {
+  const m = page.motion;
+  if (!m?.clips.some((c) => c.target.k === 'line' && lineMap.has(c.target.id))) return page;
+  const clips = m.clips.map((c) => (c.target.k === 'line' && lineMap.has(c.target.id) ? { ...c, target: { k: 'line' as const, id: lineMap.get(c.target.id)! } } : c));
+  return { ...page, motion: { ...m, clips } };
 };
 
 const renderPaths = (r: RenderState): string[] => [r.asset?.path, ...r.history.map((v) => v.path)].filter((p): p is string => !!p);
@@ -967,7 +1027,12 @@ const applyPageDelete = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_delete' }
 };
 
 const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): ComicDoc => {
-  if (patch === null) return { ...doc, letterStyle: { presetId: 'classic' } };
+  if (patch === null) {
+    // A reset clears the look. Saved named styles stay: lines link to them, no op of this build writes them, and the
+    // inverse (a reset, then the old look) must give them back exactly, so a rollback never loses them (PE-0).
+    const named = doc.letterStyle?.named;
+    return { ...doc, letterStyle: named ? { presetId: 'classic', named } : { presetId: 'classic' } };
+  }
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return doc;
   const cur = letterStyleOf(doc);
   const next: LetteringStyle = { ...cur };
@@ -1372,8 +1437,9 @@ const PANEL_SIZES: readonly PanelSize[] = ['small', 'medium', 'large', 'wide', '
 const SHOT_TYPES: readonly ShotType[] = ['establishing', 'wide', 'full', 'medium', 'close_up', 'extreme_close_up', 'over_shoulder', 'insert', 'pov'];
 const LINE_KINDS: readonly LineKind[] = ['speech', 'thought', 'caption', 'sfx', 'whisper', 'shout'];
 
-/** Page keys only their own ops change (page_frames, layer, continuity): the generic `page` op leaves them alone. */
-const PAGE_OBJECT_KEYS = ['artMode', 'frameStyle', 'layers', 'continuity'] as const;
+/** Page keys only their own ops change (page_frames, layer, continuity, motion / page_motion): the generic `page` op
+ *  leaves them alone. */
+const PAGE_OBJECT_KEYS = ['artMode', 'frameStyle', 'layers', 'continuity', 'motion'] as const;
 
 /** Extra picture sources a page's frames show besides its own drawing (EDITOR_LIMITS.sourcesPerPage). */
 const extraSourceCount = (page: Page): number =>
@@ -1439,7 +1505,8 @@ const followFrames = (beforeDoc: ComicDoc, afterDoc: ComicDoc, pageId: string): 
   });
   const layers = after.layers?.map((l) => {
     const m = l.clip ? maps.get(l.clip) : undefined;
-    if (!m) return l;
+    // An opaque layer (a kind a newer build wrote) is kept exactly as written: its box never follows here (PE-0).
+    if (!m || isOpaqueLayer(l)) return l;
     const x0 = m.x(l.box.x);
     const x1 = m.x(l.box.x + l.box.w);
     const y0 = m.y(l.box.y);
@@ -1660,9 +1727,11 @@ const applyPanelRemove = (doc: ComicDoc, op: Extract<DocOp, { op: 'panel_remove'
   const deleted = target ? new Set<string>() : new Set(rest.map((l) => l.id));
   const nextPage: Page = { ...page, panels: renumberPanels(panels) };
   if (deleted.size) nextPage.balloons = page.balloons.filter((b) => !deleted.has(b.lineId));
-  if (page.layers?.some((l) => l.clip === op.id)) {
+  // Overlays clipped to the removed panel are unclipped; an opaque layer is kept exactly as written (PE-0), so its undo
+  // never needs a patch the server would refuse.
+  if (page.layers?.some((l) => l.clip === op.id && !isOpaqueLayer(l))) {
     nextPage.layers = page.layers.map((l) => {
-      if (l.clip !== op.id) return l;
+      if (l.clip !== op.id || isOpaqueLayer(l)) return l;
       const out = { ...l };
       delete out.clip;
       return out;
@@ -1678,6 +1747,9 @@ const applyLayer = (doc: ComicDoc, op: Extract<DocOp, { op: 'layer' }>): ComicDo
   if (!page || typeof op.id !== 'string' || !LAYER_ID_RE.test(op.id)) return doc;
   const layers = page.layers ?? [];
   const idx = layers.findIndex((l) => l.id === op.id);
+  // Pro Edit (PE-0): a layer of a kind this build does not know (written by a newer build) is kept as written: no op
+  // patches, replaces or deletes it here, so a rollback never loses it (R6: unchanged doc).
+  if (idx >= 0 && isOpaqueLayer(layers[idx])) return doc;
   if (op.patch === null || op.patch === undefined) {
     if (idx < 0) return doc;
     const rest = layers.filter((_, i) => i !== idx);
@@ -1817,7 +1889,80 @@ const remapPanelIds = (page: Page, ids: Map<string, string>): Page => {
     if (parts?.panels) render.parts = { ...parts, panels: Object.fromEntries(Object.entries(parts.panels).map(([k, v]) => [ids.get(k) ?? k, v])) };
     out = { ...out, render };
   }
+  // Pro Edit (PE-0): clips aimed at a panel or anchored to one, and the camera moves, follow the new panel ids.
+  const m = page.motion;
+  const movesPanel = (id: string | undefined) => !!id && ids.has(id);
+  if (m && (m.clips.some((c) => (c.target.k === 'panel' && movesPanel(c.target.id)) || movesPanel(c.at.panelId)) || m.camera?.some((c) => movesPanel(c.panelId)))) {
+    const clips = m.clips.map((c) => {
+      const target = c.target.k === 'panel' && movesPanel(c.target.id) ? { k: 'panel' as const, id: ids.get(c.target.id)! } : c.target;
+      const at = movesPanel(c.at.panelId) ? { ...c.at, panelId: ids.get(c.at.panelId!)! } : c.at;
+      return target === c.target && at === c.at ? c : { ...c, target, at };
+    });
+    const motion: PageMotion = { ...m, clips };
+    if (m.camera) motion.camera = m.camera.map((c) => (movesPanel(c.panelId) ? { ...c, panelId: ids.get(c.panelId)! } : c));
+    out = { ...out, motion };
+  }
   return out;
+};
+
+// --- Pro Edit (PE-0): page motion ---
+
+/** The page with `motion` set, or removed when nothing is left (no clips, camera or hold). */
+const withPageMotion = (page: Page, motion: PageMotion | undefined): Page => {
+  const next: Page = { ...page };
+  if (motion) next.motion = motion;
+  else delete next.motion;
+  return next;
+};
+
+const applyMotion = (doc: ComicDoc, op: Extract<DocOp, { op: 'motion' }>): ComicDoc => {
+  const page = findPageById(doc, op.pageId);
+  if (!page || typeof op.id !== 'string' || !op.id) return doc;
+  const clips = page.motion?.clips ?? [];
+  const idx = clips.findIndex((c) => c.id === op.id);
+  let next: MotionClip[];
+  if (op.patch === null || op.patch === undefined) {
+    if (idx < 0) return doc;
+    next = clips.filter((_, i) => i !== idx);
+  } else {
+    if (!isObject(op.patch)) return doc;
+    if (idx < 0 && clips.length >= MOTION_LIMITS.clipsPerPage) return doc;
+    const clip = mergedThrough({ ...(idx >= 0 ? clips[idx] : {}), id: op.id }, op.patch, normalizeMotionClip, ['id']);
+    if (!clip || (idx >= 0 && sameJson(clip, clips[idx]))) return doc;
+    next = clips.slice();
+    if (idx >= 0) next[idx] = clip;
+    else next.splice(clampInt(op.index ?? next.length, 0, next.length, next.length), 0, clip);
+  }
+  const motion = normalizePageMotion({ ...(page.motion ?? {}), clips: next });
+  return sameJson(motion, page.motion) ? doc : setPage(doc, withPageMotion(page, motion));
+};
+
+const applyPageMotion = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_motion' }>): ComicDoc => {
+  const page = findPageById(doc, op.pageId);
+  if (!page) return doc;
+  const merged: Record<string, unknown> = { ...(page.motion ?? { clips: [] }) };
+  if (op.patch === null || op.patch === undefined) {
+    delete merged.camera;
+    delete merged.hold;
+  } else {
+    if (!isObject(op.patch)) return doc;
+    if (hasOwn(op.patch, 'camera')) {
+      const c = op.patch.camera;
+      if (c === null || c === undefined || (Array.isArray(c) && !c.length)) delete merged.camera;
+      else {
+        const camera = normalizeCameraMoves(c);
+        if (!camera) return doc; // malformed: unchanged (R6)
+        merged.camera = camera;
+      }
+    }
+    if (hasOwn(op.patch, 'hold')) {
+      if (op.patch.hold === null || op.patch.hold === undefined) delete merged.hold;
+      else if (typeof op.patch.hold === 'number' && Number.isFinite(op.patch.hold)) merged.hold = op.patch.hold;
+      else return doc;
+    }
+  }
+  const motion = normalizePageMotion(merged);
+  return sameJson(motion, page.motion) ? doc : setPage(doc, withPageMotion(page, motion));
 };
 
 // ── Pure application ─────────────────────────────────────────────────────────
@@ -2109,6 +2254,11 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       return applyConsistency(doc, op);
     case 'finding':
       return applyFinding(doc, op);
+    // --- Pro Edit (PE-0) ---
+    case 'motion':
+      return applyMotion(doc, op);
+    case 'page_motion':
+      return applyPageMotion(doc, op);
     case 'plan_input_hash': {
       if (op.hash === null) {
         if (doc.planInputHash === undefined) return doc;

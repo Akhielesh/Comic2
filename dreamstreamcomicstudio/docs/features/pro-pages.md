@@ -192,6 +192,15 @@ them as one namespace, `comic.editor.*`, so none of their helpers shadows a top-
 a price or '$': the UI adds " · Free" or the price through `formatCostForUser`. Ids are deterministic by default
 (`pe1`, `le1`, `ly_e1`); the editor UI should pass a random `IdFactory` to split, add, close-up and drop.
 
+**Opaque layers are left as written (PE-0 wave note 6, S1).** A layer of a kind only a newer build knows (PE-0's opaque
+passthrough, `docs/features/pro-edit.md` §2) is never touched by the frame engine.
+- Split and join loop over `knownLayersOf(page)`, as `panel_remove` and `followFrames` already did, so they never emit a
+  `layer {clip}` patch the server would refuse after a rollback.
+- The locked-overlay check reads known layers only: an opaque layer is never moved, so its lock never refuses the
+  edit.
+- Known overlays still follow their panel.
+- Pinned by `shared/comic/editor/frames.test.ts`.
+
 **Cuts are named before panels move.** A drawing's cuts that name no panel are matched by position. Before add,
 delete, join, split and the "Renumber the panels to match" fix, `withNamedCuts` puts `nameCutsOp(page)` first: one
 `page_cuts` op (no `keepBy`, `moveBalloons: false`) that names each cut by the panel showing it now, so each picture

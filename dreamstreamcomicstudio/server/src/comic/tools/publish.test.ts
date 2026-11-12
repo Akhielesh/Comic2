@@ -234,6 +234,44 @@ describe('publish actions (the user tap)', () => {
     }
   });
 
+  it('Library naming (DS-R0): the replies say "listed in the Library", "in the Library + link" and "Link only", never the gallery', async () => {
+    const doc = drawn();
+    const session = newSession(doc);
+    const ctx = testContext(session, { assets: fakeAssetStore() });
+    const store = createMemoryPublicationStore();
+    store.seedProject('proj-1', 'user-1');
+    const gate = async (_c: unknown, _d: ComicDoc, o: { pageIds: string[]; includeCover: boolean }) => ({
+      status: 'cleared' as const,
+      rating: 'PG' as const,
+      pages: Object.fromEntries(o.pageIds.map((id) => [id, { status: 'pass' as const, reasons: [] }])),
+      cover: null,
+      text: { status: 'pass' as const, reasons: [] },
+      checkedHash: '',
+      costUsd: 0
+    });
+    const restore = publication.configurePublication({ store, gate, renderOg: async () => ({ jpeg: Buffer.from('x'), w: 1200, h: 630, themeColor: '#000000' }), publicUrl: (p) => `https://cdn.test/${p}` });
+    publication.__resetPublishBudget();
+    try {
+      const publish = PUBLISH_ACTIONS.find((h) => h.type === 'publish')!;
+      const update = PUBLISH_ACTIONS.find((h) => h.type === 'update_publication')!;
+      expect((await publish.run(ctx, { type: 'publish', request: { visibility: 'public' } }, { confirmed: true })).outcome.status).toBe('done');
+      expect(ctx.session.doc.conversation.at(-1)!.text).toMatch(/^Published! Anyone with the link, and it’s listed in the Library can read it/);
+      expect((await update.run(ctx, { type: 'update_publication', patch: { visibility: 'unlisted' } }, { confirmed: true })).outcome.status).toBe('done');
+      expect(ctx.session.doc.conversation.at(-1)!.text).toBe("Link settings saved — it's now Link only.");
+      expect((await update.run(ctx, { type: 'update_publication', patch: { visibility: 'public' } }, { confirmed: true })).outcome.status).toBe('done');
+      expect(ctx.session.doc.conversation.at(-1)!.text).toBe("Link settings saved — it's now in the Library + link.");
+      expect(ctx.session.doc.conversation.map((m) => m.text).join('\n')).not.toMatch(/gallery|unlisted \(link only\)/i);
+    } finally {
+      restore();
+    }
+    // The director's rule and the publish_comic description use the same names as the Share sheet.
+    const rules = String(publishToolGroup.promptRules?.(drawn()) ?? '');
+    expect(rules).toContain('mention that Library + link (public) also lists it in the Library.');
+    const { tools } = toolsFor(drawn());
+    expect(tools.publish_comic.spec.function.description).toContain('Link only (unlisted) = anyone with the link; Library + link (public) = also listed in the Library.');
+    expect(`${rules}\n${tools.publish_comic.spec.function.description}`).not.toMatch(/gallery/i);
+  });
+
   it('update_publication tells the director that Update republishes the current version', async () => {
     const doc = drawn();
     doc.publication = { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };

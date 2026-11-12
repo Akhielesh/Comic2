@@ -1,3 +1,30 @@
+/**
+ * The `ds` colour namespace (bridge D6; docs/design/design-system.md "Named ds colours"): every `--ds-*`
+ * colour token as a named Tailwind colour, so `bg-ds-canvas`, `text-ds-muted`, `border-ds-hairline` read the
+ * theme and the skin, and a slash opacity is legal: `text-ds-ink/60` is `color-mix(in srgb, var(--ds-ink)
+ * 60%, transparent)` (a slash on a bare `var()` arbitrary value is invalid CSS). tests/config/dsColours.test.ts
+ * keeps this list equal to index.css's colour tokens and compiles a probe.
+ */
+const withOpacity = (v) => ({ opacityValue }) =>
+  opacityValue === undefined ? `var(${v})` : `color-mix(in srgb, var(${v}) calc(${opacityValue} * 100%), transparent)`;
+const DS_COLOURS = [
+  'canvas', 'sidebar', 'surface', 'surface-soft', 'surface-strong', 'raised', 'ink', 'muted',
+  'hairline', 'hairline-soft', 'well', 'well-strong', 'hover', 'faint', 'active',
+  'accent', 'accent-hover', 'accent-text', 'accent-fill', 'accent-fill-hover', 'on-accent', 'accent-soft',
+  'success', 'success-text', 'warning', 'warning-text', 'danger', 'danger-text', 'danger-mark', 'on-danger', 'info', 'info-text',
+  'ring', 'focus', 'control-border', 'control-border-hover', 'overlay-edge', 'overlay-hover', 'scrim',
+  'skeleton', 'skeleton-glint', 'segment-pill', 'segment-track', 'status-error-edge', 'status-error-tint', 'toast-edge',
+  'chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5', 'grid-dot', 'spot-ink',
+  // The colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer; tests/config/sparkGuard.test.ts
+  // holds every spark fill, `bg-ds-spark` included, to its allowlist).
+  'spark', 'spark-hover', 'on-spark', 'spark-text', 'spark-soft', 'spark-glow',
+  'hue-1', 'hue-2', 'hue-3', 'hue-4', 'hue-5', 'art',
+  // The art develop (MO-1): read by inline styles in ImageDevelop; listed because every colour token is.
+  'develop-light', 'develop-sheen',
+  'reader-room', 'reader-paper-back', 'reader-endpaper', 'reader-focus'
+];
+const dsColours = Object.fromEntries(DS_COLOURS.map((name) => [name, withOpacity(`--ds-${name}`)]));
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: 'class',
@@ -49,6 +76,7 @@ module.exports = {
         display: ["Bangers", "cursive"]
       },
       colors: {
+        ds: dsColours,
         brand: {
           yellow: "#FACC15",
           blue: "#3B82F6",

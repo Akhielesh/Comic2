@@ -22,6 +22,8 @@ import { CONSISTENCY_ACTIONS } from './consistency.js';
 import { EDITOR_ACTIONS } from './editor.js';
 import { PANEL_FIX_ACTIONS } from './panelFix.js';
 import { PANELS_ACTIONS } from './panels.js';
+// --- live agent (agent-editor plan §3 A3; K3 stub, A3 CONFLICT replaces it in place) ---
+import { CONFLICT_ACTIONS } from './conflict.js';
 
 /**
  * Ship 2 (pro plan §5.3): a Ship 2 action joins the registries once shared/comic/doc.ts names it among the StudioAction
@@ -58,7 +60,8 @@ const registry = createKeyedRegistry<ActionHandler>({
     MODELS_ACTIONS,
     HISTORY_ACTIONS,
     HISTORY_ALTERNATIVE_ACTIONS,
-    SHIP2_ACTIONS()
+    SHIP2_ACTIONS(),
+    CONFLICT_ACTIONS
   ]
 });
 

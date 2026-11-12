@@ -209,7 +209,7 @@ describe('the comic / chat app (everything else)', () => {
     }
   });
 
-  it('allows the SRI-pinned cdnjs scripts and the embeds in its inventory policy', () => {
+  it('allows the on-demand SRI-pinned cdnjs scripts and the embeds in its inventory policy', () => {
     const p = parsePolicy(mainCsp({ origin: 'https://dreamstreamstudio.ai' }));
     const self = 'https://dreamstreamstudio.ai/';
     expect(allowsUrl(p, 'script-src-elem', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', self)).toBe(true);

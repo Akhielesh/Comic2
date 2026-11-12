@@ -54,7 +54,7 @@ describe('StudioLayout', () => {
     layout(formFactorFor({ w: 852, h: 393, coarse: true }), 'chat', { onBack });
     const rail = screen.getByRole('navigation', { name: 'Studio views' });
     expect(rail).toHaveAttribute('data-rail');
-    fireEvent.click(within(rail).getByRole('button', { name: 'Back to your projects' }));
+    fireEvent.click(within(rail).getByRole('button', { name: 'Back to My comics' }));
     expect(onBack).toHaveBeenCalled();
   });
 

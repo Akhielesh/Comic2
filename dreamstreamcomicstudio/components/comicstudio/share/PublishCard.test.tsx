@@ -46,6 +46,11 @@ describe('PublishCard', () => {
     expect(screen.getByText(/published pages stay the same/)).toBeInTheDocument();
   });
 
+  it('a failed card with no words of its own says so in the house style (typographic apostrophe)', () => {
+    render(<PublishCard card={card({ status: 'failed' })} message={msg} studio={makeFakeStudio()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('That didn’t work. Nothing changed.');
+  });
+
   it('Not now declines', async () => {
     const studio = makeFakeStudio();
     render(<PublishCard card={card()} message={msg} studio={studio} />);
@@ -96,6 +101,12 @@ describe('ShareCardView', () => {
     doc.publication = { visibility: 'unlisted', status: 'live', slug: SLUG, publishedRev: 1, publishedAt: 1, languages: ['en'] };
     const { rerender } = render(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio({ doc })} />);
     expect((screen.getByLabelText('Share link') as HTMLInputElement).value).toBe(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    // The tag names the choice the way the Share sheet does (DS-R0): Link only / Library + link.
+    expect(screen.getByText('Link only')).toBeInTheDocument();
+    const listed = makeSampleDoc();
+    listed.publication = { ...doc.publication, visibility: 'public' };
+    rerender(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio({ doc: listed })} />);
+    expect(screen.getByText('Library + link')).toBeInTheDocument();
     rerender(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio()} />);
     expect(screen.getByText(/Only you can see this comic/)).toBeInTheDocument();
   });

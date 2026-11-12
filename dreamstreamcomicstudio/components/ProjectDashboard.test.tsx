@@ -91,6 +91,14 @@ afterEach(() => {
 });
 
 describe('ProjectDashboard — Comic Studio v4 cards', () => {
+  it('the "My comics" heading uses the DS heading recipe, not the comic display face (DS-R0 note 10)', () => {
+    renderDashboard([studioProject()]);
+    const heading = screen.getByRole('heading', { level: 1, name: 'My comics' });
+    expect(heading.className).toContain('ds-font-display');
+    expect(heading.className).toContain('text-[var(--ds-ink)]');
+    expect(heading.className).not.toMatch(/(^|\s)(font-display|text-black)(\s|$)/);
+  });
+
   it('shows the Studio badge, page progress and the mirrored cover on v4 cards only', () => {
     renderDashboard([studioProject(), classicProject()]);
 

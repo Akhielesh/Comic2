@@ -11,6 +11,7 @@
     "/llms.txt",
     "/favicon.ico",
     "/live-sw.js",
+    "/theme-boot.js",
     "/stream-alerts-bridge.js",
     "/live.webmanifest",
     "/stream.webmanifest",

@@ -57,7 +57,10 @@ export type {
   HeaderSlotRegistration
 } from './extensions';
 
-/** Card types CardRenderer renders itself (the original seven plus `recap`). */
+/**
+ * Card types CardRenderer renders itself (the original seven, `recap`, and the live agent's `conflict` card): the same
+ * list as CardRenderer's CARD_TYPES, so no feature can register a card that shadows a built-in one.
+ */
 export const BUILTIN_CARD_TYPES: ReadonlySet<Card['type']> = new Set<Card['type']>([
   'options',
   'style_choice',
@@ -66,7 +69,8 @@ export const BUILTIN_CARD_TYPES: ReadonlySet<Card['type']> = new Set<Card['type'
   'gate',
   'renders',
   'notice',
-  'recap'
+  'recap',
+  'conflict'
 ]);
 
 /** Board tabs BoardPane renders itself, with their merge positions for registered tabs. */

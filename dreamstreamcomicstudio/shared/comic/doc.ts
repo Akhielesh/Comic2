@@ -24,10 +24,51 @@ import { DEFAULT_LETTERING, sanitizeLetteringStyle, sanitizeLetterStylePatch } f
 import { normalizeI18n } from './i18n.js';
 import { isPublicationMirror } from './publication.js';
 import { hashString, stableStringify } from './hash.js';
-import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
+import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, FX_LIMITS, MOTION_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
 // --- history (versions plan §3.3; H0): type-only, so doc.ts stays the dependency root ---
 import type { HistoryCard } from './history/types.js';
+// --- Pro Edit (master plan §2.3; PE-0): the dependency-free shape modules (no registry, no catalogue, no generator code
+//     reaches doc.ts, so every bundle that loads a comic stays as small as before) ---
+import { FX_GEN_RE, FX_PARAM_KEY_RE, type FxParamValue, type LayerFx } from './fx/types.js';
+import { normalizeAssetLibRef } from './assets/index.js';
+import type { AssetLibRef } from './assets/types.js';
+import {
+  CAMERA_MOVE_IDS,
+  MOTION_ANCHORS,
+  MOTION_CLIP_ID_RE,
+  MOTION_ROLES,
+  MOTION_TARGET_KINDS,
+  MOTION_WORD_RE,
+  type CameraMove,
+  type EaseId,
+  type MotionAt,
+  type MotionClip,
+  type MotionKey,
+  type MotionParamValue,
+  type MotionPresetId,
+  type MotionTarget,
+  type PageMotion
+} from './motion/types.js';
+export type { AssetLibRef } from './assets/types.js';
+export type { FxParamValue, LayerFx } from './fx/types.js';
+export type {
+  CameraMove,
+  CameraMoveId,
+  EaseId,
+  MotionAnchor,
+  MotionAt,
+  MotionClip,
+  MotionClipPatch,
+  MotionKey,
+  MotionParamValue,
+  MotionPresetId,
+  MotionRole,
+  MotionTarget,
+  MotionTargetKind,
+  PageMotion,
+  PageMotionPatch
+} from './motion/types.js';
 export { hashString, stableStringify } from './hash.js';
 export { MAX_RENDER_HISTORY, MAX_SPEND_ENTRIES, MAX_CONVERSATION, MAX_ARCHIVE, MAX_TRASH } from './limits.js';
 
@@ -411,6 +452,11 @@ export interface Line {
   lang?: string;
   /** Never translate this line (spell, made-up word, song). Never hashed. */
   noTranslate?: boolean;
+  /** A named lettering style this line uses (agent-editor plan §3 C7; LINKED: editing the style restyles every line
+   *  using it): a key of `letterStyle.named`. Optional; never part of a spec hash (pageSpecHash, planInputHash: a style
+   *  reference changes no drawn art). The publication fingerprint does count it once set (a restyle is a change since
+   *  publishing), appended only when present so old comics keep their fingerprint. */
+  styleId?: string;
 }
 
 export interface Panel {
@@ -483,6 +529,10 @@ export interface Page {
   layers?: PageLayer[];
   /** What changes from this page on (outfits, props, where people are). */
   continuity?: PageContinuity;
+  // ── Pro Edit (master plan §2.3; PE-0). Optional and never hashed: animating never marks the art out of date. ──
+  /** The page's animation: clips (≤ MOTION_LIMITS.clipsPerPage), a camera move per panel, a hold. Only the `motion` and
+   *  `page_motion` ops change it (the generic `page` op strips it). A clip whose target is gone is inert. */
+  motion?: PageMotion;
 }
 
 // ── Ship 2 (K2a; pro plan §5.2): panels as objects, consistency, staleness parts ─────────────────────────────
@@ -520,7 +570,14 @@ export interface PanelFrameBorder {
   none?: true;
   w?: number;
   color?: string;
+  // ── Pro Edit (master plan §2.3; PE-0): a procedural border look and its seed. Absent = 'clean' (today's line). ──
+  style?: PanelBorderStyle;
+  /** int32 seed of the rough / brush / wavy / jagged look. */
+  seed?: number;
 }
+/** How a panel's border is drawn (procedural; 'clean' is today's straight line). */
+export type PanelBorderStyle = 'clean' | 'rough' | 'brush' | 'double' | 'dashed' | 'wavy' | 'jagged' | 'film' | 'bleed';
+export const PANEL_BORDER_STYLES: readonly PanelBorderStyle[] = ['clean', 'rough', 'brush', 'double', 'dashed', 'wavy', 'jagged', 'film', 'bleed'];
 export interface PanelFrame {
   /** Page-normalized at the BOOK aspect (format.pageAspect); shortest side EDITOR_LIMITS.frameMin. */
   box: Box;
@@ -566,11 +623,32 @@ export interface PageLayerShape {
   strokeW?: number;
   radius?: number;
 }
-/** An overlay on a page: an image (sticker, prop, photo) or a shape. Page-normalized at the book aspect. */
+/** The overlay kinds this build draws (Pro Edit adds 'effect'; master plan §2.3). */
+export type PageLayerKind = 'image' | 'shape' | 'effect';
+export const PAGE_LAYER_KINDS: readonly PageLayerKind[] = ['image', 'shape', 'effect'];
+/**
+ * A kind written by a newer build (rollback passthrough, master plan §2.3 graft 1). Such a layer is kept exactly as
+ * written by normalizeDoc (valid id and box, ≤ FX_LIMITS.opaqueLayerBytes) but is never drawn, never in the editor's
+ * scene, never published and never client-writable: read layers through knownLayersOf, test with isKnownLayerKind.
+ */
+export type OpaqueLayerKind = string & { readonly __opaqueLayerKind?: never };
+/** How an overlay mixes with what is under it (SVG mix-blend-mode; canvas globalCompositeOperation). */
+export type LayerBlend = 'multiply' | 'screen' | 'overlay';
+export const LAYER_BLENDS: readonly LayerBlend[] = ['multiply', 'screen', 'overlay'];
+/**
+ * An overlay's picture: a storage path (an upload or our own art) or, for a sticker, a bundled library asset (exactly one
+ * of the two). `crop` is normalized on the picture.
+ */
+export interface PageLayerSource {
+  path?: string;
+  lib?: AssetLibRef;
+  crop?: Box;
+}
+/** An overlay on a page: an image (sticker, prop, photo), a shape or a procedural effect. Page-normalized at the book aspect. */
 export interface PageLayer {
   /** 'ly_…' (unique on its page). */
   id: string;
-  kind: 'image' | 'shape';
+  kind: PageLayerKind | OpaqueLayerKind;
   name?: string;
   box: Box;
   /** Degrees, ±EDITOR_LIMITS.layerRot. */
@@ -583,8 +661,15 @@ export interface PageLayer {
   locked?: true;
   /** false = guide only: shown in the editor, never printed, exported or published. */
   print?: false;
-  src?: { path: string; crop?: Box };
+  /** kind 'image': its picture (a path, or a library sticker). */
+  src?: PageLayerSource;
+  /** kind 'shape'. */
   shape?: PageLayerShape;
+  // ── Pro Edit (master plan §2.3; PE-0). Not client-writable until PE-SERVER's sanitizer accepts them. ──
+  /** kind 'effect': the generator, its version, seed and parameters (≤ FX_LIMITS.fxBytes). */
+  fx?: LayerFx;
+  /** Any kind: how it mixes with what is under it. Absent = normal. */
+  blend?: LayerBlend;
 }
 
 /** A scene: where and when a run of pages happens (doc.scenes). */
@@ -737,6 +822,9 @@ export interface ReaderSettings {
   ambient: boolean;
   credits?: string; // End-card line, ≤ 140
   dedication?: string; // inside-cover line, ≤ 140
+  /** Pro Edit (master plan §2.5; PE-0): whether readers play the creator's motion. Absent = the reader's default
+   *  (COMIC_READER_MOTION); the viewer's own toggle, Calm motion and prefers-reduced-motion always win. */
+  motion?: 'on' | 'off';
 }
 export const DEFAULT_READER: ReaderSettings = { turn: 'paper', guidedOverview: true, paperTexture: true, ambient: true };
 
@@ -955,12 +1043,21 @@ export interface NextStep {
   usd?: number;
 }
 
+/** The nine cells of a panel or a page (agent-editor plan §3 B1 `Pos9`; the director's balloon positions). */
+export const POS9 = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const;
+export type Pos9 = (typeof POS9)[number];
+
 export type OptionVisual =
   | { kind: 'layout'; panels: number; layout?: string }
   | { kind: 'pages'; count: number }
   | { kind: 'preset'; presetId: string }
   | { kind: 'cast'; characterId: string }
-  | { kind: 'lettering'; presetId: string };
+  | { kind: 'lettering'; presetId: string }
+  // --- live agent (agent-editor plan §3 A3.3; K3): a "Which line?" / "Where?" option shows a picture ---
+  /** A crop of this balloon from its page. */
+  | { kind: 'balloon'; pageId: string; lineId: string }
+  /** A page thumbnail with one cell highlighted: of panel `panelN` (frame 'panel') or of the whole page (frame 'page'). */
+  | { kind: 'spot'; pageId: string; panelN?: number; cell: Pos9; frame: 'panel' | 'page' };
 
 export interface OptionChoice {
   id: string;
@@ -976,6 +1073,51 @@ export interface NoticeFix {
   label: string;
   free: boolean;
   action: import('./ops.js').StudioAction;
+}
+
+// --- live agent (agent-editor plan §3 A3; K3): the creator's edit and the director's collided ---
+
+/**
+ * Bounds of a stored conflict card (A3: at most 50 stored ops, size-capped). The per-item, item, text and label caps are
+ * K3 choices for the lead to confirm. An op list is never cut: an item whose ops do not fit is kept with `proposed: []`
+ * and `tooBig`, and collisions past `items` are counted in `more`, so nothing the director held back vanishes unseen.
+ */
+export const CONFLICT_LIMITS = { items: 10, opsPerItem: 20, ops: 50, textChars: 300, labelChars: 120 } as const;
+/** Where two edits collided: ids for "Show me" (opens the page with that balloon selected) and the card's words. */
+export interface ConflictWhere {
+  pageId?: string;
+  panelId?: string;
+  lineId?: string;
+  /** "page 2 · panel 1 · line 2". */
+  label: string;
+}
+/**
+ * One collision (D3: the creator's edit always wins). `mine` is the creator's current version, `theirs` what the director
+ * would have written; `proposed` are the director's held-back ops, re-sanitized against the CURRENT doc when the creator
+ * picks theirs (resolve_conflict) and committed with origin 'director', so they are undoable.
+ */
+export interface ConflictItem {
+  id: string;
+  where: ConflictWhere;
+  mine: string;
+  theirs: string;
+  proposed: import('./ops.js').DocOp[];
+  /**
+   * The held-back edit could not be stored whole (over CONFLICT_LIMITS, or unreadable): `proposed` is [] and "Use the
+   * director's" refuses it in plain words ("That change is too big to apply from here; Show me opens it"), never a
+   * partial edit.
+   */
+  tooBig?: true;
+  /** Set once the creator answered (the card then shows the outcome, its buttons gone). */
+  resolved?: 'mine' | 'theirs';
+}
+/** "We both changed page 2 · panel 1." Yours vs the director's, side by side: [Keep mine] [Use the director's] [Show me]. */
+export interface ConflictCard {
+  type: 'conflict';
+  id: string;
+  items: ConflictItem[];
+  /** Collisions past CONFLICT_LIMITS.items, not on the card: the card says how many more it left alone ("…and 3 more"). */
+  more?: number;
 }
 
 /** Interactive cards that live inside the conversation. Every card renders LIVE doc state. */
@@ -1018,7 +1160,9 @@ export type Card =
       chargedUsd?: number;
     }
   // --- history (versions plan §3.3): ids only; renders by fetching from the owner API ---
-  | HistoryCard;
+  | HistoryCard
+  // --- live agent (agent-editor plan §3 A3; K3) ---
+  | ConflictCard;
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -1038,7 +1182,9 @@ export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   // --- Ship 2 (pro plan §5.3): free editor actions ---
   'panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page',
   // --- history (versions plan §3.3): every history path is free ---
-  'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative'
+  'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative',
+  // --- live agent (agent-editor plan §3 A3; K3): answering a conflict card is free ---
+  'resolve_conflict'
 ]);
 
 export type RenderTarget =
@@ -1059,6 +1205,8 @@ export interface Msg {
   suggestions?: string[];
   /** Acting chips (≤ DOC_LIMITS.nextSteps). `suggestions: string[]` stays for old clients. */
   nextSteps?: NextStep[];
+  /** A user note sent while the director was working ("Added while the director was working"; agent-editor plan §3 A2). */
+  steered?: true;
 }
 
 export interface ComicDoc {
@@ -1222,6 +1370,9 @@ const textIn = (v: unknown, max: number): string | undefined => {
 };
 const intIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : undefined);
 const rangeIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? r4(Math.min(hi, Math.max(lo, v))) : undefined);
+/** Load rule (Pro Edit, see normalizeMotionKey): a finite number as stored (4 decimals), and text as stored. */
+const finiteR4 = (v: unknown): number | undefined => (finite(v) ? r4(v) : undefined);
+const storedText = (v: unknown): string | undefined => (typeof v === 'string' && v.length ? v : undefined);
 const hexColor = (v: unknown): string | undefined => (typeof v === 'string' && HEX_COLOR_RE.test(v) ? v : undefined);
 const isHex6 = (v: unknown): v is string => typeof v === 'string' && HEX6_RE.test(v);
 const textList = (v: unknown, maxItems: number, maxChars: number): string[] | undefined => {
@@ -1297,6 +1448,11 @@ export const normalizePanelFrame = (raw: unknown): PanelFrame | undefined => {
     if (w !== undefined) border.w = w;
     const color = hexColor(raw.border.color);
     if (color) border.color = color;
+    // Pro Edit (PE-0): a procedural border look and its seed, kept when valid (absent = 'clean', today's line).
+    const style = oneOfList(raw.border.style, PANEL_BORDER_STYLES);
+    if (style) border.style = style;
+    const seed = int32(raw.border.seed);
+    if (seed !== undefined) border.seed = seed;
     if (Object.keys(border).length) out.border = border;
   }
   const z = intIn(raw.z, -PRO_PAGE_LIMITS.zMax, PRO_PAGE_LIMITS.zMax);
@@ -1339,20 +1495,62 @@ export const normalizePanelCuts = (raw: unknown): PanelCuts | undefined => {
 
 const LAYER_SHAPES: readonly LayerShapeType[] = ['rect', 'ellipse', 'line'];
 
-/** A well-formed PageLayer (an image layer needs `src`, a shape layer `shape`), or undefined. */
+/** An int32 (seeds), or undefined. */
+const int32 = (v: unknown): number | undefined => (finite(v) && Number.isInteger(v) && v >= -2147483648 && v <= 2147483647 ? v : undefined);
+
+/** The overlay kinds this build draws. A stored layer of any other kind is opaque (see OpaqueLayerKind). */
+export const isKnownLayerKind = (kind: unknown): kind is PageLayerKind => typeof kind === 'string' && (PAGE_LAYER_KINDS as readonly string[]).includes(kind);
+/** A stored layer of a kind this build does not draw (kept as written; never drawn, listed, published or patched). */
+export const isOpaqueLayer = (layer: Pick<PageLayer, 'kind'> | null | undefined): boolean => !!layer && !isKnownLayerKind(layer.kind);
+/** The page's overlays this build draws, in stored order (opaque layers left out). Renderers and the editor read this. */
+export const knownLayersOf = (page: Pick<Page, 'layers'>): PageLayer[] => (page.layers ?? []).filter((l) => !isOpaqueLayer(l));
+
+/** A stored effect, structurally valid (generator id, integer version ≥ 1, int32 seed, plain parameters as stored,
+ *  ≤ FX_LIMITS.fxBytes in all; the per-parameter write bounds are the sanitizer's), or undefined. Whether `gen@v` is registered and the parameters fit its schema is
+ *  the server sanitizer's check; an unregistered generator draws nothing (inert), so a newer build's effect is kept. */
+export const normalizeLayerFx = (raw: unknown): LayerFx | undefined => {
+  if (!isObject(raw) || typeof raw.gen !== 'string' || !FX_GEN_RE.test(raw.gen)) return undefined;
+  const v = finite(raw.v) && Number.isInteger(raw.v) && raw.v >= 1 && raw.v <= 9999 ? raw.v : undefined;
+  const seed = int32(raw.seed);
+  if (v === undefined || seed === undefined) return undefined;
+  const params: Record<string, FxParamValue> = {};
+  if (raw.params !== undefined) {
+    if (!isObject(raw.params)) return undefined;
+    // Load rule (see normalizeMotionKey): any number of plain parameters, text as stored; fxBytes bounds the effect.
+    for (const [key, value] of Object.entries(raw.params)) {
+      if (!FX_PARAM_KEY_RE.test(key) || UNSAFE_RECORD_KEYS.has(key)) continue;
+      if (finite(value)) params[key] = r4(value);
+      else if (typeof value === 'boolean') params[key] = value;
+      else {
+        const text = storedText(value);
+        if (text) params[key] = text;
+      }
+    }
+  }
+  const fx: LayerFx = { gen: raw.gen, v, seed, params };
+  return JSON.stringify(fx).length <= FX_LIMITS.fxBytes ? fx : undefined;
+};
+
+/** A well-formed PageLayer of a kind this build draws (an image needs exactly one of `src.path` / `src.lib`, a shape
+ *  `shape`, an effect `fx`), or undefined. Strict: the `layer` op and the server sanitizer use it, so a layer of an
+ *  unknown kind can never be written or patched; normalizePageLayers keeps such stored layers as opaque. */
 export const normalizePageLayer = (raw: unknown): PageLayer | undefined => {
   if (!isObject(raw) || typeof raw.id !== 'string' || !LAYER_ID_RE.test(raw.id)) return undefined;
-  const kind = oneOfList(raw.kind, ['image', 'shape'] as const);
+  const kind = oneOfList(raw.kind, PAGE_LAYER_KINDS);
   const box = normalizeUnitBox(raw.box, PRO_PAGE_LIMITS.boxMin);
   if (!kind || !box) return undefined;
   const out: PageLayer = { id: raw.id, kind, box };
   if (kind === 'image') {
-    if (!isObject(raw.src) || typeof raw.src.path !== 'string' || !raw.src.path) return undefined;
-    const src: PageLayer['src'] = { path: raw.src.path };
+    if (!isObject(raw.src)) return undefined;
+    const hasPath = typeof raw.src.path === 'string' && !!raw.src.path;
+    const lib = raw.src.lib === undefined ? undefined : normalizeAssetLibRef(raw.src.lib);
+    // Exactly one picture: a storage path or a library sticker (Pro Edit, PE-0).
+    if (hasPath === !!lib || (raw.src.lib !== undefined && !lib)) return undefined;
+    const src: PageLayerSource = hasPath ? { path: raw.src.path as string } : { lib };
     const crop = normalizeUnitBox(raw.src.crop, PRO_PAGE_LIMITS.boxMin);
     if (crop) src.crop = crop;
     out.src = src;
-  } else {
+  } else if (kind === 'shape') {
     const type = isObject(raw.shape) ? oneOfList(raw.shape.type, LAYER_SHAPES) : undefined;
     if (!type || !isObject(raw.shape)) return undefined;
     const shape: PageLayerShape = { type };
@@ -1365,6 +1563,10 @@ export const normalizePageLayer = (raw: unknown): PageLayer | undefined => {
     const radius = rangeIn(raw.shape.radius, 0, PRO_PAGE_LIMITS.layerRadiusMax);
     if (radius !== undefined) shape.radius = radius;
     out.shape = shape;
+  } else {
+    const fx = normalizeLayerFx(raw.fx);
+    if (!fx) return undefined;
+    out.fx = fx;
   }
   const name = textIn(raw.name, PRO_PAGE_LIMITS.layerNameChars);
   if (name) out.name = name;
@@ -1379,22 +1581,242 @@ export const normalizePageLayer = (raw: unknown): PageLayer | undefined => {
   if (flip) out.flip = flip;
   if (raw.locked === true) out.locked = true;
   if (raw.print === false) out.print = false;
+  const blend = oneOfList(raw.blend, LAYER_BLENDS);
+  if (blend) out.blend = blend;
   return out;
 };
 
-/** A page's overlays: malformed and duplicate ids dropped, ≤ EDITOR_LIMITS.layersPerPage. Undefined when none. */
+/** Stored kind names a newer build may use (lower-case words). */
+const OPAQUE_KIND_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * A stored layer of a kind this build does not know, kept exactly as written (master plan §2.3 graft 1: the server
+ * hydrates through normalizeDoc and writes the whole doc back, so a rolled-back build would otherwise strip a newer
+ * build's layers for good). It needs a valid 'ly_…' id, a word for a kind, a valid box (normalized like any overlay's)
+ * and ≤ FX_LIMITS.opaqueLayerBytes as JSON; unsafe keys are dropped at every depth. Undefined otherwise. Idempotent.
+ */
+export const normalizeOpaqueLayer = (raw: unknown): PageLayer | undefined => {
+  if (!isObject(raw) || typeof raw.id !== 'string' || !LAYER_ID_RE.test(raw.id)) return undefined;
+  if (typeof raw.kind !== 'string' || !OPAQUE_KIND_RE.test(raw.kind) || isKnownLayerKind(raw.kind)) return undefined;
+  const box = normalizeUnitBox(raw.box, PRO_PAGE_LIMITS.boxMin);
+  if (!box) return undefined;
+  let text: string;
+  try {
+    text = JSON.stringify(raw);
+  } catch {
+    return undefined;
+  }
+  if (text.length > FX_LIMITS.opaqueLayerBytes) return undefined;
+  const clone = JSON.parse(text, (k, v) => (UNSAFE_RECORD_KEYS.has(k) ? undefined : v)) as Record<string, unknown>;
+  return { ...clone, id: raw.id, kind: raw.kind, box } as PageLayer;
+};
+
+/** A page's overlays: malformed and duplicate ids dropped, layers of an unknown kind kept as opaque, ≤
+ *  EDITOR_LIMITS.layersPerPage. Undefined when none. */
 export const normalizePageLayers = (raw: unknown): PageLayer[] | undefined => {
   if (!Array.isArray(raw)) return undefined;
   const seen = new Set<string>();
   const out: PageLayer[] = [];
   for (const item of raw) {
-    const layer = normalizePageLayer(item);
+    const layer = normalizePageLayer(item) ?? normalizeOpaqueLayer(item);
     if (!layer || seen.has(layer.id)) continue;
     seen.add(layer.id);
     out.push(layer);
     if (out.length >= EDITOR_LIMITS.layersPerPage) break;
   }
   return out.length ? out : undefined;
+};
+
+// ── Pro Edit motion (master plan §2.3, §2.5; PE-0) ────────────────────────────
+//
+// Structural only, so a newer build's motion survives a rollback: preset, ease and camera-move ids are kept when they
+// are well-formed words (MOTION_WORD_RE), whether or not this build plays them (an unknown one is inert). The server
+// sanitizer checks them against the registry, the byte budgets and the flash rule. Ranges and counts are clamped here.
+
+const MOTION_PARAM_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,23}$/;
+const motionWord = (v: unknown): string | undefined => (typeof v === 'string' && MOTION_WORD_RE.test(v) ? v : undefined);
+
+const normalizeMotionTarget = (raw: unknown): MotionTarget | undefined => {
+  if (!isObject(raw)) return undefined;
+  const k = oneOfList(raw.k, MOTION_TARGET_KINDS);
+  if (!k) return undefined;
+  const id = k === 'layer' ? (typeof raw.id === 'string' && LAYER_ID_RE.test(raw.id) ? raw.id : undefined) : safeId(raw.id);
+  return id ? { k, id } : undefined;
+};
+
+// LOAD RULE (Pro Edit, rollback): the load normalizers below keep structure, the plan's own bounds (§2.3, §2.5: 48 clips,
+// 12 keys, at −2000..10000 ms, dur 100..4000 ms, repeat 0..20, one camera move per panel) and the byte budgets
+// (MOTION_LIMITS.pageBytes, FX_LIMITS.fxBytes, FX_LIMITS.opaqueLayerBytes). Every other number is kept as stored when finite
+// (sign checks only) and text as stored: the write bounds this package invented (MOTION_LIMITS key ranges, holdMaxMs,
+// paramsPerClip, paramTextChars; FX_LIMITS paramsPerFx, paramTextChars) are the PE-SERVER sanitizer's and the players',
+// so S2 can widen one without a rollback truncating what it stored.
+
+const normalizeMotionKey = (raw: unknown): MotionKey | undefined => {
+  if (!isObject(raw)) return undefined;
+  const t = rangeIn(raw.t, 0, 1); // a fraction of the clip's duration (structural)
+  if (t === undefined) return undefined;
+  const out: MotionKey = { t };
+  const x = finiteR4(raw.x);
+  if (x !== undefined) out.x = x;
+  const y = finiteR4(raw.y);
+  if (y !== undefined) out.y = y;
+  const s = rangeIn(raw.s, 0, Number.MAX_SAFE_INTEGER); // a scale is never negative
+  if (s !== undefined) out.s = s;
+  const r = finiteR4(raw.r);
+  if (r !== undefined) out.r = r;
+  const o = rangeIn(raw.o, 0, 1); // opacity (structural)
+  if (o !== undefined) out.o = o;
+  return out;
+};
+
+/** One stored clip made valid ('mc_…' id, target, role, a preset word, a clamped start), or undefined. Idempotent. */
+export const normalizeMotionClip = (raw: unknown): MotionClip | undefined => {
+  if (!isObject(raw) || typeof raw.id !== 'string' || !MOTION_CLIP_ID_RE.test(raw.id)) return undefined;
+  const target = normalizeMotionTarget(raw.target);
+  const role = oneOfList(raw.role, MOTION_ROLES);
+  const preset = motionWord(raw.preset);
+  if (!target || !role || !preset || !isObject(raw.at)) return undefined;
+  const anchor = oneOfList(raw.at.anchor, MOTION_ANCHORS);
+  if (!anchor) return undefined;
+  const at: MotionAt = { anchor, ms: intIn(raw.at.ms, MOTION_LIMITS.atMsMin, MOTION_LIMITS.atMsMax) ?? 0 };
+  const atPanel = safeId(raw.at.panelId);
+  if (atPanel) at.panelId = atPanel;
+  const out: MotionClip = { id: raw.id, target, role, preset: preset as MotionPresetId, at };
+  const dur = intIn(raw.dur, MOTION_LIMITS.durMin, MOTION_LIMITS.durMax);
+  if (dur !== undefined) out.dur = dur;
+  const ease = motionWord(raw.ease);
+  if (ease) out.ease = ease as EaseId;
+  if (isObject(raw.params)) {
+    // Load rule: any number of plain parameters, text as stored (pageBytes bounds the page's motion).
+    const params: Record<string, MotionParamValue> = {};
+    for (const [key, value] of Object.entries(raw.params)) {
+      if (!MOTION_PARAM_KEY_RE.test(key) || UNSAFE_RECORD_KEYS.has(key)) continue;
+      if (finite(value)) params[key] = r4(value);
+      else if (typeof value === 'boolean') params[key] = value;
+      else {
+        const text = storedText(value);
+        if (text) params[key] = text;
+      }
+    }
+    if (Object.keys(params).length) out.params = params;
+  }
+  const repeat = intIn(raw.repeat, 0, MOTION_LIMITS.repeatMax);
+  if (repeat !== undefined && repeat > 0) out.repeat = repeat;
+  if (Array.isArray(raw.keys)) {
+    const keys = raw.keys
+      .map(normalizeMotionKey)
+      .filter((k): k is MotionKey => !!k)
+      .slice(0, MOTION_LIMITS.keysPerClip)
+      .map((k, i) => ({ k, i }))
+      .sort((a, b) => a.k.t - b.k.t || a.i - b.i)
+      .map(({ k }) => k);
+    if (keys.length) out.keys = keys;
+  }
+  return out;
+};
+
+/** Camera moves made valid: one per panel (the first wins), a move word, ≤ MOTION_LIMITS.cameraMoves. */
+export const normalizeCameraMoves = (raw: unknown): CameraMove[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const out: CameraMove[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!isObject(item)) continue;
+    const panelId = safeId(item.panelId);
+    const move = motionWord(item.move);
+    if (!panelId || !move || seen.has(panelId)) continue;
+    seen.add(panelId);
+    out.push({ panelId, move: move as CameraMove['move'] });
+    if (out.length >= MOTION_LIMITS.cameraMoves) break;
+  }
+  return out.length ? out : undefined;
+};
+
+/**
+ * A page's motion made valid: clips (malformed and duplicate ids dropped, ≤ MOTION_LIMITS.clipsPerPage), camera moves,
+ * a clamped hold. Undefined when nothing is left (no clips, no camera, no hold), so `motion: {clips: []}` is absent.
+ * Dangling targets are kept here; normalizeDoc prunes a clip only when its target is gone from the whole doc.
+ */
+export const normalizePageMotion = (raw: unknown): PageMotion | undefined => {
+  if (!isObject(raw)) return undefined;
+  const clips: MotionClip[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(raw.clips) ? raw.clips : []) {
+    const clip = normalizeMotionClip(item);
+    if (!clip || seen.has(clip.id)) continue;
+    seen.add(clip.id);
+    clips.push(clip);
+    if (clips.length >= MOTION_LIMITS.clipsPerPage) break;
+  }
+  const camera = normalizeCameraMoves(raw.camera);
+  const hold = intIn(raw.hold, 0, Number.MAX_SAFE_INTEGER); // load rule: holdMaxMs is a write bound
+  if (!clips.length && !camera && hold === undefined) return undefined;
+  const out: PageMotion = { clips };
+  if (camera) out.camera = camera;
+  if (hold !== undefined) out.hold = hold;
+  // The plan's per-page budget: clips past it (from the end) are dropped. A conforming writer never stores more.
+  while (out.clips.length && JSON.stringify(out).length > MOTION_LIMITS.pageBytes) out.clips.pop();
+  return out;
+};
+
+/** Every camera move id in the plan's set (the motion engine plays these; a stored unknown word is inert). */
+export const isKnownCameraMove = (move: unknown): boolean => typeof move === 'string' && (CAMERA_MOVE_IDS as readonly string[]).includes(move);
+
+/** Ids a clip or camera move can target anywhere in the doc (live and trashed pages): lines, panels, overlay layers. */
+const motionTargetIds = (doc: Pick<ComicDoc, 'pages' | 'trash'>): Record<MotionTarget['k'], Set<string>> => {
+  const out = { line: new Set<string>(), panel: new Set<string>(), layer: new Set<string>() };
+  const add = (p: Page) => {
+    for (const panel of p.panels || []) {
+      out.panel.add(panel.id);
+      for (const l of panel.lines || []) out.line.add(l.id);
+    }
+    for (const l of p.layers || []) out.layer.add(l.id);
+  };
+  doc.pages.forEach(add);
+  (doc.trash || []).forEach((t) => add(t.page));
+  return out;
+};
+
+/** A page with its motion pruned of clips and camera moves whose target is absent from the WHOLE doc (`ids`). Same page
+ *  object when nothing is pruned. */
+const prunedMotionPage = (page: Page, ids: Record<MotionTarget['k'], Set<string>>): Page => {
+  const m = page.motion;
+  if (!m) return page;
+  const clips = m.clips.filter((c) => ids[c.target.k].has(c.target.id));
+  const camera = m.camera?.filter((c) => ids.panel.has(c.panelId));
+  if (clips.length === m.clips.length && (camera?.length ?? 0) === (m.camera?.length ?? 0)) return page;
+  const next: PageMotion = { clips };
+  if (camera?.length) next.camera = camera;
+  if (m.hold !== undefined) next.hold = m.hold;
+  const out: Page = { ...page };
+  const motion = normalizePageMotion(next);
+  if (motion) out.motion = motion;
+  else delete out.motion;
+  return out;
+};
+
+/**
+ * Dangling motion (master plan §2.3): a clip whose target is gone is skipped by every player, so undoing a delete brings
+ * its animation back. Only a target absent from the whole doc, trash included, is pruned here (load time). Same doc
+ * when no page has motion or nothing dangles. KNOWN LIMIT (docs/features/pro-edit.md §7): ops do not prune, so once S2
+ * writes motion a reload can differ from the live doc (History I5, a client refetch); S2 integration settles it.
+ */
+export const pruneDanglingMotion = <T extends Pick<ComicDoc, 'pages' | 'trash'>>(doc: T): T => {
+  const hasMotion = doc.pages.some((p) => p.motion) || (doc.trash || []).some((t) => t.page.motion);
+  if (!hasMotion) return doc;
+  const ids = motionTargetIds(doc);
+  const pages = doc.pages.map((p) => prunedMotionPage(p, ids));
+  const trash = doc.trash?.map((t) => {
+    const page = prunedMotionPage(t.page, ids);
+    return page === t.page ? t : { ...t, page };
+  });
+  const pagesChanged = pages.some((p, i) => p !== doc.pages[i]);
+  const trashChanged = !!trash && trash.some((t, i) => t !== doc.trash![i]);
+  if (!pagesChanged && !trashChanged) return doc;
+  const out = { ...doc };
+  if (pagesChanged) out.pages = pages;
+  if (trashChanged) out.trash = trash;
+  return out;
 };
 
 const normalizeCastStateChange = (raw: unknown): CastStateChange | null | undefined => {
@@ -1740,18 +2162,28 @@ const normalizePageShip2 = (page: Page): Page => {
     if (continuity) page.continuity = continuity;
     else delete page.continuity;
   }
+  // Pro Edit (PE-0): motion, only when present (old pages unchanged).
+  if (page.motion !== undefined) {
+    const motion = normalizePageMotion(page.motion);
+    if (motion) page.motion = motion;
+    else delete page.motion;
+  }
   if (page.balloons.some((b) => isObject(b) && ('rot' in b || 'minH' in b))) page.balloons = page.balloons.map(normalizeBalloonShip2);
   return page;
 };
 
 const normalizeLine = (l: Line): Line => {
-  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l; // identity
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined && l.styleId === undefined) return l; // identity
   const next: Line = { ...l }; // key order kept
-  const style = sanitizeLetterStylePatch(l.style);
+  // Load: a newer build's Pro lettering is kept (structurally checked) so a rollback never strips it; resolveLetterStyle
+  // draws only what this build knows. Client patches go through the same sanitizer WITHOUT the option.
+  const style = sanitizeLetterStylePatch(l.style, { keepStoredPro: true });
   if (style) next.style = style;
   else delete next.style;
   if (typeof l.lang !== 'string' || !l.lang) delete next.lang;
   if (l.noTranslate !== true) delete next.noTranslate;
+  // A named style reference (agent-editor plan §3 C7): a short id; whether it names a saved style is the sanitizer's check.
+  if (typeof l.styleId !== 'string' || !l.styleId || l.styleId.length > 64) delete next.styleId;
   return next;
 };
 
@@ -1881,9 +2313,55 @@ export const normalizeNoticeCard = (card: Extract<Card, { type: 'notice' }>): Ex
   return out;
 };
 
-/** Cards of a message: `model_outage` cards are validated (dropped when malformed) and notice fix chips are
- *  validated; every other card is kept exactly as stored (their renderers read live doc state). Returns the SAME
- *  array when nothing changed. */
+const clipStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
+const optId = (v: unknown): string | undefined => (typeof v === 'string' && v && v.length <= 80 ? v : undefined);
+const isOpLike = (op: unknown): op is import('./ops.js').DocOp => isObject(op) && typeof op.op === 'string';
+
+/**
+ * A stored conflict card, well-formed (agent-editor plan §3 A3): items with an id, a where-label and both versions; at most
+ * CONFLICT_LIMITS ops (each an object naming its op — the server re-sanitizes them against the live doc on resolve).
+ * An item's op list is kept WHOLE or not at all: one that is over the per-item cap or the card's remaining budget, or
+ * holds anything that is not an op, becomes `proposed: []` + `tooBig`, so "Use the director's" can never apply half an
+ * edit. Items past CONFLICT_LIMITS.items add to `more`. Undefined when nothing usable is left; the SAME object when
+ * already clean (old docs stay identical).
+ */
+export const normalizeConflictCard = (value: unknown): ConflictCard | undefined => {
+  if (!isObject(value) || value.type !== 'conflict' || typeof value.id !== 'string' || !value.id) return undefined;
+  if (!Array.isArray(value.items)) return undefined;
+  let budget: number = CONFLICT_LIMITS.ops;
+  const items: ConflictItem[] = [];
+  for (const raw of value.items.slice(0, CONFLICT_LIMITS.items)) {
+    if (!isObject(raw) || typeof raw.id !== 'string' || !raw.id || !isObject(raw.where) || typeof raw.where.label !== 'string') continue;
+    const where: ConflictWhere = { label: clipStr(raw.where.label, CONFLICT_LIMITS.labelChars) };
+    for (const key of ['pageId', 'panelId', 'lineId'] as const) {
+      const id = optId(raw.where[key]);
+      if (id) where[key] = id;
+    }
+    const list: unknown[] = Array.isArray(raw.proposed) ? raw.proposed : [];
+    const whole = raw.tooBig !== true && list.length <= Math.min(CONFLICT_LIMITS.opsPerItem, budget) && list.every(isOpLike);
+    const item: ConflictItem = {
+      id: raw.id,
+      where,
+      mine: clipStr(raw.mine, CONFLICT_LIMITS.textChars),
+      theirs: clipStr(raw.theirs, CONFLICT_LIMITS.textChars),
+      proposed: whole ? (list as import('./ops.js').DocOp[]) : []
+    };
+    if (whole) budget -= list.length;
+    else item.tooBig = true;
+    if (raw.resolved === 'mine' || raw.resolved === 'theirs') item.resolved = raw.resolved;
+    items.push(item);
+  }
+  if (!items.length) return undefined;
+  const stored = typeof value.more === 'number' && Number.isInteger(value.more) && value.more > 0 ? value.more : 0;
+  const more = stored + Math.max(0, value.items.length - CONFLICT_LIMITS.items);
+  const next: ConflictCard = { type: 'conflict', id: value.id, items };
+  if (more) next.more = more;
+  return stableStringify(next) === stableStringify(value) ? (value as unknown as ConflictCard) : next;
+};
+
+/** Cards of a message: `model_outage` cards are validated (dropped when malformed), notice fix chips are validated and
+ *  conflict cards are validated (normalizeConflictCard; dropped when nothing usable is left); every other card is kept
+ *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
 const normalizeCards = (cards: unknown): Card[] | undefined => {
   if (!Array.isArray(cards)) return undefined;
   let changed = false;
@@ -1901,6 +2379,10 @@ const normalizeCards = (cards: unknown): Card[] | undefined => {
       const next = normalizeNoticeCard(card);
       if (next !== card) changed = true;
       out.push(next);
+    } else if (isObject(card) && (card as { type?: unknown }).type === 'conflict') {
+      const next = normalizeConflictCard(card);
+      if ((next as unknown) !== card) changed = true;
+      if (next) out.push(next);
     } else out.push(card);
   }
   return changed ? out : (cards as Card[]);
@@ -1979,6 +2461,8 @@ export const pickReader = (raw: unknown): ReaderSettings => {
   if (credits) out.credits = credits;
   const dedication = text(r.dedication);
   if (dedication) out.dedication = dedication;
+  // Pro Edit (PE-0): the creator's reader-motion choice, kept only when 'on' or 'off' (absent stays absent).
+  if (r.motion === 'on' || r.motion === 'off') out.motion = r.motion;
   return out;
 };
 
@@ -2035,7 +2519,8 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   doc.gate = input.gate || null;
   doc.conversation = asArray<Msg>(input.conversation).map(normalizeMsg);
   // ── v5 additions: explicit assignment (R3) ──
-  doc.letterStyle = sanitizeLetteringStyle(input.letterStyle); // missing/invalid → { presetId: 'classic' } (NO auto)
+  // missing/invalid → { presetId: 'classic' } (NO auto). Load: Pro keys and `named` a newer build stored are kept.
+  doc.letterStyle = sanitizeLetteringStyle(input.letterStyle, { keepStoredPro: true });
   doc.book = pickBook(input.book); // storybook plates default is applied only on create / set_format
   doc.reader = pickReader(input.reader);
   doc.archive = asArray<ArchivedVersion>(input.archive).filter(
@@ -2067,7 +2552,8 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
     if (consistency) doc.consistency = consistency;
     else delete doc.consistency;
   }
-  return doc;
+  // --- Pro Edit (PE-0): a clip whose target is gone from the whole doc (trash included) is pruned; no motion, no work ---
+  return pruneDanglingMotion(doc);
 };
 
 // ── Accessors (R9) ───────────────────────────────────────────────────────────
@@ -2088,7 +2574,10 @@ export const scenesOf = (doc: Pick<ComicDoc, 'scenes'>): Scene[] => doc.scenes ?
 export const consistencyOf = (doc: Pick<ComicDoc, 'consistency'>): ConsistencySettings => doc.consistency ?? {};
 /** The page's full frame style (each missing field is its DEFAULT_FRAME_STYLE value). */
 export const frameStyleOf = (page: Pick<Page, 'frameStyle'>): FrameStyle => (page.frameStyle ? { ...DEFAULT_FRAME_STYLE, ...page.frameStyle } : DEFAULT_FRAME_STYLE);
+/** Every stored overlay of the page, opaque ones included (ids, caps, paths). To draw or list them use knownLayersOf. */
 export const layersOf = (page: Pick<Page, 'layers'>): PageLayer[] => page.layers ?? [];
+/** The page's motion clips (Pro Edit; empty when it has none). */
+export const motionClipsOf = (page: Pick<Page, 'motion'>): MotionClip[] => page.motion?.clips ?? [];
 
 const usableBox = (b: unknown): b is Box =>
   isObject(b) && finite(b.x) && finite(b.y) && finite(b.w) && finite(b.h) && b.w > 0 && b.h > 0 && b.x >= -1e-9 && b.y >= -1e-9 && b.x + b.w <= 1 + 1e-6 && b.y + b.h <= 1 + 1e-6;
@@ -2492,9 +2981,9 @@ export const displayAssetPaths = (doc: ComicDoc): string[] => {
 
 /** Keys that never affect drawn art. Lines without them keep object identity → identical JSON. */
 const hashableLine = (l: Line): Line => {
-  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l;
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined && l.styleId === undefined) return l;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { style: _s, lang: _l, noTranslate: _n, ...rest } = l; // insertion order of the rest is preserved
+  const { style: _s, lang: _l, noTranslate: _n, styleId: _id, ...rest } = l; // insertion order of the rest is preserved
   return rest as Line;
 };
 

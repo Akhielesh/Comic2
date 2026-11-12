@@ -357,10 +357,12 @@ describe('signed URLs', () => {
     expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1-480?v=0');
     let n = 0;
     api.signStudioUrls.mockImplementation(async (_id: string, paths: string[]) => Object.fromEntries(paths.map((p) => [p, `https://cdn/p1-480?v=${++n}`])));
-    // Count only the calls that sign the broken variant: under load an unrelated signing round (another path of the
-    // sample doc) can land inside this window, and it is not what this test is about.
+    // Count only the calls that sign the broken variant. Under load a stale render's urlFor can queue the variant once
+    // more after its third re-sign; flushSigning re-checks the cap, so that queued request is dropped, not signed a 4th time.
     const VARIANT = 'u/proj/pages/p1.480.webp';
     const variantSigns = () => api.signStudioUrls.mock.calls.filter((call) => (call[1] as string[]).includes(VARIANT)).length;
+    // PF-2 #7: the controller says whether the signer gave up on a path, by urlFor's own test.
+    expect(result.current.isUnsignable(VARIANT)).toBe(false);
     const img = document.createElement('img');
     document.body.appendChild(img);
     for (let i = 0; i < 6; i += 1) {
@@ -385,6 +387,9 @@ describe('signed URLs', () => {
     // Three re-signs (an expired link is renewed), then the broken variant is dropped for the original.
     expect(variantSigns()).toBe(3);
     expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1');
+    // The chat tiles read this to say "Preview unavailable" instead of a shimmer that never ends.
+    expect(result.current.isUnsignable(VARIANT)).toBe(true);
+    expect(result.current.isUnsignable('u/proj/pages/p1.png')).toBe(false);
   });
 });
 

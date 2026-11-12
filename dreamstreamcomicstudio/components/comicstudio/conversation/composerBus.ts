@@ -2,6 +2,8 @@
 // header's Cmd/Ctrl+K) can drive the composer without prop drilling: focus it, prefill a
 // draft with a hint, or open the file picker. The composer is the only listener.
 
+import { sendOutcomeOf } from '../messageQueue';
+
 export const COMPOSE_EVENT = 'comicstudio:compose';
 
 export interface ComposeRequest {
@@ -26,3 +28,16 @@ export const composeInStudio = (request: ComposeRequest = {}): void => {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent<ComposeRequest>(COMPOSE_EVENT, { detail: request }));
 };
+
+/**
+ * A message sent from outside the composer (the board's and the timeline's "Write this page with AI", the lettering
+ * inspector's ask box) that the studio refused — the director is busy and Up next is off or full, or the comic is not
+ * ready — goes to the message box instead of being dropped (agent-editor plan §3 A1), after any draft already there, so
+ * the creator can send it once the director is free. `result` is what `studio.send(text, …)` returned.
+ */
+export const keepRefusedInComposer = (result: unknown, text: string): Promise<void> =>
+  Promise.resolve(result)
+    .then(sendOutcomeOf, () => 'refused' as const)
+    .then((outcome) => {
+      if (outcome === 'refused') composeInStudio({ text, append: true });
+    });

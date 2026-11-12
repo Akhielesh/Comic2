@@ -61,6 +61,15 @@ describe('CastCard extras', () => {
     expect(screen.getByRole('button', { name: /^Cat.*Sheet ready · used on pages\. Open the cast$/ })).toBeInTheDocument();
   });
 
+  it('the character name is marked as user content; the status words are not (DC-0 #5a)', () => {
+    const doc = makeSampleDoc();
+    doc.cast = [...doc.cast, extra(ready, { id: 'c_cat', name: 'Cat with a very long creator-given name', kind: 'animal' })];
+    render(<CastCard card={{ type: 'cast', id: 'card_c', characterIds: ['c_cat'] }} studio={makeFakeStudio({ doc })} />);
+    const name = screen.getByText('Cat with a very long creator-given name');
+    expect(name).toHaveAttribute('data-user-content');
+    expect(screen.getByText(/Sheet ready · used on pages$/).closest('[data-user-content]')).toBeNull();
+  });
+
   it('an extra whose paid sheet is drawing shows the busy dot', () => {
     const doc = makeSampleDoc();
     doc.cast = [...doc.cast, extra({ ...emptyRender(), status: 'rendering' }, { id: 'c_boy', name: 'Boy' })];

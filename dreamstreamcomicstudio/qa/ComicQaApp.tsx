@@ -7,17 +7,27 @@
 //
 //   /qa/comic-qa.html?surface=studio|board|editor|reader|classic-reader|public|kit
 //                    &kit=breakdown|refs|refs-drawer|timeline|art     (surface=kit; qa/KitScenes.tsx)
-//                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
-//                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
+//                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty|chat-14
+//                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…|queued|conflict
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
+//                    &share=live|live-public  (a published comic, Link only / Library + link: the studio's Share sheet
+//                                   opens on its link-first block; the link is on this origin, the preview has no picture)
 //                    &history=1    (Comic History on: caps.history, and the studio surface answers History offline
 //                                   from the fake HistoryApi over the synthetic 'v5' history fixture; absent: unchanged)
+//                    &variants=0   (the fixture's pages and cover carry no stored 480w/1080w variants, as comics stored
+//                                   before the server kept them: the reader has no stand-in; every surface, RD-A #12)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
 //                                   the studio and reader roots carry the attribute regardless)
+//   /qa/comic-qa.html?surface=app[&scene=<id>]&theme=light|dark&skin=atlas|none
+//                                 (DS-1b: the app-wide scenes, one page each, discovered by glob from
+//                                  qa/app/scenes — qa/app/index.tsx holds the scene contract; no scene = the index)
+//   /qa/comic-qa.html?surface=pro[&scene=<id>]
+//                                 (the Pro Edit scenes: a placeholder in qa/pro/index.tsx until Program 2 fills it)
 //
 // Contract with the specs (tests/e2e):
-//   html[data-qa-ready]   set once the surface mounted and fonts loaded
-//   window.__qa           { params, ready, pageCount, pageIds }
+//   html[data-qa-ready]   set once the surface mounted and fonts loaded (every surface)
+//   window.__qa           { params, ready, pageCount, pageIds } (the Comic Studio surfaces)
+//   window.__QA_APP_SCENES__  [{ id, title }] of every app scene (surface=app; the layout smoke reads it)
 //   window.__qaOps        every controller call (patch/act/send/…) and every blocked network request
 //   [data-qa-crash]       a render error (the spec fails with its message instead of timing out)
 // The harness never reaches the network: /api/* is answered in-page (public comic payloads from the
@@ -32,23 +42,58 @@ import { BoardPane } from '../components/comicstudio/board/BoardPane';
 import { ComicReaderView } from '../components/comicstudio/reader/ComicReaderView';
 import { PublicComicReader } from '../components/comicstudio/PublicComicReader';
 import { ImmersiveReader } from '../components/comicstudio/immersive/ImmersiveReader';
-import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
+import { QA_PROJECT_ID, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
 import { HistoryApiProvider } from '../components/comicstudio/history/historyApi';
 import { createFakeHistoryApi } from '../components/comicstudio/history/historyApi.fake';
 import { historyFixture } from '../components/comicstudio/history/__scenes__/historyFixtures';
-import { parseQaParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
+import { parseQaParams, QA_SURFACES, qaDocFromParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams, type QaRuntimeInfo } from '../components/comicstudio/testing/qaController';
 import { bootDsSkin } from '../services/dsSkin';
 import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
+import { QaAppSurface, type QaAppSkin } from './app/index';
+import { QaProSurface } from './pro/index';
 
 const FULL: React.CSSProperties = { height: '100dvh', width: '100%', overflow: 'hidden' };
+
+// ── Surfaces and parameters ──────────────────────────────────────────────────
+
+/** Every surface the harness mounts: Comic Studio's (qaController QA_SURFACES) and the app-wide ones (DS-1b). */
+export const QA_HARNESS_SURFACES = [...QA_SURFACES, 'app', 'pro'] as const;
+export type QaHarnessSurface = (typeof QA_HARNESS_SURFACES)[number];
+
+/** The harness URL: the Comic Studio params, plus the app-wide surfaces with `scene=` and `skin=` (DS-1b). */
+export type QaHarnessParams = Omit<QaParams, 'surface'> & {
+  surface: QaHarnessSurface;
+  /** surface=app|pro: the scene to mount (null: the index). */
+  scene?: string | null;
+  /** `skin=atlas` boots the page-level skin, `skin=none` keeps <html> unskinned; null leaves the boot default. */
+  skin?: QaAppSkin | null;
+};
+
+/** Parse a harness URL: exactly parseQaParams for the Comic Studio surfaces, plus `surface=app|pro`, `scene=` and `skin=`. */
+export const parseQaHarnessParams = (search: string, env: { webdriver?: boolean } = {}): QaHarnessParams => {
+  const base = parseQaParams(search, env);
+  const q = new URLSearchParams(search);
+  const surface = q.get('surface');
+  const scene = (q.get('scene') || '').trim().slice(0, 64);
+  const skin = q.get('skin');
+  return {
+    ...base,
+    surface: surface === 'app' || surface === 'pro' ? surface : base.surface,
+    scene: scene || null,
+    skin: skin === 'atlas' || skin === 'none' ? skin : null
+  };
+};
+
+/** A Comic Studio surface (everything qaController knows), as opposed to the app-wide ones. */
+const isStudioParams = (p: QaHarnessParams): p is QaParams => p.surface !== 'app' && p.surface !== 'pro';
 
 // ── Network shim ─────────────────────────────────────────────────────────────
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-const publicPayload = (params: QaParams) => {
-  const doc = makeQaDoc(params.fixture, { rtl: params.rtl });
+const publicPayload = (params: Omit<QaParams, 'surface'>) => {
+  const doc = qaDocFromParams(params);
   const urls: Record<string, string> = {};
   for (const path of qaImagePaths(doc)) {
     const url = qaImageUrl(path, params.img);
@@ -57,7 +102,7 @@ const publicPayload = (params: QaParams) => {
   return { doc, urls };
 };
 
-const installNetworkShim = (params: QaParams) => {
+const installNetworkShim = (params: Omit<QaParams, 'surface'>) => {
   const realFetch = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -182,7 +227,7 @@ const Reader: React.FC<{ params: QaParams; classic: boolean }> = ({ params, clas
   );
 };
 
-const Surface: React.FC<{ params: QaParams }> = ({ params }) => {
+const StudioSurface: React.FC<{ params: QaParams }> = ({ params }) => {
   switch (params.surface) {
     case 'board':
       return <Board params={params} />;
@@ -206,8 +251,17 @@ const Surface: React.FC<{ params: QaParams }> = ({ params }) => {
   }
 };
 
-/** The whole harness for one URL. Exported so a future Settings → Gallery "Comic Studio stress" entry can reuse it. */
-export const ComicQaApp: React.FC<{ params: QaParams }> = ({ params }) => {
+const Surface: React.FC<{ params: QaHarnessParams }> = ({ params }) => {
+  if (isStudioParams(params)) return <StudioSurface params={params} />;
+  if (params.surface === 'app') return <QaAppSurface scene={params.scene ?? null} theme={params.theme} skin={params.skin ?? null} />;
+  return <QaProSurface params={{ ...params, surface: 'pro' }} scene={params.scene ?? null} />;
+};
+
+/**
+ * The whole harness for one URL. Exported so a future Settings → Gallery "Comic Studio stress" entry can reuse it.
+ * Takes Comic Studio params (parseQaParams) or harness params (parseQaHarnessParams, which adds the app-wide surfaces).
+ */
+export const ComicQaApp: React.FC<{ params: QaHarnessParams }> = ({ params }) => {
   React.useEffect(() => {
     let cancelled = false;
     const markReady = () => {
@@ -231,23 +285,44 @@ export const ComicQaApp: React.FC<{ params: QaParams }> = ({ params }) => {
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
+/** What boot() puts on <html> and window for one URL. */
+export interface QaBootState {
+  /** `.dark` on <html> (and the stored theme). */
+  dark: boolean;
+  /** `data-qa-still` on <html> (every duration zeroed, qa-fonts.css). */
+  still: boolean;
+  /** `?skin=atlas`: boot the page-level skin exactly as the comics host does (attribute, token registration, local font preloads). */
+  atlasSkin: boolean;
+  /** window.__qa: it describes a comic fixture, so only the Comic Studio surfaces get one (the app-wide surfaces publish __QA_APP_SCENES__). */
+  qa?: QaRuntimeInfo;
+}
+
+/** The page state for one URL's params. Pure: boot() applies it, and the test checks it per surface. */
+export const qaBootState = (params: QaHarnessParams): QaBootState => {
+  const state: QaBootState = { dark: params.theme === 'dark', still: params.still, atlasSkin: params.skin === 'atlas' };
+  if (isStudioParams(params)) {
+    const doc = params.state === 'loading' || params.state === 'load-error' ? null : qaDocFromParams(params);
+    state.qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
+  }
+  return state;
+};
+
 const boot = () => {
   const el = document.getElementById('root');
   if (!el) return;
-  const params = parseQaParams(window.location.search, { webdriver: navigator.webdriver === true });
+  const params = parseQaHarnessParams(window.location.search, { webdriver: navigator.webdriver === true });
+  const state = qaBootState(params);
   try {
     window.localStorage.setItem('ds.theme.v1', params.theme);
   } catch {
     /* private mode: the class below still applies the theme */
   }
-  document.documentElement.classList.toggle('dark', params.theme === 'dark');
-  if (params.still) document.documentElement.setAttribute('data-qa-still', '1');
-  // ?skin=atlas: the page-level skin exactly as the comics host boots it (attribute, token
-  // registration, local font preloads). Without it only the studio/reader roots are skinned.
-  if (new URLSearchParams(window.location.search).get('skin') === 'atlas') bootDsSkin({ document, hostname: COMICS_HOST });
+  document.documentElement.classList.toggle('dark', state.dark);
+  if (state.still) document.documentElement.setAttribute('data-qa-still', '1');
+  // Without ?skin=atlas only the studio/reader roots are skinned (the apex case).
+  if (state.atlasSkin) bootDsSkin({ document, hostname: COMICS_HOST });
   window.__qaOps = window.__qaOps || [];
-  const doc = params.state === 'loading' || params.state === 'load-error' ? null : makeQaDoc(params.fixture, { rtl: params.rtl });
-  window.__qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
+  if (state.qa) window.__qa = state.qa;
   installNetworkShim(params);
   createRoot(el).render(<ComicQaApp params={params} />);
 };

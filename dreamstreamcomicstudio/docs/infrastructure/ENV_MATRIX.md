@@ -40,6 +40,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `SUPABASE_SERVICE_ROLE_KEY` | `services/supabase.ts` (admin client) | ✅ 🔐 | — | The workhorse client (~43 sites) |
 | `VITE_API_BASE_URL` | frontend | ✅ | — | Unset in production → same-origin `/api` (the `dreamstream-api` Worker → backend container) |
 | `VITE_AUTH_REDIRECT_URL` | frontend auth | ✅ | — | |
+| `VITE_DS_SKIN_EVERYWHERE` | build only (`vite.config.ts` `dsSkinEverywherePlugin`; docs/design/atlas-skin.md "Wave 9 (bridge)") | ⭕ | — | Cloudflare Pages **build** var, the kill switch for the Atlas design language on every host. Unset (the default) or any value but exactly `off` keeps the `data-ds-skin="atlas"` attribute that `index.html` (and every page entry that carries it, such as `live.html`) ships on `<html>`. `off` strips the skin attribute (the Atlas token block) from every HTML entry at build time; the comics host still boots the skin at runtime (`services/dsSkin.ts`). It is not a full rollback: dark on every page from first paint (`public/theme-boot.js` plus the root `initTheme()` in `index.tsx`) and the bridge D4 token moves stay, so a saved dark theme still opens the legacy pages in dark. Reverting the theme change needs a code revert of the `<script src="/theme-boot.js">` tag in `index.html` and of that `initTheme()` call. Only the exact value `off` strips the attribute; `OFF`, `false`, `0` keep the skin, and the build logs a warning for them. Setting `off` takes a rebuild |
 | `STORAGE_BUCKET` | `imageStorage.ts` | ⭕ | — | Defaults `comic-assets` |
 | `DATA_EGRESS_URL` / `DATA_EGRESS_SECRET` | `lib/egressProxy.ts` | ⭕ 🔐 | — | Finance host failover via data-egress worker |
 | `REDIS_URL` | `ventures:worker` / `connectors:worker` only | ⭕ | 💸 | **Keep UNSET on the always-on backend** (blocks App-Sleeping) |
@@ -49,7 +50,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `DREAMSTREAMSTUDIO_ALL` → `OPENROUTER_API_KEY` | `ai/gateway.ts` | ⭕ 🔐 | 💸 | Effective default gateway; per-call USD |
-| `DREAMSTREAMSTUDIO_MODELTEST` | model-test only | ⭕ 🔐 | 💸 | Kept out of user-serving pool |
+| `DREAMSTREAMSTUDIO_MODELTEST` | `comic/library/adminSpend.ts` (library runner + Model Lab via `comic/keys.ts adminSpendKeys`), bench, `jobs/preferModelTestKey.ts` | ⭕ 🔐 | 💸 | All admin image spend runs on it; unset → Admin › Library and Model Lab refuse (fail closed). Owner sets an OpenRouter limit of $35/month (limit_reset monthly) through December, then $15 (D4). Kept out of the user-serving pool. A running build is pinned to the key setting (COMIC_ADMIN_SPEND_KEY), not to this value: after rotating DREAMSTREAMSTUDIO_MODELTEST, cancel any running build and start a new one (its preflight checks the new key) |
 | `OPENROUTER_API_KEYS` / `NVIDIA_API_KEYS` | `ai/reliability/keyPool.ts` | ⭕ 🔐 | 💸 | Key-pool + circuit breaker |
 | `NVIDIA_API_KEY`, `NVIDIA_TEXT_MODEL` | NVIDIA NIM | ⭕ 🔐 | 💸 | `NVIDIA_TEXT_MODEL` **missing from .env.example** |
 | `OPENAI_API_KEY` | OpenAI | ⭕ 🔐 | 💸 | BYOK |
@@ -98,6 +99,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `MCP_OUTBOUND_TOKEN` | `/api/connect` | ⭕ 🔐 | — | **missing from .env.example** |
 | `CONNECTORS_WEBHOOK_TOKEN` / `CONNECTORS_SYNC_COLOR` / `CONNECTORS_APP_RETURN_URL` | connectors | ⭕ 🔐 | — | |
 | `NANGO_SECRET_KEY` / `NANGO_HOST` | connector SaaS | ⭕ 🔐 | 💸 | In code, not in 58-var set |
+| `CONNECTOR_PROVIDERS_CONFIRMED` | `ai/privacy/providerPolicies.ts` (`routes/chat.ts`, `services/userMemory.ts`) | ⭕ | — | Comma-separated direct providers (e.g. `gemini,nvidia`) whose **platform** key the owner confirmed for connected-account content (a paid, no-training tier). Unset = none: those providers get no connector tools, connector context or memory distilled from connected content on the platform key, and that memory is stored without a Gemini embedding until `gemini` is listed (nor is the memory query of a conversation that may carry connected content embedded). OpenAI and Anthropic need no entry; BYOK keys are never gated. See `docs/DATA_CONNECTORS.md` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URL` | Google connectors | ⭕ 🔐 | — | |
 
 ## Shared platform (wave 1: Word, PowerPoint, email drafts)
@@ -109,6 +111,65 @@ Both switches are on only when exactly `on`, and then only for the people the ro
 |---|---|---|---|---|
 | `PLATFORM_DOCS` | `server/src/ai/tools/platformDocs.ts` (`platformDocsFor(req)`: the chat tools `email_draft` and `deck_create`) | ⭕ | — | Backend env: a `vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Default unset = off. `off` rolls back the chat tools |
 | `VITE_PLATFORM_DOCS` | frontend (`services/platformFlags.ts`: the Word button on chat documents, the comic pitch deck, the draft cards, their rows in Settings → Tools) | ⭕ | — | Cloudflare Pages **build** var. Default unset = off, for admins too. Rolling back means unsetting it and rebuilding. Pairs with `PLATFORM_DOCS` |
+
+## Comic Studio: live agent, dialogue, Pro editor v2 (agent-editor plan §5)
+
+Each flag is a rollout **stage**, read once per request by `server/src/comic/access.ts` (`studioCapsFor` →
+`liveCapsFromEnv`, `shared/comic/capabilities.ts`) into the studio caps (`caps.liveAgent.{queue,steer,conflicts}`,
+`caps.dialogueFast`, `caps.proEditorV2`). The client reads the caps only, never env. Values: `off` | `admins` | `all`
+(case and spaces ignored; `everyone` = `all`; a bare switch `on` / `true` / `1` / `yes` means **admins only**, so
+everyone always needs an explicit `all`; `false` / `0` / `no` = `off`; unset or anything else = the default below).
+"Admins" is the studio's admin check (bootstrap `ADMIN_EMAILS` + `user_roles`), which fails closed. All of these are
+free software: none adds a model or image call of its own, and nothing here bypasses the spend gate. Backend env: a
+`vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`.
+
+| Var | Turns on | Default | Cost | Safe to go to `all` when |
+|---|---|---|---|---|
+| `COMIC_LIVE_QUEUE` | `caps.liveAgent.queue`: the visible "Up next" message queue while the director works (A1, built in S1; client only; queued notes drain as one combined message, D1; saved per tab in `sessionStorage`, never auto-sent after a reload). The `admins` default means admins see it once S1 ships | `admins` | — | A1 tests pass, plus one week of admin use with no lost notes |
+| `COMIC_STEER` | `caps.liveAgent.steer`: gates `POST /api/comic/projects/:id/steer` (A2, built in S1), which adds a note to the running director turn, and with it "Send now" steering (A1's client already calls it when the cap is on). Off: the route answers **501 `NOT_AVAILABLE` whatever the body** (checked before anything else), and "Send now" = Stop the director, then send (D2). On: refusals are 400 `BAD_REQUEST`, 409 `LIMIT` (> 6000 characters), 409 `NOT_RUNNING`, 409 `BUSY` (3 notes waiting or being screened), 429 `COOLDOWN`, 422 `CONTENT_POLICY`, and each keeps the note (`docs/features/live-agent.md` §3) | `off` | — (the capped safety screen per note, at most 3 at once per session, plus a few hundred tokens inside the same turn) | The steer screen passes the safety tests; no stranded steers in the logs (`comic_steer_unread` stays rare) |
+| `COMIC_CONFLICT_GUARD` | `caps.liveAgent.conflicts`: the conflict guard (A3, built in S1; D3). The creator's mid-turn edits win, the director asks with one conflict card, and "Use the director's" answers it (`resolve_conflict`, refused `NOT_AVAILABLE` while off). It also adds the DECIDED line, the ask-once prompt rule and the four contradiction questions. Off, the director behaves exactly as before. The director's line, balloon and style writers call the guard from wave 2 (B-TOOL). The `admins` default means admins get it once S1 ships | `admins` | — | Conflict cards seen and answered without false positives on two-balloon pages |
+| `COMIC_DIALOGUE_FAST` | `caps.dialogueFast`: clear dialogue edits ("make it a whisper") answered with no model call (B3 fast path; D4). The engine is built (`dialogueFastPath`, B-RESOLVE in S1) but nothing calls it until wave 2 B-TOOL wires `intents.ts`, so the flag changes nothing yet | `off` | — (saves a model call) | The phrase corpus passes and the Undo-after-fast-edit rate is low |
+| `COMIC_PRO_EDITOR_V2` | `caps.proEditorV2`: docked inspector, numeric fields, Layers, rotation, named styles (C-*) | `admins` | — | Layout smoke at 320, 360, 768, 1024 and 1280 px; reader/export parity with rotation |
+
+`dialogue_edit` (a reserved core director tool), the `GROUP_HINTS` fix and the `read_pages` line ids need no flag: they
+only make the existing director more accurate.
+
+## Comic Studio: Pro Edit (master plan §2.10)
+
+Read once per request by `server/src/comic/access.ts` (`studioCapsFor` → `proCapsFromEnv`,
+`shared/comic/capabilities.ts`) into `caps.proMotion`, `caps.proStickers` and `caps.readerMotion`; the client reads the
+caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`), never env. `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
+take the stages above (`off` | `admins` | `all`, same synonyms; a bare `on` means admins only).
+`COMIC_READER_MOTION` is `off` | `all` only (`readerMotionStage`, lead decision S1).
+- A bare `on`, `true` or `1`, and `all` / `everyone` (any case, spaces ignored), turn it on for **everyone**.
+- `admins` stays `off`, because the public reader serves signed-out readers whose admin status cannot be checked.
+- Any other value is `off`.
+
+Every one of these defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free software: no
+flag here adds a model or image call. The client reads the three caps through `studioApi.asCaps` (S1), and no Pro UI
+reads them yet. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
+`PRO_EDIT_OPS_PATCHABLE` is a code constant in `shared/comic/ops.ts`, not env: it lets clients send the `motion` /
+`page_motion` ops and is flipped only after the PE-SERVER sanitizer is deployed. Backend env: a `vars` entry in
+`api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`.
+
+| Var | Turns on | Default | Cost | Safe to go to `all` when |
+|---|---|---|---|---|
+| `COMIC_PRO_MOTION` | `caps.proMotion`: the Easy Animate row, the Animate timeline, motion edits in the editor and "Export this page as video" | `off` (then `admins` after S3) | — | Frame-determinism and flash (≤ 3 Hz) tests pass; the phone playback budget is met |
+| `COMIC_PRO_STICKERS` | `caps.proStickers`: the Stickers tab in Assets | `off` | — | D6 approved, the licence gate (PE-LICENCE) merged, the credits block live |
+| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` / `true` / `1` / `all` / `everyone` = everyone, `admins` = off (signed-out readers cannot be checked), anything else = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
+| *(not an env var)* `PRO_EDIT_OPS_PATCHABLE` | `shared/comic/ops.ts`: a **code constant**, `false`. While false, the `motion` / `page_motion` ops (`PRO_EDIT_OPS`) are not in `CLIENT_PATCHABLE_OPS`, so no client can write motion, and the server sanitizer refuses them | `false` | — | Flipped only by the S2 integration, and only after the PE-SERVER sanitizer is in production and the dangling-motion prune is settled (`docs/features/pro-edit.md` §7). PE-0 itself must be in production one deploy before that |
+
+## Comic Studio: library and admin image spend (Program 3 ST-A, ST-4)
+
+Server only. `server/src/comic/library/adminSpend.ts` reads its two per call, at a Build / Regenerate click or a Model
+Lab run (nothing is checked on page load or on a timer); `COMIC_LIBRARY_PRESET_BOARD` is read once at boot. Admin
+image spend is the Library builds and the Model Lab. The rules are in `docs/features/comic-library.md`.
+
+| Var | Consumer | Req? | Cost | Notes |
+|---|---|---|---|---|
+| `COMIC_ADMIN_SPEND_KEY` | `comic/library/adminSpend.ts` | ⭕ | 💸 | Unset/any other value = `modeltest`; `platform` (any case, trimmed) = escape hatch onto DREAMSTREAMSTUDIO_ALL (OpenRouter only). A run is pinned to this setting, not to the key's value: a run started on one setting refuses to step after a flip. |
+| `COMIC_LIBRARY_MONTHLY_CAP_USD` | `comic/library/adminSpend.ts`, enforced by `comic/library/runner.ts` (startRun) | ⭕ | 💸 | Default 20; refuses a build when this UTC month's library_runs.spent_usd + its budget would pass it; 0 stops all builds. |
+| `COMIC_LIBRARY_PRESET_BOARD` | `config.ts:312` (read by `comic/actions/library.ts`) | ⭕ | — | A boolean, default false (off): applying a library style preset also adopts its preview as the style board. Admins only after the golden A/B for content bleed, once the anchors are seeded. It is a boolean today, so `true` turns it on for everyone: keep it off until the staged form (off \| admins \| all, ST-4 #3, deferred) lands, and this row then names the stages. |
 
 ## Admin cost centre (optional live Cloudflare usage)
 

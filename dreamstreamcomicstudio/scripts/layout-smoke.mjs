@@ -3,8 +3,11 @@
 //
 // One command for the per-PR layout regression check (2–3 min on Chromium):
 //   1. builds the QA entry (QA_BUILD=1 vite build --outDir dist-qa) unless --no-build;
-//   2. runs the Playwright harness (tests/e2e) on the 4 smoke viewports — 360×740, 768×1024,
-//      1024×768, 1440×900 — plus the harness self-tests;
+//   2. runs the Playwright harness (tests/e2e) on the `smoke-*` projects plus the harness self-tests:
+//      5 smoke viewports (360/768/1024/1280/1440: studio, kit, model-picker and app scenes),
+//      smoke-360x740-atlas and smoke-1440x900-dark (the whole smoke under the page-level skin and the OS
+//      dark scheme), and the app-scene matrix (`@app`, devices.ts APP_SCENE_MATRIX: smoke-320x640,
+//      smoke-320x568, smoke-fold5-dual, smoke-852x393 besides the viewports above);
 //   3. prints a findings summary (new vs allowlisted, by owner package) and appends it to the GitHub
 //      step summary when running in Actions.
 //

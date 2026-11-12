@@ -16,6 +16,12 @@
 // The build is CLIENT-DRIVEN (decisions-final #4): no background job, so the container's
 // 15-minute idle sleep can never kill it. The admin router sits behind requireAuth →
 // adminRateLimit → requireAdmin (routes/comicMounts.ts).
+//
+// Admin spend (Program 3 ST-A): production builds spend on the model-test key only (adminSpendKeys:
+// DREAMSTREAMSTUDIO_MODELTEST, OpenRouter, never the platform Gemini key; COMIC_ADMIN_SPEND_KEY=platform is the
+// explicit escape hatch). Unset → the console says so and nothing can be built. The monthly cap and the
+// OpenRouter /key preflight run when a build starts (an admin click), never on load or on a timer. No response
+// body carries the key: only its name ('modeltest' | 'platform') and dollar figures.
 
 import { Router, type Request, type RequestHandler, type Response } from 'express';
 import { LIBRARY_MANIFEST_VERSION, type LibraryBuildRequest, type LibraryIndex } from '../../../../shared/comic/library.js';
@@ -23,11 +29,14 @@ import { logger } from '../../lib/logger.js';
 import { recordAudit } from '../../observability/auditLog.js';
 import { getSupabaseAdmin } from '../../services/supabase.js';
 import { createSupabaseAssetStore } from '../assets.js';
+import { createImageCallRecorder } from '../billing.js';
 import { createImageGenerator } from '../imageClient.js';
-import { platformStudioKeys } from '../keys.js';
+import { adminSpendKeys } from '../keys.js';
 import { createLlmClient } from '../llm.js';
 import { PUBLIC_BUCKET } from '../storagePaths.js';
 import { StudioError } from '../types.js';
+import { adminSpendMode, createLibraryCallLedger, libraryMonthlyCapUsd } from './adminSpend.js';
+import { createOpenRouterKeyBudget } from './keyBudget.js';
 import { createSupabaseLibraryRepo } from './repo.js';
 import {
   cancelRun,
@@ -48,6 +57,8 @@ import {
 export * from './runner.js';
 export { LIBRARY_MANIFEST, LIBRARY_CORE_COUNT, manifestEntry, promptHash, selectEntries, type LibraryManifestEntry } from './manifest.js';
 export { createMemoryLibraryRepo, createSupabaseLibraryRepo, type LibraryRepo, type MemoryLibraryRepo } from './repo.js';
+export { ADMIN_SPEND_KEY_ENV, ADMIN_SPEND_MODE_ENV, LIBRARY_MONTHLY_CAP_ENV, adminSpendMode, createLibraryCallLedger, libraryMonthlyCapUsd } from './adminSpend.js';
+export { createOpenRouterKeyBudget, judgeKeyBudget, judgeMonthlyCap, parseKeyBudget, type ProviderKeyBudget } from './keyBudget.js';
 
 /** Public index cache lifetime (in-process; publish/reject invalidate it). */
 export const LIBRARY_INDEX_TTL_MS = 5 * 60_000;
@@ -68,13 +79,20 @@ export function createDefaultLibraryDeps(): LibraryDeps {
       remove: (paths) => store.remove(paths),
       publicUrl: (path) => getSupabaseAdmin().storage.from(bucket).getPublicUrl(path).data.publicUrl
     },
-    keys: () => platformStudioKeys(),
+    // The model-test key (OpenRouter only), read per call; null when unset → fail closed.
+    keys: () => adminSpendKeys(),
     images: (keys) => createImageGenerator(keys),
     llm: (keys) => createLlmClient(keys),
     now: () => Date.now(),
     bucket,
     audit: (input) => recordAudit(input),
-    onPublishedChange: () => indexCacheInvalidator?.()
+    onPublishedChange: () => indexCacheInvalidator?.(),
+    spend: {
+      key: () => adminSpendMode(),
+      monthlyCapUsd: () => libraryMonthlyCapUsd(),
+      keyBudget: createOpenRouterKeyBudget()
+    },
+    calls: createLibraryCallLedger(createImageCallRecorder)
   };
 }
 

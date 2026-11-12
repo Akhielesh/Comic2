@@ -8,6 +8,7 @@ import { ArrowRight, LayoutGrid, LogIn, Mail } from 'lucide-react';
 import { EmptyArt, type EmptyArtVariant } from '../comicstudio/library/procedural/EmptyArt';
 import { LayoutGlyph } from '../comicstudio/library/procedural/LayoutGlyph';
 import { mainAppUrl } from '../../services/productHost';
+import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../chat/studioDesign';
 import { ComicsMark } from './ComicsMark';
 
 export interface ComicsLandingProps {
@@ -53,7 +54,7 @@ const STEPS: { title: string; body: string }[] = [
 
 const focusRing =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D97757]';
-const primaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[var(--ds-accent)] px-5 text-sm font-semibold text-white motion-safe:transition-colors hover:bg-[var(--ds-accent-hover)] ${focusRing}`;
+const primaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[var(--ds-accent)] px-5 text-sm font-semibold ${ON_ACCENT_TEXT} motion-safe:transition-colors hover:bg-[var(--ds-accent-hover)] ${focusRing}`;
 const secondaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-5 text-sm font-semibold text-[var(--ds-ink)] motion-safe:transition-colors hover:bg-[var(--ds-hover)] ${focusRing}`;
 const quietLink = `inline-flex min-h-[44px] items-center rounded-lg px-2 text-sm text-[var(--ds-muted)] hover:text-[var(--ds-ink)] ${focusRing}`;
 
@@ -106,7 +107,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
         </div>
         <nav className="flex shrink-0 items-center gap-1 sm:gap-2" aria-label="Comic Studio">
           <button type="button" onClick={onBrowseGallery} className={`hidden sm:inline-flex ${quietLink}`}>
-            Gallery
+            Library
           </button>
           {signedIn ? (
             <button type="button" onClick={onOpenComics} className={primaryButton}>
@@ -130,7 +131,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-10 sm:px-6 sm:pt-16 lg:grid-cols-[1.1fr_0.9fr] lg:pb-20">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#D97757]">Comic Studio</p>
-          <h1 className="mt-3 break-words text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl">
+          <h1 className={`mt-3 break-words text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl ${FONT_DISPLAY}`}>
             Talk it through.
             <br />
             Get a finished comic.
@@ -146,7 +147,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                   Open my comics <ArrowRight size={16} aria-hidden />
                 </button>
                 <button type="button" onClick={onBrowseGallery} className={secondaryButton}>
-                  <LayoutGrid size={16} aria-hidden /> Browse the gallery
+                  <LayoutGrid size={16} aria-hidden /> Browse the Library
                 </button>
               </>
             ) : (
@@ -171,7 +172,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
 
       <section aria-labelledby="comics-features" className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-sidebar)]">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-          <h2 id="comics-features" className="text-xl font-semibold sm:text-2xl">
+          <h2 id="comics-features" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
             Built for stories, not prompts
           </h2>
           <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -187,7 +188,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
       </section>
 
       <section aria-labelledby="comics-steps" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-        <h2 id="comics-steps" className="text-xl font-semibold sm:text-2xl">
+        <h2 id="comics-steps" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
           From idea to pages in four steps
         </h2>
         <ol className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -61,6 +61,12 @@ export interface ComicPageViewProps {
   /** Insert the reader's paper layer (.ds-reader-paper) between the art and the lettering. */
   paper?: boolean;
   /**
+   * Readers: a page still waiting for its image shows the page box's own background (the reader's toned paper),
+   * still, instead of the shimmer, which repaints the whole page every frame (background-position). The reader
+   * animates transform and opacity only.
+   */
+  stillLoading?: boolean;
+  /**
    * Variant pick: called with the page box's CSS width; return the best image URL for it (e.g.
    * `w => studio.urlFor(asset, { width: w })`). Falls back to `imageUrl`.
    */
@@ -193,6 +199,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
   letteringAriaHidden,
   visibleLineIds,
   paper,
+  stillLoading,
   srcWidth,
   editionLang,
   markUntranslated,
@@ -286,7 +293,7 @@ export const ComicPageView: React.FC<ComicPageViewProps> = ({
           </ImageDevelop>
         </div>
       ) : waitingForUrl && failed === null ? (
-        <div className="studio-shimmer absolute inset-0" aria-label="Loading page image" role="img" />
+        <div className={stillLoading ? 'absolute inset-0' : 'studio-shimmer absolute inset-0'} aria-label="Loading page image" role="img" />
       ) : (
         <div className="absolute inset-0 bg-[var(--ds-surface-strong)]">
           <PlanSketch doc={doc} page={page} width={width} />

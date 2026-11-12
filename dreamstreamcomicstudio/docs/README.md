@@ -36,6 +36,11 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/travel-planner.md` | Travel planner: the `plan_trip` tool (coercion, Nominatim + Open-Meteo enrichment), `ItineraryArtifact`, the day-tabbed itinerary card, `/trip` skill + recipe, related tools and travel MCPs. |
 | `features/mcp-directory.md` | MCP support: per-user registry + SSRF guards, `/api/mcp` routes, tool proxying into the agentic loop, the 13-entry curated catalog, marketplace UI, and the outbound `/api/connect/mcp` endpoint. |
 | `features/comic-studio.md` | The finalized comic creation flow: Story/Cast/Pages stages, Phase 0 auto style anchor + reference sheets, soft gates, models, sharing. (ADR 0004 removed ComicForge + Test Lab.) |
+| `features/comic-reader.md` | Comic Studio's immersive reader contract (RD-A): the reader token set, never-blank turns, stand-ins, the device-sized page cache, preloads, the reserved `--ds-reader-*` names and the S2a decisions. |
+| `features/comic-library.md` | The comic library's admin spend (ST-A): the model-test key, the monthly cap and key check, the call ledger, public provenance and LQIPs, with the S2a lead decisions. |
+| `features/live-agent.md` | Comic Studio's live agent: the "Up next" message queue (A1), steering a running turn (A2), conflict cards and contradiction questions (A3; the creator's edit wins), their flags, limits, tests, and the S1 wave summary with its lead decisions. |
+| `features/dialogue.md` | Comic Studio's dialogue understanding: the tool-hint fix, the dialogue vocabulary, the reserved `dialogue_edit` seat, named styles, and the B-RESOLVE engine (grammar, speakers, resolver, placement, compiler, fast-path condition, phrase corpus), dormant until B-TOOL. |
+| `features/pro-edit.md` | Comic Studio's Pro Edit: the Easy \| Pro editor contract (effects, stickers, motion, opaque layers), its flags, ops and the packages that fill the PE-0 stubs. |
 
 ## Conventions
 

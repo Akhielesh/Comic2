@@ -22,7 +22,7 @@ export const ShareCardView: React.FC<CardProps<ShareCardData>> = ({ studio }) =>
   const title = comicTitle(studio.doc);
   const url = m?.slug && m.status === 'live' ? buildShareUrl(COMICS_ORIGIN, m.slug) : null;
   return (
-    <CardShell title={url ? 'Your share link' : 'Not shared yet'} icon={<Link2 className="h-4 w-4" aria-hidden />} right={url ? (m!.visibility === 'public' ? 'Public' : 'Unlisted') : undefined}>
+    <CardShell title={url ? 'Your share link' : 'Not shared yet'} icon={<Link2 className="h-4 w-4" aria-hidden />} right={url ? (m!.visibility === 'public' ? 'Library + link' : 'Link only') : undefined}>
       {url ? (
         <div className="space-y-2">
           <input readOnly value={url} aria-label="Share link" onFocus={(e) => e.currentTarget.select()} className="h-11 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 font-mono text-[12px] text-[var(--ds-ink)]" />

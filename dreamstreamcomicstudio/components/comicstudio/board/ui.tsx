@@ -464,6 +464,8 @@ export interface RenderOverlayProps {
   label?: string;
 }
 
+/** Past this multiple of the model's usual time a drawing reads "taking longer than usual" (board and chat tiles alike). */
+export const SLOW_FACTOR = 2.5;
 /** Past this multiple of the model's usual time the clock stops and "Check again" is offered. */
 export const STUCK_FACTOR = 10;
 /** Without a typical time, a render counts as stuck after this long. */
@@ -519,7 +521,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
   const detailsId = React.useId();
   if (busy) {
     const elapsed = since ? Math.max(0, now - since) : 0;
-    const slow = status === 'rendering' && typicalSec && elapsed > typicalSec * 2500;
+    const slow = status === 'rendering' && typicalSec && elapsed > typicalSec * 1000 * SLOW_FACTOR;
     // A clock that reads "378d" helps nobody: past 10× the usual time it stops and offers a free re-check.
     const stuck = !!since && isStuck(elapsed, typicalSec);
     const recheck = onRefresh ?? (stuck ? studioRefresh() : undefined);
