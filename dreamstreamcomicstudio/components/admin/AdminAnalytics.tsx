@@ -116,25 +116,28 @@ export const AdminAnalytics: React.FC = () => {
             >{t}</button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white">
-            <option value={1}>Last 24h</option>
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-          <button onClick={() => void loadOverview()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
-          </button>
-        </div>
+        {/* The day range, Refresh and telemetry banners belong to the analytics tabs; Contact has its own Refresh. */}
+        {tab !== 'contact' && (
+          <div className="flex items-center gap-2">
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white">
+              <option value={1}>Last 24h</option>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+            <button onClick={() => void loadOverview()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
+            </button>
+          </div>
+        )}
       </div>
 
-      {overview && !overview.storageEnabled && (
+      {tab !== 'contact' && overview && !overview.storageEnabled && (
         <div className="border-2 border-amber-400 bg-amber-50 text-amber-800 rounded-lg px-3 py-2 text-xs font-bold flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" /> Persistence is off — apply server/sql/telemetry_feedback.sql and set SUPABASE_SERVICE_ROLE_KEY. Showing empty data.
         </div>
       )}
-      {error && <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{error}</div>}
+      {tab !== 'contact' && error && <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{error}</div>}
 
       {tab === 'overview' && overview && (
         <div className="space-y-4">
