@@ -16,7 +16,7 @@ import { ExternalLink, Languages, LayoutGrid, Link2Off, QrCode as QrIcon, Refres
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { DIALOG_TITLE, FOCUS_RING, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, CONTROL_BTN, DIALOG_TITLE, FOCUS_RING, ON_ACCENT_TEXT, OVERLINE, RADIUS_CONTROL, SEGMENTED_ACTIVE, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { useBackLayer } from '../mobile/backStack';
 import { EmbedSnippet } from './EmbedSnippet';
@@ -25,7 +25,7 @@ import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
-import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, LIBRARY_HREF, pageIdsFor, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
+import { comicTitle, editionOnLinkOn, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, languageNames, LIBRARY_HREF, pageIdsFor, readyOffLink, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
 import { ChangesSincePublishLink } from '../history/ChangesSincePublishLink';
 
 export interface ShareSheetProps {
@@ -56,6 +56,10 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:n
 
 type Confirm = null | 'unpublish' | 'regenerate' | 'public';
 
+// AH-2: the two buttons of "a finished language is ready" (add it, or update without it). Tokens and recipes only.
+const ADD_LANGUAGE_BTN = cx('min-h-[44px] px-3 font-semibold disabled:opacity-50 touch-manipulation', ACCENT_BG, ACCENT_BG_HOVER, ON_ACCENT_TEXT, RADIUS_CONTROL, FOCUS_RING);
+const PLAIN_UPDATE_BTN = cx('min-h-[44px] px-3 font-semibold text-[var(--ds-ink)] disabled:opacity-50 touch-manipulation', CONTROL_BTN, FOCUS_RING);
+
 export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose }) => {
   const doc = studio.doc;
   const view = studio.publication;
@@ -70,6 +74,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const [dragY, setDragY] = useState(0);
   // Where the fetch of the owner view stands, so the sheet never guesses: on its way, here, or failed.
   const [check, setCheck] = useState<'loading' | 'ok' | 'error'>('loading');
+  // AH-2: the "add a finished language" republish is under way (its own button says so; `busy` covers every action).
+  const [adding, setAdding] = useState(false);
   const checkSeq = useRef(0);
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -236,10 +242,23 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // Pages blocked since publishing (not yet excluded): the honest next step is "Publish without page N".
   const newlyBlockedIds = live && view?.readiness.safety.status === 'blocked' ? pageIdsFor(doc, view.readiness.safety.blockedPages).filter((id) => !excluded.includes(id)) : [];
   const newlyBlockedNs = doc.pages.filter((p) => newlyBlockedIds.includes(p.id)).map((p) => p.n);
-  const updateRequest = (alsoExclude: string[] = []): PublishRequest | null => {
+  // AH-2 (EDITION_ON_LINK): finished languages the live link does not carry yet. They go on the link in one tap of
+  // their own button; the plain Update never adds one.
+  const editionsOn = editionOnLinkOn(studio.caps?.admin);
+  const readyLangs = editionsOn && live ? readyOffLink(view, doc) : [];
+  const readyNames = languageNames(readyLangs);
+  const onLinkNames = languageNames(view?.languages || []);
+  const updateRequest = (alsoExclude: string[] = [], alsoLanguages: string[] = []): PublishRequest | null => {
     if (!view) return null;
     const excludePageIds = [...new Set([...excluded, ...alsoExclude])];
-    return { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, ...(excludePageIds.length ? { excludePageIds } : {}) };
+    const languages = alsoLanguages.length ? [...view.languages, ...alsoLanguages] : view.languages;
+    return { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages, ...(excludePageIds.length ? { excludePageIds } : {}) };
+  };
+  const addReady = () => {
+    const request = updateRequest([], readyLangs);
+    if (!request) return;
+    setAdding(true);
+    void run(() => publishComic(doc.id, request)).finally(() => setAdding(false));
   };
   const updateNow = () => {
     const request = updateRequest();
@@ -426,6 +445,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           error={error}
           check={checking ? 'loading' : checkFailed ? 'error' : undefined}
           onRetry={checkComic}
+          tickReady={editionsOn}
           onPublish={publish}
           onCancel={() => setPublishAs(null)}
         />
@@ -446,10 +466,40 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                     Publish without page {newlyBlockedNs.join(', ')}
                   </button>
                 )}
-                <button type="button" disabled={busy} onClick={updateNow} className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50">
-                  {busy ? 'Updating…' : 'Update'}
+                {readyLangs.length > 0 && (
+                  <button type="button" disabled={busy} aria-busy={adding || undefined} onClick={addReady} className={ADD_LANGUAGE_BTN}>
+                    {adding ? 'Updating…' : `Update with ${readyNames}`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={updateNow}
+                  aria-describedby={readyLangs.length > 0 ? `${hintId}-update` : undefined}
+                  className={readyLangs.length > 0 ? PLAIN_UPDATE_BTN : 'min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50'}
+                >
+                  {busy && !adding ? 'Updating…' : 'Update'}
                 </button>
               </div>
+              {readyLangs.length > 0 && (
+                <p id={`${hintId}-update`} className="m-0 w-full text-right text-[12px] text-[var(--ds-muted)]">
+                  Readers still get {onLinkNames} only
+                </p>
+              )}
+            </div>
+          )}
+          {live && !view?.behind && readyLangs.length > 0 && (
+            <div
+              role="group"
+              aria-label="Languages ready for your link"
+              className={cx('flex min-w-0 flex-wrap items-center justify-between gap-2 border px-3 py-2 text-[13px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.healthy)}
+            >
+              <span className="min-w-0">
+                {readyNames} {readyLangs.length === 1 ? 'is' : 'are'} ready. Readers of your link still get {onLinkNames} only.
+              </span>
+              <button type="button" disabled={busy} aria-busy={adding || undefined} onClick={addReady} className={ADD_LANGUAGE_BTN}>
+                {adding ? 'Adding…' : `Add ${readyNames} to the link`}
+              </button>
             </div>
           )}
           {live && view && (

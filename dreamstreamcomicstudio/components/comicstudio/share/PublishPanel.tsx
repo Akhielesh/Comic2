@@ -4,14 +4,14 @@
 // safety-blocked pages need an explicit "Publish without page N" tap, and nothing about the
 // comic changes until the server confirms.
 
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
 import type { PublicationOwnerView, PublishReadiness, PublishRequest } from '../../../shared/comic/publication';
 import { CONTROL_BTN, FOCUS_RING, OVERLINE, RADIUS_CONTROL, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx, plural } from '../conversation/ui';
-import { pageIdsFor } from './shareModel';
+import { MAX_LINK_LANGUAGES, pageIdsFor } from './shareModel';
 
 export interface PublishPanelProps {
   doc: ComicDoc;
@@ -27,6 +27,11 @@ export interface PublishPanelProps {
   check?: 'loading' | 'error';
   /** Fetch the owner view again (the failed check's Try again). */
   onRetry?(): void;
+  /**
+   * AH-2 (the Share sheet passes its EDITION_ON_LINK stage): on a first publish every finished language starts
+   * ticked, and the ticks follow the owner view until the owner changes one. Absent = the panel as it was.
+   */
+  tickReady?: boolean;
   onPublish(request: PublishRequest): void;
   onCancel?(): void;
 }
@@ -103,23 +108,41 @@ export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): A
   return rows;
 }
 
-export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibility, busy, error, check, onRetry, onPublish, onCancel }) => {
+export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibility, busy, error, check, onRetry, tickReady, onPublish, onCancel }) => {
   const source = doc.format?.language || 'en';
   const editions = useMemo(() => Object.keys(doc.i18n?.editions || {}), [doc.i18n]);
   const readiness = view?.readiness;
   const publishable = new Set((readiness?.languages || []).filter((l) => l.publishable).map((l) => l.lang));
+  const live = !!view?.slug && view.status === 'live';
+  // AH-2: a first publish (nothing live yet) starts with every finished edition ticked, in the doc's order. An update
+  // of a live link keeps to what the link carries: the sheet offers the rest in its own row, never silently.
+  const preTick = !!tickReady && !live;
+  const readyKey = preTick ? editions.filter((l) => l !== source && publishable.has(l)).join(' ') : '';
   // The original is always published (readers always get it; the server adds it even when left out).
-  const [languages, setLanguages] = useState<string[]>(() => {
+  const startLanguages = (): string[] => {
     const chosen = view?.languages?.length ? view.languages : [];
-    return [source, ...chosen.filter((l) => l !== source)];
-  });
+    const others = [...new Set([...chosen, ...(readyKey ? readyKey.split(' ') : [])].filter((l) => l !== source))];
+    // The ticks added here never go past what one publication can carry (publishing would refuse the lot).
+    return [source, ...(readyKey ? others.slice(0, MAX_LINK_LANGUAGES - 1) : others)];
+  };
+  const [languages, setLanguages] = useState<string[]>(startLanguages);
+  // The owner's own ticks win from the first one on. Until then the ticks follow the owner view: it can arrive after
+  // the panel opened, and an edition can stop being ready.
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!preTick || touched.current) return;
+    setLanguages((cur) => {
+      const next = startLanguages();
+      return next.join(' ') === cur.join(' ') ? cur : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preTick, readyKey]);
   // The edition readers start in (offered once more than one language is ticked); an unticked choice falls back to the original.
   const [defaultLang, setDefaultLang] = useState<string>(() => (view?.defaultLang && languages.includes(view.defaultLang) ? view.defaultLang : source));
   const [allowDownload, setAllowDownload] = useState(view?.allowDownload ?? true);
   const [allowEmbed, setAllowEmbed] = useState(view?.allowEmbed ?? true);
   const [showCreator, setShowCreator] = useState(view?.showCreator ?? false);
   const blocked = readiness?.safety.status === 'blocked' ? readiness.safety.blockedPages : [];
-  const live = !!view?.slug && view.status === 'live';
   // The same count the readiness row shows: the server's when its view is here, else the doc's own. Never 0 only
   // because the view has not arrived ("7 of 12 pages drawn" over "Draw at least one page to publish").
   const drawn = readiness?.drawnPages ?? drawnPagesOf(doc);
@@ -167,6 +190,8 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
               const isSource = lang === source;
               const ready = isSource || publishable.has(lang);
               const on = isSource || languages.includes(lang);
+              // AH-2: before the owner view arrives nothing is known about an edition, so nothing calls it "not ready".
+              const known = !!readiness || !tickReady;
               // An unready edition can be unticked (a published one that went stale) but never ticked.
               return (
                 <label
@@ -176,18 +201,22 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                     on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
                     !ready && 'opacity-60'
                   )}
-                  title={isSource ? 'The original is always published' : ready ? undefined : on ? 'Not ready any more: untick it to publish without it, or finish and review it first' : 'Finish and review this translation first'}
+                  title={isSource ? 'The original is always published' : ready || !known ? undefined : on ? 'Not ready any more: untick it to publish without it, or finish and review it first' : 'Finish and review this translation first'}
                 >
                   <input
                     type="checkbox"
                     checked={on}
                     disabled={isSource || (!ready && !on)}
-                    onChange={(e) => !isSource && setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)))}
+                    onChange={(e) => {
+                      if (isSource) return;
+                      touched.current = true;
+                      setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)));
+                    }}
                     className="h-4 w-4 accent-[#D97757]"
                   />
                   {languageSpec(lang)?.endonym || lang}
                   {isSource && <span className="text-[11px] text-[var(--ds-muted)]">original</span>}
-                  {!ready && <span className="text-[11px] text-[var(--ds-muted)]">not ready</span>}
+                  {!ready && known && <span className="text-[11px] text-[var(--ds-muted)]">not ready</span>}
                 </label>
               );
             })}
