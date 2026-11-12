@@ -357,8 +357,8 @@ describe('signed URLs', () => {
     expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1-480?v=0');
     let n = 0;
     api.signStudioUrls.mockImplementation(async (_id: string, paths: string[]) => Object.fromEntries(paths.map((p) => [p, `https://cdn/p1-480?v=${++n}`])));
-    // Count only the calls that sign the broken variant: under load an unrelated signing round (another path of the
-    // sample doc) can land inside this window, and it is not what this test is about.
+    // Count only the calls that sign the broken variant. Under load a stale render's urlFor can queue the variant once
+    // more after its third re-sign; flushSigning re-checks the cap, so that queued request is dropped, not signed a 4th time.
     const VARIANT = 'u/proj/pages/p1.480.webp';
     const variantSigns = () => api.signStudioUrls.mock.calls.filter((call) => (call[1] as string[]).includes(VARIANT)).length;
     // PF-2 #7: the controller says whether the signer gave up on a path, by urlFor's own test.

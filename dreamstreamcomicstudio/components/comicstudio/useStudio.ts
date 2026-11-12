@@ -1158,7 +1158,11 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     signTimerRef.current = null;
     const now = Date.now();
     const urls = stateRef.current.urls;
-    const paths = [...wantedRef.current].filter((p) => !signingRef.current.has(p) && !urlIsFresh(urls[p], now));
+    // requestSign's cap is checked again here: a path queued before the image error that gave up on it (a broken
+    // file) must not be signed once more when the debounce fires.
+    const paths = [...wantedRef.current].filter(
+      (p) => !signingRef.current.has(p) && (signAttemptsRef.current.get(p) || 0) < MAX_SIGN_ATTEMPTS && !urlIsFresh(urls[p], now)
+    );
     wantedRef.current.clear();
     if (!paths.length || !stateRef.current.base) return;
     const generation = generationRef.current;
