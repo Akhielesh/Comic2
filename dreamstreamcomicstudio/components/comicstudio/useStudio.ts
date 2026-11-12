@@ -128,9 +128,23 @@ import {
   type DrainRequest,
   type QueueAddRefusal,
   type QueueHold,
+  type QueueHoldInput,
   type QueuedNote
 } from './messageQueue';
 import { composeInStudio } from './conversation/composerBus';
+
+/**
+ * What holds the live queue, read from the studio state: the one input the send path, the Up next line and the drain all
+ * pass to holdReason, so they cannot drift (SETTLE-UI #3). It carries this tab's pending message: a 'sending' one passes
+ * the question it follows, so Up next never says "Answer the question above first" while that answer is on its way.
+ */
+export const queueHoldInputOf = (s: StudioState): QueueHoldInput => ({
+  doc: s.doc,
+  held: queueOf(s).held,
+  planning: isPlanning(s),
+  failed: s.pendingMessage?.status === 'failed',
+  pending: s.pendingMessage
+});
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -993,9 +1007,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       // message holds them, so "Try again" (which comes back through here) goes before them.
       const q = queueOf(s);
       const locked = !!messageInFlightRef.current || isTurnLocked(s);
-      const failed = s.pendingMessage?.status === 'failed';
       const drainsNext =
-        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed, pending: s.pendingMessage }));
+        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason(queueHoldInputOf(s)));
       // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
       const note: QueuedNote | null =
         files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
@@ -1545,7 +1558,6 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const queueOn = liveQueueOn(caps);
   const queueState = queueOf(state);
   const turnLocked = isTurnLocked(state);
-  const planning = isPlanning(state);
   const queueNotes = queueState.notes;
   // The creator's last message failed before the server took it: the drain must not put a new message in its place.
   const pendingFailed = state.pendingMessage?.status === 'failed';
@@ -1556,7 +1568,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       ? null
       : messageBusy
         ? queueState.held
-        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed, pending: state.pendingMessage });
+        : holdReason(queueHoldInputOf(state));
   const hasBase = !!state.base;
   /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
   const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
@@ -1583,12 +1595,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       sendQueued([express]);
       return;
     }
-    const hold = holdReason({
-      doc: stateRef.current.doc,
-      held: q.held,
-      failed: stateRef.current.pendingMessage?.status === 'failed',
-      pending: stateRef.current.pendingMessage
-    });
+    const hold = holdReason(queueHoldInputOf(stateRef.current));
     if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
     sendQueued(batchesForDrain(ready)[0] ?? []);
   }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued, steerSettled]);
