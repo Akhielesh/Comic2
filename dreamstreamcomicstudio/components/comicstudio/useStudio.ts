@@ -995,7 +995,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       const locked = !!messageInFlightRef.current || isTurnLocked(s);
       const failed = s.pendingMessage?.status === 'failed';
       const drainsNext =
-        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed }));
+        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed, pending: s.pendingMessage }));
       // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
       const note: QueuedNote | null =
         files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
@@ -1556,7 +1556,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       ? null
       : messageBusy
         ? queueState.held
-        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed });
+        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed, pending: state.pendingMessage });
   const hasBase = !!state.base;
   /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
   const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
@@ -1583,7 +1583,12 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       sendQueued([express]);
       return;
     }
-    const hold = holdReason({ doc: stateRef.current.doc, held: q.held, failed: stateRef.current.pendingMessage?.status === 'failed' });
+    const hold = holdReason({
+      doc: stateRef.current.doc,
+      held: q.held,
+      failed: stateRef.current.pendingMessage?.status === 'failed',
+      pending: stateRef.current.pendingMessage
+    });
     if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
     sendQueued(batchesForDrain(ready)[0] ?? []);
   }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued, steerSettled]);

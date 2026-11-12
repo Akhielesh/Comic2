@@ -1,5 +1,5 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { emptyRender, type Card, type Character, type ComicDoc, type Gate } from '../../../../shared/comic/doc';
 import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
@@ -640,6 +640,29 @@ describe('RendersCard', () => {
     const warn = screen.getByRole('img', { name: 'Lettering may overlap a face' });
     expect(stale.parentElement).toBe(warn.parentElement);
     expect(stale.parentElement!.className).toMatch(/\bflex-wrap\b/);
+  });
+
+  it('an out-of-date tile that opens names itself from what it shows: "Open", then the badge and the label (axe label-content-name-mismatch)', () => {
+    const onOpen = vi.fn();
+    render(
+      <RenderThumb
+        label="Page 1"
+        aspect="2 / 3"
+        stale
+        onOpen={onOpen}
+        url="https://cdn.test/p1.webp"
+        render={{ status: 'stale', history: [], asset: { path: 'p1.webp', source: 'generated', at: 1 } }}
+      />
+    );
+    const button = screen.getByRole('button', { name: /^Open .*Out of date.*Page 1/ });
+    expect(button).not.toHaveAttribute('aria-label');
+    fireEvent.click(button);
+    expect(onOpen).toHaveBeenCalled();
+  });
+
+  it('a current tile keeps its short name', () => {
+    render(<RenderThumb label="Page 1" aspect="2 / 3" onOpen={() => {}} url="https://cdn.test/p1.webp" render={{ status: 'ready', history: [], asset: { path: 'p1.webp', source: 'generated', at: 1 } }} />);
+    expect(screen.getByRole('button', { name: 'Open Page 1' })).toBeInTheDocument();
   });
 
   it('retries all failed images at once — pages AND style options, with the quote', async () => {

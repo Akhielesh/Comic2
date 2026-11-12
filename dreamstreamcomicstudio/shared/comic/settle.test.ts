@@ -8,7 +8,6 @@ import { editionProgress } from './i18n';
 import { IMAGE_MODELS } from './models';
 import { makeQaDoc } from '../../components/comicstudio/testing/qaFixtures';
 import { makeSampleDoc } from '../../components/comicstudio/conversation/testing/fixtures';
-import { openQuestion } from '../../components/comicstudio/messageQueue';
 import { costFormat } from '../../components/comicstudio/conversation/cost';
 import {
   GATE_STAMP_MODEL_CHARS,
@@ -280,6 +279,31 @@ describe('renders cards', () => {
     expect(summaryById(cover, 'r_cover')).toEqual({ text: 'Drew the cover', tone: 'plain', link: { label: 'Open the pages', client: { type: 'open_tab', tab: 'pages' } } });
   });
 });
+
+/**
+ * A1's legacy rule, copied inline (SETTLE-UI wave note 4): messageQueue.openQuestion now delegates to isOpenQuestion,
+ * so comparing against it would compare the function with itself. The last assistant message has an options card with
+ * choices and no answer, or a conflict card with an unresolved item.
+ */
+const openQuestion = (doc: ComicDoc | null | undefined): boolean => {
+  const list = doc?.conversation;
+  if (!Array.isArray(list)) return false;
+  let last: Msg | undefined;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i]?.role === 'assistant') {
+      last = list[i];
+      break;
+    }
+  }
+  const cards = last?.cards;
+  if (!Array.isArray(cards)) return false;
+  return cards.some((card) => {
+    if (!card || typeof card !== 'object') return false;
+    if (card.type === 'options') return Array.isArray(card.choices) && card.choices.length > 0 && !(card.answered || []).some(Boolean);
+    if (card.type === 'conflict') return Array.isArray(card.items) && card.items.some((item) => item && !item.resolved);
+    return false;
+  });
+};
 
 describe('parity with A1’s openQuestion (messageQueue.ts), on A1’s cases', () => {
   const q: Msg = { id: 'm_a', role: 'assistant', text: 'Here you go', at: 2, cards: [{ type: 'options', id: 'card_q', question: 'Which cover?', choices: [{ id: 'c1', label: 'Moody' }] }] };
