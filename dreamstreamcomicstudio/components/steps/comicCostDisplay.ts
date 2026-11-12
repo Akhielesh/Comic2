@@ -177,13 +177,19 @@ export const artifactsForExport = <T extends { cost?: unknown }>(artifacts: T[] 
 
 /**
  * The export ZIP's project.json: the full project row, except that a governed user's copy leaves out every
- * dollar figure the state carries (the story plan's `estimatedCostRange`, the agent's `budgetCapUsd`, and any
- * other `…Usd` amount, such as a v4 comic's per-image `costUsd`), the same rule as the report and artifact files
+ * dollar figure the state carries (the story plan's `estimatedCostRange`, the agent's `budgetCapUsd`, any other
+ * `…Usd` or `…Cents` amount such as a v4 comic's per-image `costUsd`, and the unsuffixed money keys in DOLLAR_NAMES,
+ * such as a legacy generation record's `cost` or the spend maps), the same rule as the report and artifact files
  * (house rule: governed users never see dollars). Admins and no-limit accounts get the row unchanged. Only the
  * objects on a path to a dropped key are copied.
  * Shared by Project info's ZIP and the legacy export step (ReviewExport), moved here from ProjectInfoModal (DS-3).
  */
-const DOLLAR_KEY = /Usd$/;
+const DOLLAR_KEY = /(Usd|Cents)$/;
+/**
+ * Money keys that carry no `Usd` suffix: a legacy generation record's `cost {currency, value}`, a spend total, a spend
+ * entry's `usd`, the per-kind and per-target spend maps, and the currency sign beside an amount.
+ */
+const DOLLAR_NAMES: ReadonlySet<string> = new Set(['estimatedCostRange', 'cost', 'totalCost', 'usd', 'byKind', 'byTarget', 'currency']);
 const withoutDollarFields = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     let changed = false;
@@ -198,7 +204,7 @@ const withoutDollarFields = (value: unknown): unknown => {
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (key === 'estimatedCostRange' || DOLLAR_KEY.test(key)) {
+    if (DOLLAR_NAMES.has(key) || DOLLAR_KEY.test(key)) {
       changed = true;
       continue;
     }

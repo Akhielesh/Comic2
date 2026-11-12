@@ -204,6 +204,19 @@ describe('ProjectInfoModal — cost reads the way this user should see it', () =
     expect(row.state.studioPages).toEqual([{ id: 'pg1', variants: [{ path: 'pages/pg1/a.png' }] }]);
   });
 
+  it('project.json drops the money keys without a Usd suffix too: a legacy record’s cost, a spend entry’s usd, the spend maps', async () => {
+    const row = projectRow() as ReturnType<typeof projectRow> & { state: Record<string, unknown> };
+    row.state.generationArtifacts = [{ id: 'a1', cost: { currency: '$', value: 0.25, isEstimated: true } }];
+    row.state.spend = { totalCost: 0.5, entries: [{ id: 'e1', label: 'Page 1', usd: 0.04, tokens: 120 }], byKind: { page: 0.04 }, byTarget: { pg1: 0.04 }, failed: { usd: 0.01, count: 1 }, budgetCents: 500 };
+    db.exportProject.mockResolvedValue({ ...exportPayload(), project: row });
+    await open();
+    const { projectJson } = await zipReport();
+    expect(projectJson).not.toMatch(/"cost"|"usd"|"currency"|"totalCost"|"byKind"|"byTarget"|Cents"/);
+    const out = JSON.parse(projectJson);
+    expect(out.state.generationArtifacts).toEqual([{ id: 'a1' }]);
+    expect(out.state.spend).toEqual({ entries: [{ id: 'e1', label: 'Page 1', tokens: 120 }], failed: { count: 1 } });
+  });
+
   it('an admin’s ZIP keeps the full report', async () => {
     allowance.status = ADMIN;
     await open();
