@@ -58,7 +58,7 @@ describe('WaitlistForm — register interest', () => {
     expect(link).toHaveTextContent('opens in a new tab');
     expect(link.closest('p')).toHaveTextContent(/confirm your address/);
     // The confirmation email itself is essential mail with no unsubscribe link: only updates have one.
-    expect(link.closest('p')).toHaveTextContent(/Every update has a one-click unsubscribe/);
+    expect(link.closest('p')).toHaveTextContent(/Every update has an unsubscribe link/);
     expect(link.closest('p')).not.toHaveTextContent(/Every email/);
   });
 
@@ -187,7 +187,7 @@ describe('WaitlistForm — register interest', () => {
   it('the landing banners promise an unsubscribe on updates only, name a routed mailbox, and say only the updates picks go', () => {
     window.history.replaceState(null, '', '/?newsletter=confirmed');
     const { unmount } = render(<WaitlistForm />);
-    expect(screen.getByText(/You’re confirmed/)).toHaveTextContent('Every update has a one-click unsubscribe.');
+    expect(screen.getByText(/You’re confirmed/)).toHaveTextContent('Every update has an unsubscribe link.');
     unmount();
     window.history.replaceState(null, '', '/?newsletter=unsub-invalid');
     const second = render(<WaitlistForm />);

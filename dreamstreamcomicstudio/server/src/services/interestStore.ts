@@ -2,8 +2,8 @@
 //
 // No parallel system: an interest registration IS the newsletter's double opt-in row
 // (waitlist_signups, kind 'updates'), with the picked studios in product_interests. So the
-// existing confirm link (/api/newsletter/confirm), the newsletter-confirm email, the one-click
-// unsubscribe and the marketing suppression list all apply unchanged. Two routes write here:
+// existing confirm link (/api/newsletter/confirm), the newsletter-confirm email, the unsubscribe
+// link and the marketing suppression list all apply unchanged. Two routes write here:
 // POST /api/interest (routes/interest.ts) and the older POST /api/newsletter/subscribe for
 // kind 'updates' (routes/newsletter.ts, kept for open tabs on the previous frontend).
 //
@@ -17,11 +17,17 @@
 //   * picks are written with a conditional update on what was read (savePicks), so parallel
 //     requests for one address keep every request's picks, sent or throttled;
 //   * a per-inbox throttle on the confirmation email (security finding abuse-ops-11; aliases of one
-//     address count together): none within 10 minutes of the last one, at most 3 a day. The
-//     send slot is CLAIMED atomically (a conditional update on confirm_sent_at) before mailing,
-//     so parallel requests send one email;
-//   * confirmation mail as a whole may use only CONFIRM_EMAIL_BUDGET_SHARE of the daily and
-//     monthly email caps, so it can never crowd out sign-in, recovery and invite mail;
+//     address count together): none within 10 minutes of the last one, at most 3 a day. Before
+//     mailing, a request claims the INBOX until its send is logged (claimInbox: in this backend
+//     instance, synchronously, so of parallel requests for victim+1@, victim+2@… exactly one
+//     wins) and then the row (a conditional update on confirm_sent_at), so parallel requests send
+//     one email;
+//   * confirmation mail and early-access receipts together may use only CONFIRM_EMAIL_BUDGET_SHARE
+//     of the daily and monthly email caps, so they can never crowd out sign-in, recovery and invite
+//     mail; and once the mailer's own hard cap is reached, every address gets the same answer
+//     (mailerCapReached is checked before anything about the address);
+//   * an answer that sent nothing takes about as long as one that sent the email
+//     (padToSentDuration), so response time doesn't say which it was;
 //   * tokens are signed (services/confirmToken.ts): only one this server issued for this address
 //     is ever re-sent or accepted, and re-sending one never extends its lifetime;
 //   * a missing column/table (server/sql/register_interest_2026_11.sql or email_system.sql not
@@ -34,8 +40,11 @@ import { EMAIL_MAX_PER_DAY, EMAIL_MAX_PER_MONTH } from '../config.js';
 import { getSupabaseAdmin } from './supabase.js';
 import { confirmTokenExpired, confirmTokenIssuedAt, confirmTokensAvailable, issueConfirmToken } from './confirmToken.js';
 import {
+  ACCESS_REQUESTED_TEMPLATE,
   PENDING_INTERESTS_KEY,
-  countConfirmEmailsSince,
+  countPublicFormEmailsSince,
+  getUsage,
+  inboxKey,
   normalizeEmail,
   recentConfirmEmailsToInbox
 } from './emailStore.js';
@@ -54,8 +63,75 @@ const DAY_MS = 86_400_000;
  */
 export const INTEREST_CONFIRM_THROTTLE = { minIntervalMs: 10 * 60_000, maxPerDay: 3 } as const;
 
-/** Share of EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH that newsletter-confirm mail may use. */
+/**
+ * Share of EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH that public-form mail (newsletter-confirm and
+ * access-requested together, emailStore.PUBLIC_FORM_EMAIL_TEMPLATES) may use.
+ */
 export const CONFIRM_EMAIL_BUDGET_SHARE = 0.5;
+
+/** At most one early-access receipt (access-requested) per inbox in this long. */
+export const ACCESS_RECEIPT_INTERVAL_MS = DAY_MS;
+
+// ── Per-inbox claim (this backend instance) ─────────────────────────────────────
+
+/**
+ * The email_log row the throttle counts is written only when the mailer starts the send, several
+ * round trips after the throttle's read, and each row's own claim covers one exact address. So
+ * parallel requests for different aliases of one inbox (victim+1@gmail.com, victim+2@gmail.com…)
+ * could each pass the read and each send. This claim is per inbox and is taken without an await
+ * after that read (Node runs one request's code at a time), so of N parallel requests on this
+ * instance exactly one gets it; the others are throttled ('in_flight'). The holder releases it once
+ * its send is over: by then email_log has the send (which the read counts from then on), or the
+ * send failed and doesn't count. A claim nobody released (a crash mid-send) lapses after
+ * IN_FLIGHT_MAX_MS. Production runs one backend instance (api-proxy: a single container); with
+ * several, each instance's claim is its own and parallel aliases could get one email per instance.
+ */
+const inboxClaims = new Map<string, { at: number; mark: symbol }>();
+const IN_FLIGHT_MAX_MS = 2 * 60_000;
+
+const claimInbox = (scope: 'confirm' | 'access', email: string): (() => void) | null => {
+  const now = Date.now();
+  for (const [key, claim] of inboxClaims) if (now - claim.at >= IN_FLIGHT_MAX_MS) inboxClaims.delete(key);
+  const key = `${scope}:${inboxKey(email)}`;
+  if (inboxClaims.has(key)) return null;
+  const mark = Symbol(key);
+  inboxClaims.set(key, { at: now, mark });
+  return () => {
+    if (inboxClaims.get(key)?.mark === mark) inboxClaims.delete(key);
+  };
+};
+
+// ── Answer timing ───────────────────────────────────────────────────────────────
+
+/**
+ * How long recent requests that sent a confirmation email took (ms, newest last), so a request that
+ * sent nothing (throttled) can take about as long: otherwise the response time would say whether the
+ * address got a link in the last 10 minutes. Per instance, in memory; DEFAULT until the first send.
+ */
+const sentDurations: number[] = [];
+const SENT_SAMPLES = 50;
+const MAX_PAD_MS = 3_000;
+let defaultSentMs = 400;
+
+/** Record how long a request that sent the confirmation email took, from `startedAt`. */
+export const noteSentDuration = (startedAt: number, now = Date.now()): void => {
+  sentDurations.push(Math.min(MAX_PAD_MS, Math.max(0, now - startedAt)));
+  if (sentDurations.length > SENT_SAMPLES) sentDurations.shift();
+};
+
+/** Wait until a request that sent nothing has taken as long as one recent request that sent the email. */
+export const padToSentDuration = async (startedAt: number): Promise<void> => {
+  const target = sentDurations.length ? sentDurations[Math.floor(Math.random() * sentDurations.length)] : defaultSentMs;
+  const wait = target - (Date.now() - startedAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+};
+
+/** Tests only: forget the in-memory claims and timings (one test's sends must not throttle the next). */
+export const resetInterestGuardsForTests = (opts: { defaultSentMs?: number } = {}): void => {
+  inboxClaims.clear();
+  sentDurations.length = 0;
+  defaultSentMs = opts.defaultSentMs ?? 400;
+};
 
 /** The database lacks what registering interest needs; answer 503 interest_unavailable. */
 export class InterestUnavailableError extends Error {
@@ -166,9 +242,9 @@ export const checkConfirmThrottle = async (
 };
 
 /**
- * True once newsletter-confirm mail has used its share of today's or this month's email cap.
- * A global state (never about one address). An unreadable log doesn't block: the mailer's own
- * hard caps still apply to every send.
+ * True once public-form mail (confirmations and early-access receipts) has used its share of today's
+ * or this month's email cap. A global state (never about one address). An unreadable log doesn't
+ * block: the mailer's own hard caps still apply to every send.
  */
 export const confirmBudgetExhausted = async (now = Date.now()): Promise<boolean> => {
   const share = (cap: number) => (cap > 0 ? Math.max(1, Math.floor(cap * CONFIRM_EMAIL_BUDGET_SHARE)) : 0);
@@ -177,10 +253,39 @@ export const confirmBudgetExhausted = async (now = Date.now()): Promise<boolean>
   if (!dayMax && !monthMax) return false;
   const d = new Date(now);
   const [day, month] = await Promise.all([
-    dayMax ? countConfirmEmailsSince(iso(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))) : null,
-    monthMax ? countConfirmEmailsSince(iso(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))) : null
+    dayMax ? countPublicFormEmailsSince(iso(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))) : null,
+    monthMax ? countPublicFormEmailsSince(iso(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))) : null
   ]);
   return (dayMax > 0 && day != null && day >= dayMax) || (monthMax > 0 && month != null && month >= monthMax);
+};
+
+/**
+ * True when the mailer itself would refuse every send (mailer.ts step 3: EMAIL_MAX_PER_DAY /
+ * EMAIL_MAX_PER_MONTH over every template, counted the same way by emailStore.getUsage). Checked
+ * before anything about the address, so a capped mailer answers every address the same way instead
+ * of failing only the sends (which would tell a throttled address from one that isn't).
+ */
+export const mailerCapReached = async (): Promise<boolean> => {
+  if (!(EMAIL_MAX_PER_DAY > 0) && !(EMAIL_MAX_PER_MONTH > 0)) return false;
+  const usage = await getUsage();
+  return (EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH) || (EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY);
+};
+
+/**
+ * May the early-access receipt (access-requested) go to this address now? Not when public-form mail
+ * has used its budget share or the mailer is capped, and at most once per inbox per day (every alias
+ * of the address counts, and parallel requests are claimed per inbox like confirmations). Returns
+ * the release to call once the send is over (sent or not), or null: skip the receipt (the request
+ * itself is stored and answered the same way either way).
+ */
+export const claimAccessReceipt = async (email: string, now = Date.now()): Promise<(() => void) | null> => {
+  const [budget, capped, recent] = await Promise.all([
+    confirmBudgetExhausted(now),
+    mailerCapReached(),
+    recentConfirmEmailsToInbox(email, iso(now - ACCESS_RECEIPT_INTERVAL_MS), ACCESS_REQUESTED_TEMPLATE)
+  ]);
+  if (budget || capped || (recent && recent.length > 0)) return null;
+  return claimInbox('access', email);
 };
 
 // ── Register ────────────────────────────────────────────────────────────────────
@@ -201,8 +306,11 @@ export interface RegisterInterestInput {
  * email went out) and 'throttled': which one it was says something about someone else's address.
  */
 export type RegisterInterestResult =
-  /** This request holds the send slot: email `token` in a confirm link now, and call `release()` if the send fails. */
-  | { outcome: 'send_confirmation'; token: string; release: () => Promise<void> }
+  /**
+   * This request holds the send slot: email `token` in a confirm link now, then call `sent()` once
+   * the email went out, or `release()` if the send failed (either way the inbox claim is let go).
+   */
+  | { outcome: 'send_confirmation'; token: string; sent: () => void; release: () => Promise<void> }
   /** Picks saved (savePicks); no email: one went to this address too recently or too often, or a parallel request is sending it. */
   | { outcome: 'throttled'; reason: 'too_soon' | 'too_many' | 'in_flight' }
   /** Confirmation mail has used its share of the email budget for now. Nothing was stored. */
@@ -311,10 +419,25 @@ const SAVE_PICKS_ATTEMPTS = 3;
 const PENDING_PATH = `metadata->${PENDING_INTERESTS_KEY}`;
 
 /**
+ * Picks small enough to compare in the guarded update's filter, which travels in the request's
+ * URL: a short list of short strings. The server writes each studio id at most once (the SQL CHECK
+ * holds product_interests to that); twice as many leaves room for an older row with repeats.
+ * Anything else was planted through the old
+ * all-column client INSERT grant, or as metadata (which clients can still insert), and is not
+ * compared: a planted list of thousands of strings would otherwise make every guarded update fail
+ * on its URL length, and the address could never register. The update that skips the comparison
+ * writes the cleaned list in its place whenever it writes that field.
+ */
+const MAX_COMPARED_PICKS = 2 * STUDIO_INTERESTS.length;
+const comparablePicks = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= MAX_COMPARED_PICKS && value.every((id) => typeof id === 'string' && id.length <= 64);
+
+/**
  * Write this request's picks into an existing row without losing a parallel request's. The
  * update only lands while the row still holds exactly what picksUpdate read: the same picks, the
  * same waiting picks (metadata.pending_interests), and the same subscribed state, which decides
- * where new picks go.
+ * where new picks go. Only those server-decided values are compared, never the rest of the
+ * client-writable metadata, and only while they have the shape the server writes (comparablePicks).
  * (Mutual containment is equality here: both sides are sets of studio ids.) On a miss the row is
  * read again and the merge redone. Runs before the throttle and the send claim, so the picks are
  * kept whether or not this request ends up sending the email. Returns the row as written.
@@ -327,25 +450,25 @@ const savePicks = async (initial: InterestRow, picked: readonly StudioInterestId
     if (!Object.keys(fields).length) return row;
     let query = adminOrUnavailable().from(TABLE).update(fields).eq('id', row.id).eq('confirmed', row.confirmed);
     query = row.unsubscribed_at == null ? query.is('unsubscribed_at', null) : query.not('unsubscribed_at', 'is', null);
-    if (Array.isArray(row.product_interests) && row.product_interests.every((id) => typeof id === 'string')) {
+    if (comparablePicks(row.product_interests)) {
       const picks = textArrayLiteral(row.product_interests);
       query = query.filter('product_interests', 'cs', picks).filter('product_interests', 'cd', picks);
     } else if (row.product_interests == null) {
       query = query.is('product_interests', null);
     }
-    // (A picks array holding non-strings, e.g. a NULL element only the old all-column client
-    // insert could plant, isn't compared: whenever this update writes the picks, it writes the
-    // cleaned list in its place.)
+    // (Picks that aren't comparablePicks, e.g. a NULL element or thousands of entries only the old
+    // all-column client insert could plant, aren't compared: whenever this update writes the
+    // picks, it writes the cleaned list in their place.)
     // Of the metadata, only the waiting picks: the one part picksUpdate decides from. Never the
     // whole object: a client can insert any metadata, and a value JavaScript can't hold exactly
     // (a 20-digit number) never compares equal after the round trip, so every guarded update
     // missed and the address got 503 for good. The waiting picks are compared only while they
-    // are plain strings (exact both ways); anything else there is planted, and this update
-    // replaces or removes it whenever it writes the metadata.
+    // are comparablePicks (exact both ways, and short); anything else there is planted, and this
+    // update replaces or removes it whenever it writes the metadata.
     const waiting = plainObject(row.metadata)[PENDING_INTERESTS_KEY];
     if (waiting === undefined) {
       query = query.is(PENDING_PATH, null);
-    } else if (Array.isArray(waiting) && waiting.every((id) => typeof id === 'string')) {
+    } else if (comparablePicks(waiting)) {
       const json = JSON.stringify(waiting);
       query = query.filter(PENDING_PATH, 'cs', json).filter(PENDING_PATH, 'cd', json);
     }
@@ -373,16 +496,20 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
   if (!confirmTokensAvailable()) throw new InterestUnavailableError('no signing secret (EMAIL_HMAC_SECRET)');
   const db = adminOrUnavailable();
 
-  // Global, so checked before anything about this address: an exhausted budget answers every
-  // visitor the same way.
-  if (await confirmBudgetExhausted(now)) return { outcome: 'budget_exhausted' };
+  // Global, so checked before anything about this address: an exhausted budget, or a mailer at its
+  // hard cap, answers every visitor the same way.
+  const [budget, capped] = await Promise.all([confirmBudgetExhausted(now), mailerCapReached()]);
+  if (budget || capped) return { outcome: 'budget_exhausted' };
 
   let row = await loadRow(email);
 
   if (!row) {
     // Throttled even without a row: a recent confirmation to this address from a row since deleted.
     const throttle = await checkConfirmThrottle(email, null, now);
-    const token = throttle ? null : issueConfirmToken(email, now);
+    // The inbox claim (no await between the check above and this): a parallel request for another
+    // alias of this inbox is throttled even though its row is new.
+    const releaseInbox = throttle ? null : claimInbox('confirm', email);
+    const token = releaseInbox ? issueConfirmToken(email, now) : null;
     const claimedIso = iso(now);
     const { error } = await db.from(TABLE).insert({
       email,
@@ -397,13 +524,15 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
       confirm_sent_at: token ? claimedIso : null
     });
     if (!error) {
-      if (!token) return { outcome: 'throttled', reason: throttle?.code ?? 'too_soon' };
+      if (!token) return { outcome: 'throttled', reason: throttle?.code ?? 'in_flight' };
       // The unique index made this insert the claim: a parallel request for the same address
       // gets 23505 below and finds confirm_sent_at already stamped.
       return {
         outcome: 'send_confirmation',
         token,
+        sent: () => releaseInbox?.(),
         release: async () => {
+          releaseInbox?.();
           try {
             await db
               .from(TABLE)
@@ -417,6 +546,8 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
         }
       };
     }
+    // Nothing was stored with this token: give the inbox back before deciding again below.
+    releaseInbox?.();
     // 23505: a concurrent request (or a row stored with capitals) holds this address — carry on
     // as an existing row.
     if (error.code !== '23505') raise(error, 'insert');
@@ -430,6 +561,9 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
   const throttle = await checkConfirmThrottle(email, row.confirm_sent_at, now);
   // Leave the token and its clock alone so the link already in their inbox works.
   if (throttle) return { outcome: 'throttled', reason: throttle.code };
+  // The inbox first (no await since the check above), then the row.
+  const releaseInbox = claimInbox('confirm', email);
+  if (!releaseInbox) return { outcome: 'throttled', reason: 'in_flight' };
 
   // Claim the send slot: the update only lands while no confirmation went out in the last
   // 10 minutes (a confirm_sent_at planted in the future doesn't count), so of N parallel
@@ -444,27 +578,39 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
     confirm_sent_at: Number.isFinite(sentAtOf(row.confirm_sent_at, now)) ? row.confirm_sent_at : null,
     confirmed: row.confirmed
   };
-  const { data: claimed, error: claimError } = await db
-    .from(TABLE)
-    .update({
-      confirm_token: token,
-      confirm_sent_at: claimedIso,
-      // Back after unsubscribing: must confirm again; unsubscribed_at stays until that click.
-      ...(row.unsubscribed_at ? { confirmed: false } : {})
-    })
-    .eq('id', row.id)
-    .or(`confirm_sent_at.is.null,confirm_sent_at.lt."${cutoffIso}",confirm_sent_at.gt."${futureIso}"`)
-    .select('id');
-  if (claimError) raise(claimError, 'claim');
-  if (!Array.isArray(claimed) || claimed.length === 0) return { outcome: 'throttled', reason: 'in_flight' };
+  let claimed: unknown;
+  try {
+    const { data, error: claimError } = await db
+      .from(TABLE)
+      .update({
+        confirm_token: token,
+        confirm_sent_at: claimedIso,
+        // Back after unsubscribing: must confirm again; unsubscribed_at stays until that click.
+        ...(row.unsubscribed_at ? { confirmed: false } : {})
+      })
+      .eq('id', row.id)
+      .or(`confirm_sent_at.is.null,confirm_sent_at.lt."${cutoffIso}",confirm_sent_at.gt."${futureIso}"`)
+      .select('id');
+    if (claimError) raise(claimError, 'claim');
+    claimed = data;
+  } catch (err) {
+    releaseInbox();
+    throw err;
+  }
+  if (!Array.isArray(claimed) || claimed.length === 0) {
+    releaseInbox();
+    return { outcome: 'throttled', reason: 'in_flight' };
+  }
 
   const rowId = row.id;
   return {
     outcome: 'send_confirmation',
     token,
+    sent: releaseInbox,
     // Put the row back as it was (only if nothing claimed it since), so the failed send doesn't
     // count and the link already in their inbox, if any, still works.
     release: async () => {
+      releaseInbox();
       try {
         await db
           .from(TABLE)

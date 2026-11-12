@@ -6,6 +6,11 @@
  * next person on a shared device. Device preferences that aren't personal
  * (theme, camera lens, tours seen, guest passes for share links) stay.
  *
+ * Recordings that reached the disk but were never saved (live/recorder.ts) are the one
+ * exception: they are the host's unsaved work, so they stay on the device, but each one is
+ * tagged with the account that recorded it and only that account is offered it
+ * (listUnsavedRecordings). The Cookies notice and the Privacy Policy say exactly this.
+ *
  * Only a dependency-free import on purpose: the main app's sign-out calls this too.
  */
 import { isStreamHost } from '../shared/streamHost';
@@ -22,6 +27,7 @@ const EXACT = [
   'ds-calls-seen',
   'ds-live-welcome-ticket', // a one-time welcome ticket: redeemed by whoever signs in next
   'ds-live-unconfirmed-revokes', // device sign-outs still to confirm with the nurseries
+  'ds-live-viewer-name', // the name typed to join someone else's event
   OWNER_KEY,
 ];
 /**
@@ -50,6 +56,15 @@ export function purgeLiveAccountData(): void {
       .then((sub) => sub?.unsubscribe())
       .catch(() => undefined);
   } catch { /* no service worker */ }
+}
+
+/** The account whose Stream Studio data is on this device now (null: no one is signed in here). */
+export function deviceOwner(): string | null {
+  try {
+    return localStorage.getItem(OWNER_KEY);
+  } catch {
+    return null;
+  }
 }
 
 /** Remember whose data this device holds; wipe it when someone else (or no one) is signed in. */

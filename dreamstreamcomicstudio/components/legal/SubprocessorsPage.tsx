@@ -1,7 +1,7 @@
 import React from 'react';
 import { Callout, DataTable, DocLink, LINK, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
-import { ASSISTANT_SCRIPT_PREVIEW_CHARS, BROWSER_THIRD_PARTIES, DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, PRIVACY_EMAIL } from './legalFacts';
-import type { LegalDocId } from './legalRoutes';
+import { ASSISTANT_SCRIPT_PREVIEW_CHARS, BROWSER_THIRD_PARTIES, DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, MEMORY_NOTE_MODEL, PRIVACY_EMAIL } from './legalFacts';
+import type { LegalPageProps } from './LegalDocument';
 
 // Subprocessors: every third party that receives personal information when DreamStream runs,
 // derived from the code and configuration (the legal suite's claims ledger cites each row).
@@ -25,7 +25,7 @@ export const CORE: Subprocessor[] = [
     {
         name: 'Supabase',
         purpose: 'Accounts and sign-in, our database, and file storage for Comic Studio images.',
-        data: 'Account and profile data, the IP address and browser of each sign-in session, projects and images, synced chats and memory notes, API keys you add (encrypted), encrypted connected-account tokens and indexes, Stream Studio accounts and nurseries, notifications, email sign-ups and delivery records, diagnostics, chat usage events and feedback.',
+        data: 'Account and profile data, the IP address and browser details of every request your browser makes to it (signing in, loading and saving your data, and every Comic Studio image, shared comics included), projects and images, synced chats and memory notes, API keys you add (encrypted), encrypted connected-account tokens and indexes, Stream Studio accounts and nurseries, notifications, email sign-ups and delivery records, diagnostics, chat usage events and feedback.',
         where: DATABASE_REGION_LABEL
     },
     {
@@ -39,19 +39,19 @@ export const CORE: Subprocessor[] = [
 export const AI_PROVIDERS: Subprocessor[] = [
     {
         name: 'OpenRouter',
-        purpose: 'Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it.',
+        purpose: `Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it, and Chat Studio's memory notes are written through it (today by ${MEMORY_NOTE_MODEL.label}) unless you picked another provider under Settings → API & Models.`,
         data: `What a request needs: your prompt and conversation, attached files, memory notes, your approximate location, timezone and language, items from connected accounts included in it, and Comic Studio project content. For the site-wide assistant: what you type, the page you're on and, if you're signed in, your username, masked email, plan and a summary of your Comic Studio projects, plus, for the project you have open, its story overview, the first ${ASSISTANT_SCRIPT_PREVIEW_CHARS} characters of its script and its style, layout and cover prompts.`,
         where: 'OpenRouter, and the model provider it routes to'
     },
     {
         name: 'Google (Gemini API)',
-        purpose: 'Text, image and vision models for Comic Studio and Chat Studio, and making memory notes searchable.',
-        data: 'The same request content as above when a Gemini model does the work, and the text of each memory note.',
+        purpose: 'Text, image and vision models for Comic Studio and Chat Studio, and making memory notes searchable and searching them.',
+        data: 'The same request content as above when a Gemini model does the work; the text of each memory note; and the text of each Chat Studio message you send while signed in (to search your memory notes), whichever model answers it.',
         where: PROVIDER_LOCATION
     },
     {
         name: DIRECT_AI_PROVIDERS.filter((p) => p !== 'Google (Gemini)').join(', '),
-        purpose: 'Answer Chat Studio requests directly when you choose one of their models.',
+        purpose: "Answer Chat Studio requests directly when you choose one of their models. NVIDIA also does Comic Studio's writing steps (script analysis, story outlines and drafts, world and panel breakdowns, continuity checks) when you pick it under Settings → API & Models, or when no OpenRouter key is available.",
         data: 'The request content described above.',
         where: PROVIDER_LOCATION
     },
@@ -242,6 +242,6 @@ const intro = (
     <p>The companies and services that receive personal information when DreamStream runs, what each one does for us, what it receives, and where. Atlas Studio is covered by its own policy.</p>
 );
 
-export const SubprocessorsPage: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
-    <LegalDocument doc="subprocessors" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+export const SubprocessorsPage: React.FC<LegalPageProps> = ({ onBack, onOpenDoc, onHistoryBack }) => (
+    <LegalDocument doc="subprocessors" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} onHistoryBack={onHistoryBack} />
 );

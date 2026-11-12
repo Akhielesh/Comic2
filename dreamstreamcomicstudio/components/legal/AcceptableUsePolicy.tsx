@@ -1,7 +1,7 @@
 import React from 'react';
 import { Callout, DocLink, LINK, LIST, LegalDocument, MailLink, SubHeading, type LegalSection } from './LegalDocument';
 import { ABUSE_SUBJECT, COMIC_PG_CEILING_UNDER_AGE, SECURITY_EMAIL, SECURITY_SUBJECT, SUPPORT_EMAIL } from './legalFacts';
-import type { LegalDocId } from './legalRoutes';
+import type { LegalPageProps } from './LegalDocument';
 
 // Acceptable Use Policy. Enforcement is described as it works today: reader reports, Comic Studio's
 // automated checks, moderator review, host and caller tools, and email. Nothing here claims
@@ -183,6 +183,6 @@ const intro = (
     <p>DreamStream is for making comics, chatting with AI, streaming and looking after your family. This policy sets out what isn't allowed, so the Service stays safe and useful for everyone, and how we enforce it.</p>
 );
 
-export const AcceptableUsePolicy: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
-    <LegalDocument doc="acceptable-use" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+export const AcceptableUsePolicy: React.FC<LegalPageProps> = ({ onBack, onOpenDoc, onHistoryBack }) => (
+    <LegalDocument doc="acceptable-use" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} onHistoryBack={onHistoryBack} />
 );

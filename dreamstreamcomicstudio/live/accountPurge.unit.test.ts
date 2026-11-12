@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { claimDevice, OWNER_KEY, purgeLiveAccountData } from './accountPurge';
+import { unsavedRecordingsOf, type UnsavedRecording } from './recorder';
+
+const read = (rel: string) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', rel), 'utf8');
 
 const seed = () => {
   localStorage.setItem('ds-live-prefs', JSON.stringify({ hostName: 'Akhielesh', qualityId: '1080p' }));
@@ -69,5 +75,45 @@ describe('Stream Studio sign-out wipe', () => {
     // Nobody ever signed in here and nobody is now: nothing to wipe.
     localStorage.removeItem(OWNER_KEY);
     expect(claimDevice(null)).toBe(false);
+  });
+
+  it('removes the name used to join someone else\'s event', () => {
+    localStorage.setItem('ds-live-viewer-name', 'Akhielesh');
+    purgeLiveAccountData();
+    expect(localStorage.getItem('ds-live-viewer-name')).toBeNull();
+  });
+});
+
+describe('unsaved recordings after a sign-out (the Cookies notice and Privacy Policy describe this)', () => {
+  beforeEach(() => localStorage.clear());
+  const rec = (name: string, owner?: string | null): UnsavedRecording => ({
+    name, file: `${name}.webm`, mime: 'video/webm', eventId: 'e1', title: 'Team call', at: 1, durMs: 1000, bytes: 10,
+    ...(owner === undefined ? {} : { owner }),
+  });
+
+  it('stay on the device, but only the account that recorded them is offered them', () => {
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-a', 'u-a'), rec('ds-rec-b', 'u-b'), rec('ds-rec-anon', null)]));
+    localStorage.setItem(OWNER_KEY, 'u-a');
+    purgeLiveAccountData(); // u-a signs out
+    // The host's unsaved work isn't deleted...
+    expect(JSON.parse(localStorage.getItem('ds-live-unsaved-recordings') || '[]')).toHaveLength(3);
+    // ...but the next person to sign in here is never offered it, nor is a signed-out visitor.
+    expect(unsavedRecordingsOf('u-b').map((r) => r.name)).toEqual(['ds-rec-b']);
+    expect(unsavedRecordingsOf(null).map((r) => r.name)).toEqual(['ds-rec-anon']);
+    expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-a']);
+  });
+
+  it('an entry from before recordings carried an owner goes to whoever lists it first, and stays theirs', () => {
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-old')]));
+    expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-old']);
+    expect(unsavedRecordingsOf('u-b')).toEqual([]);
+    expect(unsavedRecordingsOf('u-a').map((r) => r.owner)).toEqual(['u-a']);
+  });
+
+  it('a new recording is tagged with the account signed in when it starts', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'recorder.ts'), 'utf8');
+    expect(src).toContain('private readonly owner: string | null = deviceOwner(),');
+    expect(src).toMatch(/upsertUnsaved\(\{[\s\S]*?owner: this\.owner,\s*\}\);/);
+    expect(read('live/views/DashboardView.tsx')).toContain('}, [saving, account.userId, account.status]);');
   });
 });

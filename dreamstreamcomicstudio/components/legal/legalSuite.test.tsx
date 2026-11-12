@@ -2,7 +2,7 @@ import React from 'react';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PrivacyPolicy } from '../PrivacyPolicy';
@@ -29,14 +29,26 @@ import {
     SUPPORT_EMAIL,
     YOUTUBE_TERMS_URL
 } from './legalFacts';
-import { LEGAL_DOCS, isLegalDocId, legalDocForPath, legalPath, type LegalDocId } from './legalRoutes';
+import type { LegalPageProps } from './LegalDocument';
+import {
+    LEGAL_DOCS,
+    isLegalDocId,
+    keepLegalEntryMark,
+    legalDocForPath,
+    legalEntryState,
+    legalPath,
+    pushLegalPath,
+    syncLegalPath,
+    viewForHistoryEntry,
+    type LegalDocId
+} from './legalRoutes';
+import { resetBackStack, useBackLayer } from '../comicstudio/mobile/backStack';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
 const textOf = (el: Element): string => (el.textContent || '').replace(/\s+/g, ' ').trim();
 
-type PageProps = { onBack: () => void; onOpenDoc?: (id: LegalDocId) => void };
-const PAGES: Record<LegalDocId, React.FC<PageProps>> = {
+const PAGES: Record<LegalDocId, React.FC<LegalPageProps>> = {
     terms: TermsOfService,
     privacy: PrivacyPolicy,
     'acceptable-use': AcceptableUsePolicy,
@@ -397,6 +409,57 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         for (const n of ['agify', 'Amadeus', 'Finnhub', 'FRED', 'similar public sources']) expect(textOf(subs)).toContain(n);
     });
 
+    it('the Privacy Policy\'s own list of what the browser loads names every one of those services, Supabase included', () => {
+        // How each BROWSER_THIRD_PARTIES entry reads in the Privacy Policy's prose (a new entry must be added here and there).
+        const WORDS: Record<string, string> = {
+            Supabase: 'Supabase, our database and sign-in provider',
+            'Cloudflare Turnstile': 'Cloudflare Turnstile',
+            'Google Fonts': 'Google Fonts',
+            'cdnjs (Cloudflare)': "Cloudflare's cdnjs",
+            jsDelivr: 'the Python runtime (jsDelivr)',
+            'CodeSandbox (Sandpack)': 'code previews (CodeSandbox)',
+            CARTO: 'map tiles (CARTO)',
+            RainViewer: 'weather radar (RainViewer)',
+            'Google (site icons)': 'site icons (Google)',
+            'Parqet, Financial Modeling Prep': 'market logos (Parqet, Financial Modeling Prep)',
+            'goQR (api.qrserver.com)': 'QR codes (goQR)',
+            'YouTube, Vimeo': 'videos (YouTube, Vimeo)',
+            'Google Drive': 'Google Drive uploads',
+            'STUN servers (Cloudflare, Google)': 'STUN servers (Cloudflare, Google)',
+            'Images in answers': 'images from the websites they come from'
+        };
+        const prose = textOf(renderDoc('privacy').main.querySelector('#cookies') as HTMLElement);
+        for (const p of BROWSER_THIRD_PARTIES) {
+            expect(WORDS[p.name], `add "${p.name}" to WORDS`).toBeDefined();
+            expect(prose).toContain(WORDS[p.name]);
+        }
+        expect(BROWSER_THIRD_PARTIES.find((p) => p.name === 'Supabase')?.hosts).toEqual(['*.supabase.co']);
+        expect(CORE.find((c) => c.name === 'Supabase')?.data).toContain('the IP address and browser details of every request your browser makes to it');
+    });
+
+    it('Privacy and Subprocessors: memory search and memory notes, NVIDIA in Comic Studio, announcements, sign-out and the new retention rows', () => {
+        const privacyMain = renderDoc('privacy').main;
+        const privacy = textOf(privacyMain);
+        expect(privacy).toContain("the text of each message you send in Chat Studio while signed in (up to the first 8,000 characters) is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
+        expect(privacy).toContain("a model DreamStream picks, today Google's Gemini 2.5 Flash through OpenRouter");
+        expect(privacy).toContain("each message you send is also sent to Google's Gemini API to search your memory notes, whichever provider you choose");
+        expect(privacy).toContain("Google's Gemini API, NVIDIA, or a model reached through OpenRouter");
+        expect(privacy).toContain('service announcements our team writes and sends by hand');
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or discard them, and only the account that made them is offered them.");
+        expect(privacy).not.toContain('the Stream Studio data on that device is removed');
+        const retention = textOf(privacyMain.querySelector('#retention') as HTMLElement);
+        expect(retention).toContain("Invitations you send (the invitee's address, who invited them and how many times)");
+        expect(retention).toContain('Usage and cost records');
+        const subs = renderDoc('subprocessors').main;
+        const gemini = AI_PROVIDERS.find((p) => p.name === 'Google (Gemini API)')!;
+        expect(gemini.data).toContain('the text of each Chat Studio message you send while signed in (to search your memory notes), whichever model answers it');
+        expect(AI_PROVIDERS.find((p) => p.name === 'OpenRouter')!.purpose).toContain("Chat Studio's memory notes are written through it");
+        expect(textOf(subs.querySelector('#ai-models') as HTMLElement)).toContain("NVIDIA also does Comic Studio's writing steps");
+        const cookies = textOf(renderDoc('cookies').main.querySelector('#your-choices') as HTMLElement);
+        expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
+        expect(cookies).toContain("Recordings you made but haven't saved stay on the device until you save or discard them, and only the account that made them is offered them.");
+    });
+
     it('Privacy: API keys, the assistant, usage events, location, images, emails, events and sign-in records', () => {
         const text = textOf(renderDoc('privacy').main);
         expect(text).toContain('it is stored with your account, encrypted with AES-256-GCM, so it works on all your devices');
@@ -520,7 +583,43 @@ describe('Back and Forward between documents opened in the app', () => {
         expect(window.location.pathname).toBe('/privacy');
     });
 
-    it('the shared footer adds a history entry too', () => {
+    it('the browser\'s Back uses onHistoryBack when App gives one, and the page\'s Back button uses onBack when nothing in this visit opened the page', () => {
+        const onBack = vi.fn();
+        const onHistoryBack = vi.fn();
+        window.history.replaceState({}, '', '/privacy');
+        render(<PrivacyPolicy onBack={onBack} onHistoryBack={onHistoryBack} onOpenDoc={vi.fn()} />);
+        window.history.replaceState({}, '', '/?view=gallery');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(onHistoryBack).toHaveBeenCalledTimes(1);
+        expect(onBack).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(onBack).toHaveBeenCalledTimes(1);
+        expect(onHistoryBack).toHaveBeenCalledTimes(1);
+    });
+
+    it('opened from another page of this visit (a marked entry), the page\'s Back button goes back in history instead of calling onBack', () => {
+        const onBack = vi.fn();
+        const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+        window.history.replaceState(legalEntryState(), '', '/privacy');
+        render(<PrivacyPolicy onBack={onBack} onHistoryBack={vi.fn()} onOpenDoc={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(back).toHaveBeenCalledTimes(1);
+        expect(onBack).not.toHaveBeenCalled();
+        back.mockRestore();
+    });
+
+    it('outside the app (no onOpenDoc: nothing listens for Back), the page\'s Back button always uses onBack', () => {
+        const onBack = vi.fn();
+        const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+        window.history.replaceState(legalEntryState(), '', '/privacy');
+        render(<PrivacyPolicy onBack={onBack} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(onBack).toHaveBeenCalledTimes(1);
+        expect(back).not.toHaveBeenCalled();
+        back.mockRestore();
+    });
+
+    it('the shared footer adds a history entry too, marked as opened in the app', () => {
         const swallow = (e: MouseEvent) => e.preventDefault();
         document.addEventListener('click', swallow);
         const before = window.history.length;
@@ -528,7 +627,300 @@ describe('Back and Forward between documents opened in the app', () => {
         fireEvent.click(screen.getByRole('link', { name: 'Terms of Service' }));
         expect(window.location.pathname).toBe('/terms');
         expect(window.history.length).toBe(before + 1);
+        expect(window.history.state).toEqual(legalEntryState());
         document.removeEventListener('click', swallow);
+    });
+});
+
+describe('Back from a legal page shows the view the entry names (App routing in miniature)', () => {
+    // App.tsx in miniature, built from the same legalRoutes helpers App uses: its restorable views,
+    // its address sync (replaceState keeping only a legal entry's mark; the share viewer and the
+    // reader keep their own address), handleNavigate (one pushState, marked for a legal document),
+    // restoreViewFromHistory (a reader entry, the open project's workspace and the profile App holds
+    // included), leaveLegalPage, openLegalFromReader, the header on every view, and the shared footer
+    // under the other views. The comic reader (ComicReader, also inside SharedViewer) holds a
+    // back-stack layer and wraps its footer links in leaveTo, as the real one does.
+    const RESTORABLE = new Set<string>(['dashboard', 'gallery', 'settings', ...LEGAL_DOCS.map((d) => d.id)]);
+    const Reader: React.FC<{ label: string; layer: string; onOpenPrivacy: () => void; onOpenTerms: () => void }> = ({ label, layer, onOpenPrivacy, onOpenTerms }) => {
+        const leaveReader = useBackLayer(true, () => undefined, layer);
+        const leaveTo = (fn: () => void) => () => leaveReader(fn, { final: false });
+        return (
+            <div>
+                <p>{label}</p>
+                <LegalMicroLinks onOpenPrivacy={leaveTo(onOpenPrivacy)} onOpenTerms={leaveTo(onOpenTerms)} onOpenFaq={vi.fn()} />
+            </div>
+        );
+    };
+    const Shell: React.FC<{ initial: string; signedIn?: boolean; project?: string; profile?: string }> = ({ initial, signedIn = true, project, profile }) => {
+        const [view, setView] = React.useState(initial);
+        const [token, setToken] = React.useState<string | null>(() => /^\/share\/([^/]+)$/.exec(window.location.pathname)?.[1] ?? null);
+        const [comic, setComic] = React.useState<string | null>(() => new URLSearchParams(window.location.search).get('id'));
+        React.useEffect(() => {
+            if (view === 'shared' || view === 'reader') return;
+            const url = new URL(window.location.href);
+            if (view === 'editor' && project) {
+                url.pathname = '/';
+                url.searchParams.set('view', 'editor');
+                url.searchParams.set('id', project);
+            } else {
+                url.searchParams.delete('id');
+                if (!syncLegalPath(url, view)) {
+                    if (view === 'home') url.searchParams.delete('view');
+                    else url.searchParams.set('view', view);
+                }
+            }
+            window.history.replaceState(keepLegalEntryMark(window.history.state), '', url);
+        }, [view]);
+        const leaveLegalPage = () => setView(signedIn ? 'dashboard' : 'home');
+        const restoreViewFromHistory = () => {
+            const entry = viewForHistoryEntry(
+                window.location,
+                (v, id) => RESTORABLE.has(v) || (v === 'auth' && !signedIn) || (v === 'read' && !!id) || (v === 'editor' && !!id) || (v === 'profile' && !!profile)
+            );
+            if (!entry) return leaveLegalPage();
+            if (entry.shareToken) setToken(entry.shareToken);
+            if (entry.view === 'read' && entry.id) {
+                // App: navigateToReader(entry.id, …), which rewrites this same ?view=read&id= entry.
+                setComic(entry.id);
+                setView('reader');
+                return;
+            }
+            if (entry.view === 'editor' && entry.id) {
+                // App: the open project goes straight back; another one goes through setPendingStudioTarget.
+                if (entry.id === project) setView('editor');
+                return;
+            }
+            setView(entry.view);
+        };
+        const openLegalFromReader = (doc: LegalDocId) => () => {
+            pushLegalPath(doc);
+            setView(doc);
+        };
+        const navigate = (to: string) => {
+            setView(to);
+            const url = new URL(window.location.href);
+            url.searchParams.delete('view');
+            url.searchParams.delete('id');
+            url.pathname = '/';
+            if (isLegalDocId(to)) window.history.pushState(legalEntryState(), '', legalPath(to));
+            else window.history.pushState({}, '', url);
+        };
+        const Page = isLegalDocId(view) ? PAGES[view] : null;
+        let body: React.ReactNode;
+        if (Page) body = <Page onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setView} />;
+        else if (view === 'shared' || view === 'reader') {
+            body = (
+                <Reader
+                    key={`${view}:${token}:${comic}`}
+                    label={view === 'shared' ? `View: shared ${token}` : `View: reader ${comic}`}
+                    layer={view === 'shared' ? `reader:share-${token}` : `reader:${comic}`}
+                    onOpenPrivacy={openLegalFromReader('privacy')}
+                    onOpenTerms={openLegalFromReader('terms')}
+                />
+            );
+        } else {
+            body = (
+                <div>
+                    <p>{`View: ${view}${view === 'editor' ? ` ${project}` : view === 'profile' ? ` ${profile}` : ''}`}</p>
+                    {view === 'settings' && (
+                        <a href="/privacy" onClick={(e) => (e.preventDefault(), navigate('privacy'))}>
+                            Settings → Legal: Privacy Policy
+                        </a>
+                    )}
+                    <LegalMicroLinks onOpenPrivacy={() => setView('privacy')} onOpenTerms={() => setView('terms')} onOpenLegal={setView} onOpenFaq={vi.fn()} />
+                </div>
+            );
+        }
+        return (
+            <div>
+                <button type="button" onClick={() => navigate('gallery')}>Header: Gallery</button>
+                {body}
+            </div>
+        );
+    };
+    afterEach(() => resetBackStack());
+    const swallow = (e: MouseEvent) => e.preventDefault(); // jsdom can't follow a link
+    const clickFooter = (name: string) => {
+        document.addEventListener('click', swallow);
+        fireEvent.click(screen.getByRole('link', { name }));
+        document.removeEventListener('click', swallow);
+    };
+    const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
+    const pageBack = () => fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    const address = () => `${window.location.pathname}${window.location.search}`;
+
+    it('Gallery → footer Privacy Policy → Back shows Gallery again, at /?view=gallery (not the Dashboard)', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        render(<Shell initial="gallery" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        expect(window.location.pathname).toBe('/privacy');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(address()).toBe('/?view=gallery');
+    });
+
+    it('the page\'s own Back button does what the browser\'s Back does: Gallery → footer → Back button → Gallery', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        const before = window.history.length;
+        render(<Shell initial="gallery" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(address()).toBe('/?view=gallery');
+        // It went back to Gallery's entry instead of stacking a new one on top of the document's.
+        expect(window.history.length).toBe(before + 1);
+    });
+
+    it('Settings → Legal → a document → Back returns to Settings on its Legal tab; the document\'s own address carries no ?tab=', async () => {
+        window.history.replaceState({}, '', '/?view=settings&tab=legal');
+        const before = window.history.length;
+        render(<Shell initial="settings" />);
+        fireEvent.click(screen.getByRole('link', { name: 'Settings → Legal: Privacy Policy' }));
+        await heading('Privacy Policy');
+        expect(address()).toBe('/privacy');
+        expect(window.history.length).toBe(before + 1);
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: settings')).toBeInTheDocument());
+        expect(address()).toBe('/?view=settings&tab=legal');
+    });
+
+    it('Settings (Legal tab) → a document → the page\'s "Back" button → Settings on the Legal tab at /?view=settings&tab=legal', async () => {
+        window.history.replaceState({}, '', '/?view=settings&tab=legal');
+        render(<Shell initial="settings" />);
+        fireEvent.click(screen.getByRole('link', { name: 'Settings → Legal: Privacy Policy' }));
+        await heading('Privacy Policy');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: settings')).toBeInTheDocument());
+        expect(address()).toBe('/?view=settings&tab=legal');
+    });
+
+    it('a document → another one from the legal navigation → Back button → the first → Back button → the page that opened it', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        render(<Shell initial="gallery" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        fireEvent.click(screen.getByRole('link', { name: 'Cookies' }));
+        await heading('Cookies & Local Storage');
+        expect(window.location.pathname).toBe('/cookies');
+        pageBack();
+        await heading('Privacy Policy');
+        expect(window.location.pathname).toBe('/privacy');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(address()).toBe('/?view=gallery');
+    });
+
+    it('a document loaded cold (nothing in this visit opened it): the Back button stays in the app (Dashboard, or Home signed out)', () => {
+        for (const [signedIn, expected] of [[true, 'View: dashboard'], [false, 'View: home']] as const) {
+            window.history.replaceState({}, '', '/privacy');
+            const before = window.history.length;
+            const back = vi.spyOn(window.history, 'back');
+            const { unmount } = render(<Shell initial="privacy" signedIn={signedIn} />);
+            pageBack();
+            expect(screen.getByText(expected)).toBeInTheDocument();
+            expect(back).not.toHaveBeenCalled();
+            expect(window.history.length).toBe(before);
+            back.mockRestore();
+            unmount();
+        }
+    });
+
+    it('a /share/<token> link → the reader\'s footer (inside its back layer) → Back shows that shared comic again, at its own address', async () => {
+        window.history.replaceState({}, '', '/?view=gallery'); // the page before the share link
+        window.history.pushState({}, '', '/share/tok-123');
+        render(<Shell initial="shared" />);
+        expect(screen.getByText('View: shared tok-123')).toBeInTheDocument();
+        clickFooter('Terms of Service');
+        await heading('Terms of Service');
+        expect(window.location.pathname).toBe('/terms');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: shared tok-123')).toBeInTheDocument());
+        expect(window.location.pathname).toBe('/share/tok-123');
+    });
+
+    it('a /share/<token> link → the reader\'s footer → the page\'s Back button → the shared comic', async () => {
+        window.history.replaceState({}, '', '/?view=gallery');
+        window.history.pushState({}, '', '/share/tok-456');
+        render(<Shell initial="shared" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        pageBack();
+        await waitFor(() => expect(screen.getByText('View: shared tok-456')).toBeInTheDocument());
+        expect(window.location.pathname).toBe('/share/tok-456');
+    });
+
+    it('a comic in the reader (?view=read&id=…) → its footer → Back reopens that comic', async () => {
+        window.history.replaceState({}, '', '/?view=read&id=c1');
+        render(<Shell initial="reader" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: reader c1')).toBeInTheDocument());
+        expect(address()).toBe('/?view=read&id=c1');
+    });
+
+    it('the project open in the classic editor → footer → Back shows the editor again, not the Dashboard', async () => {
+        window.history.replaceState({}, '', '/?view=editor&id=p-open');
+        render(<Shell initial="editor" project="p-open" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: editor p-open')).toBeInTheDocument());
+        expect(address()).toBe('/?view=editor&id=p-open');
+    });
+
+    it('a public profile → footer → Back shows that profile again', async () => {
+        window.history.replaceState({}, '', '/?view=profile');
+        render(<Shell initial="profile" profile="ada" />);
+        clickFooter('Cookies');
+        await heading('Cookies & Local Storage');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: profile ada')).toBeInTheDocument());
+        expect(window.location.search).toBe('?view=profile');
+    });
+
+    it('signed out, the sign-in page → footer → Back shows the sign-in page again', async () => {
+        window.history.replaceState({}, '', '/?view=auth');
+        render(<Shell initial="auth" signedIn={false} />);
+        clickFooter('Cookies');
+        await heading('Cookies & Local Storage');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: auth')).toBeInTheDocument());
+        expect(window.location.search).toBe('?view=auth');
+    });
+
+    it('an entry that names no view App can show falls back to Dashboard when signed in, Home when not', () => {
+        for (const [signedIn, expected] of [[true, 'View: dashboard'], [false, 'View: home']] as const) {
+            window.history.replaceState({}, '', '/privacy');
+            const { unmount } = render(<Shell initial="privacy" signedIn={signedIn} />);
+            window.history.replaceState({}, '', '/?view=fontlab');
+            act(() => {
+                window.dispatchEvent(new PopStateEvent('popstate'));
+            });
+            expect(screen.getByText(expected)).toBeInTheDocument();
+            unmount();
+        }
+    });
+
+    it('header navigation from a legal page adds ONE entry: Back reopens the document, and the next Back leaves it', async () => {
+        window.history.replaceState({}, '', '/?view=dashboard');
+        render(<Shell initial="dashboard" />);
+        clickFooter('Privacy Policy');
+        await heading('Privacy Policy');
+        const onDocument = window.history.length;
+        fireEvent.click(screen.getByRole('button', { name: 'Header: Gallery' }));
+        await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
+        expect(window.history.length).toBe(onDocument + 1);
+        expect(window.location.search).toBe('?view=gallery');
+
+        window.history.back();
+        await heading('Privacy Policy');
+        expect(window.location.pathname).toBe('/privacy');
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('View: dashboard')).toBeInTheDocument());
+        expect(window.location.search).toBe('?view=dashboard');
     });
 });
 
@@ -570,9 +962,12 @@ describe('footers and other entry points reach the documents', () => {
         const settings = read('components/AccountSettings.tsx');
         expect(settings).not.toMatch(/Feb 11, 2026|Stripe for subscriptions|Token-based limits apply/);
         expect(settings).toContain('LEGAL_DOCS.map((doc)');
-        // In a new tab: an in-app move would put Back on the document's own target (Dashboard or
-        // Home) instead of Settings, since App doesn't restore a view from a popped address yet.
-        expect(settings).toContain('<a href={doc.path} target="_blank" rel="noopener noreferrer"');
+        // Opened inside the app (App's handleNavigate gives the document its own entry), and the
+        // browser's Back comes back to Settings on this tab ("Settings → Legal → a document → Back").
+        const legal = settings.slice(settings.indexOf('const renderLegal = () =>'), settings.indexOf('const renderLegal = () =>') + 1500);
+        expect(legal).toContain('href={doc.path}');
+        expect(legal).toContain('onNavigate(doc.id);');
+        expect(legal).not.toContain('target="_blank"');
     });
 
     it('the sign-up consent checkbox calls them the Terms of Service', () => {

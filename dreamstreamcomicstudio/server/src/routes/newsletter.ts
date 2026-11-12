@@ -17,7 +17,14 @@ import {
   type ConfirmLinkState
 } from '../services/emailStore.js';
 import { formatStudioInterestList } from '../../../services/studioInterests.js';
-import { InterestRetryError, InterestUnavailableError, registerInterest } from '../services/interestStore.js';
+import {
+  InterestRetryError,
+  InterestUnavailableError,
+  claimAccessReceipt,
+  noteSentDuration,
+  padToSentDuration,
+  registerInterest
+} from '../services/interestStore.js';
 import { resendPendingInvite } from '../services/invites.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
@@ -78,12 +85,14 @@ const accountExistsForEmail = async (email: string): Promise<boolean> => {
   }
 };
 
-// POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source?, firstName? }
+// POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source? }
+// No name is taken from the request: the caller is unauthenticated and the email goes to whatever
+// address it names, so a "firstName" would put the caller's words into our mail to a stranger
+// ("Hey <your account is locked, verify at …>,"). Both emails greet "Hey there" (no client sent one).
 newsletterRouter.post('/subscribe', async (req, res, next) => {
   try {
     const email = normalizeEmail(String(req.body?.email ?? ''));
     const kind = req.body?.kind === 'access' ? 'access' : 'updates';
-    const firstName = typeof req.body?.firstName === 'string' ? req.body.firstName.slice(0, 80) : undefined;
     const source = typeof req.body?.source === 'string' ? req.body.source.slice(0, 200) : undefined;
     // Optional intent capture — whitelisted/capped in upsertSubscriber.
     const intent = {
@@ -145,10 +154,16 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         });
       }
 
-      // NEW signup: acknowledge with the access-requested template (essential) —
-      // best-effort and non-blocking; a mailer failure is logged by the mailer and
-      // must never fail the signup itself.
-      void sendAccessRequested(email, firstName, reqMeta(req));
+      // NEW signup: acknowledge with the access-requested template (essential) — best-effort and
+      // non-blocking; a mailer failure is logged by the mailer and must never fail the signup
+      // itself. Every alias of an address makes a new row, so the receipt is limited per INBOX
+      // (one a day) and counts toward the public-form share of the email caps
+      // (interestStore.claimAccessReceipt); the answer is the same whether it goes out or not.
+      const receipt = await claimAccessReceipt(email);
+      if (receipt) {
+        // Let the inbox go once the send is over: by then email_log holds it (or it failed and doesn't count).
+        void sendAccessRequested(email, undefined, reqMeta(req)).catch(() => undefined).finally(receipt);
+      }
       return res.json({
         ok: true,
         status: 'joined',
@@ -164,6 +179,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       // 503: the older client then stores the address with its own direct insert, as before.
       return res.status(503).json({ ok: false, code: 'interest_unavailable', message: 'Signups are unavailable right now.' });
     }
+    const startedAt = Date.now();
     const result = await registerInterest({
       email,
       studios: intent.productInterests ?? [],
@@ -173,11 +189,16 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     if (result.outcome === 'budget_exhausted') return res.json({ ok: false, message: COULD_NOT_SEND });
     if (result.outcome === 'send_confirmation') {
       const confirmUrl = `${baseUrl()}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${result.token}`;
-      const sent = await sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
+      const sent = await sendNewsletterConfirm(email, confirmUrl, undefined, reqMeta(req));
       if (!sent.ok) {
         await result.release();
         return res.json({ ok: false, message: COULD_NOT_SEND });
       }
+      result.sent();
+      noteSentDuration(startedAt);
+    } else {
+      // Throttled: as long as a request that sent the email (see routes/interest.ts).
+      await padToSentDuration(startedAt);
     }
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
@@ -230,9 +251,17 @@ const confirmSummary = (link: Extract<ConfirmLinkState, { state: 'ready' }>, ema
 
 /**
  * The page the email link opens: what the click confirms, and one Confirm button that POSTs the
- * link back. No script, so a scanner that fetches (or even renders) the page changes nothing.
+ * link back, with the studios the page names (field s), so the click applies exactly those
+ * (emailStore.confirmSubscriber). No script, so a scanner that fetches (or even renders) the page
+ * changes nothing. `changed`: shown again because the list changed after the page first opened.
  */
-const sendConfirmPage = (res: Response, email: string, token: string, link: Extract<ConfirmLinkState, { state: 'ready' }>) => {
+const sendConfirmPage = (
+  res: Response,
+  email: string,
+  token: string,
+  link: Extract<ConfirmLinkState, { state: 'ready' }>,
+  changed = false
+) => {
   const appOrigin = originOf(APP_PUBLIC_URL);
   res
     .status(200)
@@ -262,11 +291,13 @@ button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
 </style></head>
 <body><main>
 <h1>Confirm your DreamStream updates</h1>
+${changed ? '<p><strong>The studios on this page changed after it opened</strong> (someone registered this address for more of them). Nothing has changed yet: check the list below, and press Confirm again only if you want it.</p>' : ''}
 ${confirmSummary(link, email)}
-<p>We send occasional emails${link.current.length || link.adding.length ? ' about these studios' : ''}, and every one has a one-click unsubscribe.</p>
+<p>We send occasional emails${link.current.length || link.adding.length ? ' about these studios' : ''}, and every one has an unsubscribe link.</p>
 <form method="post" action="/api/newsletter/confirm">
 <input type="hidden" name="e" value="${escapeHtml(email)}">
 <input type="hidden" name="t" value="${escapeHtml(token)}">
+<input type="hidden" name="s" value="${escapeHtml(link.adding.join(','))}">
 <button type="submit">Confirm</button>
 </form>
 <p class="muted">Didn’t ask for this? Just close this page. Nothing changes unless you press Confirm.</p>
@@ -297,9 +328,17 @@ newsletterRouter.post('/confirm', express.urlencoded({ extended: false, limit: '
     const email = normalizeEmail(str(body.e));
     const token = str(body.t);
     if (!email || !token) return res.redirect(303, redirectToApp('invalid'));
+    // The studios the page named (absent on a page from before the field existed).
+    const shown = typeof body.s === 'string' ? body.s.split(',').map((id) => id.trim()).filter(Boolean) : undefined;
 
-    const outcome = await confirmSubscriber(email, token);
+    const outcome = await confirmSubscriber(email, token, shown);
     if (!outcome) return res.redirect(303, redirectToApp('invalid'));
+    if (outcome === 'changed') {
+      // Picks arrived after the page opened: nothing was applied; show what Confirm does now.
+      const link = await inspectConfirmLink(email, token);
+      if (link?.state === 'ready') return sendConfirmPage(res, email, token, link, true);
+      return res.redirect(303, redirectToApp(link ? 'confirmed' : 'invalid'));
+    }
 
     // Welcome is marketing → only goes out once they've opted in (here), and only on the click
     // that actually opted them in (not on a later click, or one that only confirmed new picks).
@@ -347,7 +386,7 @@ button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
 </style></head>
 <body><main>
 <h1>Unsubscribe from DreamStream updates</h1>
-<p>Press Unsubscribe to stop DreamStream updates to <strong>${escapeHtml(email)}</strong>. The studios you picked for your updates are deleted too.</p>
+<p>Press Unsubscribe to stop DreamStream updates to <strong>${escapeHtml(email)}</strong>. The studio picks and any note saved with your updates are deleted too.</p>
 <form method="post" action="${escapeHtml(action)}">
 <input type="hidden" name="via" value="page">
 <button type="submit">Unsubscribe</button>

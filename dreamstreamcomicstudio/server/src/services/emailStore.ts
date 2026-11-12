@@ -250,12 +250,27 @@ const escapeLike = (value: string) => value.replace(/[\\%_]/g, (c) => `\\${c}`);
  */
 const INBOX_LOOKUP_LIMIT = 1000;
 
+/** The early-access receipt (routes/newsletter.ts kind=access): one per inbox a day (interestStore.claimAccessReceipt). */
+export const ACCESS_REQUESTED_TEMPLATE = 'access-requested';
+
 /**
- * When confirmation emails went (or are going) to this INBOX since `sinceIso`, newest first: the
- * address itself and every alias of it (inboxKey). Rows are read by domain and matched here, since
- * the aliases can't be listed up front. null = log unreadable.
+ * Mail that an unauthenticated form request makes us send to whatever address it names: the double
+ * opt-in confirmation and the early-access receipt. Together they get one share of the email caps
+ * (interestStore.CONFIRM_EMAIL_BUDGET_SHARE), so those requests can't use up what sign-in, recovery
+ * and invite mail need.
  */
-export const recentConfirmEmailsToInbox = async (email: string, sinceIso: string): Promise<string[] | null> => {
+export const PUBLIC_FORM_EMAIL_TEMPLATES = [NEWSLETTER_CONFIRM_TEMPLATE, ACCESS_REQUESTED_TEMPLATE] as const;
+
+/**
+ * When emails of `template` (the confirmation email by default) went, or are going, to this INBOX
+ * since `sinceIso`, newest first: the address itself and every alias of it (inboxKey). Rows are
+ * read by domain and matched here, since the aliases can't be listed up front. null = log unreadable.
+ */
+export const recentConfirmEmailsToInbox = async (
+  email: string,
+  sinceIso: string,
+  template: (typeof PUBLIC_FORM_EMAIL_TEMPLATES)[number] = NEWSLETTER_CONFIRM_TEMPLATE
+): Promise<string[] | null> => {
   const db = adminOrNull();
   if (!db) return null;
   const key = inboxKey(email);
@@ -267,7 +282,7 @@ export const recentConfirmEmailsToInbox = async (email: string, sinceIso: string
       .from('email_log')
       .select('to_email, created_at')
       .ilike('to_email', pattern)
-      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
+      .eq('template', template)
       .in('status', AUTH_EMAIL_COUNTED_STATUSES)
       .gte('created_at', sinceIso)
       .order('created_at', { ascending: false })
@@ -282,18 +297,17 @@ export const recentConfirmEmailsToInbox = async (email: string, sinceIso: string
 };
 
 /**
- * Confirmation emails sent to ANY address since `sinceIso` (the template's own budget, so
- * unauthenticated confirmation mail can't use up the capacity sign-in and recovery mail need);
- * null = log unreadable.
+ * Public-form emails (PUBLIC_FORM_EMAIL_TEMPLATES: confirmations and early-access receipts) sent to
+ * ANY address since `sinceIso`, for their shared budget; null = log unreadable.
  */
-export const countConfirmEmailsSince = async (sinceIso: string): Promise<number | null> => {
+export const countPublicFormEmailsSince = async (sinceIso: string): Promise<number | null> => {
   const db = adminOrNull();
   if (!db) return null;
   try {
     const { count, error } = await db
       .from('email_log')
       .select('id', { count: 'exact', head: true })
-      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
+      .in('template', [...PUBLIC_FORM_EMAIL_TEMPLATES])
       .in('status', AUTH_EMAIL_COUNTED_STATUSES)
       .gte('created_at', sinceIso);
     if (error) return null;
@@ -422,7 +436,13 @@ export type ConfirmOutcome =
   /** An active subscriber confirmed new studio picks. */
   | 'updated'
   /** The token holder is already subscribed (a second click, or an older link). */
-  | 'already_confirmed';
+  | 'already_confirmed'
+  /**
+   * What the click would subscribe the address to, or add, is no longer what the Confirm page
+   * showed (someone registered more studios for this address since it opened). Nothing changed:
+   * show the page again with the current list.
+   */
+  | 'changed';
 
 interface ConfirmRow {
   id: string;
@@ -479,6 +499,21 @@ export type ConfirmLinkState =
  * GET: is this confirm link still good? 'ready' = show the Confirm button, with what it confirms;
  * 'already_confirmed' = nothing left to do; null = invalid or expired. Read-only.
  */
+/** What pressing Confirm on this row does, as the page states it and as the click applies it. */
+const confirmPlan = (row: ConfirmRow): { subscribed: boolean; current: StudioInterestId[]; adding: StudioInterestId[] } => {
+  const stored = sanitizeStudioInterests(row.product_interests);
+  if (!isSubscribedRow(row)) return { subscribed: false, current: [], adding: stored };
+  const waiting = row.metadata && typeof row.metadata === 'object' ? row.metadata[PENDING_INTERESTS_KEY] : undefined;
+  const adding = sanitizeStudioInterests(waiting).filter((id) => !stored.includes(id));
+  return { subscribed: true, current: stored, adding };
+};
+
+const sameStudios = (a: readonly string[], b: readonly string[]): boolean => {
+  const x = [...new Set(a)].sort();
+  const y = [...new Set(b)].sort();
+  return x.length === y.length && x.every((id, i) => id === y[i]);
+};
+
 export const inspectConfirmLink = async (email: string, token: string): Promise<ConfirmLinkState | null> => {
   const db = adminOrNull();
   if (!db || !token) return null;
@@ -486,12 +521,8 @@ export const inspectConfirmLink = async (email: string, token: string): Promise<
   if (!target) return null;
   const { row } = target;
   if (!target.matches) return isSubscribedRow(row) ? { state: 'already_confirmed' } : null;
-  const stored = sanitizeStudioInterests(row.product_interests);
-  if (!isSubscribedRow(row)) return { state: 'ready', subscribed: false, current: [], adding: stored };
-  // The same picks confirmSubscriber applies on the click.
-  const waiting = row.metadata && typeof row.metadata === 'object' ? row.metadata[PENDING_INTERESTS_KEY] : undefined;
-  const adding = sanitizeStudioInterests(waiting).filter((id) => !stored.includes(id));
-  return { state: 'ready', subscribed: true, current: stored, adding };
+  // The same plan confirmSubscriber applies on the click.
+  return { state: 'ready', ...confirmPlan(row) };
 };
 
 /**
@@ -500,8 +531,15 @@ export const inspectConfirmLink = async (email: string, token: string): Promise<
  * bounces and complaints, is never lifted here): a person just pressed Confirm on a link only
  * their inbox received. Single-use: the update only lands while the row still holds this token.
  * null = invalid, expired, or superseded.
+ *
+ * `shown` is what the Confirm page said the click subscribes the address to, or adds (its hidden
+ * field). Registrations for this address keep arriving while the page is open, and a stranger can
+ * send them, so the click applies exactly what was shown: when the row's plan differs now, nothing
+ * changes and the answer is 'changed' (the route shows the page again), and the studios written
+ * are the shown ones, never a pick that arrived between this read and the write. Without `shown`
+ * (a page from before this check), the plan as read here applies.
  */
-export const confirmSubscriber = async (email: string, token: string): Promise<ConfirmOutcome | null> => {
+export const confirmSubscriber = async (email: string, token: string, shown?: readonly string[]): Promise<ConfirmOutcome | null> => {
   const db = adminOrNull();
   if (!db || !token) return null;
   const normalized = normalizeEmail(email);
@@ -510,19 +548,20 @@ export const confirmSubscriber = async (email: string, token: string): Promise<C
   const { row, matches } = target;
   const wasSubscribed = isSubscribedRow(row);
   if (!matches) return wasSubscribed ? 'already_confirmed' : null;
+  const plan = confirmPlan(row);
+  if (shown && !sameStudios(sanitizeStudioInterests(shown), plan.adding)) return 'changed';
 
   const fields: Record<string, unknown> = { confirmed: true, confirm_token: null, unsubscribed_at: null };
   if (!wasSubscribed) fields.confirmed_at = new Date().toISOString();
+  // Exactly the studios the page named (with the ones already confirmed), as read above.
+  fields.product_interests = sanitizeStudioInterests([...plan.current, ...plan.adding]);
   const metadata = row.metadata && typeof row.metadata === 'object' ? { ...row.metadata } : null;
   if (metadata && PENDING_INTERESTS_KEY in metadata) {
-    // Picks asked for while already subscribed take effect now. (A row that wasn't subscribed
-    // keeps the picks it was registered with; anything else stashed there is dropped.)
-    const pending = sanitizeStudioInterests(metadata[PENDING_INTERESTS_KEY]);
+    // Picks asked for while already subscribed take effect now (they are in plan.adding). (A row
+    // that wasn't subscribed keeps the picks it was registered with; anything else stashed there
+    // is dropped.)
     delete metadata[PENDING_INTERESTS_KEY];
     fields.metadata = metadata;
-    if (wasSubscribed && pending.length) {
-      fields.product_interests = sanitizeStudioInterests([...(row.product_interests ?? []), ...pending]);
-    }
   }
   const { data: updated, error } = await db
     .from('waitlist_signups')

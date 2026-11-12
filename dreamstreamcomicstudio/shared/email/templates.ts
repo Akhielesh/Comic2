@@ -156,27 +156,33 @@ const textToParagraphs = (text: string): string =>
     .join('');
 
 // ── Newsletter: double opt-in confirmation ──────────────────────────────────────
+// Two steps, like the route (routes/newsletter.ts): the link opens a page that says what Confirm
+// does, and only its Confirm button subscribes the address. Anyone can type an address in, and
+// each new registration can send this email again (at most 3 a day, interestStore.ts
+// INTEREST_CONFIRM_THROTTLE), so the copy never promises "you won't hear from us again".
+export const NEWSLETTER_CONFIRM_MAX_PER_DAY = 3;
 const newsletterConfirm: Renderer = (params, brand) => {
   const url = params.confirmUrl || brand.appUrl;
+  const ignore = `Didn't sign up? Ignore this email: nothing happens unless you open the link and press Confirm. If someone keeps entering your address, you may get up to ${NEWSLETTER_CONFIRM_MAX_PER_DAY} of these a day.`;
   return {
     subject: `Confirm your subscription to ${brand.productName}`,
-    preheader: 'Confirm your email to start getting updates.',
+    preheader: 'Open the confirmation page to start getting updates.',
     content:
-      heading('One click to confirm') +
-      paragraph(`${greetName(params)} thanks for signing up for ${escapeHtml(brand.productName)} updates! 🎉`) +
-      paragraph('We just need to make sure this inbox is really yours. Tap the button to lock in your spot.') +
-      button('Confirm subscription', url, 'yellow') +
+      heading('Confirm your email') +
+      paragraph(`${greetName(params)} thanks for signing up for ${escapeHtml(brand.productName)} updates!`) +
+      paragraph('To make sure this inbox is really yours, open the confirmation page and press Confirm there.') +
+      button('Open the confirmation page', url, 'yellow') +
       linkFallback(url) +
-      muted("If you didn't sign up, no worries — just ignore this email and you won't hear from us again."),
+      muted(escapeHtml(ignore)),
     text: [
       greetNameText(params),
       '',
       `Thanks for signing up for ${brand.productName} updates!`,
       '',
-      'Confirm your subscription by opening this link:',
+      'Open this link, then press Confirm on the page it opens:',
       url,
       '',
-      "If you didn't sign up, you can safely ignore this email."
+      ignore
     ].join('\n')
   };
 };

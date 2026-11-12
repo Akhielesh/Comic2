@@ -3,7 +3,19 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { HISTORY_LAYERS_KEY } from '../comicstudio/mobile/backStack';
-import { BACK_LAYERS_STATE_KEY, LEGAL_DOCS, LEGAL_DOC_IDS, isLegalDocId, legalDocForPath, legalPath, syncLegalPath } from './legalRoutes';
+import {
+  BACK_LAYERS_STATE_KEY,
+  LEGAL_DOCS,
+  LEGAL_DOC_IDS,
+  LEGAL_ENTRY_STATE_KEY,
+  isLegalDocId,
+  keepLegalEntryMark,
+  legalDocForPath,
+  legalEntryState,
+  legalPath,
+  syncLegalPath,
+  viewForHistoryEntry
+} from './legalRoutes';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
@@ -60,6 +72,69 @@ describe('legal routes', () => {
     for (const id of LEGAL_DOC_IDS) expect(restorable).toContain(`'${id}'`);
     expect(app).toContain('legalDocForPath(window.location.pathname)');
     expect(app).toContain('syncLegalPath(url, currentView)');
+  });
+
+  it('reads the view a history entry names, the way App restores one from an address', () => {
+    const restorable = (v: string, id: string | null) => ['gallery', 'settings', 'privacy'].includes(v) || (v === 'read' && !!id) || (v === 'editor' && id === 'p-open');
+    const at = (href: string) => {
+      const u = new URL(href, 'https://dreamstreamstudio.ai');
+      return viewForHistoryEntry({ pathname: u.pathname, search: u.search }, restorable);
+    };
+    expect(at('/?view=gallery')).toEqual({ view: 'gallery' });
+    expect(at('/?view=settings&tab=legal')).toEqual({ view: 'settings' });
+    expect(at('/?view=privacy')).toEqual({ view: 'privacy' });
+    expect(at('/share/tok-123')).toEqual({ view: 'shared', shareToken: 'tok-123' });
+    expect(at('/models')).toEqual({ view: 'models' });
+    expect(at('/')).toEqual({ view: 'home' });
+    expect(at('/?newsletter=confirmed')).toEqual({ view: 'home' });
+    // A reader or workspace entry carries its ?id= (App reopens that comic or project).
+    expect(at('/?view=read&id=c1')).toEqual({ view: 'read', id: 'c1' });
+    expect(at('/?view=editor&id=p-open')).toEqual({ view: 'editor', id: 'p-open' });
+    // Not restorable, or not an address App restores a view from: the caller falls back.
+    for (const href of ['/?view=read', '/?view=editor&id=p1', '/?view=auth', '/c/some-comic', '/auth/callback', '/share/a/b', '/models/x']) {
+      expect(at(href), href).toBeNull();
+    }
+  });
+
+  it('is wired into App.tsx: Back from a legal page restores the view the entry names, and header navigation adds one entry', () => {
+    const app = read('../../App.tsx');
+    const restore = app.slice(app.indexOf('const restoreViewFromHistory = () => {'), app.indexOf('const openLegalFromReader'));
+    expect(restore).toContain('RESTORABLE_VIEWS.has(v as AppView) ||');
+    expect(restore).toContain("(v === 'auth' && !user) ||");
+    // A reader entry reopens its comic, a workspace entry its project, a profile entry the profile.
+    expect(restore).toContain("(v === 'read' && !!id) ||");
+    expect(restore).toContain('void navigateToReader(entry.id,');
+    expect(restore).toContain('(!!studioViewFromUrlParam(v) && !!id) ||');
+    expect(restore).toContain('if (entry.id === activeProjectId) setCurrentView(workspace);');
+    expect(restore).toContain("else setPendingStudioTarget({ id: entry.id, view: workspace, source: 'id' });");
+    expect(restore).toContain("(v === 'profile' && !!viewedProfile)");
+    // The reader's legal links push the document's entry once the reader has left its layer (a
+    // /share/<token> entry is never rewritten to /privacy), in ComicReader and in SharedViewer.
+    expect(app).toMatch(/const openLegalFromReader = \(doc: LegalDocId\) => \(\) => \{\s*pushLegalPath\(doc\);\s*setCurrentView\(doc\);/);
+    expect(app.match(/onOpenPrivacy=\{openLegalFromReader\('privacy'\)\}/g)).toHaveLength(2);
+    expect(app.match(/onOpenTerms=\{openLegalFromReader\('terms'\)\}/g)).toHaveLength(2);
+    // The address sync keeps a legal entry's mark (the page's Back button reads it).
+    expect(app).toContain("window.history.replaceState(keepLegalEntryMark(window.history.state), '', url);")
+    for (const page of ['PrivacyPolicy', 'TermsOfService', 'AcceptableUsePolicy', 'CopyrightPolicy', 'CookiesNotice', 'SubprocessorsPage']) {
+      expect(app).toContain(`<${page} onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />`);
+    }
+    // handleNavigate's top-level branch: exactly one pushState, and no clearReaderUrlParams() (it
+    // pushed a duplicate entry first, which became a dead Back press on a legal page). The entry
+    // being left keeps its ?view=, which is what Back restores.
+    const branchStart = app.indexOf('isLegalDocId(view)\n    ) {');
+    const branch = app.slice(branchStart, app.indexOf('const goToAuth', branchStart));
+    expect(branchStart).toBeGreaterThan(-1);
+    // One pushState per move (one or the other), and a legal document's entry is marked.
+    expect(branch).toContain("if (isLegalDocId(view)) window.history.pushState(legalEntryState(), '', legalPath(view));\n        else window.history.pushState({}, '', url);");
+    expect(branch.match(/pushState\(/g)).toHaveLength(2);
+    expect(branch).not.toContain('clearReaderUrlParams(');
+    expect(branch).not.toContain('replaceState(');
+  });
+
+  it('marks an in-app legal entry, and the address sync keeps only that mark', () => {
+    expect(legalEntryState()).toEqual({ [LEGAL_ENTRY_STATE_KEY]: true });
+    expect(keepLegalEntryMark({ [LEGAL_ENTRY_STATE_KEY]: true, csLayers: ['reader:x'] })).toEqual({ [LEGAL_ENTRY_STATE_KEY]: true });
+    for (const state of [null, undefined, {}, { csLayers: ['reader:x'] }, { [LEGAL_ENTRY_STATE_KEY]: 'yes' }, 'x']) expect(keepLegalEntryMark(state)).toEqual({});
   });
 
   it('reads the back stack\'s layers under the key the back stack writes them', () => {

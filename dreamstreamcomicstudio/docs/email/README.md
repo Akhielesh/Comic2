@@ -12,20 +12,20 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 
 | Email | Template | Kind | Trigger |
 |-------|----------|------|---------|
-| Newsletter / register-interest confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/interest` (current form), `POST /api/newsletter/subscribe` (kind=updates, older tabs), whatever the address's state. Per-recipient throttle: none within 10 min of the last, max 3/day, send slot claimed atomically; at most half the daily / monthly email caps; no open pixel. The link opens a Confirm page; the button's POST confirms. |
+| Newsletter / register-interest confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/interest` (current form), `POST /api/newsletter/subscribe` (kind=updates, older tabs), whatever the address's state. Per-inbox throttle: none within 10 min of the last, max 3/day; the inbox (all its aliases) and then the row are claimed before the send, so parallel requests send one; at most half the daily / monthly email caps, shared with `access-requested`; every address gets the same answer while the mailer is capped; no open pixel; no caller-supplied name. The link opens a Confirm page; the button's POST confirms exactly the studios the page named. |
 | Newsletter welcome | `newsletter-welcome` | marketing | pressing Confirm on the confirm page (new or returning subscribers only) |
 | Product update / broadcast | `product-update` | marketing | `sendProductUpdate(...)` |
 | Admin announcement / notice | `announcement` | essential | admin Email Console / `sendAnnouncement(...)` |
 | Beta invite / referral | `beta-invite` | essential | `/api/admin/email/invite`, `/api/invites/referral/send` |
-| Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access) |
+| Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access), for a new request only; at most one a day per inbox, sharing the public-form half of the email caps with `newsletter-confirm` (`interestStore.claimAccessReceipt`). |
 | Account welcome (fuller onboarding) | `welcome` | essential | `sendWelcome(...)` |
 | New sign-in alert | `signin-alert` | essential | `sendSigninAlert(...)` |
 | Confirm signup / resend / password reset / magic link | `auth-confirm-signup`, `auth-recovery`, `auth-magic-link` | essential | `POST /api/auth/email/*` (backend `generateLink` + `/send`; see [SETUP](./SETUP.md#auth-emails-go-through-the-backend-default-since-2026-10-22)) |
 | Email change / reauthentication / security notices (+ auth fallback) | `auth-*` | essential | Supabase **Send Email Hook** |
 
 **Essential** mail (account, security, transactional) is always sent and **can never be
-unsubscribed**. **Marketing** mail carries a working one-click unsubscribe and honors the
-suppression list.
+unsubscribed**. **Marketing** mail carries a working unsubscribe (a link to a page with one Unsubscribe button,
+and the RFC 8058 one-click `List-Unsubscribe` header email apps use) and honors the suppression list.
 
 ## Sender addresses & reply policy
 

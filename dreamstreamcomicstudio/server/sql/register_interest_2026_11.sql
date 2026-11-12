@@ -84,9 +84,12 @@ alter table public.waitlist_signups
     and cardinality(product_interests) <= 5
   );
 
--- 4) The per-recipient confirmation throttle (and the auth-email one) look up email_log by exact
---    to_email + template, newest first. The existing index is on lower(to_email), which those
---    equality lookups can't use. to_email is always stored lowercased (emailStore.normalizeEmail).
+-- 4) The auth-email throttle looks up email_log by exact to_email + template, newest first. The
+--    existing index is on lower(to_email), which those equality lookups can't use. to_email is
+--    always stored lowercased (emailStore.normalizeEmail). (The confirmation throttle counts per
+--    inbox, so +tag and Gmail-dot aliases share one allowance: it reads the last day's
+--    newsletter-confirm rows for the address's domain, emailStore.recentConfirmEmailsToInbox,
+--    which idx_email_log_created in email_system.sql bounds to one day of mail.)
 create index if not exists idx_email_log_to_template
   on public.email_log (to_email, template, created_at desc);
 
@@ -219,7 +222,11 @@ end $do$;
 --    already-"confirmed" subscriber, pick its confirm_token, or plant studio picks, skipping the
 --    double opt-in. Every other column now takes its default (confirmed = false, no token, no
 --    picks). The policy also requires the address in lowercase and repeats those defaults, so a
---    later blanket GRANT can't reopen it. (The server no longer trusts a token it didn't sign,
+--    later blanket GRANT can't reopen it. Its metadata must be a JSON object of at most 8 KB
+--    (the fallback writes a source, the picks and a note of at most 1,000 characters) without the
+--    server's own pending_interests key: the server compares that key in its guarded picks
+--    update (interestStore.ts savePicks), so a client may not plant one, nor a document large
+--    enough to slow every later read of the row. (The server no longer trusts a token it didn't sign,
 --    services/confirmToken.ts, so a forged token was already useless; this closes the rest.)
 --    Safe to apply at any time: no current client writes any other column.
 alter table public.waitlist_signups enable row level security;
@@ -243,6 +250,9 @@ alter policy waitlist_public_insert on public.waitlist_signups
     and unsubscribed_at is null
     and cardinality(product_interests) = 0
     and feedback is null
+    and jsonb_typeof(metadata) = 'object'
+    and not (metadata ? 'pending_interests')
+    and octet_length(metadata::text) <= 8192
   );
 
 -- 8) No subscription oracle through the table itself. The unique index on (lower(email), kind)
@@ -286,6 +296,9 @@ begin
     and new.unsubscribed_at is null
     and cardinality(new.product_interests) = 0
     and new.feedback is null
+    and jsonb_typeof(new.metadata) = 'object'
+    and not (new.metadata ? 'pending_interests')
+    and octet_length(new.metadata::text) <= 8192
   ) is not true then
     return new;
   end if;

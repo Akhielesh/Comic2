@@ -6,6 +6,8 @@ import {
   InterestRetryError,
   InterestUnavailableError,
   getInterestSummary,
+  noteSentDuration,
+  padToSentDuration,
   registerInterest
 } from '../services/interestStore.js';
 import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
@@ -23,12 +25,14 @@ import { formatStudioInterestList, sanitizeStudioInterests, type StudioInterestI
 //   Anyone can type anyone's address, so a valid request ALWAYS gets the same answer:
 //   200 {ok, status:'pending', studios, message} with `studios` echoing only what this request
 //   picked. Whether the address was new, pending, already subscribed, unsubscribed or throttled
-//   is never told, and nothing stored is ever echoed. Other answers are about the request or the
+//   is never told, nothing stored is ever echoed, and a request that sent nothing takes about as
+//   long as one that sent the email (padToSentDuration). Other answers are about the request or the
 //   service, never the address: 400 invalid_email | invalid_studios | captcha_required |
-//   captcha_failed; 503 email_unavailable (a send failed, or confirmation mail has used its share
-//   of the email budget) | try_again | interest_unavailable (this deployment can't take
-//   registrations at all: database without the columns, no service role, no mailer; the form
-//   then hides itself).
+//   captcha_failed; 503 email_unavailable (public-form mail has used its share of the email budget,
+//   or the mailer is at its hard cap: both checked before anything about the address, so every
+//   address gets it; or this send failed) | try_again | interest_unavailable (this deployment
+//   can't take registrations at all: database without the columns, no service role, no mailer;
+//   the form then hides itself).
 //
 // GET /api/admin/interest/summary — admin only (index.ts mounts requireAdmin): counts per studio,
 //   confirmed vs pending. No address ever leaves the server here.
@@ -118,6 +122,7 @@ interestRouter.post('/', async (req, res, next) => {
     if (!mailerConfigured()) return unavailable(res);
 
     // 4) Record (idempotent, merged, throttled, send slot claimed atomically).
+    const startedAt = Date.now();
     const result = await registerInterest({ email, studios, source });
     if (result.outcome === 'budget_exhausted') {
       console.warn('[interest] confirmation budget used up for now', { requestId: req.requestId });
@@ -138,6 +143,11 @@ interestRouter.post('/', async (req, res, next) => {
         console.warn('[interest] confirmation email not sent', { reason: sent.skipped || 'send_failed', requestId: req.requestId });
         return emailUnavailable(res);
       }
+      result.sent();
+      noteSentDuration(startedAt);
+    } else {
+      // Throttled: nothing was sent, so take about as long as a request that sent the email.
+      await padToSentDuration(startedAt);
     }
 
     // 6) Sent now, or throttled: the same answer (see the header).

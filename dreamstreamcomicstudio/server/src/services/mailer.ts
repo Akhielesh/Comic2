@@ -7,7 +7,7 @@
 //   3. HARD cost cap — refuses to send past EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH (defaults
 //      sit under Cloudflare's free 3,000/mo), emitting a cost alert to the logs;
 //   4. logs every attempt to email_log (observability + the cost accounting above);
-//   5. builds the working one-click unsubscribe link (marketing) + read-receipt pixel.
+//   5. builds the unsubscribe link (marketing: a page with one button; RFC 8058 One-Click POST) + read-receipt pixel.
 //
 // Template names + their essential/marketing classification come straight from the shared
 // module the worker renders with, so there's a single source of truth and no drift.

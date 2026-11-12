@@ -12,7 +12,7 @@ import {
     SUPPORT_EMAIL,
     YOUTUBE_TERMS_URL
 } from './legal/legalFacts';
-import type { LegalDocId } from './legal/legalRoutes';
+import type { LegalPageProps } from './legal/LegalDocument';
 
 // Terms of Service: one document, one name ("Terms of Service") for every studio. Each factual
 // statement is tied to the code by components/legal/*.test.* and the legal suite's claims ledger.
@@ -302,6 +302,6 @@ const summary = (
     </Callout>
 );
 
-export const TermsOfService: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
-    <LegalDocument doc="terms" intro={intro} summary={summary} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+export const TermsOfService: React.FC<LegalPageProps> = ({ onBack, onOpenDoc, onHistoryBack }) => (
+    <LegalDocument doc="terms" intro={intro} summary={summary} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} onHistoryBack={onHistoryBack} />
 );

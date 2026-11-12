@@ -1,5 +1,5 @@
 import React from 'react';
-import { SUPPORT_EMAIL } from '@/components/legal/legalFacts';
+import { SUPPORT_EMAIL } from '@/components/legal/contacts';
 import { legalPath } from '@/components/legal/legalRoutes';
 import { mainAppUrl } from '@/services/liveLink';
 import { cx } from './primitives';

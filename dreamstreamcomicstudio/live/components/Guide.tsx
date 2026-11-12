@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } fro
 import { Icon } from '../ui/icons';
 import { Btn, cx } from '../ui/primitives';
 import { STREAM_HOST_ON, STREAM_HOSTNAME } from '@/shared/streamHost';
-import { SUPPORT_EMAIL } from '@/components/legal/legalFacts';
+import { SUPPORT_EMAIL } from '@/components/legal/contacts';
 
 export interface TourStep {
   target?: string;

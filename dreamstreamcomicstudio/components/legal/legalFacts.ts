@@ -6,9 +6,10 @@
  * This file is not legal advice. Wording that needs an owner or counsel decision is tracked outside
  * the product (the legal suite's OWNER-DECISIONS list), never as placeholder text on a page.
  */
+import { PRIVACY_EMAIL, SUPPORT_EMAIL } from './contacts';
 
 /** The date every legal page shows. Bump it with any material change to a page. */
-export const LEGAL_LAST_UPDATED = { iso: '2026-11-05', label: 'November 5, 2026' } as const;
+export const LEGAL_LAST_UPDATED = { iso: '2026-11-12', label: 'November 12, 2026' } as const;
 
 /** The trading name used on every page (the operator's legal form and address are an owner decision). */
 export const OPERATOR_NAME = 'DreamStream Studio';
@@ -18,13 +19,8 @@ export const OPERATOR_SHORT = 'DreamStream';
 /** The sites these documents cover (shared/streamHost.ts, services/productHost.ts). */
 export const COVERED_SITES = ['dreamstreamstudio.ai', 'stream.dreamstreamstudio.ai', 'comics.dreamstreamstudio.ai'] as const;
 
-/**
- * Mailboxes on our own domain. support@ and privacy@ are the Cloudflare Email Routing addresses the
- * setup guide creates (docs/connectors/google-setup.md "Professional contact addresses"); support@
- * is also the Contact in public/.well-known/security.txt.
- */
-export const SUPPORT_EMAIL = 'support@dreamstreamstudio.ai';
-export const PRIVACY_EMAIL = 'privacy@dreamstreamstudio.ai';
+/** Mailboxes on our own domain (components/legal/contacts.ts, which Stream Studio imports directly). */
+export { PRIVACY_EMAIL, SUPPORT_EMAIL };
 /** Security reports go where security.txt sends them (a test keeps the two equal). */
 export const SECURITY_EMAIL = SUPPORT_EMAIL;
 /** The private advisory form security.txt lists as its second Contact. */
@@ -162,6 +158,23 @@ export const DIRECT_AI_PROVIDERS = [
   'NVIDIA'
 ] as const;
 
+/**
+ * Chat Studio's memory notes are written by POST /api/chat/memory (server/src/routes/chat.ts). The
+ * client sends no source with it (services/chatApi.ts updateChatMemory), so the provider comes from
+ * the X-Text-Source header (the app-wide pick under Settings → API & Models) or, with none, the
+ * first key in AUTO_PROVIDER_ORDER (OpenRouter), and the model is OPENROUTER_TEXT_MODEL (default in
+ * server/src/config.ts; no override in api-proxy/wrangler.jsonc). Not the chat's own model.
+ */
+export const MEMORY_NOTE_MODEL = { id: 'google/gemini-2.5-flash', label: "Google's Gemini 2.5 Flash" } as const;
+
+/**
+ * Every signed-in Chat Studio turn embeds the last user message with Google's Gemini embedding API
+ * to search memory (server/src/ai/chat.ts → buildUserMemoryBlock → retrieveUserMemories →
+ * embedText(query, 'RETRIEVAL_QUERY'), server/src/services/userMemory.ts), whatever provider answers;
+ * embedText sends at most this many characters.
+ */
+export const MEMORY_SEARCH_MAX_CHARS = 8000;
+
 /** Production keeps Stripe billing off (api-proxy/wrangler.jsonc BILLING_ENABLED "false"). */
 export const BILLING_LIVE = false;
 
@@ -182,6 +195,14 @@ export interface BrowserThirdParty {
 }
 
 export const BROWSER_THIRD_PARTIES: readonly BrowserThirdParty[] = [
+  {
+    // Our database and sign-in provider, but another company, and browsers reach it directly
+    // (functions/_middleware.ts SUPABASE_ORIGIN; the /c/* reader's CSP in functions/_shared/csp.ts).
+    name: 'Supabase',
+    hosts: ['*.supabase.co'],
+    when: 'Signing in, loading and saving your data and live updates on the main site and in Stream Studio, and every Comic Studio image, including the pages of a comic someone shared with you (also when you are not signed in).',
+    receives: 'Your sign-in session, if you have one, and the data the page reads or saves.'
+  },
   {
     name: 'Cloudflare Turnstile',
     hosts: ['challenges.cloudflare.com'],

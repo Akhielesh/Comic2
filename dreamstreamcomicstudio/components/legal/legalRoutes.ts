@@ -77,6 +77,38 @@ export const clearFragment = (): void => {
  */
 export const BACK_LAYERS_STATE_KEY = 'csLayers';
 
+/**
+ * The history-state key that marks an entry this visit pushed for a legal document from another page
+ * of the app (pushLegalPath, and App's handleNavigate). The entry under a marked one is that page, so
+ * the document's own Back button can go back to it exactly as the browser's Back would
+ * (legalBackGoesBack). App's address sync keeps the mark when it rewrites the entry
+ * (keepLegalEntryMark); everything else in the state is the sync's to replace, as before.
+ */
+export const LEGAL_ENTRY_STATE_KEY = 'dsLegalEntry';
+
+/** The state an in-app move to a legal document pushes with its new entry. */
+export const legalEntryState = (): Record<string, unknown> => ({ [LEGAL_ENTRY_STATE_KEY]: true });
+
+const isLegalEntry = (state: unknown): boolean =>
+  !!state && typeof state === 'object' && (state as Record<string, unknown>)[LEGAL_ENTRY_STATE_KEY] === true;
+
+/** The state App's address sync writes back: the mark (if the entry has it), nothing else. */
+export const keepLegalEntryMark = (state: unknown): Record<string, unknown> => (isLegalEntry(state) ? legalEntryState() : {});
+
+/**
+ * The legal page's own Back button goes back in history (to the page that opened the document, or
+ * the document before it) when the current entry was pushed by a move inside this visit; otherwise
+ * (a cold load of /privacy, a link from another site, an entry nobody marked) it falls back to the
+ * page's onBack, so the button never leaves DreamStream.
+ */
+export const legalBackGoesBack = (): boolean => {
+  try {
+    return isLegalEntry(window.history.state);
+  } catch {
+    return false;
+  }
+};
+
 /** The current history entry belongs to an open back-stack layer (the comic reader, a sheet). */
 const entryHasBackLayers = (): boolean => {
   const state = window.history.state as Record<string, unknown> | null;
@@ -86,13 +118,14 @@ const entryHasBackLayers = (): boolean => {
 
 /**
  * Give an in-app move to a legal document its own history entry (App's address sync only replaces
- * the current one), so the browser's or the phone's Back leaves the document instead of leaving the
- * site. Back onto another document's entry opens that document; Back onto any other entry goes where
- * the page's own Back button goes (App's onBack: Dashboard when signed in, else Home), because App
- * doesn't yet restore a view from a popped address. That is the page the reader came from only when
- * they came from Dashboard or Home (restoring any view is an App.tsx change, proposed for review).
- * The new entry carries no #fragment, so the document starts at its top. Back and Forward onto it
- * reopen the document (followLegalHistory).
+ * the current one), so the browser's or the phone's Back returns to the page the reader came from
+ * instead of leaving the site. Back onto another document's entry opens that document; Back onto any
+ * other entry shows the view that entry names (App's restoreViewFromHistory, via
+ * viewForHistoryEntry below: Gallery for /?view=gallery, Settings on its tab, a /share/<token> link,
+ * /models, a comic in the reader, the project open in a workspace), and only an entry that names no
+ * view App can show falls back to Dashboard or Home. The entry is marked (legalEntryState), so the
+ * page's own Back button does the same as the browser's Back. The new entry carries no #fragment, so
+ * the document starts at its top. Back and Forward onto it reopen the document (followLegalHistory).
  *
  * Not on an entry a back-stack layer owns: the reader leaves its layer first, which pops that
  * layer's entry, and App's address sync then puts the document's path on the entry under it. A new
@@ -103,7 +136,7 @@ export const pushLegalPath = (id: LegalDocId): void => {
     if (entryHasBackLayers()) return;
     const path = legalPath(id);
     if (window.location.pathname === path && !window.location.hash && !window.location.search) return;
-    window.history.pushState({}, '', path);
+    window.history.pushState(legalEntryState(), '', path);
   } catch {
     clearFragment();
   }
@@ -136,6 +169,38 @@ export const followLegalHistory = (doc: LegalDocId, open: (id: LegalDocId) => vo
   return () => {
     if (shownDoc === doc) shownDoc = null;
   };
+};
+
+/** What a history entry's address names: a view, its ?id= (a comic or a project), and for /share/<token> the token. */
+export interface HistoryEntryView {
+  view: string;
+  id?: string;
+  shareToken?: string;
+}
+
+/**
+ * The view a history entry's address names, read the way App restores one from the address on load
+ * (App.tsx: /share/<token>, /models, a ?view= in its RESTORABLE_VIEWS, ?view=read&id= for the
+ * reader, ?view=<workspace>&id= for a project). This is what Back or Forward from a legal page onto
+ * that entry shows; a ?view= keeps its other parameters on the entry (?view=settings&tab=legal
+ * reopens Settings on that tab, which AccountSettings reads from ?tab=). "/" without a ?view= is the
+ * home page. `restorable` decides which ?view= values (with their ?id=, if any) App can show. Any
+ * other value or path names no view (null): the caller falls back to Dashboard or Home.
+ */
+export const viewForHistoryEntry = (
+  location: { pathname: string; search: string },
+  restorable: (view: string, id: string | null) => boolean
+): HistoryEntryView | null => {
+  const share = /^\/share\/([^/]+)$/.exec(location.pathname);
+  if (share) return { view: 'shared', shareToken: share[1] };
+  if (location.pathname === '/models') return { view: 'models' };
+  if (location.pathname !== '/') return null;
+  const params = new URLSearchParams(location.search);
+  const view = params.get('view');
+  if (!view) return { view: 'home' };
+  const id = params.get('id')?.trim() || null;
+  if (!restorable(view, id)) return null;
+  return id ? { view, id } : { view };
 };
 
 /**

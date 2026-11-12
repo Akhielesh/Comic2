@@ -148,9 +148,10 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
   const quick = useQuickStart(nav);
 
+  // Only the signed-in account's own unsaved recordings (recorder.ts), so re-read on sign-in / sign-out too.
   useEffect(() => {
     void listUnsavedRecordings().then(setUnsaved).catch(() => undefined);
-  }, [saving]);
+  }, [saving, account.userId, account.status]);
 
   const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
     setCheckingBackend(true);

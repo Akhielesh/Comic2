@@ -67,7 +67,7 @@ type InterestPhase = 'idle' | 'loading' | 'pending' | 'error' | 'unavailable';
 const LANDING_COPY: Record<NewsletterLanding, { tone: 'ok' | 'warn'; text: string }> = {
   confirmed: {
     tone: 'ok',
-    text: 'You’re confirmed. We’ll send occasional updates, focused on the studios you picked. Every update has a one-click unsubscribe.'
+    text: 'You’re confirmed. We’ll send occasional updates, focused on the studios you picked. Every update has an unsubscribe link.'
   },
   invalid: {
     tone: 'warn',
@@ -354,7 +354,7 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
 
         <p id={ids.consent} className={`mt-2 text-xs leading-relaxed ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
           We’ll email you once to confirm your address. Once you confirm, we’ll send occasional DreamStream updates,
-          focused on the studios you picked. Every update has a one-click unsubscribe, and we never sell your
+          focused on the studios you picked. Every update has an unsubscribe link, and we never sell your
           address. See our{' '}
           <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer" className={linkClass}>
             Privacy Policy<span className="sr-only"> (opens in a new tab)</span>

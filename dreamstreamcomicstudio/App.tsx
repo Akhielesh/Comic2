@@ -55,6 +55,7 @@ import {
   resolveProjectView,
   resolveStudioDeepLink,
   routeStudioDeepLink,
+  studioViewFromUrlParam,
   studioViewToUrlParam,
   type StudioDeepLinkView
 } from './services/studioDeepLink';
@@ -69,7 +70,7 @@ import { AppStatusBar } from './components/status/AppStatusBar';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
-import { isLegalDocId, legalDocForPath, legalPath, syncLegalPath } from './components/legal/legalRoutes';
+import { isLegalDocId, keepLegalEntryMark, legalDocForPath, legalEntryState, legalPath, pushLegalPath, syncLegalPath, viewForHistoryEntry, type LegalDocId } from './components/legal/legalRoutes';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
@@ -396,6 +397,46 @@ const App: React.FC = () => {
     clearReaderUrlParams();
   };
 
+  // A legal page's own Back button when nothing in this visit opened the document (a cold load), and
+  // the browser's Back from one onto an entry that names no view App can show.
+  const leaveLegalPage = () => setCurrentView(user ? 'dashboard' : 'home');
+  // The browser's or phone's Back (or Forward) from a legal page onto another entry, and the page's own
+  // Back button when this visit opened the document: show the view that entry's address names, as a
+  // reload of it would (?view=, /share/<token>, /models, '/'). A reader entry (?view=read&id=) reopens
+  // that comic and a workspace entry (?view=editor&id=…) its project; ?view=profile shows the profile
+  // App still holds.
+  const restoreViewFromHistory = () => {
+    const entry = viewForHistoryEntry(
+      window.location,
+      (v, id) =>
+        RESTORABLE_VIEWS.has(v as AppView) ||
+        (v === 'auth' && !user) ||
+        (v === 'read' && !!id) ||
+        (!!studioViewFromUrlParam(v) && !!id) ||
+        (v === 'profile' && !!viewedProfile)
+    );
+    if (!entry) return leaveLegalPage();
+    if (entry.shareToken) setShareToken(entry.shareToken);
+    if (entry.view === 'read' && entry.id) {
+      void navigateToReader(entry.id, returnView !== 'reader' && !isLegalDocId(returnView) ? returnView : user ? 'dashboard' : 'home');
+      return;
+    }
+    const workspace = studioViewFromUrlParam(entry.view);
+    if (workspace && entry.id) {
+      if (entry.id === activeProjectId) setCurrentView(workspace);
+      else setPendingStudioTarget({ id: entry.id, view: workspace, source: 'id' });
+      return;
+    }
+    setCurrentView(entry.view as AppView);
+  };
+  // A legal link inside the comic reader (its footer and phone sheet): the reader has left its
+  // back-stack layer when this runs, so the document gets its own entry above the reader's (Back
+  // shows the comic again, and a /share/<token> address is never overwritten).
+  const openLegalFromReader = (doc: LegalDocId) => () => {
+    pushLegalPath(doc);
+    setCurrentView(doc);
+  };
+
   // Single entry point for opening Settings on a specific tab. Writes the tab into the
   // continuity layers FIRST so an explicit intent ("open Security") always beats the
   // remembered last-visited tab when AccountSettings mounts.
@@ -566,7 +607,8 @@ const App: React.FC = () => {
           else url.searchParams.set('view', currentView);
         }
       }
-      window.history.replaceState({}, '', url);
+      // Keep only a legal document entry's mark (legalRoutes keepLegalEntryMark: its Back button needs it).
+      window.history.replaceState(keepLegalEntryMark(window.history.state), '', url);
     } catch { /* history unavailable; navigation still works via state */ }
   }, [currentView, activeProjectId, pendingStudioTarget]);
 
@@ -808,13 +850,17 @@ const App: React.FC = () => {
       view === 'terms' ||
       isLegalDocId(view)
     ) {
-      clearReaderUrlParams();
       setCurrentView(view as AppView);
-      // Give the public catalog a real, shareable URL; other views stay at '/'.
+      // Give the public catalog a real, shareable URL, and a legal document its own path; other
+      // views stay at '/'. One new entry, and the one being left keeps its address, so Back from a
+      // legal page can restore the view it names (restoreViewFromHistory).
       try {
         const url = new URL(window.location.href);
-        url.pathname = view === 'models' ? '/models' : isLegalDocId(view) ? legalPath(view) : '/';
-        window.history.pushState({}, '', url);
+        url.searchParams.delete('view');
+        url.searchParams.delete('id');
+        url.pathname = view === 'models' ? '/models' : '/';
+        if (isLegalDocId(view)) window.history.pushState(legalEntryState(), '', legalPath(view));
+        else window.history.pushState({}, '', url);
       } catch { /* history unavailable; navigation still works via state */ }
     }
   };
@@ -1227,27 +1273,27 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'privacy' && (
-            <PrivacyPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <PrivacyPolicy onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'terms' && (
-            <TermsOfService onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <TermsOfService onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'acceptable-use' && (
-            <AcceptableUsePolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <AcceptableUsePolicy onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'copyright' && (
-            <CopyrightPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <CopyrightPolicy onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'cookies' && (
-            <CookiesNotice onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <CookiesNotice onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'subprocessors' && (
-            <SubprocessorsPage onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+            <SubprocessorsPage onBack={leaveLegalPage} onHistoryBack={restoreViewFromHistory} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'dashboard' && (
@@ -1303,8 +1349,8 @@ const App: React.FC = () => {
               onUpdateProject={updateProject}
               isReadOnly={!!publicProject}
               onNavigate={handleNavigate}
-              onOpenPrivacy={() => setCurrentView('privacy')}
-              onOpenTerms={() => setCurrentView('terms')}
+              onOpenPrivacy={openLegalFromReader('privacy')}
+              onOpenTerms={openLegalFromReader('terms')}
               onOpenFaq={handleOpenFaq}
             />
           )}
@@ -1357,8 +1403,8 @@ const App: React.FC = () => {
             <SharedViewer
               shareToken={shareToken}
               onNavigate={handleNavigate}
-              onOpenPrivacy={() => setCurrentView('privacy')}
-              onOpenTerms={() => setCurrentView('terms')}
+              onOpenPrivacy={openLegalFromReader('privacy')}
+              onOpenTerms={openLegalFromReader('terms')}
               onOpenFaq={handleOpenFaq}
             />
           )}

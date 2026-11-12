@@ -78,7 +78,7 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     // which runs them through the chat's provider (server/src/routes/chat.ts).
     expect(textOf(section)).toMatch(/to suggest follow-up questions \(shown under the answer as "You might ask"\)/);
     const providers = within(section).getByText(/and the AI providers described under AI processing/);
-    expect(textOf(providers)).toMatch(/generate the response you asked for, suggest follow-up questions, and write and index your memory notes/);
+    expect(textOf(providers)).toMatch(/generate the response you asked for, suggest follow-up questions, and write, index and search your memory notes/);
   });
 
   it('names the services the model\'s tools contact, since tool requests can carry connected-account details', () => {
@@ -151,7 +151,7 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
 
   it('shows the updated date and an email contact instead of only the in-app flow', () => {
     render(<PrivacyPolicy onBack={vi.fn()} />);
-    expect(screen.getByText('November 5, 2026', { selector: 'time' })).toHaveAttribute('dateTime', '2026-11-05');
+    expect(screen.getByText('November 12, 2026', { selector: 'time' })).toHaveAttribute('dateTime', '2026-11-12');
     const contact = screen.getByRole('heading', { level: 2, name: /^\d+\. Contact$/ }).closest('section') as HTMLElement;
     expect(contact).toHaveAttribute('id', 'contact');
     expect(within(contact).getByRole('link', { name: 'privacy@dreamstreamstudio.ai' })).toBeInTheDocument();

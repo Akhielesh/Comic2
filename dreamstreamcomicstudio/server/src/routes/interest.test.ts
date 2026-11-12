@@ -40,6 +40,7 @@ const h = vi.hoisted(() => {
   let seq = 0;
 
   type Filter = (r: Row) => boolean;
+  const URL_LIMIT_BYTES = 8192;
   const builder = (table: string) => {
     const filters: Filter[] = [];
     let op: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select';
@@ -50,11 +51,17 @@ const h = vi.hoisted(() => {
     let range: [number, number] | null = null;
     let single: 'maybe' | 'one' | null = null;
     let returning = false;
+    // Filters travel in the request URL; past what gateways accept, the request fails (414).
+    let urlBytes = 0;
+    const inUrl = (value: unknown) => {
+      urlBytes += encodeURIComponent(String(value)).length;
+    };
 
     const run = () => {
       const rows = tables[table] ?? (tables[table] = []);
       const injected = state.fail && state.fail.table === table && state.fail.op === op ? state.fail : null;
       if (injected) return { data: null, error: { code: injected.code, message: injected.message ?? injected.code }, count: null };
+      if (urlBytes > URL_LIMIT_BYTES) return { data: null, error: { code: '414', message: 'Request-URI Too Large' }, count: null };
       if (op === 'insert') {
         const list = Array.isArray(payload) ? payload : [payload as Row];
         for (const r of list) {
@@ -169,18 +176,18 @@ const h = vi.hoisted(() => {
       update: (p: Row) => ((op = 'update'), (payload = p), q),
       upsert: (p: Row) => ((op = 'upsert'), (payload = p), q),
       delete: () => ((op = 'delete'), q),
-      eq: (col: string, val: unknown) => (filters.push((r) => r[col] === val), q),
+      eq: (col: string, val: unknown) => (inUrl(val), filters.push((r) => r[col] === val), q),
       in: (col: string, vals: unknown[]) => (filters.push((r) => vals.includes(r[col])), q),
       gte: (col: string, val: string) => (filters.push((r) => String(r[col]) >= val), q),
       is: (col: string, val: unknown) => (filters.push((r) => (valueAt(r, col) ?? null) === val), q),
-      or: (expr: string) => (filters.push(orFilter(expr)), q),
-      filter: (col: string, oper: string, value: string) => (filters.push(containFilter(col, oper, value)), q),
+      or: (expr: string) => (inUrl(expr), filters.push(orFilter(expr)), q),
+      filter: (col: string, oper: string, value: string) => (inUrl(value), filters.push(containFilter(col, oper, value)), q),
       not: (col: string, oper: string, value: unknown) => {
         if (oper !== 'is' || value !== null) throw new Error(`fake: unsupported not() ${oper}`);
         filters.push((r) => (r[col] ?? null) !== null);
         return q;
       },
-      ilike: (col: string, pattern: string) => (filters.push(ilikeFilter(col, pattern)), q),
+      ilike: (col: string, pattern: string) => (inUrl(pattern), filters.push(ilikeFilter(col, pattern)), q),
       order: (col: string, o?: { ascending?: boolean }) => ((order = { col, asc: o?.ascending !== false }), q),
       limit: (n: number) => ((limit = n), q),
       range: (a: number, b: number) => ((range = [a, b]), q),
@@ -219,7 +226,7 @@ const h = vi.hoisted(() => {
   const logSend = (to: string, template: string, status: string) =>
     tables.email_log.push({ id: `log-${++seq}`, to_email: to, template, kind: 'essential', status, created_at: now() });
 
-  const sendNewsletterConfirm = vi.fn(async (to: string, _url: string) => {
+  const sendNewsletterConfirm = vi.fn(async (to: string, _url: string, _firstName?: string) => {
     if (state.sendOutcome === 'not_configured') {
       logSend(to, 'newsletter-confirm', 'skipped');
       return { ok: false, skipped: 'not_configured' };
@@ -232,9 +239,16 @@ const h = vi.hoisted(() => {
     return state.sendOutcome === 'sent' ? { ok: true, messageId: 'm1' } : { ok: false, error: 'worker responded 500' };
   });
   const sendNewsletterWelcome = vi.fn(async () => ({ ok: true }));
+  // The early-access receipt, logged like the real mailer does (the per-inbox day limit reads it).
+  const sendAccessRequested = vi.fn(async (to: string, _firstName?: string) => {
+    // The real mailer reads usage before it logs the send: a parallel request's check can run first.
+    if (state.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, state.latencyMs * 4));
+    logSend(to, 'access-requested', 'sent');
+    return { ok: true, messageId: 'm2' };
+  });
   const verifyTurnstile = vi.fn(async (token?: string) => token === 'good-token');
 
-  return { state, tables, admin, rpc, sendNewsletterConfirm, sendNewsletterWelcome, verifyTurnstile, logSend };
+  return { state, tables, admin, rpc, sendNewsletterConfirm, sendNewsletterWelcome, sendAccessRequested, verifyTurnstile, logSend };
 });
 
 vi.mock('../services/supabase.js', () => ({
@@ -247,7 +261,7 @@ vi.mock('../services/mailer.js', () => ({
   mailerConfigured: () => h.state.mailerConfigured,
   sendNewsletterConfirm: h.sendNewsletterConfirm,
   sendNewsletterWelcome: h.sendNewsletterWelcome,
-  sendAccessRequested: vi.fn(async () => ({ ok: true })),
+  sendAccessRequested: h.sendAccessRequested,
   verifyUnsubscribeToken: (_e: string, t: string) => t === 'valid-unsub'
 }));
 vi.mock('../services/turnstile.js', () => ({
@@ -268,7 +282,7 @@ vi.mock('../services/rbac.js', () => ({
 const { interestRouter, adminInterestRouter } = await import('./interest.js');
 const { newsletterRouter } = await import('./newsletter.js');
 const { requireAdmin } = await import('../middleware/requireAdmin.js');
-const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE, checkConfirmThrottle } = await import('../services/interestStore.js');
+const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE, checkConfirmThrottle, resetInterestGuardsForTests } = await import('../services/interestStore.js');
 const { WAITLIST_PRODUCTS, inboxKey } = await import('../services/emailStore.js');
 const { STUDIO_INTEREST_IDS } = await import('../../../services/studioInterests.js');
 
@@ -309,8 +323,11 @@ beforeEach(() => {
   h.tables.waitlist_signups = [];
   h.tables.email_log = [];
   h.tables.email_suppressions = [];
+  // In-memory per-inbox claims and answer timings (interestStore.ts): fresh per test, no padding.
+  resetInterestGuardsForTests({ defaultSentMs: 0 });
   h.sendNewsletterConfirm.mockClear();
   h.sendNewsletterWelcome.mockClear();
+  h.sendAccessRequested.mockClear();
   h.verifyTurnstile.mockClear();
   signedIn = false;
 });
@@ -356,6 +373,16 @@ const pressConfirm = (email: string, token: string) =>
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ e: email, t: token }).toString()
   });
+/** What a browser posts when the person presses Confirm on the page `html`: the form's hidden fields. */
+const pressConfirmOnPage = (html: string) => {
+  const fields = Object.fromEntries([...html.matchAll(/<input type="hidden" name="([a-z])" value="([^"]*)">/g)].map((m) => [m[1], m[2]]));
+  return fetch(`${base}/api/newsletter/confirm`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(fields).toString()
+  });
+};
 /** The Unsubscribe link in an email (the mailer fake's verifyUnsubscribeToken accepts 'valid-unsub'). */
 const unsubUrl = (email: string, token = 'valid-unsub') => `${base}/api/newsletter/unsubscribe?e=${encodeURIComponent(email)}&t=${token}`;
 /** What a mail scanner or a person's first click does with it: GET. */
@@ -582,6 +609,8 @@ describe('/api/newsletter/unsubscribe — the email link only shows a page; the 
       const html = await page.text();
       expect(html).toContain('<form method="post" action="/api/newsletter/unsubscribe?e=ada%40example.com&amp;t=valid-unsub">');
       expect(html).toContain('<input type="hidden" name="via" value="page">');
+      // What the button does, as Privacy #emails and markUnsubscribed describe it.
+      expect(html).toContain('The studio picks and any note saved with your updates are deleted too.');
       expect(html).not.toMatch(/<script/i);
     }
     expect(row()).toMatchObject({ confirmed: true, unsubscribed_at: null, product_interests: ['comic_studio'] });
@@ -870,6 +899,102 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
   });
 });
 
+describe('POST /api/interest — per-inbox claim, the mailer cap, and answer timing', () => {
+  it('parallel requests for different aliases of one inbox send ONE email (the claim is per inbox, not per row)', async () => {
+    h.state.latencyMs = 5;
+    const burst = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => register({ email: `victim+${i}@gmail.com`, studios: ['comic_studio'] }))
+    );
+    expect(burst.map((r) => r.status)).toEqual(Array(10).fill(200));
+    expect(new Set(burst.map((r) => r.body.status))).toEqual(new Set(['pending']));
+    const toInbox = h.tables.email_log.filter((r) => r.template === 'newsletter-confirm' && inboxKey(String(r.to_email)) === 'victim@gmail.com');
+    expect(toInbox).toHaveLength(1);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    // Every alias's registration is kept (picks saved, no link): the throttle only holds the email.
+    expect(rows()).toHaveLength(10);
+  });
+
+  it('the older /subscribe path shares the per-inbox claim', async () => {
+    h.state.latencyMs = 5;
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        post({ email: `v.ictim+${i}@gmail.com`, kind: 'updates', productInterests: ['comic_studio'], captchaToken: 'good-token' }, '/api/newsletter/subscribe')
+      )
+    );
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('while the mailer is at its hard cap, every address gets the same answer and nothing is sent (no throttled/unthrottled split)', async () => {
+    await register({ email: 'recent@example.com' });
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    // Other mail (not public-form mail) fills today's hard cap (EMAIL_MAX_PER_DAY, default 200).
+    for (let i = 0; i < 200; i++) h.logSend(`u${i}@example.com`, 'welcome', 'sent');
+    const recent = await register({ email: 'recent@example.com' });
+    const fresh = await register({ email: 'fresh@example.com' });
+    expect([recent.status, recent.body.code]).toEqual([503, 'email_unavailable']);
+    expect([fresh.status, fresh.body.code]).toEqual([503, 'email_unavailable']);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('an answer that sent nothing (throttled) takes about as long as one that sent the email', async () => {
+    resetInterestGuardsForTests({ defaultSentMs: 250 });
+    h.logSend('ada@example.com', 'newsletter-confirm', 'sent'); // a link went out a moment ago
+    const started = Date.now();
+    const res = await register();
+    expect(res.body.status).toBe('pending');
+    expect(h.sendNewsletterConfirm).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(230);
+  });
+});
+
+describe('POST /api/newsletter/subscribe kind=access — the receipt is limited per inbox, shares the budget, and takes no name', () => {
+  const access = (over: Record<string, unknown>) =>
+    post({ email: 'vic@example.com', kind: 'access', captchaToken: 'good-token', ...over }, '/api/newsletter/subscribe');
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20)); // the receipt is sent in the background
+
+  it('one receipt per inbox a day, however many aliases ask; every request is stored and answered the same', async () => {
+    const answers = [];
+    for (let i = 0; i < 5; i++) {
+      answers.push((await access({ email: `victim+${i}@gmail.com` })).body);
+      await settle();
+    }
+    expect(answers.every((a) => a.ok === true && a.status === 'joined')).toBe(true);
+    expect(rows().filter((r) => r.kind === 'access')).toHaveLength(5);
+    expect(h.sendAccessRequested).toHaveBeenCalledTimes(1);
+    age(24 * 60 * 60_000 + 1000);
+    await access({ email: 'victim+9@gmail.com' });
+    await settle();
+    expect(h.sendAccessRequested).toHaveBeenCalledTimes(2);
+  });
+
+  it('parallel aliases get one receipt', async () => {
+    h.state.latencyMs = 5;
+    await Promise.all(Array.from({ length: 8 }, (_, i) => access({ email: `victim+${i}@gmail.com` })));
+    await settle();
+    expect(h.sendAccessRequested).toHaveBeenCalledTimes(1);
+  });
+
+  it('receipts and confirmations share one budget: once it is used, neither goes out (sign-in, recovery and invite mail keep the rest)', async () => {
+    for (let i = 0; i < Math.floor(200 * CONFIRM_EMAIL_BUDGET_SHARE); i++) h.logSend(`r${i}@example.com`, 'access-requested', 'sent');
+    expect((await access({ email: 'new@example.com' })).body.status).toBe('joined');
+    await settle();
+    expect(h.sendAccessRequested).not.toHaveBeenCalled();
+    const res = await register({ email: 'other@example.com' });
+    expect([res.status, res.body.code]).toEqual([503, 'email_unavailable']);
+  });
+
+  it('never puts a caller-supplied name into the email (it goes to whatever address the caller typed)', async () => {
+    await access({ email: 'stranger@example.com', firstName: 'your account is locked, verify at evil.example' });
+    await settle();
+    expect(h.sendAccessRequested).toHaveBeenCalledTimes(1);
+    expect(h.sendAccessRequested.mock.calls[0][1]).toBeUndefined();
+    await post({ email: 'stranger2@example.com', kind: 'updates', firstName: 'click evil.example', captchaToken: 'good-token' }, '/api/newsletter/subscribe');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    expect(h.sendNewsletterConfirm.mock.calls[0][2]).toBeUndefined();
+    expect(readFileSync(new URL('./newsletter.ts', import.meta.url), 'utf8')).not.toMatch(/req\.body\?\.firstName/);
+  });
+});
+
 describe('POST /api/interest — rows planted, links re-sent, parallel picks, informed confirm', () => {
   it('a row planted with a future confirm_sent_at does not block the confirmation email', async () => {
     // What the old all-column anon INSERT allowed (before register_interest_2026_11.sql).
@@ -899,6 +1024,27 @@ describe('POST /api/interest — rows planted, links re-sent, parallel picks, in
     expect(res.body.status).toBe('pending');
     expect(row().product_interests).toEqual(['comic_studio']);
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('planted lists of thousands of picks never block registering: they are not compared (the filter would outgrow the URL), and the cleaned list replaces them', async () => {
+    const flood = Array.from({ length: 4000 }, (_, i) => (i % 2 ? 'comic_studio' : `junk-${i}`));
+    // Before section 7 the anon key could plant any picks; after it, any metadata.
+    h.tables.waitlist_signups.push({ id: 'planted-1', email: 'vic@example.com', kind: 'updates', confirmed: false, confirm_token: null, confirm_sent_at: null, unsubscribed_at: null, product_interests: flood, metadata: { pending_interests: flood } });
+    const res = await register({ email: 'vic@example.com', studios: ['stream_studio'] });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('pending');
+    expect(row()).toMatchObject({ product_interests: ['comic_studio', 'stream_studio'] });
+    expect(row().metadata).not.toHaveProperty('pending_interests');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+
+    h.tables.waitlist_signups.push({ id: 'planted-2', email: 'sub@example.com', kind: 'updates', confirmed: true, confirm_token: null, confirm_sent_at: null, unsubscribed_at: null, product_interests: ['comic_studio'], metadata: { pending_interests: flood } });
+    const sub = await register({ email: 'sub@example.com', studios: ['chat_studio'] });
+    expect(sub.status).toBe(200);
+    expect(sub.body.status).toBe('pending');
+    const planted = h.tables.waitlist_signups.find((r) => r.id === 'planted-2') as Row;
+    // A subscriber's picks wait for the click; the junk is gone, the one known id in it kept.
+    expect(planted.product_interests).toEqual(['comic_studio']);
+    expect(planted.metadata).toEqual({ pending_interests: ['comic_studio', 'chat_studio'] });
   });
 
   it('planted waiting picks that are not plain strings are replaced, not compared', async () => {
@@ -983,6 +1129,46 @@ describe('POST /api/interest — rows planted, links re-sent, parallel picks, in
     age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
     await register({ studios: ['comic_studio'] });
     expect(await (await openLink('ada@example.com', tokenFromLastEmail())).text()).toContain('There is nothing new to add');
+  });
+
+  it('Confirm applies exactly what the page showed: picks a stranger adds after it opened are not subscribed, and the page is shown again', async () => {
+    // A subscriber of Comic Studio.
+    await register({ studios: ['comic_studio'] });
+    await pressConfirmOnPage(await (await openLink('ada@example.com', tokenFromLastEmail())).text());
+    expect(row()).toMatchObject({ confirmed: true, product_interests: ['comic_studio'] });
+    // A stranger asks for Stream Studio; the link goes out and the page names it.
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    await register({ studios: ['stream_studio'] });
+    const token = tokenFromLastEmail();
+    const page = await (await openLink('ada@example.com', token)).text();
+    expect(page).toContain('Pressing Confirm also adds <strong>Stream Studio</strong>.');
+    // While it is open, the stranger asks for two more (throttled: no new email, same link).
+    const sends = h.sendNewsletterConfirm.mock.calls.length;
+    await register({ studios: ['chat_studio'] });
+    await register({ studios: ['atlas_studio'] });
+    expect(h.sendNewsletterConfirm.mock.calls.length).toBe(sends);
+    // Pressing Confirm on the page as shown changes nothing and shows the page again, with the new list.
+    const again = await pressConfirmOnPage(page);
+    expect(again.status).toBe(200);
+    const shownAgain = await again.text();
+    expect(shownAgain).toContain('The studios on this page changed after it opened');
+    expect(shownAgain).toMatch(/Pressing Confirm also adds <strong>[^<]*Atlas Studio[^<]*<\/strong>\./);
+    expect(row()).toMatchObject({ confirmed: true, product_interests: ['comic_studio'] });
+    // Confirming that page applies what it names, and nothing else.
+    const done = await pressConfirmOnPage(shownAgain);
+    expect(done.status).toBe(303);
+    expect([...(row().product_interests as string[])].sort()).toEqual(['atlas_studio', 'chat_studio', 'comic_studio', 'stream_studio']);
+  });
+
+  it('the same holds before the first confirmation: picks added after the page opened are not confirmed with it', async () => {
+    await register({ studios: ['comic_studio'] });
+    const page = await (await openLink('ada@example.com', tokenFromLastEmail())).text();
+    expect(page).toContain('<input type="hidden" name="s" value="comic_studio">');
+    await register({ studios: ['stream_studio'] }); // throttled, same link
+    const res = await pressConfirmOnPage(page);
+    expect(res.status).toBe(200);
+    expect(row()).toMatchObject({ confirmed: false });
+    expect(await res.text()).toContain('Press Confirm to get DreamStream updates about <strong>Comic Studio and Stream Studio</strong>');
   });
 
   it('the Confirm page escapes what it shows', async () => {

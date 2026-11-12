@@ -23,6 +23,8 @@ import {
     CONFIRM_LINK_DAYS,
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
+    MEMORY_NOTE_MODEL,
+    MEMORY_SEARCH_MAX_CHARS,
     MIN_SIGNUP_AGE_YEARS,
     PEOPLE_SEARCH,
     PRIVACY_EMAIL,
@@ -170,6 +172,30 @@ describe('legal facts match the code: retention', () => {
     });
 });
 
+describe('legal facts match the code: the limits on unauthenticated email hold under parallel requests', () => {
+    it('the confirmation throttle claims the inbox (every alias) before the row, and the email copy states the same daily limit', () => {
+        const store = read('server/src/services/interestStore.ts');
+        expect(store).toContain("const releaseInbox = throttle ? null : claimInbox('confirm', email);");
+        expect(store).toMatch(/if \(throttle\) return \{ outcome: 'throttled', reason: throttle\.code \};\s*\/\/[^\n]*\n\s*const releaseInbox = claimInbox\('confirm', email\);\s*if \(!releaseInbox\) return \{ outcome: 'throttled', reason: 'in_flight' \};/);
+        expect(store).toContain('const key = `${scope}:${inboxKey(email)}`;');
+        // Both routes let the claim go once the send is over.
+        for (const f of ['server/src/routes/interest.ts', 'server/src/routes/newsletter.ts']) expect(read(f), f).toContain('result.sent();');
+        // The confirmation email's own "up to 3 of these a day" is the throttle's number.
+        expect(read('shared/email/templates.ts')).toContain(`export const NEWSLETTER_CONFIRM_MAX_PER_DAY = ${CONFIRM_EMAIL_LIMITS.maxPerDay};`);
+    });
+
+    it('the early-access receipt goes at most once a day per inbox and shares the public-form budget (the page says "at most one such email a day to one inbox")', () => {
+        const store = read('server/src/services/interestStore.ts');
+        expect(store).toContain('export const ACCESS_RECEIPT_INTERVAL_MS = DAY_MS;');
+        expect(store).toContain('recentConfirmEmailsToInbox(email, iso(now - ACCESS_RECEIPT_INTERVAL_MS), ACCESS_REQUESTED_TEMPLATE)');
+        expect(read('server/src/services/emailStore.ts')).toContain('export const PUBLIC_FORM_EMAIL_TEMPLATES = [NEWSLETTER_CONFIRM_TEMPLATE, ACCESS_REQUESTED_TEMPLATE] as const;');
+        const newsletter = read('server/src/routes/newsletter.ts');
+        const access = newsletter.slice(newsletter.indexOf("if (kind === 'access') {"), newsletter.indexOf('// Newsletter double opt-in'));
+        expect(access).toMatch(/const receipt = await claimAccessReceipt\(email\);\s*if \(receipt\) \{/);
+        expect(read('components/PrivacyPolicy.tsx')).toContain('otherwise it emails you to confirm we received it (at most one such email a day to one inbox');
+    });
+});
+
 describe('legal facts match the code: accounts, people and calls', () => {
     it('the sign-up age floor is the same in every sign-up path', () => {
         expect(constValue('components/AuthPage.tsx', 'MIN_SIGNUP_AGE_YEARS')).toBe(MIN_SIGNUP_AGE_YEARS);
@@ -209,6 +235,79 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         for (const label of labels) expect(named).toContain(label);
         expect(statSync(path.join(ROOT, 'server/src/ai/providers/anthropic.ts')).isFile()).toBe(true);
         expect(statSync(path.join(ROOT, 'server/src/ai/providers/nvidia.ts')).isFile()).toBe(true);
+    });
+
+    it('Comic Studio\'s writing steps can go to NVIDIA as well as OpenRouter and Gemini, and the page names all three', () => {
+        const text = read('server/src/routes/text.ts');
+        const resolve = text.slice(text.indexOf('const resolveTextProvider'), text.indexOf("textRouter.post('/analyze-script'"));
+        const providers = [...new Set([...resolve.matchAll(/provider: '([a-z]+)'/g)].map((m) => m[1]))].sort();
+        expect(providers).toEqual(['gemini', 'nvidia', 'openrouter']);
+        expect(resolve).toContain("if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();");
+        expect(resolve).toMatch(/if \(openRouterKey\) return openRouterPick\(\);\s*if \(nvidiaKey\) return nvidiaPick\(\);/);
+        // The source is the app-wide pick under Settings → API & Models, sent with every call.
+        expect(read('services/apiClient.ts')).toContain("...(textSource ? { 'X-Text-Source': textSource as string } : {}),");
+        expect(read('components/PrivacyPolicy.tsx')).toContain("Google's Gemini API, NVIDIA, or a model reached through OpenRouter");
+    });
+
+    it(`every signed-in Chat Studio message goes to Google's Gemini API to search memory (first ${MEMORY_SEARCH_MAX_CHARS} characters), whichever provider answers`, () => {
+        const memory = read('server/src/services/userMemory.ts');
+        const retrieve = memory.slice(memory.indexOf('export const retrieveUserMemories'), memory.indexOf('export const buildUserMemoryBlock'));
+        expect(retrieve).toContain("const queryEmbedding = await embedText(query, 'RETRIEVAL_QUERY');");
+        // Before anything checks whether the account has notes.
+        expect(retrieve.indexOf("embedText(query, 'RETRIEVAL_QUERY')")).toBeLessThan(retrieve.indexOf('fetchRecent'));
+        expect(memory).toContain('`${GEMINI_BASE_URL}/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${ASSISTANT_GEMINI_API_KEY}`');
+        expect(Number(/text\.slice\(0, ([\d_]+)\)/.exec(memory)?.[1].replace(/_/g, ''))).toBe(MEMORY_SEARCH_MAX_CHARS);
+        // Memory is on unless someone turned it off (only by email today), and every signed-in turn asks for it.
+        expect(memory).toContain('const enabled = data ? data.enabled !== false : true; // default ON');
+        expect(read('server/src/routes/chat.ts')).toContain('userMemory: Boolean(p.userId),');
+        expect(read('server/src/ai/chat.ts')).toMatch(/if \(params\.userId && params\.userMemory\) \{[\s\S]*?buildUserMemoryBlock\(params\.userId, memoryQuery\)/);
+        expect(read('components/PrivacyPolicy.tsx')).toContain("is also sent to Google's Gemini API before the answer is written, whichever model or provider you chose, even when you have no saved notes.");
+    });
+
+    it(`memory notes are written by the app-wide provider pick, not the chat's: no source is sent, and the model is ${MEMORY_NOTE_MODEL.id}`, () => {
+        const api = read('services/chatApi.ts');
+        const update = api.slice(api.indexOf('export const updateChatMemory'), api.indexOf('export const updateChatMemory') + 450);
+        expect(update).toContain('{ messages, memory },');
+        expect(update).not.toMatch(/\bsource\b/);
+        const route = read('server/src/routes/chat.ts');
+        const handler = route.slice(route.indexOf("chatRouter.post('/memory'"), route.indexOf("chatRouter.get('/memory/list'"));
+        expect(handler).toContain('const resolved = resolveChatProvider(req, body.source);');
+        expect(handler).toContain("const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;");
+        expect(route).toContain("const source = String(requestedSource || req.header('X-Text-Source') || '').trim().toLowerCase();");
+        expect(route).toMatch(/const AUTO_PROVIDER_ORDER: AIProviderId\[\] = \[\s*'openrouter',/);
+        expect(read('server/src/config.ts')).toContain(`export const OPENROUTER_TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || '${MEMORY_NOTE_MODEL.id}';`);
+        expect(read('api-proxy/wrangler.jsonc')).not.toContain('OPENROUTER_TEXT_MODEL');
+        expect(read('components/PrivacyPolicy.tsx')).toContain('chosen by your settings for all of DreamStream, not by the chat');
+    });
+
+    it('team-written announcements are service mail: no suppression check, no unsubscribe link, and the console sends them to any pasted address', () => {
+        expect(read('shared/email/templates.ts')).toMatch(/\n\s*announcement: 'essential',/);
+        const admin = read('server/src/routes/adminEmail.ts');
+        const systemOnly = /const SYSTEM_ONLY = new Set<string>\(\[([\s\S]*?)\]\);/.exec(admin)?.[1] ?? '';
+        expect(systemOnly).toContain("'newsletter-confirm'");
+        expect(systemOnly).not.toContain("'announcement'");
+        const mailer = read('server/src/services/mailer.ts');
+        expect(mailer).toContain("if (kind === 'marketing' && (await isSuppressed(to))) {");
+        expect(mailer).toContain("if (kind === 'marketing' && !unsubscribeUrl) {");
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain('service announcements our team writes and sends by hand');
+        expect(policy).toContain('they have no unsubscribe link. An announcement can go to any address we have');
+    });
+
+    it('nothing deletes invitation sends or usage and cost records (their retention rows say so)', () => {
+        const TABLES = ['access_invite_sends', 'token_ledger_entries', 'generation_cost_events', 'provider_usage_log'];
+        for (const f of sourceFiles('server/src')) {
+            const code = read(f);
+            for (const t of TABLES) expect(new RegExp(`from\\(\\s*'${t}'\\s*\\)[^;]*?\\.delete\\(`).test(code), `${f} deletes ${t}`).toBe(false);
+        }
+        for (const f of sourceFiles('server/sql', /\.sql$/)) {
+            const sql = read(f).toLowerCase();
+            for (const t of TABLES) expect(sql, `${f} deletes ${t}`).not.toMatch(new RegExp(`(delete\\s+from|truncate(\\s+table)?)\\s+(public\\.)?${t}\\b`));
+        }
+        expect(read('server/src/services/invites.ts')).toMatch(/from\('access_invite_sends'\)[\s\S]*?\.insert\(\{/);
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("['Invitations you send (the invitee\\'s address, who invited them and how many times)', 'Not deleted automatically today; email us to have one removed.']");
+        expect(policy).toContain("['Usage and cost records', 'Not deleted automatically today.']");
     });
 
     it('billing is off in production', () => {
@@ -330,6 +429,9 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         // A 429 from the per-IP limiter or a 5xx has no ok/message body: that falls back too.
         expect(client).toMatch(/if \(httpStatus === 400 && data\?\.message\) return \{ ok: false, message: data\.message \};\s*return null;/);
         expect(read('server/src/index.ts')).toContain("app.use('/api/newsletter/subscribe', interestRateLimit);");
+        // ...while a 400 (a bad address, a failed bot check) is shown, never saved: so the page
+        // names only an unreachable, failing or busy server.
+        expect(read('components/PrivacyPolicy.tsx')).toContain("If our server can't be reached, has an error or is too busy (for example while it starts up, or after many requests from one network), your browser saves the request directly instead, without that email or check.");
     });
 
     it('the Unsubscribe link in an email only opens a page (scanners fetch links); its button or the One-Click POST unsubscribes', () => {
@@ -339,6 +441,14 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(get).not.toContain('markUnsubscribed');
         expect(newsletter.slice(newsletter.indexOf("newsletterRouter.post('/unsubscribe'"))).toContain('await markUnsubscribed(email);');
         expect(read('email-worker/src/index.ts')).toContain("headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';");
+        // So the pages promise an unsubscribe link (a page with a button) and one click only in
+        // email apps with their own button, never a "one-click unsubscribe link".
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("Every update includes an unsubscribe link, which opens a page with an Unsubscribe button (so a mail scanner that opens links can't unsubscribe you by mistake); email apps with their own Unsubscribe button do it in one click.");
+        for (const f of ['components/PrivacyPolicy.tsx', 'components/WaitlistForm.tsx', 'server/src/routes/newsletter.ts']) {
+            expect(read(f), f).not.toMatch(/one-click unsubscribe(?! *POST)/i);
+        }
+        expect(read('components/WaitlistForm.tsx')).toContain('Every update has an unsubscribe link');
     });
 
     it('the register-interest form and its API send people to routed mailboxes', () => {
@@ -346,6 +456,13 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         const form = read('components/WaitlistForm.tsx');
         expect(form).toContain("import { PRIVACY_EMAIL, SUPPORT_EMAIL } from './legal/legalFacts';");
         expect(form).not.toContain('contact@');
+    });
+
+    it('Stream Studio takes its mailboxes from contacts.ts, never legalFacts.ts (whose third-party links would land in its bundle and its CSP check)', () => {
+        const live = sourceFiles('live', /\.tsx?$/);
+        expect(live.filter((f) => /components\/legal\/legalFacts/.test(read(f)))).toEqual([]);
+        expect(live.filter((f) => /components\/legal\/contacts/.test(read(f))).sort()).toEqual(['live/components/Guide.tsx', 'live/ui/legalLinks.tsx']);
+        expect(read('components/legal/contacts.ts')).not.toMatch(/^import /m);
     });
 
     it('security reports go where security.txt says', () => {
@@ -510,7 +627,9 @@ describe('legal facts match the code: every third party a browser or a tool cont
             if (statSync(path.join(ROOT, rel)).isDirectory()) return name === 'node_modules' || name === '__fixtures__' || name === 'testing' ? [] : files(rel, ext);
             return ext.test(name) && !/\.test\./.test(name) ? [rel] : [];
         });
-    const OURS = /(^|\.)(dreamstreamstudio\.ai|dreamstream\.app|workers\.dev|supabase\.co)$|^(example\.com|server\.example\.com|docs\.example\.com|cdn\.test)$/;
+    // Our own domains only. Supabase (supabase.co) is another company that browsers reach directly,
+    // so it is in BROWSER_THIRD_PARTIES and checked like every other host.
+    const OURS = /(^|\.)(dreamstreamstudio\.ai|dreamstream\.app|workers\.dev)$|^(example\.com|server\.example\.com|docs\.example\.com|cdn\.test)$/;
     const documented = BROWSER_THIRD_PARTIES.flatMap((p) => p.hosts).filter((h) => h !== '*');
     const isDocumented = (host: string) =>
         documented.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) : host === h || host.endsWith(`.${h}`)));
@@ -530,6 +649,14 @@ describe('legal facts match the code: every third party a browser or a tool cont
         }
         expect(hosts.length).toBeGreaterThan(5);
         expect(undocumented(hosts), 'add the service to BROWSER_THIRD_PARTIES in components/legal/legalFacts.ts').toEqual([]);
+    });
+
+    it('Supabase, which every browser reaches directly (sign-in, data, images, the shared-comic reader), is named', () => {
+        expect(read('functions/_middleware.ts')).toContain("export const SUPABASE_ORIGIN = 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co';");
+        const csp = read('functions/_shared/csp.ts');
+        expect(csp).toContain('`img-src \'self\' data: blob: ${supabaseOrigin}`');
+        expect(csp).toMatch(/`connect-src 'self' \$\{supabaseOrigin\} \$\{supabaseWs\}/);
+        expect(undocumented(['bdjfmxfmhqhzvgrhbbzm.supabase.co'])).toEqual([]);
     });
 
     it('Sandpack previews (CodeSandbox) and the STUN servers Stream Studio uses', () => {

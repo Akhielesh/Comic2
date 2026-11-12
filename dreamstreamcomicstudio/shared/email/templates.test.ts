@@ -48,6 +48,18 @@ describe('email templates', () => {
     expect(out.text).toContain('Hey there,');
   });
 
+  it('the confirmation email describes the two-step page and never promises silence (anyone can re-enter an address)', () => {
+    const out = renderEmail('newsletter-confirm', { confirmUrl: 'https://x.test/c' });
+    for (const part of [out.html, out.text]) {
+      expect(part).not.toMatch(/won.t hear from us again|One click to confirm|lock in your spot/i);
+      expect(part).toMatch(/press Confirm/);
+      expect(part).toContain('you may get up to 3 of these a day');
+    }
+    expect(out.html).toContain('Confirm your email');
+    expect(out.html).toContain('Open the confirmation page');
+    expect(out.text).toContain('Open this link, then press Confirm on the page it opens:');
+  });
+
   it('applies brand overrides', () => {
     const out = renderEmail('welcome', { firstName: 'Sam' }, { productName: 'Acme Comics' });
     expect(out.subject).toContain('Acme Comics');

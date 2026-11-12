@@ -1,7 +1,7 @@
 import React from 'react';
 import { Callout, DocLink, LIST, LegalDocument, MailLink, NUMBERED, type LegalSection } from './LegalDocument';
 import { COPYRIGHT_SUBJECT, COUNTER_NOTICE_SUBJECT, SUPPORT_EMAIL } from './legalFacts';
-import type { LegalDocId } from './legalRoutes';
+import type { LegalPageProps } from './LegalDocument';
 
 // Copyright & DMCA policy: notice-and-takedown, counter-notice and repeat infringers, handled by
 // email. It names no registered designated agent: registering one is an owner decision.
@@ -99,6 +99,6 @@ const intro = (
     <p>How to report content on DreamStream that you believe infringes your copyright, how to respond if your content was removed, and our policy on repeat infringers. This page is information, not legal advice.</p>
 );
 
-export const CopyrightPolicy: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
-    <LegalDocument doc="copyright" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+export const CopyrightPolicy: React.FC<LegalPageProps> = ({ onBack, onOpenDoc, onHistoryBack }) => (
+    <LegalDocument doc="copyright" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} onHistoryBack={onHistoryBack} />
 );

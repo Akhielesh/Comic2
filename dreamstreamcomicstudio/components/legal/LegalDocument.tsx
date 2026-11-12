@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { LEGAL_LAST_UPDATED, OPERATOR_NAME } from './legalFacts';
-import { LEGAL_DOCS, followLegalHistory, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
+import { LEGAL_DOCS, followLegalHistory, legalBackGoesBack, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
 
 // The shared frame of every legal page: title, date, the legal navigation, a table of contents and
 // numbered sections with stable #anchors. Theme tokens only (--ds-*, see index.css), so every page
@@ -110,15 +110,30 @@ export interface LegalSection {
     content: React.ReactNode;
 }
 
-interface LegalDocumentProps {
+/** What App gives every legal page. */
+export interface LegalPageProps {
+    /**
+     * The page's own Back button when there is no page of this visit to go back to (a cold load of
+     * the document's address). When the document was opened from another page of the app, the
+     * button goes back in history instead, exactly like the browser's Back (legalBackGoesBack).
+     */
+    onBack: () => void;
+    /** Opens another legal document inside the app (App's view setter). */
+    onOpenDoc?: (id: LegalDocId) => void;
+    /**
+     * The browser's or phone's Back (or Forward) onto an entry that isn't a legal document: App
+     * shows the view that entry names (its restoreViewFromHistory). Without it, onBack.
+     */
+    onHistoryBack?: () => void;
+}
+
+interface LegalDocumentProps extends LegalPageProps {
     doc: LegalDocId;
     /** Opening paragraph(s), above the table of contents. */
     intro: React.ReactNode;
     /** Optional plain-English summary shown before the full text. */
     summary?: React.ReactNode;
     sections: LegalSection[];
-    onBack: () => void;
-    onOpenDoc?: (id: LegalDocId) => void;
 }
 
 /** Jump to the URL's #fragment once the (lazily loaded) page is in the DOM; otherwise start at the top. */
@@ -146,23 +161,23 @@ const useLandOnFragment = () => {
 /**
  * Back and Forward between pages the reader opened in the app (pushLegalPath gives each its own
  * history entry): another legal document's path opens that document (followLegalHistory, which
- * also covers a Forward after this page has closed), any other path goes back to where the page's
- * Back button goes (App's onBack: Dashboard or Home, not necessarily the view that entry named;
- * see pushLegalPath), and a move between #sections of this page is left to the browser.
+ * also covers a Forward after this page has closed), any other path goes to the view that entry
+ * names (onLeave: App's restoreViewFromHistory, see pushLegalPath), and a move between #sections of
+ * this page is left to the browser.
  */
-const useLegalHistory = (doc: LegalDocId, onBack: () => void, onOpenDoc?: (id: LegalDocId) => void) => {
+const useLegalHistory = (doc: LegalDocId, onLeave: () => void, onOpenDoc?: (id: LegalDocId) => void) => {
     useEffect(() => {
         if (!onOpenDoc) return;
         const stopFollowing = followLegalHistory(doc, onOpenDoc);
         const onPop = () => {
-            if (!legalDocForPath(window.location.pathname)) onBack();
+            if (!legalDocForPath(window.location.pathname)) onLeave();
         };
         window.addEventListener('popstate', onPop);
         return () => {
             stopFollowing();
             window.removeEventListener('popstate', onPop);
         };
-    }, [doc, onBack, onOpenDoc]);
+    }, [doc, onLeave, onOpenDoc]);
 };
 
 const useDocumentTitle = (title: string) => {
@@ -175,11 +190,17 @@ const useDocumentTitle = (title: string) => {
     }, [title]);
 };
 
-export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summary, sections, onBack, onOpenDoc }) => {
+export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summary, sections, onBack, onOpenDoc, onHistoryBack }) => {
     const { title } = legalDoc(doc);
     useLandOnFragment();
     useDocumentTitle(title);
-    useLegalHistory(doc, onBack, onOpenDoc);
+    useLegalHistory(doc, onHistoryBack ?? onBack, onOpenDoc);
+    // Opened from another page of this visit: the button and the browser's Back agree (popstate then
+    // shows that page, through useLegalHistory). In the app only: without onOpenDoc nothing listens.
+    const goBack = () => {
+        if (onOpenDoc && legalBackGoesBack()) window.history.back();
+        else onBack();
+    };
 
     return (
         <OpenDocContext.Provider value={onOpenDoc}>
@@ -189,7 +210,7 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
                         <h1 className="text-3xl font-semibold tracking-tight text-[var(--ds-ink)]">{title}</h1>
                         <button
                             type="button"
-                            onClick={onBack}
+                            onClick={goBack}
                             className="shrink-0 rounded-md px-2 py-1 text-xs font-bold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
                         >
                             Back

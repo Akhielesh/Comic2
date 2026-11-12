@@ -11,6 +11,8 @@
  * a recoverable file. Browsers without OPFS fall back to the in-memory path.
  */
 
+import { deviceOwner } from './accountPurge';
+
 const UNSAVED_KEY = 'ds-live-unsaved-recordings';
 const PREFIX = 'ds-rec-';
 
@@ -23,6 +25,12 @@ export interface UnsavedRecording {
   at: number;
   durMs: number;
   bytes: number;
+  /**
+   * The Stream Studio account signed in on this device when the recording started (null: no one).
+   * Signing out leaves unsaved recordings on the device (they are the host's work), so only the
+   * account that made one is offered it: never the next person who signs in here.
+   */
+  owner?: string | null;
 }
 
 export interface FinishedRecording {
@@ -135,6 +143,7 @@ export class DiskRecorder {
     readonly file: string,
     private meta: { eventId: string; title: string },
     sink: OpfsSink | null,
+    private readonly owner: string | null = deviceOwner(),
   ) {
     this.sink = sink;
     this.onDisk = !!sink;
@@ -253,6 +262,7 @@ export class DiskRecorder {
       at: this.startedAt || now,
       durMs: this.elapsedMs,
       bytes: this.bytes,
+      owner: this.owner,
     });
   }
 }
@@ -297,9 +307,25 @@ export function removeUnsaved(name: string): void {
   writeUnsaved(readUnsaved().filter((x) => x.name !== name));
 }
 
-/** Recordings that reached disk but were never saved (crash, closed tab, dismissed sheet). */
-export async function listUnsavedRecordings(): Promise<UnsavedRecording[]> {
+/**
+ * The unsaved recordings `owner` may be offered: the ones recorded while that account (or, for
+ * null, no one) was signed in on this device. An entry from before recordings carried an owner
+ * is given to whoever lists it first, which is what this device did with every entry until then.
+ */
+export function unsavedRecordingsOf(owner: string | null): UnsavedRecording[] {
   const list = readUnsaved();
+  if (list.some((r) => r.owner === undefined)) {
+    writeUnsaved(list.map((r) => (r.owner === undefined ? { ...r, owner } : r)));
+  }
+  return list.filter((r) => (r.owner === undefined ? owner : r.owner) === owner);
+}
+
+/**
+ * Recordings that reached disk but were never saved (crash, closed tab, dismissed sheet) and that
+ * belong to the account signed in on this device now (unsavedRecordingsOf).
+ */
+export async function listUnsavedRecordings(owner: string | null = deviceOwner()): Promise<UnsavedRecording[]> {
+  const list = unsavedRecordingsOf(owner);
   if (!list.length || !opfsSupported()) return [];
   const out: UnsavedRecording[] = [];
   try {

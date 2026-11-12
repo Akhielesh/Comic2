@@ -125,7 +125,11 @@ describe('server/sql/register_interest_2026_11.sql agrees with the shared list',
       'confirmed_at is null',
       'unsubscribed_at is null',
       'cardinality(product_interests) = 0',
-      'feedback is null'
+      'feedback is null',
+      // The server's waiting picks are its own (savePicks compares them), and the document is small.
+      "jsonb_typeof(metadata) = 'object'",
+      "not (metadata ? 'pending_interests')",
+      'octet_length(metadata::text) <= 8192'
     ]) {
       expect(policy).toContain(clause);
     }

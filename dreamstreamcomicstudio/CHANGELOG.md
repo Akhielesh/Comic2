@@ -6,8 +6,8 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
-- **The full legal suite (2026-11-05):** six documents, each at its own address, all dated
-  November 5, 2026 and written to match what the product does today: **Terms of Service**
+- **The full legal suite (2026-11-05, dated November 12, 2026 after its last review):** six
+  documents, each at its own address, written to match what the product does today: **Terms of Service**
   (`/terms`; one name on the legal pages, the footers, Stream Studio and the sign-up form, with
   the YouTube Terms of Service agreement, the AI notice,
   Stream Studio recording consent, the baby monitor's safety terms and "no charges today"),
@@ -24,7 +24,29 @@ All notable user-facing changes. Format loosely follows
   consent screen uses them) and land on the new paths. The footer and Stream Studio link to the
   real paths. Tests tie the retention numbers, providers, contacts and age rule to the code.
 
+- **Register interest (2026-11):** the home page's "stay updated" form lets you pick the studios
+  you want to hear about (Comic, Stream, Chat, Atlas, future studios). It is the updates double
+  opt-in: one email with a link that opens a Confirm page, and nothing else until you press
+  Confirm there. Anyone can type any address, so every request gets the same answer, at most one
+  confirmation email goes to an inbox every 10 minutes (3 a day, all aliases of the address
+  counted together), and a subscriber's picks change only when they press Confirm.
+
 ### Fixed
+- **Legal suite and register interest, final review (2026-11-12):** the Privacy Policy now says
+  that each Chat Studio message you send while signed in also goes to Google's Gemini API to
+  search your memory notes, whichever model answers, and that memory notes are written by the
+  provider you picked for all of DreamStream (or Gemini 2.5 Flash through OpenRouter), not the
+  chat's. Comic Studio's writing steps name NVIDIA, Supabase is listed among the services your
+  browser loads, team announcements are named as service email without an unsubscribe link, and
+  invitations and usage records have retention rows. Signing out of Stream Studio now also
+  removes the name you used as a viewer, and recordings you never saved are offered only to the
+  account that made them. A legal page's own Back button now does what the browser's Back does
+  (back to Settings on its Legal tab, the gallery, a shared comic, the reader, the editor or a
+  profile). The register-interest and early-access emails can't be multiplied with address
+  aliases or parallel requests, early-access receipts go once a day per inbox and share the
+  confirmation email budget, a capped mailer answers every address the same way, the Confirm
+  button applies only the studios its page showed, no request can put a name into our email,
+  and the confirmation email describes the two-step page.
 - **Legal suite review fixes (2026-11-05):** the pages now name everything a browser loads
   straight from other companies (map tiles, radar, site icons, market logos, QR codes, the Python
   runtime, code previews, STUN servers, images in answers), on both the Cookies notice and a new

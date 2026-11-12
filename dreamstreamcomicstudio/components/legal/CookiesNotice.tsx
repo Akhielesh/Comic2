@@ -1,7 +1,7 @@
 import React from 'react';
 import { Callout, DataTable, DocLink, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
 import { BROWSER_THIRD_PARTIES, PRIVACY_EMAIL } from './legalFacts';
-import type { LegalDocId } from './legalRoutes';
+import type { LegalPageProps } from './LegalDocument';
 
 // Cookies & Local Storage: what the apps keep in the browser, by purpose, with the real key names
 // (each one is checked against the code by components/legal/legalSuite.test.tsx).
@@ -163,7 +163,7 @@ const sections: LegalSection[] = [
         content: (
             <>
                 <ul className={LIST}>
-                    <li><strong>Sign out.</strong> Signing out of Stream Studio, or of DreamStream, removes Stream Studio's personal data from that device and ends its alert subscription. Your preferences (theme, camera lens, tours seen) stay.</li>
+                    <li><strong>Sign out.</strong> Signing out of Stream Studio, or of DreamStream, removes your Stream Studio account data from that device (your display name and settings, your events' host keys, nursery data, call settings and the name you used as a viewer) and ends its alert subscription. Recordings you made but haven't saved stay on the device until you save or discard them, and only the account that made them is offered them. Your preferences (theme, camera lens, tours seen) stay.</li>
                     <li><strong>Clear site data.</strong> Your browser's settings can remove everything our sites store. You'll be signed out, and work that hasn't been saved to your account, such as guest projects and unsaved recordings, is lost. API keys you added while signed in stay stored with your account; keys added while signed out are lost.</li>
                     <li><strong>Block storage.</strong> If you block site storage, signing in and most features won't work.</li>
                 </ul>
@@ -180,6 +180,6 @@ const intro = (
     <p>This notice explains what DreamStream's sites and apps store in your browser and why, the services from other companies our pages load, and how to clear it. It applies to dreamstreamstudio.ai, stream.dreamstreamstudio.ai and comics.dreamstreamstudio.ai.</p>
 );
 
-export const CookiesNotice: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
-    <LegalDocument doc="cookies" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+export const CookiesNotice: React.FC<LegalPageProps> = ({ onBack, onOpenDoc, onHistoryBack }) => (
+    <LegalDocument doc="cookies" intro={intro} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} onHistoryBack={onHistoryBack} />
 );
