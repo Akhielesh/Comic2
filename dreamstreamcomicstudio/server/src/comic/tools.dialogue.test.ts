@@ -24,6 +24,7 @@ import {
   type DirectorTurn
 } from './tools.js';
 import { toolGroups } from './tools/index.js';
+import { recordOptionAnswer } from './director.js';
 
 // The engine's follow-up chips, replaced per test (the chip filter's proof needs a chip the engine never makes today).
 const engine = vi.hoisted(() => ({ followUps: undefined as NextStep[] | undefined }));
@@ -168,6 +169,24 @@ describe('dialogue_edit', () => {
     expect(confirmAnswerOf(ctx, turn)).toBeUndefined();
     expect(await tool.execute({ ...PLURAL, confirmed: true })).toMatch(/^Asked: "That changes 4 lines/);
     expect(allSpeech()).toBe(true);
+  });
+
+  it("with SETTLED_CARDS on, the tapped yes is recorded as its choice id and confirms (B-TOOL #10: SETTLE keeps `answered` as ids)", async () => {
+    setup({ doc: fourPages() });
+    await tool.execute(PLURAL);
+    const card = turn.cards.find((c) => c.type === 'options');
+    const yes = card && card.type === 'options' ? card.choices.find((c) => c.reply === 'Yes, change all 4 of them.') : undefined;
+    expect(yes).toBeDefined();
+    ctx.session.commit([{ op: 'message', msg: { id: 'm_a_settled', role: 'assistant', text: 'Asked.', at: 1, cards: turn.cards } }]);
+    // The route records the tap before the message commits (routes/comic.ts), with settled on for admins. The words sent
+    // here match no choice, so only the recorded `answered` can confirm.
+    expect(recordOptionAnswer(ctx.session, 'ok do it', { id: card!.id, choiceIds: [yes!.id] }, { settled: true })).toBe(true);
+    ctx.session.commit([{ op: 'message', msg: { id: 'm_u_settled', role: 'user', text: 'ok do it', at: 2 } }]);
+    turn = createDirectorTurn({ userText: 'ok do it', startRev: ctx.session.doc.rev });
+    tool = dialogueEditTool(ctx, turn);
+    expect(confirmAnswerOf(ctx, turn)).toBe(4);
+    await tool.execute({ ...PLURAL, confirmed: true });
+    expect(ctx.session.doc.pages.every((p) => p.panels[1].lines[0].kind === 'whisper')).toBe(true);
   });
 
   it('a yes for a different count does not confirm this edit', async () => {
