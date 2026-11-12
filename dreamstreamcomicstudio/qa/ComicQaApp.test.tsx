@@ -282,6 +282,26 @@ describe('?surface=app', () => {
     expect(document.querySelector('[data-qa-app-problem="./scenes/broken.tsx"]')).not.toBeNull();
   });
 
+  it('the look is on <html> before the scene mounts, so no control starts a transition when it lands (SETTLE-UI #6)', () => {
+    resetLook();
+    const seen: Array<{ skin: string | null; dark: boolean }> = [];
+    const LookProbe: React.FC = () => {
+      // A child's layout effect runs before its parent's: this is the earliest the scene can read its styles.
+      React.useLayoutEffect(() => {
+        seen.push({ skin: document.documentElement.getAttribute('data-ds-skin'), dark: document.documentElement.classList.contains('dark') });
+      }, []);
+      return <main aria-label="Look probe" />;
+    };
+    const index = collectAppScenes({ './scenes/probe.tsx': { default: { id: 'probe', title: 'Probe', Scene: LookProbe } } });
+    const { unmount } = render(<QaAppSurface scene="probe" theme="dark" skin="atlas" index={index} />);
+    expect(seen).toEqual([{ skin: 'atlas', dark: true }]);
+    expect(document.querySelector('[data-qa-app-scene="probe"]')).not.toBeNull();
+    unmount();
+    // Unmounting restores the page's own look.
+    expect(document.documentElement.hasAttribute('data-ds-skin')).toBe(false);
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+  });
+
   it('a scene typed against the contract type-checks as a glob module', () => {
     const scene: QaAppScene = { id: 'typed', title: 'Typed', Scene: () => <main /> };
     expect(collectAppScenes({ './scenes/typed.tsx': { default: scene } }).scenes).toHaveLength(1);

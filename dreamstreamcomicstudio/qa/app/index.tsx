@@ -185,7 +185,17 @@ const QaAppIndex: React.FC<{ index: QaAppSceneIndex; theme: QaAppTheme; skin: Qa
  * `index` defaults to the glob; the test passes fake scene modules through collectAppScenes.
  */
 export const QaAppSurface: React.FC<{ scene: string | null; theme: QaAppTheme; skin: QaAppSkin | null; index?: QaAppSceneIndex }> = ({ scene, theme, skin, index = APP_SCENES }) => {
-  React.useLayoutEffect(() => applyQaAppLook(document, { theme, skin }), [theme, skin]);
+  // The look goes on <html> BEFORE the scene mounts (SETTLE-UI #6). A child's layout effects run before this one's,
+  // so a scene mounted in the same commit was first styled without the look, and its `transition-all` controls
+  // started a transition (scrollbar-color, from the skin) under reduced motion when the look landed. The first commit
+  // renders nothing; this effect applies the look and its state update re-renders synchronously, before paint, with
+  // the scene. A later theme or skin change re-applies in place (the scene stays mounted).
+  const [lookApplied, setLookApplied] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const restore = applyQaAppLook(document, { theme, skin });
+    setLookApplied(true);
+    return restore;
+  }, [theme, skin]);
   React.useLayoutEffect(() => {
     window.__QA_APP_SCENES__ = index.scenes.map(({ id, title }) => ({ id, title }));
     window.__QA_APP_SCENE_PROBLEMS__ = index.problems.map((p) => ({ ...p }));
@@ -194,6 +204,7 @@ export const QaAppSurface: React.FC<{ scene: string | null; theme: QaAppTheme; s
       delete window.__QA_APP_SCENE_PROBLEMS__;
     };
   }, [index]);
+  if (!lookApplied) return null;
   if (scene === null) return <QaAppIndex index={index} theme={theme} skin={skin} />;
   const found = index.scenes.find((s) => s.id === scene);
   if (!found) throw new Error(`Unknown app scene "${scene}" (one of ${index.scenes.map((s) => s.id).join(', ') || 'none'})`);
