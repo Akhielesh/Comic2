@@ -55,13 +55,16 @@ const stored = (): ComicDoc => {
   const p1 = raw.pages[0];
   p1.panels[1].lines[0] = { ...p1.panels[1].lines[0], style: { italic: true, ...JSON.parse(JSON.stringify(PRO)) }, styleId: 'st_villain' };
   p1.panels[0].lines = [{ id: 'ln_1_1', kind: 'caption', text: 'Meanwhile', style: { italic: true, warp: 'arc' } } as Line];
-  raw.letterStyle = {
-    presetId: 'classic',
-    base: { weight: 700, warp: 'wave', glow: { color: '#00ff00', size: 0.1 } },
-    kinds: { shout: { shape: 'monster', sizeScale: 1.2 } },
-    speakers: { c_maya: { font: 'bungee', textColor: '#aa0000' } },
-    named: JSON.parse(JSON.stringify(NAMED))
-  };
+  // A newer build's ids (a Pro shape, a Pro font) are not in this build's types: stored as JSON, as the server loads them.
+  raw.letterStyle = JSON.parse(
+    JSON.stringify({
+      presetId: 'classic',
+      base: { weight: 700, warp: 'wave', glow: { color: '#00ff00', size: 0.1 } },
+      kinds: { shout: { shape: 'monster', sizeScale: 1.2 } },
+      speakers: { c_maya: { font: 'bungee', textColor: '#aa0000' } },
+      named: NAMED
+    })
+  );
   return normalizeDoc(raw);
 };
 const line = (doc: ComicDoc, id = 'ln_1_2') => doc.pages[0].panels.flatMap((p) => p.lines).find((l) => l.id === id)!;

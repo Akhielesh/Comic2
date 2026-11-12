@@ -270,7 +270,7 @@ describe('undo and rollback', () => {
   });
 
   it("a newer build's preset and camera move (inert here) are kept when the client re-sends them; never written new", () => {
-    const doc = fixture({ clips: [{ id: 'mc_s3', target: { k: 'line', id: 'ln_1_2' }, role: 'emphasis', preset: 'hyperspin', at: { anchor: 'reveal', ms: 0 }, params: { spin: 9 } } as MotionClip], camera: [{ panelId: 'pn_1_1', move: 'dolly-zoom' as never }] });
+    const doc = fixture({ clips: [{ id: 'mc_s3', target: { k: 'line', id: 'ln_1_2' }, role: 'emphasis', preset: 'hyperspin', at: { anchor: 'reveal', ms: 0 }, params: { spin: 9 } } as unknown as MotionClip], camera: [{ panelId: 'pn_1_1', move: 'dolly-zoom' as never }] });
     expect(doc.pages[0].motion!.clips[0].preset).toBe('hyperspin');
     const ops = sanitize(doc, [motionOp('mc_s3', { preset: 'hyperspin', at: { anchor: 'reveal', ms: 500 } }), { op: 'page_motion', pageId: 'pg_1', patch: { camera: [{ panelId: 'pn_1_1', move: 'dolly-zoom' }], hold: 200 } }]);
     expect(applyOps(doc, ops).pages[0].motion).toMatchObject({ clips: [{ id: 'mc_s3', preset: 'hyperspin', at: { ms: 500 }, params: { spin: 9 } }], camera: [{ panelId: 'pn_1_1', move: 'dolly-zoom' }], hold: 200 });
