@@ -25,13 +25,24 @@ export const MAX_IMPORT_CHARS = 24_000;
 /** Accept generous uploads — extraction shrinks them client-side before sending. */
 export const MAX_IMPORT_FILE_BYTES = 8 * 1024 * 1024;
 
-const KNOWN_USER_TEXT_KEYS = new Set([
-  // ChatGPT export (conversations.json): message.author.role === 'user' handled
-  // structurally below; these keys catch memory/instruction shapes.
-  'memory', 'memories', 'content', 'text', 'about_user_message', 'about_model_message',
-  // Claude export: chat_messages[].text with sender 'human' handled structurally.
-  'instructions', 'custom_instructions', 'saved_info', 'preference', 'value'
+/**
+ * Keys whose value is the user's own memory or instruction text, wherever they sit.
+ * (Chat turns are recognised structurally instead: ChatGPT message.author.role, Claude
+ * chat_messages[].sender, a Gemini API contents[].role.)
+ */
+const MEMORY_KEYS = new Set([
+  'memory', 'memories', 'about_user_message', 'about_model_message',
+  'instructions', 'custom_instructions', 'saved_info', 'preference'
 ]);
+
+/**
+ * Generic text keys. Every export uses them for the assistant's answers as much as for
+ * the user's words, so they are harvested only once the walk is anchored: inside a
+ * user-authored turn or under a memory key. Under any other key (`response.text`,
+ * `answer.content`, a flat `{q, text}` pair) they are not the user's, and nothing of
+ * them is collected.
+ */
+const GENERIC_TEXT_KEYS = new Set(['content', 'text', 'value']);
 
 const IGNORED_KEYS = new Set([
   'id', 'uuid', 'conversation_id', 'parent', 'children', 'create_time', 'update_time',
@@ -40,7 +51,9 @@ const IGNORED_KEYS = new Set([
   'role', 'sender', 'author', 'name', 'slug',
   // Labels and pointers inside a user turn (ChatGPT content.content_type and image
   // asset_pointer; Claude content[].type and its start/stop timestamps): not words.
-  'content_type', 'type', 'asset_pointer', 'start_timestamp', 'stop_timestamp'
+  'content_type', 'type', 'asset_pointer', 'start_timestamp', 'stop_timestamp',
+  // ChatGPT code turns: content.language ('unknown', 'python', …) is a label, not words.
+  'language'
 ]);
 
 const looksLikeAssistantRole = (value: unknown): boolean =>
@@ -78,15 +91,21 @@ const takeoutOwnWords = (record: Record<string, unknown>): string | null | undef
  * feature poisons a memory store.
  *
  * `allowed` gates harvesting: it turns ON inside a user-authored turn or under a
- * memory-ish key, and OFF again when descending through unknown object keys — so a
- * bare list of memory strings imports cleanly while ids/titles/slugs stay behind.
+ * memory key, and OFF again when descending through unknown object keys — so a bare
+ * list of memory strings imports cleanly while ids/titles/slugs stay behind.
+ *
+ * `anchored` records that the walk has passed through a user-authored turn or a memory
+ * key on the way here. Only then do the generic text keys (GENERIC_TEXT_KEYS) turn
+ * `allowed` back on: in a layout with no such anchor, `text`/`content`/`value` are as
+ * likely to hold the assistant's answer as the user's prompt, so neither is sent.
  */
 const collectUserText = (
   node: unknown,
   out: string[],
   roleHint: 'user' | 'assistant' | null,
   allowed: boolean,
-  depth: number
+  depth: number,
+  anchored = false
 ): void => {
   if (out.length >= 800 || depth > 12 || node == null) return;
 
@@ -96,7 +115,7 @@ const collectUserText = (
     return;
   }
   if (Array.isArray(node)) {
-    for (const item of node) collectUserText(item, out, roleHint, allowed, depth + 1);
+    for (const item of node) collectUserText(item, out, roleHint, allowed, depth + 1, anchored);
     return;
   }
   if (typeof node !== 'object') return;
@@ -119,8 +138,11 @@ const collectUserText = (
 
   for (const [key, value] of Object.entries(record)) {
     if (IGNORED_KEYS.has(key)) continue;
-    const childAllowed = nextRole !== 'assistant' && (nextRole === 'user' || KNOWN_USER_TEXT_KEYS.has(key));
-    collectUserText(value, out, nextRole, childAllowed, depth + 1);
+    const childAnchored = anchored || nextRole === 'user' || MEMORY_KEYS.has(key);
+    const childAllowed =
+      nextRole !== 'assistant' &&
+      (nextRole === 'user' || MEMORY_KEYS.has(key) || (GENERIC_TEXT_KEYS.has(key) && childAnchored));
+    collectUserText(value, out, nextRole, childAllowed, depth + 1, childAnchored);
   }
 };
 
@@ -129,6 +151,8 @@ const collectUserText = (
  * JSON (an object or array) gets the user-text extraction, and JSON in which none of the
  * user's own words is found returns '' so nothing is sent; anything else (plain text,
  * markdown, or text that only looks like JSON and does not parse) passes through trimmed.
+ * That last case is sent as written, whatever it holds: a .jsonl export or a cut-off
+ * conversations.json keeps its assistant lines (the spec keeps text as text).
  */
 export const prepareMemoryImportContent = (raw: string): string => {
   const trimmed = (raw || '').trim();

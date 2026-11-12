@@ -367,6 +367,9 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
   const [importError, setImportError] = useState<string | null>(null);
   // Calm notice: the file or paste held none of the user's own words, so nothing was sent.
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  // Bumped each time the notice is shown, so a repeat Import re-inserts its words into the
+  // always-mounted live region and a screen reader announces it again.
+  const [importNoticeSeq, setImportNoticeSeq] = useState(0);
   // The box holds an uploaded file's text (until the user edits it), for the notice's wording.
   const [importFromFile, setImportFromFile] = useState(false);
   const [preview, setPreview] = useState<string[] | null>(null);
@@ -396,6 +399,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
         setImportError(null);
         setPreview(null);
         setImportNotice(memoryImportNothingFoundNotice(importFromFile));
+        setImportNoticeSeq((n) => n + 1);
       }
       return;
     }
@@ -533,12 +537,15 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
               onChange={(e) => { void onPickFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
             />
             {importError && <p className="text-xs text-red-500">{importError}</p>}
-            {importNotice && (
-              <p role="status" className="flex items-start gap-1.5 text-xs leading-5 text-[var(--ds-ink)]">
-                <Info aria-hidden className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${TONE_TEXT.info}`} />
-                <span className="min-w-0 [overflow-wrap:anywhere]">{importNotice}</span>
-              </p>
-            )}
+            {/* Always mounted (empty until needed) so the notice is announced when its words arrive. */}
+            <p role="status" aria-live="polite" className="flex items-start gap-1.5 text-xs leading-5 text-[var(--ds-ink)] empty:hidden">
+              {importNotice && (
+                <React.Fragment key={importNoticeSeq}>
+                  <Info aria-hidden className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${TONE_TEXT.info}`} />
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{importNotice}</span>
+                </React.Fragment>
+              )}
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => fileRef.current?.click()}

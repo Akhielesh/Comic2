@@ -33,6 +33,9 @@ const TAKEOUT_UNRECOGNISED = JSON.stringify([
   { header: 'Gemini Apps', title: 'what should I cook', safeHtmlItem: [{ html: 'ASSISTANT ANSWER: pasta' }] }
 ]);
 
+/** A prompt/answer layout with no role marker: the answer sits under a generic `text` key. */
+const PROMPT_RESPONSE = JSON.stringify([{ prompt: 'I am vegan', response: { text: 'ASSISTANT ANSWER: try tofu' } }]);
+
 const CHATGPT_EXPORT = JSON.stringify([
   {
     title: 'Dinner ideas',
@@ -71,6 +74,8 @@ describe('ChatSettingsModal memory import: only the user’s own words are sent'
 
   it('a Takeout-shaped file with none of the user’s words makes no request and shows the calm notice', async () => {
     renderMemoryTab();
+    // The live region is in the page, empty, before anything is said into it.
+    expect(screen.getByRole('status').textContent).toBe('');
     await upload(TAKEOUT_UNRECOGNISED);
     expect((screen.getByPlaceholderText(/memories or instructions here/) as HTMLTextAreaElement).value).toBe(TAKEOUT_UNRECOGNISED);
     await act(async () => {
@@ -98,7 +103,38 @@ describe('ChatSettingsModal memory import: only the user’s own words are sent'
     expect(screen.getByRole('status').textContent).toBe(TEXT_NOTICE);
 
     fireEvent.change(box, { target: { value: 'I am vegetarian' } });
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('');
+  });
+
+  it('a prompt/answer file whose answer sits under a generic text key makes no request and shows the notice', async () => {
+    renderMemoryTab();
+    await upload(PROMPT_RESPONSE, 'export.json');
+    await act(async () => {
+      fireEvent.click(importButton());
+    });
+    expect(importChatMemory).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe(FILE_NOTICE);
+  });
+
+  it('a repeat Import of the same file says the notice again (its words are re-inserted into the live region)', async () => {
+    renderMemoryTab();
+    await upload(TAKEOUT_UNRECOGNISED);
+    await act(async () => {
+      fireEvent.click(importButton());
+    });
+    const region = screen.getByRole('status');
+    const firstWords = region.querySelector('span');
+    expect(firstWords?.textContent).toBe(FILE_NOTICE);
+
+    await act(async () => {
+      fireEvent.click(importButton());
+    });
+    expect(importChatMemory).not.toHaveBeenCalled();
+    // The same always-mounted region, fresh words inside it.
+    expect(screen.getByRole('status')).toBe(region);
+    const secondWords = region.querySelector('span');
+    expect(secondWords?.textContent).toBe(FILE_NOTICE);
+    expect(secondWords).not.toBe(firstWords);
   });
 
   it('a ChatGPT export still sends only the user’s turns, with no notice', async () => {
@@ -126,7 +162,7 @@ describe('ChatSettingsModal memory import: only the user’s own words are sent'
     });
     expect(importChatMemory).toHaveBeenCalledTimes(1);
     expect(importChatMemory.mock.calls[0][1]).toBe('- Prefers metric units\n- Works in Lisbon');
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('');
   });
 
   it('a new file replaces the notice: the next upload with the user’s words imports', async () => {
@@ -138,7 +174,7 @@ describe('ChatSettingsModal memory import: only the user’s own words are sent'
     expect(screen.getByRole('status').textContent).toBe(FILE_NOTICE);
 
     await upload(CHATGPT_EXPORT, 'conversations.json');
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('');
     await act(async () => {
       fireEvent.click(importButton());
     });

@@ -117,11 +117,26 @@ describe('prepareMemoryImportContent', () => {
           s: { id: 's', message: { author: { role: 'system' }, content: { content_type: 'text', parts: ['You are ChatGPT.'] } } },
           a: { id: 'a', message: { author: { role: 'user' }, content: { content_type: 'text', parts: ['I am vegetarian'] } } },
           b: { id: 'b', message: { author: { role: 'assistant' }, content: { content_type: 'text', parts: ['ASSISTANT: try a dal'] } } },
-          c: { id: 'c', message: { author: { role: 'user' }, content: { content_type: 'text', parts: ['I cook for two on weekdays'] } } }
+          c: { id: 'c', message: { author: { role: 'user' }, content: { content_type: 'text', parts: ['I cook for two on weekdays'] } } },
+          // A code turn: its language label is not the user's words.
+          d: { id: 'd', message: { author: { role: 'user' }, content: { content_type: 'code', language: 'unknown', text: 'print(1) my code' } } },
+          // A multimodal turn: the image pointer and its sizes are not words; the caption is.
+          e: {
+            id: 'e',
+            message: {
+              author: { role: 'user' },
+              content: {
+                content_type: 'multimodal_text',
+                parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'file-service://file-abc', size_bytes: 1234, width: 512, height: 512 }, 'This is my kitchen']
+              }
+            }
+          }
         }
       }
     ];
-    expect(prepareMemoryImportContent(JSON.stringify(conversations))).toBe('I am vegetarian\nI cook for two on weekdays');
+    expect(prepareMemoryImportContent(JSON.stringify(conversations))).toBe(
+      'I am vegetarian\nI cook for two on weekdays\nprint(1) my code\nThis is my kitchen'
+    );
 
     const assistantOnly = [{ title: 'Greeting', mapping: { b: { message: { author: { role: 'assistant' }, content: { parts: ['ASSISTANT: Hello there, how can I help?'] } } } } }];
     expect(prepareMemoryImportContent(JSON.stringify(assistantOnly))).toBe('');
@@ -149,6 +164,40 @@ describe('prepareMemoryImportContent', () => {
     expect(prepareMemoryImportContent(JSON.stringify(claude))).toBe('I am allergic to peanuts');
   });
 
+  it("JSON in an unrecognised layout never sends the assistant's reply under a generic text key", () => {
+    // The fixer review's probes: a prompt/answer pair with no role marker keeps the answer
+    // under `text` / `content` / `value`. Neither side is known to be the user's, so nothing is sent.
+    const probes = [
+      [{ prompt: 'I am vegan', response: { text: 'ASSISTANT ANSWER: try tofu' } }],
+      [{ question: 'I live in Pune', answer: { content: 'ASSISTANT ANSWER: Pune is nice' } }],
+      { threads: [{ query: 'best vegan spots', answer: { content: [{ text: 'ASSISTANT ANSWER perplexity' }] } }] },
+      [{ q: 'my prompt', text: 'ASSISTANT ANSWER flat' }],
+      { conversations: [{ input: 'hello there', output: { value: 'ASSISTANT ANSWER value' } }] }
+    ];
+    for (const probe of probes) expect(prepareMemoryImportContent(JSON.stringify(probe))).toBe('');
+  });
+
+  it('generic text keys still count under a user turn or a memory key', () => {
+    // A Gemini API transcript: contents[].role marks the turn, parts[].text holds the words.
+    const gemini = {
+      contents: [
+        { role: 'user', parts: [{ text: 'I run a bakery in Kochi' }] },
+        { role: 'model', parts: [{ text: 'ASSISTANT: what a lovely job' }] }
+      ]
+    };
+    expect(prepareMemoryImportContent(JSON.stringify(gemini))).toBe('I run a bakery in Kochi');
+    // Memory entries as objects: `text` / `content` / `value` under a memory key are the user's.
+    const memories = {
+      memories: [{ id: 'm1', text: 'Vegetarian' }, { content: 'Lives in Lisbon' }, { value: 'Prefers metric units' }],
+      saved_info: [{ text: 'Cooks for two' }]
+    };
+    expect(prepareMemoryImportContent(JSON.stringify(memories))).toBe(
+      'Vegetarian\nLives in Lisbon\nPrefers metric units\nCooks for two'
+    );
+    // A bare list of strings is still imported directly.
+    expect(prepareMemoryImportContent(JSON.stringify(['Vegetarian', 'Lives in Lisbon']))).toBe('Vegetarian\nLives in Lisbon');
+  });
+
   it('keeps plain text and markdown as written', () => {
     const md = '# About me\n\n- Prefers metric units\n- [Portfolio](https://example.com) is up to date';
     expect(prepareMemoryImportContent(`\n${md}\n`)).toBe(md);
@@ -159,6 +208,10 @@ describe('prepareMemoryImportContent', () => {
     expect(prepareMemoryImportContent(truncated)).toBe(truncated);
     const bracketed = '[x] I take notes in markdown\n[ ] Remind me about the dentist';
     expect(prepareMemoryImportContent(bracketed)).toBe(bracketed);
+    // Known limit, kept on purpose: a .jsonl export is not one JSON value, so it goes as written,
+    // assistant lines included (the docs and the privacy copy say so).
+    const jsonl = '{"role":"user","text":"I am vegan"}\n{"role":"assistant","text":"ASSISTANT ANSWER jsonl"}';
+    expect(prepareMemoryImportContent(jsonl)).toBe(jsonl);
   });
 
   it('keeps the caps on extracted JSON: 24,000 characters and 800 pieces', () => {
