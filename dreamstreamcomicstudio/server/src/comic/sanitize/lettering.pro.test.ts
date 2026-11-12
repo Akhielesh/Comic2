@@ -277,7 +277,9 @@ describe("the `line` op's saved-style link (PE-SERVER wave note 3, PE-LETTER wav
     expect(line(unlinked).styleId).toBeUndefined();
     // Nothing to unlink on ln_1_1: dropped, not refused.
     expect(patchOf(sanitize(doc, [link(null, 'ln_1_1', 'pn_1_1')]))).toEqual({});
-    const orphan = normalizeDoc({ ...doc, letterStyle: { ...doc.letterStyle!, named: { st_radio: NAMED.st_radio } } });
+    const raw = JSON.parse(JSON.stringify(doc)) as ComicDoc;
+    delete raw.letterStyle!.named!.st_villain;
+    const orphan = normalizeDoc(raw);
     expect(line(orphan).styleId).toBe('st_villain');
     expect(patchOf(sanitize(orphan, [link('st_villain')]))).toEqual({ styleId: 'st_villain' });
   });
