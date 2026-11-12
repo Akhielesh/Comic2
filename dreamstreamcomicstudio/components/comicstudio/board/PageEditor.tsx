@@ -116,7 +116,7 @@ import { LetteringToolbar } from '../lettering/LetteringToolbar';
 import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
-import { useLetteringSelection } from '../lettering/useLetteringSelection';
+import { holdsOverlaysOn, useLetteringSelection } from '../lettering/useLetteringSelection';
 import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, pinKeepingSizeOps, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { TouchCanvas, useZoom } from '../mobile/touch/TouchCanvas';
@@ -913,10 +913,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   }, []);
   const mirrorSelection = useCallback(
     (sel: StudioSelection | null) => {
-      if (sel === null && !closingRef.current) {
-        const cur = studioSelRef.current;
-        if (cur && cur.pageId === sourcePage.id && ((cur.layerIds?.length ?? 0) > 0 || (cur.panelIds?.length ?? 0) > 0)) return;
-      }
+      if (sel === null && !closingRef.current && holdsOverlaysOn(studioSelRef.current, sourcePage.id)) return;
       studio.setSelection?.(sel);
     },
     [studio, sourcePage.id]
@@ -929,7 +926,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // and changes nothing; ids not on this page are ignored.
   const shown = studio.selection;
   const requestedLineIds = shown && shown.pageId === page.id && shown.surface === 'page_editor' ? shown.lineIds : undefined;
-  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection ? mirrorSelection : undefined, panelOf, initial: requestedLineIds });
+  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection ? mirrorSelection : undefined, panelOf, initial: requestedLineIds, studioSelection: studio.selection });
   /** Select overlays (the Layers part): no balloon first, then {pageId, lineIds: [], layerIds}; [] clears. */
   const selectLayers = (ids: readonly string[]) => {
     selection.clear();

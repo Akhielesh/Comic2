@@ -197,6 +197,31 @@ describe('selection and snapping', () => {
     expect(setStudioSelection).toHaveBeenLastCalledWith(null);
   });
 
+  it('an empty balloon selection keeps an overlay or panel selection on this page; closing still clears it (PE-SHELL (m))', () => {
+    const setStudioSelection = vi.fn();
+    const overlays = { pageId: 'pg_1', lineIds: [], layerIds: ['ly_1'], surface: 'page_editor' as const };
+    const { result, rerender, unmount } = renderHook((p: { sel: Parameters<typeof useLetteringSelection>[0]['studioSelection'] }) => useLetteringSelection({ pageId: 'pg_1', setStudioSelection, studioSelection: p.sel }), {
+      initialProps: { sel: overlays }
+    });
+    // Mounting with no balloon selected leaves the Layers part's selection alone.
+    expect(setStudioSelection).not.toHaveBeenCalled();
+    act(() => result.current.select('l1'));
+    expect(setStudioSelection).toHaveBeenLastCalledWith({ pageId: 'pg_1', lineIds: ['l1'], surface: 'page_editor' });
+    setStudioSelection.mockClear();
+    rerender({ sel: { pageId: 'pg_1', lineIds: [], panelIds: ['pn_1'], surface: 'page_editor' } });
+    act(() => result.current.clear());
+    expect(setStudioSelection).not.toHaveBeenCalled();
+    // Overlays on another page do not count: the empty selection clears as before.
+    rerender({ sel: { ...overlays, pageId: 'pg_2' } });
+    act(() => result.current.select('l2'));
+    act(() => result.current.clear());
+    expect(setStudioSelection).toHaveBeenLastCalledWith(null);
+    setStudioSelection.mockClear();
+    rerender({ sel: overlays });
+    unmount();
+    expect(setStudioSelection).toHaveBeenLastCalledWith(null);
+  });
+
   it('snaps an outline edge or centre to the nearest guide within the threshold', () => {
     const targets = snapTargets({ panels: [{ x: 0.02, y: 0.02, w: 0.5, h: 0.4 }], others: [{ x: 0.6, y: 0.1, w: 0.2, h: 0.1 }], safe: { x: 0.03, y: 0.02, w: 0.94, h: 0.96 } });
     const s = computeSnap({ x: 0.596, y: 0.3, w: 0.2, h: 0.1 }, targets, { x: 0.01, y: 0.01 });
