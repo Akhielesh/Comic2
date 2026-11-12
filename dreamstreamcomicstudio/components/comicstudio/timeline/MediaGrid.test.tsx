@@ -122,6 +122,17 @@ describe('MediaGrid', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it('places each tile’s ⋯ menu outside selection mode and hides it in selection mode (a tap only toggles there)', () => {
+    const { studio } = studioFor(richDoc());
+    const menuFor = vi.fn((item: { path: string }) => <button type="button" data-testid="tile-menu">{`More for ${item.path}`}</button>);
+    const { rerender } = render(<MediaGrid studio={studio} columns={3} menuFor={menuFor} />);
+    expect(screen.getAllByTestId('tile-menu').length).toBeGreaterThan(0);
+    menuFor.mockClear();
+    rerender(<MediaGrid studio={studio} columns={3} menuFor={menuFor} selection={{ selecting: true, isSelected: () => false, toggle: vi.fn(), clear: vi.fn() }} />);
+    expect(screen.queryByTestId('tile-menu')).toBeNull();
+    expect(menuFor).not.toHaveBeenCalled();
+  });
+
   it('grouped: one labelled section per owner in book order', () => {
     const { studio } = studioFor(richDoc());
     render(<MediaGrid studio={studio} columns={3} grouped />);

@@ -73,6 +73,42 @@ describe('useOnline', () => {
     expect(result.current).toBe(true);
   });
 
+  it('a later request that reaches the server ends the hold at once, whatever its status (the safeFetch wiring)', async () => {
+    vi.useFakeTimers();
+    // services/apiClient.ts's safeFetch as the DS-R1 wave note wires it: a fetch that resolves calls markReachable();
+    // one that rejects (the request never arrived) reports the network failure, as it does today.
+    const safeFetch = async (url: string): Promise<Response> => {
+      try {
+        const res = await fetch(url);
+        markReachable();
+        return res;
+      } catch (err) {
+        appStatus.report('error', "Couldn't reach the server", { source: 'network', detail: `${(err as Error).message} · ${url}` });
+        throw err;
+      }
+    };
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(new Response('busy', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useConnectivity());
+    await act(async () => {
+      await safeFetch('/api/comic/x').catch(() => undefined);
+    });
+    // A cold-start blip: unreachable, held for up to UNREACHABLE_HOLD_MS ...
+    expect(result.current).toEqual({ online: false, reason: 'unreachable' });
+    act(() => vi.advanceTimersByTime(1500));
+    expect(result.current.online).toBe(false);
+    // ... but the next request gets an answer (a 503 still proves the server is there): online now, not in 28.5 s.
+    await act(async () => {
+      await safeFetch('/api/comic/x');
+    });
+    expect(result.current).toEqual({ online: true, reason: null });
+    expect(vi.getTimerCount()).toBe(0);
+    vi.unstubAllGlobals();
+  });
+
   it('other app errors (a window error, a failed image) never flip it', () => {
     const { result } = renderHook(() => useOnline());
     act(() => appStatus.report('error', 'Something broke', { source: 'window' }));

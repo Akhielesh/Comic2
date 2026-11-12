@@ -15,8 +15,13 @@
  *   - meta is one InlineMeta line; amounts arrive formatted — the card never prints money.
  *
  * Variants: `owner` and `public` (grid cards), `rail` (a narrow shelf card), `hero` (cover beside a big title and
- * a two-line logline), `row` (a 72 px list row with a 48 × 64 cover) and `end` (the reader's end card: compact,
- * Read only). Hover lifts the card on pointers that really hover (LIFT; never under reduced motion).
+ * a two-line logline), `row` (a 72 px list row, layout.ts `library.listRowPx`, with a 48 × 64 cover and a one-line
+ * title) and `end` (the reader's end card: compact, Read only). Hover lifts the card on pointers that really hover
+ * (LIFT; never under reduced motion).
+ *
+ * A selected card rings its cover with the spark (SPARK_RING_ON_ART), drawn INSIDE the art (MediaTile
+ * `ring="inside"`: an overlay over the picture, 2–4 px in from its edge): the grid card clips to its radius
+ * (overflow hidden) with the cover flush to its edges, so a ring set outside the art would be cut off on three sides.
  */
 import React from 'react';
 import { BookOpen, PenLine } from 'lucide-react';
@@ -72,10 +77,18 @@ export interface ComicCardProps {
   className?: string;
 }
 
-/** The card surface: opaque, hairline, the panel radius; the primary control's ::after covers it. */
+/** The card surface: opaque, hairline, the panel radius. A tap anywhere on it that is not a control of its own is
+ *  handed to the one primary control (no stretched overlay: it would sit over the corner controls). */
 export const COMIC_CARD = `group/card relative flex min-w-0 flex-col ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)]`;
 /** The primary control inside the heading (the card's focus outline shows its focus; 44 px to a finger). */
 export const COMIC_CARD_PRIMARY = `block min-w-0 cursor-pointer text-left text-inherit no-underline bg-transparent p-0 focus-visible:outline-none ${COARSE_HIT_AREA}`;
+/** A row card's cover box: 48 × 64 (3:4), the plan's list-row cover. */
+const ROW_COVER_ASPECT = '3 / 4';
+/**
+ * The `row` card: 72 px tall (layout.ts `library.listRowPx`): a 1 px hairline and 3 px of padding around the 64 px
+ * cover, everything centred on it.
+ */
+export const COMIC_CARD_ROW = 'min-h-[72px] flex-row items-center gap-3 px-3 py-[3px]';
 /** Clicks on these never open the card: they are controls of their own. */
 const OWN_CONTROLS = 'a,button,input,select,textarea,label,summary,[role="checkbox"],[role="switch"],[role="menuitem"],[data-card-ignore]';
 
@@ -139,7 +152,7 @@ export function ComicCard({
 
   // The two-line clamp lives on the words, not on the heading: a clamp clips (overflow: hidden), and the heading
   // must not clip the control's 44 px touch area.
-  const words = <span className="line-clamp-2">{title}</span>;
+  const words = <span className={row ? 'line-clamp-1' : 'line-clamp-2'}>{title}</span>;
   const primary = href ? (
     <a ref={primaryRef} href={href} aria-label={openLabel} data-card-primary="" className={COMIC_CARD_PRIMARY}>
       {words}
@@ -152,9 +165,19 @@ export function ComicCard({
     words
   );
 
+  const coverAspect = row ? ROW_COVER_ASPECT : '2 / 3';
   const coverBox = (
-    <MediaTile aspect="2 / 3" artColor={artColor ?? cover?.artColor} chip={chip} menu={corner} lift={false} selected={selected} className={cn(row ? 'w-12 shrink-0' : hero ? 'w-[120px] shrink-0 sm:w-[168px]' : 'w-full', row && 'rounded-[var(--ds-radius-sm)]')}>
-      <CoverImage alt="" {...cover} artColor={artColor ?? cover?.artColor} sizes={cover?.sizes ?? (row ? '48px' : hero ? '168px' : undefined)} className="h-full" />
+    <MediaTile
+      aspect={coverAspect}
+      artColor={artColor ?? cover?.artColor}
+      chip={chip}
+      menu={corner}
+      lift={false}
+      selected={selected}
+      ring="inside"
+      className={cn(row ? 'w-12 shrink-0' : hero ? 'w-[120px] shrink-0 sm:w-[168px]' : 'w-full', row && 'rounded-[var(--ds-radius-sm)]')}
+    >
+      <CoverImage alt="" {...cover} aspect={coverAspect} artColor={artColor ?? cover?.artColor} sizes={cover?.sizes ?? (row ? '48px' : hero ? '168px' : undefined)} className="h-full" />
     </MediaTile>
   );
 
@@ -206,7 +229,7 @@ export function ComicCard({
         COMIC_CARD,
         interactive && cn(LIFT, 'cursor-pointer'),
         'has-[[data-card-primary]:focus-visible]:outline has-[[data-card-primary]:focus-visible]:outline-2 has-[[data-card-primary]:focus-visible]:outline-offset-2 has-[[data-card-primary]:focus-visible]:outline-[color:var(--ds-focus)]',
-        row ? 'flex-row items-center gap-3 p-3' : hero ? 'flex-row items-stretch gap-4 p-4' : 'overflow-hidden',
+        row ? COMIC_CARD_ROW : hero ? 'flex-row items-stretch gap-4 p-4' : 'overflow-hidden',
         variant === 'rail' && 'w-full',
         className
       )}

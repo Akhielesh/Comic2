@@ -13,10 +13,16 @@
  *             builds (Badge onArt, StatusChip on art, RatingBadge onArt); `caption` is a short opaque label bottom-left;
  *   ⋯         `menu`, top-right: the screen passes its Menu trigger (DS-1c), the tile only places it;
  *   selected  a spark outline set off the art (SPARK_RING_ON_ART: selection on art is the one place the spark
- *             marks a choice), and `aria-pressed` on the tile's control in selection mode.
+ *             marks a choice), and `aria-pressed` on the tile's control in selection mode. `ring="inside"` draws
+ *             it inside the art instead (MEDIA_TILE_RING_INSIDE, an overlay painted over the picture) for a tile
+ *             whose container clips its edges: ComicCard's cover sits flush in a card that clips to its radius,
+ *             where a ring set outside the art is cut off on three sides.
  *
  * With `onOpen` the whole tile is one button (named by `label`) under the chips and the menu, which stay
  * separately tappable. The tile never prints a price.
+ *
+ * `as="span"` builds the tile from spans (each `block` or positioned, so it looks the same): for a tile inside a
+ * button (PresetTile), whose content may only be phrasing content. The art passed in must then be phrasing too.
  */
 import React from 'react';
 import { cn } from '../../lib/utils';
@@ -57,11 +63,20 @@ export interface MediaTileProps {
   priority?: boolean;
   /** Hover lift (cards on a grid; off inside a card that lifts itself). */
   lift?: boolean;
+  /** Where the selection ring is drawn: set off the art (default) or inside it (a container that clips the tile). */
+  ring?: 'outside' | 'inside';
+  /** The element the tile is built from: `span` inside a button (phrasing content only). */
+  as?: 'div' | 'span';
   className?: string;
 }
 
 /** The box: reserved aspect, the comic's tint, the control radius, a hairline. */
 export const MEDIA_TILE = `group/tile relative isolate block w-full min-w-0 overflow-hidden ${RADIUS_CONTROL} border border-[var(--ds-hairline)] ${ART_PLACEHOLDER}`;
+/**
+ * The selection ring drawn inside the art: an overlay over the picture (the art is positioned, so an outline on the
+ * tile itself would be painted under it), the spark outline 2–4 px inside the edge, following the tile's radius.
+ */
+export const MEDIA_TILE_RING_INSIDE = 'pointer-events-none absolute inset-0 block rounded-[inherit] outline-offset-[-4px]';
 /** An opaque label on the art (the raised surface and the muted ink: readable on any picture). */
 export const ON_ART_LABEL = 'pointer-events-none inline-flex max-w-full items-center truncate rounded-[var(--ds-radius-chip)] border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-1.5 py-0.5 text-[10.5px] font-medium leading-4 text-[var(--ds-ink)]';
 
@@ -88,9 +103,11 @@ export function MediaTile({
   artColor,
   priority = false,
   lift = true,
+  ring = 'outside',
+  as: Box = 'div',
   className
 }: MediaTileProps) {
-  const [boxRef, near] = useNearViewport<HTMLDivElement>('300px', !priority && !!resolve && !src);
+  const [boxRef, near] = useNearViewport<HTMLElement>('300px', !priority && !!resolve && !src);
   const resolveRef = React.useRef(resolve);
   resolveRef.current = resolve;
   const resolvedUrl = React.useMemo(() => (resolve && !src && near ? resolveRef.current?.() ?? null : null), [near, artKey, !!resolve, src]); // once per artKey
@@ -105,19 +122,21 @@ export function MediaTile({
     ));
 
   return (
-    <div
+    <Box
       ref={boxRef}
       // A tile that is not a control is still named: a picture with its label (the chips' words are in it).
       role={!onOpen && !menu && label ? 'img' : undefined}
       aria-label={!onOpen && !menu && label ? label : undefined}
       data-slot="media-tile"
       data-selected={selected || undefined}
-      className={cn(MEDIA_TILE, lift && onOpen && LIFT, selected && SPARK_RING_ON_ART, className)}
+      className={cn(MEDIA_TILE, lift && onOpen && LIFT, selected && ring === 'outside' && SPARK_RING_ON_ART, className)}
       style={artBoxStyle(aspect, artColor)}
     >
-      <div className="absolute inset-0" data-slot="media-tile-art">
+      <Box className="absolute inset-0 block" data-slot="media-tile-art">
         {veil ? veil(art) : art}
-      </div>
+      </Box>
+      {/* After the art (painted over it), before the control, the chips and the menu (which stay on top). */}
+      {selected && ring === 'inside' ? <Box aria-hidden="true" data-slot="media-tile-ring" className={cn(SPARK_RING_ON_ART, MEDIA_TILE_RING_INSIDE)} /> : null}
       {onOpen ? (
         <button
           type="button"
@@ -128,14 +147,14 @@ export function MediaTile({
           className={`absolute inset-0 block h-full w-full cursor-pointer bg-transparent ${RADIUS_CONTROL} ${FOCUS_RING}`}
         />
       ) : null}
-      {chip ? <div className="pointer-events-none absolute left-1.5 top-1.5 flex max-w-[calc(100%-3.5rem)] flex-wrap gap-1 [&>*]:pointer-events-auto">{chip}</div> : null}
-      {menu ? <div className="absolute right-1 top-1">{menu}</div> : null}
+      {chip ? <Box className="pointer-events-none absolute left-1.5 top-1.5 flex max-w-[calc(100%-3.5rem)] flex-wrap gap-1 [&>*]:pointer-events-auto">{chip}</Box> : null}
+      {menu ? <Box className="absolute right-1 top-1 block">{menu}</Box> : null}
       {caption || badge ? (
-        <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 flex min-w-0 items-end justify-between gap-1">
+        <Box className="pointer-events-none absolute inset-x-1.5 bottom-1.5 flex min-w-0 items-end justify-between gap-1">
           {caption ? <span className={ON_ART_LABEL}>{caption}</span> : <span />}
           {badge ? <span className="flex shrink-0 gap-1">{badge}</span> : null}
-        </div>
+        </Box>
       ) : null}
-    </div>
+    </Box>
   );
 }

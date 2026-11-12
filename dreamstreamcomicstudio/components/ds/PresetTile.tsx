@@ -1,8 +1,10 @@
 /**
  * PresetTile — one choice with a picture (redesign plan §4; styles.md §7.3 M5, amendment A2 to DS-R9): a style, a
  * format, a lettering look. The art is passed in (a LibraryImage, a PresetThumb, a page wireframe), so the tile is
- * the same chrome everywhere: the art box (MediaTile), the label under it, an optional one-line description and a
- * badge ("Free", "New"). It replaces the three hand-built style tiles and the lettering preset tile chrome.
+ * the same chrome everywhere: the art box (MediaTile, built from spans: a button holds phrasing content only, so
+ * the art passed in must be phrasing content too — an <img>, an <svg>, a span), the label under it, an optional
+ * one-line description and a badge ("Free", "New"). It replaces the three hand-built style tiles and the lettering
+ * preset tile chrome.
  *
  * Semantics come from the group (PresetGrid): `radio` (one of a set; aria-checked) or `pressed` (a toggle;
  * aria-pressed). On a pointer that really hovers the tile lifts (LIFT), every press dips (PRESS) and the chosen
@@ -55,7 +57,8 @@ export function PresetTile({ label, description, art, aspect = '4 / 5', selected
       data-state={selected ? 'on' : 'off'}
       className={`${cn(PRESET_TILE, className)} ${FOCUS_RING}`}
     >
-      <MediaTile aspect={aspect} lift={false} chip={badge} className="pointer-events-none">
+      {/* Spans only: a button holds phrasing content, never a <div>. */}
+      <MediaTile as="span" aspect={aspect} lift={false} chip={badge} className="pointer-events-none">
         {art}
       </MediaTile>
       {selected ? (

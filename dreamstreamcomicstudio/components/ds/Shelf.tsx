@@ -6,7 +6,9 @@
  *
  *   empty    renders NOTHING: Discover hides empty rails, never shows one with a "no results" line;
  *   loading  one row of skeleton cards at the shelf's card width;
- *   error    an inline row "Couldn't load {title} · Retry" (the rest of the page keeps working).
+ *   error    an inline row "Couldn't load {title} · Retry" (the rest of the page keeps working). It is a polite
+ *            status, never an alert: a page with several failed shelves must not fire several assertive
+ *            interruptions at load (§9, one polite announcer; calm copy).
  *
  * The arrows say where they go ("Scroll Trending left"), are disabled at the ends, and jump instead of gliding
  * under reduced motion. Below the fold a shelf can skip rendering work until it is near (`deferRender`:
@@ -144,7 +146,7 @@ export function Shelf<T>({ title, items, getKey, renderItem, cardPx, seeAll, loa
         </div>
       </div>
       {error ? (
-        <div role="alert" data-slot="shelf-error" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5 text-[var(--ds-muted)]">
+        <div role="status" data-slot="shelf-error" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5 text-[var(--ds-muted)]">
           <span>Couldn't load {title}</span>
           {onRetry ? (
             <>

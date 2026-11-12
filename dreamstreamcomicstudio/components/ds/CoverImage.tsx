@@ -13,7 +13,9 @@
  *     near the viewport, and only once per picture: a 300-cover shelf signs what is seen. It stays a prop: once
  *     PF-4 lands (S3) it becomes a pure URL builder and nothing here changes;
  *   - a publication card (`publication`) shows only published art: a path outside `pub/<key>/` (a draft, a
- *     history version, someone's private upload) is refused and never becomes an `<img>`;
+ *     history version, someone's private upload) is refused and never becomes an `<img>`, and a URL handed in must
+ *     also come from a known origin (the storage origin, this page's own, or one the caller adds with
+ *     `coverOrigins`): Discover's rows cross a trust boundary, so a tainted row cannot load a third-party image;
  *   - the picture is revealed through components/ds/useImageReveal (MO-1): it waits for `load` and `decode()`, then
  *     fades in (and settles from 102 % on fine pointers) on --ds-motion-enter, following LibraryImage's pattern.
  *     A cover the browser already holds swaps in with no entrance, and under reduced motion nothing animates;
@@ -36,16 +38,48 @@ export const PUBLICATION_PATH_RE = /^pub\/[A-Za-z0-9]{22}\/[A-Za-z0-9][A-Za-z0-9
 const PUBLICATION_URL_PATH_RE = /\/pub\/[A-Za-z0-9]{22}\/[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/;
 const LOCAL_HTTP = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\//i;
 
+const originOf = (url: unknown): string | null => {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    const origin = new URL(url).origin;
+    return origin && origin !== 'null' ? origin : null;
+  } catch {
+    return null;
+  }
+};
+
+let knownOrigins: readonly string[] | null = null;
+/**
+ * The origins a publication cover URL may come from by default: the storage origin (VITE_SUPABASE_URL; the edge
+ * hands out `<storage>/storage/v1/object/public/<bucket>/pub/…`, api-proxy/src/publicComic.ts publicObjectUrl) and
+ * this page's own origin. Read once.
+ */
+export function publicationCoverOrigins(): readonly string[] {
+  if (knownOrigins) return knownOrigins;
+  const out = new Set<string>();
+  let storage: unknown;
+  try {
+    storage = import.meta.env?.VITE_SUPABASE_URL;
+  } catch {
+    storage = undefined;
+  }
+  for (const o of [originOf(storage), typeof window !== 'undefined' ? originOf(window.location?.href) : null]) if (o) out.add(o);
+  knownOrigins = [...out];
+  return knownOrigins;
+}
+
 /**
  * Whether a cover source may be shown on a publication card: a `pub/` path, or an https URL (plain http only on a
- * local dev server) whose path ends in one. Anything else (`u/<user>/…`, a data: URL, a relative path) is refused.
+ * local dev server) from one of `origins` whose path ends in one. Anything else (`u/<user>/…`, a data: URL, a
+ * relative path, a pub/ path on someone else's host) is refused.
  */
-export function isPublicationCoverSource(source: string | null | undefined): boolean {
+export function isPublicationCoverSource(source: string | null | undefined, origins: readonly string[] = publicationCoverOrigins()): boolean {
   if (typeof source !== 'string' || !source || source.includes('..')) return false;
   if (PUBLICATION_PATH_RE.test(source)) return true;
   if (!/^https:\/\//i.test(source) && !LOCAL_HTTP.test(source)) return false;
   try {
-    return PUBLICATION_URL_PATH_RE.test(new URL(source).pathname);
+    const url = new URL(source);
+    return origins.includes(url.origin) && PUBLICATION_URL_PATH_RE.test(url.pathname);
   } catch {
     return false;
   }
@@ -108,8 +142,16 @@ export interface RevealImageProps {
  * An `<img>` that is shown only once it has loaded and decoded, then plays the art entrance (LibraryImage's
  * pattern: opacity 0 → 1 on --ds-motion-enter with the enter curve, plus a 2 % settle on fine pointers; no
  * entrance for a cached picture or under reduced motion). On error it renders `fallback` instead.
+ *
+ * Keyed by `revealKey` (MO-1: "key the component by its url"): a new picture is a new `<img>` AND a new reveal.
+ * Keying only the `<img>` is not enough: in the commit that swaps pictures the reveal's effect still holds the old
+ * element, which has its pixels, and would mark the new picture revealed from cache before a byte of it arrived.
  */
-export function RevealImage({ src, srcSet, sizes, alt, revealKey, priority = false, fit = 'cover', width, height, fallback, className }: RevealImageProps) {
+export function RevealImage(props: RevealImageProps) {
+  return <RevealImageFrame key={props.revealKey} {...props} />;
+}
+
+function RevealImageFrame({ src, srcSet, sizes, alt, revealKey, priority = false, fit = 'cover', width, height, fallback, className }: RevealImageProps) {
   const reveal = useImageReveal(revealKey);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const setImg = useCallback(
@@ -136,7 +178,6 @@ export function RevealImage({ src, srcSet, sizes, alt, revealKey, priority = fal
   if (reveal.phase === 'error') return <>{fallback}</>;
   return (
     <img
-      key={revealKey}
       ref={setImg}
       src={src}
       srcSet={srcSet || undefined}
@@ -170,6 +211,8 @@ export interface CoverImageProps {
   resolve?: (width: CoverWidth) => string | null | undefined;
   /** A public card: only `pub/` art is shown. */
   publication?: boolean;
+  /** More origins a publication card may load a handed-in cover URL from (the Discover edge's), beside the defaults. */
+  coverOrigins?: readonly string[];
   /** The first row: load now (eager, high fetch priority). */
   priority?: boolean;
   /** Decorative by default: the card's heading names the comic. */
@@ -202,6 +245,7 @@ export function CoverImage({
   sources,
   resolve,
   publication = false,
+  coverOrigins,
   priority = false,
   alt = '',
   sizes = '(max-width: 599px) 50vw, (max-width: 1279px) 25vw, 240px',
@@ -240,7 +284,8 @@ export function CoverImage({
   const src = w480 || all?.src || w1080 || null;
   const urls = [w480, w1080, all?.src].filter((u): u is string => typeof u === 'string' && !!u);
   // URLs built by the caller's resolver from a checked pub/ path are trusted; URLs handed in are checked themselves.
-  const urlsRefused = publication && (!path || !resolved) && urls.some((u) => !isPublicationCoverSource(u));
+  const origins = coverOrigins?.length ? [...publicationCoverOrigins(), ...coverOrigins.map(originOf).filter((o): o is string => !!o)] : publicationCoverOrigins();
+  const urlsRefused = publication && (!path || !resolved) && urls.some((u) => !isPublicationCoverSource(u, origins));
   const refused = pathRefused || urlsRefused;
   const srcSet = [w480 ? `${w480} 480w` : '', w1080 ? `${w1080} 1080w` : ''].filter(Boolean).join(', ');
   const empty = (

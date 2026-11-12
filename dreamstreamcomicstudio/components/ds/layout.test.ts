@@ -251,7 +251,8 @@ const ROWS: Row[] = [
     tabBarPx: 0,
     gutterPx: 24,
     appNav: 'header',
-    studio: { nav: 'navtrack', navPx: 48, director: 'bottom', directorPx: null, pages: 3, pagesCollapsed: 3, content: { width: 882, height: 1000 } },
+    // The place has the top segment: 552 − 56 header − 48 NavTrack (the Director has the bottom one).
+    studio: { nav: 'navtrack', navPx: 48, director: 'bottom', directorPx: null, pages: 3, pagesCollapsed: 3, content: { width: 882, height: 448 } },
     library: { columns: 3, compact: 4, withInspector: 3, view: 'grid', inspector: 'segment', inspectorPx: null, scrim: false, selectionBar: 'bottom' },
     discover: { columns: 3, compact: 4, shelfPx: 160, filters: 'side-sheet', inspector: 'segment' }
   }
@@ -346,6 +347,19 @@ describe('the other §5 numbers', () => {
     expect(postureOf({ width: 1024, height: 400, layout: 'single-rail' })).toBe('phone-landscape');
     expect(postureOf({ width: 700, height: 900, layout: 'single' })).toBe('phone-wide');
     expect(layoutFor({ width: NaN, height: 0, layout: 'split' }).posture).toBe('laptop');
+  });
+
+  it('tabletop: the place has the top segment only (the Director and composer have the bottom one)', () => {
+    // 552 − 56 header − 48 NavTrack.
+    expect(layoutFor(ff(882, 1104, TABLETOP)).studio.content.height).toBe(448);
+    // A hinge between the segments: the top rect's own height counts, not half the window.
+    const hinged = segmentsFromRects([rect(0, 0, 882, 540), rect(0, 564, 882, 540)]);
+    expect(layoutFor(ff(882, 1104, hinged)).studio.content.height).toBe(540 - 56 - 48);
+    // Rects listed bottom first: still the upper one.
+    const reversed: Segments = { count: 2, axis: 'vertical', rects: [rect(0, 552, 882, 552), rect(0, 0, 882, 500)] };
+    expect(layoutFor({ width: 882, height: 1104, layout: 'split', segments: reversed }).studio.content.height).toBe(500 - 56 - 48);
+    // Stacked segments with no rects: half the window.
+    expect(layoutFor({ width: 882, height: 1104, layout: 'split', segments: { count: 2, axis: 'vertical', rects: [] } }).studio.content.height).toBe(552 - 56 - 48);
   });
 
   it('the bottom-sheet inspector opens at 60 % and drags to 92 %', () => {

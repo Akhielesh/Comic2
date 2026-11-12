@@ -8,9 +8,12 @@
  *     "Drawing needs a connection" controls all tell the same story.
  *
  * A network failure holds the app "unreachable" for UNREACHABLE_HOLD_MS, or until the browser says it is back
- * online, or until a caller confirms the server answered (`markReachable`). The hold is one timer, armed only
- * after a failure and cleared when it fires: nothing polls and nothing here ever calls `/api` (CLAUDE.md
- * "Keep it sleepable"). Every component that asks shares one store, so the answer is the same everywhere.
+ * online, or until the next request that reaches the server: services/apiClient.ts's safeFetch calls
+ * `markReachable()` whenever a fetch resolves, whatever its status (a 503 still proves the server answered; its
+ * owner wires it from the DS-R1 wave note), so a single cold-start blip says "offline" only until the next request
+ * gets through, never for the whole hold. The hold is one timer, armed only after a failure and cleared when it fires: nothing polls and nothing here ever
+ * calls `/api` (CLAUDE.md "Keep it sleepable"). Every component that asks shares one store, so the answer is the
+ * same everywhere.
  */
 import { useSyncExternalStore } from 'react';
 import { appStatus, type StatusSnapshot } from '../../services/appStatus';
@@ -149,7 +152,10 @@ function subscribe(listener: () => void): () => void {
 const getSnapshot = (): Connectivity => (teardown ? current : compute());
 const getServerSnapshot = (): Connectivity => ONLINE;
 
-/** A request reached the server again: drop the "unreachable" hold now instead of waiting it out. */
+/**
+ * A request reached the server again: drop the "unreachable" hold now instead of waiting it out. Cheap when there
+ * is no hold (it returns at once), so the API client calls it after every fetch that resolves.
+ */
 export function markReachable(): void {
   if (!unreachable) return;
   unreachable = false;

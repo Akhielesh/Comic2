@@ -8,8 +8,10 @@
  * move focus card to card (Left/Right by one, mirrored right-to-left; Up/Down by a row; Home/End to the ends),
  * landing on each card's own control, and Esc leaves selection mode (`onExitSelection`).
  *
- * Motion: the first twelve items of the FIRST page rise in one after another (`ds-stagger`, --ds-motion-stagger);
- * a later page, a filter change or a re-sort appears at once. Nothing moves under reduced motion (styles/ds-motion.css).
+ * Motion: the first twelve items of the FIRST page rise in one after another (`ds-rise-in`, each delayed by its index
+ * × --ds-motion-stagger); the thirteenth and every later item appear at once, so a 300-card first page starts twelve
+ * entrances, not 300. A later page, a filter change or a re-sort appears at once (`stagger` false). Nothing moves
+ * under reduced motion (`ds-rise-in` is in styles/ds-motion.css's reduced-motion block).
  */
 import React, { useRef } from 'react';
 import { cn } from '../../lib/utils';
@@ -34,6 +36,9 @@ export interface CardGridProps<T> {
   className?: string;
   itemClassName?: string;
 }
+
+/** How many items of a first page rise in (redesign §9, styles M10). */
+export const CARD_GRID_STAGGER_MAX = 12;
 
 /** The grid: explicit columns from --cols, the 12 px gap (layout.ts GRID_GAP_PX). */
 export const CARD_GRID = 'm-0 grid list-none grid-cols-[repeat(var(--cols),minmax(0,1fr))] gap-3 p-0';
@@ -101,14 +106,21 @@ export function CardGrid<T>({ items, getKey, renderItem, columns, label, selecti
       data-slot="card-grid"
       data-selecting={selecting || undefined}
       onKeyDown={onKeyDown}
-      className={cn(CARD_GRID, stagger && 'ds-stagger', className)}
+      className={cn(CARD_GRID, className)}
       style={columnsStyle(columns)}
     >
-      {items.map((item, i) => (
-        <li key={getKey(item, i)} className={cn('min-w-0', i === spanIndex && 'col-span-full', itemClassName)}>
-          {renderItem(item, i)}
-        </li>
-      ))}
+      {items.map((item, i) => {
+        const rise = stagger && i < CARD_GRID_STAGGER_MAX;
+        return (
+          <li
+            key={getKey(item, i)}
+            className={cn('min-w-0', i === spanIndex && 'col-span-full', rise && 'ds-rise-in', itemClassName)}
+            style={rise ? { animationDelay: `calc(${i} * var(--ds-motion-stagger))` } : undefined}
+          >
+            {renderItem(item, i)}
+          </li>
+        );
+      })}
     </ul>
   );
 }

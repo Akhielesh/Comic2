@@ -7,15 +7,17 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CardGrid, nextGridIndex } from './CardGrid';
+import { CARD_GRID_STAGGER_MAX, CardGrid, nextGridIndex } from './CardGrid';
 import { ComicCard } from './ComicCard';
-import { CoverImage, isPublicationCoverSource, PUBLICATION_PATH_RE } from './CoverImage';
+import { CoverImage, isPublicationCoverSource, publicationCoverOrigins, PUBLICATION_PATH_RE } from './CoverImage';
 import { FilterChips } from './FilterChips';
 import { InlineMeta } from './InlineMeta';
+import { layoutFor } from './layout';
 import { Lightbox } from './Lightbox';
-import { MediaTile } from './MediaTile';
+import { MEDIA_TILE_RING_INSIDE, MediaTile } from './MediaTile';
 import { NavTrack } from './NavTrack';
 import { PresetGrid } from './PresetGrid';
+import { PresetTile } from './PresetTile';
 import { Row } from './Row';
 import { SearchField } from './SearchField';
 import { SelectionBar, selectionText } from './SelectionBar';
@@ -87,6 +89,8 @@ afterEach(() => {
 });
 
 const PUB = 'pub/AbCdEfGhIjKlMnOpQrStUv/cover.webp';
+/** The test's storage edge: publication cards may load handed-in cover URLs from it (coverOrigins). */
+const CDN = ['https://cdn.test'];
 const coverBox = (container: HTMLElement) => container.querySelector('[data-slot="cover-image"]') as HTMLElement;
 
 // ── ComicCard ─────────────────────────────────────────────────────────────────────────────────────
@@ -125,10 +129,47 @@ describe('ComicCard', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('a selected card rings its cover (selection on art) and says so', () => {
+  it('a selected card rings its cover (selection on art) INSIDE the art, so the clipped grid card never cuts it off', () => {
     const { container } = render(<ComicCard title="Low Tide" onOpen={() => {}} selected />);
-    expect(container.querySelector('[data-slot="comic-card"]')).toHaveAttribute('data-selected', 'true');
-    expect(container.querySelector('[data-slot="media-tile"]')!.className).toContain('outline-[color:var(--ds-spark)]');
+    const card = container.querySelector('[data-slot="comic-card"]')!;
+    expect(card).toHaveAttribute('data-selected', 'true');
+    // The grid card clips to its radius and the cover sits flush with its top, left and right edges ...
+    expect(card.className.split(/\s+/)).toContain('overflow-hidden');
+    const tile = container.querySelector('[data-slot="media-tile"]')!;
+    // ... so no outline on the tile itself (it would sit 2–4 px outside the art and be clipped) ...
+    expect(tile.className).not.toMatch(/(?:^|\s)outline/);
+    // ... but an overlay ring INSIDE the art: painted after the picture (an outline on the tile is painted under its
+    // positioned art), 2–4 px in from the edge, before the corner controls.
+    const ring = tile.querySelector('[data-slot="media-tile-ring"]') as HTMLElement;
+    expect(ring).not.toBeNull();
+    const ringClasses = ring.className.split(/\s+/);
+    expect(ringClasses).toEqual(expect.arrayContaining(['outline', 'outline-2', 'outline-[color:var(--ds-spark)]', 'outline-offset-[-4px]', 'absolute', 'inset-0', 'pointer-events-none']));
+    expect(ringClasses).not.toContain('outline-offset-2');
+    expect(MEDIA_TILE_RING_INSIDE).toContain('outline-offset-[-4px]');
+    const order = Array.from(tile.children).map((c) => (c as HTMLElement).dataset.slot ?? 'other');
+    expect(order.indexOf('media-tile-ring')).toBe(order.indexOf('media-tile-art') + 1);
+    expect(ring).toHaveAttribute('aria-hidden', 'true');
+    // An unselected card has no ring at all.
+    const { container: plain } = render(<ComicCard title="High Tide" onOpen={() => {}} />);
+    expect(plain.querySelector('[data-slot="media-tile-ring"]')).toBeNull();
+    expect(plain.querySelector('[data-slot="media-tile"]')!.className).not.toMatch(/outline/);
+  });
+
+  it('the row variant is the plan’s list row: 72 px (library.listRowPx) around a 48 × 64 cover, the title on one line', () => {
+    const rowPx = layoutFor({ width: 320, height: 568, layout: 'single' }).library.listRowPx;
+    expect(rowPx).toBe(72);
+    const { container } = render(<ComicCard variant="row" title="Rain on Seventh Street" onOpen={() => {}} meta={['Comic', '2 of 8 pages']} cover={{ sources: { src: 'https://cdn.test/noir.webp' } }} />);
+    const row = container.querySelector('[data-slot="comic-card"]') as HTMLElement;
+    const rowClasses = row.className.split(/\s+/);
+    // 1 px hairline + 3 px padding + 64 px cover = 72 px, at least (min-height, border-box).
+    expect(rowClasses).toEqual(expect.arrayContaining([`min-h-[${rowPx}px]`, 'py-[3px]', 'border', 'items-center']));
+    expect(rowClasses).not.toContain('p-3');
+    const tile = container.querySelector('[data-slot="media-tile"]') as HTMLElement;
+    expect(tile.style.aspectRatio).toBe('3 / 4');
+    expect(tile.className.split(/\s+/)).toContain('w-12');
+    // The cover inside follows the tile's box.
+    expect(coverBox(container).style.aspectRatio).toBe('3 / 4');
+    expect(container.querySelector('h3 [data-card-primary] span')!.className).toContain('line-clamp-1');
   });
 
   it('links (href) keep the same shape: one link in the heading, Read outside it; the heading level follows the screen', () => {
@@ -177,11 +218,11 @@ describe('CoverImage', () => {
     expect(container.querySelector('img')).toBeNull();
     expect(coverBox(container).dataset.cover).toBe('refused');
     expect(resolve).not.toHaveBeenCalled();
-    rerender(<CoverImage publication sources={{ w480: 'https://cdn.test/u/user-1/cover.webp' }} />);
+    rerender(<CoverImage publication coverOrigins={CDN} sources={{ w480: 'https://cdn.test/u/user-1/cover.webp' }} />);
     expect(container.querySelector('img')).toBeNull();
     expect(coverBox(container).dataset.cover).toBe('refused');
-    // A published cover is shown.
-    rerender(<CoverImage publication sources={{ w480: `https://cdn.test/${PUB}` }} />);
+    // A published cover from a known origin is shown.
+    rerender(<CoverImage publication coverOrigins={CDN} sources={{ w480: `https://cdn.test/${PUB}` }} />);
     expect(container.querySelector('img')).not.toBeNull();
     // The same draft is fine on the owner's own card.
     rerender(<CoverImage sources={{ w480: 'https://cdn.test/u/user-1/cover.webp' }} />);
@@ -191,10 +232,30 @@ describe('CoverImage', () => {
   it('pins the publication path rule to the published-asset rule the exports use', () => {
     expect(PUBLICATION_PATH_RE.source).toBe(PUBLIC_ASSET_PATH_RE.source);
     expect(isPublicationCoverSource(PUB)).toBe(true);
-    expect(isPublicationCoverSource(`https://edge.test/${PUB}?sig=1`)).toBe(true);
+    expect(isPublicationCoverSource(`https://edge.test/${PUB}?sig=1`, ['https://edge.test'])).toBe(true);
     for (const bad of ['u/1/p/2/cover.webp', 'pub/short/cover.webp', `http://evil.test/${PUB}`, `data:image/png;base64,AAAA`, `pub/AbCdEfGhIjKlMnOpQrStUv/../x.webp`, '']) {
-      expect(isPublicationCoverSource(bad), bad).toBe(false);
+      expect(isPublicationCoverSource(bad, ['https://edge.test', 'http://evil.test']), bad).toBe(false);
     }
+  });
+
+  it('a publication card refuses a pub/ cover URL from a foreign host (a tainted public row cannot load a third-party image)', () => {
+    const foreign = `https://evil.test/${PUB}`;
+    // The default origins are the storage origin (VITE_SUPABASE_URL) and this page's own; evil.test is neither.
+    expect(publicationCoverOrigins()).not.toContain('https://evil.test');
+    expect(publicationCoverOrigins()).toContain(window.location.origin);
+    expect(isPublicationCoverSource(foreign)).toBe(false);
+    expect(isPublicationCoverSource(foreign, ['https://edge.test'])).toBe(false);
+    const { container, rerender } = render(<CoverImage publication sources={{ w480: foreign }} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(coverBox(container).dataset.cover).toBe('refused');
+    // Adding an unrelated edge origin does not let it in either; the page's own origin is fine.
+    rerender(<CoverImage publication coverOrigins={['https://edge.test']} sources={{ w480: foreign }} />);
+    expect(container.querySelector('img')).toBeNull();
+    rerender(<CoverImage publication sources={{ w480: `${window.location.origin}/${PUB}` }} />);
+    expect(container.querySelector('img')).not.toBeNull();
+    // The owner's own card is not a publication card: no origin rule there.
+    rerender(<CoverImage sources={{ w480: foreign }} />);
+    expect(container.querySelector('img')).not.toBeNull();
   });
 
   it('calls resolve only once the box is in view, and only once per picture', () => {
@@ -239,6 +300,28 @@ describe('CoverImage', () => {
     expect(reduced.container.querySelector('img')).toHaveAttribute('data-reveal', 'revealed');
     expect(animate).not.toHaveBeenCalled();
   });
+
+  it('a new picture in the same box is a new <img>: the old one (and its loaded pixels) never stands in for it', async () => {
+    const { container, rerender } = render(<CoverImage path="u/1/a.webp" sources={{ w480: 'https://cdn.test/a.webp' }} />);
+    const first = container.querySelector('img')!;
+    await act(async () => {
+      fireEvent.load(first);
+    });
+    expect(first).toHaveAttribute('data-reveal', 'revealed');
+    // The first picture is in memory: complete, with pixels.
+    Object.defineProperty(first, 'complete', { configurable: true, get: () => true });
+    Object.defineProperty(first, 'naturalWidth', { configurable: true, get: () => 480 });
+    rerender(<CoverImage path="u/1/b.webp" sources={{ w480: 'https://cdn.test/b.webp' }} />);
+    const second = container.querySelector('img')!;
+    expect(second).not.toBe(first);
+    // Hidden until ITS bytes arrive (a reused element would read the old pixels as "already loaded").
+    expect(second).toHaveAttribute('data-reveal', 'loading');
+    expect(second.className).toContain('opacity-0');
+    await act(async () => {
+      fireEvent.load(second);
+    });
+    expect(container.querySelector('img')).toHaveAttribute('data-reveal', 'revealed');
+  });
 });
 
 // ── MediaTile ─────────────────────────────────────────────────────────────────────────────────────
@@ -257,6 +340,9 @@ describe('MediaTile', () => {
     });
     expect(container.querySelector('img')).toHaveAttribute('data-reveal', 'revealed');
     expect(screen.getByRole('button', { name: 'Page 1' })).toHaveAttribute('aria-pressed', 'true');
+    // A tile on a grid (gap around it) keeps its ring set off the art.
+    expect(tile.className).toContain('outline-offset-2');
+    expect(tile.querySelector('[data-slot="media-tile-ring"]')).toBeNull();
   });
 });
 
@@ -280,10 +366,33 @@ describe('CardGrid', () => {
     render(grid(false));
     const list = screen.getByRole('list', { name: 'Your comics' });
     expect(list.tagName).toBe('UL');
+    // Explicit: Safari drops a list's semantics once list-style is none, which the grid sets.
+    expect(list).toHaveAttribute('role', 'list');
     expect(within(list).getAllByRole('listitem')).toHaveLength(5);
     expect(list.style.getPropertyValue('--cols')).toBe('2');
     expect(list.className).not.toMatch(/auto-fill|auto-fit/);
     for (const b of within(list).getAllByRole('button')) expect(b.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('the first twelve items of a first page rise in, one after another; the thirteenth and later appear at once', () => {
+    const many = Array.from({ length: 30 }, (_, i) => `c${i}`);
+    const { container, rerender } = render(<CardGrid items={many} getKey={(x) => x} columns={3} label="Your comics" stagger renderItem={(x) => <span>{x}</span>} />);
+    const list = screen.getByRole('list', { name: 'Your comics' });
+    // No list-wide stagger rule (it animates every child, 300 cards included).
+    expect(list.className).not.toContain('ds-stagger');
+    const items = Array.from(list.children) as HTMLElement[];
+    expect(CARD_GRID_STAGGER_MAX).toBe(12);
+    for (let i = 0; i < 12; i++) {
+      expect(items[i].className, `item ${i + 1}`).toContain('ds-rise-in');
+      expect(items[i].style.animationDelay).toBe(`calc(${i} * var(--ds-motion-stagger))`);
+    }
+    for (const item of items.slice(12)) {
+      expect(item.className).not.toMatch(/ds-rise-in|ds-stagger|animate/);
+      expect(item.style.animationDelay).toBe('');
+    }
+    // A later page or a re-sort (stagger off) appears at once.
+    rerender(<CardGrid items={many} getKey={(x) => x} columns={3} label="Your comics" renderItem={(x) => <span>{x}</span>} />);
+    expect(container.querySelectorAll('.ds-rise-in')).toHaveLength(0);
   });
 
   it('takes no arrow key outside selection mode', () => {
@@ -373,11 +482,33 @@ describe('Shelf', () => {
   it('a failed shelf is an inline row with Retry; a loading one shows skeletons', () => {
     const retry = vi.fn();
     const { rerender, container } = render(shelf([], { error: true, onRetry: retry }));
-    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load Trending");
+    // A polite status, never an assertive alert (several failed shelves must not interrupt at load).
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent("Couldn't load Trending");
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(retry).toHaveBeenCalledTimes(1);
     rerender(shelf([], { loading: true, skeletonCount: 3 }));
     expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBe(6);
+  });
+
+  it('the edge fade (a scroll-driven animation) is off under reduced motion: Shelf, scrolling FilterChips and PresetGrid', () => {
+    const scrollers = () => {
+      const r = render(
+        <div>
+          {shelf(['a', 'b'])}
+          <FilterChips scroll value="all" onChange={() => {}} label="Filter" options={[{ value: 'all', label: 'All' }, { value: 'mine', label: 'Mine' }]} />
+          <PresetGrid scroll label="Style" value="a" onChange={() => {}} options={[{ value: 'a', label: 'Ink', art: <span /> }, { value: 'b', label: 'Wash', art: <span /> }]} />
+        </div>
+      );
+      const els = [screen.getByRole('list', { name: 'Trending' }), screen.getByRole('radiogroup', { name: 'Filter' }), screen.getByRole('radiogroup', { name: 'Style' })];
+      return { ...r, els };
+    };
+    const moving = scrollers();
+    for (const el of moving.els) expect(el.className, el.getAttribute('aria-label') ?? el.tagName).toContain('ds-fade-edge-x');
+    moving.unmount();
+    setMatchMedia((q) => q.includes('prefers-reduced-motion'));
+    const still = scrollers();
+    for (const el of still.els) expect(el.className, el.getAttribute('aria-label') ?? el.tagName).not.toContain('ds-fade-edge-x');
   });
 });
 
@@ -529,11 +660,52 @@ describe('FilterChips, PresetGrid, NavTrack, Lightbox, SearchField', () => {
     expect(screen.getByRole('status')).toHaveTextContent('2 of 3');
     fireEvent.keyDown(viewer, { key: 'ArrowRight' });
     expect(onIndex).toHaveBeenLastCalledWith(2);
+    // A swipe to the left brings the next picture; to the right, the previous one (the content follows the finger).
+    onIndex.mockClear();
     fireEvent.pointerDown(viewer, { pointerType: 'touch', clientX: 200, clientY: 10, pointerId: 1 });
     fireEvent.pointerUp(viewer, { pointerType: 'touch', clientX: 100, clientY: 14, pointerId: 1 });
+    expect(onIndex).toHaveBeenCalledTimes(1);
     expect(onIndex).toHaveBeenLastCalledWith(2);
+    fireEvent.pointerDown(viewer, { pointerType: 'touch', clientX: 100, clientY: 10, pointerId: 2 });
+    fireEvent.pointerUp(viewer, { pointerType: 'touch', clientX: 200, clientY: 12, pointerId: 2 });
+    expect(onIndex).toHaveBeenCalledTimes(2);
+    expect(onIndex).toHaveBeenLastCalledWith(0);
+    // Too short, or more up and down than sideways: not a swipe.
+    fireEvent.pointerDown(viewer, { pointerType: 'touch', clientX: 100, clientY: 10, pointerId: 3 });
+    fireEvent.pointerUp(viewer, { pointerType: 'touch', clientX: 130, clientY: 10, pointerId: 3 });
+    fireEvent.pointerDown(viewer, { pointerType: 'touch', clientX: 100, clientY: 10, pointerId: 4 });
+    fireEvent.pointerUp(viewer, { pointerType: 'touch', clientX: 170, clientY: 200, pointerId: 4 });
+    expect(onIndex).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole('button', { name: 'Previous picture' }));
     expect(onIndex).toHaveBeenLastCalledWith(0);
+  });
+
+  it('Lightbox cross-fades between pictures with motion allowed, and simply swaps under reduced motion', () => {
+    const items = [
+      { key: 'a', alt: 'A' },
+      { key: 'b', alt: 'B' },
+      { key: 'c', alt: 'C' }
+    ];
+    const moving = render(<Lightbox label="Viewer" index={0} onIndexChange={() => {}} items={items} />);
+    expect(animate).not.toHaveBeenCalled();
+    moving.rerender(<Lightbox label="Viewer" index={1} onIndexChange={() => {}} items={items} />);
+    expect(animate).toHaveBeenCalledTimes(1);
+    moving.unmount();
+    animate.mockClear();
+    setMatchMedia((q) => q.includes('prefers-reduced-motion'));
+    const still = render(<Lightbox label="Viewer" index={0} onIndexChange={() => {}} items={items} />);
+    still.rerender(<Lightbox label="Viewer" index={1} onIndexChange={() => {}} items={items} />);
+    still.rerender(<Lightbox label="Viewer" index={2} onIndexChange={() => {}} items={items} />);
+    expect(screen.getByRole('status')).toHaveTextContent('3 of 3');
+    expect(animate).not.toHaveBeenCalled();
+  });
+
+  it('PresetTile holds phrasing content only: no <div> inside its button', () => {
+    render(<PresetTile label="Ink" description="Bold lines" art={<span>art</span>} badge={<span>New</span>} selected onSelect={() => {}} />);
+    const tile = screen.getByRole('radio', { name: /Ink/ });
+    expect(tile.tagName).toBe('BUTTON');
+    expect(tile.querySelectorAll('div')).toHaveLength(0);
+    expect(tile.querySelector('[data-slot="media-tile"]')!.tagName).toBe('SPAN');
   });
 
   it('SearchField: labelled, capped at 60 characters, Esc clears, Clear refocuses, / focuses from the page', () => {

@@ -7,11 +7,15 @@
  *     the defaults by a double click / double tap or Home / Enter on the gutter;
  *   - the gutter is a `role="separator"` with its value (the first pane's share): ← / → move it 3 %; on a coarse
  *     pointer it is a 24 px strip with a 44 × 64 grab handle, on a fine one an 8 px line;
- *   - neither pane is squeezed below `minPx` (at most 45 % of the width);
+ *   - neither pane is squeezed below `minPx` (at most 45 % of the width), and each pane can have its own range
+ *     (`startMinPx`/`startMaxPx`, `endMinPx`/`endMaxPx`): the Director's 320–520 px (layout.ts
+ *     `studio.director.minPx`/`maxPx`) holds while dragging, with the keys, and when the window grows (a max is
+ *     also the pane's CSS max-width);
+ *   - a drag measures the container once, when it starts, and the sizes are written to the device once, when it
+ *     ends (and on each key move or reset), never on every pointer move;
  *   - a pane can be hidden (`show`): it stays mounted, `hidden` and `inert`, so its scroll and drafts survive.
  */
-import React, { useEffect, useRef, useState } from 'react';
-import { applyGutterDelta } from '../studio/kit/ResizableSplit';
+import React, { useRef, useState } from 'react';
 import { isDoubleTap, type Tap } from '../comicstudio/mobile/touch/gestureMath';
 import { cn } from '../../lib/utils';
 import { RADIUS_PILL, SHADOW_SOFT } from './recipes';
@@ -26,6 +30,12 @@ export interface SplitPaneProps {
   defaultSizes?: [number, number];
   /** Neither pane gets narrower than this (capped at 45 % of the width). */
   minPx?: number;
+  /** The start pane's own range in px (its minimum defaults to minPx). */
+  startMinPx?: number;
+  startMaxPx?: number;
+  /** The end pane's own range in px: the Director pane is 320–520 at 1440 (layout.ts studio.director). */
+  endMinPx?: number;
+  endMaxPx?: number;
   /** The gutter's accessible name ("Resize the Director"). */
   label: string;
   /** Which panes are shown; the hidden one stays mounted, hidden and inert. */
@@ -38,38 +48,65 @@ export interface SplitPaneProps {
 const validSizes = (raw: unknown): [number, number] | undefined =>
   Array.isArray(raw) && raw.length === 2 && raw.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? [raw[0], raw[1]] : undefined;
 
-export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320, label, show = 'both', coarse = false, className }: SplitPaneProps) {
+/**
+ * The range the start pane's weight may take, for a container `width` px wide and weights summing to `sum`: both
+ * minimums (each capped at 45 % of the width), then the maximums. When a maximum cannot hold beside the minimums
+ * (a narrow window), the minimums win.
+ */
+export function splitBounds(
+  width: number,
+  sum: number,
+  px: { minPx: number; startMinPx?: number; startMaxPx?: number; endMinPx?: number; endMaxPx?: number }
+): { lo: number; hi: number } {
+  if (!(width > 0) || !(sum > 0)) return { lo: sum * 0.25, hi: sum * 0.75 };
+  const frac = (n: number) => (n / width) * sum;
+  const cap = sum * 0.45;
+  const minLo = Math.min(cap, frac(px.startMinPx ?? px.minPx));
+  const minHi = sum - Math.min(cap, frac(px.endMinPx ?? px.minPx));
+  const lo = px.endMaxPx !== undefined ? Math.max(minLo, sum - frac(px.endMaxPx)) : minLo;
+  const hi = px.startMaxPx !== undefined ? Math.min(minHi, frac(px.startMaxPx)) : minHi;
+  return lo <= hi ? { lo, hi } : { lo: minLo, hi: minHi };
+}
+
+export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320, startMinPx, startMaxPx, endMinPx, endMaxPx, label, show = 'both', coarse = false, className }: SplitPaneProps) {
   const container = useRef<HTMLDivElement>(null);
   const key = id ? scopedKey('split', id) : null;
   const [sizes, setSizes] = useState<[number, number]>(() => (key ? readStored(key, defaultSizes, { parse: validSizes }) : defaultSizes));
   const lastTap = useRef<Tap | null>(null);
+  const px = { minPx, startMinPx, startMaxPx, endMinPx, endMaxPx };
 
-  useEffect(() => {
-    if (key) writeStored(key, sizes);
-  }, [key, sizes]);
-
-  const minFrac = (sum: number) => {
-    const width = container.current?.getBoundingClientRect().width || 0;
-    return width > 0 ? Math.min(sum * 0.45, (minPx / width) * sum) : sum * 0.25;
+  const persist = (next: [number, number]) => {
+    if (key) writeStored(key, next);
   };
-  const reset = () => setSizes([defaultSizes[0], defaultSizes[1]]);
-  const apply = (from: [number, number], delta: number, sum: number) => {
-    const next = applyGutterDelta(from, 0, delta, minFrac(sum));
-    return [next[0], next[1]] as [number, number];
+  const measure = () => container.current?.getBoundingClientRect().width || 0;
+  /** The start pane takes `from[0] + delta` weight, held inside its bounds. */
+  const apply = (from: [number, number], delta: number, bounds: { lo: number; hi: number }): [number, number] => {
+    const sum = from[0] + from[1];
+    const a = Math.min(bounds.hi, Math.max(bounds.lo, from[0] + delta));
+    return [a, sum - a];
+  };
+  const reset = () => {
+    const next: [number, number] = [defaultSizes[0], defaultSizes[1]];
+    setSizes(next);
+    persist(next);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
-    const rect = container.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return;
+    // Measured once per drag: a pointer move only does arithmetic and one state update.
+    const width = measure();
+    if (width <= 0) return;
     const from = sizes;
     const sum = from[0] + from[1];
+    const bounds = splitBounds(width, sum, px);
     const startX = e.clientX;
     let moved = false;
+    let latest = from;
     const onMove = (ev: PointerEvent) => {
       if (Math.abs(ev.clientX - startX) > 3) moved = true;
-      setSizes(apply(from, ((ev.clientX - startX) / rect.width) * sum, sum));
+      latest = apply(from, ((ev.clientX - startX) / width) * sum, bounds);
+      setSizes(latest);
     };
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', onMove);
@@ -77,6 +114,8 @@ export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320
       window.removeEventListener('pointercancel', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      // Written once, when the drag ends.
+      if (latest !== from) persist(latest);
       if (!moved && ev.type === 'pointerup') {
         const tap = { t: Date.now(), x: ev.clientX, y: ev.clientY };
         if (isDoubleTap(lastTap.current, tap)) {
@@ -96,7 +135,9 @@ export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320
     const sum = sizes[0] + sizes[1];
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
-      setSizes((s) => apply(s, (e.key === 'ArrowLeft' ? -1 : 1) * sum * 0.03, sum));
+      const next = apply(sizes, (e.key === 'ArrowLeft' ? -1 : 1) * sum * 0.03, splitBounds(measure(), sum, px));
+      setSizes(next);
+      persist(next);
     } else if (e.key === 'Home' || e.key === 'Enter') {
       e.preventDefault();
       reset();
@@ -125,7 +166,7 @@ export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320
         inert={hideStart || undefined}
         data-pane="start"
         className={cn(hideStart ? 'hidden' : 'flex', 'min-h-0 min-w-0')}
-        style={both ? { flexGrow: sizes[0], flexShrink: 1, flexBasis: 0 } : { flex: '1 1 0%' }}
+        style={both ? { flexGrow: sizes[0], flexShrink: 1, flexBasis: 0, maxWidth: startMaxPx } : { flex: '1 1 0%' }}
       >
         {start}
       </div>
@@ -160,7 +201,7 @@ export function SplitPane({ id, start, end, defaultSizes = [40, 60], minPx = 320
         inert={hideEnd || undefined}
         data-pane="end"
         className={cn(hideEnd ? 'hidden' : 'flex', 'min-h-0 min-w-0')}
-        style={both ? { flexGrow: sizes[1], flexShrink: 1, flexBasis: 0 } : { flex: '1 1 0%' }}
+        style={both ? { flexGrow: sizes[1], flexShrink: 1, flexBasis: 0, maxWidth: endMaxPx } : { flex: '1 1 0%' }}
       >
         {end}
       </div>

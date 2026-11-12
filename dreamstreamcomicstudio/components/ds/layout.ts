@@ -200,7 +200,17 @@ const STUDIO_NAV: Record<LayoutPosture, StudioNavKind> = {
 
 const NAV_PX: Record<StudioNavKind, number> = { tabbar: CHROME.tabBarPx, rail: CHROME.railPx, navtrack: CHROME.navTrackPx, sidebar: CHROME.sidebarPx };
 
-function studioFor(posture: LayoutPosture, width: number, height: number, segmentWidth: number, headerPx: number, tabBarPx: number): StudioLayoutTable {
+/** A tabletop's top segment height: the upper of two stacked rects, or half the window without rects. */
+function topSegmentHeight(height: number, segments: Segments | undefined): number {
+  const rects = segments?.rects ?? [];
+  if (rects.length >= 2) {
+    const top = rects.reduce((a, b) => (b.top < a.top ? b : a));
+    if (Number.isFinite(top.height) && top.height > 0) return Math.round(top.height);
+  }
+  return Math.floor(height / 2);
+}
+
+function studioFor(posture: LayoutPosture, width: number, height: number, segmentWidth: number, headerPx: number, tabBarPx: number, segments?: Segments): StudioLayoutTable {
   const nav = STUDIO_NAV[posture];
   const navPx = NAV_PX[nav];
   const director = directorFor(posture);
@@ -214,9 +224,14 @@ function studioFor(posture: LayoutPosture, width: number, height: number, segmen
     // Segment 1 holds the place under its NavTrack; segment 0 is the Director.
     contentWidth = segmentWidth;
     contentHeight = height - headerPx - navPx;
-  } else if (posture === 'tablet' || posture === 'tabletop') {
+  } else if (posture === 'tabletop') {
+    // The place (or the editor stage) has the top segment under the header and its NavTrack; the Director and its
+    // composer have the bottom one (§5.3).
     contentWidth = width;
-    contentHeight = height - headerPx - navPx - (posture === 'tablet' ? CHROME.directorDockPx : 0);
+    contentHeight = topSegmentHeight(height, segments) - headerPx - navPx;
+  } else if (posture === 'tablet') {
+    contentWidth = width;
+    contentHeight = height - headerPx - navPx - CHROME.directorDockPx;
   } else {
     contentWidth = width - sideNav - (director.widthPx ?? 0);
     contentHeight = height - headerPx;
@@ -331,7 +346,7 @@ export function layoutFor(ff: LayoutInput): LayoutTable {
     tabBarPx,
     gutterPx,
     appNav,
-    studio: studioFor(posture, width, height, segmentWidth, headerPx, tabBarPx),
+    studio: studioFor(posture, width, height, segmentWidth, headerPx, tabBarPx, seg),
     library: libraryFor(posture, width),
     discover: discoverFor(posture, width, segmentWidth, gutterPx)
   };
