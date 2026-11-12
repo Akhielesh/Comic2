@@ -9,9 +9,12 @@
 import React, { useState } from 'react';
 import { Bell, Bold, BookOpen, Image as ImageIcon, Inbox, Italic, Palette, Plus, Search, Settings, Sparkles, Trash2, Underline } from 'lucide-react';
 import {
+  ART_PLACEHOLDER,
   Badge,
   BADGE_VARIANTS,
+  BENDAY,
   Button,
+  BUTTON_EXTENSION_VARIANTS,
   BUTTON_SIZES,
   BUTTON_VARIANTS,
   Card,
@@ -31,9 +34,14 @@ import {
   Field,
   IconButton,
   Input,
+  HUE_DOT,
+  hueClass,
   InViewPause,
   LiveDot,
   LoadingState,
+  MAKING_DOT,
+  MAKING_SWEEP,
+  MAKING_TEXT,
   MetricCard,
   PageHeader,
   Progress,
@@ -42,6 +50,8 @@ import {
   Select,
   Skeleton,
   Slider,
+  SPARK_RING_ON_ART,
+  SPARK_SOFT_BG,
   STATUS_STATES,
   StatusChip,
   Switch,
@@ -51,6 +61,8 @@ import {
   TabsTrigger,
   Textarea,
   TONE_TEXT,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
   type CheckedState
 } from '../../../components/ds';
 
@@ -60,9 +72,9 @@ const NOTE = 'm-0 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]';
 
 function Buttons() {
   return (
-    <SectionCard title="Buttons" description="Every Atlas variant in every size, plus busy, disabled and icon-only." icon={<Sparkles />}>
+    <SectionCard title="Buttons" description="Every Atlas variant in every size, plus busy, disabled and icon-only, then DreamStream's create." icon={<Sparkles />}>
       <div className={STACK}>
-        {BUTTON_VARIANTS.map((variant) => (
+        {[...BUTTON_VARIANTS, ...BUTTON_EXTENSION_VARIANTS].map((variant) => (
           <div key={variant} className={ROW} data-qa-variant={variant}>
             {BUTTON_SIZES.map((size) =>
               size === 'icon' ? (
@@ -402,10 +414,73 @@ function Motion() {
   );
 }
 
+/** The colour layer's named tokens, each as a swatch beside its name (the hues in their fixed order). */
+const SWATCHES: ReadonlyArray<{ name: string; fill: string }> = [
+  { name: '--ds-spark', fill: 'bg-[var(--ds-spark)]' },
+  { name: '--ds-spark-soft', fill: SPARK_SOFT_BG },
+  ...HUE_DOT.map((fill, i) => ({ name: `--ds-hue-${i + 1}`, fill }))
+];
+/** A legend's words for the five hue slots (series and tags, never status). */
+const HUE_WORDS = ['Pages', 'Covers', 'Cast sheets', 'Edits', 'Exports'] as const;
+const ART_TILE = `${ART_PLACEHOLDER} ${RADIUS_CONTROL} aspect-[4/5] w-20 shrink-0`;
+
+/**
+ * The colour layer "Ink & Spark" (CL-0; docs/design/design-system.md § Colour layer) as specimens: the tokens, the
+ * one create fill, the making state (dot, label, bar, sweep), selection on art, a hue legend and Ben-Day dots behind
+ * a hero. No price and no spend label sits near a spark (tests/config/sparkGuard.test.ts holds specimens to both).
+ */
+function ColourLayer() {
+  return (
+    <SectionCard title="Colour layer" description="Ink on paper, colour as a spot: the spark means making, the hues tell series apart." icon={<Palette />}>
+      <div className={STACK}>
+        <ul aria-label="Colour layer tokens" className="m-0 flex min-w-0 list-none flex-wrap gap-3 p-0">
+          {SWATCHES.map(({ name, fill }) => (
+            <li key={name} className="flex min-w-0 items-center gap-2" data-qa-swatch={name}>
+              <span aria-hidden="true" className={`size-6 shrink-0 border border-[var(--ds-hairline)] ${RADIUS_CONTROL} ${fill}`} />
+              <code className="text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">{name}</code>
+            </li>
+          ))}
+        </ul>
+        <div className={`${BENDAY} ${RADIUS_PANEL} flex min-w-0 flex-col items-start gap-3 border border-[var(--ds-hairline)] p-6`} data-qa-benday="">
+          <h3 className="m-0 text-[length:var(--ds-text-lg)] font-semibold text-[var(--ds-ink)]">Make a comic from one sentence</h3>
+          <p className={NOTE}>The dots sit on the panel’s own layer, behind these words and the button.</p>
+          <Button variant="create">New comic</Button>
+        </div>
+        <InViewPause className={STACK}>
+          <div className={ROW} data-qa-making="">
+            <LiveDot className={MAKING_DOT} />
+            <span className={`${MAKING_TEXT} text-[length:var(--ds-text-sm)]`}>Drawing page 3 of 6</span>
+          </div>
+          <Progress label="Drawing pages" tone="making" value={2} max={6} valueText="Drawing page 3 of 6" />
+          <div className={ROW}>
+            <figure className="m-0 flex flex-col items-start gap-1">
+              <div className={`${ART_TILE} ${MAKING_SWEEP}`} data-qa-tile="making" />
+              <figcaption className={NOTE}>Page 3, drawing</figcaption>
+            </figure>
+            <figure className="m-0 flex flex-col items-start gap-1">
+              <div className={`${ART_TILE} ${SPARK_RING_ON_ART}`} data-qa-tile="selected" />
+              <figcaption className={NOTE}>Page 2, selected</figcaption>
+            </figure>
+          </div>
+        </InViewPause>
+        <ul aria-label="Hue legend" className="m-0 flex min-w-0 list-none flex-wrap gap-x-4 gap-y-2 p-0">
+          {HUE_WORDS.map((word, i) => (
+            <li key={word} className="inline-flex items-center gap-2 text-[length:var(--ds-text-sm)] text-[var(--ds-ink)]">
+              <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${hueClass('dot', i) ?? ''}`} />
+              {word}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </SectionCard>
+  );
+}
+
 function Gallery() {
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Buttons />
+      <ColourLayer />
       <Fields />
       <Choices />
       <Labels />
