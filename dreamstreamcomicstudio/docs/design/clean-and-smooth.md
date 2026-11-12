@@ -349,16 +349,36 @@ Lead decisions recorded here:
   `data-action="quality"` and, when roomy, reads "{Tier} · {Model}" with the lock glyph and the screen-reader words
   ", locked for this comic". It names a tier and a model, never a price, and takes no spark. So at 1024 px and up a
   locked comic shows its lock on screen, not only inside the closed ⋯ › Quality row, and the probe now checks C2 for
-  Quality at desk too (ComicStudio.test.tsx 'the quality cut is 1024' still pins the header side).
+  Quality at desk too (ComicStudio.test.tsx 'the quality cut is 1024' still pins the header side). The S2b review
+  found the chip hidden at 1024 (a composer under `ROOMY_PX`) and clipped by the chip row's scroller up to about
+  1900 px, so the integration fixed it: the quality chip leads the row, the lock leads its words, and from 1024 px
+  (`qualityHome.ts`, shared with the header's cut) it never hides; a composer under `ROOMY_PX` shows a compact
+  "{Tier}" plus the lock, with the model in its title. `declutter.spec.ts` 'the composer quality chip is on screen
+  from 1024 px' hit-tests the chip and the lock at their centres at 1024 and 1280, light and dark.
 - **D20:** DC-1 #6 and #7 (ids on the header Share and History) are held, as in §2, because each would be the first
   rise in a desk C2 entry.
 - The page editor's flag-off snapshots (`board/PageEditor.flagOff.test.tsx`, PE-SHELL's pin of today's DOM) carry
   DC-1's add-tile words: "Add page — a blank page", with no "free" (lead decision D7, a test edit forced by the merge).
 
-Still red in the loop, for their owners (new scenes the baseline does not list, so they are held to the targets and
-were not added): `app-ds-content` C3 depth 4 (DS-R1's content-kit scene: a ComicCard's chip inside the scene's own
-section card), `app-shell` C9 live pulses 8 at desk and 3 on phones (DS-2's header skeleton shimmer) and
-`app-landing` C1 primaries 2 (DS-3: the header's ink "Sign in" plus the hero's spark CTA, by design).
+The S2b merges left three new scenes red (scenes the baseline did not list, so they are held to the targets). The
+integration settled each before the PR:
+
+- `app-landing` C1 primaries 2: **fixed, no entry.** The comics landing's header "Sign in" / "My comics" is now a
+  `secondaryButton`, so the hero's spark CTA is the one filled primary in the first view, and the four feature spots
+  draw `EmptyArt` in the card's own ink (`accent="currentColor"`), not terracotta. The scene meets the targets and
+  stays unlisted (`comicshost.test.tsx` pins both).
+- `app-ds-content` C3 depth 4 (nested boxes 9), in every phone and desk entry: **reviewed exception, listed.** The
+  scene is DS-R1's QA content-kit specimen. Its depth is the specimen's own `SectionCard` wrapper around a ComicCard
+  (section > ComicCard > MediaTile > chip); no production screen nests a ComicCard in a card. Cutting a level (the
+  StatusChip `onArt` variant) is left to the kit's owner, and the listed entry stops it from rising meanwhile.
+- `app-shell` C9 live pulses 8 at desk and 3 on phones: **reviewed exception, listed.** The pulses are
+  `AppHeaderSkeleton`'s shimmer blocks (one per brand, nav and action placeholder). The skeleton is exported by
+  `components/ds` and drawn only by the QA shell scene (`qa/app/scenes/shell.tsx`); nothing in production mounts it.
+  Whoever first mounts it in the app gives it one shimmer (C9) before it ships, and the entry then falls.
+
+Only those ten entries (`app-ds-content@*`, `app-shell@*`) came from the verify step's reset proposal; its other
+35 new entries are scenes that already meet the targets and stay unlisted, and none of the 105 existing entries
+changed.
 
 ## 7. Limits (what the probe does not see)
 
