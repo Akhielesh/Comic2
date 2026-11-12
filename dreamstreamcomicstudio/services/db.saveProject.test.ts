@@ -118,6 +118,18 @@ describe('saveProject never writes a card over a full row (EGRESS-DB E1)', () =>
     expect(sb.upserts).toHaveLength(0);
   });
 
+  it('refuses a state built from a card even after the full state is loaded (the marker survives a spread)', async () => {
+    const [card] = await loadProjects();
+    await loadProjectState('card-1');
+    expect(isCardOnly('card-1')).toBe(false);
+    const derived = { ...card, state: { ...card.state, isFeatured: true } };
+    await expect(saveProject(derived)).rejects.toBeInstanceOf(CardSaveRefusedError);
+    expect(sb.upserts).toHaveLength(0);
+    // The marker never reaches JSON (nor storage).
+    expect(JSON.stringify(card.state)).not.toContain('CardState');
+    expect(Object.keys(card.state)).not.toContain('Symbol(dreamstream.projectCardState)');
+  });
+
   it('never refuses a project that was never listed (a new comic)', async () => {
     await saveProject({ ...project({}, false), id: 'brand-new' });
     expect(sb.upserts.map((r) => r.id)).toEqual(['brand-new']);

@@ -267,6 +267,34 @@ describe('useProjectManager with library cards', () => {
     expect((upserts()[before].state as Record<string, unknown>).versions).toEqual(VERSIONS);
   });
 
+  it('an update built by spreading a card\'s state is laid over the full state, never put in its place', async () => {
+    const STYLE = { name: 'Inline', imageUrl: `data:image/png;base64,${'A'.repeat(2_000)}` };
+    const pagesState = {
+      ...classicState,
+      pipelineMode: 'pagestudio',
+      pageStudio: { brief: 'A page', style: STYLE, layout: 'splash', aspectRatio: '2:3', resolution: '2K', pages: [{ id: 'pg1', prompt: 'Hero', imageId: 'user-1/page1.png' }], activePageId: 'pg1' }
+    };
+    fakeSupabase.state.tables.projects.push(row('pages-1', pagesState, '2026-10-08T00:00:00.000Z'));
+    const hook = await mount();
+    const card = listed(hook, 'pages-1');
+    // A component still holding the card changes one key the way many do: a spread of what it holds.
+    act(() => hook.result.current.updateProject('pages-1', { state: { ...card.state, overview: 'New blurb' } }));
+    await waitFor(() => expect(upserts()).toHaveLength(1), { timeout: 2000 });
+    const saved = upserts()[0].state as Record<string, any>;
+    expect(saved.overview).toBe('New blurb');
+    expect(saved.versions).toEqual(VERSIONS);
+    expect(saved.imageTags).toEqual(classicState.imageTags);
+    expect(saved.selectedStyleId).toBe('s1');
+    expect(saved.pageStudio.style).toEqual(STYLE);
+    expect(saved.pageStudio.brief).toBe('A page');
+    expect(saved.pageStudio.pages.map((p: { id: string }) => p.id)).toEqual(['pg1']);
+    // The same spread after the swap (a stale prop) is merged too.
+    act(() => hook.result.current.updateProject('pages-1', { state: { ...card.state, overview: 'Later' } }));
+    await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
+    expect((upserts()[1].state as Record<string, any>).pageStudio.style).toEqual(STYLE);
+    expect((upserts()[1].state as Record<string, any>).versions).toEqual(VERSIONS);
+  });
+
   it('duplicate loads the full state first and copies it', async () => {
     const hook = await mount();
     await act(async () => {

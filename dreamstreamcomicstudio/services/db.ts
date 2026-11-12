@@ -498,9 +498,18 @@ const PROJECT_CARD_SELECT_LEGACY = ['id,user_id,name,cover_image_url,is_public,c
 
 const CARD_ARRAY_KEYS: ReadonlySet<string> = new Set(['panels', 'styleVariants', 'scenes', 'characters', 'items', 'locations', 'comments']);
 
+/**
+ * Marks a state object built from a library card. Being an enumerable symbol key, it survives a spread
+ * (`{ ...card.state, isFeatured: true }`) but never reaches JSON or storage, so a state DERIVED from a card is
+ * recognised (and refused by saveProject) even after the card's id has had its full state loaded.
+ */
+export const CARD_STATE = Symbol.for('dreamstream.projectCardState');
+export const isCardState = (state: unknown): boolean =>
+  typeof state === 'object' && state !== null && (state as Record<symbol, unknown>)[CARD_STATE] === true;
+
 /** The state a card row stands for: its projected keys, arrays defaulted to [] and the script to ''. */
 export const projectCardStateOf = (row: Record<string, unknown>): Project['state'] => {
-  const state: Record<string, unknown> = {};
+  const state: Record<string | symbol, unknown> = { [CARD_STATE]: true };
   for (const key of PROJECT_CARD_STATE_KEYS) {
     const value = row[key];
     if (CARD_ARRAY_KEYS.has(key)) state[key] = Array.isArray(value) ? value : [];
@@ -558,7 +567,7 @@ export const markStateLoaded = (id: string): void => {
   cardOnlyIds.delete(id);
 };
 
-/** saveProject refused a project whose in-memory state is only its library card. */
+/** saveProject refused a project whose in-memory state is only its library card (or was built from one). */
 export class CardSaveRefusedError extends Error {
   code = 'CARD_ONLY' as const;
   projectId: string;
@@ -573,7 +582,7 @@ export class CardSaveRefusedError extends Error {
 export const saveProject = async (project: Project): Promise<void> => {
   // Before any await: a card must never be upserted over the full row. A save that passed this check
   // carries a full state, whatever a library reload flags while it is in flight.
-  if (cardOnlyIds.has(project.id)) throw new CardSaveRefusedError(project.id);
+  if (cardOnlyIds.has(project.id) || isCardState(project.state)) throw new CardSaveRefusedError(project.id);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {

@@ -4,7 +4,9 @@ import { startBackgroundGeneration, cancelGeneration } from '../services/generat
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
 import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
 import {
+  CARD_STATE,
   createGenerationNotification,
+  isCardState,
   loadProjectCards,
   loadProjectState,
   isCardOnly,
@@ -711,12 +713,27 @@ export const useProjectManager = () => {
     return newProject;
   };
 
+  /**
+   * A state built from a library card (a component that still holds the card spread it and changed a key) is the
+   * card's keys plus that change: it is laid over the full state, never put in its place. Page Studio is the one
+   * card key that is itself partial ({ pages, activePageId }), so it is merged a level down.
+   */
+  const overFullState = (full: ComicState, fromCard: ComicState): ComicState => {
+    const { [CARD_STATE]: _marker, ...patch } = fromCard as ComicState & { [CARD_STATE]?: true };
+    const merged: ComicState = { ...full, ...patch };
+    if (full.pageStudio && patch.pageStudio) merged.pageStudio = { ...full.pageStudio, ...patch.pageStudio };
+    return merged;
+  };
+
   /** Apply one update to a project whose full state is in memory, then schedule its save. */
   const applyUpdate = (id: string, updates: ProjectUpdate) => {
     let updated: Project | undefined;
     commitProjects(prevProjects => prevProjects.map(p => {
       if (p.id !== id) return p;
-      const newValues = typeof updates === 'function' ? updates(p) : updates;
+      let newValues = typeof updates === 'function' ? updates(p) : updates;
+      if (newValues?.state && isCardState(newValues.state) && !isCardState(p.state)) {
+        newValues = { ...newValues, state: overFullState(p.state, newValues.state) };
+      }
       updated = { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
       return updated;
     }));
