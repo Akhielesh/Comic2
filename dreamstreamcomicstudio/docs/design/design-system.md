@@ -54,7 +54,7 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-grid-dot` (wave 9) | ink at 14 % | same | the dot of `.ds-grid-backdrop` |
 | `--ds-spot-ink` (wave 9) | `var(--ds-ink)` | same | the spotlight pool's ink (the header and home work) |
 | `--ds-radius-hero` / `-feature` (wave 9) | `28px` / `16px` | same | the hero frame; feature cards |
-| `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper. Paper only (1.5:1 on `--ds-reader-room`): controls over the room use `--ds-focus` on their own chrome surface |
+| `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper. Paper only (1.5:1 on `--ds-reader-room`): controls over the room draw `--ds-reader-hud-focus` (readerDesigns.css, RD-A) |
 | `--sidebar-w` (M1a) | `240px` | same | the wide-screen sidebar, beside `--rail-w` (72 px) |
 
 Atlas has no z or density tokens: the skin restates the same values so every token has a skin value
@@ -64,6 +64,119 @@ Under the skin the control and chip radius is 8 px (Atlas `rounded-md`). A `.dar
 page restates the var()-derived tokens (`:where(.dark:not(:root))`), so a dark demo panel or preview reads
 its own pill, edges and marks. `--ds-on-danger` on the danger fill and on its hover mix is measured in all six contexts by
 `tests/config/tokenContrast.test.ts` (≥ 4.5:1).
+
+**Reader tokens (RD-A).** `components/comicstudio/immersive/readerDesigns.css` on `[data-reader-root]` is the reader's
+one motion and ink token set (not skin tokens: reserved DreamStream reader-scope names, `atlas-skin.md`), and
+`readerTokens.ts` reads it once per mount; "fade" is 280 ms everywhere. Room-side focus and progress use
+`--ds-reader-hud-focus` / `--ds-reader-accent` (Night `#fafafa`, Day `#3b3026`), ≥ 3:1 on the room and the HUD glass
+(`tokenContrast.test.ts`, "the reader rooms"). The rest of the reader contract (never-blank turns, stand-ins, the
+device-sized cache, preloads) is in `docs/features/comic-reader.md`.
+
+## Colour layer ("Ink & Spark")
+
+A DreamStream extension, not from Atlas (CL-0; the Atlas session has the 12 names as such, `atlas-skin.md`
+"DreamStream extensions"). The studio is black ink on white paper. Colour is a **spot**, like a single printed ink,
+and it appears for one of four reasons only:
+
+1. **Spark** marks *creation*: the one place to start making something on this screen, what is being drawn right
+   now, and what is selected on the art.
+2. **Hues 1–5** tell series and tags apart.
+3. **Status** says healthy / attention / error, always with words.
+4. **Art tint** is the comic's own colour, around the comic.
+
+Everything else stays ink: text, headings, navigation, icons, borders, menus, dialogs, focus rings, prices and every
+control that spends money.
+
+**Tokens** (`index.css`, in `:root`, `.dark`, `[data-ds-skin="atlas"]` and its dark block; mirrored in both brand
+skins and the named `ds` Tailwind colours). The values are the same with and without the skin, like the chart steps.
+The `var()`-derived ones are restated in every block, so a nested skin recomputes them.
+
+| Token | Light | Dark | Use |
+| --- | --- | --- | --- |
+| `--ds-spark` | `#3d44e8` | `#8b9bfe` | the creation fill, the making dot and bar, the ring on art |
+| `--ds-spark-hover` | `#3438cc` | `#a3b2fe` | the fill on hover |
+| `--ds-on-spark` | `#ffffff` | `#0a0a0a` | the label on a spark fill |
+| `--ds-spark-text` | `#3d44e8` | `#abb9fe` | spark as text, or an icon beside its words |
+| `--ds-spark-soft` | spark 8 % into the canvas | spark 16 % into the canvas | the selected / making tint |
+| `--ds-spark-glow` | spark at 24 % | spark at 30 % | shadows and the making sweep only, never under text |
+| `--ds-hue-1` … `-5` | `#3d44e8 #d13d91 #db6b04 #079a94 #9548cc` | `#5568fd #d84497 #df6e07 #04a19b #a155da` | categorical series and tags, in this fixed order |
+| `--ds-art` | `var(--ds-well-strong)` | same | a comic's own tint; components set it inline |
+
+S2a lead decision: the values ship as CL-0 built them. Where they differ from the design report: the default skin's
+`--ds-info` / `--ds-info-text` are neutral (`#525252` / `#404040` light, `#e5e5e5` dark; the old blue, and the
+report's dark grey, sat too close to the spark); dark `--ds-hue-1` is `#5568fd`, one step lighter than the report's
+`#5265f9`, which was 2.93:1 on the default dark card; only the 4↔5 hue swap keeps every gate (2↔4 fails); and the How
+It Works pin is `:root.dark .hiw-gradient-text` (`atlas-skin.md`).
+
+**Recipes** (`components/chat/studioDesign.ts`, re-exported by `components/ds/recipes.ts`): `SPARK_FILL`,
+`SPARK_TEXT`, `SPARK_SOFT_BG`, `SPARK_RING_ON_ART` (a 2 px spark outline with a 2 px gap, selection on art only),
+`MAKING_DOT` (on a `LiveDot`, always beside its words), `MAKING_SWEEP` (`.ds-making-sweep`, a spark glint across a
+tile being drawn, paused off screen, still under reduced motion), `MAKING_TEXT` (the shimmer-text loop with a spark
+glint), `BENDAY` (`.ds-benday`, comic Ben-Day dots in the spark behind hero art and empty states only: put it on the
+container itself; the dots sit on its `::before` layer, behind its content), `ART_PLACEHOLDER`, `ART_GLOW`, and
+`HUE_DOT` / `HUE_FILL` / `HUE_STROKE` (slots 1–5). `hueIndex(i)` and `hueClass(kind, i)` are 0-based (the n-th series
+reads slot n + 1) and return null past the fifth: fold the rest into "Other", a chart step.
+
+**Primitives.** Button has one DreamStream variant, `create`, the spark fill, named by meaning (`BUTTON_EXTENSION_VARIANTS`;
+Atlas's six variants are untouched). Progress takes `tone="making"` (`PROGRESS_MAKING`, the bar in the spark);
+`StatusState` is not widened.
+
+**Where colour is allowed** (the rows are places; design report §3.7):
+
+| Place | Spark | Hues 1–5 | Status | Art tint |
+| --- | --- | --- | --- | --- |
+| Primary call to action | **One** `create` fill per view, only to start something | — | — | — |
+| Spend / price controls (Approve, Draw · price, Redraw, Translate, Get more) | **Never** (the ink primary) | — | — | — |
+| AI at work | `MAKING_DOT`, `MAKING_SWEEP`, `Progress tone="making"`, "Drawing 2 of 6" in `SPARK_TEXT` | — | — | — |
+| Selection | On art only: `SPARK_RING_ON_ART`. Elsewhere the Atlas selection (`SEGMENTED_ACTIVE`, accent-soft) | — | — | — |
+| Status | — | — | the Atlas `STATUS_*` / `TONE_*`, always worded | — |
+| Charts | the "highlight one" mark | series identity (≥ 2 series, fixed order, a legend always) | only when the series *means* good or bad | — |
+| Tags (colour mode, medium, kind) | — | a 6 px dot before the word, in a neutral chip | — | — |
+| Art-adjacent surfaces | — | — | — | placeholder, glow, reader room |
+| Empty-state art | one spot element per drawing | — | — | — |
+| Landing | the hero call to action; `BENDAY` behind the hero art | — | — | real covers |
+
+When more than one place wants the one spark, page content wins in this order: the My comics header's New comic, then
+the composer Send, then the landing hero. The panel's New comic stays ink.
+
+**Where colour is forbidden** (§3.8): body text, headings, navigation labels and chrome icons (except a status icon
+and the making dot beside its words); focus rings (they stay `--ds-focus`); card, sheet, dialog, menu and toast
+surfaces or edges, hover and active tints, dividers; any control that spends money or shows a price; more than one
+spark fill in a view, or two adjacent; destructive actions; gradient text; full-bleed colour on long-lived views;
+colour as the only signal; hues as status or status as series; inside the comic page and the reader (the reader keeps
+`--ds-reader-*`); raw Tailwind hue classes or hex literals in UI.
+
+**Charts** (§3.9; `--ds-chart-1…5` keeps its meaning, so Atlas-shared charts render the same):
+
+| Chart job | Colours |
+| --- | --- |
+| One series (magnitude over time) | `--ds-chart-1` |
+| Ordinal or sequential (tiers, buckets) | `--ds-chart-1 → 5` (ink steps) |
+| Highlight one against the rest | the one in `--ds-spark`, the rest in `--ds-chart-4` |
+| Categorical identity, 2–5 series | `--ds-hue-1…5` in fixed order, a legend always; ≤ 4 series also labelled directly; "Other" past five |
+| Good / bad state | the Atlas status tokens, an icon and words; never mixed with hues in one chart |
+
+**Guards.**
+- `tests/config/tokenContrast.test.ts` ("the colour layer … in all six contexts"): spark text and the label on a
+  fill ≥ 4.5:1, spark as a mark or ring ≥ 3:1 on every backdrop, hues ≥ 3:1 on the canvas and on a card, the spark
+  far from every status colour, and no ink-system or reader token reads a layer token.
+- `tests/config/huePalette.test.ts`: the hues are a validated categorical set (band, chroma, adjacent CVD ≥ 8 and
+  normal ΔE ≥ 15, the first three slots for all pairs, the order is load-bearing).
+- `tests/config/sparkGuard.test.ts`, six rules:
+  1. spark fills, in every spelling, only where its `ALLOWLIST` pins them; only the four `SPARK_DEFINITIONS` files are
+     exempt, and the `components/ds` composites are held like screens;
+  2. one per file, and never in a list;
+  3. navigation (`INK_ONLY`) takes no spark except the making dot;
+  4. no spark in the reader, its CSS included;
+  5. no price inside or beside a fill (the `PRICE_CALLS` / `PRICE_IDENTS` list; a ratchet over the cost modules
+     forces a new formatter onto it);
+  6. no spend label (Approve, Draw, Redraw, Translate, Get more) on a fill.
+
+  The gallery (`SPECIMENS`) may show several fills, but never beside a price or with a spend label. The layout
+  smoke's `one-spark` check counts visible `create` fills per viewport on every app scene except the gallery.
+- Measured caveats: on the default dark raised chip, hues 1, 2 and 5 fall under 3:1 (charts never sit on one; a test
+  pins it); tritanopia separation is reported, not gated (between 5 and 8; CL-0 measured 6.3 light and 5.5 dark); hues
+  are never status.
 
 ## Recipes
 
@@ -254,6 +367,7 @@ The hooks and primitives that go with them (Atlas `hooks/` and `components/effec
 | `<CountUp value format?>` | counts up once in view; the final value at once, with no JavaScript animation, under reduced motion |
 | `<Collapse open>` | a grid-rows height disclosure that exits on `--ds-motion-exit` and is instant under reduced motion |
 | `usePresence`, `useReducedMotion` | the mount-for-exit helper and the live OS motion setting |
+| `useImageReveal(key, { enabled })` (MO-1) | art never animates before it arrives. Phases: `loading`, then `decoding` (`img.decode()` pending), then `revealed`, or `error`. A cached picture reveals in the same frame (`fromCache`, no entrance); a box with no `<img>` reveals at once, flagged `empty` (no entrance); a stuck decode reveals 1 s after load. Entrances use `playEntrance`: Web Animations, opacity and transform only, on the compositor, timed by `motionMs` / `motionEase` on the `--ds-motion-*` tokens. No entrance animates a filter; `allowFilterEffects` is the gate for any future filter (none on coarse pointers, low power — Save-Data, or ≤ 4 cores with ≤ 2 GB — or art wider than 640 px). Reduced motion means a decode-gated swap with no entrance. The `<img>` is looked up when the element or the key changes, so key the component by its picture |
 - The switch's off track is ink at 18 % over the page (Atlas's `--switch-background`, #d4d4d4 / #3a3a3a).
 
 ## Guards and the ratchet (DS-0 owns the code)
@@ -269,6 +383,8 @@ excluded; `live/**` excluded until DS-11):
 | `zLadderGuard` | `z-[…]` / `z-NN` outside the `Z` recipe (`components/ds/**` and `studioDesign.ts` are excluded from this one guard only) |
 | `statusInkGuard` | raw chromatic text colours (content and data-viz allowlisted, one line of reason each) |
 | `overlineGuard`, `dialogTitle` | hand-rolled eyebrows; untitled or wrongly titled modals |
+| `pulseGuard` (DC-0, C9) | each raw `animate-pulse` / `-ping` / `-bounce`, and any without `motion-safe:` or `motion-reduce:animate-none`; the rubric and its loop are `docs/design/clean-and-smooth.md` |
+| `sparkGuard`, `huePalette` (CL-0) | a spark fill outside its allowlist, beside a price or on a spend control; an unvalidated hue set (§ Colour layer) |
 
 **Ratchet** (the full rules: `tests/config/baselines/README.md`).
 - Roots: `components/**`, `App.tsx`, `qa/**`. Excluded: `*.test.*`, `*.spec.*`, `__tests__`, `__mocks__`,
@@ -316,3 +432,12 @@ and dark, with and without the Atlas skin: no overflow, no coarse target under 4
 The gallery shows every primitive in every variant and state in the page theme and, while the page is
 light, again in a dark panel. A new primitive is not done until the gallery shows it
 (`components/ds/gallery.test.tsx` checks every primitive is there).
+
+Clutter ratchet: `--project=declutter` (tests/e2e/declutter.spec.ts, baseline tests/e2e/baselines/declutter.json; 320,
+360 and 1280 px); the loop is docs/design/clean-and-smooth.md §4. The layout smoke's `one-spark` check fails a viewport
+that shows more than one visible `create` fill (every app scene but the gallery, a spark specimen).
+
+Granted e2e files outside their packages' folders (S2a lead decisions): `tests/e2e/studio.chat.images.spec.ts` (PF-2:
+chat tiles load the small variant; the `chat-14` fixture, 14 or more tiles) and `tests/e2e/reader.turns.spec.ts`
+(RD-A: never-blank turns). The reader spec delays images through the public `QaHarness.delayImages`, not the
+harness's private route.

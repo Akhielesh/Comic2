@@ -50,7 +50,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `DREAMSTREAMSTUDIO_ALL` → `OPENROUTER_API_KEY` | `ai/gateway.ts` | ⭕ 🔐 | 💸 | Effective default gateway; per-call USD |
-| `DREAMSTREAMSTUDIO_MODELTEST` | model-test only | ⭕ 🔐 | 💸 | Kept out of user-serving pool |
+| `DREAMSTREAMSTUDIO_MODELTEST` | `comic/library/adminSpend.ts` (library runner + Model Lab via `comic/keys.ts adminSpendKeys`), bench, `jobs/preferModelTestKey.ts` | ⭕ 🔐 | 💸 | All admin image spend runs on it; unset → Admin › Library and Model Lab refuse (fail closed). Owner sets an OpenRouter limit of $35/month (limit_reset monthly) through December, then $15 (D4). Kept out of the user-serving pool |
 | `OPENROUTER_API_KEYS` / `NVIDIA_API_KEYS` | `ai/reliability/keyPool.ts` | ⭕ 🔐 | 💸 | Key-pool + circuit breaker |
 | `NVIDIA_API_KEY`, `NVIDIA_TEXT_MODEL` | NVIDIA NIM | ⭕ 🔐 | 💸 | `NVIDIA_TEXT_MODEL` **missing from .env.example** |
 | `OPENAI_API_KEY` | OpenAI | ⭕ 🔐 | 💸 | BYOK |
@@ -158,6 +158,18 @@ reads them yet. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
 | `COMIC_PRO_STICKERS` | `caps.proStickers`: the Stickers tab in Assets | `off` | — | D6 approved, the licence gate (PE-LICENCE) merged, the credits block live |
 | `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` / `true` / `1` / `all` / `everyone` = everyone, `admins` = off (signed-out readers cannot be checked), anything else = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
 | *(not an env var)* `PRO_EDIT_OPS_PATCHABLE` | `shared/comic/ops.ts`: a **code constant**, `false`. While false, the `motion` / `page_motion` ops (`PRO_EDIT_OPS`) are not in `CLIENT_PATCHABLE_OPS`, so no client can write motion, and the server sanitizer refuses them | `false` | — | Flipped only by the S2 integration, and only after the PE-SERVER sanitizer is in production and the dangling-motion prune is settled (`docs/features/pro-edit.md` §7). PE-0 itself must be in production one deploy before that |
+
+## Comic Studio: library and admin image spend (Program 3 ST-A, ST-4)
+
+Server only. `server/src/comic/library/adminSpend.ts` reads its two per call, at a Build / Regenerate click or a Model
+Lab run (nothing is checked on page load or on a timer); `COMIC_LIBRARY_PRESET_BOARD` is read once at boot. Admin
+image spend is the Library builds and the Model Lab. The rules are in `docs/features/comic-library.md`.
+
+| Var | Consumer | Req? | Cost | Notes |
+|---|---|---|---|---|
+| `COMIC_ADMIN_SPEND_KEY` | `comic/library/adminSpend.ts` | ⭕ | 💸 | Unset/any value = `modeltest`; exactly `platform` = escape hatch onto DREAMSTREAMSTUDIO_ALL (OpenRouter only). A run started on one key refuses to step after a flip. |
+| `COMIC_LIBRARY_MONTHLY_CAP_USD` | `comic/library/adminSpend.ts`, enforced by `comic/library/runner.ts` (startRun) | ⭕ | 💸 | Default 20; refuses a build when this UTC month's library_runs.spent_usd + its budget would pass it; 0 stops all builds. |
+| `COMIC_LIBRARY_PRESET_BOARD` | `config.ts:312` (read by `comic/actions/library.ts`) | ⭕ | — | A boolean, default false (off): applying a library style preset also adopts its preview as the style board. Admins only after the golden A/B for content bleed, once the anchors are seeded. It is a boolean today, so `true` turns it on for everyone: keep it off until the staged form (off \| admins \| all, ST-4 #3, deferred) lands, and this row then names the stages. |
 
 ## Admin cost centre (optional live Cloudflare usage)
 

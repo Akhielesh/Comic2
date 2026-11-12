@@ -280,6 +280,25 @@ editor's toolbar also cuts "Mark up" and "Lettering" (`mobile/editor/EditorToolb
 - **DC-3 (S3):** one primary while a gate is open, and a static board chip. The pulse guard's last two unguarded
   lines go away.
 
+### After S2a (the first loop, 2026-11-12)
+
+The S2a integration ran the loop once after its ten merges and regenerated `declutter.json` once, as a reviewed
+reset (§5). Every other entry is byte-identical. The rises, each reviewed:
+
+- `app-ds-gallery@desk-*`: primaries 4 → 8 and live pulses 6 → 7. This is the §5 exception: the gallery now shows
+  the colour layer's `create` button and making dot as specimens, in both panels (CL-0). The gallery is a spark
+  specimen, so the layout smoke's one-spark check skips it.
+- Transcript screens up by one in six entries: `studio-busy@desk-*` 11 → 12, `studio-busy@phone-*` 18 → 19 and
+  `editor-pro@phone-*` 20 → 21. A reset on the merges alone, before any wave note, measures the same, so the merged
+  packages' transcript content crossed one screen boundary each. Winning the screen back is for the C9 / DC-1 pass.
+- The pulse guard: the chat tiles' raw `animate-pulse` is gone (PF-2), so `pulse.json`'s `animate-pulse` total is 32.
+  The busy studio's live pulses did not change (3 desk, 2 phone).
+
+Lead decisions recorded here: the C2 `data-action` ids go to DC-1 (until then duplicate actions read 0 everywhere and
+the report's duplicate-name groups are the reviewer's lead). The phone render-gate label cut (`BoardPane.tsx`) is
+deferred to DC-3 or the gate's owner, and the page editor's "Mark up" / "Lettering" cut at 320 px to PE-SHELL. The
+calendar batch subtitles now wrap to two lines at 320 px instead of truncating (CHAT-0).
+
 ## 7. Limits (what the probe does not see)
 
 - A primary drawn without the primary tokens (a hand-rolled fill) is not counted. Build controls from the

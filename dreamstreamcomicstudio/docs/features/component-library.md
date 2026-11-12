@@ -169,6 +169,33 @@ From `ARTIFACT_RENDERERS` (`ChatArtifacts.tsx:42-69`). Density-aware =
 | `code_review` | `CodeReviewCard.tsx` | /code-review verdict card: severity-grouped findings, file:line chips, suggested fixes. | yes | yes |
 | `live_monitor` | `LiveMonitorCard.tsx` | /loop wrapper: re-runs one refreshable tool on an interval; embedded card inherits density. | yes | yes |
 
+## Acting cards settle (CHAT-0)
+
+Cards that act for the user record what happened, so a reload, a remount or another device never offers the same
+action twice.
+
+- `calendar_event_draft` and `clarify` record their outcome on `ChatTurn.artifactState` through
+  `ArtifactTurnsContext` (`components/chat/artifacts/ChatArtifacts.tsx`). `artifactState` is an additive persisted
+  field and rides `chat_sync`.
+- Calendar writes `pending` before each write and the outcome after it, so an N-row batch makes N+1 saves.
+- Inside a chat, a batch card reads its rows from the turn whenever it is not adding rows itself. A card remounted
+  while an earlier view's Add all still runs shows "Adding n/N…" and never offers a row that view added, may have
+  added, or is adding.
+- A write whose answer never came back reads "may already be in your calendar".
+- A settled card is one line (`SettledArtifactLine`) with no controls and no widget chrome (D3). The line wraps (never
+  an ellipsis). It takes focus when its card settles from its own action (Confirm, Add all, Send answers), unless
+  focus has moved elsewhere (settle §5.8).
+- The settled calendar line keeps one plain "Open" link to the event (navigation only, no action; lead decision S2a,
+  reading D3's renders/media allowance onto calendar cards).
+- Content widgets never settle.
+- With no chat view mounted, a chat stays hot only while a write may still arrive.
+- The gallery (`components/chat/ComponentGallery.tsx`) shows every settled state, plus the "still adding from an
+  earlier view" state.
+- Deferred (S2a lead decision): an idempotency key on the connector write route
+  (`POST /api/connectors/connections/:id/mutate`) is ask-first connector write behaviour and is not built; until then
+  the `pending` mark is what stops a second write. The rest of the settle work (edit confirm and Undo, Retry on the
+  last turn only, a compact agent activity line) is DS-5.
+
 ## How to add a new widget — checklist
 
 1. **Declare the data type** in `apiTypes.ts` (an `XxxArtifact` interface; include

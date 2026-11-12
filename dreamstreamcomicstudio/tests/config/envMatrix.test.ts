@@ -47,6 +47,19 @@ describe(`${FILE} renders every variable inside a table`, () => {
     expect(firstCells.some((c) => c.includes('VITE_DS_SKIN_EVERYWHERE'))).toBe(true);
   });
 
+  it('maps every variable the admin image spend reads, each in exactly one row (S2a: ST-A, ST-4)', () => {
+    // The names come from the code, so a renamed or new variable fails here until the map follows.
+    const adminSpend = readFileSync(path.join(ROOT, 'server/src/comic/library/adminSpend.ts'), 'utf8');
+    const config = readFileSync(path.join(ROOT, 'server/src/config.ts'), 'utf8');
+    const read = [...adminSpend.matchAll(/export const \w+_ENV = '([A-Z0-9_]+)'/g)].map((m) => m[1]);
+    expect(read.sort()).toEqual(['COMIC_ADMIN_SPEND_KEY', 'COMIC_LIBRARY_MONTHLY_CAP_USD', 'DREAMSTREAMSTUDIO_MODELTEST']);
+    expect(config).toContain('process.env.COMIC_LIBRARY_PRESET_BOARD');
+    for (const name of [...read, 'COMIC_LIBRARY_PRESET_BOARD']) {
+      const rows = firstCells.filter((c) => c.split(/[\s/→,]+/).includes(name));
+      expect(rows, name).toHaveLength(1);
+    }
+  });
+
   it('keeps the live Worker’s Phase 0 variables in the map', () => {
     for (const name of ['ALLOWED_ORIGINS', 'DEVICE_TOKEN_JWK', 'ACT_TOKEN_KEY', 'SECURITY_HOOK_SECRET', 'OPS_KEY', 'APNS_KEY_P8', 'PUSH_IOS_VIA', 'RL_WS', 'CSP_REPORTS']) {
       expect(firstCells.some((c) => c.includes(name)), name).toBe(true);

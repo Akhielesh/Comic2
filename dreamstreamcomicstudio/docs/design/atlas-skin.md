@@ -409,16 +409,19 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- The Atlas repository, its design branch, commit **`0677199b`** (2026-11-05). The design
-  files are **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
+- The Atlas repository, its design branch, commit **`292b17b6`** (2026-11-05, checked for S2a on 2026-11-12). The
+  design files are byte-identical from `0677199b` through `292b17b6`: the 7 commits since change connector, beta-copy
+  and `lib/server` code, tests and docs, and the only design-list hit is again Atlas's own connector copy guard
+  (`tests/lib/beta-connector-copy.test.ts`, a Google Photos case), nothing to port. At `0677199b` the design files
+  were **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
   `components/WorkspacePrimitives.tsx`, `components/shell/**`, `GlobalNotificationBar`, `PublicSiteChrome`,
   `GlobalFooter`, `WorkspaceShell`, `AuthenticatedAppHeader`, `app/layout.tsx`, `AppShell` and the UI guide; the
   12 commits since are security dependency bumps, connector fixes and public beta-copy pages, and the only
   design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
-  agreed with the Atlas session from this commit. Previous syncs `acbdaff7` (= `98240e5b` design files), `496f265c`,
-  `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
-  `git diff 0677199b <design branch> -- app/globals.css
+  agreed with the Atlas session from `0677199b`. Previous syncs `0677199b`, `acbdaff7` (= `98240e5b` design files),
+  `496f265c`, `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
+  `git diff 292b17b6 <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).
@@ -448,7 +451,52 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   - `tests/lib/status-ink-guard.test.ts`, `tests/lib/dialog-title-size-guard.test.ts` (wave 8) — the
     rules Comic Studio's status-ink guard and dialog-title test mirror.
 
+## DreamStream extensions (not from Atlas)
+
+These `--ds-*` names are DreamStream's own. Atlas has no counterpart, so an Atlas sync check-in diffs only Atlas names
+and skips these. They take the same values with and without the skin (light and dark below), in `index.css` and both
+brand skins (`packages/platform-core/src/brand/skins/{dreamstream,atlas}.ts`).
+
+The colour layer "Ink & Spark" (CL-0; `docs/design/design-system.md` § Colour layer), 12 names:
+
+| Token | Light | Dark |
+| --- | --- | --- |
+| `--ds-spark` | `#3d44e8` | `#8b9bfe` |
+| `--ds-spark-hover` | `#3438cc` | `#a3b2fe` |
+| `--ds-on-spark` | `#ffffff` | `#0a0a0a` |
+| `--ds-spark-text` | `#3d44e8` | `#abb9fe` |
+| `--ds-spark-soft` | `color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas))` | the same at 16 % |
+| `--ds-spark-glow` | `color-mix(in srgb, var(--ds-spark) 24%, transparent)` | the same at 30 % |
+| `--ds-hue-1` | `#3d44e8` | `#5568fd` |
+| `--ds-hue-2` | `#d13d91` | `#d84497` |
+| `--ds-hue-3` | `#db6b04` | `#df6e07` |
+| `--ds-hue-4` | `#079a94` | `#04a19b` |
+| `--ds-hue-5` | `#9548cc` | `#a155da` |
+| `--ds-art` | `var(--ds-well-strong)` | `var(--ds-well-strong)` |
+
+Also DreamStream's own: the art develop tokens `--ds-develop-light` (`rgb(255 255 255)`; dark
+`rgb(255 255 255 / 0.55)`) and `--ds-develop-sheen` (white at 0.18; dark 0.15), read by `ImageDevelop` (MO-1).
+
+The `--ds-reader-*` names (`--ds-reader-accent`, `--ds-reader-hud-focus`, `--ds-reader-glass`, `--ds-reader-turn*`,
+`--ds-reader-spot*`, `--ds-reader-ink*` and the rest, on `[data-reader-root]` in
+`components/comicstudio/immersive/readerDesigns.css`) are **reserved DreamStream reader-scope names**, not skin
+tokens: they are not in `:root` or the brand skins, and Atlas should not define them. `--ds-reader-room`,
+`--ds-reader-paper-back` and `--ds-reader-focus` stay on `:root` (reader content, not skinned).
+
+No Atlas token changes name or value. The default (non-Atlas) skin's `--ds-info` / `--ds-info-text` are neutral since
+CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3.7 from the spark.
+
 ## Changelog
+
+### S2a — the colour layer (Atlas `292b17b6`, design files = `0677199b`, 2026-11-12)
+
+- The 12 colour-layer tokens and the two develop tokens, as DreamStream extensions (above). Their values ship as CL-0
+  built them (S2a lead decision). The Atlas session has the names.
+- The default skin's info pair went neutral; Atlas values are untouched.
+- The How It Works pin `:root.dark .hiw-gradient-text` (selector `:root.dark`, because `atlasSkin.test.ts` bridge D4
+  rejects hex literals in rules whose selector starts with `.dark .hiw-gradient-text`; the pin sets token values only,
+  so the paint rule still reads tokens).
+- The reader's `--ds-reader-*` set moved into `readerDesigns.css` (RD-A): reserved reader names, not skin tokens.
 
 ### Wave 9 (bridge) — the S1 token commit (Atlas `0677199b`, design files = `acbdaff7`, 2026-11-05)
 
@@ -510,9 +558,10 @@ primitives) and DS-1b (the QA harness).
   review it carried the display face, which Atlas never gave a dialog title (`dialogTitle.test.ts`).
 
 **Known limits.**
-- With the kill switch off, in dark, the How It Works headline words take the default dark hues
-  (`#60a5fa`, `#f87171`, `#fbbf24`) on a page that stays light: 2.5, 2.8 and 1.6:1 on white. Under the
-  skin they take the heading's own ink (`color: inherit`).
+- With the kill switch off, in dark, How It Works stays a light page: `:root.dark .hiw-gradient-text` pins the light
+  info / danger / warning stops (#525252, #dc2626, #d97706: 7.8, 4.8 and 3.2:1 on white; tokenContrast.test.ts).
+  Under the skin the words take the heading's own ink (`color: inherit`). (Since CL-0 this is no longer a known
+  limit; until then the words took the default dark hues, 2.5, 2.8 and 1.6:1 on white.)
 - The legacy Universal Assistant's answer bubble stays white in dark; `index.css` pins the light markdown
   tokens inside it (`.dark .bg-white.border-black .message-body`, link 6.7:1, code 16:1, table header
   13:1). The pin goes with the legacy-kit package, with the form-control rule.

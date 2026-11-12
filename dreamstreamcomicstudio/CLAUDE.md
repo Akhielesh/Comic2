@@ -83,6 +83,7 @@ as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
 hexes; never put a slash opacity on a bare `var()` arbitrary value (`text-[var(--ds-ink)]/60`
 is invalid CSS) — accent tints use `bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the
 old literal `bg-[#D97757]/10`. Charts read `--ds-chart-1…5` (monochrome steps, ink first).
+Colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer): ink on paper, colour as a spot. The spark (`--ds-spark*`, SPARK_FILL / the Button `create` variant, MAKING_DOT / MAKING_SWEEP / MAKING_TEXT, `Progress tone="making"`, SPARK_RING_ON_ART) means creation only: one fill per view (never in a list), never on a price or a control that spends (Approve, Draw, Redraw, Translate, Get more), never the panel, never the reader (tests/config/sparkGuard.test.ts). Series and tags use `--ds-hue-1…5` (HUE_DOT/HUE_FILL/HUE_STROKE or `hueClass(kind, i)`, 0-based, fixed order, a legend always); `--ds-art` is a comic's own tint (ART_PLACEHOLDER, ART_GLOW).
 
 **Design skins** (`docs/design/atlas-skin.md`): the whole app renders in the Atlas
 language through one attribute, `data-ds-skin="atlas"`, which `index.html` ships on `<html>`

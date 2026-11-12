@@ -822,7 +822,7 @@ Exact clicks and commands for every Phase 0 action, in order: `docs/infrastructu
 - [x] `public/_headers`: under `/*`, add HSTS, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy` for static assets and `live-sw.js`.
 - [x] `index.html`:
   - Delete the `aistudiocdn.com` importmap.
-  - Add `integrity` and `crossorigin` to the jsPDF 2.5.1 and html2canvas 1.4.1 cdnjs tags (bundling is a later task).
+  - Add `integrity` and `crossorigin` to the jsPDF 2.5.1 and html2canvas 1.4.1 cdnjs tags (bundling is a later task). (PF-1, Nov 2026: the tags left index.html; services/legacyPdfLoader.ts injects the same SRI-pinned files on demand. S2a lead decision D6: the legacy PDF export is kept and loads on demand, so cdnjs stays in the CSP; only the modal's automatic size refresh waits for the tools, and the manual click loads them. Boot: PF-1 took 2.66 s off DOMContentLoaded on the boot.mjs profile; the absolute budget moves to PF-12, at DCL ≤ 6.2 s on that profile.)
   - Hash the inline splash watchdog script into the CSP.
 - [x] `live.html`: no inline scripts left without a CSP hash.
 - [x] `yamnet.worker.ts`: remove `FALLBACK_URL` (Hugging Face). Keep the self-hosted, hash-checked model.

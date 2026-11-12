@@ -25,7 +25,7 @@ v3 redesign (`comic-studio-v3-agent-stream.md`).
 |---|---|---|
 | `springSoft` | stiffness 320 · damping 30 · mass 0.9 | card entrance, layout, reveals |
 | `springSnappy` | stiffness 520 · damping 32 | hover/press, selection, panel pop |
-| `easeOut` | 0.45s · cubic(0.2,0.7,0.2,1) | one-shot develop/sheen |
+| `easeOut` | 0.45s · cubic(0.2,0.7,0.2,1) | one-shot framer transitions. The develop and its sheen no longer use it: they read the `--ds-motion-enter-slow` / `--ds-motion-slow` / `--ds-motion-fast` tokens (MO-1) |
 | `STAGGER_STEP` | 0.06s | per-child delay in a stream/grid |
 
 ## The signature beats (`components/studio/kit/streamMotion.tsx`)
@@ -34,10 +34,19 @@ v3 redesign (`comic-studio-v3-agent-stream.md`).
 |---|---|---|
 | `StreamList` / `StreamItem` | agent cards arrive in the column | blur-up + rise + faint scale on `springSoft`, staggered; `layout` keeps the column smooth as heights change |
 | `AgentThinking` | "composing the next card" | three accent dots looping opacity + lift; `role="status"` for SR |
-| `ImageDevelop` | an AI render resolves | blur + over-bright → crisp, with a one-shot diagonal sheen sweep |
+| `ImageDevelop` | an AI render resolves once its image has loaded and decoded | over-exposed and 3 % large → crisp, with one sheen sweep (opacity and transform only, never a filter); a static token surface holds the box until then; a picture already in memory and a box with no picture never develop; reduced motion swaps it in; a develop cut short cancels its animations |
 | `SelectPop` | lock a style board / cover | spring lift on hover, scale-down on press, accent ring + check-mark pop on select (`AnimatePresence`) |
 | `CountUp` | the `$X.XX` cost chip updates | rAF ease-out-cubic tween; jumps instantly under reduced motion |
 | `PanelGrid` / `PanelPop` | page panels finish rendering | each panel pops in (scale + rise) on `springSnappy`, staggered |
+
+`ImageDevelop` takes `loading` (lazy by default), `decoding` (async by default), `srcSet` and `sizes`. The gate is
+`useImageReveal` (`components/ds/useImageReveal.ts`; docs/design/design-system.md, motion hooks). The light it
+develops out of and the sheen are the `--ds-develop-light` / `--ds-develop-sheen` tokens (index.css, both skins;
+softer in dark, `rgb(255 255 255 / 0.55)` and a 0.15 sheen, so a noir page does not start milky). A chat tile keys its
+`ImageDevelop` by the stored file, so a redraw in a mounted tile re-gates and develops.
+
+S2a lead decision (MO-1): the library test now asserts the procedural fallback is gone after the image loads
+(`toBeNull`), not merely invisible; the fallback that stayed underneath is what MO-1 removed.
 
 ## How it maps to the stream
 

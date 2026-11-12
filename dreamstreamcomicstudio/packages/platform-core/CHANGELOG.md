@@ -75,6 +75,11 @@ Tagged `platform-core-v1.0.0` after admin QA.
   `outlineToDeck`). A deck outline has at most 12 content slides, 100-character bullets and 500 characters of notes;
   its budget is 8,000 output tokens.
 - Fixtures `fixtures/email/**` with golden HTML and text hashes.
+- Skins: the colour-layer tokens (--ds-spark, --ds-spark-hover, --ds-on-spark, --ds-spark-text, --ds-spark-soft,
+  --ds-spark-glow, --ds-hue-1…5, --ds-art) in both skins, a DreamStream extension not from Atlas; DREAMSTREAM_SKIN
+  --ds-info / --ds-info-text are now neutral (#525252 / #404040 light, #e5e5e5 dark). Atlas may consume
+  DREAMSTREAM_SKIN / ATLAS_SKIN as package API (CL-0, S2a). Both skins also carry the art develop tokens
+  (--ds-develop-light, --ds-develop-sheen; MO-1), another DreamStream extension.
 
 ### Governance (W1.4)
 
