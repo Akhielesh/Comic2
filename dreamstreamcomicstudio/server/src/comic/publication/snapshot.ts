@@ -11,7 +11,12 @@ import crypto from 'node:crypto';
 import {
   COMIC_DOC_VERSION,
   DEFAULT_SETTINGS,
+  LAYER_BLENDS,
+  PANEL_BORDER_STYLES,
   frameStyleOf,
+  isOpaqueLayer,
+  normalizeLayerFx,
+  normalizeMotionClip,
   mapAssetRefs,
   pageSourcePaths,
   type AssetRef,
@@ -29,10 +34,13 @@ import {
   type PanelCuts,
   type PanelFrame,
   type PageLayer,
+  type PageMotion,
+  type MotionClip,
   type QcReport,
   type SpeakerMark,
   type TextTranslation
 } from '../../../../shared/comic/doc.js';
+import { normalizeAssetLibRef } from '../../../../shared/comic/assets/index.js';
 import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
@@ -227,8 +235,14 @@ const publicLine = (line: Line): Line => {
   // source language in every edition, so the reader neither counts it as "untranslated" nor marks a
   // published edition incomplete (editionProgress / fallbackLineIds read it; P2-PUBLIC-PAYLOAD).
   if (line.noTranslate === true) out.noTranslate = true;
+  // A named style the line uses (letterStyle.named is published whole): readers resolve its look as the studio does.
+  if (styleIdOf(line)) out.styleId = line.styleId;
   return out;
 };
+
+/** A line's named-style reference as published (a short id; normalizeLine's rule), or undefined. */
+const styleIdOf = (line: Pick<Line, 'styleId'>): string | undefined =>
+  typeof line.styleId === 'string' && line.styleId && line.styleId.length <= 64 ? line.styleId : undefined;
 
 /**
  * A panel: its number, size and lines, and who is in it (`castIds`, only ids of the published cast list — the
@@ -268,6 +282,9 @@ const publicFrame = (frame: PanelFrame, plan: SnapshotPlan): PanelFrame | undefi
     if (frame.border.none === true) border.none = true;
     if (num(frame.border.w)) border.w = frame.border.w;
     if (typeof frame.border.color === 'string' && HEX_COLOR_RE.test(frame.border.color)) border.color = frame.border.color;
+    // Pro Edit: the border's procedural look and its seed (a few bytes; absent = today's clean line).
+    if (frame.border.style && (PANEL_BORDER_STYLES as readonly string[]).includes(frame.border.style)) border.style = frame.border.style;
+    if (isInt32(frame.border.seed)) border.seed = frame.border.seed;
     if (Object.keys(border).length) out.border = border;
   }
   if (num(frame.z)) out.z = frame.z;
@@ -275,6 +292,7 @@ const publicFrame = (frame: PanelFrame, plan: SnapshotPlan): PanelFrame | undefi
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const isInt32 = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
 
 /**
  * The current drawing's cut boxes (pro plan §8), only for a page shown in frames: which part of the drawing each frame
@@ -291,17 +309,28 @@ const publicCuts = (cuts: PanelCuts | undefined): PanelCuts | undefined => {
 
 /**
  * The printed overlays of a page (pro plan §8): guide-only ones (print: false) never go out, nor an image overlay whose
- * picture can't go public. Geometry and look only: no name, no lock.
+ * picture can't go public, nor a layer of a kind this build does not know (opaque: a newer build's, never drawn).
+ * Geometry and look only: no name, no lock. Pro Edit (PE-SERVER): an effect goes out as its numbers (`fx`, structurally
+ * valid), a library sticker as its reference (`src.lib`: a same-origin `/library/…` file, so nothing is copied to pub/),
+ * and any overlay's `blend`.
  */
-const publicLayers = (layers: PageLayer[] | undefined, plan: SnapshotPlan): PageLayer[] => {
+export const publicLayers = (layers: PageLayer[] | undefined, plan: SnapshotPlan): PageLayer[] => {
   const out: PageLayer[] = [];
   for (const l of layers || []) {
-    if (!l || l.print === false || !validFrameBox(l.box) || typeof l.id !== 'string') continue;
+    if (!l || isOpaqueLayer(l)) continue;
+    if (l.print === false || !validFrameBox(l.box) || typeof l.id !== 'string') continue;
     const layer: PageLayer = { id: l.id, kind: l.kind, box: boxOf(l.box) };
     if (l.kind === 'image') {
+      const crop = validFrameBox(l.src?.crop) ? { crop: boxOf(l.src!.crop!) } : {};
+      const lib = l.src?.path ? undefined : normalizeAssetLibRef(l.src?.lib);
       const path = l.src?.path ? plan.paths[l.src.path] : undefined;
-      if (!path) continue;
-      layer.src = { path, ...(validFrameBox(l.src!.crop) ? { crop: boxOf(l.src!.crop) } : {}) };
+      if (path) layer.src = { path, ...crop };
+      else if (lib) layer.src = { lib, ...crop };
+      else continue;
+    } else if (l.kind === 'effect') {
+      const fx = normalizeLayerFx(l.fx);
+      if (!fx) continue;
+      layer.fx = plain(fx);
     } else {
       if (!l.shape) continue;
       layer.shape = plain(l.shape);
@@ -311,8 +340,45 @@ const publicLayers = (layers: PageLayer[] | undefined, plan: SnapshotPlan): Page
     if (typeof l.clip === 'string' && l.clip) layer.clip = l.clip;
     if (num(l.opacity)) layer.opacity = l.opacity;
     if (l.flip === 'h' || l.flip === 'v') layer.flip = l.flip;
+    if (l.blend && (LAYER_BLENDS as readonly string[]).includes(l.blend)) layer.blend = l.blend;
     out.push(layer);
   }
+  return out;
+};
+
+/** Whether a clip's target is something the published page draws: a line or a panel of it, or a published overlay. */
+const publishedTarget = (page: Page, layerIds: ReadonlySet<string>, target: MotionClip['target']): boolean => {
+  if (target.k === 'layer') return layerIds.has(target.id);
+  if (target.k === 'panel') return (page.panels || []).some((p) => p.id === target.id);
+  return (page.panels || []).some((p) => (p.lines || []).some((l) => l.id === target.id));
+};
+
+/**
+ * A page's animation as readers get it (Pro Edit, master plan §2.3 "Hashing and publication"): clips aimed at an
+ * overlay that is not published (guide-only, an unpublishable picture, opaque) or at nothing on the page are dropped,
+ * and so are camera moves of a panel the page does not have. Each clip goes out as normalizeMotionClip reads it (ids,
+ * numbers, words; no free text). Whether readers play it is the reader's call (COMIC_READER_MOTION, the creator's
+ * reader.motion, the viewer's own toggle, Calm motion, reduced motion), so turning reader motion on needs no republish.
+ * Undefined when nothing is left.
+ */
+export const publicMotion = (page: Page, publishedLayers: readonly Pick<PageLayer, 'id'>[]): PageMotion | undefined => {
+  const motion = page.motion;
+  if (!motion || typeof motion !== 'object') return undefined;
+  const layerIds = new Set(publishedLayers.map((l) => l.id));
+  const clips: MotionClip[] = [];
+  for (const raw of Array.isArray(motion.clips) ? motion.clips : []) {
+    const clip = normalizeMotionClip(raw);
+    if (clip && publishedTarget(page, layerIds, clip.target)) clips.push(plain(clip));
+  }
+  const panelIds = new Set((page.panels || []).map((p) => p.id));
+  const camera = (Array.isArray(motion.camera) ? motion.camera : [])
+    .filter((c) => !!c && typeof c.panelId === 'string' && panelIds.has(c.panelId) && typeof c.move === 'string')
+    .map((c) => ({ panelId: c.panelId, move: c.move }));
+  const hold = typeof motion.hold === 'number' && Number.isInteger(motion.hold) && motion.hold >= 0 ? motion.hold : undefined;
+  if (!clips.length && !camera.length && hold === undefined) return undefined;
+  const out: PageMotion = { clips };
+  if (camera.length) out.camera = camera;
+  if (hold !== undefined) out.hold = hold;
   return out;
 };
 
@@ -381,6 +447,8 @@ function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: Readonly
   if (page.frameStyle) out.frameStyle = { ...frameStyleOf(page) };
   const layers = publicLayers(page.layers, plan);
   if (layers.length) out.layers = layers;
+  const motion = publicMotion(page, layers);
+  if (motion) out.motion = motion;
   return out;
 }
 
@@ -525,7 +593,8 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
         p.id,
         p.render.asset!.path,
         p.chapterTitle,
-        (p.panels || []).map((pn) => (pn.lines || []).map((l) => [l.id, l.kind, l.speakerId, l.text, l.style])),
+        // A named style (Line.styleId) is appended only when set, so an old comic keeps the fingerprint it was published with.
+        (p.panels || []).map((pn) => (pn.lines || []).map((l) => (styleIdOf(l) ? [l.id, l.kind, l.speakerId, l.text, l.style, l.styleId] : [l.id, l.kind, l.speakerId, l.text, l.style]))),
         p.balloons
       ];
       // Ship 2: the published layout geometry, appended only when the page has some, so a page without frames,
@@ -543,15 +612,38 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
 };
 
 /**
- * What a reader sees of a page's Ship 2 layout (pro plan §8): display mode, frame style, frames (box, crop, border,
- * stacking, picture), the current cut boxes in panels mode and the printed overlays. Undefined when the page has none.
+ * What a reader sees of a page's Ship 2 layout (pro plan §8): display mode, frame style, frames (box, crop, border with
+ * its look, stacking, picture), the current cut boxes in panels mode and the printed overlays (a library sticker's
+ * reference rides `src`). Pro Edit (PE-SERVER): an effect's `fx` and an overlay's `blend` are appended to its entry, and
+ * the page's motion (clips not aimed at a guide-only or opaque overlay, camera, hold) to the geometry, each only when
+ * present, so a page without them keeps the fingerprint it had and republishing sees an effect, blend or animation edit.
+ * Opaque overlays (a newer build's, never published) are left out. Undefined when the page has none of it.
  */
-const layoutGeometryOf = (p: Page): unknown => {
+export const layoutGeometryOf = (p: Page): unknown => {
   const frames = (p.panels || []).filter((pn) => !!pn.frame).map((pn) => [pn.id, pn.frame!.box, pn.frame!.fit, pn.frame!.src?.path, pn.frame!.src?.box, pn.frame!.border, pn.frame!.z]);
-  const printed = (p.layers || []).filter((l) => l.print !== false).map((l) => [l.id, l.kind, l.box, l.rot, l.z, l.clip, l.opacity, l.flip, l.src, l.shape]);
+  const printedLayers = (p.layers || []).filter((l) => l.print !== false && !isOpaqueLayer(l));
+  const printed = printedLayers.map((l) => {
+    const entry: unknown[] = [l.id, l.kind, l.box, l.rot, l.z, l.clip, l.opacity, l.flip, l.src, l.shape];
+    if (l.fx !== undefined || l.blend !== undefined) entry.push(l.fx ?? null, l.blend ?? null);
+    return entry;
+  });
   const cuts = p.artMode === 'panels' ? (p.render.cuts?.cuts || []).map((c) => [c.panelId, c.drawn, c.box]) : [];
-  if (p.artMode !== 'panels' && !p.frameStyle && !frames.length && !printed.length) return undefined;
-  return { mode: p.artMode ?? null, style: p.frameStyle ?? null, frames, cuts, layers: printed };
+  const motion = motionGeometryOf(p, new Set(printedLayers.map((l) => l.id)));
+  if (p.artMode !== 'panels' && !p.frameStyle && !frames.length && !printed.length && !motion) return undefined;
+  const out: Record<string, unknown> = { mode: p.artMode ?? null, style: p.frameStyle ?? null, frames, cuts, layers: printed };
+  if (motion) out.motion = motion;
+  return out;
+};
+
+/** The part of a page's motion readers could see, without the publish plan: clips not aimed at a guide-only or opaque
+ *  overlay (a layer that is not on the page at all still counts: an undo can bring it back), the camera and the hold. */
+const motionGeometryOf = (p: Page, printedLayerIds: ReadonlySet<string>): unknown => {
+  const m = p.motion;
+  if (!m) return undefined;
+  const layerIds = new Set((p.layers || []).map((l) => l.id));
+  const clips = (m.clips || []).filter((c) => !(c?.target?.k === 'layer' && layerIds.has(c.target.id) && !printedLayerIds.has(c.target.id)));
+  if (!clips.length && !m.camera?.length && m.hold === undefined) return undefined;
+  return [clips, m.camera ?? null, m.hold ?? null];
 };
 
 /**
