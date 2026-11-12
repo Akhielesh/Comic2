@@ -20,7 +20,7 @@ const markup = (el: Element | null) => (el?.outerHTML || '').replace(ID_RE, 'pt-
 const VARIANTS: EmptyArtVariant[] = ['pages', 'cast', 'style', 'reader', 'studio', 'media'];
 
 describe('PresetThumb', () => {
-  it('renders a distinct, NaN-free scene for all 12 presets over the gradient swatch', () => {
+  it('renders a distinct, NaN-free scene for every preset over the gradient swatch', () => {
     const digests: Record<string, string> = {};
     for (const p of STYLE_PRESETS) {
       const { container, unmount } = render(<PresetThumb preset={p} />);
