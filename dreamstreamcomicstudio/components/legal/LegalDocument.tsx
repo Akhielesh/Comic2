@@ -2,11 +2,14 @@ import React, { createContext, useContext, useEffect } from 'react';
 import { LEGAL_LAST_UPDATED, OPERATOR_NAME } from './legalFacts';
 import {
     LEGAL_DOCS,
+    LEGAL_TITLE_ID,
     clearFragment,
     followLegalHistory,
     legalBackGoesBack,
     legalDoc,
     legalDocForPath,
+    landOn,
+    landOnTop,
     pushLegalPath,
     replaceLegalFragment,
     type LegalDocId
@@ -48,18 +51,6 @@ const showSection = (id: string): boolean => {
     if (!target || !replaceLegalFragment(id)) return false;
     landOn(target);
     return true;
-};
-
-/**
- * Scroll to a section and move keyboard focus there, as the browser's own fragment navigation
- * would: Tab carries on from the section, and a screen reader starts reading it. Used for a jump
- * on the page shown (showSection) and for a section of another document once it opens
- * (useLandOnFragment), so both kinds of section link leave focus in the same place.
- */
-const landOn = (target: HTMLElement): void => {
-    target.scrollIntoView?.();
-    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
-    target.focus?.({ preventScroll: true });
 };
 
 export const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
@@ -195,20 +186,20 @@ interface LegalDocumentProps extends LegalPageProps {
 /**
  * Land on the URL's #fragment once the (lazily loaded) page is in the DOM, focus included (landOn):
  * a link to a section of another document unmounts the link that was clicked, which would otherwise
- * leave focus on <body>. Otherwise start at the top.
+ * leave focus on <body>. Otherwise start at the top, with focus left on a control still on the page
+ * (the shared footer's link) moved to the title (landOnTop).
  */
 const useLandOnFragment = () => {
     useEffect(() => {
         const raw = window.location.hash.slice(1);
-        const top = () => (document.scrollingElement ?? document.documentElement)?.scrollTo?.({ top: 0 });
         if (!raw) {
-            top();
+            landOnTop();
             return;
         }
         // A mangled shared link (e.g. #%) must not take the whole page down.
         const target = document.getElementById(decodeFragment(raw));
         if (target) landOn(target);
-        else top();
+        else landOnTop();
     }, []);
 };
 
@@ -274,7 +265,7 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
             <div className="min-h-screen bg-[var(--ds-canvas)] font-sans text-[var(--ds-ink)]">
                 <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-12" onClick={onSectionLink}>
                     <div className="mb-3 flex items-start justify-between gap-4">
-                        <h1 className="text-3xl font-semibold tracking-tight text-[var(--ds-ink)]">{title}</h1>
+                        <h1 id={LEGAL_TITLE_ID} tabIndex={-1} className="text-3xl font-semibold tracking-tight text-[var(--ds-ink)] focus:outline-none">{title}</h1>
                         <button
                             type="button"
                             onClick={goBack}

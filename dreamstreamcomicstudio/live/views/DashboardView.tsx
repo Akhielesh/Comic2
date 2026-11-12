@@ -145,7 +145,8 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   // Re-read on sign-in / sign-out: the last account's events must not linger.
   const recordings = useMemo(listMyRecordings, [account.userId, account.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
-  // Unsaved recordings other accounts left here: a count and their size only (recorder.ts).
+  // Unsaved recordings here this account isn't offered (other accounts', and those whose account
+  // can't be told): a count and their size only (recorder.ts otherAccountsUnsaved).
   const [others, setOthers] = useState({ count: 0, bytes: 0 });
   const [saving, setSaving] = useState<FinishedRecording | null>(null);
   const quick = useQuickStart(nav);
@@ -159,7 +160,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const deleteOthers = () => {
     const one = others.count === 1;
     const what = one ? 'the unsaved recording' : `the ${others.count} unsaved recordings`;
-    if (!window.confirm(`Delete ${what} another account left on this device (${fmtBytes(others.bytes)})? Only that account could save ${one ? 'it' : 'them'}. This cannot be undone.`)) return;
+    if (!window.confirm(`Delete ${what} on this device that ${one ? "isn't" : "aren't"} yours to open (${fmtBytes(others.bytes)})? This cannot be undone.`)) return;
     void discardOtherAccountsUnsaved()
       .then((n) => {
         setOthers(otherAccountsUnsaved());
@@ -445,7 +446,9 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
           {others.count > 0 && (
             <div className="card card-pad">
               <p className="faint" style={{ margin: '0 0 8px' }}>
-                {others.count === 1 ? '1 unsaved recording' : `${others.count} unsaved recordings`} from another account on this device {others.count === 1 ? 'uses' : 'use'} {fmtBytes(others.bytes)}. Only that account can save {others.count === 1 ? 'it' : 'them'}.
+                {others.count === 1
+                  ? `1 unsaved recording on this device isn't yours to open: it was made for another account, or its account isn't known. It uses ${fmtBytes(others.bytes)}.`
+                  : `${others.count} unsaved recordings on this device aren't yours to open: they were made for other accounts, or their account isn't known. They use ${fmtBytes(others.bytes)}.`}
               </p>
               <Btn variant="ghost" size="sm" icon="trash" onClick={deleteOthers}>Delete {others.count === 1 ? 'it' : 'them'}</Btn>
             </div>

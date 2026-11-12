@@ -144,13 +144,30 @@ alert opt-ins, call settings) in `localStorage`, and no sign-out cleared it — 
 greeted the last person by name. Now `live/accountPurge.ts` wipes everything
 personal Stream Studio keeps on a device, including guest passes from nurseries' share
 links (`ds-monitor-guest-<nursery>`: a working pass to watch that nursery under the name
-typed for it; a guest who never signed in keeps theirs, since nothing purges a device no
-account owns), while device preferences such as theme, lens, tours and the device's
+typed for it), while device preferences such as theme, lens, tours and the device's
 monitor name stay, when:
 - you sign out in Stream Studio, or in the main app (`contexts/AuthContext.tsx`);
 - Stream Studio loads with no session but a previous owner (`ds-live-owner`), or a
   different person signs in;
 - and it unsubscribes the device's `/live` push subscription.
+
+A guest who joined while no one was signed in keeps their pass across loads with no
+session (`claimDevice(null)` purges nothing while no account owns the device). It still
+goes: when they leave, when the room turns it down (removed or revoked), 90 days after its
+end (`loadGuest`), when a member of that nursery opens it signed in (`useGuestPass`), and
+with the purge above: someone who signs in on that device later takes it over with no
+purge (`claimDevice(userId)`), so their sign-out removes it; any main-app sign-out
+(`purgeLocalAccountData`) removes it; and a main-app account switch (`takeOverDevice`)
+purges data no account owns too. The Cookies notice says so.
+
+Unsaved recordings are not purged (they are the host's work): each carries the account it
+was made for, which `live/accountPurge.ts` also records apart from the registry
+(`ds-live-rec-owners`), with the account the device held when this version first ran there
+(`ds-live-legacy-owner`, noted only where an earlier version kept recordings, and cleared
+once every one of those has its own owner). A recording whose entry is lost (a tab still
+running the earlier version keeps only 10 entries; a failed registry write) comes back at
+the next start for that account, or, when its account can't be told, for no one
+(`?unknown`): the dashboard only counts it, with its size, and offers to delete it.
 
 A sign-out in another tab now also drops a Stream Studio tab's own session copy
 (sessionStorage, when "Remember me" was off), and `www.dreamstreamstudio.ai` (and since

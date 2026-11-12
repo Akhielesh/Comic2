@@ -494,8 +494,10 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         // Sign-out and unsaved recordings: who is offered one, including ones no account made, and
         // what another account at the device can see and do (live/recorder.unit.test.ts checks it).
         // One left from an earlier version goes to the account whose data the device held when this version
-        // first ran there (settleUnownedRecordings), not to whoever was signing in at that moment.
-        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there or, if there was none, is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them.");
+        // first ran there (settleUnownedRecordings), not to whoever was signing in at that moment; one whose
+        // account can't be told (UNKNOWN_OWNER) is offered to no one, only counted (recorder.ts).
+        expect(privacy).toContain("Recordings you made but haven't saved stay on the device until you save or delete them, with a note of the account each was made for. Each is offered only to the account its studio was opened for. One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there. If there was none, one that version still listed is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in, and one it had stopped listing is offered to no one. So is any other recording whose account can't be told, such as one recorded in a tab still running the earlier version and dropped from its list before this version listed it. Someone signed in there with another account sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.");
+        for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('first ran there or, if there was none, is offered to anyone');
         for (const page of ['components/PrivacyPolicy.tsx', 'components/legal/CookiesNotice.tsx']) expect(read(page), page).not.toContain('goes to the account signed in there when this version first ran');
         expect(privacy).not.toContain('only the account that made them is offered them');
         expect(privacy).not.toContain('the Stream Studio data on that device is removed');
@@ -511,12 +513,16 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         const cookiesMain = renderDoc('cookies').main;
         const cookies = textOf(cookiesMain.querySelector('#your-choices') as HTMLElement);
         expect(cookies).not.toContain("removes Stream Studio's personal data from that device");
-        expect(cookies).toContain('One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there or, if there was none, is offered to anyone who opens Stream Studio on that device');
+        expect(cookies).toContain("One left unsaved under an earlier version of Stream Studio goes to the account whose Stream Studio data was on that device when this version first ran there. If there was none, one that version still listed is offered to anyone who opens Stream Studio on that device, as is one made while no one was signed in, and one it had stopped listing is offered to no one.");
+        expect(cookies).toContain('anyone there sees the same for recordings offered to no one.');
         // What sign-out removes and, in the same words as the code's purge list, what stays (live/accountPurge.unit.test.ts).
         // Guest passes from share links go with the account (accountPurge PREFIXES), and the list of what
         // stays no longer claims to be three things: device settings stay too.
         expect(cookies).toContain("nursery data, guest passes from a nursery's share link, call settings, the names of people you called and the name you used as a viewer) and ends its alert subscription.");
-        expect(cookies).toContain('A guest who joined with a share link without signing in keeps their pass on that device until it ends or a parent ends it. These stay after a sign-out.');
+        // A signed-out guest's pass: every way it goes (leave, the room's refusal, 90 days past its end, and
+        // any sign-out or account switch on that device, or a member opening it: live/accountPurge.unit.test.ts).
+        expect(cookies).toContain('A guest who joined with a share link while no one was signed in keeps their pass on that device until they leave, the nursery turns it down (a parent ended it or removed them) or 90 days after its end, unless someone signs out of Stream Studio or DreamStream on that device, the device switches to another account, or a member of that nursery opens it there signed in: then it goes too. These stay after a sign-out.');
+        expect(cookies).not.toContain('keeps their pass on that device until it ends or a parent ends it');
         expect(cookies).not.toContain('Three things stay');
         expect(cookies).toContain("This browser's baby-monitor encryption data stays: its own keys, its copies of nursery keys, the counters its encryption uses, and which cameras it has seen encrypt");
         expect(cookies).toContain('Device settings stay too: your preferences (theme, camera lens, tours seen, the tracker\'s units and similar), the name this device goes by in the baby monitor, and the folder you picked for saving recordings.');
@@ -525,7 +531,7 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(textOf(cookiesMain.querySelector('#what-we-store') as HTMLElement)).toContain('guest passes for nurseries you joined with a share link');
         expect(cookies).toContain("Changes to your call favourites and blocks that haven't reached our server yet stay, for your account only, until they do.");
         expect(cookies).toContain('Each is offered only to the account its studio was opened for.');
-        expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them.');
+        expect(cookies).toContain('sees only how many of your unsaved recordings there are and how much space they use, and can delete them; anyone there sees the same for recordings offered to no one.');
         expect(cookies).not.toContain('only the account that made them is offered them');
     });
 
@@ -535,9 +541,10 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         expect(textOf(privacyMain.querySelector('#ai-processing') as HTMLElement)).toContain('Free models in particular may keep what they receive and learn from it, that is, use it to train or improve their models.');
         expect(privacy).toContain('The Contact form in Settings sends our database the email address you enter, your message, a phone number if you add one, and your account, so we can reply by email.');
         expect(textOf(privacyMain.querySelector('#retention') as HTMLElement)).toMatch(/Messages sent with the Contact form in Settings\s*How long\s*Not deleted automatically today; email us to have yours deleted\./);
-        // What an import sends: pasted text up to its first 24,000 characters, but from an export file the
-        // text the user wrote from anywhere in it (services/memoryImport.ts; legalFacts.test.ts runs it).
-        expect(privacy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first 24,000 characters; from a data-export file (such as ChatGPT's or Claude's conversations file) or other JSON, it sends the text you wrote, taken from anywhere in the file: your own messages in its past conversations and its memory and instruction entries, but not the assistant's replies, up to 24,000 characters. That is sent with the list to an AI model, the same way as the notes written from Chat Studio");
+        // What an import sends: pasted text up to its first 24,000 characters; from JSON, the text it finds
+        // outside messages marked as the assistant's (the first 800 pieces), or a file it finds nothing in as
+        // it is (services/memoryImport.ts; legalFacts.test.ts runs it).
+        expect(privacy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first 24,000 characters. From JSON, such as ChatGPT's or Claude's conversations file, it sends the text it finds in memory and instruction entries, in messages the file marks as yours, and in other fields such as \"text\" or \"content\" that the file doesn't mark as the assistant's, but not messages the file marks as the assistant's: the first 800 pieces of text it finds, up to 24,000 characters. So an assistant's reply in a file that doesn't say who wrote what can be sent, and a JSON file in which it finds none of that, such as a Google Takeout activity file, is sent as it is, assistant replies included, up to its first 24,000 characters.");
         expect(privacy).not.toContain('what you paste or upload (up to the first');
     });
 
@@ -987,9 +994,47 @@ describe('Back from a legal page shows the view the entry names (App routing in 
             expect(`${window.location.pathname}${window.location.hash}`).toBe('/privacy');
             expect(legalBackGoesBack()).toBe(true);
             expect(toTop).toHaveBeenCalledWith({ top: 0 });
+            // Focus goes to the top too: left on the section, the next Tab would scroll back down to it.
+            expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' }));
             window.history.back();
             await waitFor(() => expect(screen.getByText('View: gallery')).toBeInTheDocument());
             expect(address()).toBe('/?view=gallery');
+        } finally {
+            (el as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
+        }
+    });
+
+    it('the shared footer under a legal document (App shows it there), used from the keyboard: the document shown, or another one, starts at its title, so the next Tab doesn\'t scroll back down to the footer', async () => {
+        Element.prototype.scrollIntoView = vi.fn();
+        const el = document.scrollingElement ?? document.documentElement;
+        const scrollTo = (el as HTMLElement & { scrollTo?: unknown }).scrollTo;
+        (el as HTMLElement & { scrollTo: unknown }).scrollTo = vi.fn();
+        const Doc: React.FC = () => {
+            const [doc, setDoc] = React.useState<LegalDocId>('privacy');
+            const Page = PAGES[doc];
+            return (
+                <div>
+                    <Page key={doc} onBack={vi.fn()} onOpenDoc={setDoc} />
+                    <LegalMicroLinks onOpenPrivacy={() => setDoc('privacy')} onOpenTerms={() => setDoc('terms')} onOpenLegal={setDoc} onOpenFaq={vi.fn()} />
+                </div>
+            );
+        };
+        try {
+            window.history.replaceState({}, '', '/privacy');
+            render(<Doc />);
+            await screen.findByRole('heading', { level: 1, name: 'Privacy Policy' });
+            // Loaded cold, nothing has focus yet: none is moved.
+            expect(document.activeElement).toBe(document.body);
+            const footer = screen.getByRole('navigation', { name: 'Legal and support' });
+            const own = within(footer).getByRole('link', { name: 'Privacy Policy' });
+            own.focus();
+            fireEvent.click(own);
+            expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' }));
+            const terms = within(footer).getByRole('link', { name: 'Terms of Service' });
+            terms.focus();
+            fireEvent.click(terms);
+            const title = await screen.findByRole('heading', { level: 1, name: 'Terms of Service' });
+            await waitFor(() => expect(document.activeElement).toBe(title));
         } finally {
             (el as HTMLElement & { scrollTo: unknown }).scrollTo = scrollTo;
         }

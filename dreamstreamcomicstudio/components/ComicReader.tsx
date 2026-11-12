@@ -387,12 +387,20 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
   useEffect(() => {
     loadReaderState(project.id).then((state) => {
+      // The loaded place is what a close before the next render saves, not the defaults.
+      if (state) {
+        lastPosition.current = {
+          ...lastPosition.current,
+          mode: state.mode,
+          ...(typeof state.pageIndex === 'number' ? { pageIndex: state.pageIndex } : {}),
+          scrollTop: typeof state.scrollTop === 'number' ? state.scrollTop || 0 : lastPosition.current.scrollTop
+        };
+      }
       positionLoaded.current = true;
       if (!state) return;
       setReaderMode(state.mode);
       if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
       if (typeof state.scrollTop === 'number') {
-        lastPosition.current.scrollTop = state.scrollTop || 0;
         requestAnimationFrame(() => {
           if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
         });
@@ -471,7 +479,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   // Closing the reader (or leaving it for another page, such as a legal document) saves where it was,
   // so opening the comic again shows it as it was left. A layout cleanup runs before the scroll box
   // is detached; the scroll debounce is cancelled so it can't write a later scrollTop of 0. Nothing is
-  // saved before the stored position has loaded, which would overwrite it with the defaults.
+  // saved before the stored position has loaded (persistReaderState neither), which would overwrite it
+  // with the defaults: the mount's own save, and both mounts under StrictMode.
   useLayoutEffect(() => () => {
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     if (!positionLoaded.current) return;
@@ -484,6 +493,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   }, [readerMode]);
 
   const persistReaderState = (override?: Partial<{ mode: 'scroll' | 'flip'; pageIndex: number; scrollTop: number }>) => {
+    if (!positionLoaded.current) return;
     const payload = {
       projectId: project.id,
       mode: override?.mode ?? readerMode,
@@ -540,11 +550,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   };
 
+  // Also after a stored page loads: the comic may have fewer pages now than when it was saved.
   useEffect(() => {
     if (pageIndex >= pages.length && pages.length > 0) {
       setPageIndex(pages.length - 1);
     }
-  }, [pages.length]);
+  }, [pages.length, pageIndex]);
 
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;

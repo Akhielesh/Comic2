@@ -89,6 +89,36 @@ export const clearFragment = (): void => {
   }
 };
 
+/** The id of a legal document's title (LegalDocument's <h1>): a move to the top of a document leaves keyboard focus there. */
+export const LEGAL_TITLE_ID = 'legal-document-title';
+
+/**
+ * Scroll to a section and move keyboard focus there, as the browser's own fragment navigation
+ * would: Tab carries on from the section, and a screen reader starts reading it. Used for a jump
+ * on the page shown (LegalDocument showSection, pushLegalPath) and for a section of another document
+ * once it opens (LegalDocument useLandOnFragment), so every kind of section link leaves focus in the
+ * same place.
+ */
+export const landOn = (target: HTMLElement): void => {
+  target.scrollIntoView?.();
+  if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+  target.focus?.({ preventScroll: true });
+};
+
+/**
+ * Start at the top of the document shown. Keyboard focus left on a control that is still on the page
+ * (the shared footer's link that was used, or a link further down the document) moves to the
+ * document's title, so the next Tab carries on from the top instead of scrolling back down to that
+ * control. Focus on <body> (a page loaded cold, or a link that is gone) stays there.
+ */
+export const landOnTop = (): void => {
+  (document.scrollingElement ?? document.documentElement)?.scrollTo?.({ top: 0 });
+  const title = document.getElementById(LEGAL_TITLE_ID);
+  const active = document.activeElement;
+  if (!title || !active || active === document.body || active === title) return;
+  title.focus?.({ preventScroll: true });
+};
+
 /**
  * The history-state key under which the comic reader's back stack records its layers
  * (components/comicstudio/mobile/backStack.ts HISTORY_LAYERS_KEY; legalRoutes.test.ts keeps the two equal).
@@ -160,11 +190,12 @@ export const pushLegalPath = (id: LegalDocId, section?: string): void => {
       // The document is already shown, maybe at a #section after a table-of-contents jump: a new
       // entry would be one Back only returns to the same page from. The current entry takes the
       // fragment asked for, with its state (so its mark), and the page goes where the link points,
-      // since the view doesn't change and the document doesn't land anywhere by itself.
+      // focus included (landOn, landOnTop), since the view doesn't change and the document doesn't
+      // land anywhere by itself.
       if (window.location.hash !== fragment) window.history.replaceState(window.history.state, '', `${path}${fragment}`);
       const target = section ? document.getElementById(section) : null;
-      if (target) target.scrollIntoView?.();
-      else if (!section) (document.scrollingElement ?? document.documentElement)?.scrollTo?.({ top: 0 });
+      if (target) landOn(target);
+      else if (!section) landOnTop();
       return;
     }
     window.history.pushState(legalEntryState(), '', `${path}${fragment}`);

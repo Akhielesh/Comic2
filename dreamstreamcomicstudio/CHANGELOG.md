@@ -32,6 +32,20 @@ All notable user-facing changes. Format loosely follows
   spellings counted together), and a subscriber's picks change only when they press Confirm.
 
 ### Fixed
+- **Legal suite, seventh review (2026-11-12):** in Stream Studio, a kept recording an earlier
+  version had stopped listing now goes to the account whose data the device held when this
+  version first ran there, also when that account signed out or the main app switched accounts
+  first, and a recording whose entry a tab still on the earlier version drops comes back for its
+  own account, never for whoever holds the device then. One whose account can't be told is
+  offered to no one: the dashboard shows how many there are and their size, and can delete them.
+  A recording you downloaded no longer comes back as "Recovered recording" when the browser can't
+  note it for deleting, or can't delete it yet. The comic reader no longer saves page 1 when it
+  opens (or twice under `npm run dev`), and a saved page beyond a shortened comic's end opens on
+  its last page. A link to the legal document already shown, or the footer under one, moves
+  keyboard focus to the document's title. The Privacy Policy says what a memory import sends
+  from JSON it doesn't recognise (a Google Takeout file: all of it, replies included), and the
+  Cookies notice every way a signed-out guest's pass goes. A slow send no longer stands out after
+  an hour with no sends, and the security notes state the timing and cap residuals as they are.
 - **Legal suite, sixth review (2026-11-12):** Stream Studio no longer deletes recordings on
   start: a kept recording an earlier version dropped from its list (it kept only the 10 newest)
   is listed again under Unsaved recordings as "Recovered recording", and only empty files are

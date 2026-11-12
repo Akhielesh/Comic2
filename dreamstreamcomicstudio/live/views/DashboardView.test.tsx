@@ -109,19 +109,20 @@ describe('DashboardView live-worker readiness gate', () => {
     expect(takeStudioIntent('ev9')).toBe('meeting');
   }, 15_000);
 
-  it('shows how many unsaved recordings another account left here and their size, never their titles, and deletes them on request', async () => {
+  it('shows how many unsaved recordings here aren\'t this account\'s to open (another account\'s, or one whose account isn\'t known) and their size, never their titles, and deletes them on request', async () => {
     vi.mocked(probeLiveWorker).mockResolvedValue(reachableProbe);
     const rec = (name: string, owner: string, bytes: number) => ({ name, file: `${name}.webm`, mime: 'video/webm', eventId: 'e1', title: `Secret ${name}`, at: 1, durMs: 1000, bytes, owner });
     localStorage.setItem('ds-live-owner', 'u1');
-    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-x', 'u-other', 1024), rec('ds-rec-y', 'u-other', 1024), rec('ds-rec-mine', 'u1', 10)]));
+    // One another account made, one recovered whose account can't be told (UNKNOWN_OWNER), one of u1's.
+    localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify([rec('ds-rec-x', 'u-other', 1024), rec('ds-rec-y', '?unknown', 1024), rec('ds-rec-mine', 'u1', 10)]));
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const push = vi.fn();
     render(<DashboardView nav={createNav()} push={push} />);
-    expect(await screen.findByText(/^2 unsaved recordings from another account on this device use .+\. Only that account can save them\.$/)).toBeInTheDocument();
-    expect(screen.queryByText(/Secret ds-rec-x/)).toBeNull();
+    expect(await screen.findByText(/^2 unsaved recordings on this device aren't yours to open: they were made for other accounts, or their account isn't known\. They use .+\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Secret ds-rec-x|Secret ds-rec-y/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Delete them' }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/^Delete the 2 unsaved recordings another account left on this device/));
-    await waitFor(() => expect(screen.queryByText(/from another account on this device/)).toBeNull());
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/^Delete the 2 unsaved recordings on this device that aren't yours to open \(/));
+    await waitFor(() => expect(screen.queryByText(/aren't yours to open/)).toBeNull());
     expect(JSON.parse(localStorage.getItem('ds-live-unsaved-recordings') || '[]').map((r: { name: string }) => r.name)).toEqual(['ds-rec-mine']);
     expect(push).toHaveBeenCalledWith('Deleted 2 recordings', { icon: 'check' });
     confirm.mockRestore();

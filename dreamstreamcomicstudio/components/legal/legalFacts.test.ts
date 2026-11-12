@@ -27,6 +27,7 @@ import {
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
     MEMORY_IMPORT_MAX_CHARS,
+    MEMORY_IMPORT_MAX_ENTRIES,
     MEMORY_NOTE_MODEL,
     MEMORY_SEARCH_MAX_CHARS,
     MIN_SIGNUP_AGE_YEARS,
@@ -199,18 +200,25 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         const store = read('server/src/services/interestStore.ts');
         expect(store).toContain('return Math.max(answerFloorMs, sorted[Math.ceil(sorted.length * 0.95) - 1]);');
         expect(store).toContain('export const SENT_SAMPLE_WINDOW_MS = 60 * 60_000;');
-        expect(read('server/src/routes/interest.ts')).toMatch(/noteSentDuration\(startedAt\);[\s\S]{0,300}await holdAnswer\(startedAt\);/);
+        // Both routes that register interest count a send's own time before its answer is held.
+        for (const f of ['server/src/routes/interest.ts', 'server/src/routes/newsletter.ts']) expect(read(f), f).toMatch(/noteSentDuration\(startedAt\);[\s\S]{0,300}await holdAnswer\(startedAt\);/);
+        // The newest send keeps setting the hold however old it is (an hour with no sends doesn't drop it to the floor).
+        expect(store).toContain('while (sentDurations.length > 1 && now - sentDurations[0].at > SENT_SAMPLE_WINDOW_MS) sentDurations.shift();');
         // The mailer counts only rows logged as sent, at send time.
         expect(read('server/src/services/emailStore.ts')).toMatch(/export const getUsage[\s\S]{0,800}\.eq\('status', 'sent'\)/);
         expect(read('server/src/services/mailer.ts')).toContain('const usage = await getUsage();');
         const doc = read('docs/email/SECURITY.md');
-        expect(doc).toContain('the 95th percentile of the sends in the last hour (`SENT_SAMPLE_WINDOW_MS`, at most 50 of them)');
-        expect(doc).toContain('with 20 or more sends in the hour the hold leaves out the slowest 5% (it is the 2nd or 3rd slowest), so about one send in 20 answers later than a throttled request would');
+        expect(doc).toContain('the 95th percentile of the sends in the last hour (`SENT_SAMPLE_WINDOW_MS`, at most 50 of them, and the newest send however old it is)');
+        expect(doc).toContain("an hour with no sends doesn't drop the hold back to the floor");
+        expect(doc).toContain('(1) a send slower than the hold at that moment answers later than a throttled request at that moment would, once sends take longer than the 2 s floor (a slow email worker): the first send after the container wakes or a deploy restarts it (nothing is held above the floor yet), a send slower than the newest one and every one in the last hour, and, with 20 or more sends in the hour, where the hold leaves out the slowest 5% (it is the 2nd or 3rd slowest), about one send in 20.');
         expect(doc).toContain('a slow one also raises the hold for the answers after it, which a request made right after it can see');
+        // The cap-boundary residual is stated per cap, in the configured caps, not a default day's count.
+        expect(doc).toContain('so at least half of `EMAIL_MAX_PER_DAY` in other mail that day (100 by default) or, at the month\'s boundary, at least half of `EMAIL_MAX_PER_MONTH` in other mail that month (1,250 by default, however little was sent that day)');
         expect(doc).toContain('That can hit several requests at one boundary, and the count at their check need only be within the number of sends then finishing, not exactly one under');
         expect(doc).toContain('so the count can end a few over a cap (by at most the sends in flight together)');
-        for (const stale of ['a send slower than every recent one', 'at most once per boundary', 'over-cap sends are skipped + alerted, never delivered']) expect(doc).not.toContain(stale);
+        for (const stale of ['a send never answers later than a throttled request at that moment', 'so at least 100 other emails that day', 'at most once per boundary', 'over-cap sends are skipped + alerted, never delivered']) expect(doc).not.toContain(stale);
         expect(store).not.toContain('Only a send slower than all of that still answers later.');
+        expect(store).not.toContain('a slow send is never told apart from a throttled');
     });
 
     it('the early-access receipt goes at most once a day per inbox and shares the public-form budget (the page says "at most one such email a day to one inbox")', () => {
@@ -401,7 +409,7 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(read('components/legal/SubprocessorsPage.tsx')).toContain('today by ${MEMORY_NOTE_MODEL.label}, or ${MEMORY_NOTE_MODEL.fallbackLabel} when that one is unavailable.');
     });
 
-    it(`importing memories from another AI tool sends pasted text (first ${MEMORY_IMPORT_MAX_CHARS} characters) or, from an export file, the user's own text from anywhere in it (up to ${MEMORY_IMPORT_MAX_CHARS}), with the in-app list through the app-wide pick, like the notes written from Chat Studio; the merged list replaces yours only when you accept it`, () => {
+    it(`importing memories from another AI tool sends pasted text (first ${MEMORY_IMPORT_MAX_CHARS} characters) or, from JSON, the text it finds outside messages marked as the assistant's (the first ${MEMORY_IMPORT_MAX_ENTRIES} pieces, up to ${MEMORY_IMPORT_MAX_CHARS}), or a JSON file it finds nothing in as it is, with the in-app list through the app-wide pick, like the notes written from Chat Studio; the merged list replaces yours only when you accept it`, () => {
         expect(constValue('server/src/routes/chat.ts', 'MAX_IMPORT_CONTENT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
         expect(constValue('services/memoryImport.ts', 'MAX_IMPORT_CHARS')).toBe(MEMORY_IMPORT_MAX_CHARS);
         const route = read('server/src/routes/chat.ts');
@@ -422,8 +430,8 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(modal).toContain('setPreview(merged);');
         expect(modal).toMatch(/const applyImport = \(\) => \{\s*if \(!preview\) return;\s*commit\(preview\);/);
         // What the browser sends: plain text cut at its first 24,000 characters; from an export (JSON),
-        // the user's own text from anywhere in it (their messages in past conversations, memory and
-        // instruction entries), never the assistant's replies, cut at 24,000.
+        // the text it finds in messages marked as the user's and memory and instruction entries, never
+        // messages marked as the assistant's, cut at 24,000.
         const filler = 'x'.repeat(40_000);
         expect(prepareMemoryImportContent(`${filler}tail`)).toBe(filler.slice(0, MEMORY_IMPORT_MAX_CHARS));
         const turn = (role: string, text: string) => ({ author: { role }, content: { parts: [text] } });
@@ -436,8 +444,23 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(sent).toContain('I live in Lisbon and work as a nurse');
         expect(sent).not.toMatch(/ASSISTANT|Noted, nurse/);
         expect(prepareMemoryImportContent(JSON.stringify([{ author: { role: 'user' }, content: { parts: [filler] } }])).length).toBe(MEMORY_IMPORT_MAX_CHARS);
+        // A file that doesn't say who wrote what: text under "text", "content" or "value" goes, replies included.
+        expect(prepareMemoryImportContent(JSON.stringify([{ prompt: { text: 'I am a nurse' }, response: { text: 'BOT_REPLY nice' } }]))).toBe('I am a nurse\nBOT_REPLY nice');
+        // A JSON file it finds none of that in (Google Takeout's My Activity, which the Gemini option's
+        // hint points to) is sent as it is, the assistant's replies included, cut at 24,000.
+        const takeout = JSON.stringify([{ header: 'Gemini Apps', title: 'Prompted I live in Lisbon', time: '2026-01-01T00:00:00Z', products: ['Gemini Apps'], safeHtmlItem: [{ html: '<p>GEMINI_REPLY: Lisbon is lovely</p>' }] }]);
+        expect(prepareMemoryImportContent(takeout)).toBe(takeout);
+        expect(read('services/memoryImport.ts')).toContain("hint: '\"Saved info\" entries, or a Google Takeout file'");
+        expect(prepareMemoryImportContent(JSON.stringify(Array.from({ length: 300 }, (_, i) => ({ header: 'Gemini Apps', title: `Prompted ${i}`, safeHtmlItem: [{ html: `<p>REPLY_${i} ${'y'.repeat(100)}</p>` }] }))))).toHaveLength(MEMORY_IMPORT_MAX_CHARS);
+        // Only the first 800 pieces of text it finds, however short.
+        expect(read('services/memoryImport.ts')).toContain(`if (out.length >= ${MEMORY_IMPORT_MAX_ENTRIES} || depth > 12 || node == null) return;`);
+        const many = prepareMemoryImportContent(JSON.stringify(Array.from({ length: 1000 }, (_, i) => turn('user', `fact number ${i}`))));
+        expect(many.split('\n')).toHaveLength(MEMORY_IMPORT_MAX_ENTRIES);
+        expect(many.length).toBeLessThan(MEMORY_IMPORT_MAX_CHARS);
+        expect(many).not.toContain('fact number 999');
         const policy = read('components/PrivacyPolicy.tsx');
-        expect(policy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters; from a data-export file (such as ChatGPT's or Claude's conversations file) or other JSON, it sends the text you wrote, taken from anywhere in the file: your own messages in its past conversations and its memory and instruction entries, but not the assistant's replies, up to {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters. That is sent with the list to an AI model, the same way as the notes written from Chat Studio, to merge the two, and the merged list replaces yours only if you accept it.");
+        expect(policy).toContain("You can also import memories from another AI tool (ChatGPT, Claude, Gemini or another) into that list. Your browser sends text you paste or a text file you upload as it is, up to its first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters. From JSON, such as ChatGPT's or Claude's conversations file, it sends the text it finds in memory and instruction entries, in messages the file marks as yours, and in other fields such as \"text\" or \"content\" that the file doesn't mark as the assistant's, but not messages the file marks as the assistant's: the first {MEMORY_IMPORT_MAX_ENTRIES} pieces of text it finds, up to {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters. So an assistant's reply in a file that doesn't say who wrote what can be sent, and a JSON file in which it finds none of that, such as a Google Takeout activity file, is sent as it is, assistant replies included, up to its first {MEMORY_IMPORT_MAX_CHARS.toLocaleString('en-US')} characters. That is sent with the list to an AI model, the same way as the notes written from Chat Studio, to merge the two, and the merged list replaces yours only if you accept it.");
+        expect(policy).not.toContain('taken from anywhere in the file');
         expect(policy).not.toContain('what you paste or upload (up to the first');
         expect(policy).toContain('memory notes (including memories you import from another AI tool)');
         expect(policy).toContain('and memories you import from another AI tool to merge them into your list');

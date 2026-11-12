@@ -201,6 +201,13 @@ export const MEMORY_SEARCH_MAX_CHARS = 8000;
 export const MEMORY_IMPORT_MAX_CHARS = 24_000;
 
 /**
+ * From JSON, the import keeps at most this many pieces of text it finds (services/memoryImport.ts
+ * collectUserText stops there, before duplicates are dropped). A JSON file in which it finds none is
+ * sent as it is, cut at MEMORY_IMPORT_MAX_CHARS (prepareMemoryImportContent's fall-through).
+ */
+export const MEMORY_IMPORT_MAX_ENTRIES = 800;
+
+/**
  * The quick-finder (components/QuickFinder.tsx): select text on any page App shows it on (every view
  * but the ones in hiddenOn: App.tsx showQuickFinder) and pick Explain, Define, Summarize and so on.
  * It sends up to selectionChars characters of the selection, with the client context, to Chat

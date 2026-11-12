@@ -111,18 +111,26 @@ const claimInbox = (scope: 'confirm' | 'access', email: string): (() => void) | 
  * the last 10 minutes or three today. That time is ANSWER_FLOOR_MS, above what a send usually takes
  * (a few database round trips and the email worker), or, while recent sends took longer (a slow
  * email worker), the 95th percentile of the sends in the last SENT_SAMPLE_WINDOW_MS (at most
- * SENT_SAMPLES of them). With fewer than 20 of those, that is the slowest one: a sending request's
- * own time counts before its answer is held, so a slow send is never told apart from a throttled
- * request at that moment, and everyone else waits as long until it is an hour old. The floor holds
- * from the first request, so an instance that just started (the backend sleeps when idle and restarts
- * on every deploy) answers like a warm one. Durations count up to the mailer's own timeout, plus its
+ * SENT_SAMPLES of them), the newest send counting however old it is. With fewer than 20 of those,
+ * that is the slowest one, so everyone else waits as long as a slow send took until it is an hour old
+ * and a newer send has come. A sending request's own time counts before its answer is held (its answer
+ * takes as long as its send did, and the answers after it wait as long), but that doesn't hide its own
+ * answer: a throttled request at that moment is held to the target without it. The floor holds from
+ * the first request, so an instance that just started (the backend sleeps when idle and restarts on
+ * every deploy) answers like a warm one. Durations count up to the mailer's own timeout, plus its
  * round trips. Per instance, in memory. Residual (docs/email/SECURITY.md): a send slower than the
- * target at that moment answers later; with 20 or more recent sends the target leaves out the top
- * 5%, so about one send in 20 answers later, and its time raises the target for the next answers.
+ * target at that moment answers later than a throttled request would: the first send after the
+ * instance starts while sends take longer than the floor, one slower than the newest send and every
+ * one in the last hour, and, with 20 or more recent sends, where the target leaves out the top 5%,
+ * about one send in 20; and its time raises the target for the next answers.
  */
 const sentDurations: { ms: number; at: number }[] = [];
 const SENT_SAMPLES = 50;
-/** A send older than this no longer sets the hold, so one slow send can't slow every answer for long. */
+/**
+ * A send older than this no longer sets the hold once a newer one has come, so one slow send can't
+ * slow every answer for long. The newest always counts: an hour with no sends dropping the hold back
+ * to the floor would make the next slow send answer later than a throttled request would.
+ */
 export const SENT_SAMPLE_WINDOW_MS = 60 * 60_000;
 /** The longest a send can take and still go out: the mailer's timeout and its database round trips. */
 const MAX_SAMPLE_MS = EMAIL_REQUEST_TIMEOUT_MS + 5_000;
@@ -131,7 +139,7 @@ export const ANSWER_FLOOR_MS = 2_000;
 let answerFloorMs = ANSWER_FLOOR_MS;
 
 const dropOldSamples = (now: number): void => {
-  while (sentDurations.length && now - sentDurations[0].at > SENT_SAMPLE_WINDOW_MS) sentDurations.shift();
+  while (sentDurations.length > 1 && now - sentDurations[0].at > SENT_SAMPLE_WINDOW_MS) sentDurations.shift();
 };
 
 /** Record how long a request that sent the confirmation email took, from `startedAt`. */

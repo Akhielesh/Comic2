@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { claimDevice, OWNER_KEY, purgeLiveAccountData, takeOverDevice } from './accountPurge';
+import { claimDevice, LEGACY_OWNER_KEY, OWNER_KEY, purgeLiveAccountData, RECORDING_OWNERS_KEY, takeOverDevice, UNKNOWN_OWNER } from './accountPurge';
 import {
   DiskRecorder,
   discardOtherAccountsUnsaved,
@@ -222,16 +222,20 @@ describe('every unsaved recording stays listed until it is saved or discarded, a
     expect((await listUnsavedRecordings('u-host')).map((r) => r.name).sort()).toEqual([...names].sort());
     expect(registry().every((r) => r.owner === 'u-host')).toBe(true);
     // A tab still running the earlier version drops the overflow again (slice(-10)): the next start
-    // lists it again.
+    // lists it again, for the account it was settled to, also once another account holds the device.
     localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(registry().slice(-10)));
+    takeOverDevice('u-other');
     await sweepDiscardedRecordings();
     expect(files.size).toBe(11);
     expect(registry()).toHaveLength(11);
+    expect(await listUnsavedRecordings('u-host')).toHaveLength(11);
+    expect(await listUnsavedRecordings('u-other')).toEqual([]);
   });
 
   it('a recording listed again goes to the account whose data the device held as the app started, even when this load\'s account check hands the device to someone else meanwhile (as settleUnownedRecordings decides)', async () => {
     const name = 'ds-rec-1760000000000-streamstudio-e1-2025-10-09-08-00-00.webm';
     files.set(name, { bytes: 5, modified: Date.now() - 3 * 24 * HOUR }); // dropped by the old 10-entry cap
+    localStorage.setItem('ds-live-unsaved-recordings', '[]'); // the earlier version's registry (the rest saved since)
     localStorage.setItem(OWNER_KEY, 'u-a'); // A never signed out under the earlier version
     // B opens Stream Studio here: the account check claims the device while the sweep awaits the disk.
     duringGetDirectory = () => claimDevice('u-b');
@@ -323,5 +327,215 @@ describe('recordings left unsaved before entries carried an owner', () => {
     expect(registry()[0].owner).toBeNull();
     claimDevice('u-a');
     expect(unsavedRecordingsOf('u-a').map((r) => r.name)).toEqual(['ds-rec-old']);
+  });
+});
+
+/** Recordings as the earlier version left a device: 11 kept (days old), the registry naming the 10 newest, untagged. */
+const oldEra = (i: number) => `ds-rec-${1760000000000 + i * HOUR}-streamstudio-ev-a-2025-10-09-0${i % 10}-00-00.webm`;
+function productionDevice(owner: string | null) {
+  const names = Array.from({ length: 11 }, (_, i) => oldEra(i));
+  for (const [i, name] of names.entries()) files.set(name, { bytes: 2_000, modified: Date.now() - (3 * 24 - i) * HOUR });
+  localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(names.slice(-10).map((name) => entry(name))));
+  if (owner) localStorage.setItem(OWNER_KEY, owner);
+  return { names, orphan: names[0] };
+}
+/** As if nothing had written these files for two hours (the sweep leaves a file written in the last hour alone). */
+const age = () => {
+  for (const [name, f] of files) files.set(name, { ...f, modified: Date.now() - 2 * HOUR });
+};
+/** A tab still running the earlier version writes the registry: it keeps only the 10 newest entries. */
+const oldTabWrite = () => localStorage.setItem('ds-live-unsaved-recordings', JSON.stringify(registry().slice(-10)));
+const legacy = () => JSON.parse(localStorage.getItem(LEGACY_OWNER_KEY) || 'null') as { owner: string | null; at: number } | null;
+
+describe('a recording whose entry is lost is listed again for its own account, never for whoever holds the device then', () => {
+  it('the main app switches accounts before Stream Studio first opens under this version: the kept recording the earlier version stopped listing goes to the account whose data the device held then', async () => {
+    const { names, orphan } = productionDevice('u-a');
+    takeOverDevice('u-b'); // A to B in the main app (same origin): A's listed entries become A's, the device B's
+    await sweepDiscardedRecordings(); // B opens Stream Studio
+    expect(await listUnsavedRecordings('u-b')).toEqual([]);
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name).sort()).toEqual([...names].sort());
+    expect(registry().find((r) => r.name === orphan)?.owner).toBe('u-a');
+    expect(otherAccountsUnsaved('u-b').count).toBe(11);
+  });
+
+  it('the account signs out in the main app first: the recording still goes to that account, not to no one (which would offer it to everyone)', async () => {
+    const { orphan } = productionDevice('u-a');
+    purgeLiveAccountData(); // A signs out (or the 30-day idle sign-out)
+    await sweepDiscardedRecordings(); // the next Stream Studio load, nobody signed in
+    expect(registry().find((r) => r.name === orphan)?.owner).toBe('u-a');
+    expect(await listUnsavedRecordings(null)).toEqual([]);
+    claimDevice('u-b');
+    expect(await listUnsavedRecordings('u-b')).toEqual([]);
+    takeOverDevice('u-c');
+    expect(await listUnsavedRecordings('u-c')).toEqual([]);
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name)).toContain(orphan);
+  });
+
+  it('on a device no account held when this version first ran, such a recording is offered to no one: anyone here sees it counted, with its size, and can delete it', async () => {
+    const { names, orphan } = productionDevice(null);
+    await sweepDiscardedRecordings();
+    expect(registry().find((r) => r.name === orphan)?.owner).toBe(UNKNOWN_OWNER);
+    // The entries the earlier version still listed are no one's, as before: offered to anyone.
+    expect((await listUnsavedRecordings(null)).map((r) => r.name).sort()).toEqual(names.slice(1).sort());
+    claimDevice('u-b');
+    expect((await listUnsavedRecordings('u-b')).map((r) => r.name)).not.toContain(orphan);
+    expect(unsavedRecordingsOf(UNKNOWN_OWNER).map((r) => r.name)).not.toContain(orphan);
+    expect(otherAccountsUnsaved(null)).toEqual({ count: 1, bytes: 2_000 });
+    expect(otherAccountsUnsaved('u-b')).toEqual({ count: 1, bytes: 2_000 });
+    // Settling never hands it to anyone later either.
+    takeOverDevice('u-c');
+    expect(registry().find((r) => r.name === orphan)?.owner).toBe(UNKNOWN_OWNER);
+    expect(await discardOtherAccountsUnsaved('u-c')).toBe(1);
+    expect(files.has(orphan)).toBe(false);
+    expect(registry()).toHaveLength(10);
+  });
+
+  it('two accounts, and a tab still running the earlier version drops the oldest entries: each recording comes back for the account it was made for', async () => {
+    takeOverDevice('u-b');
+    const bs = [await recordPart('b-0.webm', 'u-b'), await recordPart('b-1.webm', 'u-b'), await recordPart('b-2.webm', 'u-b')];
+    takeOverDevice('u-a');
+    const as: string[] = [];
+    for (let i = 0; i < 10; i++) as.push(await recordPart(`a-${i}.webm`, 'u-a'));
+    expect(otherAccountsUnsaved('u-a').count).toBe(3);
+    age();
+    oldTabWrite(); // B's three entries go
+    expect(registry().some((r) => bs.includes(r.name))).toBe(false);
+    await sweepDiscardedRecordings();
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name).sort()).toEqual([...as].sort());
+    expect(otherAccountsUnsaved('u-a').count).toBe(3);
+    expect((await listUnsavedRecordings('u-b')).map((r) => r.name).sort()).toEqual([...bs].sort());
+    // A's own, dropped the same way after a switch to B, come back as A's.
+    oldTabWrite();
+    oldTabWrite();
+    takeOverDevice('u-b');
+    const dropped = as.filter((n) => !registry().some((r) => r.name === n));
+    expect(dropped.length).toBeGreaterThan(0);
+    await sweepDiscardedRecordings();
+    expect((await listUnsavedRecordings('u-b')).map((r) => r.name).sort()).toEqual([...bs].sort());
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name)).toEqual(expect.arrayContaining(dropped));
+  });
+
+  it('a registry write that fails while recording: the recording still comes back for the account it was made for', async () => {
+    takeOverDevice('u-b');
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+      if (k === 'ds-live-unsaved-recordings') throw new DOMException('full', 'QuotaExceededError');
+      return setItem.call(this, k, v);
+    };
+    let name: string;
+    try {
+      name = await recordPart('b.webm', 'u-b');
+    } finally {
+      Storage.prototype.setItem = setItem;
+    }
+    expect(registry()).toEqual([]);
+    purgeLiveAccountData(); // B signs out; A signs in
+    claimDevice('u-a');
+    age();
+    await sweepDiscardedRecordings();
+    expect(await listUnsavedRecordings('u-a')).toEqual([]);
+    expect((await listUnsavedRecordings('u-b')).map((r) => [r.name, r.title])).toEqual([[name, 'Recovered recording']]);
+  });
+
+  it('one with no record of who made it, from after this version first ran here (a tab still on the earlier version, whose entry it dropped before it was settled), is offered to no one', async () => {
+    localStorage.setItem('ds-live-unsaved-recordings', '[]');
+    localStorage.setItem(OWNER_KEY, 'u-a');
+    const firstRan = Date.now() - 5 * HOUR;
+    localStorage.setItem(LEGACY_OWNER_KEY, JSON.stringify({ owner: 'u-a', at: firstRan }));
+    const before = `ds-rec-${Date.now() - 6 * HOUR}-streamstudio-e1-2026-11-12-00-00-00.webm`;
+    const after = `ds-rec-${Date.now() - 4 * HOUR}-streamstudio-e1-2026-11-12-02-00-00.webm`;
+    files.set(before, { bytes: 5, modified: Date.now() - 5.5 * HOUR });
+    files.set(after, { bytes: 7, modified: Date.now() - 3 * HOUR });
+    await sweepDiscardedRecordings();
+    expect(registry().map((r) => [r.name, r.owner])).toEqual([[before, 'u-a'], [after, UNKNOWN_OWNER]]);
+    expect((await listUnsavedRecordings('u-a')).map((r) => r.name)).toEqual([before]);
+    expect(otherAccountsUnsaved('u-a')).toEqual({ count: 1, bytes: 7 });
+    // Each now has its own recorded owner, so the account that held the device then is forgotten.
+    expect(JSON.parse(localStorage.getItem(RECORDING_OWNERS_KEY) || '{}')).toEqual({ [before]: 'u-a', [after]: UNKNOWN_OWNER });
+    expect(legacy()).toEqual({ owner: null, at: firstRan });
+  });
+
+  it('the account that held the device when this version first ran is noted only where an earlier version kept recordings, and kept until each of its recordings has its own owner', async () => {
+    localStorage.setItem(OWNER_KEY, 'u-a');
+    claimDevice('u-a'); // no registry: the earlier version never kept a recording here
+    expect(legacy()?.owner).toBeNull();
+    localStorage.clear();
+    // One the earlier version dropped from its list moments ago (another tab may still be writing it).
+    const { orphan } = productionDevice('u-a');
+    files.set(orphan, { bytes: 2_000, modified: Date.now() - 10 * 60_000 });
+    claimDevice('u-a');
+    await sweepDiscardedRecordings();
+    expect(registry().some((r) => r.name === orphan)).toBe(false);
+    expect(legacy()?.owner).toBe('u-a');
+    purgeLiveAccountData();
+    claimDevice('u-b');
+    files.set(orphan, { bytes: 2_000, modified: Date.now() - 2 * HOUR });
+    await sweepDiscardedRecordings();
+    expect(registry().find((r) => r.name === orphan)?.owner).toBe('u-a');
+    expect(legacy()?.owner).toBeNull();
+  });
+});
+
+describe('a saved recording never comes back as "Recovered recording" when a write or a delete fails', () => {
+  it('a download whose discard-later write fails keeps its entry, its title and its owner, instead of leaving a file no list names', async () => {
+    takeOverDevice('u-a');
+    const r = await DiskRecorder.start({} as MediaStream, 'video/webm', 1_000_000, 'a.webm', { eventId: 'e1', title: 'Stream a' }, 'u-a');
+    (r as unknown as { rec: FakeMediaRecorder }).rec.ondataavailable?.({ data: chunk('recorded bytes') });
+    const done = await r.stop();
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+      if (k === 'ds-live-discard-later') throw new DOMException('full', 'QuotaExceededError');
+      return setItem.call(this, k, v);
+    };
+    try {
+      expect(await autoSave(done, 'download')).toBe('Downloads');
+    } finally {
+      Storage.prototype.setItem = setItem;
+    }
+    expect(registry().map((e) => [e.name, e.title, e.owner])).toEqual([[done.opfsName, 'Stream a', 'u-a']]);
+    age();
+    takeOverDevice('u-b');
+    await sweepDiscardedRecordings();
+    expect(registry().map((e) => [e.name, e.title, e.owner])).toEqual([[done.opfsName, 'Stream a', 'u-a']]);
+    expect(await listUnsavedRecordings('u-b')).toEqual([]);
+  });
+
+  it('a due discard whose file can\'t be deleted stays on the discard-later list and is tried again at the next start, never listed again', async () => {
+    files.set('ds-rec-done', { bytes: 5, modified: Date.now() - 3 * HOUR });
+    localStorage.setItem('ds-live-discard-later', JSON.stringify([{ name: 'ds-rec-done', at: Date.now() - 2 * HOUR }]));
+    const removeEntry = root.removeEntry;
+    root.removeEntry = async () => {
+      throw new DOMException('in use', 'NoModificationAllowedError');
+    };
+    try {
+      await sweepDiscardedRecordings();
+    } finally {
+      root.removeEntry = removeEntry;
+    }
+    expect(files.has('ds-rec-done')).toBe(true);
+    expect(registry()).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('ds-live-discard-later') || '[]').map((i: { name: string }) => i.name)).toEqual(['ds-rec-done']);
+    await sweepDiscardedRecordings();
+    expect(files.has('ds-rec-done')).toBe(false);
+    expect(localStorage.getItem('ds-live-discard-later')).toBe('[]');
+  });
+
+  it('a recording whose file can\'t be deleted keeps its entry, and is not counted as deleted', async () => {
+    takeOverDevice('u-a');
+    const a = await recordPart('a.webm', 'u-a');
+    takeOverDevice('u-b');
+    const removeEntry = root.removeEntry;
+    root.removeEntry = async () => {
+      throw new DOMException('in use', 'NoModificationAllowedError');
+    };
+    try {
+      expect(await discardOtherAccountsUnsaved()).toBe(0);
+    } finally {
+      root.removeEntry = removeEntry;
+    }
+    expect(registry().map((e) => [e.name, e.owner])).toEqual([[a, 'u-a']]);
+    expect(await discardOtherAccountsUnsaved()).toBe(1);
+    expect(registry()).toEqual([]);
+    expect(files.has(a)).toBe(false);
   });
 });

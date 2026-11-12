@@ -127,13 +127,51 @@ describe('the classic reader keeps its place when it closes', () => {
     expect(store.get(project.id)?.scrollTop).toBe(1234);
   });
 
-  it('closed before its saved place has loaded, it saves nothing (it would overwrite that place with page 1)', async () => {
+  it('closed before its saved place has loaded, it saves nothing, on mount or on close (it would overwrite that place with page 1)', async () => {
     store.set(project.id, { projectId: project.id, mode: 'flip', pageIndex: 4, scrollTop: 0, updatedAt: 1 });
     const db = await import('../services/db');
     vi.mocked(db.loadReaderState).mockImplementationOnce(() => new Promise(() => undefined));
-    const { unmount } = render(<Host />);
     const before = writes.length;
+    const { unmount } = render(<Host />);
     unmount();
-    expect(writes.slice(before).filter((w) => w.mode === 'scroll' && w.pageIndex === 0 && w.scrollTop === 0)).toHaveLength(0);
+    expect(writes.slice(before)).toEqual([]);
+    expect(store.get(project.id)).toMatchObject({ mode: 'flip', pageIndex: 4 });
+  });
+
+  it('closed after its saved place has loaded but before it is shown, it saves that place, not page 1', async () => {
+    store.set(project.id, { projectId: project.id, mode: 'flip', pageIndex: 4, scrollTop: 0, updatedAt: 1 });
+    const db = await import('../services/db');
+    let resolve!: (s: Saved) => void;
+    vi.mocked(db.loadReaderState).mockImplementationOnce(() => new Promise<Saved>((r) => (resolve = r)) as ReturnType<typeof db.loadReaderState>);
+    const { unmount } = render(<Host />);
+    resolve(store.get(project.id)!);
+    await Promise.resolve(); // the load's callback has run; React hasn't rendered it yet
+    unmount();
+    expect(store.get(project.id)).toMatchObject({ mode: 'flip', pageIndex: 4 });
+  });
+
+  it('under StrictMode (npm run dev mounts it twice), it still opens where it was left', async () => {
+    store.set(project.id, { projectId: project.id, mode: 'flip', pageIndex: 5, scrollTop: 0, updatedAt: 1 });
+    render(
+      <React.StrictMode>
+        <Host />
+      </React.StrictMode>
+    );
+    await tick(30);
+    expect(document.body.textContent).toContain('6 / 8');
+    expect(store.get(project.id)).toMatchObject({ mode: 'flip', pageIndex: 5 });
+  });
+
+  it('a saved page beyond the comic\'s end (it has fewer pages now) opens on its last page, and that is what is saved', async () => {
+    store.set(project.id, { projectId: project.id, mode: 'flip', pageIndex: 7, scrollTop: 0, updatedAt: 1 });
+    const short: Project = { ...project, state: { ...project.state, panels: project.state.panels.slice(0, 5) } };
+    const { unmount } = render(
+      <ComicReader project={short} onClose={vi.fn()} onUpdateProject={vi.fn()} onNavigate={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />
+    );
+    await tick(30);
+    expect(document.body.textContent).toContain('5 / 5');
+    expect(document.body.textContent).not.toContain('Image missing');
+    unmount();
+    expect(store.get(project.id)).toMatchObject({ mode: 'flip', pageIndex: 4 });
   });
 });

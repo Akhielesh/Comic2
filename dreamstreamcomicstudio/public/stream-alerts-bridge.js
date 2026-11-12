@@ -27,6 +27,8 @@
   var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-unconfirmed-revokes', 'ds-live-viewer-name', 'ds-call-names', 'ds-calls-ok', 'ds-live-owner'];
   var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-monitor-caps-', 'ds-monitor-guest-', 'ds-track-queue-', 'ds-usage-'];
   var UNSAVED = 'ds-live-unsaved-recordings';
+  var REC_OWNERS = 'ds-live-rec-owners';
+  var LEGACY_OWNER = 'ds-live-legacy-owner';
 
   function storage() {
     try {
@@ -83,20 +85,36 @@
   /**
    * Before the owner goes: unsaved recordings left from before recordings carried an owner go to the
    * account that holds this device (or to none), as live/accountPurge.ts settleUnownedRecordings does
-   * before every wipe there, so whoever opens Stream Studio here next isn't offered them.
+   * before every wipe there, so whoever opens Stream Studio here next isn't offered them. The same
+   * way, the first time it runs here it notes whose data this device held then (LEGACY_OWNER), and
+   * each entry's owner is recorded apart from the list (REC_OWNERS), so a recording whose entry is
+   * lost later is listed again for its own account, never for whoever holds the device then.
    */
   function settleUnownedRecordings(s) {
     try {
-      var list = JSON.parse(s.getItem(UNSAVED) || '[]');
+      var owner = s.getItem(OWNER);
+      var stored = s.getItem(UNSAVED);
+      if (s.getItem(LEGACY_OWNER) == null) s.setItem(LEGACY_OWNER, JSON.stringify({ owner: stored == null ? null : owner, at: Date.now() }));
+      var list = JSON.parse(stored || '[]');
       if (!Array.isArray(list)) return;
       var untagged = function (r) {
         return !!r && typeof r === 'object' && r.owner === undefined;
       };
-      if (!list.some(untagged)) return;
-      var owner = s.getItem(OWNER);
-      s.setItem(UNSAVED, JSON.stringify(list.map(function (r) {
+      var settled = list.some(untagged) ? list.map(function (r) {
         return untagged(r) ? Object.assign({}, r, { owner: owner }) : r;
-      })));
+      }) : list;
+      var owners = JSON.parse(s.getItem(REC_OWNERS) || '{}');
+      if (owners && typeof owners === 'object' && !Array.isArray(owners)) {
+        var added = false;
+        settled.forEach(function (r) {
+          if (!r || typeof r.name !== 'string' || (r.owner !== null && typeof r.owner !== 'string')) return;
+          if (Object.prototype.hasOwnProperty.call(owners, r.name)) return;
+          owners[r.name] = r.owner;
+          added = true;
+        });
+        if (added) s.setItem(REC_OWNERS, JSON.stringify(owners));
+      }
+      if (settled !== list) s.setItem(UNSAVED, JSON.stringify(settled));
     } catch (e) {
       /* storage unavailable or unreadable */
     }

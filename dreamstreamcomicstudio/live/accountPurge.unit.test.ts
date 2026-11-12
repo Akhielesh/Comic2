@@ -64,6 +64,27 @@ describe('Stream Studio sign-out wipe', () => {
     expect(loadGuest(NID)?.name).toBe('Grandma');
   });
 
+  it('a pass kept while no one was signed in goes once someone signs in there and out again, or the device switches accounts (the Cookies notice lists these)', () => {
+    const NID = '11111111-2222-4333-8444-555555555555';
+    const pass = JSON.stringify({ token: 'room-issued', name: 'Grandma', role: 'viewer', until: Date.now() + 3_600_000, nursery: { name: 'Nursery', baby: 'Mia' } });
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    expect(claimDevice(null)).toBe(false);
+    expect(claimDevice('u-son')).toBe(false); // the son signs in to Stream Studio here: no purge, the device is his
+    expect(loadGuest(NID)?.name).toBe('Grandma');
+    purgeLiveAccountData(); // ...and signs out (here or in the main app)
+    expect(loadGuest(NID)).toBeNull();
+    // A sign-out elsewhere: the next load with no session purges.
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    claimDevice('u-son');
+    expect(claimDevice(null)).toBe(true);
+    expect(loadGuest(NID)).toBeNull();
+    // A main-app account switch purges data no account owns too.
+    localStorage.clear();
+    localStorage.setItem(`ds-monitor-guest-${NID}`, pass);
+    expect(takeOverDevice('u-mum')).toBe(true);
+    expect(loadGuest(NID)).toBeNull();
+  });
+
   it('removes this device’s usage too: a nursery’s relay data (parents only), last nights, the month’s ledger, hosted meetings, notices', () => {
     const usage = [
       'ds-usage-relay-n1', // the nursery's month of relay data, read by a parent

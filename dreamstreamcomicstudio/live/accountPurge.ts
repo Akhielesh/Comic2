@@ -6,8 +6,12 @@
  * next person on a shared device. That includes the guest passes this device
  * got from nurseries' share links ('ds-monitor-guest-<nursery>'): each is a
  * working pass to watch that nursery under the name typed for it, so the next
- * person here could otherwise watch as them. A guest who never signs in keeps
- * theirs (nothing to sign out of). Device preferences that aren't personal
+ * person here could otherwise watch as them. A guest who joined while no one was
+ * signed in keeps theirs across loads with no session (claimDevice(null) purges
+ * nothing on a device no account owns), but not past the next purge: someone who
+ * signs in here later takes the device over without one, so their sign-out (or
+ * any main-app sign-out, or an account switch) removes it, as the Cookies notice
+ * says. Device preferences that aren't personal
  * (theme, camera lens, tours seen, this device's name for the monitor, the
  * folder picked for saving recordings) stay.
  *
@@ -17,7 +21,10 @@
  *    for, and only that account is offered it (listUnsavedRecordings). An entry from before
  *    recordings carried an owner is settled once, the first time this code sees the device: it goes
  *    to the account that holds the device then, or, with none, stays unowned and is offered to
- *    anyone here (settleUnownedRecordings);
+ *    anyone here (settleUnownedRecordings). Who made each one is also kept apart from the list
+ *    (RECORDING_OWNERS_KEY), with the account that held the device when this code first ran here
+ *    (LEGACY_OWNER_KEY), so a recording whose entry is lost is listed again for its own account, or
+ *    for none (UNKNOWN_OWNER), never for whoever holds the device then;
  *  - the baby monitor's encryption keys in IndexedDB ('ds-keys': this browser's device keys and its
  *    copies of nursery keys, live/monitor/keys.ts) and the cameras it has seen encrypt
  *    ('ds-e2e-cams-<nursery>'), so this device keeps refusing a camera's unencrypted pictures;
@@ -33,6 +40,107 @@ export const OWNER_KEY = 'ds-live-owner';
 
 /** The unsaved-recordings registry (live/recorder.ts keeps it; listed here so a purge can tag it). */
 export const UNSAVED_RECORDINGS_KEY = 'ds-live-unsaved-recordings';
+
+/**
+ * Who made each unsaved recording, by its disk name ({name: account or null}), written with every
+ * entry (live/recorder.ts) and when an entry from before recordings carried an owner is settled. A
+ * Stream Studio tab still running a version from before this key never touches it, though it drops
+ * registry entries (it kept only the 10 newest), so a recording that loses its entry that way, or to
+ * a registry write that failed, is listed again for the account it was made for. Never purged: the
+ * recordings it describes stay too.
+ */
+export const RECORDING_OWNERS_KEY = 'ds-live-rec-owners';
+
+/**
+ * {owner, at}: the account whose Stream Studio data was on this device the first time this code ran
+ * here, and when. Written once, before anything about the device's owner changes, and `at` never
+ * changes: a recording from before then that no list names any more (an earlier version had stopped
+ * listing it) goes to that account, as the entries that version still listed do. The owner is noted
+ * only where an earlier version kept unsaved recordings (its registry is here; null otherwise), and
+ * is cleared once every recording from before then has its own recorded owner or is on a list
+ * (retireLegacyOwner), so the account's id doesn't stay on the device longer than it is needed.
+ */
+export const LEGACY_OWNER_KEY = 'ds-live-legacy-owner';
+
+/**
+ * The owner of an unsaved recording whose account can't be told (no record of who made it, and not
+ * from before this code first ran on a device an account held then). It is offered to no one; anyone
+ * here sees it counted, with its size, and can delete it (live/recorder.ts otherAccountsUnsaved).
+ */
+export const UNKNOWN_OWNER = '?unknown';
+
+type OwnerRecord = string | null;
+const isOwner = (v: unknown): v is OwnerRecord => v === null || typeof v === 'string';
+
+/** RECORDING_OWNERS_KEY as stored ({} when absent), or null when it can't be read. */
+export function readRecordingOwners(): Record<string, OwnerRecord> | null {
+  try {
+    const raw = localStorage.getItem(RECORDING_OWNERS_KEY);
+    const map = raw ? (JSON.parse(raw) as unknown) : {};
+    return map && typeof map === 'object' && !Array.isArray(map) ? (map as Record<string, OwnerRecord>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember who made the recording on disk as `name`; a record already there is kept (it was first). */
+export function noteRecordingOwner(name: string, owner: OwnerRecord): void {
+  const map = readRecordingOwners();
+  if (!map || Object.prototype.hasOwnProperty.call(map, name)) return;
+  try {
+    localStorage.setItem(RECORDING_OWNERS_KEY, JSON.stringify({ ...map, [name]: owner }));
+  } catch { /* storage unavailable */ }
+}
+
+/** Forget the owners of recordings whose disk copies are gone. */
+export function forgetRecordingOwners(names: Iterable<string>): void {
+  const map = readRecordingOwners();
+  if (!map) return;
+  let changed = false;
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(map, name)) {
+      delete map[name];
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  try {
+    localStorage.setItem(RECORDING_OWNERS_KEY, JSON.stringify(map));
+  } catch { /* storage unavailable */ }
+}
+
+/** LEGACY_OWNER_KEY, or null when it was never written or can't be read. */
+export function legacyRecordingsOwner(): { owner: OwnerRecord; at: number } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(LEGACY_OWNER_KEY) || 'null') as { owner?: unknown; at?: unknown } | null;
+    return v && isOwner(v.owner) && typeof v.at === 'number' ? { owner: v.owner, at: v.at } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every recording from before LEGACY_OWNER_KEY's time has its own owner now: forget that account. */
+export function retireLegacyOwner(): void {
+  const legacy = legacyRecordingsOwner();
+  if (!legacy || legacy.owner === null) return;
+  try {
+    localStorage.setItem(LEGACY_OWNER_KEY, JSON.stringify({ owner: null, at: legacy.at }));
+  } catch { /* storage unavailable */ }
+}
+
+/**
+ * Who a recording on disk that no list names belongs to: the account recorded for it; else, for
+ * one from before this code first ran here (its disk name says when it started), the account that
+ * held the device then; else no one can tell (UNKNOWN_OWNER, which includes an earlier version's
+ * recording on a device no account held then: it was never offered after that version dropped it).
+ */
+export function recoveredRecordingOwner(name: string, startedAt: number | null): OwnerRecord {
+  const owners = readRecordingOwners();
+  if (owners && Object.prototype.hasOwnProperty.call(owners, name) && isOwner(owners[name])) return owners[name];
+  const legacy = legacyRecordingsOwner();
+  if (legacy && legacy.owner && startedAt != null && startedAt < legacy.at) return legacy.owner;
+  return UNKNOWN_OWNER;
+}
 
 const EXACT = [
   'ds-live-prefs', // display name + settings synced to the account
@@ -61,16 +169,33 @@ const PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 
  * likely to have made them), so whoever signs in next isn't offered them; with no owner (the last
  * account signed out under the code before this), to no account (null: offered to anyone who opens
  * Stream Studio here, as every entry was until then). Never to whoever happens to sign in or list
- * them first.
+ * them first. The first time it runs on a device it also notes whose data the device held then
+ * (LEGACY_OWNER_KEY), and every entry's owner is recorded apart from the list (RECORDING_OWNERS_KEY),
+ * so an entry dropped later keeps its owner. It runs from the main app's sign-out and account switch
+ * too, and from Stream Studio's start-up sweep (recorder.ts sweepOrphanRecordings).
  */
-function settleUnownedRecordings(): void {
+export function settleUnownedRecordings(): void {
   try {
-    const list = JSON.parse(localStorage.getItem(UNSAVED_RECORDINGS_KEY) || '[]') as unknown;
+    const owner = deviceOwner();
+    const stored = localStorage.getItem(UNSAVED_RECORDINGS_KEY);
+    if (localStorage.getItem(LEGACY_OWNER_KEY) == null) {
+      localStorage.setItem(LEGACY_OWNER_KEY, JSON.stringify({ owner: stored == null ? null : owner, at: Date.now() }));
+    }
+    const list = JSON.parse(stored || '[]') as unknown;
     if (!Array.isArray(list)) return;
     const untagged = (r: unknown): r is Record<string, unknown> => !!r && typeof r === 'object' && (r as Record<string, unknown>).owner === undefined;
-    if (!list.some(untagged)) return;
-    const owner = deviceOwner();
-    localStorage.setItem(UNSAVED_RECORDINGS_KEY, JSON.stringify(list.map((r) => (untagged(r) ? { ...r, owner } : r))));
+    const settled = list.some(untagged) ? list.map((r) => (untagged(r) ? { ...r, owner } : r)) : list;
+    const owners = readRecordingOwners();
+    if (owners) {
+      let added = false;
+      for (const r of settled as Array<Record<string, unknown> | null>) {
+        if (!r || typeof r.name !== 'string' || !isOwner(r.owner) || Object.prototype.hasOwnProperty.call(owners, r.name)) continue;
+        owners[r.name] = r.owner;
+        added = true;
+      }
+      if (added) localStorage.setItem(RECORDING_OWNERS_KEY, JSON.stringify(owners));
+    }
+    if (settled !== list) localStorage.setItem(UNSAVED_RECORDINGS_KEY, JSON.stringify(settled));
   } catch { /* storage unavailable or unreadable */ }
 }
 
