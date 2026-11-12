@@ -6,7 +6,8 @@
 //   exportPngZip        one language (the doc as given, or the `lang` edition of it);
 //   exportLanguagesZip  "All languages": one folder per published language (`te-telugu/…`). Each art
 //                       image is fetched ONCE and re-lettered for every language (the art is shared;
-//                       only the overlay lettering, the cover title and the plates change).
+//                       only the overlay lettering, the cover title and the plates change). A composed
+//                       page's other pictures (frame sources, overlays) are loaded once for all languages too.
 // Pages render one at a time (bounded memory on phones) with progress; a page that fails is reported,
 // not silently dropped, and the rest still export. The archive is written in Blob slices (zipToBlob),
 // never as one big output buffer, but every PNG is still held once until the archive is saved (JSZip
@@ -22,7 +23,7 @@ import { forEachReported, plateWidthFor, renderSlotWith, checkCancelled, type Ex
 import { CANCELLED, ExportError } from './errors';
 import { exportFileStem, languageFolderName } from './filenames';
 import { prepareExportFonts } from './fonts';
-import { loadExportImage, renderSlotToBlob, type LoadedImage, type RasterOptions } from './rasterize';
+import { loadExportImage, pathUrlFor, renderSlotToBlob, type LoadedImage, type RasterOptions } from './rasterize';
 import { collectExportSlots, exportLanguages, localizedFor, type ExportSlot, type UrlFor } from './sequence';
 import { oneLanguageZipFits, planZipMemory, zipReducedNotice, zipTooBigMessage, type ZipMemoryPlan } from './zipMemory';
 
@@ -178,7 +179,7 @@ export async function exportPngZip(doc: ComicDoc, urlFor: UrlFor, opts: ZipExpor
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const folder = zip.folder(stem) || zip;
-  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, urlForPath: pathUrlFor(urlFor), ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
   const coverUrl = slots.find((s) => s.kind === 'cover')?.url;
   let files = 0;
 
@@ -226,7 +227,7 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const root = zip.folder(stem) || zip;
-  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
+  const raster: RasterOptions = { longEdge: opts.longEdge, signal: opts.signal, measure: fonts?.measure, plateWidth, urlForPath: pathUrlFor(urlFor), ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };
   const coverSlot = slots.find((s) => s.kind === 'cover');
   const coverUrl = coverSlot?.url;
   const multi = books.length > 1;
@@ -241,8 +242,10 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
   try {
     for (const slot of slots) {
       checkCancelled(opts.signal);
-      // The art is the same in every language: fetch it once.
+      // The art is the same in every language: fetch it once. So are a composed page's other pictures (frame sources,
+      // overlays): kept for every language of this page, released after it.
       let image: LoadedImage | null = null;
+      const pictures = new Map<string, LoadedImage>();
       if (!overrides && slot.url && !slot.plate) {
         try {
           image = await loadExportImage(slot.url, opts.signal);
@@ -261,7 +264,7 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
           async (b) => {
             const blob = overrides
               ? await renderSlotWith(b.doc, slot, raster, { ...opts, coverUrl })
-              : await renderSlotToBlob(b.doc, slot, { ...raster, ...(image ? { image } : {}), coverUrl, ...(coverArt ? { coverArt } : {}) });
+              : await renderSlotToBlob(b.doc, slot, { ...raster, ...(image ? { image } : {}), pictures, coverUrl, ...(coverArt ? { coverArt } : {}) });
             checkCancelled(opts.signal);
             (root.folder(b.folder) || root).file(`${slot.fileBase}.png`, blob, { binary: true });
             files += 1;
@@ -274,6 +277,8 @@ export async function exportLanguagesZip(doc: ComicDoc, urlFor: UrlFor, opts: La
         failed.push(...results);
       } finally {
         image?.release();
+        pictures.forEach((p) => p.release());
+        pictures.clear();
       }
       done += books.length;
     }

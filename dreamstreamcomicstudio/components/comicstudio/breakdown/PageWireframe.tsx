@@ -15,9 +15,13 @@
 //
 // The SVG uses a page-shaped viewBox (`0 0 1 1/ratio`), so the boxes keep the page's real shape at any tile size.
 // Colours are theme tokens applied through `style` (var() is not reliable in SVG presentation attributes).
+//
+// Frames when present (Ship 2 B1): a page shown in its panel frames — or planned on frames not drawn yet — passes
+// `frames` (wireframeFramesOf), and the wireframe draws those boxes, insets above their hosts by z, exactly where the
+// page shows them. Without `frames` the wireframe is what it always was.
 
 import React from 'react';
-import type { ShotType } from '../../../shared/comic/doc';
+import { artModeOf, type Box, type Page, type ShotType } from '../../../shared/comic/doc';
 import type { PanelSummary } from '../../../shared/comic/plan';
 import type { FitState } from '../../../shared/comic/density';
 
@@ -57,6 +61,24 @@ export const FIT_DOT_COLOR: Record<FitDot, string> = {
   overfull: 'var(--ds-danger-text)'
 };
 
+/** One panel frame as the page shows it (page fractions; z orders insets above their hosts). */
+export interface WireframeFrame {
+  box: Box;
+  z?: number;
+}
+
+/**
+ * The frames a page is shown in, one per panel in panel order: the page is in panels mode, or it is not drawn yet and
+ * every panel already has a frame (a template). Undefined otherwise (the page is shown as drawn: use the summary boxes).
+ * The same rule as the editor scene's framesShown.
+ */
+export const wireframeFramesOf = (page: Pick<Page, 'panels' | 'render'> & Partial<Pick<Page, 'artMode' | 'layout'>>): WireframeFrame[] | undefined => {
+  const panels = Array.isArray(page?.panels) ? page.panels : [];
+  if (!panels.length) return undefined;
+  const shown = artModeOf(page) === 'panels' || (!page.render?.asset?.path && panels.every((p) => !!p.frame?.box));
+  return shown ? panels.map((p) => ({ box: { ...p.frame!.box }, ...(typeof p.frame?.z === 'number' ? { z: p.frame.z } : {}) })) : undefined;
+};
+
 export interface PageWireframeProps {
   panels: (Pick<PanelSummary, 'n' | 'box' | 'shot' | 'speech' | 'captions' | 'sfx'> & Partial<Pick<PanelSummary, 'fitState'>>)[];
   /** Page aspect, "4:5". */
@@ -70,6 +92,8 @@ export interface PageWireframeProps {
   className?: string;
   /** When set the SVG is announced as an image with this label; otherwise it is decorative. */
   label?: string;
+  /** The page's frames (wireframeFramesOf), one per panel: drawn instead of the summary boxes, by z. */
+  frames?: readonly WireframeFrame[];
 }
 
 const MAX_DOTS = 4;
@@ -97,11 +121,15 @@ const FitMark: React.FC<{ dot: FitDot; cx: number; cy: number; r: number; n: num
   );
 };
 
-export const PageWireframe: React.FC<PageWireframeProps> = ({ panels, aspect, detail = true, activePanel, fit = true, className, label }) => {
+export const PageWireframe: React.FC<PageWireframeProps> = ({ panels, aspect, detail = true, activePanel, fit = true, className, label, frames }) => {
   const ratio = aspectNumber(aspect);
   const H = 1 / ratio;
   const font = Math.min(0.085, 0.06 * Math.max(1, H));
   const a11y = label ? { role: 'img' as const, 'aria-label': label } : { 'aria-hidden': true as const };
+  // Frames when present (one per panel): their boxes, insets drawn after their hosts (z, then reading order).
+  const framed = frames && frames.length === panels.length ? frames : undefined;
+  const order = panels.map((p, i) => ({ p: framed ? { ...p, box: framed[i].box } : p, i, z: framed?.[i].z ?? 0 }));
+  if (framed) order.sort((a, b) => a.z - b.z || a.i - b.i);
   return (
     <svg
       viewBox={`0 0 1 ${H.toFixed(4)}`}
@@ -117,7 +145,7 @@ export const PageWireframe: React.FC<PageWireframeProps> = ({ panels, aspect, de
           No panels
         </text>
       )}
-      {panels.map((p, i) => {
+      {order.map(({ p, i }) => {
         const x = p.box.x;
         const y = p.box.y * H;
         const w = Math.max(0, p.box.w);
