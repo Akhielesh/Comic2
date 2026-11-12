@@ -27,8 +27,20 @@
 // Every finished change sends the FULL balloon when the line had none stored yet (a software-placed
 // balloon), so a first drag never jumps to a default width or loses its tail; changes are pinned so an
 // automatic re-layout never moves them again.
+//
+// The Pro workspace (PE-SHELL; master plan §2.7, agent-editor plan §3 C1, C8, C9) adds, through
+// BalloonEditorExtrasContext (absent = exactly today):
+//   - a rotate handle above the selected balloon (15° detents through the B9 snapAngle / rotateEdit; Alt = free) and a
+//     height handle under it (balloon {minH}); each drag sends ONE balloon op on release, and each handle is a slider
+//     for the keyboard (arrows); R / Shift+R rotate 15° on the focused balloon; two fingers on a selected balloon
+//     rotate it with 15° detents, while two fingers anywhere else still zoom. Not in a translated edition (rotation
+//     and height are the same in every language).
+//   - Tab / Shift+Tab move to the next / previous balloon in reading order (wrapping; Esc leaves the page), ⌘A
+//     selects every balloon on the page.
+//   - presence: a balloon the director is editing (StudioController.presence, A4) wears a dashed ink outline and the
+//     words "Director is editing this balloon".
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Balloon, Box, ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { PatchOptions } from '../types';
@@ -38,6 +50,9 @@ import { safeAreaBox } from '../../../shared/comic/lettering/place';
 import { LETTERING_PRESETS, DEFAULT_LETTERING, DEFAULT_SAFE_MARGIN } from '../../../shared/comic/lettering/style';
 import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { planLettering, type LetterPlan } from '../../../shared/comic/lettering/layout';
+import { EDITOR_LIMITS } from '../../../shared/comic/limits';
+import { ROTATE_STEP, clampRot, normalizeDeg, rotateEdit, snapAngle } from '../../../shared/comic/editor/transform';
+import { INVERSE_SURFACE, RADIUS_PILL } from '../../chat/studioDesign';
 import { LetteringSvg } from '../lettering/LetteringSvg';
 import { BalloonTextEditor } from '../lettering/BalloonTextEditor';
 import { SnapGuides, computeSnap, snapTargets, type SnapGuide } from '../lettering/SnapGuides';
@@ -51,6 +66,7 @@ import { haptic, longPressMs } from '../mobile/touch/pointerPolicy';
 import { LETTERING, pageAspectOf } from './balloonGeometry';
 import { LINE_KIND_LABEL, castName } from './boardModel';
 import { cx } from './ui';
+import { cycleReadingOrder } from '../editor/shortcuts';
 
 export interface BalloonLayerProps {
   doc: ComicDoc;
@@ -101,7 +117,41 @@ export interface BalloonChangeOptions {
   label?: string;
   gesture?: BalloonGesture;
 }
-export type BalloonGesture = 'move' | 'resize' | 'tail';
+export type BalloonGesture = 'move' | 'resize' | 'tail' | 'rotate' | 'height';
+
+/**
+ * What the Pro workspace adds to the editable layer (PE-SHELL). The page editor provides it around the page; anything
+ * else (readers, the board, the flag off) gets the default: nothing changes.
+ */
+export interface BalloonEditorExtras {
+  /** Rotate and height handles, R / Shift+R and the two-finger rotate on the selected balloon. */
+  transform: boolean;
+  /** Tab / Shift+Tab cycle the balloons in reading order; ⌘A selects them all. */
+  keyboard: boolean;
+  /** The balloons the director is editing right now (A4's StudioController.presence on this page). */
+  presenceLineIds?: ReadonlySet<string>;
+}
+export const NO_BALLOON_EXTRAS: BalloonEditorExtras = { transform: false, keyboard: false };
+export const BalloonEditorExtrasContext = createContext<BalloonEditorExtras>(NO_BALLOON_EXTRAS);
+/** The words beside a balloon the director is editing. */
+export const PRESENCE_LABEL = 'Director is editing this balloon';
+/** How far the rotate handle sits above the outline (screen px). */
+const ROTATE_GAP_PX = 28;
+
+/** The rotation of a balloon (degrees), from its stored value. */
+export const balloonRot = (b: Pick<Balloon, 'rot'> | undefined): number => (b && typeof b.rot === 'number' && Number.isFinite(b.rot) ? b.rot : 0);
+
+/**
+ * A rotation drag: the start rotation plus the pointer's turn around the centre since the press, snapped to 15°
+ * detents (free with Alt), clamped to ±EDITOR_LIMITS.balloonRot. Angles are measured in physical units (`aspect` =
+ * page width ÷ height), 0 = up, clockwise positive. Pure; tested.
+ */
+export const dragRotation = (start: number, centre: { x: number; y: number }, from: { x: number; y: number }, to: { x: number; y: number }, aspect: number, free = false): number => {
+  const angle = (p: { x: number; y: number }) => (Math.atan2((p.x - centre.x) * aspect, -(p.y - centre.y)) * 180) / Math.PI;
+  const raw = normalizeDeg(start + angle(to) - angle(from));
+  const deg = free ? Math.round(raw * 10) / 10 : snapAngle(raw);
+  return clampRot(deg, EDITOR_LIMITS.balloonRot);
+};
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const clamp = (n: number, lo: number, hi: number): number => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo);
@@ -123,7 +173,7 @@ const NEAREST_TAP_PX = 22;
 const HIT_PX = 44;
 const SPOKEN: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 
-type DragMode = 'move' | 'tail' | 'width';
+type DragMode = 'move' | 'tail' | 'width' | 'rotate' | 'height';
 
 /** Clamp an outline-relative box move so the outline stays inside [m, 1-m] (centred if too big). */
 const clampAxis = (start: number, size: number, lo: number, hi: number): number =>
@@ -154,6 +204,10 @@ interface DragState {
   rect: { w: number; h: number };
   moved: boolean;
   alt: boolean;
+  /** Rotate drags: the rotation the release commits. */
+  rot?: number;
+  /** Height drags: the minimum height the release commits. */
+  minH?: number;
 }
 
 /**
@@ -242,6 +296,13 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [lifted, setLifted] = useState<string | null>(null);
   const zoom = useZoom();
+  const extras = useContext(BalloonEditorExtrasContext);
+  /** A rotation in progress (the handle or two fingers): drawn on the selection's box until PE-LETTER draws rot. */
+  const [turn, setTurn] = useState<{ id: string; deg: number } | null>(null);
+  /** A height drag in progress: the hit box shows the new height (page fraction). */
+  const [grow, setGrow] = useState<{ id: string; h: number } | null>(null);
+  /** What the two-finger rotate (a window listener, registered before the layer's handlers exist) calls into. */
+  const twoFingerApi = useRef<{ selectedOne(): string | null; begin(id: string): { move(delta: number): void; end(commit: boolean): void } | null; cancelDrag(): void } | null>(null);
   const arbiter = useGestureArbiter();
   const layerRef = useRef<HTMLDivElement>(null);
   const cleanup = useRef<(() => void) | null>(null);
@@ -293,6 +354,73 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     };
   }, [editable, rendered]);
   const multiTouch = (e: React.PointerEvent) => e.pointerType === 'touch' && touches.current.size > 1;
+
+  // Two fingers on the selected balloon rotate it (C9), with 15° detents, one op when the first finger lifts. The
+  // second finger's pointerdown is taken in the WINDOW capture phase, before TouchCanvas (whose own capture listener
+  // would start a pinch) and before the layer's (which would cancel the drag as a pinch). Two fingers anywhere else
+  // are left alone: they still zoom.
+  const transformOn = editable && extras.transform && !editionLang;
+  useEffect(() => {
+    if (!transformOn || typeof window === 'undefined') return;
+    let first: { id: number; x: number; y: number; line: string } | null = null;
+    let g: { a: number; b: number; pa: { x: number; y: number }; pb: { x: number; y: number }; a0: number; turn: { move(delta: number): void; end(commit: boolean): void } } | null = null;
+    const angle = (pa: { x: number; y: number }, pb: { x: number; y: number }) => (Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180) / Math.PI;
+    const lineAt = (t: EventTarget | null): string | null => {
+      const el = t as Element | null;
+      const hit = el && typeof el.closest === 'function' ? el.closest('[data-testid="balloon-hit"]') : null;
+      return hit ? hit.getAttribute('data-line-id') : null;
+    };
+    const onDown = (ev: PointerEvent) => {
+      if (ev.pointerType !== 'touch') return;
+      const api = twoFingerApi.current;
+      const sel = api?.selectedOne() ?? null;
+      const line = lineAt(ev.target);
+      if (!first) {
+        first = sel && line === sel ? { id: ev.pointerId, x: ev.clientX, y: ev.clientY, line } : null;
+        return;
+      }
+      if (g || !api || ev.pointerId === first.id || line !== first.line) return;
+      const turn = api.begin(first.line);
+      if (!turn) return;
+      ev.stopPropagation();
+      api.cancelDrag();
+      const pa = { x: first.x, y: first.y };
+      const pb = { x: ev.clientX, y: ev.clientY };
+      g = { a: first.id, b: ev.pointerId, pa, pb, a0: angle(pa, pb), turn };
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (first && ev.pointerId === first.id) {
+        first.x = ev.clientX;
+        first.y = ev.clientY;
+      }
+      if (!g) return;
+      if (ev.pointerId === g.a) g.pa = { x: ev.clientX, y: ev.clientY };
+      else if (ev.pointerId === g.b) g.pb = { x: ev.clientX, y: ev.clientY };
+      else return;
+      g.turn.move(normalizeDeg(angle(g.pa, g.pb) - g.a0));
+    };
+    const end = (commit: boolean) => (ev: PointerEvent) => {
+      if (first && ev.pointerId === first.id) first = null;
+      if (!g || (ev.pointerId !== g.a && ev.pointerId !== g.b)) return;
+      const done = g;
+      g = null;
+      done.turn.end(commit);
+      // The lifted finger ends the gesture; the other one stays still until it lifts (no drag starts from it).
+      first = null;
+    };
+    const up = end(true);
+    const cancel = end(false);
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', cancel, true);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', cancel, true);
+    };
+  }, [transformOn]);
 
   // ── Selection (controlled multi, controlled single, or local) ─────────────
   const [localSel, setLocalSel] = useState<string[]>([]);
@@ -375,6 +503,56 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
    * edition (line styles belong to the original there).
    */
   const keepSizeOps = (ids: readonly string[]): DocOp[] => (editionLang ? [] : keepDrawnSizeOps(page, base.plans, ids));
+
+  // ── Pro: rotation and height (one balloon op per gesture; never a Pro field) ──
+  const storedOf = (id: string) => page.balloons.find((b) => b.lineId === id);
+  const rotOf = (id: string) => balloonRot(storedOf(id) ?? resolvedOf(id));
+  /** One balloon change from a rotate or height gesture: exactly one `balloon` op (no size keep, no second op). */
+  const commitOne = (id: string, patch: Partial<Balloon>, label: string, gesture: 'rotate' | 'height') => {
+    const full = fullPatch(id, patch);
+    if (onBalloonChange) {
+      onBalloonChange(id, full, { ...(lang || {}), label, gesture });
+      return;
+    }
+    onOps?.([{ op: 'balloon', pageId: page.id, lineId: id, patch: full } as DocOp], { label, coalesce: `balloon:${gesture}:${page.id}:${id}` });
+  };
+  /** Rotate through the B9 engine (rotateEdit: ±45°, null clears, pinned); a software-placed balloon gets its drawn box too. */
+  const commitRotate = (id: string, deg: number) => {
+    const stored = storedOf(id);
+    const r = resolvedOf(id);
+    const on = stored ? page : r ? { ...page, balloons: [...page.balloons, { ...r, lineId: id }] } : null;
+    if (!on) return;
+    const res = rotateEdit(doc, on, { kind: 'balloon', id }, deg);
+    if (!res.ok) return;
+    const op = res.ops.find((o) => o.op === 'balloon');
+    if (!op || op.op !== 'balloon') return;
+    commitOne(id, op.patch as Partial<Balloon>, 'Rotate balloon', 'rotate');
+  };
+  const commitHeight = (id: string, h: number) => {
+    const next = r4(clamp(h, 0.01, EDITOR_LIMITS.minHMax));
+    if (storedOf(id)?.minH === next) return;
+    commitOne(id, { minH: next, pinned: true }, 'Change balloon height', 'height');
+  };
+  twoFingerApi.current = {
+    selectedOne: () => (selectionRef.current.length === 1 && !basePlanById.get(selectionRef.current[0])?.locked ? selectionRef.current[0] : null),
+    begin: (id) => {
+      const plan = basePlanById.get(id);
+      if (!plan || plan.locked) return null;
+      const start = rotOf(id);
+      let deg = start;
+      return {
+        move: (delta) => {
+          deg = clampRot(snapAngle(normalizeDeg(start + delta)), EDITOR_LIMITS.balloonRot);
+          setTurn({ id, deg });
+        },
+        end: (commit) => {
+          setTurn(null);
+          if (commit && deg !== start) commitRotate(id, deg);
+        }
+      };
+    },
+    cancelDrag: () => cancelActive.current?.()
+  };
 
   /**
    * One undo entry per gesture, named for what it did (LE-8): a resize is "Resize balloon", a tail aim
@@ -468,7 +646,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     } catch {
       /* synthetic events / unsupported */
     }
-    const rect = layerRef.current?.getBoundingClientRect() ?? { width: 0, height: 0 };
+    const rect = layerRef.current?.getBoundingClientRect() ?? { width: 0, height: 0, left: 0, top: 0 };
     const t = travel(rect, pageWidth, pageHeight);
     const group = mode === 'move' && wasSelected && selectionRef.current.length > 1 ? selectionRef.current.filter((x) => planById.has(x)) : [id];
     const ids = group.filter((x) => !basePlanById.get(x)?.locked);
@@ -583,6 +761,28 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         if (!p || !tip) return;
         const r = resolvedOf(p.lineId);
         next.set(p.lineId, { ...(r || { lineId: p.lineId }), lineId: p.lineId, x: r4(p.x / 1000), y: r4(p.y / H), w: r4(p.w / 1000), tailX: r4(clamp01(tip.x + dx)), tailY: r4(clamp01(tip.y + dy)), pinned: true });
+      } else if (mode === 'rotate') {
+        // The pointer's turn around the outline's centre since the press, from the stored rotation: 15° detents
+        // (Alt: free), ±45°. Only the selection box turns while dragging; the release sends one balloon op.
+        const p = startPlans[0];
+        if (!p) return;
+        const o = outlineFractions(p, H);
+        const left = (rect as DOMRect).left || 0;
+        const top = (rect as DOMRect).top || 0;
+        const frac = (cx: number, cy: number) => ({ x: (cx - left) / st.rect.w, y: (cy - top) / st.rect.h });
+        const deg = dragRotation(rotOf(p.lineId), { x: o.x + o.w / 2, y: o.y + o.h / 2 }, frac(st.origin.x, st.origin.y), frac(ev.clientX, ev.clientY), aspect, ev.altKey);
+        st.rot = deg;
+        setTurn({ id: p.lineId, deg });
+        return;
+      } else if (mode === 'height') {
+        // The outline's height (page fraction) follows the pointer: balloon {minH} on release (≤ minHMax).
+        const p = startPlans[0];
+        if (!p) return;
+        const o = outlineFractions(p, H);
+        const h = r4(clamp(o.h + dy, 0.01, EDITOR_LIMITS.minHMax));
+        st.minH = h;
+        setGrow({ id: p.lineId, h });
+        return;
       } else {
         const p = startPlans[0];
         if (!p) return;
@@ -602,6 +802,14 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         // A tap/click: select (touch selects on tap without moving); a plain click inside a
         // multi-selection narrows it to that balloon.
         if (mode === 'move' && (touch || selectionRef.current.length > 1)) select(id);
+        return;
+      }
+      if (mode === 'rotate') {
+        if (typeof st.rot === 'number' && st.rot !== rotOf(id)) commitRotate(id, st.rot);
+        return;
+      }
+      if (mode === 'height') {
+        if (typeof st.minH === 'number') commitHeight(id, st.minH);
         return;
       }
       if (!result) return;
@@ -638,6 +846,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       setDrafts(null);
       setGuides([]);
       setLifted(null);
+      setTurn(null);
+      setGrow(null);
     };
     cancelActive.current = cancel;
     window.addEventListener('pointermove', move);
@@ -665,6 +875,29 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
       handled();
       select(null);
       (e.currentTarget as HTMLElement).blur();
+      return;
+    }
+    // Pro: Tab / Shift+Tab walk the balloons in reading order (wrapping; Esc leaves), ⌘A selects them all.
+    if (extras.keyboard && e.key === 'Tab' && !mod && !e.altKey) {
+      const next = cycleReadingOrder(readingOrder, id, e.shiftKey ? -1 : 1);
+      if (!next || next === id) return;
+      handled();
+      select(next);
+      Array.from(layerRef.current?.querySelectorAll<HTMLElement>('[data-testid="balloon-hit"]') ?? [])
+        .find((el) => el.getAttribute('data-line-id') === next)
+        ?.focus();
+      return;
+    }
+    if (extras.keyboard && mod && !e.altKey && !e.shiftKey && (e.key === 'a' || e.key === 'A')) {
+      handled();
+      setSel([...readingOrder]);
+      return;
+    }
+    // Pro: R / Shift+R turn the balloon 15° (one op per press; a run of presses coalesces into one undo entry).
+    if (transformOn && !mod && !e.altKey && (e.key === 'r' || e.key === 'R')) {
+      handled();
+      if (plan.locked) return;
+      commitRotate(id, clampRot(snapAngle(rotOf(id) + (e.shiftKey ? -ROTATE_STEP : ROTATE_STEP)), EDITOR_LIMITS.balloonRot));
       return;
     }
     if ((e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) && onBalloonMenu) {
@@ -730,7 +963,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
   };
 
   /** Keyboard on the tail / width handles (role=slider): arrows aim the tail or change the width. */
-  const onHandleKey = (e: React.KeyboardEvent, plan: LetterPlan, mode: 'tail' | 'width') => {
+  const onHandleKey = (e: React.KeyboardEvent, plan: LetterPlan, mode: 'tail' | 'width' | 'rotate' | 'height') => {
     const dirs: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const d = dirs[e.key];
     if (!editable || !d || e.metaKey || e.ctrlKey) return;
@@ -738,6 +971,18 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
     e.stopPropagation();
     if (plan.locked) return;
     const step = e.shiftKey ? NUDGE_BIG : NUDGE;
+    if (mode === 'rotate') {
+      // Slider semantics: Right / Up turn clockwise, Left / Down back, 15° a press.
+      const delta = d[0] !== 0 ? d[0] : -d[1];
+      commitRotate(plan.lineId, clampRot(snapAngle(rotOf(plan.lineId) + delta * ROTATE_STEP), EDITOR_LIMITS.balloonRot));
+      return;
+    }
+    if (mode === 'height') {
+      // Up / Right taller, Down / Left shorter.
+      const delta = d[1] !== 0 ? -d[1] : d[0];
+      commitHeight(plan.lineId, outlineFractions(plan, H).h + delta * step);
+      return;
+    }
     if (mode === 'tail') {
       const tip = planTip(plan, H, resolvedOf(plan.lineId));
       if (!tip) return;
@@ -891,7 +1136,10 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           const sel = selectedSet.has(id);
           const style = p.style;
           const fontLabel = FONT_REGISTRY[p.fontId]?.label ?? p.fontId;
-          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}${onBalloonMenu ? '; the menu key opens its actions' : ''}`;
+          const presence = !!extras.presenceLineIds?.has(id);
+          const turning = turn && turn.id === id ? turn.deg : null;
+          const growH = grow && grow.id === id ? grow.h : null;
+          const describe = `${presetName}; ${fontLabel}; ${style.shape.replace('_', ' ')} balloon${p.locked ? '; locked' : ''}${p.outOfSafeArea ? '; outside the safe area' : ''}${p.overflow ? '; text does not fit' : ''}${onBalloonMenu ? '; the menu key opens its actions' : ''}${presence ? `; ${PRESENCE_LABEL.toLowerCase()}` : ''}${extras.keyboard ? '; Tab moves to the next balloon, Esc leaves the page' : ''}`;
           return (
             <div
               key={id}
@@ -914,7 +1162,15 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 'focus-visible:outline-dashed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ds-accent)]',
                 lifted === id && 'scale-[1.04] shadow-[0_10px_30px_rgba(0,0,0,0.35)] motion-reduce:scale-100'
               )}
-              style={{ left: `${o.x * 100}%`, top: `${o.y * 100}%`, width: `${o.w * 100}%`, height: `${o.h * 100}%`, zIndex: sel ? 5 : 1 }}
+              style={{
+                left: `${o.x * 100}%`,
+                top: `${o.y * 100}%`,
+                width: `${o.w * 100}%`,
+                height: `${(growH ?? o.h) * 100}%`,
+                zIndex: sel ? 5 : 1,
+                ...(turning !== null ? { transform: `rotate(${turning}deg)` } : {})
+              }}
+              data-presence={presence || undefined}
               role="button"
               tabIndex={0}
               aria-roledescription="movable balloon"
@@ -950,6 +1206,15 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 // 44 px on screen). beginDrag hands a press on it to the nearest balloon.
                 <span aria-hidden data-hit-halo className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: `max(100%, ${HIT_PX / zs}px)`, height: `max(100%, ${HIT_PX / zs}px)` }} />
               )}
+              {presence && (
+                <>
+                  {/* The director is editing this balloon (A4 presence): a dashed ink ring and the words. */}
+                  <span aria-hidden data-testid="presence-outline" className="pointer-events-none absolute -inset-1 rounded-[30%] border-2 border-dashed border-[var(--ds-ink)]" />
+                  <span aria-hidden data-testid="presence-chip" className={cx('pointer-events-none absolute bottom-full left-0 mb-1 whitespace-nowrap px-1.5 py-0.5 text-[10.5px] font-medium', RADIUS_PILL, INVERSE_SURFACE)}>
+                    {PRESENCE_LABEL}
+                  </span>
+                </>
+              )}
               {p.overflow && (
                 // Visible "text doesn't fit" marker in the editor (the inspector offers the free fix).
                 <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white" />
@@ -969,6 +1234,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
           otherOutlines={plans.filter((p) => p.lineId !== primaryPlan.lineId).map((p) => outlineFractions(p, H))}
           onDrag={(e, mode) => beginDrag(e, primaryPlan, mode)}
           onKey={(e, mode) => onHandleKey(e, primaryPlan, mode)}
+          transform={transformOn ? { rot: turn && turn.id === primaryPlan.lineId ? turn.deg : rotOf(primaryPlan.lineId), turning: !!turn && turn.id === primaryPlan.lineId } : undefined}
         />
       )}
       {editable && <SnapGuides guides={guides} />}
@@ -1174,8 +1440,10 @@ const Handles: React.FC<{
   /** The other balloons' outlines (page fractions): touch handles keep off their targets. */
   otherOutlines: readonly Box[];
   onDrag: (e: React.PointerEvent, mode: DragMode) => void;
-  onKey: (e: React.KeyboardEvent, mode: 'tail' | 'width') => void;
-}> = ({ plan, H, tip, coarse, scale, pageWidth, pageHeight, otherOutlines, onDrag, onKey }) => {
+  onKey: (e: React.KeyboardEvent, mode: 'tail' | 'width' | 'rotate' | 'height') => void;
+  /** Pro: the rotate and height handles (the current rotation, and whether a turn is in progress). */
+  transform?: { rot: number; turning: boolean };
+}> = ({ plan, H, tip, coarse, scale, pageWidth, pageHeight, otherOutlines, onDrag, onKey, transform }) => {
   const dot = (coarse ? 20 : 14) / scale;
   const grip = { w: (coarse ? 10 : 8) / scale, h: (coarse ? 32 : 24) / scale };
   const hit = HIT_PX / scale;
@@ -1224,6 +1492,81 @@ const Handles: React.FC<{
         className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] focus-visible:ring-offset-1"
         style={{ left: `${(pos.grip.x / pw) * 100}%`, top: `${(pos.grip.y / ph) * 100}%`, width: grip.w, height: grip.h }}
         title="Drag to resize"
+      >
+        <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: hit, height: hit }} />
+      </span>
+      {transform && <TransformHandles plan={plan} H={H} coarse={coarse} scale={scale} pageWidth={pw} pageHeight={ph} rot={transform.rot} turning={transform.turning} onDrag={onDrag} onKey={onKey} />}
+    </>
+  );
+};
+
+/**
+ * Pro: the rotate handle above the selected balloon and the height grip under it (master plan §2.7, C-CANVAS). Both are
+ * sliders for the keyboard (arrows: 15° a press, or a height step), 44 px targets on touch, ringed in white like the
+ * other handles; the turn shows its angle while it happens.
+ */
+const TransformHandles: React.FC<{
+  plan: LetterPlan;
+  H: number;
+  coarse: boolean;
+  scale: number;
+  pageWidth: number;
+  pageHeight: number;
+  rot: number;
+  turning: boolean;
+  onDrag: (e: React.PointerEvent, mode: DragMode) => void;
+  onKey: (e: React.KeyboardEvent, mode: 'rotate' | 'height') => void;
+}> = ({ plan, H, coarse, scale, pageWidth, pageHeight, rot, turning, onDrag, onKey }) => {
+  const o = outlineFractions(plan, H);
+  const s = Math.max(scale, 1e-6);
+  const hit = HIT_PX / s;
+  const dot = (coarse ? 18 : 12) / s;
+  const cxPct = (o.x + o.w / 2) * 100;
+  const gap = (coarse ? ROTATE_GAP_PX + 12 : ROTATE_GAP_PX) / s;
+  const rotTop = Math.max(0, o.y * pageHeight - gap);
+  const gripTop = Math.min(pageHeight, (o.y + o.h) * pageHeight + (coarse ? HIT_PX / 2 / s : 0));
+  const heightPct = Math.round(o.h * 1000) / 10;
+  return (
+    <>
+      <span
+        role="slider"
+        aria-label="Rotation"
+        aria-valuenow={rot}
+        aria-valuemin={-EDITOR_LIMITS.balloonRot}
+        aria-valuemax={EDITOR_LIMITS.balloonRot}
+        aria-valuetext={`${rot}°. Arrow keys turn it ${ROTATE_STEP}°.`}
+        data-testid="rotate-handle"
+        data-no-canvas-gesture
+        tabIndex={0}
+        onPointerDown={(e) => onDrag(e, 'rotate')}
+        onKeyDown={(e) => onKey(e, 'rotate')}
+        className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] focus-visible:ring-offset-1"
+        style={{ left: `${cxPct}%`, top: `${(rotTop / (pageHeight || 1)) * 100}%`, width: dot, height: dot, zIndex: 6 }}
+        title="Drag to rotate (15° steps; Alt for any angle)"
+      >
+        <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ width: hit, height: hit }} />
+        {turning && (
+          <span aria-live="polite" data-testid="rotate-readout" className={cx('pointer-events-none absolute bottom-full left-1/2 mb-1 -translate-x-1/2 whitespace-nowrap px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums', RADIUS_PILL, INVERSE_SURFACE)}>
+            {rot}°
+          </span>
+        )}
+      </span>
+      <span
+        role="slider"
+        aria-label="Balloon height"
+        aria-orientation="vertical"
+        aria-valuenow={heightPct}
+        aria-valuemin={1}
+        aria-valuemax={EDITOR_LIMITS.minHMax * 100}
+        aria-valuetext={`${heightPct}% of the page height. Arrow keys change it.`}
+        data-testid="height-handle"
+        data-no-canvas-gesture
+        tabIndex={0}
+        onPointerDown={(e) => onDrag(e, 'height')}
+        onKeyDown={(e) => onKey(e, 'height')}
+        className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] focus-visible:ring-offset-1"
+        style={{ left: `${cxPct}%`, top: `${(gripTop / (pageHeight || 1)) * 100}%`, width: (coarse ? 32 : 24) / s, height: (coarse ? 10 : 8) / s, zIndex: 6 }}
+        title="Drag to change the height"
       >
         <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ width: hit, height: hit }} />
       </span>
