@@ -10,7 +10,7 @@ import type { AssetRef, Card, ComicDoc, Msg } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { buildSettleIndex, settleKey } from '../../../shared/comic/settle';
 import { makeQaDoc } from '../testing/qaFixtures';
-import { directorSettledDoc } from '../../../qa/app/scenes/director-settled';
+import scene, { directorSettledDoc } from '../../../qa/app/scenes/director-settled';
 import { ConversationPane } from './ConversationPane';
 import { __resetEntrances } from './MessageItem';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
@@ -95,6 +95,20 @@ describe('the heist-12p conversation with settled cards on', () => {
     expect(slot(container, 'ds_end')!.textContent).toBe('You picked They team up');
     expect(slot(container, 'card_qa_conflict')!.textContent).toBe('Kept yours (1) · used the director’s (1)');
     expect(within(slot(container, 'ds_renders')!).getByRole('link', { name: 'Open the pages' })).toBeInTheDocument();
+  });
+
+  it('the QA scene’s history (the page the layout smoke measures): every card is a settled line, no control, no image', () => {
+    const { container } = render(<scene.Scene />);
+    const slots = [...container.querySelectorAll('[data-card-slot]')];
+    expect(slots.length).toBeGreaterThanOrEqual(18);
+    for (const s of slots) {
+      expect(s.querySelector('[data-settled]'), `card ${s.getAttribute('data-card-slot')} is a settled row`).not.toBeNull();
+      expect(s.querySelectorAll(ENABLED_CONTROLS), `card ${s.getAttribute('data-card-slot')} has no control`).toHaveLength(0);
+    }
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(container.querySelector('[data-card-slot="cg1"]')!.textContent).toMatch(/^Approved · ≈ \$[\d.]+ · \d+ images$/);
+    expect(container.querySelector('[data-card-slot="ds_cover"]')!.textContent).toBe('You picked Back to back in the rain');
+    expect(container.querySelector('[data-card-slot="cr1"]')!.textContent).toMatch(/^Drew \d+ pages, the cover/);
   });
 
   it('settled rows are quiet for the log (aria-live off) and stack 4 px apart inside a reply', () => {
