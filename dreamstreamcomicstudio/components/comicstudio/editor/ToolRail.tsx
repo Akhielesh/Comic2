@@ -33,10 +33,12 @@ export interface ToolRailProps {
   /** Why a shown tool is off. */
   disabled?: Partial<Record<ProTool, string>>;
   orientation?: 'vertical' | 'horizontal';
+  /** After the tools, inside the toolbar (the tablet row's Layers / Assets toggles). */
+  extra?: React.ReactNode;
   className?: string;
 }
 
-export const ToolRail: React.FC<ToolRailProps> = ({ tool, onTool, tools, disabled = {}, orientation = 'vertical', className }) => {
+export const ToolRail: React.FC<ToolRailProps> = ({ tool, onTool, tools, disabled = {}, orientation = 'vertical', extra, className }) => {
   const vertical = orientation === 'vertical';
   const shown = PRO_TOOLS.filter((t) => tools.includes(t.id));
   return (
@@ -79,6 +81,7 @@ export const ToolRail: React.FC<ToolRailProps> = ({ tool, onTool, tools, disable
           onClick={() => onTool(t.id)}
         />
       ))}
+      {extra}
     </div>
   );
 };

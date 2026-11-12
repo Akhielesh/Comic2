@@ -42,7 +42,6 @@ import { useCostFormat, type CostFormat } from './costFormat';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { keepRefusedInComposer } from '../conversation/composerBus';
 import { proEditorV2On } from '../../../shared/comic/capabilities';
-import { requestEditorTool } from '../editor/useProEditor';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -179,7 +178,7 @@ export const PageCard: React.FC<{
   const letteringEntry = proEditorV2On(studio.caps) && !compact && drawn && !blocked && doc.format.lettering === 'overlay' && !!firstLine;
   const openLettering = () => {
     if (!firstLine) return;
-    requestEditorTool(page.id, 'select');
+    // The editor opens on the Select tool (its default) with this balloon selected ("Show me" path).
     studio.setSelection({ pageId: page.id, lineIds: [firstLine.id], surface: 'page_editor' });
     studio.openPage(page.id);
   };

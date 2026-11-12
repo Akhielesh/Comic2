@@ -1,10 +1,11 @@
 // The Pro shell in the page editor (PE-SHELL; master plan §2.2, §2.7): the header Easy | Pro switch (one concept: no op),
 // Shift+P, the toolbar duplicate gone only with the flag on, D7 on phones, the docked workspace at 1280, the tool rail,
-// in-art comics, the arrow-key fix (graft 4), Made in Pro, presence and "Edit lettering".
+// in-art comics, the arrow-key fix (graft 4), Made in Pro, presence, "Edit lettering" and the phone header. The Pro
+// view's pieces load lazily (editor/proLazy.ts), so the tests wait for them (findBy…).
 
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
@@ -14,11 +15,20 @@ import { PagesTab } from './PagesTab';
 import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import type { StudioController } from '../types';
-import { EDITOR_MODE_KEY } from '../editor/useProEditor';
-import { MODE_GROUP_LABEL } from '../editor/ProTopBar';
+import { MODE_GROUP_LABEL } from '../editor/ProModeSwitch';
+import { MODE_STORAGE_KEY, useStudioMode } from '../useStudioMode';
+import { ProPartsContext, partModule, type ProPanelProps, type ProPartModule } from '../editor/useProEditor';
+import { useQaController } from '../testing/qaController';
+import type { ProEditPartId } from '../../../shared/comic/pro/types';
 
 const allowance = vi.hoisted(() => ({ status: null as unknown }));
 vi.mock('../../usage/useUsageAllowance', () => ({ useUsageAllowance: () => allowance.status }));
+
+// The Pro view's pieces load lazily (editor/proLazy.ts); warm their modules once so each test waits on React, not on the
+// first transform of a module.
+beforeAll(async () => {
+  await Promise.all([import('../editor/ProWorkspace'), import('../editor/ProTopBar'), import('../editor/balloonTransform'), import('../editor/proShapes'), import('../editor/proNudge')]);
+}, 30_000);
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -97,34 +107,76 @@ describe('the Easy | Pro switch (flag on)', () => {
   });
 });
 
-describe('D7: phones open in Easy first, then remember this device’s last choice', () => {
+describe('D7: phones open in Easy first, then follow this device’s own choice (useStudioMode’s key)', () => {
+  /** The real view state: useStudioMode (localStorage `comicstudio.mode`) behind studio.mode / setMode. */
+  const PhoneEditor: React.FC<{ caps?: StudioCaps }> = ({ caps = FLAG_ON }) => {
+    const m = useStudioMode(caps);
+    const doc = React.useMemo(() => makeSampleDoc(), []);
+    const studio = React.useMemo(() => makeStudio(doc, { focusedPageId: 'pg_1', caps }), [doc, caps]);
+    return (
+      <FormFactorProvider value={PHONE}>
+        <PageEditor studio={{ ...studio, mode: m.mode, setMode: m.setMode }} doc={doc} pageId="pg_1" />
+      </FormFactorProvider>
+    );
+  };
+
   it('a paid user (default Pro) sees Easy on a phone’s first open', () => {
     open({ ff: PHONE, mode: 'pro' });
     expect(within(modeSwitch()).getByRole('radio', { name: 'Easy mode' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByTestId('pro-tool-rail')).toBeNull();
   });
 
-  it('choosing Pro on the phone is remembered on this device (localStorage) and calls setMode', () => {
-    const { studio } = open({ ff: PHONE, mode: 'easy' });
+  it('choosing Pro on the phone is stored in the ONE device key (comicstudio.mode) and the next open follows it', () => {
+    render(<PhoneEditor caps={{ ...FLAG_ON, defaultMode: 'pro' }} />);
+    expect(within(modeSwitch()).getByRole('radio', { name: 'Easy mode' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(within(modeSwitch()).getByRole('radio', { name: 'Pro mode' }));
-    expect(window.localStorage.getItem(EDITOR_MODE_KEY)).toBe('pro');
-    expect(studio.setMode).toHaveBeenCalledWith('pro');
+    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('pro');
+    expect(within(modeSwitch()).getByRole('radio', { name: 'Pro mode' })).toHaveAttribute('aria-checked', 'true');
+    // No second per-device key.
+    expect(Object.keys(window.localStorage).filter((k) => k.startsWith('comicstudio.') && k.endsWith('mode'))).toEqual([MODE_STORAGE_KEY]);
     cleanup();
-    open({ ff: PHONE, mode: 'easy' });
+    render(<PhoneEditor />);
+    expect(within(modeSwitch()).getByRole('radio', { name: 'Pro mode' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('a Pro choice made elsewhere on this device (the Pages switch, another tab) is the phone editor’s too', () => {
+    window.localStorage.setItem(MODE_STORAGE_KEY, 'pro');
+    open({ ff: PHONE, mode: 'pro' });
     expect(within(modeSwitch()).getByRole('radio', { name: 'Pro mode' })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('desktop follows studio.mode (no per-device override)', () => {
-    window.localStorage.setItem(EDITOR_MODE_KEY, 'easy');
+    window.localStorage.setItem(MODE_STORAGE_KEY, 'easy');
     open({ ff: DESKTOP, mode: 'pro' });
     expect(within(modeSwitch()).getByRole('radio', { name: 'Pro mode' })).toHaveAttribute('aria-checked', 'true');
   });
 });
 
+describe('the phone header with the flag on (320 / 360)', () => {
+  it('"Page n" always reads in full (shrink-0, never truncated); "of n" and the status are for a screen reader', () => {
+    for (const mode of ['easy', 'pro'] as const) {
+      if (mode === 'pro') window.localStorage.setItem(MODE_STORAGE_KEY, 'pro');
+      open({ ff: PHONE, mode });
+      const h2 = within(header()).getByRole('heading', { level: 2 });
+      expect(h2.className).toMatch(/\bshrink-0\b/);
+      expect(h2.className).not.toMatch(/\btruncate\b/);
+      expect(h2.querySelector('.sr-only')?.textContent).toBe('of 6');
+      const dot = within(header()).getByTestId('editor-status-dot');
+      expect(dot.querySelector('.sr-only')?.textContent).toBe('Drawn');
+      cleanup();
+    }
+  });
+  it('flag off: today’s header (the chip, "of n" shown)', () => {
+    open({ ff: PHONE, caps: { ...DEFAULT_CAPS, proEditorV2: false } });
+    expect(within(header()).queryByTestId('editor-status-dot')).toBeNull();
+    expect(within(header()).getByRole('heading', { level: 2 }).querySelector('.sr-only')).toBeNull();
+  });
+});
+
 describe('the docked Pro workspace (1280 × 800)', () => {
-  it('rail, canvas and a 400 px inspector column: Properties and AI tabs, the free footer, Edit with AI in AI', () => {
+  it('rail, canvas and a 400 px inspector column: Properties and AI tabs, the free footer, Edit with AI in AI', async () => {
     open({ mode: 'pro' });
-    const dock = screen.getByTestId('pro-dock');
+    const dock = await screen.findByTestId('pro-dock');
     expect(dock.style.width).toBe('400px');
     expect(screen.getByTestId('pro-tool-rail')).toHaveAttribute('aria-orientation', 'vertical');
     expect(document.querySelector('[data-pro-workspace="docked"]')).not.toBeNull();
@@ -139,9 +191,9 @@ describe('the docked Pro workspace (1280 × 800)', () => {
     expect(document.querySelectorAll('#pe-instruction')).toHaveLength(1);
   });
 
-  it('the dock is a column of the layout (never a floating layer over the page)', () => {
+  it('the dock is a column of the layout (never a floating layer over the page)', async () => {
     open({ mode: 'pro' });
-    const dock = screen.getByTestId('pro-dock');
+    const dock = await screen.findByTestId('pro-dock');
     const row = dock.parentElement!;
     expect(row.getAttribute('data-pro-workspace')).toBe('docked');
     expect(row.className).toMatch(/\bflex-row\b/);
@@ -149,9 +201,9 @@ describe('the docked Pro workspace (1280 × 800)', () => {
     expect(dock.className).toMatch(/\bshrink-0\b/);
   });
 
-  it('the tool keys pick tools in Pro (B arms a speech balloon; Esc puts Select back)', () => {
+  it('the tool keys pick tools in Pro (B arms a speech balloon; Esc puts Select back)', async () => {
     open({ mode: 'pro' });
-    const rail = screen.getByTestId('pro-tool-rail');
+    const rail = await screen.findByTestId('pro-tool-rail');
     fireEvent.keyDown(document.body, { key: 'b' });
     expect(within(rail).getByRole('button', { name: 'Balloon' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('balloon-layer').className).toMatch(/cursor-crosshair/);
@@ -159,25 +211,25 @@ describe('the docked Pro workspace (1280 × 800)', () => {
     expect(within(rail).getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('Shapes waits for the compose part (overlays must draw first)', () => {
+  it('Shapes waits for the compose part (overlays must draw first)', async () => {
     open({ mode: 'pro' });
-    expect(within(screen.getByTestId('pro-tool-rail')).queryByRole('button', { name: 'Shapes' })).toBeNull();
+    expect(within(await screen.findByTestId('pro-tool-rail')).queryByRole('button', { name: 'Shapes' })).toBeNull();
   });
 
-  it('tablet portrait: the tools are a row under the top bar', () => {
+  it('tablet portrait: the tools are a row under the top bar', async () => {
     open({ ff: TABLET, mode: 'pro' });
-    expect(screen.getByTestId('pro-tool-rail')).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(await screen.findByTestId('pro-tool-rail')).toHaveAttribute('aria-orientation', 'horizontal');
     expect(screen.queryByTestId('pro-dock')).toBeNull();
   });
 });
 
 describe('in-art comics (§2.2 rule 6)', () => {
-  it('Text, Balloon and Sound effect are off with the in-art note; the rest still work', () => {
+  it('Text, Balloon and Sound effect are off with the in-art note; the rest still work', async () => {
     const doc = makeSampleDoc((d) => {
       d.format.lettering = 'in_art';
     });
     open({ mode: 'pro', doc });
-    const rail = screen.getByTestId('pro-tool-rail');
+    const rail = await screen.findByTestId('pro-tool-rail');
     for (const name of ['Text', 'Balloon', 'Sound effect']) {
       const b = within(rail).getByRole('button', { name });
       expect(b).toHaveAttribute('aria-disabled', 'true');
@@ -196,12 +248,13 @@ describe('the arrow-key fix (graft 4)', () => {
       d.pages[1].layers = [{ id: 'ly_1', kind: 'shape', box: { x: 0.2, y: 0.2, w: 0.2, h: 0.1 }, shape: { type: 'rect' } }];
     });
 
-  it('an arrow key with an overlay selected nudges it and does NOT turn the page', () => {
+  it('an arrow key with an overlay selected nudges it and does NOT turn the page', async () => {
     const doc = withLayer();
     const { studio } = open({ doc, pageId: 'pg_2', studio: { selection: { pageId: 'pg_2', lineIds: [], layerIds: ['ly_1'], surface: 'page_editor' } } });
     fireEvent.keyDown(document.body, { key: 'ArrowRight' });
     expect(studio.openPage).not.toHaveBeenCalled();
-    expect(studio.patch).toHaveBeenCalledTimes(1);
+    // The nudge module loads lazily (warmed when an overlay is selected).
+    await waitFor(() => expect(studio.patch).toHaveBeenCalledTimes(1));
     const [ops, opts] = (studio.patch as ReturnType<typeof vi.fn>).mock.calls[0] as [DocOp[], { undo: boolean; coalesce: string }];
     expect(ops).toHaveLength(1);
     expect(ops[0]).toMatchObject({ op: 'layer', pageId: 'pg_2', id: 'ly_1' });
@@ -258,15 +311,15 @@ describe('presence (A4 fills StudioController.presence)', () => {
 });
 
 describe('the shortcut sheet (?)', () => {
-  it('opens from ? and the header button, closes with Esc; never with the flag off', () => {
+  it('opens from ? and the header button, closes with Esc; never with the flag off', async () => {
     open({ mode: 'pro' });
     fireEvent.keyDown(document.body, { key: '?' });
-    const sheet = screen.getByTestId('pro-shortcuts');
+    const sheet = await screen.findByTestId('pro-shortcuts');
     expect(within(sheet).getByText('Tab / Shift+Tab')).toBeInTheDocument();
     fireEvent.keyDown(sheet, { key: 'Escape' });
     expect(screen.queryByTestId('pro-shortcuts')).toBeNull();
-    fireEvent.click(screen.getByTestId('pro-help'));
-    expect(screen.getByTestId('pro-shortcuts')).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId('pro-help'));
+    expect(await screen.findByTestId('pro-shortcuts')).toBeInTheDocument();
     cleanup();
     open({ caps: { ...DEFAULT_CAPS, proEditorV2: false } });
     fireEvent.keyDown(document.body, { key: '?' });
@@ -299,5 +352,79 @@ describe('PRO_EDIT_OPS_PATCHABLE stays false: the shell never sends a Pro op', (
     });
     expect(studio.patch).not.toHaveBeenCalled();
     expect(studio.act).not.toHaveBeenCalled();
+  });
+});
+
+describe('the arrow fix with the real selection state (selectLayers; the balloon mirror never wipes it)', () => {
+  const withLayer = () =>
+    makeSampleDoc((d) => {
+      d.pages[0].layers = [{ id: 'ly_1', kind: 'shape', box: { x: 0.2, y: 0.2, w: 0.2, h: 0.1 }, shape: { type: 'rect' } }];
+    });
+  /** A ready Layers part (stand-in) whose row selects the overlay through the shell's selectLayers. */
+  const LAYERS: ProPartModule = {
+    part: { id: 'layers', ready: true },
+    Panel: (p: ProPanelProps) => (
+      <button type="button" onClick={() => p.selectLayers(['ly_1'])}>
+        Pick the rectangle
+      </button>
+    )
+  };
+  const readParts = (id: ProEditPartId): ProPartModule => (id === 'layers' ? LAYERS : partModule(id));
+
+  it('a Layers row picks an overlay over a selected balloon; ArrowRight moves it with ONE layer op and turns no page', async () => {
+    const doc = withLayer();
+    const patch = vi.fn();
+    const ctl: { current: StudioController | null } = { current: null };
+    const Harness: React.FC = () => {
+      const studio = useQaController({ doc, focusedPageId: 'pg_1', mode: 'pro', caps: FLAG_ON });
+      ctl.current = studio;
+      const wrapped: StudioController = {
+        ...studio,
+        patch: (ops, opts) => {
+          patch(ops, opts);
+          return studio.patch(ops, opts);
+        }
+      };
+      return (
+        <FormFactorProvider value={DESKTOP}>
+          <ProPartsContext.Provider value={readParts}>{studio.doc && studio.focusedPageId && <PageEditor studio={wrapped} doc={studio.doc} pageId={studio.focusedPageId} />}</ProPartsContext.Provider>
+        </FormFactorProvider>
+      );
+    };
+    render(<Harness />);
+    // A balloon is selected first (the "Show me" path): the editor mirrors it as {lineIds}.
+    act(() => ctl.current!.setSelection({ pageId: 'pg_1', lineIds: ['pg_1_l2'], surface: 'page_editor' }));
+    await waitFor(() => expect(ctl.current!.selection?.lineIds).toEqual(['pg_1_l2']));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Layers' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick the rectangle' }));
+    // The balloon selection is cleared, and its mirror's "nothing selected" does not wipe the overlay.
+    await waitFor(() => expect(ctl.current!.selection).toMatchObject({ pageId: 'pg_1', lineIds: [], layerIds: ['ly_1'] }));
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const [ops] = patch.mock.calls[0] as [DocOp[]];
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ op: 'layer', pageId: 'pg_1', id: 'ly_1' });
+    expect(ctl.current!.focusedPageId).toBe('pg_1');
+    expect(ctl.current!.doc!.pages[0].layers![0].box.x).toBeCloseTo(0.205, 4);
+    expect(ctl.current!.selection?.layerIds).toEqual(['ly_1']);
+  });
+
+  it('closing the editor still clears an overlay selection (the guard holds only while it is open)', async () => {
+    const ctl: { current: StudioController | null } = { current: null };
+    const Harness: React.FC = () => {
+      const studio = useQaController({ doc: withLayer(), focusedPageId: 'pg_1', mode: 'pro', caps: FLAG_ON });
+      ctl.current = studio;
+      return (
+        <FormFactorProvider value={DESKTOP}>
+          <ProPartsContext.Provider value={readParts}>{studio.doc && studio.focusedPageId && <PageEditor studio={studio} doc={studio.doc} pageId={studio.focusedPageId} />}</ProPartsContext.Provider>
+        </FormFactorProvider>
+      );
+    };
+    render(<Harness />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Layers' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick the rectangle' }));
+    await waitFor(() => expect(ctl.current!.selection?.layerIds).toEqual(['ly_1']));
+    act(() => ctl.current!.openPage(null));
+    await waitFor(() => expect(ctl.current!.selection).toBeNull());
   });
 });

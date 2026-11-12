@@ -5,8 +5,13 @@
 //   1280 × 800   the same with a 400 px inspector: the dock is a COLUMN, so it never overlaps the page
 //   1440 × 900+  adds the 280 px Layers / Assets rail on the left (only while a part fills it); nothing floats over
 //                the page
-//   768 tablet   today's layout with the tools as a row under the top bar (ToolRail horizontal)
-//   phones       today's layout: the inspector stays a bottom sheet; the thumb bar gains Layers (C9)
+//   768 tablet   today's layout with the tools as a row under the top bar (ToolRail horizontal), plus Layers and
+//                Assets toggles that open a left overlay drawer, and the inspector part in a bottom sheet (≤ 40 %)
+//   phones       today's layout: the inspector stays a bottom sheet; the thumb bar gains Layers (C9), which opens a
+//                sheet ABOVE the thumb bar that the stage makes room for (portrait), or a 320 px side sheet (landscape)
+//
+// LAZY: this module (and the tool rail, the kit's ToolButton and ds/Tabs it brings) loads through editor/proLazy.ts
+// only while COMIC_PRO_EDITOR_V2 is on; the Easy path never downloads it (master plan §2.8).
 //
 // The shell only arranges: the panels come from the PE-0 parts (inspector and layers from PE-INSPECT, assets and
 // animate in S3), mounted when `part.ready` is true and COMIC_PRO_EDITOR_V2 is on. Every Pro panel reads
@@ -15,17 +20,19 @@
 // Also here: the coach cards (Layers, Effects & assets, Animate — shown on the first open of Pro, dismissible, back
 // from ?), the shortcut sheet (?), the phone Layers sheet and the frame every Pro panel sits in.
 
-import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { Images, Layers, X } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { PRO_FREE_FOOTER, type ProSample } from '../../../shared/comic/pro/types';
-import { DENSITY, FOCUS_RING, INK, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, RADIUS_PANEL, ACCENT_SOFT_BG } from '../../chat/studioDesign';
+import { DENSITY, FOCUS_RING, INK, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, RADIUS_PANEL, ACCENT_SOFT_BG, SCRIM } from '../../chat/studioDesign';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
 import type { ProWorkspaceLayout } from '../mobile/editor/editorModel';
 import { IconButton } from '../board/ui';
-import { SHORTCUT_SHEET } from './shortcuts';
-import type { ProCoachCard } from './useProEditor';
+import { SHORTCUT_SHEET, type ProTool } from './shortcuts';
+import type { MountedParts, ProCoachCard, ProPanelProps } from './useProEditor';
 import { editorZ } from './kit/zLayers';
+import { ToolButton } from './kit/ToolButton';
+import { ToolRail } from './ToolRail';
 
 // ── The frame every Pro panel sits in ────────────────────────────────────────
 
@@ -238,19 +245,39 @@ export const ShortcutSheet: React.FC<ShortcutSheetProps> = ({ onClose, onTips })
 
 // ── The phone Layers sheet (C9) ──────────────────────────────────────────────
 
-export const ProLayersSheet: React.FC<{ onClose(): void; children: React.ReactNode }> = ({ onClose, children }) => (
+export interface ProLayersSheetProps {
+  onClose(): void;
+  children: React.ReactNode;
+  /**
+   * 'bottom' (phone portrait): a sheet at the foot of the stage column, ABOVE the thumb bar, `height` px tall; the page
+   * editor shrinks the stage by the same height, so the whole page stays above it. 'side' (phone landscape): a 320 px
+   * column beside the stage (master plan §2.7: the rail plus a 320 px side sheet). Neither floats over the page.
+   */
+  variant?: 'bottom' | 'side';
+  height?: number;
+}
+
+export const PRO_SIDE_SHEET_W = 320;
+
+export const ProLayersSheet: React.FC<ProLayersSheetProps> = ({ onClose, children, variant = 'bottom', height }) => (
   <div
     role="dialog"
     aria-label="Layers"
     data-testid="pro-layers-sheet"
+    data-variant={variant}
     onKeyDown={(e) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         onClose();
       }
     }}
-    className={cn('fixed inset-x-0 bottom-0 flex max-h-[50vh] flex-col overflow-hidden border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[shadow:var(--ds-shadow-overlay)]', editorZ('sheet'))}
-    style={{ paddingBottom: 'var(--sa-bottom-eff, env(safe-area-inset-bottom, 0px))' }}
+    className={cn(
+      'flex min-h-0 flex-col overflow-hidden bg-[var(--ds-surface-strong)]',
+      variant === 'side'
+        ? 'shrink-0 border-l border-[var(--ds-hairline)]'
+        : cn('absolute inset-x-0 bottom-0 border-t border-[var(--ds-hairline)] shadow-[shadow:var(--ds-shadow-overlay)]', editorZ('sheet'))
+    )}
+    style={variant === 'side' ? { width: PRO_SIDE_SHEET_W } : { height }}
   >
     <header className="flex shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-1.5">
       <h3 className={cn('m-0 min-w-0 flex-1 text-[13px] font-semibold', INK)}>Layers</h3>
@@ -261,3 +288,288 @@ export const ProLayersSheet: React.FC<{ onClose(): void; children: React.ReactNo
     <ProPanelFrame>{children}</ProPanelFrame>
   </div>
 );
+
+// ── A mounted part (its Panel may be lazy: PE-INSPECT's loadPanel) ───────────
+
+const PartSlot: React.FC<{ Panel: React.ComponentType<ProPanelProps>; props: ProPanelProps }> = ({ Panel, props }) => (
+  <Suspense fallback={null}>
+    <Panel {...props} />
+  </Suspense>
+);
+
+// ── The docked workspace, composed (≥ 1024; the page editor hands it its pieces) ──
+
+export interface ProDockedWorkspaceProps {
+  layout: ProWorkspaceLayout;
+  rootRef?: React.Ref<HTMLDivElement>;
+  bodyRef?: React.Ref<HTMLDivElement>;
+  dockRef?: React.Ref<HTMLElement>;
+  tool: ProTool;
+  onTool(tool: ProTool): void;
+  tools: readonly ProTool[];
+  disabled: Partial<Record<ProTool, string>>;
+  parts: MountedParts;
+  panelProps: ProPanelProps;
+  /** Properties without the inspector part: the whole-comic lettering style; under it, always, the script. */
+  letteringStyle: React.ReactNode;
+  script: React.ReactNode;
+  /** The AI tab: Edit with AI, page actions, QC, versions (the one priced place; no free footer). */
+  ai: React.ReactNode;
+  modeRow: React.ReactNode;
+  stage: React.ReactNode;
+  filmstrip: React.ReactNode;
+  /** The coach cards, above the dock's tabs. */
+  coach?: React.ReactNode;
+  dockTab: DockTabId;
+  onDockTab(id: DockTabId): void;
+  leftTab: 'layers' | 'assets';
+  onLeftTab(id: 'layers' | 'assets'): void;
+  /** Floating pieces (the fallback lettering panel, the menu). */
+  children?: React.ReactNode;
+}
+
+/**
+ * The rail, the canvas, the dock (Properties | Layers | Assets | AI) and, from 1440 px, the Layers / Assets rail; the
+ * animate part's timeline (proMotion) under the stage in its own free frame. Nothing floats over the page.
+ */
+export const ProDockedWorkspace: React.FC<ProDockedWorkspaceProps> = ({
+  layout,
+  rootRef,
+  bodyRef,
+  dockRef,
+  tool,
+  onTool,
+  tools,
+  disabled,
+  parts,
+  panelProps,
+  letteringStyle,
+  script,
+  ai,
+  modeRow,
+  stage,
+  filmstrip,
+  coach,
+  dockTab,
+  onDockTab,
+  leftTab,
+  onLeftTab,
+  children
+}) => {
+  const { inspector: InspectorPart, layers: LayersPart, assets: AssetsPart, animate: AnimatePart } = parts;
+  const leftRailOn = layout.leftRailW > 0 && !!(LayersPart || AssetsPart);
+  const properties = (
+    <div className="flex min-w-0 flex-col gap-4">
+      {InspectorPart ? <PartSlot Panel={InspectorPart} props={panelProps} /> : letteringStyle}
+      {script}
+    </div>
+  );
+  const tabs: DockTab[] = [
+    { id: 'properties', label: 'Properties', content: properties, free: true },
+    ...(!leftRailOn && LayersPart ? [{ id: 'layers' as const, label: 'Layers', content: <PartSlot Panel={LayersPart} props={panelProps} />, free: true }] : []),
+    ...(!leftRailOn && AssetsPart ? [{ id: 'assets' as const, label: 'Assets', content: <PartSlot Panel={AssetsPart} props={panelProps} />, free: true }] : []),
+    { id: 'ai', label: 'AI', content: <div className="flex min-w-0 flex-col gap-4">{ai}</div>, free: false }
+  ];
+  const leftTabs = [
+    ...(LayersPart ? [{ id: 'layers' as const, label: 'Layers', node: <PartSlot Panel={LayersPart} props={panelProps} /> }] : []),
+    ...(AssetsPart ? [{ id: 'assets' as const, label: 'Assets', node: <PartSlot Panel={AssetsPart} props={panelProps} /> }] : [])
+  ];
+  const leftValue = leftTabs.some((t) => t.id === leftTab) ? leftTab : leftTabs[0]?.id;
+  const leftRail =
+    leftRailOn && leftValue ? (
+      <Tabs value={leftValue} onValueChange={(v) => onLeftTab(v as 'layers' | 'assets')} className="min-h-0 flex-1 gap-0">
+        <div className="shrink-0 border-b border-[var(--ds-hairline)] px-3 py-2">
+          <TabsList label="Layers and assets" size="sm" fullWidth>
+            {leftTabs.map((t) => (
+              <TabsTrigger key={t.id} value={t.id}>
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+        {leftTabs.map((t) => (
+          <TabsContent key={t.id} value={t.id} className="flex min-h-0 flex-1 flex-col focus-visible:outline-none">
+            <ProPanelFrame>{t.node}</ProPanelFrame>
+          </TabsContent>
+        ))}
+      </Tabs>
+    ) : undefined;
+  return (
+    <ProWorkspace
+      layout={layout}
+      rootRef={rootRef}
+      bodyRef={bodyRef}
+      rail={<ToolRail tool={tool} onTool={onTool} tools={tools} disabled={disabled} orientation="vertical" />}
+      leftRail={leftRail}
+      main={
+        <>
+          {modeRow}
+          {stage}
+          {AnimatePart && (
+            // The timeline strip is a Pro panel too: its free footer under it (the shell draws it).
+            <div className="flex max-h-[40%] min-h-0 shrink-0 flex-col border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)]" data-testid="pro-timeline">
+              <ProPanelFrame>
+                <PartSlot Panel={AnimatePart} props={panelProps} />
+              </ProPanelFrame>
+            </div>
+          )}
+          {filmstrip}
+        </>
+      }
+      dock={<ProDock ref={dockRef} tabs={tabs} value={dockTab} onChange={onDockTab} width={layout.dockW} top={coach} />}
+    >
+      {children}
+    </ProWorkspace>
+  );
+};
+
+// ── The tablet tool row (768: tools as a row; Layers / Assets toggles) ───────
+
+export type ProDrawerId = 'layers' | 'assets';
+
+export interface ProToolRowProps {
+  tool: ProTool;
+  onTool(tool: ProTool): void;
+  tools: readonly ProTool[];
+  disabled: Partial<Record<ProTool, string>>;
+  /** The drawer toggles to show (a part that is mounted), and which drawer is open. */
+  drawers: readonly ProDrawerId[];
+  drawer: ProDrawerId | null;
+  onDrawer(id: ProDrawerId | null): void;
+}
+
+const DRAWER_LABEL: Record<ProDrawerId, string> = { layers: 'Layers', assets: 'Assets' };
+
+export const ProToolRow: React.FC<ProToolRowProps> = ({ tool, onTool, tools, disabled, drawers, drawer, onDrawer }) => (
+  <ToolRail
+    tool={tool}
+    onTool={onTool}
+    tools={tools}
+    disabled={disabled}
+    orientation="horizontal"
+    extra={
+      drawers.length ? (
+        <span role="group" aria-label="Panels" className="ml-auto flex shrink-0 items-center gap-1 border-l border-[var(--ds-hairline)] pl-1" data-testid="pro-drawer-toggles">
+          {drawers.map((id) => (
+            <ToolButton
+              key={id}
+              label={DRAWER_LABEL[id]}
+              icon={id === 'layers' ? <Layers className="h-4 w-4" /> : <Images className="h-4 w-4" />}
+              active={drawer === id}
+              aria-controls="pro-drawer"
+              data-drawer={id}
+              data-testid={`pro-drawer-${id}`}
+              onClick={() => onDrawer(drawer === id ? null : id)}
+            />
+          ))}
+        </span>
+      ) : undefined
+    }
+  />
+);
+
+// ── The tablet drawer (Layers / Assets) and the tablet inspector sheet ───────
+
+export interface ProDrawerProps {
+  id: ProDrawerId;
+  onClose(): void;
+  children: React.ReactNode;
+}
+
+/**
+ * The 768 tablet's left overlay drawer (master plan §2.7: "Layers and Assets in a left overlay drawer"): over the stage,
+ * on the sheet layer, a scrim behind it that closes it; Esc closes; its panel reads PRO_FREE_FOOTER.
+ */
+export const ProDrawer: React.FC<ProDrawerProps> = ({ id, onClose, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, [id]);
+  return (
+    <>
+      <button type="button" aria-label={`Close ${DRAWER_LABEL[id]}`} tabIndex={-1} data-testid="pro-drawer-scrim" onClick={onClose} className={cn('absolute inset-0 cursor-default', SCRIM, editorZ('scrim'))} />
+      <div
+        ref={ref}
+        id="pro-drawer"
+        role="dialog"
+        aria-label={DRAWER_LABEL[id]}
+        tabIndex={-1}
+        data-testid="pro-drawer"
+        data-drawer={id}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+        className={cn('absolute inset-y-0 left-0 flex min-h-0 flex-col overflow-hidden border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[shadow:var(--ds-shadow-overlay)] focus-visible:outline-none', editorZ('sheet'))}
+        style={{ width: `min(${PRO_SIDE_SHEET_W}px, 85vw)` }}
+      >
+        <header className="flex shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-1.5">
+          <h3 className={cn('m-0 min-w-0 flex-1 text-[13px] font-semibold', INK)}>{DRAWER_LABEL[id]}</h3>
+          <IconButton label={`Close ${DRAWER_LABEL[id]}`} onClick={onClose}>
+            <X className="h-4 w-4" aria-hidden />
+          </IconButton>
+        </header>
+        <ProPanelFrame>{children}</ProPanelFrame>
+      </div>
+    </>
+  );
+};
+
+/** The 768 tablet's inspector (master plan §2.7: an AdaptiveSheet at most 40 % tall): the inspector part, at the stage's foot. */
+export const ProInspectorSheet: React.FC<{ onClose(): void; height: number; children: React.ReactNode }> = ({ onClose, height, children }) => (
+  <div
+    role="dialog"
+    aria-label="Properties"
+    data-testid="pro-inspector-sheet"
+    onKeyDown={(e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    }}
+    className={cn('absolute inset-x-0 bottom-0 flex max-h-[40vh] min-h-0 flex-col overflow-hidden border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[shadow:var(--ds-shadow-overlay)]', editorZ('sheet'))}
+    style={{ height }}
+  >
+    <header className="flex shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-1.5">
+      <h3 className={cn('m-0 min-w-0 flex-1 text-[13px] font-semibold', INK)}>Properties</h3>
+      <IconButton label="Close Properties" onClick={onClose}>
+        <X className="h-4 w-4" aria-hidden />
+      </IconButton>
+    </header>
+    <ProPanelFrame>{children}</ProPanelFrame>
+  </div>
+);
+
+export interface ProTabletPanelsProps {
+  parts: MountedParts;
+  panelProps: ProPanelProps;
+  drawer: ProDrawerId | null;
+  onDrawer(id: ProDrawerId | null): void;
+  /** The inspector sheet shows (a selection, the inspector part mounted) and its height (≤ 40 % of the body). */
+  inspector: boolean;
+  inspectorHeight: number;
+  onCloseInspector(): void;
+}
+
+/** The tablet's Pro panels: the left drawer and the inspector sheet, each with the mounted part in it. */
+export const ProTabletPanels: React.FC<ProTabletPanelsProps> = ({ parts, panelProps, drawer, onDrawer, inspector, inspectorHeight, onCloseInspector }) => {
+  const DrawerPart = drawer === 'layers' ? parts.layers : drawer === 'assets' ? parts.assets : undefined;
+  const InspectorPart = parts.inspector;
+  return (
+    <>
+      {inspector && InspectorPart && (
+        <ProInspectorSheet onClose={onCloseInspector} height={inspectorHeight}>
+          <PartSlot Panel={InspectorPart} props={panelProps} />
+        </ProInspectorSheet>
+      )}
+      {drawer && DrawerPart && (
+        <ProDrawer id={drawer} onClose={() => onDrawer(null)}>
+          <PartSlot Panel={DrawerPart} props={panelProps} />
+        </ProDrawer>
+      )}
+    </>
+  );
+};

@@ -14,7 +14,9 @@
 //   shell-flag-off       the flag off: exactly today's editor (the comparison scene)
 //
 // The layout smoke reads `window.__QA_PRO_SCENES__` (published while this surface is mounted), as it reads the app
-// scenes. Phones: D7 shows Easy on the first open, so the Pro scenes record "Pro" as this device's last choice first.
+// scenes. Phones: D7 shows Easy until this device has a stored choice (useStudioMode's `comicstudio.mode`), so the Pro
+// scenes record "Pro" there first and the Easy scenes clear it. Only shell-pro-parts shows the coach cards (the others
+// store every card as dismissed).
 // Keep the export's name and props (the harness passes the parsed Comic Studio params with `surface: 'pro'`).
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -23,7 +25,8 @@ import { CANVAS_BG, FOCUS_RING, HEADING, HOVER_ROW, INK, MUTED, OVERLINE } from 
 import type { QaParams } from '../../components/comicstudio/testing/qaController';
 import { qaSceneFromParams, useQaController } from '../../components/comicstudio/testing/qaController';
 import { PageEditor } from '../../components/comicstudio/board/PageEditor';
-import { EDITOR_MODE_KEY, PRO_COACH_KEY, ProPartsContext, partModule, type ProPartModule, type ProPanelProps } from '../../components/comicstudio/editor/useProEditor';
+import { PRO_COACH_CARDS, PRO_COACH_KEY, ProPartsContext, partModule, type ProPartModule, type ProPanelProps } from '../../components/comicstudio/editor/useProEditor';
+import { MODE_STORAGE_KEY } from '../../components/comicstudio/useStudioMode';
 import type { ProEditPartId } from '../../shared/comic/pro/types';
 
 /** The Pro Edit scenes this surface can mount. */
@@ -98,8 +101,8 @@ const ProScene: React.FC<{ params: QaProParams; scene: QaProScene }> = ({ params
   const pro = scene !== 'shell-easy' && scene !== 'shell-flag-off';
   // Before the editor mounts: this device's last editor choice (D7) and the coach cards (only the parts scene shows them).
   useState(() => {
-    store(EDITOR_MODE_KEY, pro ? 'pro' : null);
-    store(PRO_COACH_KEY, scene === 'shell-pro-parts' ? null : '1');
+    store(MODE_STORAGE_KEY, pro ? 'pro' : null);
+    store(PRO_COACH_KEY, scene === 'shell-pro-parts' ? null : JSON.stringify(PRO_COACH_CARDS.map((c) => c.id)));
     return true;
   });
   const init = useMemo(() => {

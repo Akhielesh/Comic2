@@ -10,10 +10,27 @@
 //
 // Nothing here fires while typing (isEditableTarget): a field, a textarea, a select or contentEditable text keeps
 // every key, so "Shift+P" in the Edit-with-AI box types a P.
+//
+// The page editor's Easy path reads only keys.ts (re-exported here); this file — the tools' names and hints and the
+// shortcut sheet — is for the rail, the sheet (both lazy) and tests (master plan §2.8).
 
-import type { StudioSelection } from '../types';
+import { PRO_TOOL_KEYS, type ProTool } from './keys';
 
-export type ProTool = 'select' | 'text' | 'balloon' | 'sfx' | 'shapes' | 'markup' | 'hand' | 'zoom';
+// The core (ids, keys, the typing test, the shell shortcut, the arrow guard) is keys.ts, the Easy path's only part.
+export {
+  PRO_TOOL_IDS,
+  PRO_TOOL_KEYS,
+  TOOL_LINE_KIND,
+  isEditableTarget,
+  isLetteringTool,
+  selectionHoldsArrows,
+  shellShortcut,
+  type KeyLike,
+  type LetteringTool,
+  type ProTool,
+  type ShellShortcut,
+  type ShortcutContext
+} from './keys';
 
 export interface ProToolSpec {
   id: ProTool;
@@ -28,87 +45,20 @@ export interface ProToolSpec {
 
 /** The rail, in order (master plan §2.7). */
 export const PRO_TOOLS: readonly ProToolSpec[] = [
-  { id: 'select', key: 'V', label: 'Select', hint: 'Select and move balloons' },
-  { id: 'text', key: 'T', label: 'Text', hint: 'Click the page to add a caption', letters: true },
-  { id: 'balloon', key: 'B', label: 'Balloon', hint: 'Click the page to add a speech balloon', letters: true },
-  { id: 'sfx', key: 'S', label: 'Sound effect', hint: 'Click the page to add a sound effect', letters: true },
-  { id: 'shapes', key: 'U', label: 'Shapes', hint: 'Click the page to add a rectangle' },
-  { id: 'markup', key: 'M', label: 'Mark up', hint: 'Drag a box on the art to show the AI what to change' },
-  { id: 'hand', key: 'H', label: 'Hand', hint: 'Drag to pan the page' },
-  { id: 'zoom', key: 'Z', label: 'Zoom', hint: 'Zoom controls; pinch or Ctrl + scroll also zoom' }
+  { id: 'select', key: PRO_TOOL_KEYS.select, label: 'Select', hint: 'Select and move balloons' },
+  { id: 'text', key: PRO_TOOL_KEYS.text, label: 'Text', hint: 'Click the page to add a caption', letters: true },
+  { id: 'balloon', key: PRO_TOOL_KEYS.balloon, label: 'Balloon', hint: 'Click the page to add a speech balloon', letters: true },
+  { id: 'sfx', key: PRO_TOOL_KEYS.sfx, label: 'Sound effect', hint: 'Click the page to add a sound effect', letters: true },
+  { id: 'shapes', key: PRO_TOOL_KEYS.shapes, label: 'Shapes', hint: 'Click the page to add a rectangle' },
+  { id: 'markup', key: PRO_TOOL_KEYS.markup, label: 'Mark up', hint: 'Drag a box on the art to show the AI what to change' },
+  { id: 'hand', key: PRO_TOOL_KEYS.hand, label: 'Hand', hint: 'Drag to pan the page' },
+  { id: 'zoom', key: PRO_TOOL_KEYS.zoom, label: 'Zoom', hint: 'Zoom controls; pinch or Ctrl + scroll also zoom' }
 ];
 
 export const toolSpec = (id: ProTool): ProToolSpec => PRO_TOOLS.find((t) => t.id === id) ?? PRO_TOOLS[0];
 
-/** The line kind a lettering tool places (Text = a caption box, Balloon = speech, Sound effect = SFX). */
-export const TOOL_LINE_KIND = { text: 'caption', balloon: 'speech', sfx: 'sfx' } as const;
-export type LetteringTool = keyof typeof TOOL_LINE_KIND;
-export const isLetteringTool = (t: ProTool): t is LetteringTool => t === 'text' || t === 'balloon' || t === 'sfx';
-
-/** A field, a textarea, a select or editable text: keys there are typing, never shortcuts. */
-export const isEditableTarget = (el: EventTarget | null): boolean => {
-  if (!el || typeof (el as HTMLElement).tagName !== 'string') return false;
-  const node = el as HTMLElement;
-  const tag = node.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable === true;
-};
-
-/** What a key press asks the Pro shell for (null: not a shell shortcut, let it through). */
-export type ShellShortcut =
-  | { kind: 'tool'; tool: ProTool }
-  | { kind: 'toggle-mode' }
-  | { kind: 'help' }
-  | { kind: 'cycle'; dir: 1 | -1 }
-  | { kind: 'select-all' };
-
-export interface KeyLike {
-  key: string;
-  shiftKey?: boolean;
-  altKey?: boolean;
-  metaKey?: boolean;
-  ctrlKey?: boolean;
-  target?: EventTarget | null;
-}
-
-export interface ShortcutContext {
-  /** COMIC_PRO_EDITOR_V2 is on (Shift+P and ? exist). */
-  flag: boolean;
-  /** The Pro view is showing (tools, Tab cycling and ⌘A). */
-  pro: boolean;
-  /** Tools the rail offers right now (a hidden or disabled tool's key does nothing). */
-  tools: ReadonlySet<ProTool>;
-}
-
-const TOOL_BY_KEY: ReadonlyMap<string, ProTool> = new Map(PRO_TOOLS.map((t) => [t.key.toLowerCase(), t.id]));
-
-/** The shell shortcut for a key press, or null. Pure. */
-export function shellShortcut(e: KeyLike, ctx: ShortcutContext): ShellShortcut | null {
-  if (!ctx.flag || isEditableTarget(e.target ?? null)) return null;
-  const mod = !!(e.metaKey || e.ctrlKey);
-  if (!mod && !e.altKey && e.shiftKey && (e.key === 'P' || e.key === 'p')) return { kind: 'toggle-mode' };
-  if (!mod && !e.altKey && e.key === '?') return { kind: 'help' };
-  if (!ctx.pro) return null;
-  if (e.key === 'Tab' && !mod && !e.altKey) return { kind: 'cycle', dir: e.shiftKey ? -1 : 1 };
-  if (mod && !e.altKey && !e.shiftKey && (e.key === 'a' || e.key === 'A')) return { kind: 'select-all' };
-  if (mod || e.altKey || e.shiftKey) return null;
-  const tool = TOOL_BY_KEY.get(e.key.toLowerCase());
-  return tool && ctx.tools.has(tool) ? { kind: 'tool', tool } : null;
-}
-
-/** The next id in reading order from `current` (wrapping); the first (or last) when nothing is selected. */
-export function cycleReadingOrder(order: readonly string[], current: string | undefined, dir: 1 | -1): string | undefined {
-  if (!order.length) return undefined;
-  const at = current ? order.indexOf(current) : -1;
-  if (at < 0) return dir > 0 ? order[0] : order[order.length - 1];
-  return order[(at + dir + order.length) % order.length];
-}
-
-/**
- * The arrow-key page turn's guard (graft 4): never turn the page while anything on it is selected — balloons
- * (lineIds), overlays (layerIds) or panels (panelIds). Arrows then nudge the selection instead.
- */
-export const selectionHoldsArrows = (sel: Pick<StudioSelection, 'lineIds' | 'layerIds' | 'panelIds'> | null | undefined): boolean =>
-  !!sel && ((sel.lineIds?.length ?? 0) > 0 || (sel.layerIds?.length ?? 0) > 0 || (sel.panelIds?.length ?? 0) > 0);
+/** The next id in reading order (wrapping): a leaf module, so the balloon layer can read it without this table. */
+export { cycleReadingOrder } from './readingCycle';
 
 /** One row of the shortcut sheet. */
 export interface ShortcutRow {
@@ -118,7 +68,7 @@ export interface ShortcutRow {
 
 /** The shortcut sheet (?), grouped. Only rows that work in this build are listed. */
 export const SHORTCUT_SHEET: readonly { title: string; rows: readonly ShortcutRow[] }[] = [
-  { title: 'Tools', rows: PRO_TOOLS.map((t) => ({ keys: t.key, label: t.label })) },
+  { title: 'Tools', rows: /* @__PURE__ */ PRO_TOOLS.map((t) => ({ keys: t.key, label: t.label })) },
   {
     title: 'Selection',
     rows: [

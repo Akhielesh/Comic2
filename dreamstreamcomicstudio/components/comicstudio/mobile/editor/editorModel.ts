@@ -114,25 +114,6 @@ export function proWorkspaceFor(layout: Pick<EditorLayout, 'kind' | 'toolsWidth'
   return { kind: 'phone', railW: 0, dockW: 0, leftRailW: 0 };
 }
 
-/**
- * The page box inside the docked workspace's canvas for a window (px, the page fitted with the stage's 24 px inset):
- * where the page sits and where the dock begins. The page's right edge never passes the dock's left edge. Pure.
- */
-export function proDockedGeometry(
-  viewport: { w: number; h: number },
-  ws: ProWorkspaceLayout,
-  opts: { aspect: number; chromeH: number; leftRail?: boolean; inset?: number }
-): { stage: { left: number; width: number; height: number }; page: { left: number; right: number; width: number }; dockLeft: number } {
-  const inset = opts.inset ?? 24;
-  const left = ws.railW + (opts.leftRail ? ws.leftRailW : 0);
-  const dockLeft = Math.max(left, viewport.w - ws.dockW);
-  const width = Math.max(0, dockLeft - left);
-  const height = Math.max(0, viewport.h - opts.chromeH);
-  const fit = Math.max(0, Math.floor(Math.min(width - inset * 2, (height - inset * 2) * (opts.aspect > 0 ? opts.aspect : 1))));
-  const pageLeft = left + (width - fit) / 2;
-  return { stage: { left, width, height }, page: { left: pageLeft, right: pageLeft + fit, width: fit }, dockLeft };
-}
-
 // ── Tools sheet detents ──────────────────────────────────────────────────────
 
 export type ToolsDetent = 'peek' | 'half' | 'full';

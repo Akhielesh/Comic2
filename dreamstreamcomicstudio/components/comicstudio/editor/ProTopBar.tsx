@@ -10,7 +10,7 @@
 //    for the Pages toolbar.
 //  - Undo shows what it undoes; the zoom is read-only here (pinch, Ctrl + scroll or the Zoom tool change it).
 //  - Phones show the switch only (the header has no room for more at 320 px); the shortcut sheet is reachable from the
-//    tools sheet there.
+//    tools sheet there. The page editor loads this bar lazily (editor/proLazy.ts) and shows ProModeSwitch until it is in.
 //  - Preview ▶ and Export arrive with PE-ANIMATE / PE-SHELL-2 (S3): no button is drawn for something that cannot run.
 
 import React from 'react';
@@ -18,52 +18,12 @@ import { CircleHelp, Redo2, Undo2 } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import { DENSITY, FOCUS_RING, INK, MUTED, RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
-import { IconButton, Segmented } from '../board/ui';
+import { IconButton } from '../board/ui';
+import { ProModeSwitch } from './ProModeSwitch';
 
-/** The switch's group name (M6: not "Editor view"). */
-export const MODE_GROUP_LABEL = 'Easy or Pro mode';
-
-export interface ProModeSwitchProps {
-  value: StudioMode;
-  onChange(mode: StudioMode): void;
-  /** caps.proEditor (true for everyone today; "Pro" is never "paid"). */
-  canPro: boolean;
-  size?: 'xs' | 'sm';
-  className?: string;
-}
-
-/** The one Easy | Pro switch (header on every layout; the Pages toolbar under DS-R10). */
-export const ProModeSwitch: React.FC<ProModeSwitchProps> = ({ value, onChange, canPro, size = 'xs', className }) => (
-  <span className={cn('inline-flex shrink-0', className)} data-testid="pro-mode-switch">
-    <Segmented<StudioMode>
-      label={MODE_GROUP_LABEL}
-      size={size}
-      value={canPro ? value : 'easy'}
-      onChange={(m) => m !== value && onChange(m)}
-      options={[
-        {
-          value: 'easy',
-          title: 'Easy mode: the essentials. Everything stays on the page.',
-          label: (
-            <>
-              Easy <span className="sr-only">mode</span>
-            </>
-          )
-        },
-        {
-          value: 'pro',
-          disabled: !canPro,
-          title: canPro ? 'Pro mode: tools, layers and exact numbers. Free, done by the editor.' : 'Pro mode isn’t available here',
-          label: (
-            <>
-              Pro <span className="sr-only">mode</span>
-            </>
-          )
-        }
-      ]}
-    />
-  </span>
-);
+// The one Easy | Pro switch lives in its own small module (the page editor's header shows it on every layout, on the
+// Easy path too, without loading this bar); it is re-exported here under its names (DS-R10 reuses it).
+export { ProModeSwitch, MODE_GROUP_LABEL, type ProModeSwitchProps } from './ProModeSwitch';
 
 export interface ProTopBarProps {
   mode: StudioMode;
@@ -111,7 +71,9 @@ export const ProTopBar: React.FC<ProTopBarProps> = ({ mode, onModeChange, canPro
         </span>
       )}
       {extras && variant === 'full' && (
-        <span className={cn('hidden px-1 text-[12px] tabular-nums lg:inline', MUTED)} aria-label={`Zoom ${Math.round(zoom * 100)} percent`} data-testid="pro-zoom">
+        // Visible text a screen reader reads as it is ("Zoom 150%"): aria-label on a role-less span is not announced.
+        <span className={cn('hidden px-1 text-[12px] tabular-nums lg:inline', MUTED)} data-testid="pro-zoom">
+          <span className="sr-only">Zoom </span>
           {Math.round(zoom * 100)}%
         </span>
       )}

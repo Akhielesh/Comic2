@@ -2,12 +2,18 @@
 // window.__QA_PRO_SCENES__ for the layout smoke; each scene mounts the real page editor offline, with exactly one <main>.
 
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { parseQaHarnessParams } from '../ComicQaApp';
 import { QA_PRO_SCENES, QaProSurface, type QaProParams } from './index';
 
 vi.mock('../../components/usage/useUsageAllowance', () => ({ useUsageAllowance: () => null }));
+
+// The Pro view's pieces load lazily (editor/proLazy.ts); warm their modules once so each test waits on React, not on the
+// first transform of a module.
+beforeAll(async () => {
+  await Promise.all([import('../../components/comicstudio/editor/ProWorkspace'), import('../../components/comicstudio/editor/ProTopBar'), import('../../components/comicstudio/editor/balloonTransform'), import('../../components/comicstudio/editor/proShapes'), import('../../components/comicstudio/editor/proNudge')]);
+}, 30_000);
 
 afterEach(() => {
   cleanup();
@@ -42,15 +48,15 @@ describe('the Pro Edit QA surface', () => {
   it('shell-pro mounts the editor in Pro with the rail and the switch on Pro', async () => {
     await mount('shell-pro');
     expect(document.querySelectorAll('main')).toHaveLength(1);
-    expect(screen.getByTestId('pro-tool-rail')).toBeInTheDocument();
+    expect(await screen.findByTestId('pro-tool-rail')).toBeInTheDocument();
     const group = within(screen.getByTestId('editor-header')).getByRole('radiogroup', { name: 'Easy or Pro mode' });
     expect(within(group).getByRole('radio', { name: 'Pro mode' })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('shell-pro-parts mounts the stand-in parts and the coach', async () => {
     await mount('shell-pro-parts');
-    expect(document.querySelector('[data-qa-stub-part="Properties"]')).not.toBeNull();
-    expect(screen.getByTestId('pro-coach')).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-qa-stub-part="Properties"]')).not.toBeNull());
+    expect(await screen.findByTestId('pro-coach')).toBeInTheDocument();
   });
 
   it('shell-flag-off is today’s editor: no switch in the header', async () => {

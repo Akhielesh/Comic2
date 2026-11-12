@@ -5,9 +5,8 @@
 // Every Pro edit is free software: this folder never imports editActionFor and never calls studio.act
 // (proEdit.contract.test.ts scans it).
 
-import type { ProEditPart } from '../../../../shared/comic/pro/types';
-
-export const part: ProEditPart = { id: 'kit', ready: true };
+// The part flag lives in part.ts (no controls behind it), so the shell's Easy path reads it without this barrel.
+export { part } from './part';
 
 export { ToolButton, TOOL_BUTTON_BASE, TOOL_BUTTON_IDLE, type ToolButtonProps } from './ToolButton';
 export { PropertyRow, type PropertyRowProps } from './PropertyRow';
@@ -15,4 +14,4 @@ export { ScrubField, clampToStep, parseNumber, type ScrubFieldProps } from './Sc
 export { SliderField, type SliderFieldProps } from './SliderField';
 export { SwatchPopover, normalizeHex, type SwatchPopoverProps } from './SwatchPopover';
 export { PresetCard, type PresetCardProps } from './PresetCard';
-export { EDITOR_Z, editorZ, type EditorZLayer } from './zLayers';
+export { EDITOR_Z, PAGE_Z, editorZ, type EditorZLayer } from './zLayers';

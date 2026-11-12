@@ -24,3 +24,17 @@ export type EditorZLayer = keyof typeof EDITOR_Z;
 
 /** The class for an editor layer. */
 export const editorZ = (layer: EditorZLayer): string => EDITOR_Z[layer];
+
+/**
+ * The page box's OWN stacking (local to the page, inside the ladder's stage rung 0–30; never a ladder step and never a
+ * class): the balloon layer's hit boxes sit at 1 (5 selected), the art-side layers (mark-up, the Shapes place layer) at
+ * 3, and every handle at 6 — the same rungs as the balloon layer's tail and width handles (`z-[6]` in BalloonLayer.tsx,
+ * counted by the z-ladder ratchet). The Pro handles and layers set these as an inline zIndex, so the ratchet's counts
+ * stay what they are and the rungs are named in one place (kit.test.tsx pins them inside 1–30).
+ */
+export const PAGE_Z = {
+  /** The Shapes tool's place layer (over the art and the mark-up layer, under the balloons' handles). */
+  place: 3,
+  /** The rotate and height handles (with the tail and width handles). */
+  handles: 6
+} as const;

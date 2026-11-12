@@ -5,7 +5,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { SEGMENTED_ACTIVE, Z } from '../../../chat/studioDesign';
-import { EDITOR_Z, PresetCard, PropertyRow, ScrubField, SliderField, SwatchPopover, ToolButton, clampToStep, editorZ, normalizeHex, parseNumber, part } from './index';
+import { EDITOR_Z, PAGE_Z, PresetCard, PropertyRow, ScrubField, SliderField, SwatchPopover, ToolButton, clampToStep, editorZ, normalizeHex, parseNumber, part } from './index';
 
 afterEach(cleanup);
 
@@ -158,6 +158,17 @@ describe('PresetCard', () => {
     expect(b).toHaveAttribute('aria-pressed', 'true');
     expect(b.textContent).toContain('Free');
     expect(b.className).toMatch(COARSE);
+  });
+});
+
+describe('PAGE_Z (the page box’s own stacking)', () => {
+  it('names local rungs inside the stage’s 1–30 (never a ladder step): the place layer under the handles', () => {
+    for (const v of Object.values(PAGE_Z)) {
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(1);
+      expect(v).toBeLessThanOrEqual(30);
+    }
+    expect(PAGE_Z.place).toBeLessThan(PAGE_Z.handles);
   });
 });
 

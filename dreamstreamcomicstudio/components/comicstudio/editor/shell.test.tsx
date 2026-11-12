@@ -7,7 +7,8 @@ import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@te
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { IN_ART_LETTERING_NOTE, PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
 import { PRO_TOOLS, SHORTCUT_SHEET, cycleReadingOrder, isEditableTarget, selectionHoldsArrows, shellShortcut, type ProTool } from './shortcuts';
-import { EDITOR_MODE_KEY, coachCardsFor, editorViewFor, requestEditorTool, takeEditorTool, useProEditor } from './useProEditor';
+import { PRO_COACH_KEY, PRO_COACH_READERS_LINE, coachCardsFor, editorViewFor, reachableParts, readDismissedTips, useProEditor } from './useProEditor';
+import { MODE_STORAGE_KEY, useStudioMode } from '../useStudioMode';
 import { ToolRail } from './ToolRail';
 import { MODE_GROUP_LABEL, ProModeSwitch, ProTopBar } from './ProTopBar';
 import { ProCoach, ProDock, ShortcutSheet } from './ProWorkspace';
@@ -75,9 +76,11 @@ describe('editorViewFor (D7)', () => {
     expect(editorViewFor({ flag: false, canPro: true, phone: true, studioMode: 'pro', stored: null })).toBe('pro');
     expect(editorViewFor({ flag: false, canPro: false, phone: false, studioMode: 'pro', stored: null })).toBe('easy');
   });
-  it('flag on, phone: Easy on the first open, then the last choice on this device', () => {
+  it('flag on, phone: Easy until this device has a stored choice (useStudioMode’s key), then studio.mode', () => {
     expect(editorViewFor({ flag: true, canPro: true, phone: true, studioMode: 'pro', stored: null })).toBe('easy');
-    expect(editorViewFor({ flag: true, canPro: true, phone: true, studioMode: 'easy', stored: 'pro' })).toBe('pro');
+    expect(editorViewFor({ flag: true, canPro: true, phone: true, studioMode: 'pro', stored: 'pro' })).toBe('pro');
+    // A choice exists: the studio's view (a later switch elsewhere on this device included) wins.
+    expect(editorViewFor({ flag: true, canPro: true, phone: true, studioMode: 'easy', stored: 'pro' })).toBe('easy');
   });
   it('flag on, larger layouts: studio.mode', () => {
     expect(editorViewFor({ flag: true, canPro: true, phone: false, studioMode: 'pro', stored: 'easy' })).toBe('pro');
@@ -87,15 +90,21 @@ describe('editorViewFor (D7)', () => {
 describe('useProEditor', () => {
   const studioWith = (mode: 'easy' | 'pro' = 'easy', flag = true) => ({ caps: { ...DEFAULT_CAPS, proEditorV2: flag }, mode, setMode: vi.fn() });
 
-  it('setView calls setMode (and remembers on a phone); it never touches the document', () => {
-    const studio = studioWith('easy');
-    const { result } = renderHook(() => useProEditor(studio, { pageId: 'pg_1', phone: true, inArt: false }));
+  it('setView calls setMode; on a phone the ONE device key (comicstudio.mode) is the memory; it never touches the document', () => {
+    const caps = { ...DEFAULT_CAPS, proEditorV2: true, defaultMode: 'pro' as const };
+    const setMode = vi.fn();
+    const { result } = renderHook(() => {
+      const m = useStudioMode(caps);
+      return useProEditor({ caps, mode: m.mode, setMode: (x) => (setMode(x), m.setMode(x)) }, { pageId: 'pg_1', phone: true, inArt: false });
+    });
+    // First open on this device: Easy, though the plan's default is Pro.
     expect(result.current.view).toBe('easy');
     act(() => result.current.setView('pro'));
-    expect(studio.setMode).toHaveBeenCalledWith('pro');
-    expect(window.localStorage.getItem(EDITOR_MODE_KEY)).toBe('pro');
+    expect(setMode).toHaveBeenCalledWith('pro');
+    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('pro');
     expect(result.current.view).toBe('pro');
     expect(result.current.pro).toBe(true);
+    expect(window.localStorage.getItem('comicstudio.editor.mode')).toBeNull();
   });
 
   it('flag off: off, today’s view, no parts; storage throwing never breaks it', () => {
@@ -116,18 +125,59 @@ describe('useProEditor', () => {
     expect(result.current.tools).not.toContain('shapes');
   });
 
-  it('"Edit lettering" hands the next editor on that page its tool, once', () => {
-    requestEditorTool('pg_2', 'balloon');
-    expect(takeEditorTool('pg_1')).toBeNull();
+  it('the editor opens on the Select tool', () => {
     const { result } = renderHook(() => useProEditor(studioWith('pro'), { pageId: 'pg_2', phone: false, inArt: false }));
-    expect(result.current.tool).toBe('balloon');
-    expect(takeEditorTool('pg_2')).toBeNull();
+    expect(result.current.tool).toBe('select');
   });
 
-  it('coach cards follow the mounted parts', () => {
+  it('coach cards follow the mounted parts, and only the ones this layout can reach', () => {
     const P = () => null;
     expect(coachCardsFor({}).map((c) => c.id)).toEqual([]);
     expect(coachCardsFor({ layers: P, assets: P, animate: P }).map((c) => c.id)).toEqual(['layers', 'effects', 'animate']);
+    const all = { layers: P, assets: P, animate: P };
+    expect(coachCardsFor(reachableParts(all, 'docked')).map((c) => c.id)).toEqual(['layers', 'effects', 'animate']);
+    // 768: Layers and Assets have the tool row's drawer; there is no timeline there in S2.
+    expect(coachCardsFor(reachableParts(all, 'tool-row')).map((c) => c.id)).toEqual(['layers', 'effects']);
+    // Phones: the thumb bar's Layers button only.
+    expect(coachCardsFor(reachableParts(all, 'phone')).map((c) => c.id)).toEqual(['layers']);
+  });
+
+  it('the Animate tip promises what readers see only with reader motion on (COMIC_READER_MOTION, off by default)', () => {
+    const P = () => null;
+    const off = coachCardsFor({ animate: P })[0];
+    expect(off.body).toBe('Give a balloon or an effect an entrance you can preview here and export as video.');
+    expect(off.body).not.toMatch(/readers/i);
+    expect(coachCardsFor({ animate: P }, { readerMotion: true })[0].body).toBe(`${off.body} ${PRO_COACH_READERS_LINE}`);
+  });
+
+  it('a dismissed tip stays dismissed per card: a part that mounts later still shows its tip once; "again" resets', () => {
+    const P = () => null;
+    const caps = { ...DEFAULT_CAPS, proEditorV2: true };
+    const studio = { caps, mode: 'pro' as const, setMode: vi.fn() };
+    const only = { layers: { part: { id: 'layers' as const, ready: true }, Panel: P } };
+    const read1 = (id: string) => (only as Record<string, unknown>)[id] ?? { part: { id, ready: false } };
+    const first = renderHook(() => useProEditor(studio, { pageId: 'pg_1', phone: false, inArt: false }, read1 as never));
+    expect(first.result.current.coach.cards.map((c) => c.id)).toEqual(['layers']);
+    act(() => first.result.current.coach.dismiss());
+    expect(JSON.parse(window.localStorage.getItem(PRO_COACH_KEY)!)).toEqual(['layers']);
+    expect(first.result.current.coach.open).toBe(false);
+    first.unmount();
+    // S3: the assets part mounts. Its tip shows; the dismissed Layers tip does not.
+    const both = { ...only, assets: { part: { id: 'assets' as const, ready: true }, Panel: P } };
+    const read2 = (id: string) => (both as Record<string, unknown>)[id] ?? { part: { id, ready: false } };
+    const second = renderHook(() => useProEditor(studio, { pageId: 'pg_1', phone: false, inArt: false }, read2 as never));
+    expect(second.result.current.coach.cards.map((c) => c.id)).toEqual(['effects']);
+    expect(second.result.current.coach.all.map((c) => c.id)).toEqual(['layers', 'effects']);
+    act(() => second.result.current.coach.reopen());
+    expect(second.result.current.coach.cards.map((c) => c.id)).toEqual(['layers', 'effects']);
+    expect(readDismissedTips()).toEqual([]);
+  });
+
+  it('a bad stored value is "none dismissed" (try/catch), never a crash', () => {
+    window.localStorage.setItem(PRO_COACH_KEY, '{not json');
+    expect(readDismissedTips()).toEqual([]);
+    window.localStorage.setItem(PRO_COACH_KEY, JSON.stringify(['layers', 'nope', 'layers']));
+    expect(readDismissedTips()).toEqual(['layers']);
   });
 });
 
@@ -162,7 +212,11 @@ describe('the pieces', () => {
   it('the top bar: undo says what it undoes, the zoom shows, phones get the switch only', () => {
     render(<ProTopBar mode="pro" onModeChange={vi.fn()} canPro variant="full" canUndo undoLabel="Move balloon" onUndo={vi.fn()} zoom={1.5} onHelp={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Undo Move balloon' }).textContent).toBe('Undo · Move balloon');
-    expect(screen.getByTestId('pro-zoom').textContent).toBe('150%');
+    // Visible text, read as "Zoom 150%" (no aria-label on a role-less span).
+    const zoom = screen.getByTestId('pro-zoom');
+    expect(zoom.textContent).toBe('Zoom 150%');
+    expect(zoom.querySelector('.sr-only')?.textContent).toBe('Zoom ');
+    expect(zoom).not.toHaveAttribute('aria-label');
     cleanup();
     render(<ProTopBar mode="pro" onModeChange={vi.fn()} canPro variant="phone" onHelp={vi.fn()} />);
     expect(screen.queryByTestId('pro-undo')).toBeNull();

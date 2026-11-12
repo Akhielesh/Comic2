@@ -6,36 +6,47 @@
 //  - One concept (zero-confusion rule 1): switching calls studio.setMode and never sends an op — the document, the
 //    engine and the undo stack are the same in Easy and in Pro.
 //  - Flag off (COMIC_PRO_EDITOR_V2): `on` is false and the view is exactly today's (studio.mode, gated by caps.proEditor).
-//  - Phones (D7, collisions C-18): the first open on a phone shows Easy, then the editor remembers the last choice on
-//    that device (localStorage `comicstudio.editor.mode`, try/catch). useStudioMode.ts is not this package's, so the
-//    per-device memory lives here; other layouts follow studio.mode as today.
+//  - Phones (D7, collisions C-18): the first open on a phone shows Easy, then the device's own last choice. The choice
+//    is the ONE per-device key useStudioMode already keeps (localStorage `comicstudio.mode`, read here through its
+//    readStoredMode, read-only): until it holds a value a phone opens in Easy, after that it follows studio.mode like
+//    every other layout — so a Pro choice made on the Pages switch (DS-R10) or in another tab is the editor's too.
 //  - A part mounts only when its `part.ready` is true AND the flag is on (an unfinished part never shows).
 //  - "Pro" is never "paid": nothing here reads a price, a tier or the spend gate.
+//  - This file is on the Easy path (the page editor imports it statically), so it reads the parts' flags only: the kit,
+//    compose and stage parts by name (`part`, tree-shaken from their barrels), the panel parts as their tiny index
+//    modules. Everything the Pro view draws loads through editor/proLazy.ts (master plan §2.8).
 //
 // The parts' mount contract (PE-INSPECT, PE-ASSETS, PE-ANIMATE fill their stubs; collisions B-16):
-//   export const part: ProEditPart            (PE-0, already there)
-//   export const Panel: React.ComponentType<ProPanelProps>   (inspector, layers, assets, animate)
-//   export const samples: readonly ProSample[]               (assets only: the "Start from a sample" entry)
-// The shell reads them through `partModule` below, so a stub without `Panel` simply mounts nothing.
+//   export const part: ProEditPart                                    (PE-0, already there)
+//   export const loadPanel = () => import('./Panel')                  (inspector, layers, assets, animate: the panel
+//                                                                       module exports `Panel: ComponentType<ProPanelProps>`;
+//                                                                       the shell mounts it lazily, so index.ts stays tiny
+//                                                                       and the panel never rides in the Easy path)
+//   export const Panel: React.ComponentType<ProPanelProps>            (accepted too — a stand-in or a test stub — but a
+//                                                                       real panel exported statically from index.ts
+//                                                                       would load with every page editor)
+//   export const samples: readonly ProSample[]                        (assets only: the "Start from a sample" entry)
+// The shell reads them through `partModule` below, so a stub without a panel simply mounts nothing.
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, lazy, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import type { ComicDoc, Page } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { LetterPlan } from '../../../shared/comic/lettering/layout';
-import { proEditorV2On, proMotionOn, type StudioMode } from '../../../shared/comic/capabilities';
+import { proEditorV2On, proMotionOn, readerMotionOn, type StudioMode } from '../../../shared/comic/capabilities';
 import { IN_ART_LETTERING_NOTE, type ProEditPart, type ProEditPartId, type ProSample } from '../../../shared/comic/pro/types';
 import type { PatchOptions, StudioController, StudioPresence } from '../types';
-import type { EditorLayoutKind } from '../mobile/editor/editorModel';
+import type { EditorLayoutKind, ProWorkspaceLayout } from '../mobile/editor/editorModel';
 import type { Placements } from '../lettering/useLetterPlans';
+import { readStoredMode } from '../useStudioMode';
 import * as inspectorModule from './inspector';
 import * as layersModule from './layers';
 import * as assetsModule from './assets';
 import * as animateModule from './animate';
-import * as stageModule from './stage';
-import * as kitModule from './kit';
-import * as composeModule from '../compose';
-import { PRO_TOOLS, isLetteringTool, type ProTool } from './shortcuts';
+import { part as stagePart } from './stage';
+import { part as kitPart } from './kit/part';
+import { part as composePart } from '../compose';
+import { PRO_TOOL_IDS, isLetteringTool, type ProTool } from './keys';
 
 // ── The parts ────────────────────────────────────────────────────────────────
 
@@ -57,6 +68,11 @@ export interface ProPanelProps {
   placements: Placements;
   /** The selected balloons (reading order, primary first). */
   selection: { ids: readonly string[]; set(ids: string[]): void; clear(): void };
+  /**
+   * Select overlays (the Layers panel): the balloon selection is cleared first, then the studio selection becomes
+   * {pageId, lineIds: [], layerIds}, so the arrows nudge them (graft 4) and the balloon mirror never wipes it. [] clears.
+   */
+  selectLayers(ids: readonly string[]): void;
   /** Free, undoable, labelled edits (in an edition they land in it). Never editActionFor, never studio.act. */
   apply(ops: DocOp[], opts?: PatchOptions): void;
   /** Open the inline text editor on a balloon. */
@@ -75,9 +91,17 @@ export interface ProPanelProps {
 /** A PE-0 part module as the shell reads it (see the header). */
 export interface ProPartModule {
   part: ProEditPart;
+  /** The panel, loaded lazily (the module it imports exports `Panel`). */
+  loadPanel?: () => Promise<{ Panel: React.ComponentType<ProPanelProps> }>;
+  /** The panel, there already (stand-ins, test stubs). */
   Panel?: React.ComponentType<ProPanelProps>;
   samples?: readonly ProSample[];
 }
+
+// The flag-only parts, by name (their barrels' controls are tree-shaken away).
+const KIT: ProPartModule = { part: kitPart };
+const STAGE: ProPartModule = { part: stagePart };
+const COMPOSE: ProPartModule = { part: composePart };
 
 /** The part modules, read through one door (tests mock the stub files to stub a ready part). */
 export const partModule = (id: ProEditPartId): ProPartModule => {
@@ -91,13 +115,28 @@ export const partModule = (id: ProEditPartId): ProPartModule => {
     case 'animate':
       return animateModule as unknown as ProPartModule;
     case 'stage':
-      return stageModule as unknown as ProPartModule;
+      return STAGE;
     case 'kit':
-      return kitModule as unknown as ProPartModule;
+      return KIT;
     case 'compose':
     default:
-      return composeModule as unknown as ProPartModule;
+      return COMPOSE;
   }
+};
+
+/** One lazy component per part module (React.lazy must not be recreated per render). */
+const lazyPanels = new WeakMap<object, React.ComponentType<ProPanelProps>>();
+/** A part's panel: its `Panel`, else a lazy one over `loadPanel`, else none. Render it under a <Suspense>. */
+export const panelOf = (mod: ProPartModule): React.ComponentType<ProPanelProps> | undefined => {
+  if (mod.Panel) return mod.Panel;
+  const load = mod.loadPanel;
+  if (typeof load !== 'function') return undefined;
+  let p = lazyPanels.get(mod);
+  if (!p) {
+    p = lazy(() => load().then((m) => ({ default: m.Panel })));
+    lazyPanels.set(mod, p);
+  }
+  return p;
 };
 
 /**
@@ -124,7 +163,7 @@ export interface MountedParts {
 export const mountedParts = (flag: boolean, motion: boolean, read: (id: ProEditPartId) => ProPartModule = partModule): MountedParts => {
   const panel = (id: ProEditPartId) => {
     const mod = read(id);
-    return partMounts(mod, flag) && mod.Panel ? mod.Panel : undefined;
+    return partMounts(mod, flag) ? panelOf(mod) : undefined;
   };
   const assets = read('assets');
   return {
@@ -139,34 +178,15 @@ export const mountedParts = (flag: boolean, motion: boolean, read: (id: ProEditP
 
 // ── The view (D7) ────────────────────────────────────────────────────────────
 
-/** localStorage key of the editor's last view on THIS device (phones; D7). */
-export const EDITOR_MODE_KEY = 'comicstudio.editor.mode';
-
-export const readEditorMode = (): StudioMode | null => {
-  try {
-    const v = typeof window !== 'undefined' ? window.localStorage.getItem(EDITOR_MODE_KEY) : null;
-    return v === 'easy' || v === 'pro' ? v : null;
-  } catch {
-    return null;
-  }
-};
-
-export const writeEditorMode = (mode: StudioMode): void => {
-  try {
-    window.localStorage.setItem(EDITOR_MODE_KEY, mode);
-  } catch {
-    /* not persisted (private mode, blocked storage): the view still switches for this session */
-  }
-};
-
 /**
- * The editor's view. Flag off: exactly today (studio.mode, Easy without caps.proEditor). Flag on: phones show the last
- * choice made on this device, else Easy (first open); every other layout follows studio.mode. Pure.
+ * The editor's view. Flag off: exactly today (studio.mode, Easy without caps.proEditor). Flag on: a phone shows Easy
+ * until this device has a stored choice (`stored`: useStudioMode's readStoredMode(), null on the first open), then
+ * studio.mode; every other layout follows studio.mode. Pure.
  */
 export const editorViewFor = (o: { flag: boolean; canPro: boolean; phone: boolean; studioMode: StudioMode | undefined; stored: StudioMode | null }): StudioMode => {
   if (!o.canPro) return 'easy';
   if (!o.flag || !o.phone) return o.studioMode ?? 'easy';
-  return o.stored ?? 'easy';
+  return o.stored !== null ? o.studioMode ?? 'easy' : 'easy';
 };
 
 // ── Coach cards (§2.2 rule 5) ────────────────────────────────────────────────
@@ -181,48 +201,63 @@ export interface ProCoachCard {
 export const PRO_COACH_CARDS: readonly ProCoachCard[] = [
   { id: 'layers', title: 'Layers', body: 'Every balloon and overlay on the page in reading order. Pick one, hide it in this view, or lock it so it stays put.' },
   { id: 'effects', title: 'Effects & assets', body: 'Speed lines, bursts, looks and sound-effect words, ready to drop on the page. Each one is a free edit you can undo.' },
-  { id: 'animate', title: 'Animate', body: 'Give a balloon or an effect an entrance that plays when readers reach it. Press Play to preview; nothing changes the art.' }
+  // Readers play motion only with COMIC_READER_MOTION (master plan §2.10; off by default): the honest default copy
+  // promises the preview and the video, and "Readers see it too." joins it only when reader motion is on.
+  { id: 'animate', title: 'Animate', body: 'Give a balloon or an effect an entrance you can preview here and export as video.' }
 ];
 
-/** localStorage key: the Pro tips were dismissed on this device. */
+/** The Animate card's extra line, only while readers play motion (caps.readerMotion). */
+export const PRO_COACH_READERS_LINE = 'Readers see it too.';
+
+const COACH_IDS: readonly ProCoachId[] = ['layers', 'effects', 'animate'];
+const isCoachId = (v: unknown): v is ProCoachId => typeof v === 'string' && (COACH_IDS as readonly string[]).includes(v);
+
+/**
+ * localStorage key: the Pro tips dismissed on this device, as a JSON array of card ids (a card for a part that mounts
+ * later — Effects & assets, Animate — still shows once). "Show the Pro tips again" clears it.
+ */
 export const PRO_COACH_KEY = 'comicstudio.editor.proTips';
 
-const readFlag = (key: string): string | null => {
+/** The dismissed card ids (try/catch: blocked storage or a bad value is "none dismissed"). */
+export const readDismissedTips = (): ProCoachId[] => {
   try {
-    return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PRO_COACH_KEY) : null;
+    const v: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(v) ? [...new Set(v.filter(isCoachId))] : [];
   } catch {
-    return null;
-  }
-};
-const writeFlag = (key: string, value: string): void => {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    /* not persisted */
+    return [];
   }
 };
 
-/** The cards whose part is mounted (a tip about something the creator cannot see yet is never shown). Pure. */
-export const coachCardsFor = (parts: Pick<MountedParts, 'layers' | 'assets' | 'animate'>): ProCoachCard[] =>
-  PRO_COACH_CARDS.filter((c) => (c.id === 'layers' ? !!parts.layers : c.id === 'effects' ? !!parts.assets : !!parts.animate));
-
-// ── "Edit lettering" (§2.2 Entry) ────────────────────────────────────────────
-
-/** One pending "open the editor with this tool" request (the Pages card's Edit lettering), consumed once. */
-let pendingTool: { pageId: string; tool: ProTool } | null = null;
-
-/** Ask the next page editor opened on `pageId` to start with `tool` selected (then open it). */
-export const requestEditorTool = (pageId: string, tool: ProTool): void => {
-  pendingTool = { pageId, tool };
+export const writeDismissedTips = (ids: readonly ProCoachId[]): void => {
+  try {
+    if (ids.length) window.localStorage.setItem(PRO_COACH_KEY, JSON.stringify([...new Set(ids)]));
+    else window.localStorage.removeItem(PRO_COACH_KEY);
+  } catch {
+    /* not persisted: the tips come back next time */
+  }
 };
 
-/** The tool asked for this page, once (null when none, or for another page). */
-export const takeEditorTool = (pageId: string): ProTool | null => {
-  const p = pendingTool;
-  if (!p || p.pageId !== pageId) return null;
-  pendingTool = null;
-  return p.tool;
-};
+/**
+ * The cards whose part is mounted (a tip about something the creator cannot see yet is never shown); the Animate card
+ * says readers see it only with reader motion on. Pure.
+ */
+export const coachCardsFor = (parts: Pick<MountedParts, 'layers' | 'assets' | 'animate'>, opts: { readerMotion?: boolean } = {}): ProCoachCard[] =>
+  PRO_COACH_CARDS.filter((c) => (c.id === 'layers' ? !!parts.layers : c.id === 'effects' ? !!parts.assets : !!parts.animate)).map((c) =>
+    c.id === 'animate' && opts.readerMotion ? { ...c, body: `${c.body} ${PRO_COACH_READERS_LINE}` } : c
+  );
+
+/**
+ * The mounted panels the creator can REACH on this layout (a tip never describes a panel with no way in): docked, the
+ * dock and the left rail hold Layers, Assets and the timeline; the 768 tablet's tool row opens Layers and Assets in its
+ * drawer (no timeline there in S2); phones have the thumb bar's Layers button only. Pure.
+ */
+export const reachableParts = (parts: Pick<MountedParts, 'layers' | 'assets' | 'animate'>, workspace: ProWorkspaceLayout['kind']): Pick<MountedParts, 'layers' | 'assets' | 'animate'> =>
+  workspace === 'docked'
+    ? { layers: parts.layers, assets: parts.assets, animate: parts.animate }
+    : workspace === 'tool-row'
+      ? { layers: parts.layers, assets: parts.assets }
+      : { layers: parts.layers };
 
 // ── The hook ─────────────────────────────────────────────────────────────────
 
@@ -244,7 +279,8 @@ export interface ProEditorState {
   tools: readonly ProTool[];
   disabled: Partial<Record<ProTool, string>>;
   parts: MountedParts;
-  coach: { cards: ProCoachCard[]; open: boolean; dismiss(): void; reopen(): void };
+  /** `cards`: the tips to show now (reachable, not dismissed); `all`: every reachable tip (what "again" brings back). */
+  coach: { cards: ProCoachCard[]; all: ProCoachCard[]; open: boolean; dismiss(): void; reopen(): void };
   help: { open: boolean; toggle(): void; close(): void };
 }
 
@@ -255,6 +291,8 @@ export interface ProEditorOptions {
   inArt: boolean;
   /** The page has no drawing yet, or its art is blocked: Mark up needs art. */
   markupOff?: string;
+  /** How the Pro view lays out this window (proWorkspaceFor): which panels a coach card can point at. Default: phone ? 'phone' : 'docked'. */
+  workspace?: ProWorkspaceLayout['kind'];
 }
 
 export function useProEditor(studio: Pick<StudioController, 'caps' | 'mode' | 'setMode'>, opts: ProEditorOptions, readArg?: (id: ProEditPartId) => ProPartModule): ProEditorState {
@@ -263,18 +301,22 @@ export function useProEditor(studio: Pick<StudioController, 'caps' | 'mode' | 's
   const on = proEditorV2On(studio.caps);
   const canPro = studio.caps?.proEditor !== false;
   const motion = proMotionOn(studio.caps);
-  const [stored, setStored] = useState<StudioMode | null>(() => (on && opts.phone ? readEditorMode() : null));
-  const view = editorViewFor({ flag: on, canPro, phone: opts.phone, studioMode: studio.mode, stored });
+  const readerMotion = readerMotionOn(studio.caps);
+  // D7: has this device a stored Easy/Pro choice yet (useStudioMode's key)? Re-read when the studio's view changes
+  // (a switch here, on the Pages toolbar or in another tab writes it).
+  const [chosen, setChosen] = useState(() => readStoredMode() !== null);
+  useEffect(() => {
+    if (!chosen && readStoredMode() !== null) setChosen(true);
+  }, [studio.mode, chosen]);
+  const view = editorViewFor({ flag: on, canPro, phone: opts.phone, studioMode: studio.mode, stored: chosen ? studio.mode ?? 'easy' : null });
   const pro = on && view === 'pro';
 
   const setView = useCallback(
     (mode: StudioMode) => {
       if (mode !== 'easy' && mode !== 'pro') return;
       if (mode === 'pro' && !canPro) return;
-      if (on && opts.phone) {
-        writeEditorMode(mode);
-        setStored(mode);
-      }
+      // studio.setMode stores the choice on this device (useStudioMode); from now on a phone follows it.
+      if (on && opts.phone) setChosen(true);
       studio.setMode?.(mode);
     },
     [studio, on, canPro, opts.phone]
@@ -282,37 +324,43 @@ export function useProEditor(studio: Pick<StudioController, 'caps' | 'mode' | 's
   const toggleView = useCallback(() => setView(view === 'pro' ? 'easy' : 'pro'), [setView, view]);
 
   const parts = useMemo(() => mountedParts(on, motion, read), [on, motion, read]);
-  const tools = useMemo(() => PRO_TOOLS.map((t) => t.id).filter((id) => id !== 'shapes' || parts.compose), [parts.compose]);
+  const tools = useMemo(() => PRO_TOOL_IDS.filter((id) => id !== 'shapes' || parts.compose), [parts.compose]);
   const disabled = useMemo(() => {
     const out: Partial<Record<ProTool, string>> = {};
-    if (opts.inArt) for (const t of PRO_TOOLS) if (isLetteringTool(t.id)) out[t.id] = IN_ART_LETTERING_NOTE;
+    if (opts.inArt) for (const t of PRO_TOOL_IDS) if (isLetteringTool(t)) out[t] = IN_ART_LETTERING_NOTE;
     if (opts.markupOff) out.markup = opts.markupOff;
     return out;
   }, [opts.inArt, opts.markupOff]);
 
-  const [tool, setToolState] = useState<ProTool>(() => takeEditorTool(opts.pageId) ?? 'select');
+  const [tool, setToolState] = useState<ProTool>('select');
   const setTool = useCallback((t: ProTool) => setToolState(t), []);
   // A tool that went away (the part unmounted) or turned off falls back to Select.
   useEffect(() => {
     if (!tools.includes(tool) || disabled[tool]) setToolState('select');
   }, [tools, tool, disabled]);
 
-  const cards = useMemo(() => coachCardsFor(parts), [parts]);
-  const [coachDismissed, setCoachDismissed] = useState(() => readFlag(PRO_COACH_KEY) === '1');
-  const [coachForced, setCoachForced] = useState(false);
-  const coachOpen = pro && cards.length > 0 && (coachForced || !coachDismissed);
+  const workspace = opts.workspace ?? (opts.phone ? 'phone' : 'docked');
+  const all = useMemo(() => coachCardsFor(reachableParts(parts, workspace), { readerMotion }), [parts, workspace, readerMotion]);
+  const [dismissed, setDismissed] = useState<ProCoachId[]>(readDismissedTips);
+  const cards = useMemo(() => all.filter((c) => !dismissed.includes(c.id)), [all, dismissed]);
+  const coachOpen = pro && cards.length > 0;
   const coach = useMemo(
     () => ({
       cards,
+      all,
       open: coachOpen,
+      // "Got it" dismisses the tips shown now; a tip for a part that mounts later still shows once.
       dismiss: () => {
-        setCoachDismissed(true);
-        setCoachForced(false);
-        writeFlag(PRO_COACH_KEY, '1');
+        const next = [...new Set([...dismissed, ...cards.map((c) => c.id)])];
+        setDismissed(next);
+        writeDismissedTips(next);
       },
-      reopen: () => setCoachForced(true)
+      reopen: () => {
+        setDismissed([]);
+        writeDismissedTips([]);
+      }
     }),
-    [cards, coachOpen]
+    [cards, all, coachOpen, dismissed]
   );
 
   const [helpOpen, setHelpOpen] = useState(false);

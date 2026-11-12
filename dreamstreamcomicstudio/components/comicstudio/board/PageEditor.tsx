@@ -22,7 +22,7 @@
 // is shared; typing writes `translation`, dragging writes `edition_balloon`; the original is never
 // overwritten from another language. Safety: the art sits in a SafetyVeil at the comic's rating.
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -55,18 +55,31 @@ import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
-import { ACCENT_SOFT_BG, OVERLAY, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, SCRIM, STATUS_SURFACE, TONE_CHIP, TONE_TEXT, TRANSITION, Z } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, OVERLAY, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, SCRIM, STATUS_SURFACE, TONE_CHIP, TONE_FILL, TONE_TEXT, TRANSITION, Z } from '../../chat/studioDesign';
 import { IN_ART_LETTERING_NOTE, MADE_IN_PRO_CHIP, PRO_FREE_FOOTER } from '../../../shared/comic/pro/types';
 import { PRO_BUBBLE_SHAPES, PRO_SFX_EFFECTS, PRO_STYLE_KEYS } from '../../../shared/comic/lettering/style';
-import { NUDGE as ENGINE_NUDGE, moveEdit } from '../../../shared/comic/editor/transform';
-import { resolveDrop } from '../../../shared/comic/editor/drop';
 import { BalloonEditorExtrasContext, NO_BALLOON_EXTRAS, type BalloonEditorExtras } from './BalloonLayer';
 import { useProEditor, type ProEditorState, type ProPanelProps } from '../editor/useProEditor';
-import { ProTopBar } from '../editor/ProTopBar';
-import { ToolRail } from '../editor/ToolRail';
-import { ProCoach, ProDock, ProLayersSheet, ProPanelFrame, ProWorkspace, ShortcutSheet, type DockTab, type DockTabId } from '../editor/ProWorkspace';
-import { TOOL_LINE_KIND, isEditableTarget, isLetteringTool, selectionHoldsArrows, shellShortcut, toolSpec, type ProTool } from '../editor/shortcuts';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
+// The Easy path loads the switch, the key table, the shell's state and the lazy doors only; the Pro view's modules
+// (workspace, rail, top bar, handles, the B9 drop and transform engines) load through proLazy (master plan §2.8).
+import { ProModeSwitch } from '../editor/ProModeSwitch';
+import {
+  ProCoachLazy,
+  ProDockedWorkspaceLazy,
+  ProLayersSheetLazy,
+  ProTabletPanelsLazy,
+  ProToolRowLazy,
+  ProTopBarLazy,
+  ShapePlaceLayerLazy,
+  ShortcutSheetLazy,
+  loadOverlayNudge,
+  overlayNudgeNow,
+  preloadProShell,
+  useBalloonTransformKit
+} from '../editor/proLazy';
+import type { DockTabId, ProDrawerId } from '../editor/ProWorkspace';
+import { TOOL_LINE_KIND, isEditableTarget, isLetteringTool, selectionHoldsArrows, shellShortcut, type ProTool } from '../editor/keys';
+import type { StudioSelection } from '../types';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
@@ -194,6 +207,34 @@ export const inspectorSheetMaxHeight = (stageTop: number, viewportHeight: number
   const vh = Number.isFinite(viewportHeight) ? viewportHeight : 0;
   const keep = Math.max(minStage, Math.round(vh * MIN_STAGE_SHARE));
   return Math.max(MIN_SHEET_PX, Math.round(vh - (Number.isFinite(stageTop) ? stageTop : 0) - keep));
+};
+
+/** The header's status dot (flag on, phones: the chip folds to it; its words stay for a screen reader). */
+const HEADER_STATUS_DOT: Record<ReturnType<typeof pageVisualStatus>, string> = {
+  ready: TONE_FILL.success,
+  stale: TONE_FILL.warning,
+  failed: TONE_FILL.danger,
+  rendering: 'bg-[var(--ds-accent)]',
+  queued: 'bg-[var(--ds-accent)]',
+  planned: TONE_FILL.neutral,
+  empty: TONE_FILL.neutral
+};
+
+/** The share of the editor's body a Pro bottom sheet takes: the phone Layers sheet, and the 768 tablet's inspector (≤ 40 %). */
+export const PHONE_LAYERS_SHARE = 0.42;
+export const TABLET_INSPECTOR_SHARE = 0.4;
+
+/**
+ * A Pro bottom sheet's height (px) for an editor body `bodyH` px tall: its share, never under MIN_SHEET_PX, always
+ * leaving the page MIN_STAGE_PX (the stage shrinks by this much, so the sheet never covers the page). 0 before the body
+ * is measured. Pure.
+ */
+export const proBottomSheetHeight = (bodyH: number, share: number): number => {
+  const h = Number.isFinite(bodyH) && bodyH > 0 ? bodyH : 0;
+  if (!h) return 0;
+  const want = Math.max(MIN_SHEET_PX, Math.round(h * share));
+  const cap = Math.max(MIN_SHEET_PX, Math.round(h - MIN_STAGE_PX));
+  return Math.min(want, cap, Math.round(h));
 };
 
 /** Default text for a balloon added from the toolbar (selected in the inline editor, so typing replaces it). */
@@ -837,11 +878,38 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const tool: ProTool = pro.pro ? pro.tool : 'select';
   const proRef = useRef(pro);
   proRef.current = pro;
-  const dockRef = useRef<HTMLElement>(null);
+  // The dock (in the lazily loaded workspace): state, not a ref, so the lettering panel's bounds follow it once it mounts.
+  const [dockEl, setDockEl] = useState<HTMLElement | null>(null);
   const [dockTab, setDockTab] = useState<DockTabId>('properties');
   const [leftTab, setLeftTab] = useState<'layers' | 'assets'>('layers');
   const [layersSheet, setLayersSheet] = useState(false);
+  /** The 768 tablet's left drawer (Layers or Assets). */
+  const [drawer, setDrawer] = useState<ProDrawerId | null>(null);
+  // Phones: the Layers sheet (portrait: above the thumb bar, the stage making room; landscape: a 320 px side sheet).
+  const phoneLayersOpen = pro.pro && !!pro.parts.layers && layersSheet && (layout.kind === 'phone' || layout.kind === 'phone-landscape');
   const { plans, placements, measure, H } = useLetterPlans(vDoc, page, aspect);
+  // The balloon selection is mirrored to studio.selection (chat focus). An overlay or panel selection (the Layers part,
+  // through selectLayers) lives there too, with no balloon: the mirror's "nothing selected" must not wipe it, except
+  // when the editor closes. Declared before useLetteringSelection, so this cleanup runs before its closing clear.
+  const studioSelRef = useRef(studio.selection);
+  studioSelRef.current = studio.selection;
+  const closingRef = useRef(false);
+  useEffect(() => {
+    closingRef.current = false;
+    return () => {
+      closingRef.current = true;
+    };
+  }, []);
+  const mirrorSelection = useCallback(
+    (sel: StudioSelection | null) => {
+      if (sel === null && !closingRef.current) {
+        const cur = studioSelRef.current;
+        if (cur && cur.pageId === sourcePage.id && ((cur.layerIds?.length ?? 0) > 0 || (cur.panelIds?.length ?? 0) > 0)) return;
+      }
+      studio.setSelection?.(sel);
+    },
+    [studio, sourcePage.id]
+  );
   const validIds = useMemo(() => page.panels.flatMap((p) => p.lines.map((l) => l.id)), [page.panels]);
   const panelOf = useCallback((id: string) => page.panels.find((p) => p.lines.some((l) => l.id === id))?.n, [page.panels]);
   // "Show me" (the conflict card, agent-editor plan §3 A3) opens this page and sets studio.selection on its balloon. An
@@ -850,7 +918,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // and changes nothing; ids not on this page are ignored.
   const shown = studio.selection;
   const requestedLineIds = shown && shown.pageId === page.id && shown.surface === 'page_editor' ? shown.lineIds : undefined;
-  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection, panelOf, initial: requestedLineIds });
+  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection ? mirrorSelection : undefined, panelOf, initial: requestedLineIds });
+  /** Select overlays (the Layers part): no balloon first, then {pageId, lineIds: [], layerIds}; [] clears. */
+  const selectLayers = (ids: readonly string[]) => {
+    selection.clear();
+    studio.setSelection?.(ids.length ? { pageId: sourcePage.id, lineIds: [], layerIds: [...new Set(ids)], surface: 'page_editor' } : null);
+  };
   const requestedKey = requestedLineIds?.join('|') ?? '';
   const lastRequestedRef = useRef(requestedKey);
   useEffect(() => {
@@ -883,7 +956,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const placementFix = overlayLettering && artOk && !busy && plans.length > 0 && !hasFaceData(sourcePage);
   // The balloon menu is the one surface while it is open: the inspector (a second sheet on phones, which
   // would also re-fit the page under the menu) waits until it closes ("Style…" then shows it).
-  const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu;
+  // The phone Layers sheet and the lettering sheet never stack: while Layers is open the lettering panel stays closed.
+  const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu && !phoneLayersOpen;
   const compactInspectorOpen = inspectorOpen && layout.compactInspector;
 
   const chooseAddKind = (kind: LineKind | null) => {
@@ -963,9 +1037,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     return ids.length ? new Set(ids) : undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presenceKey, presence?.pageId, sourcePage.id, validIds]);
+  // The rotate / height handles come with the lazily loaded transform kit (no B9 engine on the Easy path).
+  const balloonKit = useBalloonTransformKit(pro.pro);
   const balloonExtras: BalloonEditorExtras = useMemo(
-    () => (pro.pro || presenceIds ? { transform: pro.pro, keyboard: pro.pro, presenceLineIds: presenceIds } : NO_BALLOON_EXTRAS),
-    [pro.pro, presenceIds]
+    () => (pro.pro || presenceIds ? { transform: pro.pro && !!balloonKit, kit: balloonKit ?? undefined, keyboard: pro.pro, presenceLineIds: presenceIds } : NO_BALLOON_EXTRAS),
+    [pro.pro, presenceIds, balloonKit]
   );
 
   // Inspector anchor: the selection's outline bounds on screen (recomputed on resize/scroll/zoom).
@@ -1010,7 +1086,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const foldSplit = layout.kind === 'fold-book' || layout.kind === 'fold-tabletop' ? layout.split : undefined;
   useLayoutEffect(() => {
     // Pro, docked: the lettering panel (until the inspector part docks itself) stays in the dock column, never over the page.
-    const root = foldSplit ? foldGridRef.current : docked ? dockRef.current : layoutRootRef.current;
+    const root = foldSplit ? foldGridRef.current : docked ? dockEl : layoutRootRef.current;
     if (!root || !inspectorOpen || layout.compactInspector) {
       setInspectorBounds((cur) => (cur === null ? cur : null));
       return;
@@ -1023,7 +1099,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom }
         : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
     setInspectorBounds((cur) => (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom ? cur : next));
-  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick, docked]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick, docked, dockEl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
   // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
@@ -1131,15 +1207,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     setMode('move');
     if (pro.pro && tool === 'markup') settleTool('select');
   };
-  /** Pro, the Shapes tool: a rectangle overlay where the page was clicked (B9 resolveDrop; kept in the panel it lands in). */
-  const placeShape = (point: { x: number; y: number }) => {
-    const r = resolveDrop(doc, sourcePage, { kind: 'shape', shape: 'rect' }, { point });
-    if (r.ok === false) {
-      setNotice((r as { reason: string }).reason);
-      return;
-    }
-    // Overlays belong to every language (the art is shared), so this is never an edition edit.
-    void studio.patch(r.ops, { undo: true, label: r.label });
+  /** Pro, the Shapes tool placed a rectangle (proShapes: B9 resolveDrop). Overlays belong to every language: never an edition edit. */
+  const placeShape = (ops: DocOp[], label: string) => {
+    void studio.patch(ops, { undo: true, label });
     settleTool('select');
   };
   const pickVersions = () => {
@@ -1246,6 +1316,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const restingInsetRef = useRef(0);
   if (!compactInspectorOpen) restingInsetRef.current = sheetInset;
   const stageInset = compactInspectorOpen ? restingInsetRef.current : sheetInset;
+  // Pro sheets at the stage's foot that the stage makes room for (they never cover the page): the phone Layers sheet
+  // (portrait; above the thumb bar, the page re-fitted above it) and the 768 tablet's inspector sheet (≤ 40 %).
+  const tabletInspectorOpen = toolRow && !!pro.parts.inspector && inspectorOpen;
+  const phoneLayersH = phoneLayersOpen && layout.kind === 'phone' ? proBottomSheetHeight(body.height, PHONE_LAYERS_SHARE) : 0;
+  const tabletInspectorH = tabletInspectorOpen ? proBottomSheetHeight(body.height, TABLET_INSPECTOR_SHARE) : 0;
+  const canvasBottom = Math.max(stageInset, phoneLayersH, tabletInspectorH);
   // The image variant follows the page's size with NO sheet over the stage: opening the lettering
   // inspector or moving the tools sheet between detents never swaps in (and downloads) a smaller file.
   const restingPageWidth = fitPageToStage({ w: restingStage.width, h: restingStage.height }, aspect, 0);
@@ -1386,13 +1462,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // Pro tips: in the dock when docked (nothing moves over the page), above the stage elsewhere.
   const proCoachEl = pro.coach.open ? (
-    <ProCoach
-      cards={pro.coach.cards}
-      onDismiss={pro.coach.dismiss}
-      samples={pro.parts.samples}
-      onSamples={() => (ws.leftRailW > 0 && pro.parts.assets ? setLeftTab('assets') : setDockTab('assets'))}
-      className={docked ? 'mx-3 mt-3' : 'basis-full'}
-    />
+    <Suspense fallback={null}>
+      <ProCoachLazy
+        cards={pro.coach.cards}
+        onDismiss={pro.coach.dismiss}
+        samples={pro.parts.samples}
+        onSamples={() => (docked ? (ws.leftRailW > 0 && pro.parts.assets ? setLeftTab('assets') : setDockTab('assets')) : toolRow ? setDrawer('assets') : undefined)}
+        className={docked ? 'mx-3 mt-3' : 'basis-full'}
+      />
+    </Suspense>
   ) : null;
   const proCoachInBanners = !!proCoachEl && !docked;
   const banners = (
@@ -1486,7 +1564,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       <span className="ml-auto hidden text-[11px] text-[var(--ds-muted)] xl:inline">
         {hint ??
           (railed
-            ? `${toolSpec(tool).label}: ${toolSpec(tool).hint} · Tab walks the balloons · ? lists every shortcut`
+            ? 'Tab walks the balloons · ? lists every shortcut (each tool’s key is on its button)'
             : overlayLettering
               ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge · right-click for more'
               : 'Lettering is drawn into the art on this comic.')}
@@ -1529,7 +1607,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       <div
         ref={canvasAreaRef}
         className={cx('absolute inset-x-0 top-0', TRANSITION, 'motion-reduce:transition-none')}
-        style={{ bottom: stageInset, ...(slide ? { transform: `translateY(${-slide}px)` } : {}) }}
+        style={{ bottom: canvasBottom, ...(slide ? { transform: `translateY(${-slide}px)` } : {}) }}
         data-slide={slide || undefined}
         data-testid="editor-canvas-area"
       >
@@ -1587,7 +1665,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 }
               >
                 <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} onRegion={markRegion} />
-                {pro.pro && tool === 'shapes' && pro.parts.compose && <ShapePlaceLayer onPlace={placeShape} />}
+                {pro.pro && tool === 'shapes' && pro.parts.compose && (
+                  <Suspense fallback={null}>
+                    <ShapePlaceLayerLazy doc={doc} page={sourcePage} onPlace={placeShape} onRefused={setNotice} />
+                  </Suspense>
+                )}
               </ComicPageView>
               </BalloonEditorExtrasContext.Provider>
             </div>
@@ -1889,7 +1971,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       {filmstripToolsSection}
       {letteringStyleSection}
       {scriptSection}
-      {pro.pro && phone && pro.coach.cards.length > 0 && !pro.coach.open && (
+      {pro.pro && phone && pro.coach.all.length > 0 && !pro.coach.open && (
         <button type="button" data-testid="pro-tips-again" onClick={pro.coach.reopen} className={cx('tap-target self-start px-2 py-1 text-[12px] font-semibold text-[var(--ds-ink)] underline decoration-[var(--ds-hairline)] underline-offset-2 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11', RADIUS_CONTROL)}>
           Show the Pro tips again
         </button>
@@ -1897,9 +1979,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </>
   );
 
-  // Pro, docked, with the inspector part ready: the Properties tab IS the inspector (nothing floats).
-  const dockInspector = docked && !!pro.parts.inspector;
-  const inspector = inspectorOpen && !dockInspector && (
+  // Pro with the inspector part ready: docked, the Properties tab IS the inspector (nothing floats); on the 768 tablet
+  // it is the bottom sheet (≤ 40 %). The lettering panel then never shows beside it.
+  const partInspector = (docked || toolRow) && !!pro.parts.inspector;
+  const inspector = inspectorOpen && !partInspector && (
     <div ref={inspectorHostRef} className="contents">
       <LetteringInspector
         doc={vDoc}
@@ -1955,6 +2038,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               attention,
               onToggle: () => {
                 if (mode !== 'move') changeMode('move');
+                // Lettering takes the foot of the screen back from the Layers sheet (the selection's panel shows again).
+                if (phoneLayersOpen) {
+                  setLayersSheet(false);
+                  if (selection.ids.length) return;
+                }
                 if (selection.ids.length && inspectorClosed) {
                   setInspectorClosed(false);
                   return;
@@ -1971,6 +2059,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       tools={{
         open: layout.tools === 'side' ? tools.side : sheetShown,
         onToggle: () => {
+          if (phoneLayersOpen) setLayersSheet(false);
           if (layout.tools === 'side') onTools({ side: !tools.side });
           else if (compactInspectorOpen) {
             // The lettering sheet is up: put it away and bring the tools back.
@@ -1979,7 +2068,22 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           } else onTools({ open: !tools.open });
         }
       }}
-      layers={pro.pro && pro.parts.layers ? { open: layersSheet, onToggle: () => setLayersSheet((v) => !v) } : undefined}
+      layers={
+        pro.pro && pro.parts.layers
+          ? {
+              open: phoneLayersOpen,
+              onToggle: () => {
+                // One sheet at a time: Layers puts the tools sheet (or side sheet) and the lettering sheet away.
+                if (!phoneLayersOpen) {
+                  if (layout.tools === 'side') onTools({ side: false });
+                  else onTools({ open: false });
+                  setTrayOpen(false);
+                }
+                setLayersSheet(!phoneLayersOpen);
+              }
+            }
+          : undefined
+      }
       tray={
         trayAvailable && trayOpen && !inspectorOpen
           ? {
@@ -2028,6 +2132,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     plans,
     placements,
     selection: { ids: selection.ids, set: selection.set, clear: selection.clear },
+    selectLayers,
     apply,
     onEditText: (id) => {
       selection.select(id);
@@ -2041,92 +2146,90 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   };
   const LayersPart = pro.parts.layers;
   const layersSheetEl =
-    pro.pro && LayersPart && layersSheet && (layout.kind === 'phone' || layout.kind === 'phone-landscape') ? (
-      <ProLayersSheet onClose={() => setLayersSheet(false)}>
-        <LayersPart {...panelProps} />
-      </ProLayersSheet>
+    phoneLayersOpen && LayersPart ? (
+      <Suspense fallback={null}>
+        <ProLayersSheetLazy onClose={() => setLayersSheet(false)} variant={layout.kind === 'phone-landscape' ? 'side' : 'bottom'} height={phoneLayersH || undefined}>
+          <Suspense fallback={null}>
+            <LayersPart {...panelProps} />
+          </Suspense>
+        </ProLayersSheetLazy>
+      </Suspense>
     ) : null;
-  const rail = railed ? (
-    <ToolRail tool={tool} onTool={pro.setTool} tools={pro.tools} disabled={pro.disabled} orientation={docked ? 'vertical' : 'horizontal'} />
+  // The 768 tablet: the tools as a row, with a Layers / Assets toggle for each mounted part (its drawer), and the
+  // inspector part in a bottom sheet while something is selected.
+  const drawers: ProDrawerId[] = toolRow ? [...(pro.parts.layers ? (['layers'] as const) : []), ...(pro.parts.assets ? (['assets'] as const) : [])] : [];
+  const openDrawer = drawer && drawers.includes(drawer) ? drawer : null;
+  const toolRowEl = toolRow ? (
+    <Suspense fallback={null}>
+      <ProToolRowLazy tool={tool} onTool={pro.setTool} tools={pro.tools} disabled={pro.disabled} drawers={drawers} drawer={openDrawer} onDrawer={setDrawer} />
+    </Suspense>
   ) : null;
+  const tabletPanelsEl =
+    toolRow && (openDrawer || tabletInspectorOpen) ? (
+      <Suspense fallback={null}>
+        <ProTabletPanelsLazy
+          parts={pro.parts}
+          panelProps={panelProps}
+          drawer={openDrawer}
+          onDrawer={setDrawer}
+          inspector={tabletInspectorOpen}
+          inspectorHeight={tabletInspectorH}
+          onCloseInspector={() => setInspectorClosed(true)}
+        />
+      </Suspense>
+    ) : null;
+
+  // Desktop / tablet landscape: today's stage + aside (also the docked workspace's stand-in while its chunk loads).
+  const desktopLayout = (
+    <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
+      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
+        {modeRow}
+        {stageEl}
+        {filmstrip}
+      </div>
+      {inspector}
+      {toolsSheet}
+      {contextMenu}
+    </div>
+  );
 
   if (docked) {
-    const InspectorPart = pro.parts.inspector;
-    const AssetsPart = pro.parts.assets;
-    const AnimatePart = pro.parts.animate;
-    const leftRailOn = ws.leftRailW > 0 && !!(LayersPart || AssetsPart);
-    const properties = (
-      <div className="flex min-w-0 flex-col gap-4">
-        {InspectorPart ? <InspectorPart {...panelProps} /> : letteringStyleSection}
-        {scriptSection}
-      </div>
-    );
-    const tabs: DockTab[] = [
-      { id: 'properties', label: 'Properties', content: properties, free: true },
-      ...(!leftRailOn && LayersPart ? [{ id: 'layers' as const, label: 'Layers', content: <LayersPart {...panelProps} />, free: true }] : []),
-      ...(!leftRailOn && AssetsPart ? [{ id: 'assets' as const, label: 'Assets', content: <AssetsPart {...panelProps} />, free: true }] : []),
-      {
-        id: 'ai',
-        label: 'AI',
-        content: (
-          <div className="flex min-w-0 flex-col gap-4">
-            {aiSection}
-            {actionsSection}
-            {qcSection}
-            {versionsSection}
-          </div>
-        ),
-        free: false
-      }
-    ];
-    const leftTabs = [
-      ...(LayersPart ? [{ id: 'layers' as const, label: 'Layers', node: <LayersPart {...panelProps} /> }] : []),
-      ...(AssetsPart ? [{ id: 'assets' as const, label: 'Assets', node: <AssetsPart {...panelProps} /> }] : [])
-    ];
-    const leftValue = leftTabs.some((t) => t.id === leftTab) ? leftTab : leftTabs[0]?.id;
-    const leftRail =
-      leftRailOn && leftValue ? (
-        <Tabs value={leftValue} onValueChange={(v) => setLeftTab(v as 'layers' | 'assets')} className="min-h-0 flex-1 gap-0">
-          <div className="shrink-0 border-b border-[var(--ds-hairline)] px-3 py-2">
-            <TabsList label="Layers and assets" size="sm" fullWidth>
-              {leftTabs.map((t) => (
-                <TabsTrigger key={t.id} value={t.id}>
-                  {t.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
-          {leftTabs.map((t) => (
-            <TabsContent key={t.id} value={t.id} className="flex min-h-0 flex-1 flex-col focus-visible:outline-none">
-              <ProPanelFrame>{t.node}</ProPanelFrame>
-            </TabsContent>
-          ))}
-        </Tabs>
-      ) : undefined;
     return (
-      <ProWorkspace
-        layout={ws}
-        rootRef={layoutRootRef}
-        bodyRef={bodyRef}
-        rail={rail}
-        leftRail={leftRail}
-        main={
-          <>
-            {modeRow}
-            {stageEl}
-            {AnimatePart && (
-              <div className="shrink-0 border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)]" data-testid="pro-timeline">
-                <AnimatePart {...panelProps} />
-              </div>
-            )}
-            {filmstrip}
-          </>
-        }
-        dock={<ProDock ref={dockRef} tabs={tabs} value={dockTab} onChange={setDockTab} width={ws.dockW} top={proCoachEl} />}
-      >
-        {inspector}
-        {contextMenu}
-      </ProWorkspace>
+      <Suspense fallback={desktopLayout}>
+        <ProDockedWorkspaceLazy
+          layout={ws}
+          rootRef={layoutRootRef}
+          bodyRef={bodyRef}
+          dockRef={setDockEl}
+          tool={tool}
+          onTool={pro.setTool}
+          tools={pro.tools}
+          disabled={pro.disabled}
+          parts={pro.parts}
+          panelProps={panelProps}
+          letteringStyle={letteringStyleSection}
+          script={scriptSection}
+          ai={
+            <>
+              {aiSection}
+              {actionsSection}
+              {qcSection}
+              {versionsSection}
+            </>
+          }
+          modeRow={modeRow}
+          stage={stageEl}
+          filmstrip={filmstrip}
+          coach={proCoachEl}
+          dockTab={dockTab}
+          onDockTab={setDockTab}
+          leftTab={leftTab}
+          onLeftTab={setLeftTab}
+        >
+          {inspector}
+          {contextMenu}
+        </ProDockedWorkspaceLazy>
+      </Suspense>
     );
   }
 
@@ -2162,10 +2265,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           {phoneRow}
           {stageEl}
         </div>
+        {/* Pro Layers: the rail plus a 320 px side sheet (§2.7), a column beside the stage, never over it. */}
+        {layersSheetEl}
         {toolsSheet}
         {inspector}
         {contextMenu}
-        {layersSheetEl}
       </div>
     );
   }
@@ -2175,50 +2279,23 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     return (
       <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
         <div ref={bodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
-          {toolRow && rail}
+          {toolRowEl}
           {phone ? phoneRow : modeRow}
           {stageEl}
           {toolsSheet}
+          {/* Pro sheets at the stage's foot (above the thumb bar; the stage makes room) and the tablet drawer. */}
+          {layersSheetEl}
+          {tabletPanelsEl}
         </div>
         {toolbar}
         {inspector}
         {contextMenu}
-        {layersSheetEl}
       </div>
     );
   }
 
-  // Desktop / tablet landscape: today's stage + aside.
-  return (
-    <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
-      <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
-        {modeRow}
-        {stageEl}
-        {filmstrip}
-      </div>
-      {inspector}
-      {toolsSheet}
-      {contextMenu}
-    </div>
-  );
+  return desktopLayout;
 };
-
-/** Pro, the Shapes tool: one press on the page places a rectangle there (the B9 drop of a shape). */
-const ShapePlaceLayer: React.FC<{ onPlace(point: { x: number; y: number }): void }> = ({ onPlace }) => (
-  <div
-    aria-hidden
-    data-testid="shape-place-layer"
-    className="absolute inset-0 cursor-crosshair"
-    style={{ zIndex: 3 }}
-    onPointerDown={(e) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      if (!(r.width > 0) || !(r.height > 0)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onPlace({ x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) });
-    }}
-  />
-);
 
 const requestAnimationFrameSafe = (fn: () => void) => {
   if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(() => fn());
@@ -2256,14 +2333,24 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   // The Pro shell (PE-SHELL): flag, view (D7), tool, coach, shortcut sheet and the mounted parts.
   const phoneLayout = layout.kind === 'phone' || layout.kind === 'phone-landscape';
   const pageArtOk = !!page && hasImage(page.render) && canServeToOwner(page.render.asset);
+  const proWs = proWorkspaceFor(layout, ff.width);
   const pro = useProEditor(studio, {
     pageId,
     phone: phoneLayout,
     inArt: doc.format.lettering !== 'overlay',
-    markupOff: pageArtOk ? undefined : 'Mark up needs a drawing: render this page first.'
+    markupOff: pageArtOk ? undefined : 'Mark up needs a drawing: render this page first.',
+    workspace: proWs.kind
   });
   const [stageZoom, setStageZoom] = useState(1);
-  const proWs = proWorkspaceFor(layout, ff.width);
+  // Flag on: warm the Pro view's chunks in the background, so the first switch is instant. Flag off: never.
+  useEffect(() => {
+    if (pro.on) preloadProShell();
+  }, [pro.on]);
+  // An overlay selected (the arrow fix): load the nudge before the first arrow press.
+  const layerSelected = (studio.selection?.layerIds?.length ?? 0) > 0;
+  useEffect(() => {
+    if (layerSelected) void loadOverlayNudge();
+  }, [layerSelected]);
   // Tool keys work where the rail is (docked or the tablet tool row), never on phones.
   const keyTools = useMemo(() => new Set<ProTool>(pro.pro && proWs.kind !== 'phone' ? pro.tools : []), [pro.pro, proWs.kind, pro.tools]);
 
@@ -2313,17 +2400,15 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
         const on = page && sel && sel.pageId === page.id ? page : undefined;
         if (d && on && layerIds.length) {
           e.preventDefault();
-          const step = e.shiftKey ? ENGINE_NUDGE.big : ENGINE_NUDGE.step;
-          const ops: DocOp[] = [];
-          let label = '';
-          for (const id of layerIds) {
-            const r = moveEdit(doc, on, { kind: 'overlay', id }, d[0] * step, d[1] * step);
-            if (r.ok) {
-              ops.push(...r.ops);
-              label = label ? 'Move overlays' : r.label;
-            }
-          }
-          if (ops.length) void studio.patch(ops, { undo: true, label, coalesce: `layer:move:${on.id}:${layerIds.join(',')}` });
+          const big = e.shiftKey;
+          const nudge = (m: NonNullable<ReturnType<typeof overlayNudgeNow>>) => {
+            const { ops, label } = m.overlayNudgeOps(doc, on, layerIds, d[0], d[1], big);
+            if (ops.length) void studio.patch(ops, { undo: true, label, coalesce: `layer:move:${on.id}:${layerIds.join(',')}` });
+          };
+          // The nudge module loads when an overlay is selected; a press before it is in waits for it.
+          const now = overlayNudgeNow();
+          if (now) nudge(now);
+          else void loadOverlayNudge().then((m) => m && nudge(m));
         }
         return;
       }
@@ -2420,32 +2505,49 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
             {rtl ? nextButton : prevButton}
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                <h2 className={pro.on ? 'min-w-0 truncate whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]' : 'shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]'}>
+                {/* Flag on, phones: the header also holds the Easy | Pro switch. "Page n" always reads in full (shrink-0);
+                    "of n" is read, not shown, and the status chip folds to its dot with its words for a screen reader. */}
+                <h2 className={pro.on && !phoneLayout ? 'min-w-0 truncate whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]' : 'shrink-0 whitespace-nowrap text-[14px] font-semibold text-[var(--ds-ink)]'}>
                   Page {page.n}{' '}
-                  {/* Flag on, phones: the header also holds the Easy | Pro switch, so "of n" is read, not shown (320 px). */}
                   <span className={pro.on && phoneLayout ? 'sr-only' : 'font-normal text-[var(--ds-muted)]'}>of {pages.length}</span>
                 </h2>
-                <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} className="min-w-0" />
+                {pro.on && phoneLayout ? (
+                  <span className="inline-flex shrink-0 items-center" data-testid="editor-status-dot" data-status={status}>
+                    <span aria-hidden className={cx('h-2 w-2 rounded-full', HEADER_STATUS_DOT[status], status === 'rendering' && 'animate-pulse motion-reduce:animate-none')} />
+                    <span className="sr-only">
+                      <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} />
+                    </span>
+                  </span>
+                ) : (
+                  <StatusChip status={status} label={status === 'stale' ? 'Out of date' : undefined} className="min-w-0" />
+                )}
               </div>
               {page.summary && <p className="truncate text-[12px] text-[var(--ds-muted)]">{page.summary}</p>}
             </div>
             {rtl ? prevButton : nextButton}
-            {pro.on && (
-              <ProTopBar
-                mode={pro.view}
-                onModeChange={pro.setView}
-                canPro={pro.canPro}
-                variant={proWs.kind === 'docked' ? 'full' : proWs.kind === 'tool-row' ? 'tablet' : 'phone'}
-                canUndo={!!studio.canUndo}
-                canRedo={!!studio.canRedo}
-                undoLabel={studio.undoLabel}
-                onUndo={() => studio.undo?.()}
-                onRedo={() => studio.redo?.()}
-                zoom={stageZoom}
-                helpOpen={pro.help.open}
-                onHelp={pro.help.toggle}
-              />
-            )}
+            {pro.on &&
+              (proWs.kind === 'phone' ? (
+                // Phones: the switch only (the header has no room for more at 320 px), on the Easy path's own module.
+                <ProModeSwitch value={pro.view} onChange={pro.setView} canPro={pro.canPro} />
+              ) : (
+                // Larger layouts: the Pro top bar (lazy); the switch stands in for it while it loads.
+                <Suspense fallback={<ProModeSwitch value={pro.view} onChange={pro.setView} canPro={pro.canPro} />}>
+                  <ProTopBarLazy
+                    mode={pro.view}
+                    onModeChange={pro.setView}
+                    canPro={pro.canPro}
+                    variant={proWs.kind === 'docked' ? 'full' : 'tablet'}
+                    canUndo={!!studio.canUndo}
+                    canRedo={!!studio.canRedo}
+                    undoLabel={studio.undoLabel}
+                    onUndo={() => studio.undo?.()}
+                    onRedo={() => studio.redo?.()}
+                    zoom={stageZoom}
+                    helpOpen={pro.help.open}
+                    onHelp={pro.help.toggle}
+                  />
+                </Suspense>
+              ))}
             <IconButton label="Close editor" onClick={close}>
               <X className="h-4 w-4" />
             </IconButton>
@@ -2463,7 +2565,21 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
             pro={pro}
             onZoom={pro.on ? setStageZoom : undefined}
           />
-          {pro.help.open && <ShortcutSheet onClose={pro.help.close} onTips={pro.coach.cards.length ? () => { pro.coach.reopen(); pro.help.close(); } : undefined} />}
+          {pro.help.open && (
+            <Suspense fallback={null}>
+              <ShortcutSheetLazy
+                onClose={pro.help.close}
+                onTips={
+                  pro.coach.all.length
+                    ? () => {
+                        pro.coach.reopen();
+                        pro.help.close();
+                      }
+                    : undefined
+                }
+              />
+            </Suspense>
+          )}
         </div>
       </div>
     </ModalPortal>
