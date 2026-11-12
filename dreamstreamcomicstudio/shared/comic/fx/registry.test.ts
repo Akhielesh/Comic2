@@ -9,19 +9,17 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { FX_LIMITS } from '../limits';
+import * as fxBarrel from './index';
 import { FX_GEN_RE, FX_GROUPS, FX_PARAM_KEY_RE, fxParamsOf, fxWithinBudget } from './index';
 import { FX_NAMES, fxName } from './names';
 import {
   FX_BORDER_STYLES,
   FX_EMANATA_SYMBOLS,
   FX_GENERATORS,
-  FX_PRESETS,
   fxAspectOf,
   fxCanDraw,
   fxDefaultsOf,
-  fxFromPreset,
   fxGeneratorOf,
-  fxPresetOf,
   fxSegmentsOf,
   latestFxGenerator,
   registerFxDraw,
@@ -110,46 +108,6 @@ describe('fx registry: generators and their schemas', () => {
   });
 });
 
-describe('fx registry: named presets', () => {
-  it('names 42 presets: lines 6, bursts 8, emanata 12, atmosphere 6, borders 10', () => {
-    const count: Record<string, number> = {};
-    for (const p of FX_PRESETS) count[p.group] = (count[p.group] ?? 0) + 1;
-    expect(count).toEqual({ lines: 6, bursts: 8, emanata: 12, atmosphere: 6, borders: 10 });
-    expect(FX_PRESETS).toHaveLength(42);
-    expect(new Set(FX_PRESETS.map((p) => p.id)).size).toBe(42);
-    expect(new Set(FX_PRESETS.map((p) => p.name)).size).toBe(42);
-    // One preset per emanata mark and per border style.
-    expect(new Set(FX_PRESETS.filter((p) => p.gen === 'emanata').map((p) => p.params.symbol))).toEqual(new Set(FX_EMANATA_SYMBOLS));
-    expect(new Set(FX_PRESETS.filter((p) => p.gen === 'frame-border').map((p) => p.params.style))).toEqual(new Set(FX_BORDER_STYLES));
-  });
-
-  it('every preset is a registered generator with every parameter inside its schema, a seed and search words', () => {
-    for (const p of FX_PRESETS) {
-      const g = fxGeneratorOf(p.gen, p.v);
-      expect(g, p.id).toBeDefined();
-      expect(p.group).toBe(g!.group);
-      expect(FX_GEN_RE.test(p.id), p.id).toBe(true);
-      expect(Object.keys(p.params).sort(), p.id).toEqual(Object.keys(g!.params).sort());
-      expect(fxParamsOf(g!, p.params), p.id).toEqual(p.params);
-      expect(Number.isInteger(p.seed) && p.seed >= -2147483648 && p.seed <= 2147483647, p.id).toBe(true);
-      expect(p.keywords.length, p.id).toBeGreaterThanOrEqual(3);
-      expect(fxWithinBudget(fxFromPreset(p.id)), p.id).toBe(true);
-      expect(Object.isFrozen(p) && Object.isFrozen(p.params), p.id).toBe(true);
-    }
-  });
-
-  it('fxFromPreset gives a fresh effect (its own parameters; an int32 seed override), undefined for an unknown id', () => {
-    const a = fxFromPreset('radial-speed-lines')!;
-    expect(a).toEqual({ gen: 'speed-lines', v: 1, seed: 103, params: { ...fxPresetOf('radial-speed-lines')!.params } });
-    a.params.count = 4;
-    expect(fxPresetOf('radial-speed-lines')!.params.count).toBe(56);
-    expect(fxFromPreset('rain', -12)!.seed).toBe(-12);
-    expect(fxFromPreset('rain', 2 ** 31)!.seed).toBe(401);
-    expect(fxFromPreset('rain', 1.5)!.seed).toBe(401);
-    expect(fxFromPreset('nope')).toBeUndefined();
-  });
-});
-
 describe('fx registry: renderFx loading seam, budget helpers', () => {
   it('draws nothing until fx/generators.ts is loaded, then draws (renderFx stays synchronous)', async () => {
     const fxs = FX_GENERATORS.map((g) => defaultFx(g.gen, g.v));
@@ -206,6 +164,11 @@ describe('fx registry: generator code never follows into the shared barrel', () 
     }
     return undefined;
   };
+
+  it('the barrel carries schemas, not presets or drawings (those load with fx/generators.ts, in the Pro chunk)', () => {
+    for (const name of ['FX_PRESETS', 'fxFromPreset', 'fxPresetOf', 'FX_DRAW_FNS', 'registerFxGenerators']) expect(name in fxBarrel, name).toBe(false);
+    for (const name of ['FX_GENERATORS', 'renderFx', 'fxParamsOf', 'fxGeneratorOf', 'FX_NAMES']) expect(name in fxBarrel, name).toBe(true);
+  });
 
   it('registry.ts and names.ts import only types, names and limits (static or dynamic)', () => {
     expect(importsOf(join(here, 'registry.ts')).sort()).toEqual(['../limits.js', './names.js', './types.js']);

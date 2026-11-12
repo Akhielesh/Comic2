@@ -7,9 +7,9 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { FX_LIMITS } from '../limits';
-import { fxParamsOf } from './index';
-import { FX_DRAW_FNS, FX_GENERATORS_LOADED, fxDrawFor, registerFxGenerators } from './generators';
-import { FX_GENERATORS, FX_PRESETS, fxCanDraw, fxDefaultsOf, fxFromPreset, fxGeneratorOf, fxSegmentsOf, registerFxDraw, renderFx } from './registry';
+import { FX_GEN_RE, fxParamsOf, fxWithinBudget } from './index';
+import { FX_DRAW_FNS, FX_GENERATORS_LOADED, FX_PRESETS, fxDrawFor, fxFromPreset, fxPresetOf, registerFxGenerators } from './generators';
+import { FX_BORDER_STYLES, FX_EMANATA_SYMBOLS, FX_GENERATORS, fxCanDraw, fxDefaultsOf, fxGeneratorOf, fxSegmentsOf, registerFxDraw, renderFx } from './registry';
 import { ASPECTS, SEEDS, atBound, commandsOf, curvePoints, fxOf, paramSets } from './fixtures.test-helpers';
 import type { FxGenerator, FxNode, FxParamValue } from './types';
 
@@ -133,6 +133,46 @@ describe('effect generators: registration and determinism', () => {
     const got: Record<string, string> = {};
     for (const p of FX_PRESETS) got[p.id] = h(renderFx(fxFromPreset(p.id)!, { aspect: 1 }));
     expect(got).toEqual(PRESET_GOLDEN);
+  });
+});
+
+describe('effect generators: named presets (with the drawings, in the Pro chunk)', () => {
+  it('names 42 presets: lines 6, bursts 8, emanata 12, atmosphere 6, borders 10', () => {
+    const count: Record<string, number> = {};
+    for (const p of FX_PRESETS) count[p.group] = (count[p.group] ?? 0) + 1;
+    expect(count).toEqual({ lines: 6, bursts: 8, emanata: 12, atmosphere: 6, borders: 10 });
+    expect(FX_PRESETS).toHaveLength(42);
+    expect(new Set(FX_PRESETS.map((p) => p.id)).size).toBe(42);
+    expect(new Set(FX_PRESETS.map((p) => p.name)).size).toBe(42);
+    // One preset per emanata mark and per border style.
+    expect(new Set(FX_PRESETS.filter((p) => p.gen === 'emanata').map((p) => p.params.symbol))).toEqual(new Set(FX_EMANATA_SYMBOLS));
+    expect(new Set(FX_PRESETS.filter((p) => p.gen === 'frame-border').map((p) => p.params.style))).toEqual(new Set(FX_BORDER_STYLES));
+  });
+
+  it('every preset is a registered generator with every parameter inside its schema, a seed and search words', () => {
+    for (const p of FX_PRESETS) {
+      const g = fxGeneratorOf(p.gen, p.v);
+      expect(g, p.id).toBeDefined();
+      expect(p.group).toBe(g!.group);
+      expect(FX_GEN_RE.test(p.id), p.id).toBe(true);
+      expect(Object.keys(p.params).sort(), p.id).toEqual(Object.keys(g!.params).sort());
+      expect(fxParamsOf(g!, p.params), p.id).toEqual(p.params);
+      expect(Number.isInteger(p.seed) && p.seed >= -2147483648 && p.seed <= 2147483647, p.id).toBe(true);
+      expect(p.keywords.length, p.id).toBeGreaterThanOrEqual(3);
+      expect(fxWithinBudget(fxFromPreset(p.id)), p.id).toBe(true);
+      expect(Object.isFrozen(p) && Object.isFrozen(p.params), p.id).toBe(true);
+    }
+  });
+
+  it('fxFromPreset gives a fresh effect (its own parameters; an int32 seed override), undefined for an unknown id', () => {
+    const a = fxFromPreset('radial-speed-lines')!;
+    expect(a).toEqual({ gen: 'speed-lines', v: 1, seed: 103, params: { ...fxPresetOf('radial-speed-lines')!.params } });
+    a.params.count = 4;
+    expect(fxPresetOf('radial-speed-lines')!.params.count).toBe(56);
+    expect(fxFromPreset('rain', -12)!.seed).toBe(-12);
+    expect(fxFromPreset('rain', 2 ** 31)!.seed).toBe(401);
+    expect(fxFromPreset('rain', 1.5)!.seed).toBe(401);
+    expect(fxFromPreset('nope')).toBeUndefined();
   });
 });
 

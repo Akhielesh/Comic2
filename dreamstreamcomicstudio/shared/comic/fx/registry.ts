@@ -1,7 +1,7 @@
 // The effect generator registry (master plan §2.3, §2.6, §2.8, §2.12 PE-FX). Metadata only: every registered
-// generator version with its name, group and parameter schema (FX_GENERATORS), the named presets a creator starts
-// from (FX_PRESETS), and renderFx, which dispatches to the drawings that fx/generators.ts registers. Registered versions
-// are never removed or changed: a stored effect must draw the same forever, so a new look is a new version.
+// generator version with its name, group and parameter schema (FX_GENERATORS), which the server sanitizer reads, and
+// renderFx, which dispatches to the drawings that fx/generators.ts registers. Registered versions are never removed or
+// changed: a stored effect must draw the same forever, so a new look is a new version.
 //
 // Rules (PE-0 fixer note 10; collisions B-7):
 // - this file imports types, names.ts and limits.ts only, never a generator module (lines, bursts, emanata, atmosphere,
@@ -11,8 +11,9 @@
 // - renderFx keeps PE-0's synchronous signature. Until fx/generators.ts is imported (the Pro editor and the compose
 //   path import it), no drawing is registered and renderFx returns [] for every effect, as before PE-FX.
 //
-// S2 holds 14 generators (lines 2, bursts 4, emanata 1, atmosphere 6, borders 1) and 42 named presets (lines 6,
-// bursts 8, emanata 12, atmosphere 6, borders 10). Tones and paper are PE-TONES's (S3).
+// S2 holds 14 generators (lines 2, bursts 4, emanata 1, atmosphere 6, borders 1). The 42 named presets (lines 6,
+// bursts 8, emanata 12, atmosphere 6, borders 10) live with the drawings in fx/generators.ts: only the Pro editor's
+// pickers need them (§2.6 "Delivery"), so they stay out of the shared barrel. Tones and paper are PE-TONES's (S3).
 
 import { FX_LIMITS } from '../limits.js';
 import { FX_NAMES } from './names.js';
@@ -177,93 +178,6 @@ export const latestFxGenerator = (gen: string): FxGenerator | undefined =>
 /** Every schema default of a generator (what an effect holds when a parameter is absent). */
 export const fxDefaultsOf = (generator: Pick<FxGenerator, 'params'>): Record<string, FxParamValue> =>
   Object.fromEntries(Object.entries(generator.params).map(([k, spec]) => [k, spec.default]));
-
-// ── Named presets ────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** A named starting point (§2.6 "Effects … named presets"): a generator version, a seed and full parameters. */
-export interface FxPreset {
-  /** Unique, lower-case words joined by '-'. */
-  id: string;
-  /** Plain words for the picker: "Radial speed lines". */
-  name: string;
-  group: FxGroup;
-  gen: string;
-  v: number;
-  /** The seed a new effect from this preset starts with (Shuffle picks another). */
-  seed: number;
-  /** Every parameter of the generator's schema, each within it. */
-  params: Readonly<Record<string, FxParamValue>>;
-  /** Search words for the picker. */
-  keywords: readonly string[];
-}
-
-const preset = (id: string, name: string, gen: string, seed: number, keywords: readonly string[], params: Record<string, FxParamValue> = {}): FxPreset => {
-  const g = latestFxGenerator(gen);
-  if (!g) throw new Error(`fx preset ${id}: no generator ${gen}`);
-  return Object.freeze({ id, name, group: g.group, gen, v: g.v, seed, params: Object.freeze({ ...fxDefaultsOf(g), ...params }), keywords: Object.freeze([...keywords]) });
-};
-
-/** The 42 S2 presets: lines 6, bursts 8, emanata 12, atmosphere 6, borders 10. */
-export const FX_PRESETS: readonly FxPreset[] = Object.freeze([
-  // lines 6
-  preset('speed-lines', 'Speed lines', 'speed-lines', 101, ['speed', 'motion', 'fast', 'action', 'whoosh']),
-  preset('falling-lines', 'Falling lines', 'speed-lines', 102, ['fall', 'drop', 'vertical', 'plunge'], { angle: 90, count: 32, length: 0.8 }),
-  preset('radial-speed-lines', 'Radial speed lines', 'speed-lines', 103, ['radial', 'zoom', 'rush', 'charge'], { mode: 'radial', count: 56, length: 0.55, clear: 0.32, weight: 0.014 }),
-  preset('curved-speed-lines', 'Curved speed lines', 'speed-lines', 104, ['curve', 'swing', 'swoosh', 'spin'], { mode: 'curved', count: 28, bend: 0.6, length: 0.75, weight: 0.014 }),
-  preset('focus-lines', 'Focus lines', 'focus-lines', 105, ['focus', 'shock', 'reveal', 'manga', 'concentration']),
-  preset('impact-focus', 'Impact focus', 'focus-lines', 106, ['impact', 'hit', 'dramatic', 'intense'], { count: 110, clear: 0.26, spread: 0.012, jitter: 0.8 }),
-  // bursts 8
-  preset('star-burst', 'Star burst', 'burst', 201, ['star', 'pow', 'bang', 'pop'], { points: 14, inner: 0.58, jitter: 0.2 }),
-  preset('shout-burst', 'Shout burst', 'burst', 202, ['shout', 'yell', 'loud', 'scream'], { points: 28, inner: 0.74, jitter: 0.55, fill: '#ffffff' }),
-  preset('puff-burst', 'Puff burst', 'burst', 203, ['puff', 'cloud', 'poof', 'soft'], { round: true, points: 11, inner: 0.82, jitter: 0.25, fill: '#ffffff' }),
-  preset('spiky-burst', 'Spiky burst', 'burst', 204, ['spiky', 'crash', 'danger', 'alarm'], { points: 36, inner: 0.45, jitter: 0.65, fill: '#e63946' }),
-  preset('sunburst', 'Sunburst', 'sunburst', 205, ['sun', 'rays', 'glory', 'shine']),
-  preset('ray-flash', 'Ray flash', 'sunburst', 206, ['flash', 'rays', 'dramatic', 'light'], { rays: 48, core: 0.16, color: '#ffffff', opacity: 0.55 }),
-  preset('explosion', 'Explosion', 'explosion', 207, ['explosion', 'boom', 'blast', 'kaboom']),
-  preset('shock-rings', 'Shock rings', 'shock-rings', 208, ['shock', 'ripple', 'impact', 'wave'], { rings: 3, wobble: 0.35 }),
-  // emanata 12
-  preset('sweat-drops', 'Sweat drops', 'emanata', 301, ['sweat', 'nervous', 'worry', 'drop'], { symbol: 'sweat', count: 3, arrange: 'arc', fill: '#8ecae6' }),
-  preset('shake-marks', 'Shake marks', 'emanata', 302, ['shake', 'tremble', 'vibrate', 'shiver'], { symbol: 'shake', count: 2, arrange: 'sides', size: 0.3 }),
-  preset('surprise-lines', 'Surprise lines', 'emanata', 303, ['surprise', 'shock', 'startle', 'alert'], { symbol: 'surprise', count: 7, arrange: 'arc', size: 0.16, jitter: 0.15 }),
-  preset('anger-mark', 'Anger mark', 'emanata', 304, ['anger', 'angry', 'mad', 'vein'], { symbol: 'anger', count: 1, arrange: 'scatter', size: 0.4, color: '#d62828' }),
-  preset('love-hearts', 'Love hearts', 'emanata', 305, ['love', 'heart', 'crush', 'romance'], { symbol: 'heart', count: 5, arrange: 'rise', fill: '#e63946', size: 0.2 }),
-  preset('dizzy-stars', 'Dizzy stars', 'emanata', 306, ['dizzy', 'stars', 'knocked', 'daze'], { symbol: 'star', count: 5, arrange: 'ring', spread: 0.75, fill: '#ffd23f', size: 0.18 }),
-  preset('steam-puffs', 'Steam puffs', 'emanata', 307, ['steam', 'fume', 'furious', 'huff'], { symbol: 'steam', count: 3, arrange: 'rise', spread: 0.3, size: 0.24 }),
-  preset('sleep-z', 'Sleep Zs', 'emanata', 308, ['sleep', 'zzz', 'snore', 'tired'], { symbol: 'sleep', count: 3, arrange: 'rise', spread: 0.5, size: 0.22 }),
-  preset('music-notes', 'Music notes', 'emanata', 309, ['music', 'notes', 'sing', 'hum'], { symbol: 'note', count: 3, arrange: 'rise', spread: 0.6, size: 0.24 }),
-  preset('gloom-lines', 'Gloom lines', 'emanata', 310, ['gloom', 'sad', 'depressed', 'despair'], { symbol: 'gloom', count: 7, arrange: 'row', spread: 0.8, size: 0.4, jitter: 0.35 }),
-  preset('exclamation', 'Exclamation', 'emanata', 311, ['exclamation', 'alert', 'notice', 'idea'], { symbol: 'exclaim', count: 1, arrange: 'scatter', size: 0.5, jitter: 0 }),
-  preset('dizzy-swirl', 'Dizzy swirl', 'emanata', 312, ['swirl', 'spiral', 'confused', 'dizzy'], { symbol: 'spiral', count: 1, arrange: 'scatter', size: 0.5, jitter: 0 }),
-  // atmosphere 6
-  preset('rain', 'Rain', 'rain', 401, ['rain', 'storm', 'wet', 'weather']),
-  preset('snow', 'Snow', 'snow', 402, ['snow', 'winter', 'cold', 'flakes']),
-  preset('falling-petals', 'Falling petals', 'petals', 403, ['petals', 'sakura', 'blossom', 'spring', 'romance']),
-  preset('bokeh-lights', 'Bokeh lights', 'bokeh', 404, ['bokeh', 'lights', 'glow', 'night', 'dreamy']),
-  preset('sparkles', 'Sparkles', 'sparkle', 405, ['sparkle', 'shine', 'magic', 'glitter']),
-  preset('smoke', 'Smoke', 'smoke', 406, ['smoke', 'fire', 'dust', 'fog']),
-  // borders 10
-  preset('rough-border', 'Rough ink border', 'frame-border', 501, ['rough', 'ink', 'sketch', 'hand-drawn'], { style: 'rough' }),
-  preset('brush-border', 'Brush border', 'frame-border', 502, ['brush', 'paint', 'sumi', 'stroke'], { style: 'brush', weight: 0.028, roughness: 0.7 }),
-  preset('double-rule', 'Double rule', 'frame-border', 503, ['double', 'classic', 'formal', 'line'], { style: 'double', weight: 0.024 }),
-  preset('dashed-border', 'Dashed border', 'frame-border', 504, ['dashed', 'cut', 'coupon', 'line'], { style: 'dashed', weight: 0.012, step: 16 }),
-  preset('dotted-border', 'Dotted border', 'frame-border', 505, ['dotted', 'dots', 'playful', 'line'], { style: 'dotted', weight: 0.014, step: 18 }),
-  preset('wavy-border', 'Wavy border', 'frame-border', 506, ['wavy', 'dream', 'memory', 'flashback'], { style: 'wavy', weight: 0.012, step: 10, roughness: 0.4 }),
-  preset('jagged-border', 'Jagged border', 'frame-border', 507, ['jagged', 'shock', 'tension', 'spiky'], { style: 'jagged', weight: 0.014, step: 18, roughness: 0.6 }),
-  preset('film-strip', 'Film strip', 'frame-border', 508, ['film', 'movie', 'cinema', 'flashback'], { style: 'film', weight: 0.024, inset: 0, step: 12 }),
-  preset('torn-paper', 'Torn paper', 'frame-border', 509, ['torn', 'paper', 'rip', 'collage'], { style: 'torn', weight: 0.03, inset: 0, roughness: 0.7, color: '#f4ecd8' }),
-  preset('scalloped-border', 'Scalloped border', 'frame-border', 510, ['scallop', 'cloud', 'thought', 'dream'], { style: 'scallop', weight: 0.02, inset: 0, step: 12 })
-]);
-
-/** The preset with this id, or undefined. */
-export const fxPresetOf = (id: string): FxPreset | undefined => FX_PRESETS.find((p) => p.id === id);
-
-/** A new effect from a preset (its own copy of the parameters; `seed` overrides the preset's), or undefined. */
-export const fxFromPreset = (id: string, seed?: number): LayerFx | undefined => {
-  const p = fxPresetOf(id);
-  if (!p) return undefined;
-  const s = typeof seed === 'number' && Number.isInteger(seed) && seed >= -2147483648 && seed <= 2147483647 ? seed : p.seed;
-  return { gen: p.gen, v: p.v, seed: s, params: { ...p.params } };
-};
 
 // ── Drawing: dispatch, memo and budget ───────────────────────────────────────────────────────────────────────────
 
