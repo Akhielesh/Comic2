@@ -3,7 +3,17 @@ import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, St
 import { startBackgroundGeneration, cancelGeneration } from '../services/generationManager';
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
 import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
-import { createGenerationNotification, loadProjects, saveProject, deleteProject as deleteProjectRecord, saveImage, getImageUrl } from '../services/db';
+import {
+  createGenerationNotification,
+  loadProjectCards,
+  loadProjectState,
+  isCardOnly,
+  markStateLoaded,
+  saveProject,
+  deleteProject as deleteProjectRecord,
+  saveImage,
+  getImageUrl
+} from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { applyStyleLockResolution } from '../services/styleLock';
@@ -11,6 +21,7 @@ import { getDefaultStoryPlanningState, recommendStoryPlanning } from '../service
 import { makeDefaultComicAgentSettings, normalizeComicAgentSettings } from '../services/comicAgentSettings';
 import { makeDefaultComicAgentRun, syncAgentRunWithState } from '../services/comicAgentRun';
 import { isStudioV4Project } from '../services/studioDeepLink';
+import { TOAST, Z } from '../components/chat/studioDesign';
 
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 4;
@@ -282,14 +293,85 @@ export const withoutStudioVisibility = (project: Project, updates: Partial<Proje
   return rest;
 };
 
+type ProjectUpdate = Partial<Project> | ((prev: Project) => Partial<Project>);
+
+export const STATE_LOAD_FAILED_SAVE = "Couldn't load this comic to save your change. Try again.";
+export const STATE_LOAD_FAILED = "Couldn't load this comic. Try again.";
+
+/** A short notice the app shell does not render itself (the hook has no UI): one at a time, gone after 6 s. */
+const showProjectNotice = (message: string) => {
+  if (typeof document === 'undefined' || !document.body) return;
+  const id = 'project-state-notice';
+  document.getElementById(id)?.remove();
+  const el = document.createElement('div');
+  el.id = id;
+  el.setAttribute('role', 'alert');
+  el.className = `${TOAST} ${Z.toast} fixed bottom-6 left-1/2 w-max max-w-[calc(100vw-32px)] -translate-x-1/2`;
+  el.textContent = message;
+  document.body.appendChild(el);
+  window.setTimeout(() => el.remove(), 6000);
+};
+
+type HasImage = { id?: unknown; imageId?: string; imageUrl?: string };
+
+/**
+ * The signed preview URLs a library card already holds, carried onto the full state that replaces it (same image
+ * id only), so a card changed from the dashboard keeps its cover. In memory only: a save strips every URL.
+ */
+const carryCardDisplayUrls = (card: ComicState, full: ComicState): ComicState => {
+  const overlay = <T extends HasImage>(target: T[] | undefined, from: T[] | undefined): T[] | undefined => {
+    if (!Array.isArray(target) || !Array.isArray(from)) return target;
+    const signed = new Map(from.filter((e) => e && e.imageId && e.imageUrl).map((e) => [`${String(e.id)}\u0000${e.imageId}`, e.imageUrl]));
+    if (!signed.size) return target;
+    return target.map((e) => {
+      const url = e && !e.imageUrl && e.imageId ? signed.get(`${String(e.id)}\u0000${e.imageId}`) : undefined;
+      return url ? { ...e, imageUrl: url } : e;
+    });
+  };
+  const next: ComicState = { ...full };
+  if (!next.coverImageUrl && card.coverImageUrl && next.coverImageId && next.coverImageId === card.coverImageId) next.coverImageUrl = card.coverImageUrl;
+  if (!next.coverTemplateImageUrl && card.coverTemplateImageUrl && next.coverTemplateImageId && next.coverTemplateImageId === card.coverTemplateImageId) {
+    next.coverTemplateImageUrl = card.coverTemplateImageUrl;
+  }
+  const panels = overlay(full.panels, card.panels);
+  if (panels) next.panels = panels;
+  const variants = overlay(full.styleVariants, card.styleVariants);
+  if (variants) next.styleVariants = variants;
+  if (full.pageStudio?.pages && card.pageStudio?.pages) {
+    const pages = overlay(full.pageStudio.pages, card.pageStudio.pages);
+    if (pages) next.pageStudio = { ...full.pageStudio, pages };
+  }
+  return next;
+};
+
 export const useProjectManager = () => {
   const { user, loading: authLoading } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingSavesRef = useRef<Map<string, Project>>(new Map());
+  // The project list as of the last change, kept synchronously (React state lags a render): the card-only
+  // decisions below must see what a save would see.
+  const projectsRef = useRef<Project[]>([]);
+  // Updates made to a card while its full state loads, applied in order once it is in (EGRESS-DB E1).
+  const queuedUpdatesRef = useRef<Map<string, ProjectUpdate[]>>(new Map());
+  const stateLoadsRef = useRef<Map<string, Promise<Project | undefined>>>(new Map());
+  const deletedIdsRef = useRef<Set<string>>(new Set());
+
+  const commitProjects = (next: Project[] | ((prev: Project[]) => Project[])) => {
+    const value = typeof next === 'function' ? next(projectsRef.current) : next;
+    projectsRef.current = value;
+    setProjects(value);
+    return value;
+  };
+
+  const persist = (project: Project) => {
+    saveProject(project).catch((error) => console.warn('[projects] save failed', project.id, error));
+  };
 
   const scheduleSave = (project: Project) => {
+    // A card is never saved (saveProject would refuse it too): its full state loads first.
+    if (isCardOnly(project.id)) return;
     pendingSavesRef.current.set(project.id, project);
     const existing = saveTimersRef.current.get(project.id);
     if (existing) clearTimeout(existing);
@@ -297,7 +379,7 @@ export const useProjectManager = () => {
       const latest = pendingSavesRef.current.get(project.id);
       pendingSavesRef.current.delete(project.id);
       saveTimersRef.current.delete(project.id);
-      if (latest) void saveProject(latest);
+      if (latest) persist(latest);
     }, SAVE_DEBOUNCE_MS);
     saveTimersRef.current.set(project.id, handle);
   };
@@ -307,7 +389,7 @@ export const useProjectManager = () => {
       saveTimersRef.current.forEach((handle) => clearTimeout(handle));
       saveTimersRef.current.clear();
       pendingSavesRef.current.forEach((project) => {
-        void saveProject(project);
+        persist(project);
       });
       pendingSavesRef.current.clear();
     };
@@ -384,7 +466,7 @@ export const useProjectManager = () => {
     };
 
     if (didStateMigrationRequireSave(project.state, migratedState)) {
-      void saveProject(hydratedProject);
+      persist(hydratedProject);
     }
 
     return hydratedProject;
@@ -401,72 +483,66 @@ export const useProjectManager = () => {
     return coverImageUrl ? { ...project, state: { ...project.state, coverImageUrl } } : project;
   };
 
-  const hydrateProjectCover = async (project: Project): Promise<Project> => {
+  // A library card (EGRESS-DB E1) is a state subset: only its preview images are signed here. The classic flow
+  // migrations need the whole state, so they run (and save) when the comic is opened (hydrateProject), never on a
+  // card, and nothing here is ever saved.
+  const hydrateCardThumbnails = async (project: Project): Promise<Project> => {
     if (isStudioV4Project(project)) return hydrateStudioCover(project);
-    let panelOverrides: ComicPanel[] | undefined;
-    const firstPanelWithImageIdIndex = project.state.panels.findIndex(
+    const state = project.state;
+    const thumb = (id: string) => getImageUrl(id, { transform: IMAGE_TRANSFORMS.thumb }).catch(() => undefined);
+
+    let panels = state.panels;
+    const firstPanelIndex = panels.findIndex(
       (panel) => !panel.imageUrl && (!!panel.imageId || (panel.imageIdHistory?.length || 0) > 0)
     );
-    if (firstPanelWithImageIdIndex >= 0) {
-      const target = project.state.panels[firstPanelWithImageIdIndex];
+    if (firstPanelIndex >= 0) {
+      const target = panels[firstPanelIndex];
       const previewImageId = target.imageId || target.imageIdHistory?.[target.imageIdHistory.length - 1];
-      const hydratedPanelUrl = previewImageId
-        ? await getImageUrl(previewImageId, { transform: IMAGE_TRANSFORMS.thumb })
-        : undefined;
-      if (hydratedPanelUrl) {
-        panelOverrides = [...project.state.panels];
-        panelOverrides[firstPanelWithImageIdIndex] = {
-          ...target,
-          imageUrl: hydratedPanelUrl
-        };
+      const imageUrl = previewImageId ? await thumb(previewImageId) : undefined;
+      if (imageUrl) {
+        panels = [...panels];
+        panels[firstPanelIndex] = { ...target, imageUrl };
       }
     }
 
-	    let styleOverrides: StyleVariant[] | undefined;
-    const firstStyleWithImageIdIndex = project.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
-    if (firstStyleWithImageIdIndex >= 0) {
-      const target = project.state.styleVariants[firstStyleWithImageIdIndex];
-      const hydratedStyleUrl = await getImageUrl(target.imageId!, { transform: IMAGE_TRANSFORMS.thumb });
-      if (hydratedStyleUrl) {
-        styleOverrides = [...project.state.styleVariants];
-        styleOverrides[firstStyleWithImageIdIndex] = {
-          ...target,
-          imageUrl: hydratedStyleUrl
-        };
+    let styleVariants = state.styleVariants;
+    const firstStyleIndex = styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
+    if (firstStyleIndex >= 0) {
+      const target = styleVariants[firstStyleIndex];
+      const imageUrl = await thumb(target.imageId!);
+      if (imageUrl) {
+        styleVariants = [...styleVariants];
+        styleVariants[firstStyleIndex] = { ...target, imageUrl };
       }
-	    }
+    }
 
-	    let pageStudioOverride = project.state.pageStudio;
-	    if (project.state.pageStudio?.pages?.length) {
-	      pageStudioOverride = {
-	        ...project.state.pageStudio,
-	        pages: await Promise.all(project.state.pageStudio.pages.map(async (page) => ({
-	          ...page,
-	          imageUrl: page.imageId
-	            ? await getImageUrl(page.imageId, { transform: IMAGE_TRANSFORMS.thumb })
-	            : page.imageUrl
-	        })))
-	      };
-	    }
+    let pageStudio = state.pageStudio;
+    if (pageStudio?.pages?.length) {
+      pageStudio = {
+        ...pageStudio,
+        pages: await Promise.all(pageStudio.pages.map(async (page) => ({
+          ...page,
+          imageUrl: page.imageId ? await thumb(page.imageId) : page.imageUrl
+        })))
+      };
+    }
 
-	    const migratedState = await migrateHydratedCoverAndFlowState(
-	      project.state,
-	      {
-	        ...(panelOverrides ? { panels: panelOverrides } : {}),
-	        ...(styleOverrides ? { styleVariants: styleOverrides } : {}),
-	        ...(pageStudioOverride ? { pageStudio: pageStudioOverride } : {})
-	      },
-	      { useThumbTransform: true }
-	    );
+    const coverImageUrl = state.coverImageId ? await thumb(state.coverImageId) : state.coverImageUrl;
+    const coverTemplateImageUrl = state.coverTemplateImageId
+      ? await getImageUrl(state.coverTemplateImageId, { transform: IMAGE_TRANSFORMS.editor }).catch(() => undefined)
+      : state.coverTemplateImageUrl;
 
-    const hydratedProject: Project = {
+    return {
       ...project,
-      state: migratedState
+      state: {
+        ...state,
+        panels,
+        styleVariants,
+        ...(pageStudio ? { pageStudio } : {}),
+        coverImageUrl,
+        coverTemplateImageUrl
+      }
     };
-    if (didStateMigrationRequireSave(project.state, migratedState)) {
-      void saveProject(hydratedProject);
-    }
-    return hydratedProject;
   };
 
   const migrateLegacyProject = async (project: Project): Promise<Project> => {
@@ -570,14 +646,46 @@ export const useProjectManager = () => {
     try {
       setProjectsLoaded(false);
       if (!user) {
-        setProjects([]);
+        commitProjects([]);
         setProjectsLoaded(true);
         return;
       }
 
-      const storedProjects = await loadProjects();
-      const hydrated = await Promise.all(storedProjects.map(hydrateProjectCover));
-      setProjects(hydrated);
+      const { projects: cards, fullBefore } = await loadProjectCards();
+      // Synchronous from here until the decision is recorded: loadProjectCards has just flagged every listed id
+      // card-only. A full project this tab already holds stays (and is flagged full again) when the row has not
+      // changed since, or when an edit of it is waiting to save; any other listed comic becomes its card, so a
+      // newer remote edit always forces a fresh load before the next save.
+      const held = new Map(projectsRef.current.map((p) => [p.id, p]));
+      const kept = new Map<string, Project>();
+      for (const card of cards) {
+        const existing = held.get(card.id);
+        if (!existing || !fullBefore.has(card.id)) continue;
+        if (existing.updatedAt === card.updatedAt || pendingSavesRef.current.has(card.id)) {
+          markStateLoaded(card.id);
+          kept.set(card.id, existing);
+        }
+      }
+
+      const fresh = await Promise.all(cards.filter((card) => !kept.has(card.id)).map(hydrateCardThumbnails));
+      const freshById = new Map(fresh.map((card) => [card.id, card]));
+      commitProjects((prev) => {
+        const live = new Map(prev.map((p) => [p.id, p]));
+        const next: Project[] = [];
+        for (const card of cards) {
+          if (deletedIdsRef.current.has(card.id)) continue;
+          const current = live.get(card.id);
+          if (kept.has(card.id)) {
+            next.push(current ?? kept.get(card.id)!);
+          } else if (!isCardOnly(card.id) && current) {
+            // Its full state loaded while the previews were signed: keep it, never a card over it.
+            next.push(current);
+          } else {
+            next.push(freshById.get(card.id) ?? card);
+          }
+        }
+        return next;
+      });
     } catch (e) {
       console.error("Failed to load projects", e);
     } finally {
@@ -598,77 +706,143 @@ export const useProjectManager = () => {
       updatedAt: Date.now(),
       state: { ...INITIAL_STATE }
     };
-    setProjects(prev => [newProject, ...prev]);
-    void saveProject(newProject);
+    commitProjects(prev => [newProject, ...prev]);
+    persist(newProject);
     return newProject;
   };
 
-  const updateProject = (id: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => {
-    setProjects(prevProjects => {
-      const newProjects = prevProjects.map(p => {
-        if (p.id === id) {
-          const newValues = typeof updates === 'function' ? updates(p) : updates;
-          return { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
-        }
-        return p;
-      });
-      const updated = newProjects.find(p => p.id === id);
-      if (updated) {
-        scheduleSave(updated);
-      }
-      return newProjects;
-    });
+  /** Apply one update to a project whose full state is in memory, then schedule its save. */
+  const applyUpdate = (id: string, updates: ProjectUpdate) => {
+    let updated: Project | undefined;
+    commitProjects(prevProjects => prevProjects.map(p => {
+      if (p.id !== id) return p;
+      const newValues = typeof updates === 'function' ? updates(p) : updates;
+      updated = { ...p, ...withoutStudioVisibility(p, newValues), updatedAt: Date.now() };
+      return updated;
+    }));
+    if (updated) scheduleSave(updated);
   };
 
-  // Wrapper to call standard updateProject but also persist to storage (handled by updateProject logic above if we lift saveProjects out or duplicate)
-  // To avoid race conditions in React state vs LocalStorage, we rely on the setProjects functional update callback pattern mostly.
+  const flushQueuedUpdates = (id: string) => {
+    const queued = queuedUpdatesRef.current.get(id);
+    if (!queued) return;
+    queuedUpdatesRef.current.delete(id);
+    for (const updates of queued) applyUpdate(id, updates);
+  };
+
+  /**
+   * The comic with its full state (EGRESS-DB E1): a card loads its state once (one request per id at a time),
+   * replaces the card with it, then applies the updates queued meanwhile. A full project resolves as it is.
+   * Rejects when the state cannot be loaded; the queued updates are then dropped, with a notice.
+   */
+  const ensureProjectState = (id: string): Promise<Project | undefined> => {
+    if (!projectsRef.current.some((p) => p.id === id)) return Promise.resolve(undefined);
+    if (!isCardOnly(id)) {
+      flushQueuedUpdates(id);
+      return Promise.resolve(projectsRef.current.find((p) => p.id === id));
+    }
+    const inflight = stateLoadsRef.current.get(id);
+    if (inflight) return inflight;
+    const run = loadProjectState(id)
+      .then(({ state, updatedAt }) => {
+        // loadProjectState has just flagged the id full: the card is replaced in this same turn.
+        commitProjects((prev) => prev.map((p) => (p.id === id ? { ...p, state: carryCardDisplayUrls(p.state, state), updatedAt } : p)));
+        flushQueuedUpdates(id);
+        return projectsRef.current.find((p) => p.id === id);
+      })
+      .catch((error) => {
+        const dropped = queuedUpdatesRef.current.get(id)?.length ?? 0;
+        queuedUpdatesRef.current.delete(id);
+        if (dropped > 0) showProjectNotice(STATE_LOAD_FAILED_SAVE);
+        console.warn('[projects] could not load the full state', id, error);
+        throw error;
+      })
+      .finally(() => {
+        stateLoadsRef.current.delete(id);
+      });
+    stateLoadsRef.current.set(id, run);
+    return run;
+  };
+
+  const updateProject = (id: string, updates: ProjectUpdate) => {
+    if (!projectsRef.current.some((p) => p.id === id)) return;
+    if (isCardOnly(id)) {
+      // A card holds a subset of the comic: the change waits for the full state, so it is never saved over it.
+      const queue = queuedUpdatesRef.current.get(id);
+      if (queue) queue.push(updates);
+      else queuedUpdatesRef.current.set(id, [updates]);
+      void ensureProjectState(id).catch(() => undefined);
+      return;
+    }
+    applyUpdate(id, updates);
+  };
 
   const deleteProject = (id: string) => {
-    setProjects(prev => prev.filter(p => p.id !== id));
+    deletedIdsRef.current.add(id);
+    commitProjects(prev => prev.filter(p => p.id !== id));
     const existing = saveTimersRef.current.get(id);
     if (existing) clearTimeout(existing);
     saveTimersRef.current.delete(id);
     pendingSavesRef.current.delete(id);
+    queuedUpdatesRef.current.delete(id);
     void deleteProjectRecord(id);
   };
 
-  const duplicateProject = (id: string) => {
-    const original = projects.find(p => p.id === id);
+  const duplicateProject = async (id: string) => {
+    const listed = projectsRef.current.find(p => p.id === id);
     // A v4 studio comic's content lives in comic_docs (server-owned); copying the listing
     // row alone would produce a comic with no document. The dashboard disables the action.
-    if (original && isStudioV4Project(original)) return;
-    if (original) {
-      const copy: Project = {
-        ...original,
-        id: crypto.randomUUID(),
-        name: `${original.name} (Copy)`,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        state: {
-          ...original.state,
-          panels: [], // Reset generated panels on duplicate? Or keep? Let's keep for "forking".
-          generationStatus: undefined // Reset active generation
-        }
-      };
-      setProjects(prev => [copy, ...prev]);
-      void saveProject(copy);
+    if (!listed || isStudioV4Project(listed)) return;
+    // A copy of a card would be a copy of a subset: the copy is made from the full state.
+    let original: Project | undefined;
+    try {
+      original = await ensureProjectState(id);
+    } catch {
+      showProjectNotice(STATE_LOAD_FAILED);
+      return;
     }
+    if (!original || isStudioV4Project(original)) return;
+    const copy: Project = {
+      ...original,
+      id: crypto.randomUUID(),
+      name: `${original.name} (Copy)`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      state: {
+        ...original.state,
+        panels: [], // Reset generated panels on duplicate? Or keep? Let's keep for "forking".
+        generationStatus: undefined // Reset active generation
+      }
+    };
+    commitProjects(prev => [copy, ...prev]);
+    persist(copy);
   };
 
   const getProject = (id: string) => projects.find(p => p.id === id);
 
   const hydrateProjectAssets = async (projectId: string): Promise<Project | undefined> => {
-    const target = projects.find((p) => p.id === projectId);
+    const target = projectsRef.current.find((p) => p.id === projectId);
     if (!target) return undefined;
     // v4 studio comics sign their own assets through /api/comic (see hydrateStudioCover).
     if (isStudioV4Project(target)) return target;
-    const hydrated = await hydrateProject(target);
-    setProjects((prev) => prev.map((p) => (p.id === projectId ? hydrated : p)));
+    // Opening a comic listed as a card loads its full state first (rejects when it cannot).
+    const full = await ensureProjectState(projectId);
+    if (!full) return undefined;
+    if (isStudioV4Project(full)) return full;
+    const hydrated = await hydrateProject(full);
+    commitProjects((prev) => prev.map((p) => (p.id === projectId ? hydrated : p)));
     return hydrated;
   };
 
-  const startGeneration = (projectId: string) => {
-    const project = getProject(projectId);
+  const startGeneration = async (projectId: string) => {
+    // A generation reads and writes the whole comic: never from a card.
+    let project: Project | undefined;
+    try {
+      project = await ensureProjectState(projectId);
+    } catch {
+      showProjectNotice(STATE_LOAD_FAILED);
+      return;
+    }
     if (!project) return;
     const { state: repairedState, resolution, changed } = applyStyleLockResolution(project.state);
     if (!resolution.resolved) {
@@ -690,11 +864,12 @@ export const useProjectManager = () => {
     }
 
     // Start the background process
+    const projectName = project.name;
     startBackgroundGeneration(
       generationProject,
       updateProject, // Pass the updater
       (pid, panels) => {
-        void createGenerationNotification(pid, project.name);
+        void createGenerationNotification(pid, projectName);
       }
     );
   };
@@ -714,6 +889,7 @@ export const useProjectManager = () => {
     startGeneration,
     stopGeneration,
     reloadProjects: loadAllProjects,
-    hydrateProjectAssets
+    hydrateProjectAssets,
+    ensureProjectState
   };
 };

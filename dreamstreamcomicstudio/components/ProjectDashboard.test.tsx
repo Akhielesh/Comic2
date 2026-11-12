@@ -11,8 +11,11 @@ vi.mock('./common/SmartImage', () => ({
   SmartImage: ({ src, alt, className }: { src: string; alt: string; className?: string }) => <img src={src} alt={alt} className={className} />
 }));
 vi.mock('./modals/ProjectInfoModal', () => ({ ProjectInfoModal: () => null }));
+vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
 
 import { DUPLICATE_UNAVAILABLE_FOR_STUDIO, ProjectDashboard, syncStudioTitle } from './ProjectDashboard';
+import { fakeSupabase } from '../services/projectRows.testkit';
+import { loadProjects } from '../services/db';
 
 const baseState = (): ComicState => ({
   step: 0,
@@ -290,5 +293,85 @@ describe('ProjectDashboard — new comic double submit', () => {
     fireEvent.click(screen.getByRole('button', { name: /creat/i }));
     expect(onCreateProject).toHaveBeenCalledTimes(1);
     await act(async () => resolve());
+  });
+});
+
+// EGRESS-DB E1: the library list holds cards (a few state keys per comic, never the classic snapshots); the
+// dashboard renders them exactly as it renders the full comics.
+describe('ProjectDashboard — library cards', () => {
+  const toRow = (project: Project) => ({
+    id: project.id,
+    user_id: 'user-1',
+    name: project.name,
+    cover_image_url: project.coverImage ?? null,
+    is_public: !!project.isPublic,
+    is_forced_private: false,
+    content_rating: null,
+    likes_count: 0,
+    views_count: 0,
+    created_at: new Date(project.createdAt).toISOString(),
+    updated_at: new Date(project.updatedAt).toISOString(),
+    state: project.state
+  });
+
+  const fullComics = (): Project[] => {
+    const classic = classicProject();
+    return [
+      studioProject(),
+      { ...studioProject({ studioPages: 3, studioRendered: 3 }), id: 'studio-2', name: 'Done Deal', updatedAt: NOW - 10 },
+      {
+        ...classic,
+        state: {
+          ...classic.state,
+          step: 6,
+          overview: 'A wizard loses his hat.',
+          isFeatured: true,
+          comments: [{ id: 'c1', text: 'Great', createdAt: 1, likes: 1, dislikes: 0 }],
+          panels: [{ id: 'p1', sceneId: 1, description: 'Hat flies', dialogue: '', imageUrl: 'https://cdn.example/p1.webp' }],
+          generationStatus: { isActive: true, progress: 40, currentStepDescription: 'Drawing', estimatedTimeRemaining: '2m', logs: [] },
+          versions: [{ id: 'v1', state: { script: 'old draft' } }]
+        } as unknown as ComicState
+      },
+      {
+        id: 'pages-1',
+        name: 'Page Studio Story',
+        createdAt: NOW - 5000,
+        updatedAt: NOW - 5000,
+        state: {
+          ...baseState(),
+          pipelineMode: 'pagestudio',
+          pageStudio: { brief: 'b', style: { inline: 'data:image/png;base64,AAAA' }, layout: 'splash', aspectRatio: '2:3', resolution: '2K', pages: [{ id: 'pg1', prompt: 'p', imageUrl: 'https://cdn.example/pg1.webp' }], activePageId: 'pg1' }
+        } as unknown as ComicState
+      }
+    ];
+  };
+
+  /** What a person sees on each card: its text and its images. */
+  const snapshot = (container: HTMLElement) => ({
+    text: container.textContent,
+    images: Array.from(container.querySelectorAll('img')).map((img) => `${img.getAttribute('alt')} ${img.getAttribute('src')}`)
+  });
+
+  it('renders the same dashboard from the projected cards as from the full comics', async () => {
+    fakeSupabase.reset();
+    const full = fullComics();
+    fakeSupabase.state.tables.projects = full.map(toRow);
+    const cards = await loadProjects();
+    expect(cards.map((p) => p.id)).toEqual(full.map((p) => p.id));
+    expect(JSON.stringify(cards)).not.toContain('old draft');
+    expect(JSON.stringify(cards)).not.toContain('data:image/png');
+
+    const fromFull = renderDashboard(full);
+    const expected = snapshot(fromFull.container);
+    fromFull.unmount();
+    const fromCards = renderDashboard(cards);
+    expect(snapshot(fromCards.container)).toEqual(expected);
+
+    expect(within(cardFor('Spice Market')).getByText('2 of 6 pages')).toBeInTheDocument();
+    expect(within(cardFor('Done Deal')).getByText('Drawn')).toBeInTheDocument();
+    expect(within(cardFor('Old Wizard Comic')).getByRole('button', { name: /edit/i })).toBeInTheDocument();
+    expect(within(cardFor('Old Wizard Comic')).getByText('BUILDING')).toBeInTheDocument();
+    expect(expected.images.join(' ')).toContain('https://cdn.example/pg1.webp');
+    expect(expected.images.join(' ')).toContain('https://cdn.example/p1.webp');
   });
 });

@@ -7,20 +7,20 @@ const collectImageIds = (project: Project) => {
   const add = (id?: string) => {
     if (id) ids.add(id);
   };
-  project.state.panels.forEach((panel) => {
+  project.state.panels?.forEach((panel) => {
     add(panel.imageId);
     panel.imageIdHistory?.forEach(add);
   });
-  project.state.styleVariants.forEach((variant) => add(variant.imageId));
-  project.state.characters.forEach((c) => {
+  project.state.styleVariants?.forEach((variant) => add(variant.imageId));
+  project.state.characters?.forEach((c) => {
     add(c.imageId);
     c.referenceImageIds?.forEach(add);
   });
-  project.state.items.forEach((i) => {
+  project.state.items?.forEach((i) => {
     add(i.imageId);
     i.referenceImageIds?.forEach(add);
   });
-  project.state.locations.forEach((l) => {
+  project.state.locations?.forEach((l) => {
     add(l.imageId);
     l.referenceImageIds?.forEach(add);
   });
@@ -75,8 +75,8 @@ export const summarizeProject = async (project: Project): Promise<ProjectSummary
     step: project.state.step,
     stepLabel: AppStep[project.state.step],
     updatedAt: project.updatedAt,
-    scenes: project.state.scenes.length,
-    panels: project.state.panels.length,
+    scenes: project.state.scenes?.length ?? 0,
+    panels: project.state.panels?.length ?? 0,
     isGenerating: !!project.state.generationStatus?.isActive,
     generationProgress: project.state.generationStatus?.progress,
     generationStep: project.state.generationStatus?.currentStepDescription,
@@ -93,7 +93,7 @@ export const summarizeProject = async (project: Project): Promise<ProjectSummary
     imageResolution: project.state.imageResolution,
     coverReady: !!project.state.coverImageId,
     overview: project.state.overview || "",
-    scriptLength: project.state.script.length,
+    scriptLength: project.state.script?.length ?? 0,
     lastUpdatedAt: project.updatedAt,
     storage: {
       imageCount: report.storage.imageCount || imageIds.size,
@@ -118,8 +118,8 @@ export const summarizeAllProjects = async (projects: Project[]): Promise<Project
         step: project.state.step,
         stepLabel: AppStep[project.state.step],
         updatedAt: project.updatedAt,
-        scenes: project.state.scenes.length,
-        panels: project.state.panels.length,
+        scenes: project.state.scenes?.length ?? 0,
+        panels: project.state.panels?.length ?? 0,
         isGenerating: !!project.state.generationStatus?.isActive,
         generationProgress: project.state.generationStatus?.progress,
         generationStep: project.state.generationStatus?.currentStepDescription,
@@ -131,7 +131,7 @@ export const summarizeAllProjects = async (projects: Project[]): Promise<Project
         imageResolution: project.state.imageResolution,
         coverReady: !!project.state.coverImageId,
         overview: project.state.overview || "",
-        scriptLength: project.state.script.length,
+        scriptLength: project.state.script?.length ?? 0,
         lastUpdatedAt: project.updatedAt,
         comments: { count: project.state.comments?.length || 0, likes: 0, dislikes: 0 }
       });
@@ -141,30 +141,30 @@ export const summarizeAllProjects = async (projects: Project[]): Promise<Project
 };
 
 export const buildProjectSnapshot = (project: Project) => {
-  const sampleScenes = project.state.scenes.slice(0, 5).map((scene) => ({
+  const sampleScenes = (project.state.scenes ?? []).slice(0, 5).map((scene) => ({
     id: scene.id,
     synopsis: scene.synopsis?.slice(0, 240),
     setting: scene.setting,
     characters: scene.characters
   }));
-  const samplePanels = project.state.panels.slice(0, 6).map((panel) => ({
+  const samplePanels = (project.state.panels ?? []).slice(0, 6).map((panel) => ({
     id: panel.id,
     sceneId: panel.sceneId,
     description: panel.description?.slice(0, 200),
     dialogue: panel.dialogue?.slice(0, 160),
     hasImage: !!panel.imageId || !!panel.imageUrl
   }));
-  const sampleCharacters = project.state.characters.slice(0, 6).map((c) => ({
+  const sampleCharacters = (project.state.characters ?? []).slice(0, 6).map((c) => ({
     id: c.id,
     name: c.name,
     description: c.description?.slice(0, 160)
   }));
-  const sampleItems = project.state.items.slice(0, 6).map((i) => ({
+  const sampleItems = (project.state.items ?? []).slice(0, 6).map((i) => ({
     id: i.id,
     name: i.name,
     description: i.description?.slice(0, 140)
   }));
-  const sampleLocations = project.state.locations.slice(0, 6).map((l) => ({
+  const sampleLocations = (project.state.locations ?? []).slice(0, 6).map((l) => ({
     id: l.id,
     name: l.name,
     description: l.description?.slice(0, 140)
@@ -187,8 +187,8 @@ export const buildProjectSnapshot = (project: Project) => {
     updatedAt: project.updatedAt,
     overview: project.state.overview || "",
     scriptChecklist: project.state.scriptChecklist,
-    scriptLength: project.state.script.length,
-    scriptPreview: project.state.script.slice(0, 600),
+    scriptLength: project.state.script?.length ?? 0,
+    scriptPreview: (project.state.script ?? '').slice(0, 600),
     style: {
       category: project.state.styleCategory,
       prompt: project.state.stylePrompt?.slice(0, 240),
@@ -208,12 +208,12 @@ export const buildProjectSnapshot = (project: Project) => {
     },
     generationStatus: project.state.generationStatus,
     counts: {
-      scenes: project.state.scenes.length,
-      panels: project.state.panels.length,
-      characters: project.state.characters.length,
-      items: project.state.items.length,
-      locations: project.state.locations.length,
-      styleVariants: project.state.styleVariants.length
+      scenes: project.state.scenes?.length ?? 0,
+      panels: project.state.panels?.length ?? 0,
+      characters: project.state.characters?.length ?? 0,
+      items: project.state.items?.length ?? 0,
+      locations: project.state.locations?.length ?? 0,
+      styleVariants: project.state.styleVariants?.length ?? 0
     },
     samples: {
       scenes: sampleScenes,

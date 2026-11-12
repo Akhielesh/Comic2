@@ -476,8 +476,80 @@ const isProjectLikesMissingError = (error: unknown): boolean => {
 // fire on every generation tick). Only log the first time, or when the size changes meaningfully.
 const lastStateBytesLogged = new Map<string, number>();
 
+// --- Library cards (EGRESS-DB E1) ---
+// The library list reads a CARD per comic: the row's columns plus the few state keys the dashboard,
+// the cover hydration, the deep-link routing and the assistant summaries read. Never `versions` (the
+// classic editor's snapshots, ~70% of all state bytes) or `pageStudio.style` (an inline image). The
+// full state loads only when a comic is opened, duplicated or changed (loadProjectState).
+export const PROJECT_CARD_STATE_KEYS = ['studioVersion', 'studioPages', 'studioRendered', 'pipelineMode', 'shareSlug',
+  'publicCover', 'publishedAt', 'isFeatured', 'step', 'overview', 'generationStatus', 'comments', 'coverImageId',
+  'coverImageUrl', 'coverTemplateImageId', 'panels', 'styleVariants', 'scenes', 'script', 'layoutType', 'textLayout',
+  'styleCategory', 'styleAspectRatio', 'imageResolution', 'pricingConfig', 'characters', 'items', 'locations'] as const;
+const PROJECT_CARD_STATE_SELECT = [
+  ...PROJECT_CARD_STATE_KEYS.map((k) => `${k}:state->${k}`),
+  'pageStudioPages:state->pageStudio->pages,pageStudioActivePageId:state->pageStudio->activePageId'
+].join(',');
+export const PROJECT_CARD_SELECT = [
+  'id,user_id,name,cover_image_url,is_public,is_forced_private,content_rating,likes_count,views_count,created_at,updated_at',
+  PROJECT_CARD_STATE_SELECT
+].join(',');
+/** The same card on a database without the moderation, rating and counter columns (error 42703). */
+const PROJECT_CARD_SELECT_LEGACY = ['id,user_id,name,cover_image_url,is_public,created_at,updated_at', PROJECT_CARD_STATE_SELECT].join(',');
+
+const CARD_ARRAY_KEYS: ReadonlySet<string> = new Set(['panels', 'styleVariants', 'scenes', 'characters', 'items', 'locations', 'comments']);
+
+/** The state a card row stands for: its projected keys, arrays defaulted to [] and the script to ''. */
+export const projectCardStateOf = (row: Record<string, unknown>): Project['state'] => {
+  const state: Record<string, unknown> = {};
+  for (const key of PROJECT_CARD_STATE_KEYS) {
+    const value = row[key];
+    if (CARD_ARRAY_KEYS.has(key)) state[key] = Array.isArray(value) ? value : [];
+    else if (key === 'script') state[key] = typeof value === 'string' ? value : '';
+    else if (value !== null && value !== undefined) state[key] = value;
+  }
+  const pages = row.pageStudioPages;
+  const activePageId = row.pageStudioActivePageId;
+  if (Array.isArray(pages) || typeof activePageId === 'string') {
+    state.pageStudio = { pages: Array.isArray(pages) ? pages : [], ...(typeof activePageId === 'string' ? { activePageId } : {}) };
+  }
+  return state as unknown as Project['state'];
+};
+
+const isProjectCardRow = (value: unknown): value is Record<string, unknown> & Omit<ProjectRow, 'state'> =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.name === 'string' &&
+  typeof value.created_at === 'string' &&
+  typeof value.updated_at === 'string';
+
+const isUndefinedColumnError = (error: unknown): boolean => isRecord(error) && String(error.code ?? '') === '42703';
+
+/**
+ * Ids whose in-memory project is a card (a state subset). The save guard is keyed by the id, not by
+ * the state object, so a state rebuilt from a card (a spread, an update) is still refused.
+ */
+const cardOnlyIds = new Set<string>();
+export const isCardOnly = (id: string): boolean => cardOnlyIds.has(id);
+export const markStateLoaded = (id: string): void => {
+  cardOnlyIds.delete(id);
+};
+
+/** saveProject refused a project whose in-memory state is only its library card. */
+export class CardSaveRefusedError extends Error {
+  code = 'CARD_ONLY' as const;
+  projectId: string;
+  constructor(projectId: string) {
+    super(`Refused to save comic ${projectId}: only its library card is loaded, not its full state.`);
+    this.name = 'CardSaveRefusedError';
+    this.projectId = projectId;
+  }
+}
+
 // 1. Projects
 export const saveProject = async (project: Project): Promise<void> => {
+  // Before any await: a card must never be upserted over the full row. A save that passed this check
+  // carries a full state, whatever a library reload flags while it is in flight.
+  if (cardOnlyIds.has(project.id)) throw new CardSaveRefusedError(project.id);
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -534,29 +606,67 @@ export const deleteProject = async (projectId: string): Promise<void> => {
   if (error) throw error;
 };
 
-export const loadProjects = async (): Promise<Project[]> => {
+/**
+ * The signed-in user's library as cards (see PROJECT_CARD_SELECT). Every listed id is flagged card-only;
+ * `fullBefore` holds the listed ids that were not flagged a moment before (so a caller can keep a full
+ * project it already holds). Both happen synchronously right before this resolves.
+ */
+export const loadProjectCards = async (): Promise<{ projects: Project[]; fullBefore: ReadonlySet<string> }> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
     // Auth-first mode: dashboard data is user-owned and stored in Supabase.
-    return [];
+    return { projects: [], fullBefore: new Set() };
   }
 
-  const { data, error } = await supabase
+  const selectCards = (columns: string) => supabase
     .from('projects')
-    .select('*')
+    .select(columns)
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
+  let { data, error } = await selectCards(PROJECT_CARD_SELECT);
+  if (error && isUndefinedColumnError(error)) ({ data, error } = await selectCards(PROJECT_CARD_SELECT_LEGACY));
   if (error) throw error;
 
-  const rows = (data || []).filter(isProjectRow);
+  const rows = ((data || []) as unknown[]).filter(isProjectCardRow);
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
-  return rows.map((row) => mapProjectRow(row, profileMap));
+  const projects = rows.map((row) => mapProjectRow({ ...row, state: projectCardStateOf(row) } as ProjectRow, profileMap));
+  const fullBefore = new Set<string>();
+  for (const project of projects) {
+    if (!cardOnlyIds.has(project.id)) fullBefore.add(project.id);
+    cardOnlyIds.add(project.id);
+  }
+  return { projects, fullBefore };
 };
+
+export const loadProjects = async (): Promise<Project[]> => (await loadProjectCards()).projects;
 
 export const reloadProjects = async (): Promise<Project[]> => {
   return loadProjects();
+};
+
+/**
+ * One comic's full state (the only read that ships `versions`): for opening, duplicating, changing or
+ * generating a comic listed as a card. Clears the id's card-only flag right before it resolves.
+ */
+export const loadProjectState = async (projectId: string): Promise<{ state: Project['state']; updatedAt: number }> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to open this comic.');
+
+  const { data, error } = await supabase
+    .from('projects')
+    .select('state,updated_at')
+    .eq('id', projectId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (error) throw error;
+  if (!isRecord(data) || !isRecord(data.state) || typeof data.updated_at !== 'string') {
+    throw new Error('This comic could not be loaded.');
+  }
+  markStateLoaded(projectId);
+  return { state: data.state as unknown as Project['state'], updatedAt: new Date(data.updated_at).getTime() };
 };
 
 // A public read signs what the reader shows: the cover, each panel's current art and each Page Studio page's current

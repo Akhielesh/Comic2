@@ -2,14 +2,24 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
-const db = vi.hoisted(() => ({
-  loadProjects: vi.fn(),
-  saveProject: vi.fn(),
-  deleteProject: vi.fn(),
-  getImageUrl: vi.fn(),
-  saveImage: vi.fn(),
-  createGenerationNotification: vi.fn()
-}));
+const db = vi.hoisted(() => {
+  const mock = {
+    loadProjects: vi.fn(),
+    // The list as the library reads it (EGRESS-DB E1). These rows stand for comics already held in full
+    // (isCardOnly is false), so this suite pins the v4 rules alone; the card rules have their own tests
+    // (useProjectManager.test.ts, services/db.projectCards.test.ts).
+    loadProjectCards: vi.fn(async () => ({ projects: await mock.loadProjects(), fullBefore: new Set<string>() })),
+    loadProjectState: vi.fn(),
+    isCardOnly: vi.fn(() => false),
+    markStateLoaded: vi.fn(),
+    saveProject: vi.fn(),
+    deleteProject: vi.fn(),
+    getImageUrl: vi.fn(),
+    saveImage: vi.fn(),
+    createGenerationNotification: vi.fn()
+  };
+  return mock;
+});
 
 vi.mock('../services/db', () => db);
 vi.mock('../services/generationManager', () => ({ startBackgroundGeneration: vi.fn(), cancelGeneration: vi.fn() }));
@@ -102,9 +112,10 @@ describe('useProjectManager — Comic Studio v4 rows', () => {
     expect(state.flowVersion).toBeUndefined();
     expect(state.layoutType).toBe('classic');
 
-    // The classic row still migrates (and saves its repaired state) as before; the v4 row is never saved.
-    await waitFor(() => expect(db.saveProject).toHaveBeenCalled());
-    expect(db.saveProject.mock.calls.map(([p]) => (p as Project).id)).not.toContain('studio-1');
+    // Listing saves nothing (EGRESS-DB E1: a classic row migrates, and saves its repaired state, when it is
+    // opened); the v4 row is never saved.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(db.saveProject).not.toHaveBeenCalled();
   });
 
   it('keeps a studio row listed when its cover cannot be signed', async () => {
@@ -131,10 +142,14 @@ describe('useProjectManager — Comic Studio v4 rows', () => {
 
   it('refuses to duplicate a studio comic (its document lives server-side)', async () => {
     const { result } = await loaded();
-    act(() => result.current.duplicateProject('studio-1'));
+    await act(async () => {
+      await result.current.duplicateProject('studio-1');
+    });
     expect(result.current.projects).toHaveLength(2);
 
-    act(() => result.current.duplicateProject('classic-1'));
+    await act(async () => {
+      await result.current.duplicateProject('classic-1');
+    });
     expect(result.current.projects).toHaveLength(3);
     expect(result.current.projects[0].name).toBe('Old Wizard Comic (Copy)');
   });
