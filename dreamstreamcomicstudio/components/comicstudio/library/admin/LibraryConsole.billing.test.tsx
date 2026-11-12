@@ -4,8 +4,9 @@
 // OpenRouter: only the server's manifest is read.
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { LibraryManifestView } from '../../../../shared/comic/library';
+import type { LibraryStartResult } from '../../../../services/adminLibrary';
 
 const api = vi.hoisted(() => ({
   getLibraryManifest: vi.fn(),
@@ -83,6 +84,12 @@ describe('LibraryConsole billing (P3-ST1)', () => {
     const text = document.querySelector('[data-library-billing]')!.textContent || '';
     expect(text).toMatch(/OpenRouter budget: \$1\.50 left \(checked /);
     expect(text).not.toMatch(/limit none/);
+  });
+
+  it('the client service types the start warning (ST-A #11): LibraryStartResult.warning is an optional string', () => {
+    expectTypeOf<LibraryStartResult['warning']>().toEqualTypeOf<string | undefined>();
+    const out: LibraryStartResult = { run: null, quote: { usd: 0, worstCaseUsd: 0, images: 0, lines: [], skipped: [] }, message: 'Build ready.', warning: 'Only the app cap applies.' };
+    expect(out.warning).toBe('Only the app cap applies.');
   });
 
   it('an unlimited key starts the build but the notice is a warning, not a green check', async () => {

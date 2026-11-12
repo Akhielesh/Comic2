@@ -42,7 +42,8 @@ import {
   regenerateLibraryAsset,
   rejectLibraryAsset,
   startLibraryBuild,
-  stepLibraryRun
+  stepLibraryRun,
+  type LibraryStartResult
 } from '../../../../services/adminLibrary';
 import { PresetThumb } from '../procedural/PresetThumb';
 import { EmptyArt, type EmptyArtVariant } from '../procedural/EmptyArt';
@@ -166,8 +167,8 @@ const billingLine = (b: LibraryBillingView): string[] => {
 };
 
 /** A start's pass-with-a-warning (an unlimited key: only the app cap applies), from servers that send one. */
-const startWarning = (out: unknown): string | null => {
-  const w = (out as { warning?: unknown } | null | undefined)?.warning;
+const startWarning = (out: Pick<LibraryStartResult, 'warning'> | null | undefined): string | null => {
+  const w = out?.warning;
   return typeof w === 'string' && w.trim() ? w.trim().slice(0, 400) : null;
 };
 
@@ -349,9 +350,9 @@ export const LibraryConsole: React.FC = () => {
     try {
       const out = await fn();
       if (!mounted.current) return;
-      const warning = startWarning(out);
+      const started = out as Partial<LibraryStartResult> | undefined;
+      const warning = startWarning(started);
       setNotice(warning ? { tone: 'warn', text: `${ok} ${warning}` } : { tone: 'ok', text: ok });
-      const started = out as { run?: LibraryRunView | null; message?: string } | undefined;
       if (started && 'run' in (started as object) && started.run) {
         setRun(started.run);
         void drive(started.run.id);
