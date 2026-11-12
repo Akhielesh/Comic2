@@ -230,7 +230,13 @@ describe('legal facts match the code: the limits on unauthenticated email hold u
         const access = newsletter.slice(newsletter.indexOf("if (kind === 'access') {"), newsletter.indexOf('// Newsletter double opt-in'));
         expect(access).toMatch(/const receipt = await claimAccessReceipt\(email\);\s*if \(receipt\) \{/);
         // "None while the allowance is used up": the receipt is skipped on the budget share or the cap.
-        expect(store).toContain('if (budget || capped || (recent && recent.length > 0)) return null;');
+        // An unreadable log skips it too (fails closed, like the confirmation's throttle), and SECURITY.md says both.
+        expect(store).toContain('if (budget || capped || recent === null || recent.length > 0) return null;');
+        expect(store).toContain("if (sends === null) return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };");
+        const security = read('docs/email/SECURITY.md');
+        expect(security).toContain("If `email_log` can't be read, no confirmation email is sent until it can");
+        expect(security).toContain("and not at all while public-form mail has used its share or the mailer is capped, or while `email_log` can't be read;");
+        expect(store).not.toContain('neither\n * a lagging nor an unreadable log means "unlimited"');
         // "Counting the +tag and Gmail dot spellings as the same address", and nothing more: those two
         // fold together, other spellings of one mailbox don't (the page claims no more than this).
         expect(inboxKey('Vic.Tim+news@googlemail.com')).toBe(inboxKey('victim@gmail.com'));
@@ -482,9 +488,9 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         const save = db.slice(db.indexOf('export const savePublicContactMessage'), db.indexOf('// --- COMMUNITY FEATURES'));
         expect(save).toMatch(/supabase\.from\('contact_messages'\)\.insert\(\{\s*user_id: user\.id,\s*email: normalizedEmail,\s*message: normalizedMessage\s*\}\)/);
         const settings = read('components/AccountSettings.tsx');
-        const form = settings.slice(settings.indexOf('const ContactSection = () =>'), settings.indexOf('export const AccountSettings'));
+        const form = settings.slice(settings.indexOf('export const ContactSection = () =>'), settings.indexOf('export const AccountSettings'));
         expect(form).toContain('const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\\n\\n${normalizedMessage}` : normalizedMessage;');
-        expect(form).toContain('const saved = await savePublicContactMessage(normalizedEmail, finalMessage);');
+        expect(form).toContain('saved = await savePublicContactMessage(normalizedEmail, finalMessage);');
         // Nothing in the server, the client or the SQL deletes them (no table file, no purge).
         for (const f of [...sourceFiles('server/src'), ...sourceFiles('services')]) {
             expect(/from\(\s*'contact_messages'\s*\)[^;]*?\.delete\(/.test(read(f)), `${f} deletes contact_messages`).toBe(false);
@@ -693,8 +699,19 @@ describe('legal facts match the code: providers, billing, email and contacts', (
     it('Stream Studio takes its mailboxes from contacts.ts, never legalFacts.ts (whose third-party links would land in its bundle and its CSP check)', () => {
         const live = sourceFiles('live', /\.tsx?$/);
         expect(live.filter((f) => /components\/legal\/legalFacts/.test(read(f)))).toEqual([]);
-        expect(live.filter((f) => /components\/legal\/contacts/.test(read(f))).sort()).toEqual(['live/components/Guide.tsx', 'live/ui/legalLinks.tsx']);
+        expect(live.filter((f) => /components\/legal\/contacts/.test(read(f))).sort()).toEqual(['live/components/Guide.tsx', 'live/ui/legalLinks.tsx', 'live/views/account/StepUp.tsx']);
         expect(read('components/legal/contacts.ts')).not.toMatch(/^import /m);
+    });
+
+    it('the support address in emails and in Stream Studio is SUPPORT_EMAIL, not a copy of it', () => {
+        // The email templates' brand (shared/ can't import components/): pinned to the same mailbox.
+        expect(read('shared/email/theme.ts')).toContain(`supportEmail: '${SUPPORT_EMAIL}',`);
+        // Stream Studio's two-step recovery note takes it from contacts.ts.
+        const stepUp = read('live/views/account/StepUp.tsx');
+        expect(stepUp).toContain("import { SUPPORT_EMAIL } from '@/components/legal/contacts';");
+        expect(stepUp).toContain('<a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>');
+        const live = sourceFiles('live', /\.tsx?$/).filter((f) => !/\.test\./.test(f));
+        expect(live.filter((f) => /\b(support|contact)@dreamstream/.test(read(f)))).toEqual([]);
     });
 
     it('security reports go where security.txt says', () => {

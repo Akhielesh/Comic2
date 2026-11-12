@@ -235,8 +235,9 @@ All notable user-facing changes. Format loosely follows
   2026 date. The page follows the light/dark theme and jumps straight to a section from a `#`
   link. Every contact address that pointed at dreamstream.com, a domain we don't own, is now on
   dreamstreamstudio.ai: the Contact link in the Privacy · Terms · FAQs footer, Stream Studio's
-  Support link and guide, the comic reader's footer (contact@dreamstreamstudio.ai), and the
-  support address in Account Settings (support@dreamstreamstudio.ai). The section also covers Atlas Studio,
+  Support link and guide, the comic reader's footer, and the support address in Account Settings
+  (all support@dreamstreamstudio.ai; the reader's footer first used contact@, which isn't routed,
+  until the legal suite moved it). The section also covers Atlas Studio,
   which connects through the same Google apps, and links its own privacy policy.
 - **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
   shows one screen — sign in or create your DreamStream account, the same one as Comic Studio

@@ -57,18 +57,23 @@ type MessageState = { type: 'success' | 'error'; text: string } | null;
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
-const ContactSection = () => {
+export const ContactSection = () => {
     const { user } = useAuth();
     const [msg, setMsg] = useState('');
     const [contactEmail, setContactEmail] = useState(user?.email || '');
     const [phone, setPhone] = useState('');
     const [sent, setSent] = useState(false);
     const [sendError, setSendError] = useState<string | null>(null);
+    // A send that didn't go through points to the support mailbox (the form has nowhere else to send it).
+    const [sendFailed, setSendFailed] = useState(false);
+    const [sending, setSending] = useState(false);
     const words = normalizeText(msg) ? normalizeText(msg).split(/\s+/).length : 0;
 
     const send = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (sending) return;
         setSendError(null);
+        setSendFailed(false);
         if (words > 300) return;
         const normalizedEmail = normalizeText(contactEmail);
         const normalizedMessage = normalizeText(msg);
@@ -78,12 +83,17 @@ const ContactSection = () => {
             return;
         }
         const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\n\n${normalizedMessage}` : normalizedMessage;
-        const saved = await savePublicContactMessage(normalizedEmail, finalMessage);
-        if (saved) {
-            setSent(true);
-        } else {
-            setSendError('Unable to send message right now. Please try again.');
+        setSending(true);
+        let saved = false;
+        try {
+            saved = await savePublicContactMessage(normalizedEmail, finalMessage);
+        } catch {
+            saved = false;
+        } finally {
+            setSending(false);
         }
+        if (saved) setSent(true);
+        else setSendFailed(true);
     };
 
     if (sent) {
@@ -103,7 +113,7 @@ const ContactSection = () => {
         <div className="max-w-xl animate-fade-in">
             <h3 className="font-display text-2xl mb-2">Contact Support</h3>
             <p className="text-slate-500 mb-6 font-comic">
-                Share bugs, billing issues, or feature requests.
+                Share bugs or feature requests.
             </p>
             <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
                 <p className="font-bold mb-1">Basic Contact Info</p>
@@ -143,7 +153,12 @@ const ContactSection = () => {
                     </div>
                 </div>
                 {sendError && <div className="text-xs font-bold text-red-600">{sendError}</div>}
-                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300}>Send Message</Button>
+                {sendFailed && (
+                    <div role="alert" className="text-xs font-bold text-red-600">
+                        We couldn't send that. Please email <a href={`mailto:${SUPPORT_EMAIL}`} className="underline">{SUPPORT_EMAIL}</a> instead.
+                    </div>
+                )}
+                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300 || sending}>{sending ? 'Sending…' : 'Send Message'}</Button>
             </form>
         </div>
     );

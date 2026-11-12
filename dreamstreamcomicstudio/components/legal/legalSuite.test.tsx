@@ -408,6 +408,16 @@ describe('Cookies & Local Storage', () => {
         expect(read('public/live-sw.js').length).toBeGreaterThan(0);
     });
 
+    it('the "Your work" row names the reading place the comic reader keeps for every comic read on the device', () => {
+        const row = [...renderDoc('cookies').main.querySelectorAll('tr')].find((tr) => tr.textContent?.includes('dreamstream_local_cache'));
+        expect(row?.textContent).toContain("and where you were in each comic you've read here (page, reading mode and scroll position), kept in IndexedDB and local storage.");
+        // The reader saves exactly that, per comic, into the reader_state store of dreamstream_local_cache.
+        expect(read('services/db.ts')).toContain('const DB_NAME = "dreamstream_local_cache";');
+        expect(read('services/db.ts')).toContain('const READER_STATE_STORE = "reader_state";');
+        expect(read('types.ts')).toMatch(/export type ReaderState = \{\s*projectId: string;\s*mode: "scroll" \| "flip";\s*pageIndex\?: number;\s*scrollTop\?: number;\s*updatedAt: number;\s*\};/);
+        expect(read('components/ComicReader.tsx')).toContain('void saveReaderState({ projectId, mode, pageIndex: page, scrollTop:');
+    });
+
     it('names the third parties the pages load', () => {
         const text = textOf(renderDoc('cookies').main);
         for (const host of ['challenges.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com']) expect(text).toContain(host);
@@ -1225,6 +1235,27 @@ describe('App\'s automatic moves wait while a legal page is open (isOnLegalPage)
         window.history.replaceState({}, '', '/privacy');
         expect(isOnLegalPage('dashboard')).toBe(false);
     });
+
+    it('a ?view= on a path that owns its address (App never restores or rewrites it there) holds nothing back', () => {
+        try {
+            for (const [path, view] of [
+                ['/share/tok?view=terms', 'shared'],
+                ['/share/tok/?view=privacy', 'shared'],
+                ['/models?view=privacy', 'models'],
+                ['/auth/callback?view=cookies', 'auth-callback'],
+                ['/auth/callback/?view=terms', 'auth-callback'],
+                ['/c/AbCdEfGhIjKlMnOpQ?view=terms', 'publiccomic']
+            ] as const) {
+                window.history.replaceState({}, '', path);
+                expect(isOnLegalPage(view), path).toBe(false);
+            }
+            // The document itself still counts there once it is the view.
+            window.history.replaceState({}, '', '/share/tok?view=terms');
+            expect(isOnLegalPage('terms')).toBe(true);
+        } finally {
+            window.history.replaceState({}, '', '/');
+        }
+    });
 });
 
 describe('footers and other entry points reach the documents', () => {
@@ -1256,6 +1287,10 @@ describe('footers and other entry points reach the documents', () => {
     it('support links go to the routed support mailbox, not the unrouted contact@', () => {
         for (const f of ['components/layout/LegalMicroLinks.tsx', 'components/ComicReader.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx', 'components/WaitlistForm.tsx', 'server/src/routes/interest.ts']) expect(read(f), f).not.toContain('contact@');
         expect(LIVE_LEGAL_LINKS.find((l) => l.label === 'Support')?.href).toBe(`mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support`);
+        // The CHANGELOG no longer gives the reader's footer the unrouted contact@ address.
+        const changelog = read('CHANGELOG.md');
+        expect(changelog).not.toContain("the comic reader's footer (contact@dreamstreamstudio.ai)");
+        expect(changelog).toContain("the comic reader's footer, and the support address in Account Settings\n  (all support@dreamstreamstudio.ai;");
         // Settings → Contact names the mailbox legalFacts defines, not a copy of it.
         const settings = read('components/AccountSettings.tsx');
         expect(settings).toContain('Support Email: {SUPPORT_EMAIL}');

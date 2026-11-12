@@ -877,12 +877,27 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(4);
   });
 
-  it('when email_log is unreadable, the cooldown falls back to confirm_sent_at', async () => {
+  it('when email_log is unreadable, no confirmation email is sent until it can be read (the answer is the same)', async () => {
     await register();
     h.state.fail = { table: 'email_log', op: 'select', code: '57014', message: 'statement timeout' };
     const res = await register();
     expect(res.body.status).toBe('pending');
     expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    // Past the cooldown, and for an address never mailed: still nothing while the log can't be read.
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    expect((await register()).body.status).toBe('pending');
+    expect((await register({ email: 'grace@example.com' })).body.status).toBe('pending');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    h.state.fail = null;
+    expect((await register()).body.status).toBe('pending');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  it('when email_log is unreadable, aliases of one inbox (each with its own row) get no confirmation emails', async () => {
+    h.state.fail = { table: 'email_log', op: 'select', code: '57014', message: 'statement timeout' };
+    for (let i = 1; i <= 4; i++) expect((await register({ email: `victim+${i}@gmail.com` })).body.status).toBe('pending');
+    expect(rows().filter((r) => String(r.email).startsWith('victim+'))).toHaveLength(4);
+    expect(h.sendNewsletterConfirm).not.toHaveBeenCalled();
   });
 
   it('the cooldown uses the later of the log and the row (a lagging log is not a free pass)', async () => {
@@ -1045,6 +1060,16 @@ describe('POST /api/newsletter/subscribe kind=access — the receipt is limited 
     await access({ email: 'victim+9@gmail.com' });
     await settle();
     expect(h.sendAccessRequested).toHaveBeenCalledTimes(2);
+  });
+
+  it('when email_log is unreadable, no receipt goes out (the request is stored and answered the same)', async () => {
+    h.state.fail = { table: 'email_log', op: 'select', code: '57014', message: 'statement timeout' };
+    for (let i = 0; i < 3; i++) {
+      expect((await access({ email: `victim+${i}@gmail.com` })).body.status).toBe('joined');
+      await settle();
+    }
+    expect(rows().filter((r) => r.kind === 'access')).toHaveLength(3);
+    expect(h.sendAccessRequested).not.toHaveBeenCalled();
   });
 
   it('parallel aliases get one receipt', async () => {

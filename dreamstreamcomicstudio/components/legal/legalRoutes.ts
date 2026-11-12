@@ -66,11 +66,15 @@ export const legalDocForPath = (pathname: string | null | undefined): LegalDocId
  * off a document they opened, and run once the reader leaves it. A document's own path needs no
  * check of its own: App derives the view from it before the first paint, and while App leaves a
  * document the path is still /privacy for a moment (until the address sync rewrites it), which must
- * not hold the move back.
+ * not hold the move back. On the paths that own their address (a share link, the public reader, the
+ * model catalog, a sign-in link) App never restores or rewrites ?view=, so a ?view=terms there would
+ * hold both moves for as long as the page stays open: it is ignored.
  */
 export const isOnLegalPage = (view: string): boolean => {
   if (isLegalDocId(view)) return true;
   try {
+    const path = window.location.pathname.replace(/\/+$/, '');
+    if (path.startsWith('/share/') || /^\/c(?:\/|$)/.test(path) || path === '/models' || path === '/auth/callback') return false;
     return isLegalDocId(new URLSearchParams(window.location.search).get('view'));
   } catch {
     return false;

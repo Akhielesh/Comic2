@@ -13,6 +13,7 @@
 // a lost phone has a way back: "Use a recovery code" switches two-step sign-in off so they can
 // get in and set it up again (account.ts recoverWithCode).
 import { useEffect, useRef, useState } from 'react';
+import { SUPPORT_EMAIL } from '@/components/legal/contacts';
 import { failed, recoverWithCode, registerSecondStepOpener, signOutThisDevice, stepUp, stepUpNeeded, useAccount } from '../../account';
 import { Icon } from '../../ui/icons';
 import { Btn, type PushToast } from '../../ui/primitives';
@@ -330,7 +331,7 @@ export function StepUpSheet({
               Use a recovery code
             </Btn>
             <p style={{ margin: '8px 0 0' }}>
-              No codes and no setup key? Email <a href="mailto:support@dreamstreamstudio.ai">support@dreamstreamstudio.ai</a> from your
+              No codes and no setup key? Email <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> from your
               account’s address and we’ll help you back in. A new password alone won’t switch two-step sign-in off — that’s the point of it.
             </p>
           </div>

@@ -122,7 +122,8 @@ describe("a shared comic's reader (SharedViewer)", () => {
     await screen.findByRole('link', { name: 'Copyright' });
     first.unmount();
     render(<SharedViewer {...props} />);
-    expect(screen.getByText(/Loading shared comic/)).toBeInTheDocument();
+    // Any loading copy that names the shared comic (DS-3 rewords the loader).
+    expect(screen.getByText(/shared comic/i)).toBeInTheDocument();
     await screen.findByRole('link', { name: 'Copyright' });
     expect(apiGet.mock.calls.filter(([url]) => url === '/shares/token/tok-again')).toHaveLength(2);
     const changelog = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'CHANGELOG.md'), 'utf8');

@@ -378,6 +378,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   // would see only the first render's mode and page, and by then the scroll box is already detached.
   const lastPosition = useRef({ projectId: project.id, mode: readerMode, pageIndex, scrollTop: 0 });
   const positionLoaded = useRef(false);
+  // A restored scroll position, held until the comic is tall enough to reach it: the panel images are lazy and
+  // take their height only as they load, so a scrollTop set at once is clamped (and that clamped one was saved).
+  const restoringScroll = useRef<number | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const touchMulti = useRef(false);
   const textLayout = project.state.textLayout || 'caption';
@@ -386,7 +389,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const allPanelsMissingArt = panelCount > 0 && panelsWithArtCount === 0;
 
   useEffect(() => {
+    // Per comic: until this comic's place has loaded nothing is saved, and an earlier comic's late answer
+    // (or its pending scroll save) never lands on this one.
+    let live = true;
+    positionLoaded.current = false;
+    restoringScroll.current = null;
     loadReaderState(project.id).then((state) => {
+      if (!live) return;
       // The loaded place is what a close before the next render saves, not the defaults.
       if (state) {
         lastPosition.current = {
@@ -401,13 +410,19 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       setReaderMode(state.mode);
       if (typeof state.pageIndex === 'number') setPageIndex(state.pageIndex);
       if (typeof state.scrollTop === 'number') {
+        restoringScroll.current = state.mode === 'scroll' && state.scrollTop > 0 ? state.scrollTop : null;
         requestAnimationFrame(() => {
-          if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
+          if (restoringScroll.current !== null) restoreScroll();
+          else if (scrollRef.current) scrollRef.current.scrollTop = state.scrollTop || 0;
         });
       }
     }, () => {
-      positionLoaded.current = true;
+      if (live) positionLoaded.current = true;
     });
+    return () => {
+      live = false;
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
   }, [project.id]);
 
   useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(readerRef.current))), []);
@@ -485,7 +500,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     if (!positionLoaded.current) return;
     const { projectId, mode, pageIndex: page, scrollTop } = lastPosition.current;
-    saveReaderState({ projectId, mode, pageIndex: page, scrollTop: scrollRef.current?.scrollTop ?? scrollTop, updatedAt: Date.now() });
+    void saveReaderState({ projectId, mode, pageIndex: page, scrollTop: restoringScroll.current ?? scrollRef.current?.scrollTop ?? scrollTop, updatedAt: Date.now() }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -498,10 +513,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       projectId: project.id,
       mode: override?.mode ?? readerMode,
       pageIndex: override?.pageIndex ?? pageIndex,
-      scrollTop: override?.scrollTop ?? (scrollRef.current?.scrollTop || 0),
+      scrollTop: override?.scrollTop ?? restoringScroll.current ?? (scrollRef.current?.scrollTop || 0),
       updatedAt: Date.now()
     };
-    saveReaderState(payload);
+    void saveReaderState(payload).catch(() => undefined);
   };
 
   // renderPanelText removed — use <PanelDialogue /> component instead
@@ -557,8 +572,48 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     }
   }, [pages.length, pageIndex]);
 
+  // Scrolls to the held position; done once it is reached, or once every image in the comic has loaded or failed.
+  const restoreScroll = () => {
+    const el = scrollRef.current;
+    const target = restoringScroll.current;
+    if (!el || target === null) return;
+    el.scrollTop = target;
+    if (Math.abs(el.scrollTop - target) <= 1 || Array.from(el.querySelectorAll('img')).every((img) => img.complete)) restoringScroll.current = null;
+  };
+
+  // While a restore is held: try again each time the comic grows (an image loads), and let go once the reader
+  // scrolls by hand (wheel, touch, the scrollbar, the keyboard).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const letGo = () => {
+      restoringScroll.current = null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(e.key)) letGo();
+    };
+    const content = el.firstElementChild;
+    const grows = typeof ResizeObserver === 'function' && content ? new ResizeObserver(() => restoreScroll()) : null;
+    if (grows && content) grows.observe(content);
+    el.addEventListener('load', restoreScroll, true);
+    el.addEventListener('wheel', letGo, { passive: true });
+    el.addEventListener('touchmove', letGo, { passive: true });
+    el.addEventListener('mousedown', letGo);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      restoringScroll.current = null;
+      grows?.disconnect();
+      el.removeEventListener('load', restoreScroll, true);
+      el.removeEventListener('wheel', letGo);
+      el.removeEventListener('touchmove', letGo);
+      el.removeEventListener('mousedown', letGo);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [readerMode]);
+
   const handleScroll = () => {
     if (readerMode !== 'scroll') return;
+    if (restoringScroll.current !== null) return; // the restore's own scroll, maybe clamped: not a place to save
     lastPosition.current.scrollTop = scrollRef.current?.scrollTop || 0;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {

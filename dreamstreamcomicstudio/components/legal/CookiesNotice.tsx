@@ -95,7 +95,7 @@ const sections: LegalSection[] = [
                         ],
                         [
                             'Your work',
-                            'Projects, guest projects, caches that make the studios fast and work offline, Chat Studio conversations and memory, kept in IndexedDB and local storage.',
+                            'Projects, guest projects, caches that make the studios fast and work offline, Chat Studio conversations and memory, and where you were in each comic you\'ve read here (page, reading mode and scroll position), kept in IndexedDB and local storage.',
                             <><Key>dreamstream_local_cache</Key> <Key>dreamstream_comic_studio</Key> <Key>dreamstream_chat</Key> <Key>dreamstream_chat_memory</Key></>
                         ],
                         [

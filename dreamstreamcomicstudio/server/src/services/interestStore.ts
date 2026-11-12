@@ -252,11 +252,12 @@ export type ConfirmThrottle = { code: 'too_soon' | 'too_many'; retryAfterS: numb
 /**
  * May we send this address another confirmation email now? Counted per inbox, so aliases of one
  * address (+tags, Gmail dots) can't each get their own allowance. The cooldown runs from the later of
- * the last logged send and the row's own confirm_sent_at (stamped before every send), so neither
- * a lagging nor an unreadable log means "unlimited". Only mail that went out (or is going out)
- * counts toward the daily cap: a failed send never locks anyone out. A confirm_sent_at in the
- * future is ignored (sentAtOf). This is the pre-check; the atomic claim in registerInterest is
- * what stops parallel requests.
+ * the last logged send and the row's own confirm_sent_at (stamped before every send), so a lagging
+ * log is no free pass. If email_log can't be read, no confirmation email is sent until it can: the
+ * per-inbox limits live only in the log (each alias has its own row), so reading nothing would let
+ * every alias send. Only mail that went out (or is going out) counts toward the daily cap: a failed
+ * send never locks anyone out. A confirm_sent_at in the future is ignored (sentAtOf). This is the
+ * pre-check; the atomic claim in registerInterest is what stops parallel requests.
  */
 export const checkConfirmThrottle = async (
   email: string,
@@ -265,13 +266,15 @@ export const checkConfirmThrottle = async (
 ): Promise<ConfirmThrottle | null> => {
   // One read covers both limits: every send to this inbox (any alias of it) in the last day.
   const sends = await recentConfirmEmailsToInbox(email, iso(now - DAY_MS));
-  const lastDay = sends ? sends.length : null;
-  const latest = Math.max(timeOf(sends?.[0]), sentAtOf(confirmSentAt, now));
+  // Unreadable log: fail closed (the routes answer a throttled request the same way as a sent one).
+  if (sends === null) return { code: 'too_many', retryAfterS: Math.ceil(INTEREST_CONFIRM_THROTTLE.minIntervalMs / 1000) };
+  const lastDay = sends.length;
+  const latest = Math.max(timeOf(sends[0]), sentAtOf(confirmSentAt, now));
   const waitMs = INTEREST_CONFIRM_THROTTLE.minIntervalMs - (now - latest);
   if (Number.isFinite(waitMs) && waitMs > 0) {
     return { code: 'too_soon', retryAfterS: Math.max(1, Math.ceil(waitMs / 1000)) };
   }
-  if (lastDay != null && lastDay >= INTEREST_CONFIRM_THROTTLE.maxPerDay) {
+  if (lastDay >= INTEREST_CONFIRM_THROTTLE.maxPerDay) {
     // The oldest send in the window ages out within a day; tell them "tomorrow", not a precise time.
     return { code: 'too_many', retryAfterS: Math.ceil(DAY_MS / 1000) };
   }
@@ -311,9 +314,10 @@ export const mailerCapReached = async (): Promise<boolean> => {
 /**
  * May the early-access receipt (access-requested) go to this address now? Not when public-form mail
  * has used its budget share or the mailer is capped, and at most once per inbox per day (every alias
- * of the address counts, and parallel requests are claimed per inbox like confirmations). Returns
- * the release to call once the send is over (sent or not), or null: skip the receipt (the request
- * itself is stored and answered the same way either way).
+ * of the address counts, and parallel requests are claimed per inbox like confirmations; an
+ * unreadable log skips the receipt, as it holds confirmations). Returns the release to call once the
+ * send is over (sent or not), or null: skip the receipt (the request itself is stored and answered
+ * the same way either way).
  */
 export const claimAccessReceipt = async (email: string, now = Date.now()): Promise<(() => void) | null> => {
   const [budget, capped, recent] = await Promise.all([
@@ -321,7 +325,7 @@ export const claimAccessReceipt = async (email: string, now = Date.now()): Promi
     mailerCapReached(),
     recentConfirmEmailsToInbox(email, iso(now - ACCESS_RECEIPT_INTERVAL_MS), ACCESS_REQUESTED_TEMPLATE)
   ]);
-  if (budget || capped || (recent && recent.length > 0)) return null;
+  if (budget || capped || recent === null || recent.length > 0) return null;
   return claimInbox('access', email);
 };
 
