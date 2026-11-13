@@ -283,7 +283,9 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
   const revertEdits = () => {
     if (!activePage) return;
     const updatedPages = ps.pages.map((p) =>
-      p.id === activePage.id ? { ...p, imageUrl: p.baseImageUrl, edits: [] } : p
+      // Saving strips URLs when an imageId exists: restore the matching ID too, or
+      // clear it for an older URL-only original so reload cannot resurrect the edit.
+      p.id === activePage.id ? { ...p, imageId: p.baseImageId, imageUrl: p.baseImageUrl, edits: [] } : p
     );
     patch({ pages: updatedPages });
   };
