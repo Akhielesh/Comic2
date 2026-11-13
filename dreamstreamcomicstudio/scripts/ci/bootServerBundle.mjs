@@ -29,7 +29,7 @@
 // with the reason and the tail of the server's output.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -208,6 +208,9 @@ export async function main(argv = process.argv.slice(2)) {
       symlinkSync(from, path.join(dir, 'node_modules', pkg), 'dir');
     }
 
+    // Simulate the image's baked identity alongside stale durable-container runtime variables.
+    const imageBuild = { gitSha: 'c'.repeat(40), buildTimestamp: '2026-11-13T00:00:00.000Z' };
+    writeFileSync(path.join(dir, 'build-info.json'), JSON.stringify(imageBuild));
     const port = await freePort();
     // No secrets and no developer .env: the image's own ENV, then placeholders for the config the
     // server refuses to start without. Nothing listens on 127.0.0.1:9, so no request leaves the box.
@@ -220,7 +223,8 @@ export async function main(argv = process.argv.slice(2)) {
       VITE_SUPABASE_URL: 'http://127.0.0.1:9',
       VITE_SUPABASE_ANON_KEY: 'placeholder-anon-key',
       BILLING_ENABLED: 'false',
-      GIT_SHA: 'ci-boot',
+      GIT_SHA: 'stale-runtime-build',
+      BUILD_TIMESTAMP: '2020-01-01T00:00:00.000Z',
     };
     log(`starting node server.mjs (NODE_ENV=${env.NODE_ENV ?? 'unset'}, NODE_OPTIONS=${env.NODE_OPTIONS ?? 'unset'}, PORT=${port})`);
 
@@ -258,6 +262,15 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (!health) return fail(`GET /api/health did not answer {"status":"ok"} within ${args.timeoutMs} ms. Last output:\n${tail()}`);
     log(`GET /api/health → ${JSON.stringify(health)} after ${Date.now() - started} ms`);
+    if (health.build !== imageBuild.gitSha.slice(0, 12) || health.builtAt !== imageBuild.buildTimestamp) {
+      return fail('health reported stale runtime metadata instead of the baked image identity');
+    }
+    const versionResponse = await fetch(`http://127.0.0.1:${port}/api/system/version`, { signal: AbortSignal.timeout(2000) });
+    const versionInfo = await versionResponse.json();
+    if (!versionResponse.ok || versionInfo.gitSha !== imageBuild.gitSha || versionInfo.buildTimestamp !== imageBuild.buildTimestamp) {
+      return fail(`version endpoint did not report the baked image: ${JSON.stringify(versionInfo)}`);
+    }
+    log('GET /api/system/version → baked image identity; stale runtime metadata ignored.');
 
     child.kill('SIGTERM');
     const stop = await Promise.race([exitedP, sleep(30_000).then(() => null)]);
