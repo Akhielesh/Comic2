@@ -17,7 +17,7 @@ import {
   TONE_CHIP,
   TRANSITION
 } from '../../chat/studioDesign';
-import { busyButtonProps } from '../board/ui';
+import { ARIA_DISABLED, busyButtonProps } from '../board/busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -53,12 +53,9 @@ export const CardShell: React.FC<{
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   busy?: boolean;
   size?: 'sm' | 'md';
-  /** While busy, stay focusable (aria-disabled; clicks and Enter swallowed) instead of disabled — board/ui busyButtonProps. */
+  /** While busy, stay focusable (aria-disabled; clicks and Enter swallowed) instead of disabled — board/busyButton. */
   keepFocusWhileBusy?: boolean;
 };
-
-/** The busy look for a button that keeps focus (aria-disabled instead of disabled). */
-const ARIA_DISABLED = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-45';
 
 // Coarse pointers get real 44 px buttons (mobile.md §2.4); fine pointers keep today's sizes.
 const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5' : 'h-9 px-4 text-[13px] coarse:h-11');

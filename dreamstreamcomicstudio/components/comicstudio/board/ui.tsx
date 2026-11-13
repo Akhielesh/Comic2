@@ -8,6 +8,10 @@ import type { RenderState } from '../../../shared/comic/doc';
 import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
+import { ARIA_DISABLED, busyButtonProps } from './busyButton';
+
+// Re-exported so existing imports of the helper from the board kit keep working.
+export { busyButtonProps } from './busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -50,41 +54,9 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; right?: React.R
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   busy?: boolean;
   size?: 'xs' | 'sm' | 'md';
-  /**
-   * While `busy`, keep the button focusable instead of disabling it (6B FL-1): it reads aria-disabled, swallows
-   * clicks and Enter (preventDefault, so a submit button never submits), and keeps keyboard focus, as
-   * components/ds/Button's `loading` does. A disabled button drops focus to <body> in the browser, so a keyboard
-   * user who pressed Enter on Approve lost their place. Opt-in: without it, busy still means disabled.
-   */
+  /** While busy, stay focusable instead of disabled (6B FL-1) — see board/busyButton. */
   keepFocusWhileBusy?: boolean;
 };
-
-/** Busy-state handling shared by the studio button kits (board and conversation). */
-export const busyButtonProps = ({
-  busy,
-  keepFocusWhileBusy,
-  disabled,
-  onClick,
-  onKeyDown
-}: Pick<ButtonProps, 'busy' | 'keepFocusWhileBusy' | 'disabled' | 'onClick' | 'onKeyDown'>): Pick<
-  React.ButtonHTMLAttributes<HTMLButtonElement>,
-  'disabled' | 'aria-disabled' | 'onClick' | 'onKeyDown'
-> => {
-  if (!busy || !keepFocusWhileBusy) return { disabled: disabled || busy, onClick, onKeyDown };
-  return {
-    // A button that is really unavailable stays disabled; only the busy hold keeps focus.
-    disabled: disabled || undefined,
-    'aria-disabled': true,
-    onClick: (e) => e.preventDefault(),
-    onKeyDown: (e) => {
-      if (e.key === 'Enter') e.preventDefault();
-      onKeyDown?.(e);
-    }
-  };
-};
-
-/** The busy look for a button that keeps focus (aria-disabled instead of disabled). */
-const ARIA_DISABLED = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-45';
 
 // Coarse pointers (mobile.md §2.4): sm/md grow to a real 44 px — tall AND wide, so an icon-only
 // button (its label hidden on a phone) is never a 42 px target; xs keeps a compact look with a 44 px
