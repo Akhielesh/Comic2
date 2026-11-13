@@ -34,7 +34,7 @@ import { getStylePreset } from './stylePresets.js';
 export type SettledCardsStage = 'off' | 'admins' | 'all';
 
 /**
- * Everyone (R00, decision AD-5: the owner asked for old questions to close for every creator, not only admins). Admins
+ * Everyone (R00: old questions close for every creator, not only admins). Admins
  * had it first in S2. A code constant, not an env var: 'off' is the kill switch (one commit and a redeploy). The client
  * reads `studio.caps.admin` only for the 'admins' stage, so capabilities.ts is untouched.
  */

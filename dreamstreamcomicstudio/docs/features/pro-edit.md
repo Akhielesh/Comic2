@@ -44,7 +44,9 @@ done by the editor, no AI cost"); "Pro" is never "paid".
 `backend_env` table has no `COMIC_*` row and that `api-proxy/wrangler.jsonc` sets no `COMIC_PRO_EDITOR_V2`, so the code
 default (`'admins'`, `LIVE_FLAG_DEFAULTS.proEditorV2` in `shared/comic/capabilities.ts`) applies, unless a Worker secret
 of that name overrides it; Worker secrets cannot be listed from here, so that last part is unverified. In practice:
-admins get the Pro workspace, everyone else the Easy editor. It is **not** "off by default", as the S2b digest said.
+admins get the Pro workspace (Layers, the docked inspector, numeric fields); everyone else gets the S2 editor, whose
+Easy | Pro switch still opens the older Pro lettering panel (every lettering setting for a selected balloon, no Layers).
+It is **not** "off" in production. The studio's Easy | Pro switch words its hint from the same flag (`ModeToggle.tsx`).
 
 `server/src/comic/access.ts` reads them once per request (`proCapsFromEnv`, `shared/comic/capabilities.ts`). The client
 reads only the caps (`asCaps` in `studioApi.ts`, then `proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only for motion and stickers;

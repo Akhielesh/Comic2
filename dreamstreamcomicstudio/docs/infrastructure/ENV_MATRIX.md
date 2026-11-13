@@ -120,7 +120,7 @@ Each flag is a rollout **stage**, read once per request by `server/src/comic/acc
 (case and spaces ignored; `everyone` = `all`; a bare switch `on` / `true` / `1` / `yes` means **admins only**, so
 everyone always needs an explicit `all`; `false` / `0` / `no` = `off`; unset or anything else = the default below).
 "Admins" is the studio's admin check (bootstrap `ADMIN_EMAILS` + `user_roles`), which fails closed. All of these are
-free software: none adds a model or image call of its own, and nothing here bypasses the spend gate. Backend env: a
+free software: none adds a model or image call of its own (except `COMIC_STEER`'s capped safety screen per steered note, see its row), and nothing here bypasses the spend gate. Backend env: a
 `vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`. A `vars` entry wins over a D1 row of the same name (`api-proxy/src/backendEnv.ts`); a Worker secret of the same name as a `vars` entry cannot coexist with it, so a stage that lives in `vars` is changed in `wrangler.jsonc` and redeployed.
 
 | Var | Turns on | Default | Cost | Safe to go to `all` when |

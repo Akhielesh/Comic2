@@ -184,8 +184,8 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
 
 ## 6. Flags and decisions
 
-- **`SETTLED_CARDS`** (`'off' | 'admins' | 'all'`, a code constant in `settle.ts`) is **`'all'` since R00** (decision
-  AD-5; the owner: "past messages can still receive replies, I told you to collapse"). It was `'admins'` in S2 and S2b.
+- **`SETTLED_CARDS`** (`'off' | 'admins' | 'all'`, a code constant in `settle.ts`) is **`'all'` since R00** (the owner
+  asked for old questions to close for every creator, not only admins). It was `'admins'` in S2 and S2b.
   Every creator now sees an old card as its one line, and the server keeps a late tap or typed answer to a passed card
   (options: `kept`; conflict: refused with `SETTLED_TEXT`), so an old question changes nothing. `settledCardsOn` reads
   `studio.caps.admin` only for the `'admins'` stage, so `capabilities.ts` is untouched. **Rollback:** `'off'` is the kill
