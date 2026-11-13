@@ -214,12 +214,14 @@ describe('ComicsLanding', () => {
     expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
   });
 
-  it('offers signed-in visitors their comics and the Library', () => {
+  it('offers signed-in visitors creation, their comics and the Library', () => {
     const h = handlers();
-    render(<ComicsLanding signedIn {...h} />);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'My comics' }));
+    const onStartCreating = vi.fn();
+    render(<ComicsLanding signedIn {...h} onStartCreating={onStartCreating} />);
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start creating' }));
+    expect(onStartCreating).toHaveBeenCalledTimes(1);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' }));
-    expect(h.onOpenComics).toHaveBeenCalledTimes(2);
+    expect(h.onOpenComics).toHaveBeenCalledTimes(1);
     fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();

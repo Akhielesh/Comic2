@@ -11,7 +11,7 @@
   grid-template-columns: minmax(0, 0.93fr) minmax(0, 1.07fr);
   align-items: center;
   gap: clamp(24px, 3vw, 52px);
-  padding-block: clamp(24px, 3vw, 48px);
+  padding-block: clamp(24px, 1.8vw, 28px);
 }
 
 .comics-hero-copy { min-width: 0; }
@@ -80,6 +80,12 @@
   touch-action: pan-y pinch-zoom;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.comics-sample-viewport:focus-visible { outline: none; }
+.comics-sample-viewport:focus-visible .comics-sample-page[data-active='true'] .comics-sample-art {
+  outline: 2px solid var(--ds-focus);
+  outline-offset: -3px;
 }
 
 .comics-sample-track {
@@ -186,8 +192,7 @@
 
 @media (max-width: 719px) {
   .comics-hero { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-block: 28px 24px; }
-  .comics-title { font-size: clamp(38px, 8vw, 54px); max-width: 12ch; }
-  .comics-title span { display: inline; }
+  .comics-title { font-size: clamp(38px, 8vw, 54px); }
   .comics-lead { max-width: 32rem; margin-top: 16px; font-size: 17px; }
   .comics-hero-actions { margin-top: 22px; gap: 10px; }
   .comics-hero-cta { flex: 1 1 auto; min-height: 46px; padding-inline: 16px; font-size: 15px; }
@@ -212,10 +217,12 @@
   .comics-hero-actions { margin-top: 20px; }
   .comics-hero-cta { min-height: 44px; font-size: 14px; padding-inline: 18px; }
   .comics-invitation { margin-top: 12px; font-size: 12px; }
-  .comics-style-dialog { grid-template-columns: minmax(0, 1fr) minmax(180px, 0.65fr); align-items: start; }
-  .comics-style-dialog-heading { grid-column: 1 / -1; }
-  .comics-style-dialog .comics-sample { max-width: 100%; }
-  .comics-style-dialog .comics-looks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .comics-style-dialog { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; gap: 12px 20px; }
+  .comics-style-dialog-heading { grid-column: 2; grid-row: 1; padding-right: 24px; }
+  .comics-style-dialog .comics-sample { grid-column: 1; grid-row: 1 / span 2; max-width: min(100%, calc((100dvh - 157px) * 1.4)); }
+  .comics-style-dialog .comics-looks { grid-column: 2; grid-row: 2; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .comics-style-dialog .comics-look { gap: 5px; }
+  .comics-style-dialog .comics-look-art { aspect-ratio: 3.5 / 1; }
 }
 
 @keyframes comics-sample-replace { from { opacity: 0.55; } to { opacity: 1; } }

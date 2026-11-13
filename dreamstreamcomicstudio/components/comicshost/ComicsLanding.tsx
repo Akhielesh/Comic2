@@ -21,6 +21,7 @@ export interface ComicsLandingProps {
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
   onOpenAccount?: () => void;
+  onStartCreating?: () => void;
 }
 
 const TEXT_LINK = cn('ds-link inline-flex items-center text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', DENSITY.coarse, RADIUS_CONTROL, FOCUS_RING);
@@ -41,7 +42,7 @@ function focusSection(id: string) {
   section?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
 }
 
-export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onOpenAccount }: ComicsLandingProps) {
+export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onOpenAccount, onStartCreating }: ComicsLandingProps) {
   const { theme } = useComicTheme();
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [comparing, setComparing] = useState(false);
@@ -68,8 +69,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
             <h1 id="comics-hero-title" className="comics-title"><span>Make your story</span>{' '}<span>a comic.</span></h1>
             <p className="comics-lead">Start with an idea or a script. Plan, draw and letter your pages with the Comic Director.</p>
             <div className="comics-hero-actions">
-              <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={signedIn ? onOpenComics : onSignIn}>
-                {signedIn ? 'My comics' : 'Start creating'}
+              <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={signedIn ? (onStartCreating ?? onOpenComics) : onSignIn}>
+                Start creating
               </Button>
               <Button variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Browse the Library</Button>
             </div>
