@@ -2,7 +2,7 @@
   "guard": "terracotta",
   "test": "tests/config/terracottaGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts lowers it (see README.md).",
-  "totals": { "#c2643f": 3, "#d97757": 358 },
+  "totals": { "#c2643f": 3, "#d97757": 357 },
   "files": {
     "components/ApiConfiguration.tsx": { "#d97757": 2 },
     "components/ComicReader.tsx": { "#d97757": 2 },
@@ -19,7 +19,6 @@
     "components/chat/ChatMessageView.tsx": { "#d97757": 1 },
     "components/chat/ChatModelPicker.tsx": { "#d97757": 1 },
     "components/chat/ChatModelSuggester.tsx": { "#d97757": 1 },
-    "components/chat/ChatProjectModal.tsx": { "#d97757": 1 },
     "components/chat/ChatSettingsModal.tsx": { "#d97757": 8 },
     "components/chat/ChatSidebar.tsx": { "#d97757": 8 },
     "components/chat/CommandPalette.tsx": { "#d97757": 2 },
