@@ -297,6 +297,9 @@ The diff shows every rise, and the PR says why each one is right. The reviewer r
 - **The rules** are §5's: a listed `scene@view-theme` may neither rise nor fall; an unlisted one is held to **0** on
   every metric, so a new screen (a format sheet, a starter, a voice strip) must be clean from its first commit.
   Generated, never typed; a vanished scene fails until dropped.
+  One allowance: `hOverflow` is a width in pixels, and fonts rasterise a pixel apart between machines (the CI runner
+  read 140 px where the machine that wrote the baseline read 139 px), so a **listed** `hOverflow` may differ by up to
+  2 px either way (`HOVERFLOW_SLACK_PX`). The two counts stay exact, and a zero stays zero.
 - **Lowering.** A package that fixes a call site writes the new numbers in its wave note; the integrator runs
   `UPDATE_BASELINES=1 npx playwright test -c tests/e2e/playwright.config.ts --project=overflow` once after the merge,
   and again after every rebase (regenerate, never hand-merge). `UPDATE_BASELINES=reset` is the reviewed exception.

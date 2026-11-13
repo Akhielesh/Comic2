@@ -23,7 +23,8 @@
 //
 // The ratchet (tests/e2e/baselines/overflow.json) is the declutter one: a listed scene may neither rise above nor fall
 // below its entry; a scene the baseline does not list is held to 0 on every metric, so a new screen is clean from its
-// first commit. UPDATE_BASELINES=1 only lowers; UPDATE_BASELINES=reset rewrites the measured entries (reviewed, rare).
+// first commit. One allowance: hOverflow is a width in pixels, and fonts rasterise a pixel apart between machines, so
+// a LISTED hOverflow may differ by HOVERFLOW_SLACK_PX either way (counts and zeros stay exact). UPDATE_BASELINES=1 only lowers; UPDATE_BASELINES=reset rewrites the measured entries (reviewed, rare).
 // Importable from Node directly (type-only Playwright import).
 
 import fs from 'node:fs';
@@ -314,7 +315,16 @@ export function storedOverflow(counts: OverflowCounts): OverflowCounts {
   return out;
 }
 
-/** A listed scene may neither rise nor fall; an unlisted one is held to 0 on every metric. */
+/**
+ * How far a listed `hOverflow` may differ from its baseline, either way. It is a width in pixels of an unbreakable
+ * string, and the same page measures a pixel apart on another machine's fonts (the CI runner read 140 px and 100 px
+ * where the machine that wrote the baseline read 139 px and 99 px). The two counts stay exact, and so does a zero:
+ * an unlisted scene, or a listed one with no page overflow, is still held to 0 px.
+ */
+export const HOVERFLOW_SLACK_PX = 2;
+const slackOf = (metric: OverflowMetric, baseline: number): number => (metric === 'hOverflow' && baseline > 0 ? HOVERFLOW_SLACK_PX : 0);
+
+/** A listed scene may neither rise nor fall (a listed pixel width within HOVERFLOW_SLACK_PX); an unlisted one is held to 0 on every metric. */
 export function judgeOverflow(key: string, actual: OverflowCounts, scenes: Record<string, OverflowCounts>): { over: string[]; under: string[] } {
   const over: string[] = [];
   const under: string[] = [];
@@ -323,8 +333,9 @@ export function judgeOverflow(key: string, actual: OverflowCounts, scenes: Recor
   for (const m of OVERFLOW_METRICS) {
     const n = actual[m] ?? 0;
     const b = base[m] ?? 0;
-    if (n > b) over.push(`${key}  ${m}: ${n}, ${listed ? `baseline ${b}` : 'not in the baseline: a new scene is held to 0'}`);
-    else if (n < b) under.push(`${key}  ${m}: ${n}, baseline ${b} — it fell: lower the baseline (${SHRINK})`);
+    const slack = slackOf(m, b);
+    if (n > b + slack) over.push(`${key}  ${m}: ${n}, ${listed ? `baseline ${b}` : 'not in the baseline: a new scene is held to 0'}`);
+    else if (n < b - slack) under.push(`${key}  ${m}: ${n}, baseline ${b} — it fell: lower the baseline (${SHRINK})`);
   }
   return { over, under };
 }
