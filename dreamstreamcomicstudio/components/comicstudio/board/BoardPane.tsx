@@ -95,12 +95,17 @@ export const GateBanner: React.FC<{
 }> = ({ studio, compact = false, dense = false }) => {
   const gate = studio.doc?.gate;
   const { busyKey, fire } = useClickGuard(4000);
+  // The gate this banner already sent an approval for. Approve keeps focus while it is sent, so a second Enter lands
+  // on it again; the 4 s click guard alone would let that Enter send a second approval once it ends. The gate's
+  // answer stays held until the gate closes (or a new gate opens), and is released only if the approval failed, so
+  // the user can try again.
+  const [answeredGateId, setAnsweredGateId] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
   const cost = useCostFormat(studio.caps);
   const open = !!gate && gate.status === 'open';
   // When the gate the user answered closes, the banner (and the Approve that held focus) unmounts and the browser
   // drops focus to <body>. If focus was inside the banner and nothing else took it, move it to the board's tab
-  // panel, so a keyboard user carries on from the board instead of from the top of the page (FX-15, 6B FL-1).
+  // panel, so a keyboard user carries on from the board instead of from the top of the page.
   const focusInside = useRef(false);
   useEffect(() => {
     if (open || !focusInside.current) return;
@@ -117,6 +122,23 @@ export const GateBanner: React.FC<{
     // Focus moved to a real element outside the banner: the user went elsewhere, so leave their focus alone.
     if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) focusInside.current = false;
   };
+  const approving = busyKey === 'approve' || answeredGateId === gate.id;
+  const approve = () => {
+    if (approving) return;
+    const gateId = gate.id;
+    setAnsweredGateId(gateId);
+    const release = () => setAnsweredGateId((cur) => (cur === gateId ? null : cur));
+    fire('approve', () =>
+      Promise.resolve(studio.act({ type: 'approve_gate', gateId })).then(
+        (out) => {
+          // A failed approval (offline, refused) may be sent again; a skipped duplicate means one is already in flight.
+          const o = out as { ok?: unknown; skipped?: unknown } | undefined;
+          if (o && o.ok === false && !o.skipped) release();
+        },
+        release
+      )
+    );
+  };
   const price = cost.quote(gate.estimateUsd);
   // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
   const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
@@ -124,12 +146,12 @@ export const GateBanner: React.FC<{
   const overBudget = gate.reason === 'budget' ? ' · over your budget cap' : '';
   const buttons = (
     <div className="flex shrink-0 gap-2">
-      {/* keepFocusWhileBusy (6B FL-1): Enter on Approve leaves focus on Approve while it is sent (a disabled button
-          dropped it to <body>), and a second Enter in the guard window sends nothing. */}
-      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={busyKey === 'approve'} keepFocusWhileBusy onClick={() => fire('approve', () => studio.act({ type: 'approve_gate', gateId: gate.id }))}>
+      {/* keepFocusWhileBusy: Enter on Approve leaves focus on Approve while it is sent (a disabled button dropped it
+          to <body>), and a second Enter sends nothing until the gate closes or the approval fails. */}
+      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={approving} keepFocusWhileBusy onClick={approve}>
         Approve
       </PrimaryButton>
-      <GhostButton size={compact ? 'xs' : 'sm'} disabled={busyKey === 'approve'} onClick={() => fire('decline', () => studio.act({ type: 'decline_gate', gateId: gate.id }))}>
+      <GhostButton size={compact ? 'xs' : 'sm'} disabled={approving} onClick={() => fire('decline', () => studio.act({ type: 'decline_gate', gateId: gate.id }))}>
         Not now
       </GhostButton>
     </div>
@@ -156,7 +178,7 @@ export const GateBanner: React.FC<{
             className={cx(
               'flex min-h-[36px] min-w-0 flex-1 gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
               // Opened (one tap; a phone has no hover title): the whole label and the whole price, wrapped onto as
-              // many lines as they need — closed it was "Draw the re… · ≈ $1.…" (FX-15; Program 3 DC-3's phone gate label).
+              // many lines as they need — closed it was "Draw the re… · ≈ $1.…" (the phone gate label).
               details ? 'flex-wrap items-start py-1' : 'items-center'
             )}
           >

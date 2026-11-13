@@ -1,6 +1,6 @@
 // FX-15: the approval strip on a phone. Closed it is one line ("Draw the re… · ≈ $1.…"); one tap opens it and the
 // whole label and the whole price are on screen (a phone has no hover title). A governed user reads usage words,
-// never "$" or "¢" (FEA L4). 6B FL-1: Enter on Approve keeps focus on Approve and a second Enter sends nothing.
+// never "$" or "¢". Enter on Approve keeps focus on Approve and a second Enter sends nothing.
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -88,7 +88,7 @@ describe.each([360, 390])('the approval strip at %i px', (w) => {
   });
 });
 
-describe('Approve keeps focus while it is sent (6B FL-1)', () => {
+describe('Approve keeps focus while it is sent', () => {
   it('Enter on Approve: 0.3 s and 5 s later focus is still on Approve; a second Enter sends nothing', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
@@ -117,6 +117,69 @@ describe('Approve keeps focus while it is sent (6B FL-1)', () => {
     });
     expect(document.activeElement).toBe(approve);
     expect(studio.act).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Approve answers a gate once, however long the answer takes', () => {
+  // Approve keeps focus while it is sent, so a second Enter lands on it again. The click guard alone lasts 4 s; the
+  // gate's own Approve must stay inert until the gate closes, or the user sends a second approval that the server
+  // refuses with "That approval is no longer open".
+  const pressEnter = (el: HTMLElement) => {
+    const notPrevented = fireEvent.keyDown(el, { key: 'Enter' });
+    if (notPrevented) fireEvent.click(el);
+  };
+  const approveIn = () => within(screen.getByRole('region', { name: 'Waiting for your approval' })).getByRole('button', { name: 'Approve' });
+
+  it('a second Enter after the 4 s guard, with the gate still open, sends nothing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
+    atWidth(390, studio);
+    const approve = approveIn();
+    approve.focus();
+    pressEnter(approve);
+    expect(studio.act).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(4100);
+    });
+    expect(document.activeElement).toBe(approve);
+    expect(approve).toHaveAttribute('aria-disabled', 'true');
+    pressEnter(approve);
+    fireEvent.click(approve);
+    expect(studio.act).toHaveBeenCalledTimes(1);
+    // Not now stays held too, so the two answers never race.
+    expect(within(screen.getByRole('region', { name: 'Waiting for your approval' })).getByRole('button', { name: 'Not now' })).toBeDisabled();
+  });
+
+  it('an approval that failed can be sent again once the guard ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const act1 = vi.fn(async () => ({ ok: false, aborted: false, retryable: true, gated: false, error: 'offline' }));
+    const studio = { ...makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } }), act: act1 };
+    atWidth(390, studio);
+    const approve = approveIn();
+    approve.focus();
+    pressEnter(approve);
+    await act(async () => {
+      vi.advanceTimersByTime(4100);
+    });
+    expect(approve).not.toHaveAttribute('aria-disabled');
+    pressEnter(approve);
+    expect(act1).toHaveBeenCalledTimes(2);
+  });
+
+  it('a new gate gets a fresh Approve', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
+    const view = atWidth(390, studio);
+    pressEnter(approveIn());
+    await act(async () => {
+      vi.advanceTimersByTime(4100);
+    });
+    const next = gated();
+    next.gate!.id = 'gate_8';
+    view.rerender(atWidthEl(390, { ...studio, doc: next }));
+    pressEnter(approveIn());
+    expect(studio.act).toHaveBeenCalledTimes(2);
+    expect(studio.act).toHaveBeenLastCalledWith({ type: 'approve_gate', gateId: 'gate_8' });
   });
 });
 
