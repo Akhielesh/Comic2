@@ -429,14 +429,15 @@ describe('status ink guard — the rest of the app (ratchet)', () => {
  * `--ds-danger`, `--ds-info`, `--ds-danger-mark`) and the chart ramp steps (`--ds-chart-seq-N`, `--ds-chart-div-N`)
  * are tuned for dots, edges, bars and cells, not for words: Atlas's warning on white is 2.15:1, and a ramp's light
  * end is under 2:1 on the page. Words and the icon beside them read the `-text` inks (TONE_TEXT / STATUS_INK).
- * This fails on `text-[var(--ds-…)]` with or without the `color:` hint, and on the named colour `text-ds-…`, for
+ * This fails on `text-[var(--ds-…)]` with or without the `color:` hint or a fallback, on Tailwind 3's bare
+ * `text-[--ds-…]` shorthand, and on the named colour `text-ds-…`, for
  * those tokens, with any variant prefix and any opacity, anywhere an app-wide guard looks (components/** including
  * Comic Studio, App.tsx, qa/**). The `-text` tokens and every fill (bg-, border-, fill-, stroke-, ring-, …) stay
  * allowed. There is no allowlist and no baseline: today's count is 0 and it stays 0.
  */
 const MARK_TOKENS = String.raw`(?:success|warning|danger|info|danger-mark|chart-(?:seq|div)-\d+)`;
 const MARK_AS_TEXT = new RegExp(
-  String.raw`(?<![\w-])${VARIANT}text-(?:\[(?:color:)?var\(--ds-${MARK_TOKENS}\)\]|ds-${MARK_TOKENS})(?:\/\d+|\/\[[^\]]+\])?(?![\w-])`,
+  String.raw`(?<![\w-])${VARIANT}text-(?:\[(?:color:)?(?:var\(--ds-${MARK_TOKENS}(?:,[^\]]*)?\)|--ds-${MARK_TOKENS})\]|ds-${MARK_TOKENS})(?:\/\d+|\/\[[^\]]+\])?(?![\w-])`,
   'g'
 );
 
@@ -462,7 +463,7 @@ export function markAsTextScan(root = ROOT): { files: string[]; offenders: strin
 }
 
 describe('status ink guard — a status mark or a chart ramp step is never a text colour', () => {
-  it('recognises every spelling: the var() form with or without color:, the named colour, any variant, any opacity', () => {
+  it('recognises every spelling: the var() form with or without color: or a fallback, the bare [--var] form, the named colour, any variant, any opacity', () => {
     const flagged = [
       'text-[var(--ds-success)]',
       'text-[var(--ds-warning)]',
@@ -482,7 +483,13 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
       'text-[color:var(--ds-chart-div-4)]',
       'text-[var(--ds-chart-div-7)]',
       'text-ds-chart-seq-3',
-      'focus-visible:text-ds-chart-div-1/60'
+      'focus-visible:text-ds-chart-div-1/60',
+      // A var() with a fallback, and Tailwind 3's bare [--var] shorthand (with or without color:).
+      'text-[var(--ds-warning,#000)]',
+      'text-[color:var(--ds-danger-mark,_currentColor)]/70',
+      'text-[--ds-success]',
+      'sm:text-[color:--ds-chart-div-3]',
+      'md:hover:text-[--ds-chart-seq-2]/[0.5]'
     ];
     for (const token of flagged) {
       expect(findMarkAsText(`<p className="text-sm ${token}">x</p>`).map((h) => h.token), token).toEqual([token]);
@@ -494,7 +501,8 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
       'bg-ds-warning/10 border-ds-danger-mark ring-[var(--ds-danger)] decoration-[var(--ds-warning)]',
       'bg-[var(--ds-chart-seq-3)] fill-[var(--ds-chart-div-2)] stroke-ds-chart-seq-6',
       'text-[var(--ds-chart-1)] text-[var(--ds-ink)] text-[var(--ds-on-danger)] text-[var(--ds-status-error-tint)]',
-      'text-[var(--ds-hue-1-text)] text-[var(--ds-spark-text)]'
+      'text-[var(--ds-hue-1-text)] text-[var(--ds-spark-text)]',
+      'text-[--ds-success-text] text-[color:--ds-warning-text] text-[var(--ds-danger-text,#b00)] bg-[--ds-warning]'
     ];
     for (const classes of allowed) expect(findMarkAsText(`<p className="${classes}">x</p>`), classes).toEqual([]);
     // A comment that explains the rule is not a class name.
