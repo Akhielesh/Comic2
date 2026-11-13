@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { resolveBuildInfo } from './buildInfo';
+import { resolveBuildInfo } from './buildInfo.js';
 
 describe('backend image identity', () => {
   const image = { gitSha: 'c'.repeat(40), buildTimestamp: '2026-11-13T12:00:00Z' };
