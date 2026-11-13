@@ -12,7 +12,7 @@ import {
 } from '../services/db';
 import { getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
-import { FOCUS_RING } from './chat/studioDesign';
+import { FOCUS_RING, WRAP_TEXT } from './chat/studioDesign';
 import { SUPPORT_EMAIL } from './legal/contacts';
 import { ApiConfiguration } from './ApiConfiguration';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -35,6 +35,10 @@ import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
+
+// The photo button fills a round overflow-hidden frame, so the shared ring (drawn 2 px outside the element) would be
+// clipped away entirely. This one is drawn 4 px inside the button, where the frame cannot clip it.
+const AVATAR_FOCUS_RING = FOCUS_RING.replace('focus-visible:outline-offset-2', 'focus-visible:outline-offset-[-4px]');
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -594,6 +598,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
+    // The sign-in email cannot be edited here, so it is read-only text (role=textbox, aria-readonly), not a disabled
+    // input: an input cannot wrap (an ordinary 30-character address was cut on phones) and a disabled one cannot be
+    // focused, scrolled or selected, so the hidden part could not be reached at all.
     const renderProfile = () => (
         <div className="space-y-8 animate-fade-in max-w-2xl">
             {requireDobCompletion && (
@@ -618,7 +625,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 type="button"
                                 onClick={() => setPreviewAvatar(avatarUrl)}
                                 aria-label="View profile photo"
-                                className={`block w-full h-full cursor-zoom-in ${FOCUS_RING}`}
+                                className={`block w-full h-full cursor-zoom-in ${AVATAR_FOCUS_RING}`}
                             >
                                 <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
                             </button>
@@ -657,14 +664,17 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         <p id="account-username-hint" className="text-xs text-slate-500 mt-1">3-20 chars, letters/numbers/underscore only.</p>
                     </div>
                     <div>
-                        <label htmlFor="account-email" className="font-display text-lg">Email</label>
-                        <input
+                        <span id="account-email-label" className="block font-display text-lg">Email</span>
+                        <div
                             id="account-email"
-                            type="email"
-                            value={user?.email || ''}
-                            disabled
-                            className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-500 cursor-not-allowed"
-                        />
+                            role="textbox"
+                            aria-readonly="true"
+                            aria-labelledby="account-email-label"
+                            tabIndex={0}
+                            className={`w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-600 select-text ${WRAP_TEXT} ${FOCUS_RING}`}
+                        >
+                            {user?.email || ''}
+                        </div>
                     </div>
                     <div>
                         <label htmlFor="account-display-name" className="font-display text-lg">Name *</label>
@@ -1042,6 +1052,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
     );
 
+    const showAdminChip = isAdmin || isModerator;
     const navGroups: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: React.ReactNode; show?: boolean }> }> = [
         {
             label: 'Account',
@@ -1067,7 +1078,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         {
             label: 'Platform',
             items: [
-                { id: 'admin', label: 'Admin Console', icon: <Shield size={17} />, show: isAdmin || isModerator }
+                { id: 'admin', label: 'Admin Console', icon: <Shield size={17} />, show: showAdminChip }
             ]
         }
     ];
@@ -1089,11 +1100,21 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const navRowRef = useRef<HTMLElement>(null);
     useEffect(() => {
         const row = navRowRef.current;
-        if (!row || row.scrollWidth <= row.clientWidth) return;
-        const chip = row.querySelector<HTMLElement>('[aria-current="page"]');
-        if (!chip) return;
-        row.scrollLeft = Math.max(0, chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2);
-    }, [activeTab]);
+        if (!row) return;
+        const reveal = () => {
+            if (row.scrollWidth <= row.clientWidth) return;
+            const chip = row.querySelector<HTMLElement>('[aria-current="page"]');
+            if (!chip) return;
+            row.scrollLeft = Math.max(0, chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2);
+        };
+        reveal();
+        // The row only scrolls below md: crossing the breakpoint (a rotation, a narrowed window) re-centres it.
+        const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 768px)') : null;
+        mq?.addEventListener?.('change', reveal);
+        return () => mq?.removeEventListener?.('change', reveal);
+        // showAdminChip: the Admin chip only appears once admin access resolves after mount, so a deep link to
+        // ?tab=admin has no current chip on the first run.
+    }, [activeTab, showAdminChip]);
 
     return (
         <div className="min-h-screen bg-slate-50 pb-20">
