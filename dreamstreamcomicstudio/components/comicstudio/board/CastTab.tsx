@@ -32,6 +32,7 @@ import { sheetHint } from '../refs/refsModel';
 import { EmptyIllustration, FrameBadge, ImageFrame, VersionsButton, frameSources } from './ImageFrame';
 import { CLEAR, byokFromDoc, estimateOne, hasImage, initials, isBusy, jobModel, nameHue, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { CharacterDetail, characterCardId } from './CharacterDetail';
 import { ConfirmStrip, EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, Surface, cx, useClickGuard } from './ui';
 
 type LookKey = Exclude<keyof CharacterLook, 'summary'>;
@@ -245,6 +246,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const cost = costProp ?? fallbackCost;
   const rating = ratingProp ?? effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const [expanded, setExpanded] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const { busyKey, fire } = useClickGuard();
   const kind = castKindOf(c);
@@ -273,7 +275,8 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const findings = cardLintOn(studio.caps?.admin) ? lintLook(c) : [];
 
   return (
-    <Surface as="article" aria-label={c.name} data-testid="character-card" data-kind={kind} className="flex min-w-0 flex-col gap-2.5 p-3">
+    <Surface as="article" id={characterCardId(c.id)} aria-label={c.name} data-testid="character-card" data-kind={kind} className="flex min-w-0 flex-col gap-2.5 p-3">
+      {inspecting && <CharacterDetail studio={studio} characterId={c.id} onClose={() => setInspecting(false)} />}
       <ImageFrame
         url={src.url}
         srcSet={src.srcSet}
@@ -282,6 +285,8 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
         // Extras without a sheet get a slim placeholder — they don't need one.
         aspect={c.tier === 'extra' && !drawn && !busy && status !== 'failed' ? '5 / 2' : SHEET_ASPECT}
         alt={`${c.name} model sheet`}
+        onClick={status === 'ready' ? () => setInspecting(true) : undefined}
+        clickLabel={`Open ${c.name} portrait and details`}
         render={c.sheet}
         tone="paper"
         safety={{ rating, onCheckAgain: () => void studio.act({ type: 'safety_recheck', target: { kind: 'sheet', id: c.id } }), onChangeRating: () => studio.setTab('story') }}
@@ -310,6 +315,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
           />
         }
       />
+      <GhostButton size="xs" className="self-start" onClick={() => setInspecting(true)}>View character</GhostButton>
       <div className="flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1">
           <InlineField label="Name" value={c.name} allowEmpty={false} multiline rows={1} submitOnEnter onCommit={(name) => set({ name })} inputClassName="text-[15px] font-semibold" maxLength={80} />

@@ -1,5 +1,5 @@
 // "cast" card: the characters the director just captured, with their model-sheet status.
-// Tapping a character opens the board's Cast tab; leads/supports without a sheet can be
+// Tapping a character opens its portrait, references and details; leads/supports without a sheet can be
 // drawn from here (sheets are the identity anchors for every page).
 //
 // Non-human cast is first-class (director.md §3.5): animals, creatures, robots, toys,
@@ -7,7 +7,7 @@
 // support reads as a "Companion". The status line is a real truncating text span (visualqa
 // P1-4: `truncate` on a flex container never shows an ellipsis).
 
-import React from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, Check, Users } from 'lucide-react';
 import type { Card, Character } from '../../../../shared/comic/doc';
 import { estimateDocJobs } from '../../../../shared/comic/plan';
@@ -17,6 +17,7 @@ import { TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, cx, plural } from '../ui';
 import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
 import { useAction } from './useAction';
+import { CharacterDetail } from '../../board/CharacterDetail';
 
 type CastCardData = Extract<Card, { type: 'cast' }>;
 
@@ -63,6 +64,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
   const doc = studio.doc;
   const { run, isPending } = useAction(studio.act);
   const cost = useCostFormat(studio);
+  const [inspecting, setInspecting] = useState<string | null>(null);
   if (!doc) return null;
   const ids = Array.isArray(card.characterIds) && card.characterIds.length ? card.characterIds : doc.cast.map((c) => c.id);
   const cast = ids.map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is Character => !!c);
@@ -82,6 +84,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
       aria-label="Cast"
       className="min-w-0 max-w-full"
     >
+      {inspecting && <CharacterDetail studio={studio} characterId={inspecting} onClose={() => setInspecting(null)} />}
       {cast.length === 0 ? (
         <p className="text-[13px] text-[var(--ds-muted)]">These characters were removed from the comic.</p>
       ) : (
@@ -93,9 +96,9 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
               <li key={c.id} className="min-w-0 max-w-full">
                 <button
                   type="button"
-                  onClick={() => studio.setTab('cast')}
+                  onClick={() => setInspecting(c.id)}
                   title={c.look.summary || c.name}
-                  aria-label={`${castAriaLabel(c)}. ${status.text}. Open the cast`}
+                  aria-label={`${castAriaLabel(c)}. ${status.text}. Open character details`}
                   className="flex w-full max-w-[16rem] items-center gap-2.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-1.5 pr-3 text-left transition-colors duration-200 hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
                 >
                   <CastAvatar character={c} urlFor={studio.urlFor} size={40} busy={status.tone === 'busy'} showCount={false} />
