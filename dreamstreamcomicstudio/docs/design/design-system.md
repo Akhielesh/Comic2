@@ -112,7 +112,7 @@ Soft tint: the hue at 12 % (light) or 16 % (dark) over `--ds-raised`, opaque. So
 `#9a4900 #d76900 #eeae7b #d4d4d4 #aabbf5 #6a81f2 #3d44e8`, dark `#f4a25c #de6f11 #91450d #4a4a4a #404dc1 #7085ff #a2b2ff`.
 Hero wash: magenta, ultramarine and orange at 20 / 18 / 12 % under the Atlas skin (26 / 22 / 16 % dark), 13 % in the
 default skin (18 % dark). Empty wash: magenta and leaf at 10 % (14 % dark). The dark text steps for slots 1, 2 and 5 are
-4 % lighter than the colour review's values: those measured 4.40 to 4.42:1 on a hovered row over the default dark raised
+4 % lighter than the first draft's values: those measured 4.40 to 4.42:1 on a hovered row over the default dark raised
 step.
 
 **The rules.**
@@ -128,15 +128,20 @@ step.
   are always labelled. A plot draws on `CHART_PLOT_BG` (the card), never on the raised step (hues 1, 2 and 5 fall under
   3:1 on the default dark raised fill). Ramp steps under 3:1 on the plot always carry a value label or the table twin.
   A chart mark on slot 1 is not a spark fill.
-- **Spend and price.** No colour on or beside a price or a spend control (Approve, Draw, Redraw, Translate, Get more).
-  Owner's decision: usage and spend *charts* may be coloured, the charts only, starting at magenta, never ultramarine
+- **Spend and price.** No colour on or beside a price or a spend control (Approve, Draw, Redraw, Translate, Get more):
+  not on the element, not on a sibling, not on a wrapper that holds the control. A recipe kept in a variable is judged
+  where it is used. Usage and spend *charts* may be coloured, the charts only, starting at magenta, never ultramarine
   or a ramp next to money.
+- **The inverse (ink) panel** (`INVERSE_SURFACE`) takes no tint, chip or coloured words: the steps are tuned for paper
+  (light text steps are about 3.2:1 on ink). A chart mark (a tooltip swatch) may draw there.
 - **Washes** only on a hero or an empty state whose action does not spend, once per page; never a working view.
 - **Navigation** takes no ultramarine and no wash (the studio accent's 2 px marker is allowed). **The reader** takes
   no colour-layer token at all; the comic page keeps `--ds-reader-*`.
 - **The off switch.** `VITE_DS_COLOUR=off` (build time) marks every HTML entry `<html data-ds-colour="off">`; one block
   in `index.css` points every name above back to neutral (tints transparent, hue text muted, solids the strong well
-  under ink, ramps the ink steps, no washes, no studio accent, the art tint the plain card). No component change.
+  under ink, ramps the ink steps, no washes, no studio accent, the art tint the plain card). Charts stay readable:
+  hues 6 and 7 take two different ink steps, and both ramps become one ordered grey ramp (the diverging poles dark and
+  light, never the same grey). Hues 1 to 5 keep their colour, as before the layer. No component change.
   Turning it off or on again takes a rebuild and a redeploy (`docs/infrastructure/ENV_MATRIX.md`).
 
 **Where colour may go now** (adds to the CL-0 table below): tag chips (`hueChip`), the part of a comic you are in

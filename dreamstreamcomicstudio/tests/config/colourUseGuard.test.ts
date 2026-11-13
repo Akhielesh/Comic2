@@ -9,20 +9,27 @@
  *      text: words in a hue use HUE_TEXT (the -text step, ≥ 4.5:1), and only on slots 1, 5 and 7; on slots 2, 3, 4 and 6
  *      the text step is for an icon (it sits near a status colour), so an element carrying it holds no words.
  *   2. NEVER ON OR BESIDE A PRICE OR A SPEND CONTROL. No hue, tint, solid, studio accent, wash or art tint on an element
- *      that holds a price, beside one (a sibling element), or on a control whose own label starts with Approve, Draw,
- *      Redraw, Translate or Get more. One exception, the owner's decision "colour on usage and spend charts, for the
- *      charts only, starting at magenta, no blue next to money": a CHART MARK (an SVG fill or stroke, judged by the <svg>
- *      it draws in) may sit beside a price, except slot 1 (ultramarine) and the two ramps (both ultramarine family).
+ *      that holds a price or a spend control (a button, link or pressable whose label, words or aria-label, starts
+ *      with Approve, Draw, Redraw, Translate or Get more), or beside one (a sibling element, or a control inside a
+ *      sibling). A recipe kept in a variable or a helper function is judged at every element that reads it; one kept
+ *      where the detector cannot follow (a Map, an argument, an export) fails in a file that shows a price. One
+ *      exception (colour on usage and spend charts, for the charts only, starting at magenta, no blue next to money):
+ *      a CHART MARK (an SVG fill or stroke, judged by the <svg> it draws in) may sit beside a price or a spend control,
+ *      except slot 1 (ultramarine) and the two ramps (both ultramarine family).
  *   3. WASHES ONLY WHERE THEY BELONG. WASH_HERO / WASH_EMPTY (and any --ds-wash-*) only in WASH_FILES, at most one
  *      element per file and never inside a list: a hero or an empty state, never a working view.
  *   4. NO WORDS ON A SOLID WHITE CAN'T CARRY. HUE_SOLID on slots 2, 3, 4 and 7 (white on them is 3.4 to 4.4:1 in light)
  *      holds an icon only; a solid picked by a computed index holds no words either (the slot is not known here).
+ *      Words reached through `cond && "x"`, a ternary or `a ?? "x"` count; a branch that is an element or null does not.
  *   5. INK NAVIGATION. The panel and navigation (sparkGuard's INK_ONLY) take no ultramarine (hue 1 is the spark's
  *      family) and no wash; the studio accent's 2 px marker is the one colour allowed there.
  *   6. NO COLOUR LAYER IN THE READER. components/comicstudio/{reader,immersive}/** read no hue, tint, solid, ramp,
  *      wash, studio or art-scope token, their CSS included (the comic page keeps --ds-reader-*; the art is the colour).
  *   7. NO HUE BUTTON. No Button variant reads a colour-layer token (primary buttons stay ink; the spark is the one
  *      coloured fill, sparkGuard.test.ts).
+ *   8. PAPER STEPS STAY ON PAPER. No tint, chip, coloured words, studio tint or art tint inside the inverse (ink)
+ *      surface (INVERSE_SURFACE / .ds-inverse-surface): the text steps are about 3.2:1 on ink, and a soft tint under
+ *      the swapped ink of an Atlas dark panel is near 1.2:1. A chart mark (a tooltip swatch) may draw there.
  * A chart mark on slot 1 is not a spark fill: the spark rule counts controls, tiles and rings, not marks.
  * Specimens (the colour specimen and the gallery scenes) may show every wash; rules 1, 2 and 4 still hold there.
  */
@@ -171,16 +178,88 @@ function svgOf(el: ts.Node): ts.JsxElement | null {
   return null;
 }
 
-/** Whether an element (or anything inside it) says words: text, a string, or an expression that is not an element. */
+/** Whether an expression can render words: a string, a template, a value; not an element, null, or a boolean. */
+function exprWords(e: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(e)) return exprWords(e.expression);
+  if (ts.isJsxElement(e) || ts.isJsxFragment(e)) return e.children.some(childWords);
+  if (ts.isJsxSelfClosingElement(e)) return false;
+  if (e.kind === ts.SyntaxKind.NullKeyword || e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword || (ts.isIdentifier(e) && e.text === 'undefined')) return false;
+  // Both branches of a choice; the right of `cond && x` (the left is the condition); either side of `a || b` / `a ?? b`.
+  if (ts.isConditionalExpression(e)) return exprWords(e.whenTrue) || exprWords(e.whenFalse);
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) return exprWords(e.right);
+    if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) return exprWords(e.left) || exprWords(e.right);
+  }
+  return true;
+}
+function childWords(c: ts.JsxChild): boolean {
+  if (ts.isJsxText(c)) return c.text.trim().length > 0;
+  if (ts.isJsxExpression(c)) return !!c.expression && exprWords(c.expression);
+  if (ts.isJsxElement(c) || ts.isJsxFragment(c)) return c.children.some(childWords);
+  return false;
+}
+/** Whether an element (or anything inside it) says words: text, a string, or an expression that can render one. */
 function holdsWords(el: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
-  if (!ts.isJsxElement(el)) return false;
-  if (textOf(el.children).replace(/\s+/g, '').length > 0) return true;
-  const visit = (n: ts.Node): boolean => {
-    if (ts.isJsxExpression(n) && n.expression && !ts.isJsxElement(n.expression) && !ts.isJsxSelfClosingElement(n.expression) && !ts.isConditionalExpression(n.expression) && !ts.isBinaryExpression(n.expression)) return true;
-    if (ts.isJsxElement(n)) return n.children.some(visit);
-    return false;
+  return ts.isJsxElement(el) && el.children.some(childWords);
+}
+
+/** A control a person presses (a button, a link, anything with onClick or role="button"). */
+function isControl(el: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+  const opening = ts.isJsxElement(el) ? el.openingElement : el;
+  const tag = opening.tagName.getText();
+  if (/^(?:button|a)$|Button$|^(?:Link|MenuItem)$/.test(tag)) return true;
+  return opening.attributes.properties.some((a) => ts.isJsxAttribute(a) && (a.name.getText() === 'onClick' || (a.name.getText() === 'role' && !!a.initializer && ts.isStringLiteral(a.initializer) && a.initializer.text === 'button')));
+}
+/** The first spend-control label among the controls in a subtree (the root included). */
+function spendIn(root: ts.Node): string | null {
+  let found: string | null = null;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if ((ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) && isControl(n)) found = labelsOf(n).find((l) => SPEND_LABEL.test(l)) ?? null;
+    if (!found) ts.forEachChild(n, visit);
   };
-  return el.children.some(visit);
+  visit(root);
+  return found;
+}
+
+/** Whether an element sits on the inverse (ink) surface: it or an ancestor carries INVERSE_SURFACE / ds-inverse-surface. */
+function onInverse(el: ts.Node): boolean {
+  for (let n: ts.Node | undefined = el; n && !ts.isSourceFile(n); n = n.parent) {
+    if (!ts.isJsxElement(n) && !ts.isJsxSelfClosingElement(n)) continue;
+    const opening = ts.isJsxElement(n) ? n.openingElement : n;
+    const cls = opening.attributes.properties.find((a) => ts.isJsxAttribute(a) && a.name.getText() === 'className');
+    if (cls && /\bINVERSE_SURFACE\b|(?<![\w-])ds-inverse-surface(?![\w-])/.test(cls.getText())) return true;
+  }
+  return false;
+}
+/** The uses tuned for paper (a tint, a chip, coloured words, the studio or art tint), not a chart mark. */
+const PAPER_ONLY = /^(?:HUE_TEXT|HUE_SOFT_BG|hueChip|STUDIO_SOFT_BG|ART_SOFT_BG)\b|^literal:.*(?:--ds-hue-\d-(?:text|soft)|--ds-studio-soft|--ds-art-soft)/;
+
+/**
+ * Where a recipe kept in a variable or a helper ends up: every element whose attributes read that name (through further
+ * variables too). `bound` is false when the use sits in no named variable or function the detector can follow.
+ */
+function elementsFor(node: ts.Node, depth = 0, seen = new Set<string>()): { bound: boolean; els: Array<ts.JsxElement | ts.JsxSelfClosingElement> } {
+  let name: string | null = null;
+  for (let n: ts.Node | undefined = node.parent; n && !ts.isSourceFile(n); n = n.parent) {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) { name = n.name.text; break; }
+    if (ts.isFunctionDeclaration(n) && n.name) { name = n.name.text; break; }
+  }
+  if (!name || seen.has(name) || depth > 4) return { bound: !!name, els: [] };
+  seen.add(name);
+  const els: Array<ts.JsxElement | ts.JsxSelfClosingElement> = [];
+  const sf = node.getSourceFile();
+  const visit = (n: ts.Node) => {
+    if (ts.isIdentifier(n) && n.text === name && !isDeclName(n) && !(ts.isFunctionDeclaration(n.parent) && n.parent.name === n) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
+      const el = elementOf(n);
+      if (el) els.push(el);
+      else els.push(...elementsFor(n, depth + 1, seen).els);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { bound: true, els };
 }
 
 /** The list call a node renders inside (`.map()`, `.flatMap()`, `Array.from(…, fn)`), or null. */
@@ -210,25 +289,38 @@ export function checkColourSource(rel: string, source: string, opts: { washFiles
     for (const u of uses) v.push(`${rel}:${u.line}: the reader takes no colour-layer token (${u.token}) — the comic page keeps --ds-reader-* — ${u.text}`);
     return v;
   }
+  const sf = uses[0].node.getSourceFile();
+  const names = costNamesOf(sf);
+  const fileHasPrice = priceIn(sf, sf, names);
   for (const u of uses) {
     if (u.hueAsText) v.push(`${rel}:${u.line}: a hue mark as a text colour (${u.token}) — words use HUE_TEXT (the -text step), on slots 1, 5 and 7 only — ${u.text}`);
-    const el = elementOf(u.node);
-    if (el) {
-      const sfOf = el.getSourceFile();
-      const names = costNamesOf(sfOf);
+    const direct = elementOf(u.node);
+    let els: Array<ts.JsxElement | ts.JsxSelfClosingElement> = direct ? [direct] : [];
+    if (!direct) {
+      const bound = elementsFor(u.node);
+      els = bound.els;
+      // Kept somewhere the detector cannot follow (a Map, an argument, an export) in a file that shows money: say so.
+      if (!els.length && fileHasPrice) v.push(`${rel}:${u.line}: colour (${u.token}) kept where the guard cannot follow it, in a file that shows a price (${fileHasPrice}) — apply the recipe on the element (or in a variable used there), so the guard can check it stays off money — ${u.text}`);
+    }
+    for (const el of new Set(els)) {
       // A chart mark is judged by its chart: the <svg> it draws in, and what sits beside that.
       const at = (u.mark ? svgOf(el) : null) ?? el;
-      const price = priceIn(at, sfOf, names) ?? siblingsOf(at).map((s) => priceIn(s, sfOf, names)).find(Boolean) ?? null;
+      const price = priceIn(at, sf, names) ?? siblingsOf(at).map((s) => priceIn(s, sf, names)).find(Boolean) ?? null;
       if (price && (!u.mark || u.blue !== false)) {
         v.push(`${rel}:${u.line}: colour (${u.token}) on or beside a price (${price}) — prices and spend controls stay ink${u.mark ? '; a chart mark beside money starts at magenta, never ultramarine' : ''} — ${u.text}`);
       }
-      const spend = labelsOf(el).find((l) => SPEND_LABEL.test(l));
+      const spend = labelsOf(el).find((l) => SPEND_LABEL.test(l)) ?? (u.mark ? null : spendIn(el));
       if (spend && !u.mark) v.push(`${rel}:${u.line}: colour (${u.token}) on a spend control (${JSON.stringify(spend)}) — Approve, Draw, Redraw, Translate and Get more stay ink — ${u.text}`);
+      const beside = spend ? null : siblingsOf(at).map(spendIn).find(Boolean) ?? null;
+      if (beside && (!u.mark || u.blue !== false)) v.push(`${rel}:${u.line}: colour (${u.token}) beside a spend control (${JSON.stringify(beside)}) — Approve, Draw, Redraw, Translate and Get more stay ink, and so does what sits next to them — ${u.text}`);
       if (u.solidSlot !== undefined && (u.solidSlot === 0 || [2, 3, 4, 7].includes(u.solidSlot)) && holdsWords(el)) {
         v.push(`${rel}:${u.line}: words inside HUE_SOLID on ${u.solidSlot ? `slot ${u.solidSlot}` : 'a computed slot'} (${u.token}) — white on it is under 4.5:1 in light: an icon only, or slots 1, 5, 6 — ${u.text}`);
       }
       if (u.textSlot !== undefined && (u.textSlot === 0 || ![1, 5, 7].includes(u.textSlot)) && holdsWords(el)) {
         v.push(`${rel}:${u.line}: coloured words in HUE_TEXT on ${u.textSlot ? `slot ${u.textSlot}` : 'a computed slot'} (${u.token}) — coloured text only on slots 1, 5 and 7 (the rest sit near a status colour); an icon is fine — ${u.text}`);
+      }
+      if (!u.mark && PAPER_ONLY.test(u.token) && onInverse(el)) {
+        v.push(`${rel}:${u.line}: a tint, chip or coloured words (${u.token}) on the inverse surface — the steps are tuned for paper (light text steps are about 3.2:1 on ink): keep the panel ink, or use a chart mark — ${u.text}`);
       }
     }
   }
@@ -347,6 +439,32 @@ describe('colour-use guard — the rules on one file', () => {
     expect(check('export const A = () => <button className={HUE_SOLID[0]}><Star aria-hidden /></button>;')).toEqual([]);
   });
 
+  it('rule 2: colour beside a spend control fails too (a sibling control, by its words or its aria-label; or a control inside the coloured element)', () => {
+    expect(check('export const A = () => <div><span className={HUE_SOFT_BG[1]}>Cast</span><Button>Approve</Button></div>;').join()).toMatch(/beside a spend control \("Approve"\)/);
+    expect(check('export const A = () => <div><span className={HUE_SOFT_BG[1]}>Cast</span><Button aria-label="Approve and draw" /></div>;').join()).toMatch(/beside a spend control \("Approve and draw"\)/);
+    expect(check('export const A = () => <div><i className={hueChip(2)} /><footer><button type="button">Redraw page</button></footer></div>;').join()).toMatch(/beside a spend control \("Redraw page"\)/);
+    expect(check('export const A = () => <div className={HUE_SOFT_BG[1]}><p>Cast</p><Button>Draw 3 pages</Button></div>;').join()).toMatch(/on a spend control \("Draw 3 pages"\)/);
+    // Words that merely start like a spend label are not a control; a chart mark (from magenta on) may sit beside one.
+    expect(check('export const A = () => <div><span className={HUE_SOFT_BG[1]}>Cast</span><p>Draw your first comic in minutes.</p></div>;')).toEqual([]);
+    expect(check('export const A = () => <div><svg><rect className={chartHue("fill", 1)} /></svg><Button>Approve</Button></div>;')).toEqual([]);
+    expect(check('export const A = () => <div><svg><rect className={chartHue("fill", 0)} /></svg><Button>Approve</Button></div>;').join()).toMatch(/beside a spend control/);
+  });
+
+  it('rule 2: a recipe kept in a variable or a helper is judged where it is used', () => {
+    expect(check('const tint = HUE_SOFT_BG[1];\nexport const P = () => <span className={tint}>{formatUsd(1)}</span>;').join()).toMatch(/\(HUE_SOFT_BG\[1\]\) on or beside a price/);
+    expect(check('export const P = () => { const chip = cn(HUE_SOFT_BG[2], "px-2"); return <div><span className={chip}>Cast</span><Button>Approve</Button></div>; };').join()).toMatch(/beside a spend control/);
+    expect(check('const styles = { tag: HUE_SOFT_BG[1] };\nexport const P = () => <div><i className={styles.tag} /><span>{formatUsd(1)}</span></div>;').join()).toMatch(/beside a price/);
+    expect(check('function tone(i) { return HUE_SOFT_BG[i]; }\nexport const P = () => <span className={tone(2)}>{formatUsd(1)}</span>;').join()).toMatch(/beside a price/);
+    // Through two variables, and words on a solid kept in a variable.
+    expect(check('const a = HUE_SOFT_BG[1];\nconst b = cn(a, "x");\nexport const P = () => <span className={b}>{formatUsd(1)}</span>;').join()).toMatch(/beside a price/);
+    expect(check('const solid = HUE_SOLID[1];\nexport const T = () => <span className={solid}>New</span>;').join()).toMatch(/words inside HUE_SOLID on slot 2/);
+    // A colour kept somewhere the detector cannot follow, in a file that shows a price: flagged rather than missed.
+    expect(check('export const tints = new Map([[1, HUE_SOFT_BG[1]]]);\nexport const P = () => <span>{formatUsd(1)}</span>;').join()).toMatch(/cannot follow/);
+    // Kept in a variable and used away from money: fine.
+    expect(check('const tint = HUE_SOFT_BG[1];\nexport const P = () => <div><section><span className={tint}>Cast</span></section><section>{formatUsd(1)}</section></div>;')).toEqual([]);
+    expect(check('export const tints = new Map([[1, HUE_SOFT_BG[1]]]);')).toEqual([]);
+  });
+
   it('rule 2: a chart mark may sit beside a price (spend charts start at magenta), but never slot 1 or the diverging ramp', () => {
     expect(check(PRICE_ROW('<svg><rect className={chartHue("fill", 1)} /></svg>'))).toEqual([]);
     expect(check(PRICE_ROW('<svg><rect className={HUE_MARK.fill[1]} /></svg>'))).toEqual([]);
@@ -377,6 +495,25 @@ describe('colour-use guard — the rules on one file', () => {
     expect(check('export const T = () => <span className={HUE_SOLID[1]}><Palette aria-hidden /></span>;')).toEqual([]);
     expect(check('export const T = () => <span className={HUE_SOLID[5]}>Leaf</span>;')).toEqual([]);
     expect(check('export const T = () => <span className={HUE_SOLID[0]}>New</span>;')).toEqual([]);
+  });
+
+  it('rule 4: words reached through a condition or a choice count as words; icon-only branches do not', () => {
+    expect(check('export const T = ({ n }) => <span className={HUE_SOLID[1]}>{n > 0 && "New"}</span>;').join()).toMatch(/words inside HUE_SOLID on slot 2/);
+    expect(check('export const T = ({ n }) => <span className={HUE_SOLID[1]}>{n ? "New" : "Old"}</span>;').join()).toMatch(/words inside HUE_SOLID on slot 2/);
+    expect(check('export const T = ({ n, label }) => <span className={HUE_SOLID[1]}>{n ? <Star aria-hidden /> : label}</span>;').join()).toMatch(/words inside HUE_SOLID/);
+    expect(check('export const T = ({ n }) => <span className={HUE_TEXT[1]}>{n ?? "None"}</span>;').join()).toMatch(/coloured words in HUE_TEXT on slot 2/);
+    expect(check('export const T = ({ n }) => <span className={HUE_SOLID[1]}>{n > 0 && <Star aria-hidden />}</span>;')).toEqual([]);
+    expect(check('export const T = ({ n }) => <span className={HUE_SOLID[1]}>{n ? <Star aria-hidden /> : null}</span>;')).toEqual([]);
+  });
+
+  it('rule 8: no tint, chip or coloured words on the inverse (ink) surface: they are tuned for paper', () => {
+    expect(check('export const I = () => <section className={INVERSE_SURFACE}><span className={hueChip(1)}>Cast</span></section>;').join()).toMatch(/inverse surface/);
+    expect(check('export const I = () => <div className="ds-inverse-surface p-4"><p><b className={HUE_TEXT[0]}>New</b></p></div>;').join()).toMatch(/inverse surface/);
+    expect(check('export const I = () => <div className={cn(INVERSE_SURFACE, HUE_SOFT_BG[2])}>x</div>;').join()).toMatch(/inverse surface/);
+    expect(check('export const I = () => <div className={INVERSE_SURFACE}><i className="bg-[var(--ds-studio-soft)]" /></div>;').join()).toMatch(/inverse surface/);
+    // A chart mark may draw there (a tooltip swatch), and colour outside the panel is fine.
+    expect(check('export const I = () => <div className={INVERSE_SURFACE}><svg><rect className={chartHue("fill", 1)} /></svg></div>;')).toEqual([]);
+    expect(check('export const I = () => <div><section className={INVERSE_SURFACE}>Access</section><span className={hueChip(1)}>Cast</span></div>;')).toEqual([]);
   });
 
   it('rule 5: navigation takes no ultramarine and no wash; the studio marker is allowed', () => {
