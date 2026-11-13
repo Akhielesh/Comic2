@@ -1027,17 +1027,18 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 [data-ds-studio="atlas"] { --ds-studio: var(--ds-hue-7); --ds-studio-soft: var(--ds-hue-7-soft); }
 /* The comic's own tint: a component sets --ds-art inline (CL-8 derives it from the cover and clamps it to OKLCH
    L 0.50-0.70, C 0.06-0.16) and puts ART_SCOPE on the same element; the soft card wash, the edge and the glow
-   are mixed here in OKLab over the raised step, so ink and muted text keep 4.5:1 on the soft wash. Outside a scope
+   are mixed here in OKLab over the page (over the raised step the default dark muted text fell to 4.08:1), so ink
+   and muted text keep 4.5:1 on the soft wash for every colour of the clamp box. Outside a scope
    --ds-art-soft / --ds-art-edge are the plain card (the token blocks). */
 .ds-art-scope {
-  --ds-art-soft: color-mix(in oklab, var(--ds-art) 12%, var(--ds-raised));
-  --ds-art-edge: color-mix(in oklab, var(--ds-art) 40%, var(--ds-raised));
+  --ds-art-soft: color-mix(in oklab, var(--ds-art) 12%, var(--ds-canvas));
+  --ds-art-edge: color-mix(in oklab, var(--ds-art) 40%, var(--ds-canvas));
   --ds-art-glow: color-mix(in oklab, var(--ds-art) 45%, transparent);
 }
 .dark .ds-art-scope,
 .dark.ds-art-scope {
-  --ds-art-soft: color-mix(in oklab, var(--ds-art) 18%, var(--ds-raised));
-  --ds-art-edge: color-mix(in oklab, var(--ds-art) 45%, var(--ds-raised));
+  --ds-art-soft: color-mix(in oklab, var(--ds-art) 18%, var(--ds-canvas));
+  --ds-art-edge: color-mix(in oklab, var(--ds-art) 45%, var(--ds-canvas));
   --ds-art-glow: color-mix(in oklab, var(--ds-art) 40%, transparent);
 }
 /* THE OFF SWITCH (VITE_DS_COLOUR=off; vite.config.ts dsColourPlugin marks <html data-ds-colour="off"> in every HTML
