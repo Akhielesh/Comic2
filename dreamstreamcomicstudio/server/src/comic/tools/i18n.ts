@@ -9,6 +9,10 @@
 //
 // Phase gate: language words in the turn, a non-English comic, or editions exist. No published list and
 // no set_reader_languages: what readers can pick is the publication's job (editionReadiness gates it).
+//
+// Money: translate_comic never spends unseen. A translate the user asked for waits for one Approve however
+// small it is (gate reason 'policy'); an offer nobody asked for waits too ('no_intent'); only a comic set to
+// "never ask" starts at once. Free paths (everything already translated) run straight away.
 
 import type { ComicDoc, Line, Page } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, i18nOf, lineSourceHash, normalizeSource, translationStatus } from '../../../../shared/comic/i18n.js';
@@ -122,8 +126,34 @@ const pagesArg = (doc: ComicDoc, raw: unknown): Page[] | undefined => {
 
 const ratingOf = (ctx: StudioContext) => ctx.rating ?? effectiveRating(ctx.session.doc, (ctx.caps ?? DEFAULT_CAPS).ratingCeiling).rating;
 
-/** Start a quoted translate spend from the director (gated like any spend; $0 runs straight away). */
-async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Extract<SpendAction, { type: 'translate' }>): Promise<string> {
+type TranslateAction = Extract<SpendAction, { type: 'translate' }>;
+const REFUSED_SECOND_SPEND = 'Refused: a spend from this turn is already waiting for the user to approve it. Tell them the estimate and stop; continue after they approve.';
+/** The Approve card a director turn opened for a translate the user asked for, and the action it holds. */
+const askedGates = new WeakMap<DirectorTurn, { gateId: string; action: TranslateAction }>();
+/** The same pages and options: only the languages differ, so the two calls are one request. */
+const sameScope = (a: TranslateAction, b: TranslateAction) =>
+  (a.pageIds || []).join() === (b.pageIds || []).join() && !!a.force === !!b.force && !!a.overwriteEdits === !!b.overwriteEdits;
+
+/**
+ * A second translate_comic call in the turn that already opened an Approve card for the languages the user asked for
+ * ("add telugu and hindi versions" sent as [Telugu], then [Hindi]): close that card and quote both languages on one new
+ * card, instead of refusing the second call and silently dropping its language. Undefined: nothing to merge.
+ */
+async function mergeIntoAskedGate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<TranslateAction | undefined> {
+  const mine = askedGates.get(turn);
+  const open = ctx.session.doc.gate;
+  if (!mine || !open || open.id !== mine.gateId || open.status !== 'open' || !sameScope(mine.action, action)) return undefined;
+  await startAction(ctx, { type: 'decline_gate', gateId: open.id }, { confirmed: true, caps: ctx.caps, origin: 'director' });
+  const card = turn.cards.findIndex((c) => c.type === 'gate' && c.gateId === open.id);
+  if (card >= 0) turn.cards.splice(card, 1);
+  askedGates.delete(turn);
+  turn.gated = false;
+  return { ...action, languages: [...new Set([...mine.action.languages, ...action.languages])] };
+}
+
+/** Start a quoted translate spend from the director: it waits for the user's Approve unless the comic is set to "never ask"; $0 runs straight away. */
+async function startTranslate(ctx: StudioContext, turn: DirectorTurn, asked: TranslateAction): Promise<string> {
+  const action = (turn.gated && (await mergeIntoAskedGate(ctx, turn, asked))) || asked;
   const doc = ctx.session.doc;
   const quote = quoteTranslation(doc, ctx.keys, action);
   // caps and origin are explicit on every action this tool starts (RunActionOptions may require them).
@@ -146,14 +176,21 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Ex
     turn.outcome = started.outcome.status;
     message = started.outcome.message;
   } else {
-    if (turn.gated) return 'Refused: a spend from this turn is already waiting for the user to approve it. Tell them the estimate and stop; continue after they approve.';
-    // The user asked for languages in this turn → the policy decides; a proactive offer always asks.
-    const asked = LANG_WORDS.test(turn.userText || '');
-    const started = await startAction(ctx, action, { ...opts, confirmed: false, priorUsd: turn.spentUsd, ...(asked ? {} : { forceGate: 'no_intent' as const }) });
+    if (turn.gated) return REFUSED_SECOND_SPEND;
+    // The user asked for languages in this turn → the studio shows the price and waits for one Approve, however
+    // small ('policy' stops under every setting; under "big spends only" a cheap translate used to start with no
+    // card). A comic set to "never ask" starts at once, as before. An offer nobody asked for always asks.
+    const userAsked = LANG_WORDS.test(turn.userText || '');
+    const forceGate = !userAsked ? ('no_intent' as const) : doc.settings.confirm === 'never' ? undefined : ('policy' as const);
+    const started = await startAction(ctx, action, { ...opts, confirmed: false, priorUsd: turn.spentUsd, ...(forceGate ? { forceGate } : {}) });
     const outcome = started.outcome;
     turn.outcome = outcome.status;
     if (outcome.status === 'started') turn.spentUsd += outcome.estimate.usd;
-    else if (outcome.status === 'gated') turn.gated = true;
+    else if (outcome.status === 'gated') {
+      turn.gated = true;
+      // An offer nobody asked for stays one card per turn; the user's own languages gather on one card.
+      if (userAsked) askedGates.set(turn, { gateId: outcome.gate.id, action });
+    }
     void ctx.track(started.done);
     // The Approve card names the languages by code: the director gets their names, and what the wait means.
     message =
@@ -476,14 +513,17 @@ export function languagesSummary(doc: ComicDoc): string | undefined {
   return `Languages: source ${doc.format.language}${parts.length ? `; editions ${parts.join(', ')}` : '; no translations'}${lettering}`;
 }
 
-/** What the director is told about languages; the languages on offer are the registry's, never the comic's own. */
+/**
+ * What the director is told about languages. A comic set to "never ask" starts a translation at once, so its rule
+ * says so instead of promising an Approve card; the languages on offer are the registry's, never the comic's own.
+ */
 export function i18nPromptRules(doc?: ComicDoc): string {
   const source = doc?.format.language || 'en';
   const offered = LANGUAGES.filter((l) => !sameLanguage(l.code, source)).map((l) => l.english).join(', ');
-  // A small translation under "big spends only" (and every one under "never ask") starts at once; a big one, or any
-  // under "always ask", waits for the Approve card. The tool's own result says which happened.
   const money =
-    "It is PAID: under this comic's money settings it either starts at once (a small spend) or the studio shows the price and waits for the user's Approve. Say the languages and what the tool reports in one line.";
+    doc?.settings.confirm === 'never'
+      ? "This comic is set to never ask before a spend, so translate_comic starts at once unless it would go over the comic's budget, when the studio asks first: call it only when the user asked for those languages, and say what the tool reports."
+      : "It is PAID, but calling it spends nothing: the studio shows the price and waits for the user's Approve (it runs at once only when everything is already translated, for free). Say the languages and the price in one line and stop.";
   return `LANGUAGES. The comic is written in its source language (DOC SUMMARY). To make it readable in other languages call translate_comic: software reuses everything already translated for free, a writer-class translator does the rest and a linguist reviews every line. ${money} When the user asks for the comic in other languages (a translation, "a Hindi version", "in Telugu too"), call translate_comic with the languages they named, all of them in one call. Never use ask_user to choose languages they already named, and never offer to "switch" or "set active" a language: adding a language never changes the comic's own. Call set_comic_language only when they ask to change the comic's own language. If they named no language, call ask_user once with multi: true and two to five languages that fit the story's setting (and the language the user writes in, when it is not the comic's): each option's label is the language's name and its reply is "Translate into <language>". You can translate into: ${offered}. Never "translate" by rewriting lines with edit_panel_text. To change one translated line use edit_translation; to check how a translation reads use read_translation (quote its gloss, never guess). To write the comic natively in another language, call set_comic_language with mode relabel BEFORE plan_pages. Reply in the user's language, but never change the comic's language unless they ask. Translated editions need overlay lettering: if the pages have lettering painted into the art, explain that converting means redrawing those pages without text (quote it) and ask before doing it. Readers choose among published languages when the comic is published; a language is publishable once it is translated and reviewed.`;
 }
 
