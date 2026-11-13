@@ -103,6 +103,7 @@ import { hashString } from '../../../shared/comic/hash.js';
 import { DEFAULT_LETTERING, mergeNamedStyles, mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { CONSISTENCY_LIMITS, DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
+import { languageSpec } from '../../../shared/comic/languages.js';
 import {
   LOW_QC_SCORE as PLAN_LOW_QC_SCORE,
   coverNeedsDraw,
@@ -1417,6 +1418,15 @@ const pagesPhrase = (pages: { n: number }[]): string => {
   return `${ns.length} pages`;
 };
 
+/**
+ * Language codes as English words from the language registry: "Hindi", "Hindi and Tamil", "Hindi, Tamil and Telugu".
+ * A code the registry does not know is left out rather than shown; the same language twice is named once.
+ */
+export const languageList = (codes: readonly string[]): string => {
+  const names = [...new Set(codes.map((code) => languageSpec(code)?.english).filter((name): name is string => !!name))];
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+};
+
 const describeSpend = (doc: ComicDoc, action: GatedSpend): SpendPlan => {
   switch (action.type) {
     case 'fix_panel': {
@@ -1462,8 +1472,13 @@ const describeSpend = (doc: ComicDoc, action: GatedSpend): SpendPlan => {
       return action.textless
         ? { what: 'a textless cover (the title becomes editable text)', title: 'Redraw the cover without lettering?', kind: 'cover' }
         : { what: 'the cover', title: 'Draw the cover?', kind: 'cover' };
-    case 'translate':
-      return { what: `a translation (${(action.languages || []).join(', ')})`, title: 'Translate?', kind: 'page' };
+    case 'translate': {
+      // The Approve card names languages in words ("Hindi and Tamil"), never by code: a person approves what they read.
+      const names = languageList(action.languages || []);
+      return names
+        ? { what: `a translation into ${names}`, title: `Translate into ${names}?`, kind: 'page' }
+        : { what: 'a translation', title: 'Translate?', kind: 'page' };
+    }
     case 'recheck_page': {
       const page = findPage(doc, action.pageId);
       // in_art comics have their words painted in: the re-check only renews the page check (QC).
