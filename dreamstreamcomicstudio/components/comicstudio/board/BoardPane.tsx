@@ -26,7 +26,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController, StudioTab } from '../types';
 import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
-import { ACCENT_SOFT_BG, HAIRLINE, OVERLINE, RADIUS_PANEL } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, CLIP_TEXT, HAIRLINE, OVERLINE, RADIUS_PANEL, WRAP_TEXT } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -105,7 +105,9 @@ export const GateBanner: React.FC<{
   const overBudget = gate.reason === 'budget' ? ' · over your budget cap' : '';
   const buttons = (
     <div className="flex shrink-0 gap-2">
-      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={busyKey === 'approve'} onClick={() => fire('approve', () => studio.act({ type: 'approve_gate', gateId: gate.id }))}>
+      {/* keepFocusWhileBusy (6B FL-1): Enter on Approve leaves focus on Approve while it is sent (a disabled button
+          dropped it to <body>), and a second Enter in the guard window sends nothing. */}
+      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={busyKey === 'approve'} keepFocusWhileBusy onClick={() => fire('approve', () => studio.act({ type: 'approve_gate', gateId: gate.id }))}>
         Approve
       </PrimaryButton>
       <GhostButton size={compact ? 'xs' : 'sm'} disabled={busyKey === 'approve'} onClick={() => fire('decline', () => studio.act({ type: 'decline_gate', gateId: gate.id }))}>
@@ -129,11 +131,17 @@ export const GateBanner: React.FC<{
             onClick={() => setDetails((d) => !d)}
             aria-expanded={details}
             title={`${gate.title} · ${price} · ${images}${overBudget}`}
-            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]"
+            data-gate-summary={details ? 'open' : 'closed'}
+            className={cx(
+              'flex min-h-[36px] min-w-0 flex-1 gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
+              // Opened (one tap; a phone has no hover title): the whole label and the whole price, wrapped onto as
+              // many lines as they need — closed it was "Draw the re… · ≈ $1.…" (FX-15; Program 3 DC-3's phone gate label).
+              details ? 'flex-wrap items-start py-1' : 'items-center'
+            )}
           >
-            <span className="min-w-0 truncate font-semibold">{gate.title}</span>
-            <span className="min-w-0 max-w-[45%] shrink-0 truncate tabular-nums text-[var(--ds-muted)]">· {price}</span>
-            <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'rotate-180')} aria-hidden />
+            <span className={cx('font-semibold', details ? WRAP_TEXT : CLIP_TEXT)}>{gate.title}</span>
+            <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[45%] shrink-0 truncate')}>· {price}</span>
+            <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'mt-0.5 rotate-180')} aria-hidden />
             <span className="sr-only">{details ? 'Hide details' : 'Show details'}</span>
           </button>
           {buttons}
@@ -203,7 +211,8 @@ FrozenWhileEditing.displayName = 'FrozenWhileEditing';
 const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ children, active }) => (
   <span
     className={cx(
-      'min-w-[1.25rem] rounded-full px-1.5 py-px text-center text-[10px] font-semibold tabular-nums leading-4',
+      // The 11 px step of the chrome scale (--ds-text-xs; it follows the user's text size), not a spelled 10 px (FX-15).
+      'min-w-[1.25rem] rounded-full px-1.5 py-px text-center text-[length:var(--ds-text-xs)] font-semibold tabular-nums leading-4',
       active ? 'bg-[#D97757]/15 text-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
     )}
   >
