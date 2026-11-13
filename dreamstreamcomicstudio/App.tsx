@@ -244,6 +244,8 @@ const App: React.FC = () => {
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
+  const [newComicRequested, setNewComicRequested] = useState(false);
+  const consumeNewComicRequest = useCallback(() => setNewComicRequested(false), []);
 
   // Simple routing state. A /c/<slug> share link is decided before the first paint (no flash of the
   // home page under the reader's boot card).
@@ -398,6 +400,7 @@ const App: React.FC = () => {
   const hasWarnedDobProfileCheckRef = useRef(false);
 
   const handleBackToHome = () => {
+    setNewComicRequested(false);
     setCurrentView('home');
     setActiveProjectId(null);
     clearReaderUrlParams();
@@ -782,6 +785,7 @@ const App: React.FC = () => {
   };
 
   const handleNavigate = (view: string, id?: string) => {
+    setNewComicRequested(false);
     if (view === 'reader' && id) {
       void navigateToReader(id, currentView);
       return;
@@ -842,6 +846,12 @@ const App: React.FC = () => {
       window.dispatchEvent(new PopStateEvent('popstate'));
     }
     if (currentView !== 'gallery') handleNavigate('gallery');
+  };
+
+  const handleStartCreating = () => {
+    // Route through the existing auth/product gate. Opening the form does not create a project.
+    handleNavigate('dashboard');
+    setNewComicRequested(true);
   };
 
   const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
@@ -1159,6 +1169,7 @@ const App: React.FC = () => {
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('request-access')}
               onOpenComics={() => handleNavigate('dashboard')}
+              onStartCreating={handleStartCreating}
               onOpenAccount={() => openSettings('profile')}
               onBrowseGallery={handleBrowseComicsLibrary}
               onOpenPrivacy={() => setCurrentView('privacy')}
@@ -1246,6 +1257,8 @@ const App: React.FC = () => {
           {effectiveView === 'dashboard' && (
             <ProjectDashboard
               projects={projects}
+              openNewComic={newComicRequested}
+              onNewComicOpened={consumeNewComicRequest}
               onCreateProject={handleCreateProject}
               onOpenProject={handleOpenProject}
               onDeleteProject={deleteProject}

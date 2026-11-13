@@ -100,6 +100,9 @@ const TitleRenameInput: React.FC<{ initial: string; onDone: (value: string | nul
 
 interface ProjectDashboardProps {
   projects: Project[];
+  /** One-shot navigation intent: show the existing creation form without creating a draft. */
+  openNewComic?: boolean;
+  onNewComicOpened?: () => void;
   /** May return a promise: the dashboard shows progress and an inline error if it rejects. */
   onCreateProject: (name: string, mode: NewComicMode) => void | Promise<void>;
   onOpenProject: (id: string) => void;
@@ -113,9 +116,14 @@ interface ProjectDashboardProps {
 
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
-  projects, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
+  projects, openNewComic = false, onNewComicOpened, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
-  const [isCreating, setIsCreating] = useState(false);
+  const [isCreating, setIsCreating] = useState(openNewComic);
+  useEffect(() => {
+    if (!openNewComic) return;
+    setIsCreating(true);
+    onNewComicOpened?.();
+  }, [openNewComic, onNewComicOpened]);
   const [newProjectName, setNewProjectName] = useState('');
   const [createPending, setCreatePending] = useState<NewComicMode | null>(null);
   // Synchronous guard: Enter + click in the same tick must not create two comics.
