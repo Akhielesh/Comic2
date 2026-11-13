@@ -18,7 +18,7 @@ import { ComicCard, COMIC_CARD_HERO } from './ComicCard';
 import { ErrorState } from './ErrorState';
 import { MessageText } from './MessageText';
 
-const ID60 = 'google/gemini-3-pro-image-preview-experimental-20261101-a1b2c3';
+const ID60 = 'studio/reference-sheet-preview-experimental-20261101-a1b2c3';
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean);
 const hasAll = (recipe: string, part: string) => tokens(part).every((t) => tokens(recipe).includes(t));
 

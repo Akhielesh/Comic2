@@ -17,7 +17,7 @@ import { ConfirmStrip, RenderOverlay, Chip as BoardChip, EmptyHint } from '../..
 import { Note } from '../../../components/comicstudio/history/ui';
 import { UploadQueue } from '../../../components/comicstudio/refs/UploadQueue';
 
-const LONG_ID = 'google/gemini-3-pro-image-preview-experimental-20261101-a1b2c3';
+const LONG_ID = 'studio/reference-sheet-preview-experimental-20261101-a1b2c3';
 const LONG_ERROR =
   "We couldn't finish that because the image service answered with an unexpected error. Details: https://api.example-provider.dev/v1/images/generations/very-long-path-segment?model=" +
   LONG_ID +

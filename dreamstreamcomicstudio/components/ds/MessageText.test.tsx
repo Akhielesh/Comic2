@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const LONG = 'https://api.example-provider.dev/v1/images/generations/very-long-path-segment?model=google/gemini-3-pro-image-preview';
+const LONG = 'https://api.example-provider.dev/v1/images/generations/very-long-path-segment?ref=studio/reference-sheet-preview';
 const body = () => document.querySelector<HTMLElement>('[data-slot="message"]')!;
 
 describe('MessageText', () => {
