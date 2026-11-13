@@ -429,32 +429,87 @@ describe('status ink guard — the rest of the app (ratchet)', () => {
  * `--ds-danger`, `--ds-info`, `--ds-danger-mark`) and the chart ramp steps (`--ds-chart-seq-N`, `--ds-chart-div-N`)
  * are tuned for dots, edges, bars and cells, not for words: Atlas's warning on white is 2.15:1, and a ramp's light
  * end is under 2:1 on the page. Words and the icon beside them read the `-text` inks (TONE_TEXT / STATUS_INK).
- * This fails on `text-[var(--ds-…)]` with or without the `color:` hint or a fallback, on Tailwind 3's bare
- * `text-[--ds-…]` shorthand, and on the named colour `text-ds-…`, for
- * those tokens, with any variant prefix and any opacity, anywhere an app-wide guard looks (components/** including
- * Comic Studio, App.tsx, qa/**). The `-text` tokens and every fill (bg-, border-, fill-, stroke-, ring-, …) stay
- * allowed. There is no allowlist and no baseline: today's count is 0 and it stays 0.
+ * What it reads, for those tokens:
+ *   - the text and placeholder utilities: `text-[var(--ds-…)]` with or without the `color:` hint, a fallback or
+ *     Tailwind's `_` spaces, Tailwind 3's bare `text-[--ds-…]` shorthand (a fallback allowed), a `color-mix()` that
+ *     starts from a mark, the named colour `text-ds-…`, and the same for `placeholder-`, with any variant prefix
+ *     (bracketed ones with `=` included) and any opacity;
+ *   - the arbitrary property `[color:var(--ds-…)]`;
+ *   - a `color:` declaration in an inline style object or a CSS file (`background-color`, `border-color` and the other
+ *     `-color` properties are fills and stay allowed);
+ *   - the `fill` of an SVG `<text>` or `<tspan>` (a chart's label is words);
+ *   - a class built at run time from a mark's name (`text-ds-chart-seq-${i}`, `text-[var(--ds-${tone})]`): a built text
+ *     colour must end in the `-text` ink (`text-ds-${tone}-text`).
+ * It reads one line at a time, so an SVG `<text>` whose `fill` sits on a later line than the tag, and a colour picked
+ * from a variable (`color: tone.mark`), are not seen. It looks wherever an app-wide guard looks (components/**
+ * including Comic Studio, App.tsx, qa/**) plus the CSS files (index.css, styles/**, components/**). The `-text` tokens
+ * and every fill (bg-, border-, fill-, stroke-, ring-, …) stay allowed. There is no allowlist and no baseline: today's
+ * count is 0 and it stays 0.
  */
 const MARK_TOKENS = String.raw`(?:success|warning|danger|info|danger-mark|chart-(?:seq|div)-\d+)`;
+/** `var(--ds-MARK)`, Tailwind's `_` spaces allowed around the name, with an optional fallback. */
+const MARK_VAR = String.raw`var\(_*--ds-${MARK_TOKENS}_*(?:,[^\]]*)?\)`;
+/** A variant chain (`dark:`, `group-hover/row:`, `[&_svg]:`, `aria-[invalid=true]:`) and the `!` modifier. */
+const MARK_VARIANT = String.raw`(?:(?:[\w\-&:()>.*/@]|\[[^\]\s]*\])+:)?!?`;
+const MARK_OPACITY = String.raw`(?:\/\d+(?:\.\d+)?|\/\[[^\]]+\])?`;
 const MARK_AS_TEXT = new RegExp(
-  String.raw`(?<![\w-])${VARIANT}text-(?:\[(?:color:)?(?:var\(--ds-${MARK_TOKENS}(?:,[^\]]*)?\)|--ds-${MARK_TOKENS})\]|ds-${MARK_TOKENS})(?:\/\d+|\/\[[^\]]+\])?(?![\w-])`,
+  String.raw`(?<![\w-])${MARK_VARIANT}(?:text|placeholder)-(?:\[(?:color:)?(?:${MARK_VAR}|--ds-${MARK_TOKENS}(?:,[^\]]*)?|color-mix\([^\]]*?var\(_*--ds-${MARK_TOKENS}_*[,)][^\]]*)_*\]|ds-${MARK_TOKENS})${MARK_OPACITY}(?![\w-])`,
   'g'
 );
+/** The arbitrary property `[color:var(--ds-MARK)]`. */
+const MARK_AS_COLOR_PROPERTY = new RegExp(String.raw`(?<![\w-])${MARK_VARIANT}\[color:${MARK_VAR}_*\]`, 'g');
+/** A `color:` declaration (a style object or CSS) reading a mark; not `background-color:`, not a utility's `[color:`. */
+const MARK_AS_COLOR_DECLARATION = new RegExp(
+  String.raw`(?<![\w\-[])color\s*:\s*(['"\u0060]?)var\(\s*--ds-${MARK_TOKENS}\s*(?:,[^;'"\u0060}\n]*)?\)\1`,
+  'g'
+);
+/** The fill of an SVG `<text>` / `<tspan>` reading a mark (the token reported is the fill attribute). */
+const MARK_AS_SVG_TEXT = new RegExp(
+  String.raw`<(?:text|tspan)\b[^>]*?\b(?<token>fill=\{?\s*['"\u0060]var\(\s*--ds-${MARK_TOKENS}\s*(?:,[^)]*)?\)['"\u0060]?)`,
+  'g'
+);
+/** A text or placeholder colour built at run time from a `--ds-` name, unless the built name ends in `-text`. */
+const BUILT_MARK_AS_TEXT = new RegExp(
+  String.raw`(?<![\w-])${MARK_VARIANT}(?:text|placeholder)-(?:ds-|\[(?:color:)?var\(_*--ds-)[\w-]*\$\{[^}]*\}(?!-text(?![\w-]))[^\s'"\u0060]*`,
+  'g'
+);
+const MARK_PATTERNS = [MARK_AS_TEXT, MARK_AS_COLOR_PROPERTY, MARK_AS_COLOR_DECLARATION, MARK_AS_SVG_TEXT, BUILT_MARK_AS_TEXT];
 
 /** Every status mark or ramp step used as a text colour in one source (`line  token`), comments ignored. */
 export function findMarkAsText(source: string): Array<{ line: number; token: string }> {
-  const hits: Array<{ line: number; token: string }> = [];
+  const hits: Array<{ line: number; token: string; at: number }> = [];
   stripComments(source)
     .split('\n')
     .forEach((text, index) => {
-      for (const match of text.matchAll(MARK_AS_TEXT)) hits.push({ line: index + 1, token: match[0] });
+      for (const pattern of MARK_PATTERNS) {
+        for (const match of text.matchAll(pattern)) hits.push({ line: index + 1, token: match.groups?.token ?? match[0], at: match.index ?? 0 });
+      }
     });
-  return hits;
+  return hits.sort((a, b) => a.line - b.line || a.at - b.at).map(({ line, token }) => ({ line, token }));
 }
 
-/** The scan the real-tree test runs: every app-wide scanned file under `root`, Comic Studio included. */
+/** The CSS files the scan also reads: index.css and every stylesheet under styles/ and components/. */
+function listCssFiles(root: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    const full = path.join(root, rel);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch {
+      return;
+    }
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(full)) if (entry !== 'node_modules' && !entry.startsWith('.')) walk(`${rel}/${entry}`);
+    } else if (rel.endsWith('.css')) out.push(rel);
+  };
+  for (const r of ['index.css', 'styles', 'components']) walk(r);
+  return out.sort();
+}
+
+/** The scan the real-tree test runs: every app-wide scanned file under `root`, Comic Studio included, and the CSS. */
 export function markAsTextScan(root = ROOT): { files: string[]; offenders: string[] } {
-  const files = listScannedFiles({ root });
+  const files = [...listScannedFiles({ root }), ...listCssFiles(root)];
   const offenders: string[] = [];
   for (const rel of files) {
     for (const h of findMarkAsText(readFileSync(path.join(root, rel), 'utf8'))) offenders.push(`${rel}:${h.line}  ${h.token}`);
@@ -463,7 +518,7 @@ export function markAsTextScan(root = ROOT): { files: string[]; offenders: strin
 }
 
 describe('status ink guard — a status mark or a chart ramp step is never a text colour', () => {
-  it('recognises every spelling: the var() form with or without color: or a fallback, the bare [--var] form, the named colour, any variant, any opacity', () => {
+  it('recognises the spellings it promises: text and placeholder utilities (var(), color:, fallbacks, _ spaces, the bare [--var] form, a color-mix from a mark, the named colour, any variant, any opacity), [color:…], a style or CSS color:, an SVG label fill, a built class', () => {
     const flagged = [
       'text-[var(--ds-success)]',
       'text-[var(--ds-warning)]',
@@ -489,11 +544,39 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
       'text-[color:var(--ds-danger-mark,_currentColor)]/70',
       'text-[--ds-success]',
       'sm:text-[color:--ds-chart-div-3]',
-      'md:hover:text-[--ds-chart-seq-2]/[0.5]'
+      'md:hover:text-[--ds-chart-seq-2]/[0.5]',
+      'text-[--ds-warning,#000]',
+      // Tailwind's `_` spaces inside the brackets, a mix that starts from a mark, the placeholder colour.
+      'text-[var(--ds-warning_)]',
+      'text-[var(_--ds-warning)]',
+      'text-[var(--ds-warning)_]',
+      'text-[color-mix(in_srgb,var(--ds-warning)_80%,black)]',
+      'placeholder-[var(--ds-warning)]',
+      'focus:placeholder-ds-danger/60',
+      // Variants with `=` in a bracket, and a decimal opacity, reported whole.
+      'aria-[invalid=true]:text-ds-danger',
+      'data-[state=open]:text-[var(--ds-info)]',
+      'text-ds-warning/7.5',
+      // The arbitrary colour property.
+      '[color:var(--ds-warning)]',
+      'hover:[color:var(--ds-chart-seq-4)]'
     ];
     for (const token of flagged) {
       expect(findMarkAsText(`<p className="text-sm ${token}">x</p>`).map((h) => h.token), token).toEqual([token]);
     }
+    // Outside a class list: an inline style or a CSS colour declaration, an SVG label's fill, and a class built at
+    // run time from a mark's name (a built name must end in the -text ink).
+    const elsewhere: Array<[string, string]> = [
+      [`<p style={{ color: 'var(--ds-warning)' }}>x</p>`, `color: 'var(--ds-warning)'`],
+      [`const s = { fontWeight: 600, color: "var(--ds-chart-div-2)" };`, `color: "var(--ds-chart-div-2)"`],
+      ['.low { color: var(--ds-danger-mark); }', 'color: var(--ds-danger-mark)'],
+      ['<text x={4} y={8} fill="var(--ds-chart-seq-3)">12</text>', 'fill="var(--ds-chart-seq-3)"'],
+      [`<tspan fill={'var(--ds-success)'}>up</tspan>`, `fill={'var(--ds-success)'`],
+      ['const c = `tabular-nums text-ds-chart-seq-${i}`;', 'text-ds-chart-seq-${i}'],
+      ['const c = `text-[var(--ds-${tone})]`;', 'text-[var(--ds-${tone})]'],
+      ['const c = `hover:text-ds-${tone}`;', 'hover:text-ds-${tone}']
+    ];
+    for (const [source, token] of elsewhere) expect(findMarkAsText(source).map((h) => h.token), source).toEqual([token]);
     const allowed = [
       'text-[var(--ds-success-text)] text-[var(--ds-warning-text)] text-[var(--ds-danger-text)] text-[var(--ds-info-text)]',
       'text-[color:var(--ds-danger-text)] text-ds-warning-text text-ds-success-text/80',
@@ -502,9 +585,20 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
       'bg-[var(--ds-chart-seq-3)] fill-[var(--ds-chart-div-2)] stroke-ds-chart-seq-6',
       'text-[var(--ds-chart-1)] text-[var(--ds-ink)] text-[var(--ds-on-danger)] text-[var(--ds-status-error-tint)]',
       'text-[var(--ds-hue-1-text)] text-[var(--ds-spark-text)]',
-      'text-[--ds-success-text] text-[color:--ds-warning-text] text-[var(--ds-danger-text,#b00)] bg-[--ds-warning]'
+      'text-[--ds-success-text] text-[color:--ds-warning-text] text-[var(--ds-danger-text,#b00)] bg-[--ds-warning]',
+      'bg-[color:var(--ds-warning)] border-[color:var(--ds-danger)] text-[color-mix(in_srgb,var(--ds-warning-text)_80%,black)]',
+      'placeholder-[var(--ds-muted)] placeholder-ds-warning-text text-[var(--ds-ink,var(--ds-warning))]'
     ];
     for (const classes of allowed) expect(findMarkAsText(`<p className="${classes}">x</p>`), classes).toEqual([]);
+    const fine = [
+      `<p style={{ color: 'var(--ds-warning-text)', backgroundColor: 'var(--ds-warning)' }}>x</p>`,
+      '.dot { background-color: var(--ds-success); border-color: var(--ds-danger); outline-color: var(--ds-info); }',
+      '.x { --tw-ring-color: var(--ds-warning); color: var(--ds-success-text); }',
+      '<rect fill="var(--ds-chart-seq-3)" /><path stroke="var(--ds-warning)" /><circle fill={"var(--ds-danger-mark)"} />',
+      '<text fill="var(--ds-muted)">12</text>',
+      'const c = `text-ds-${tone}-text text-[var(--ds-${tone}-text)] bg-ds-chart-seq-${i} border-[var(--ds-${tone})]`;'
+    ];
+    for (const source of fine) expect(findMarkAsText(source), source).toEqual([]);
     // A comment that explains the rule is not a class name.
     expect(findMarkAsText('// never text-[var(--ds-warning)]: use TONE_TEXT.warning\nconst a = 1;')).toEqual([]);
   });
@@ -514,12 +608,16 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
       'components/__planted__/Fixture.tsx': `export const A = () => <p className="text-sm dark:text-[color:var(--ds-warning)]/80">Low</p>;\n`,
       'components/comicstudio/__planted__/Chart.tsx': `export const B = 'tabular-nums text-ds-chart-seq-2';\n`,
       'components/__planted__/Fine.tsx': `export const C = 'bg-[var(--ds-warning)] text-[var(--ds-warning-text)]';\n`,
-      'components/__planted__/Fixture.test.tsx': `export const D = 'text-[var(--ds-danger)]';\n`
+      'components/__planted__/Fixture.test.tsx': `export const D = 'text-[var(--ds-danger)]';\n`,
+      'components/__planted__/Axis.tsx': `export const E = () => <svg><text x={0} y={9} fill="var(--ds-chart-div-6)">9</text></svg>;\n`,
+      'styles/__planted__.css': `.a { background-color: var(--ds-warning); }\n.b { color: var(--ds-warning); }\n`
     });
     try {
       expect(markAsTextScan(root).offenders).toEqual([
+        'components/__planted__/Axis.tsx:1  fill="var(--ds-chart-div-6)"',
         'components/__planted__/Fixture.tsx:1  dark:text-[color:var(--ds-warning)]/80',
-        'components/comicstudio/__planted__/Chart.tsx:1  text-ds-chart-seq-2'
+        'components/comicstudio/__planted__/Chart.tsx:1  text-ds-chart-seq-2',
+        'styles/__planted__.css:2  color: var(--ds-warning)'
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -531,6 +629,7 @@ describe('status ink guard — a status mark or a chart ramp step is never a tex
     expect(files.length).toBeGreaterThan(400);
     expect(files.some((f) => f.startsWith('components/comicstudio/'))).toBe(true);
     expect(files).toContain('components/chat/studioDesign.ts');
+    expect(files).toEqual(expect.arrayContaining(['index.css', 'styles/ds-motion.css', 'components/comicstudio/immersive/readerDesigns.css']));
     expect(
       offenders,
       'A status colour or a chart ramp step is a mark (a dot, an edge, a bar), not a text colour: words and the icon beside them read TONE_TEXT / STATUS_INK (the -text inks).'
