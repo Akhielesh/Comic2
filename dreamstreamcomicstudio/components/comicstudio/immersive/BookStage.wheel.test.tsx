@@ -295,6 +295,56 @@ describe('what still never turns a zoomed page (a pan must not turn by accident)
     expect(camera().tx).toBeLessThan(before.tx - 100);
   });
 
+  /** A mouse held down and panning leftward; the hand keeps going after the zoom has gone. */
+  const held = (x: number) => fireEvent.pointerMove(stage(), { clientX: x, clientY: 400, pointerId: 1, pointerType: 'mouse', buttons: 1 });
+  const keepPanningThenRelease = () => {
+    for (const x of [700, 600, 500, 400, 300, 200]) held(x);
+    fireEvent.pointerUp(stage(), { clientX: 200, clientY: 400, pointerId: 1, pointerType: 'mouse', button: 0 });
+  };
+
+  it('reduced motion: a pan held across → turns one page only, not a second on release', async () => {
+    reduce = true;
+    await open();
+    layOutStage();
+    notch('in');
+    fireEvent.pointerDown(stage(), { clientX: 900, clientY: 400, pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1 });
+    held(800);
+    press('ArrowRight');
+    expect(counter()).toBe('Pages 4–5 of 6');
+    keepPanningThenRelease();
+    await wait(1500);
+    expect(counter()).toBe('Pages 4–5 of 6');
+  }, 20_000);
+
+  it('motion on: a pan held across → turns one page only, after the turn lands too', async () => {
+    await open();
+    layOutStage();
+    notch('in');
+    await wait(200);
+    fireEvent.pointerDown(stage(), { clientX: 900, clientY: 400, pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1 });
+    held(800);
+    press('ArrowRight');
+    await waitFor(() => expect(counter()).toBe('Pages 4–5 of 6'), { timeout: 8000 });
+    await waitFor(() => expect(camera()).toMatchObject({ tx: 0, ty: 0, scale: 1 }));
+    await wait(300);
+    keepPanningThenRelease();
+    await wait(2500);
+    expect(counter()).toBe('Pages 4–5 of 6');
+  }, 20_000);
+
+  it('Escape mid-pan: the held drag does not turn the page once the zoom is gone', async () => {
+    reduce = true;
+    await open();
+    layOutStage();
+    notch('in');
+    fireEvent.pointerDown(stage(), { clientX: 900, clientY: 400, pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1 });
+    held(800);
+    press('Escape');
+    keepPanningThenRelease();
+    await wait(1500);
+    expect(counter()).toBe('Pages 2–3 of 6');
+  }, 20_000);
+
   it('a plain wheel does not step while zoomed; unzoomed it does', async () => {
     reduce = true;
     const r = await open();

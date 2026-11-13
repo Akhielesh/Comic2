@@ -297,6 +297,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   useEffect(() => {
     if (guidedOn) return;
     if (!state.zoom) {
+      // A pointer held down while zoomed was panning. Forget it, so the same drag cannot turn the page once
+      // the zoom is gone (an arrow key, Escape or a double tap mid-pan); its release does nothing.
+      down.current = null;
       if (camera.current.current.s !== 1 || camera.current.current.tx !== 0 || camera.current.current.ty !== 0) {
         // A zoom that had not settled yet (a key right after a wheel notch) must not lay the book out at the
         // old zoom while the camera eases back: a turn may already be running. This move settles it at fit.
