@@ -55,6 +55,8 @@ import {
   type StudioDeepLinkView
 } from './services/studioDeepLink';
 import { createStudioProject } from './components/comicstudio/studioApi';
+import { ComicProjectNavigation } from './components/comicstudio/ComicCreationWorkspace';
+import { clearOtherComicIdeaDrafts } from './components/comicstudio/comicIdeaDraft';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
@@ -246,6 +248,15 @@ const App: React.FC = () => {
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
   const [newComicRequested, setNewComicRequested] = useState(false);
   const consumeNewComicRequest = useCallback(() => setNewComicRequested(false), []);
+  const [firstIdea, setFirstIdea] = useState<{ accountId: string; projectId: string; id: string; text: string } | null>(null);
+  const accountRef = useRef(user?.id);
+  accountRef.current = user?.id;
+  useEffect(() => {
+    if (authLoading) return;
+    clearOtherComicIdeaDrafts(user?.id ?? null);
+    setFirstIdea((idea) => idea?.accountId === user?.id ? idea : null);
+  }, [user?.id, authLoading]);
+  const consumeFirstIdea = useCallback((id: string) => setFirstIdea((idea) => idea?.id === id ? null : idea), []);
 
   // Simple routing state. A /c/<slug> share link is decided before the first paint (no flash of the
   // home page under the reader's boot card).
@@ -257,7 +268,7 @@ const App: React.FC = () => {
   // Full-screen surfaces size to the visible height (--app-h) and keep sheets above the keyboard (--kb).
   // App only needs the CSS variables, so it attaches the shared store without subscribing to its
   // value: a keyboard animation or a viewport pan never re-renders the whole app tree.
-  const keyboardInsetHost = currentView === 'comicstudio' || currentView === 'reader' || currentView === 'publiccomic';
+  const keyboardInsetHost = currentView === 'comicstudio' || currentView === 'reader' || currentView === 'publiccomic' || (comicsHost.active && currentView === 'dashboard');
   useEffect(() => (keyboardInsetHost ? subscribeKeyboardInset(() => undefined) : undefined), [keyboardInsetHost]);
 
   // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
@@ -886,9 +897,13 @@ const App: React.FC = () => {
   // New comics start in the conversational studio. The server creates the projects row +
   // the comic_docs row in one call; failures reject with a user-safe message the dashboard
   // shows inline (offline, expired session, studio storage unavailable…).
-  const handleCreateProject = async (name: string, mode: NewComicMode = 'studio'): Promise<void> => {
+  const handleCreateProject = async (name: string, mode: NewComicMode = 'studio', initialIdea?: string): Promise<void> => {
     if (mode === 'studio') {
+      const accountId = user?.id;
       const { projectId } = await createStudioProject({ title: name.trim() || undefined });
+      // An in-flight request from a previous account must not open its project for the next account.
+      if (!accountId || accountRef.current !== accountId) return;
+      setFirstIdea(initialIdea?.trim() ? { accountId, projectId, id: crypto.randomUUID(), text: initialIdea } : null);
       openComicStudio(projectId);
       // The server created the listing row; pick it up in the background so every way
       // back to the dashboard lists the new comic.
@@ -1075,13 +1090,14 @@ const App: React.FC = () => {
   // suite header steps aside, whether App draws ComicsHeader, whether the floating widgets may show.
   const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });
   const comicsChrome = chrome.owns;
-  const showSharedHeader = !comicsChrome && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
+  const comicsDashboard = comicsHost.active && effectiveView === 'dashboard';
+  const showSharedHeader = !comicsChrome && !comicsDashboard && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
+  const showSharedLegalLinks = !comicsDashboard && effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
   // The comics host's own views (the landing; signed out, sign-in, Privacy, Terms and the Library) carry no floating
   // widgets, as the studio carries none: nothing sits over the art or the sign-in form.
-  const showUniversalAssistant = assistant.mounted && chrome.widgets;
+  const showUniversalAssistant = assistant.mounted && chrome.widgets && !comicsDashboard;
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared' && effectiveView !== 'publiccomic';
@@ -1089,7 +1105,7 @@ const App: React.FC = () => {
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = chrome.widgets && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  const showFeedbackWidget = chrome.widgets && !comicsDashboard && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
   // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
   const publicComicIsOwner =
     !!publicComicRoute?.slug &&
@@ -1106,7 +1122,7 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
       {/* The comics host's own views sit on the skin's paper and own their ink (appRootClass), as the landing does. */}
-      <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome)}>
+      <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome || comicsDashboard)}>
         {/* The app's one toast slot: every app toast renders here (portalled to <body>, above the tab bar). */}
         <ToastHost />
         {showSharedHeader && (() => {
@@ -1256,7 +1272,11 @@ const App: React.FC = () => {
 
           {effectiveView === 'dashboard' && (
             <ProjectDashboard
+              key={user?.id ?? 'signed-out'}
+              accountId={user?.id}
+              comicWorkspace={comicsHost.active}
               projects={projects}
+              projectsLoaded={projectsLoaded}
               openNewComic={newComicRequested}
               onNewComicOpened={consumeNewComicRequest}
               onCreateProject={handleCreateProject}
@@ -1289,7 +1309,11 @@ const App: React.FC = () => {
             // fallback where dynamic viewport units aren't supported).
             <div className="h-screen w-full overflow-hidden" style={{ height: 'var(--app-h, 100dvh)' }}>
               <StudioErrorBoundary onBack={leaveComicStudio}>
-                <ComicStudio key={activeProjectId} projectId={activeProjectId} onBack={leaveComicStudio} />
+                <ComicStudio key={`${user?.id}:${activeProjectId}`} projectId={activeProjectId} onBack={leaveComicStudio}
+                  initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
+                  onInitialIdeaConsumed={consumeFirstIdea}
+                  navigationFooter={<ComicProjectNavigation projects={projects} activeProjectId={activeProjectId}
+                    onNewComic={handleStartCreating} onAllComics={leaveComicStudio} onLibrary={handleBrowseComicsLibrary} onOpenProject={handleOpenProject} />} />
               </StudioErrorBoundary>
             </div>
           )}
