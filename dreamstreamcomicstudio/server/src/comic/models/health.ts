@@ -366,9 +366,6 @@ export const alternateRouteFor = (
   return { route, model, key };
 };
 
-/** Whether spend runs on the user's own key (same rule as jobs.ts spendIsByok). */
-const spendIsByok = (keys: StudioKeys): boolean => (keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok));
-
 /** Registry list prices as a PriceBook (the live catalog's book is injected by the caller when it has one). */
 export const registryPriceBook = (): PriceBook => ({
   unit: (modelId, res) => {
@@ -607,20 +604,21 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
     at: number
   ): Promise<Extract<OutageOption, { kind: 'switch_model' }>[]> => {
     const caps = input.caps || DEFAULT_CAPS;
-    const byok = spendIsByok(input.keys);
-    const markup = byok ? 1 : PLATFORM_MARKUP;
     const book = input.prices || registryPriceBook();
     const fallbackBook = registryPriceBook();
     const targets = drawnTargets(input.doc);
     const redrawCount = targets.pages.length + (targets.cover ? 1 : 0);
-    const fitting = pickableImageModels().filter(
-      (cand) => cand.id !== blockedSpec.id && !!primaryRouteFor(cand, input.keys) && !modelFit(cand, input.doc, caps).some((r) => r.severity === 'block')
-    );
+    const fitting = pickableImageModels().flatMap((cand) => {
+      if (cand.id === blockedSpec.id || modelFit(cand, input.doc, caps).some((r) => r.severity === 'block')) return [];
+      const route = primaryRouteFor(cand, input.keys);
+      return route ? [{ cand, byok: route.key.byok }] : [];
+    });
     // Candidates' health in parallel (each public read is cached and bounded by the 4 s timeout).
-    const healths = await Promise.all(fitting.map((cand) => getModelHealth(cand, { keys: input.keys, now: at })));
+    const healths = await Promise.all(fitting.map(({ cand }) => getModelHealth(cand, { keys: input.keys, now: at })));
     const candidates: { spec: ImageModelSpec; usdPerImage: number; redrawUsd: number }[] = [];
-    fitting.forEach((cand, i) => {
+    fitting.forEach(({ cand, byok }, i) => {
       if (healths[i].state === 'down') return;
+      const markup = byok ? 1 : PLATFORM_MARKUP;
       const res = redrawResolution(input.doc, cand.id, 'page');
       const unit = book.unit(cand.id, res, 'page').usd ?? fallbackBook.unit(cand.id, res, 'page').usd;
       const redraw = redrawQuote(input.doc, cand.id, 'pages_cover', book, byok).usd ?? redrawQuote(input.doc, cand.id, 'pages_cover', fallbackBook, byok).usd;
