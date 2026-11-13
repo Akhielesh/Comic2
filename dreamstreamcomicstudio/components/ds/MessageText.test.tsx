@@ -1,5 +1,5 @@
 /**
- * MessageText (SPEC-overflow §3.4, §7.1): one element when the message fits; a clamped body and a "Show more" toggle
+ * MessageText (docs/design/design-system.md "Long words"): one element when the message fits; a clamped body and a "Show more" toggle
  * as its next sibling when it does not; the live role on the body only; measured while collapsed; "Show less" stays;
  * new text starts collapsed; no timers. jsdom has no layout, so scrollHeight / clientHeight are stubbed per case.
  */
@@ -80,6 +80,50 @@ describe('MessageText', () => {
     rerender(<MessageText>{`${LONG} (again)`}</MessageText>);
     expect(screen.getByRole('button', { name: 'Show more' })).toHaveAttribute('aria-expanded', 'false');
     expect(body().className).toMatch(/line-clamp-3/);
+  });
+
+  it('JSX children: a parent re-render with the same words keeps the message expanded', () => {
+    overflowing = true;
+    const Parent = ({ tick }: { tick: number }) => (
+      <div data-tick={tick}>
+        <MessageText>
+          <>Details: {LONG}</>
+        </MessageText>
+      </div>
+    );
+    const { rerender } = render(<Parent tick={0} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    rerender(<Parent tick={1} />);
+    expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+    // New words in JSX still start collapsed.
+    rerender(
+      <div>
+        <MessageText>
+          <>Other details: {LONG}</>
+        </MessageText>
+      </div>
+    );
+    expect(screen.getByRole('button', { name: 'Show more' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('resetKey decides when the message counts as new', () => {
+    overflowing = true;
+    const { rerender } = render(<MessageText resetKey="a">{LONG}</MessageText>);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    rerender(<MessageText resetKey="a">{`${LONG} (same error, new wording)`}</MessageText>);
+    expect(screen.getByRole('button', { name: 'Show less' })).toBeTruthy();
+    rerender(<MessageText resetKey="b">{LONG}</MessageText>);
+    expect(screen.getByRole('button', { name: 'Show more' })).toBeTruthy();
+  });
+
+  it('keyboard focus on the toggle stays on it when new (still long) text arrives while expanded', () => {
+    overflowing = true;
+    const { rerender } = render(<MessageText>{LONG}</MessageText>);
+    const toggle = screen.getByRole('button', { name: 'Show more' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    rerender(<MessageText>{`${LONG} again`}</MessageText>);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Show more' }));
   });
 
   it('starts no timers: mount, toggle and new text', () => {
