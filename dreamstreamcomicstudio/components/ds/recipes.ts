@@ -15,6 +15,10 @@
  * The colour layer "Ink & Spark" (SPARK_*, MAKING_*, HUE_*, ART_*, BENDAY) is a DreamStream extension, not from Atlas:
  * the spark marks creation only and never sits on a price (tests/config/sparkGuard.test.ts). MAKING_SWEEP, MAKING_TEXT
  * and BENDAY are hand-written CSS classes (styles/ds-motion.css), named in ds.hygiene.test.ts HAND_WRITTEN_CLASSES.
+ * The colour layer "Ink, Paper & Colour" (CL-6: HUE_MARK / HUE_TEXT / HUE_SOFT_BG / HUE_SOLID, hueChip, chartHue and
+ * CHART_HUE_ORDER, the chart ramps, the washes, ART_SOFT_BG / ART_EDGE, STUDIO_*) is re-exported here too. ART_SCOPE is
+ * not: it is a hand-written class in index.css (`.ds-art-scope`), so it is imported from studioDesign until a
+ * components/ds owner lists it in HAND_WRITTEN_CLASSES.
  */
 
 export {
@@ -22,9 +26,18 @@ export {
   ACCENT_FILL_HOVER,
   ACCENT_TEXT,
   ARROW_NUDGE,
+  ART_EDGE,
   ART_GLOW,
   ART_PLACEHOLDER,
+  ART_SOFT_BG,
   BENDAY,
+  CHART_DIV_BG,
+  CHART_DIV_FILL,
+  CHART_HUE_ORDER,
+  CHART_PLOT_BG,
+  CHART_SEQ_BG,
+  CHART_SEQ_FILL,
+  chartHue,
   CHIP,
   CLIP_TEXT,
   CHIP_VARIANT,
@@ -47,9 +60,19 @@ export {
   HEADER_GLASS,
   HUE_DOT,
   HUE_FILL,
+  HUE_MARK,
+  HUE_NAMES,
+  HUE_SLOTS,
+  HUE_SOFT_BG,
+  HUE_SOLID,
+  HUE_SOLID_TEXT_SLOTS,
   HUE_STROKE,
+  HUE_TEXT,
+  HUE_TEXT_SLOTS,
+  hueChip,
   hueClass,
   hueIndex,
+  INK_TILE,
   INVERSE_ACTION,
   INVERSE_ACTION_QUIET,
   LIFT,
@@ -94,14 +117,18 @@ export {
   STATUS_INK,
   STATUS_SURFACE,
   STICKY_HEADER,
+  STUDIO_MARK,
+  STUDIO_SOFT_BG,
   TEXT_2XL,
   TEXT_3XL,
   TEXT_XL,
   TONE_CHIP,
   TONE_TEXT,
   TWO_LINE_TEXT,
+  WASH_EMPTY,
+  WASH_HERO,
   WRAP_TEXT,
   Z
 } from '../chat/studioDesign';
-export type { Density, StatusState, StatusTone, ZLayer } from '../chat/studioDesign';
+export type { Density, HueSlot, StatusState, StatusTone, ZLayer } from '../chat/studioDesign';
 

@@ -212,6 +212,19 @@ function pairs(): Pair[] {
       out.push({ ctx, fg: '--ds-on-spark', bg: fill, ratio: ratio(on, bg), min: 4.5 });
       out.push({ ctx, fg: '--ds-on-spark at 90 %', bg: fill, ratio: ratio(over(withAlpha(on, 0.9), bg), bg), min: 4.5 });
     }
+    // The colour layer "Ink, Paper & Colour" (CL-6): each hue's text step on every surface and on its own opaque soft
+    // tint; the one label colour on each solid fill, at 4.5:1 where words are allowed on it (slots 1, 5 and 6 in
+    // light, all seven in dark) and at 3:1 (an icon) elsewhere.
+    const dark = /dark/.test(ctx);
+    for (const slot of design.HUE_SLOTS) {
+      const fg = `--ds-hue-${slot}-text`;
+      for (const [bg, c] of [...surfaces(ctx), [`hue-${slot}-soft`, token(`--ds-hue-${slot}-soft`, ctx)] as const]) {
+        out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), over(c, token('--ds-canvas', ctx))), min: 4.5 });
+      }
+      const words = dark || design.HUE_SOLID_TEXT_SLOTS.includes(slot);
+      const solid = over(token(`--ds-hue-${slot}-solid`, ctx), token('--ds-canvas', ctx));
+      out.push({ ctx, fg: words ? '--ds-on-hue' : '--ds-on-hue (icon)', bg: `hue-${slot}-solid`, ratio: ratio(token('--ds-on-hue', ctx), solid), min: words ? 4.5 : 3 });
+    }
   }
   return out;
 }
@@ -707,7 +720,7 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
     // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas. --ds-spark
     // is gated as a mark (≥ 3:1), not as text, so it is NOT a measured text token: words in the spark use SPARK_TEXT
     // (--ds-spark-text, ≥ 4.5:1). Its one text-[…] spelling is MAKING_DOT, skipped by name below.
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`)]);
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`), ...design.HUE_SLOTS.map((n) => `--ds-hue-${n}-text`), '--ds-on-hue']);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
       if (name === 'MAKING_DOT') continue; // a mark: currentColor of LiveDot, gated ≥ 3:1 in the colour-layer describe
@@ -1204,6 +1217,21 @@ describe('Atlas wave 5 outcomes — "increase contrast" strengthens both hairlin
 const SPARK_TOKENS = ['--ds-spark', '--ds-spark-hover', '--ds-on-spark', '--ds-spark-text', '--ds-spark-soft', '--ds-spark-glow'] as const;
 const HUE_TOKENS = ['--ds-hue-1', '--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-hue-5'] as const;
 const LAYER_TOKENS = [...SPARK_TOKENS, ...HUE_TOKENS, '--ds-art'] as const;
+/**
+ * The names the colour layer "Ink, Paper & Colour" adds (CL-6; tests/config/dsColourSwitch.test.ts holds the same list
+ * to the off switch): two more hues, each hue's text step, soft tint and solid, the one label colour, the two chart
+ * ramps, the two washes, the studio accent and the art tint's card defaults. They read the hues by design.
+ */
+const COLOUR_TOKENS = [
+  '--ds-hue-6', '--ds-hue-7',
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-text`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-soft`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-solid`),
+  '--ds-on-hue',
+  ...[1, 2, 3, 4, 5, 6].map((n) => `--ds-chart-seq-${n}`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-chart-div-${n}`),
+  '--ds-wash-hero', '--ds-wash-empty', '--ds-studio', '--ds-studio-soft', '--ds-art-soft', '--ds-art-edge'
+] as const;
 /** Every status colour a spark could be mistaken for: the fills and marks, and the readable text inks. */
 const STATUS_COLOURS = ['--ds-success', '--ds-warning', '--ds-danger', '--ds-danger-mark', '--ds-info', '--ds-success-text', '--ds-warning-text', '--ds-danger-text', '--ds-info-text'] as const;
 /** The separation floors (design §3.11, PROGRAM3 CL-0): normal vision ≥ 15, the worse of protanopia and deuteranopia ≥ 8. */
@@ -1353,7 +1381,7 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
     const leaks: string[] = [];
     for (const [blockName, block] of Object.entries({ ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE })) {
       for (const [k, v] of block) {
-        if ((LAYER_TOKENS as readonly string[]).includes(k)) continue;
+        if ((LAYER_TOKENS as readonly string[]).includes(k) || (COLOUR_TOKENS as readonly string[]).includes(k)) continue;
         if (/var\(--ds-(?:spark|hue-|art\b)/.test(v)) leaks.push(`${blockName} ${k}: ${v}`);
       }
     }

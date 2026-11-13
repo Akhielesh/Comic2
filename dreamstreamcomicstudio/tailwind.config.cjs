@@ -19,6 +19,15 @@ const DS_COLOURS = [
   // holds every spark fill, `bg-ds-spark` included, to its allowlist).
   'spark', 'spark-hover', 'on-spark', 'spark-text', 'spark-soft', 'spark-glow',
   'hue-1', 'hue-2', 'hue-3', 'hue-4', 'hue-5', 'art',
+  // The colour layer "Ink, Paper & Colour" (CL-6): hues 6 and 7, each hue's readable text step, opaque soft tint and
+  // solid fill, the one label colour on a solid, the sequential and diverging chart ramps, and the studio accent.
+  'hue-6', 'hue-7',
+  'hue-1-text', 'hue-2-text', 'hue-3-text', 'hue-4-text', 'hue-5-text', 'hue-6-text', 'hue-7-text',
+  'hue-1-soft', 'hue-2-soft', 'hue-3-soft', 'hue-4-soft', 'hue-5-soft', 'hue-6-soft', 'hue-7-soft',
+  'hue-1-solid', 'hue-2-solid', 'hue-3-solid', 'hue-4-solid', 'hue-5-solid', 'hue-6-solid', 'hue-7-solid', 'on-hue',
+  'chart-seq-1', 'chart-seq-2', 'chart-seq-3', 'chart-seq-4', 'chart-seq-5', 'chart-seq-6',
+  'chart-div-1', 'chart-div-2', 'chart-div-3', 'chart-div-4', 'chart-div-5', 'chart-div-6', 'chart-div-7',
+  'studio', 'studio-soft', 'art-soft', 'art-edge',
   // The art develop (MO-1): read by inline styles in ImageDevelop; listed because every colour token is.
   'develop-light', 'develop-sheen',
   'reader-room', 'reader-paper-back', 'reader-endpaper', 'reader-focus'
