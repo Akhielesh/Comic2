@@ -1808,17 +1808,37 @@ const firstStorySentences = (script: string, max: number): string => {
   return clip(out || sentences[0], max);
 };
 
-/** The story moment a style test (or a cover without direction) should depict. */
-export const keyMoment = (doc: ComicDoc): string => {
-  const fromBrief = clean(doc.brief.logline) || clean(doc.brief.premise);
-  if (fromBrief) return stripEnd(clip(fromBrief, 260));
-  const fromSource = doc.source.script ? firstStorySentences(doc.source.script, 260) : '';
-  if (fromSource) return stripEnd(fromSource);
+/**
+ * The story moment a style test (or a cover without direction) should depict. `untitled` (a textless
+ * cover) never names the comic: the fallback drops the quoted title, and the title's words are taken
+ * out of the logline, premise or script excerpt, so the model is not shown words it might paint.
+ */
+export const keyMoment = (doc: ComicDoc, opts: { untitled?: boolean } = {}): string => {
   const genre = clean(doc.brief.genre);
-  return `a defining moment from ${genre ? `a ${genre} story` : 'the story'} called ${quoteForPrompt(doc.brief.title || 'Untitled')}`;
+  const story = genre ? `a ${genre} story` : 'the story';
+  const titles = opts.untitled ? [doc.cover.title, doc.brief.title] : [];
+  const fromBrief = clean(doc.brief.logline) || clean(doc.brief.premise);
+  const text = fromBrief ? stripEnd(clip(fromBrief, 260)) : doc.source.script ? stripEnd(firstStorySentences(doc.source.script, 260)) : '';
+  const moment = clean(withoutTitle(text, titles));
+  if (moment) return moment;
+  return opts.untitled ? `a defining moment from ${story}` : `a defining moment from ${story} called ${quoteForPrompt(doc.brief.title || 'Untitled')}`;
 };
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `text` with each whole-word mention of a title (any case, with its quotes) replaced by "this story".
+ * An all-lowercase match of a capitalised one-word title is left alone ("the moon" in a comic called "Moon").
+ */
+export const withoutTitle = (text: string, titles: Array<string | undefined>): string => {
+  let out = text;
+  for (const t of new Set(titles.map((x) => clean(x)).filter(Boolean))) {
+    const cased = t !== t.toLowerCase() && !/\s/.test(t);
+    const re = new RegExp(`["“”'‘’«»]?(?<![\\p{L}\\p{N}])${escapeRegExp(t)}(?![\\p{L}\\p{N}])["“”'‘’«»]?`, 'giu');
+    out = out.replace(re, (m) => (cased && m === m.toLowerCase() && m !== m.toUpperCase() ? m : 'this story'));
+  }
+  return out;
+};
 
 /** Whole-word, case-insensitive mention of a name in free text. */
 const mentions = (text: string, name: string): boolean => {
@@ -2021,7 +2041,7 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
   const genre = clean(doc.brief.genre) || clean(doc.brief.tone) || 'the story';
   const hero = clean(doc.cover.direction)
     ? stripEnd(clean(safeText(doc.cover.direction!, opts)))
-    : `an iconic, dramatic composition that sells this story — ${safeText(keyMoment(doc), opts)} —`;
+    : `an iconic, dramatic composition that sells this story — ${safeText(keyMoment(doc, { untitled: textless }), opts)} —`;
   const names = featured.map((c) => {
     const tag = imageTag(index.get(`c:${c.id}`));
     return `${castLabel(c)}${tag ? ` ${tag}` : ''}`;
