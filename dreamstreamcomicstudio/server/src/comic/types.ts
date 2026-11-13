@@ -145,6 +145,8 @@ export interface ImageReference {
 }
 
 export interface ImageRequest {
+  /** One generation dispatch only: no automatic retry, nudge, or route fallback. */
+  singleRequest?: boolean;
   spec: ImageModelSpec;
   resolution: Resolution;
   aspect: AspectRatio;

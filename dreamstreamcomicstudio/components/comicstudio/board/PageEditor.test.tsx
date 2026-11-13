@@ -36,6 +36,12 @@ const markRegion = (from: [number, number], to: [number, number]) => {
 
 const lineRow = (lineId: string) => document.querySelector<HTMLElement>(`[data-testid="line-row"][data-line-id="${lineId}"]`)!;
 
+const withPanelBounds = () => makeSampleDoc((doc) => {
+  doc.pages[0].render.qc = { score: 0.9, issues: [], checkedAt: SAMPLE_NOW,
+    panelBoxes: [{ x: 0.02, y: 0.02, w: 0.96, h: 0.45 }, { x: 0.02, y: 0.52, w: 0.46, h: 0.46 }, { x: 0.52, y: 0.52, w: 0.46, h: 0.46 }],
+    boxesFrom: 'vision', beats: [1, 2, 3], crosses: [], panelShapes: ['rect', 'rect', 'rect'] };
+});
+
 describe('pure helpers', () => {
   it('builds the edit_page payload, trimming and omitting empty scope', () => {
     expect(editActionFor('pg_1', '  make it night  ')).toEqual({ type: 'edit_page', pageId: 'pg_1', instruction: 'make it night' });
@@ -172,16 +178,21 @@ describe('PageEditor', () => {
     expect(screen.queryByTestId('region-chip')).toBeNull();
   });
 
-  it('sends a whole-panel edit without a region', () => {
-    const { studio } = open();
+  it('previews verified panel bounds and sends one panel edit without altering the document', () => {
+    const { studio } = open('pg_1', withPanelBounds());
     fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'Give Arjun his beard' } });
     fireEvent.change(screen.getByLabelText('Panel to change'), { target: { value: '3' } });
+    expect(screen.getByTestId('panel-edit-boundary')).toHaveStyle({ left: '52%', top: '52%', width: '46%', height: '46%' });
+    expect(screen.getByText(/Only panel 3 will change/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Apply edit/ }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'edit_page', pageId: 'pg_1', instruction: 'Give Arjun his beard', panelN: 3 });
+    expect(studio.act).toHaveBeenCalledTimes(1);
+    expect(studio.patch).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('panel-edit-boundary')).toBeNull();
   });
 
   it('requires a region or panel for an object edit and keeps the selected panel in the action', () => {
-    const { studio } = open();
+    const { studio } = open('pg_1', withPanelBounds());
     fireEvent.change(screen.getByRole('combobox', { name: 'Edit type' }), { target: { value: 'add' } });
     fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'A blue toolbox by the car.' } });
     const apply = screen.getByRole('button', { name: /Apply edit/ });
@@ -194,6 +205,36 @@ describe('PageEditor', () => {
       panelN: 2,
       instruction: 'Add an object within the selected area. A blue toolbox by the car. Preserve the surrounding art and other objects.'
     });
+  });
+
+  it.each(['unknown', 'other'] as const)('blocks an %s panel shape and offers an explicit marked-area path', (shape) => {
+    const doc = withPanelBounds();
+    doc.pages[0].render.qc!.panelShapes![2] = shape;
+    const { studio } = open('pg_1', doc);
+    fireEvent.change(screen.getByLabelText('Panel to change'), { target: { value: '3' } });
+    const instruction = screen.getByLabelText('What should change?');
+    fireEvent.change(instruction, { target: { value: 'Give Arjun his beard' } });
+    expect(screen.getByRole('button', { name: /Apply edit/ })).toBeDisabled();
+    expect(screen.getByText(/Mark an area inside the panel to edit it safely/)).toBeInTheDocument();
+    fireEvent.keyDown(instruction, { key: 'Enter', ctrlKey: true });
+    expect(studio.act).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark an area' }));
+    markRegion([240, 360], [320, 450]);
+    expect(screen.getByRole('button', { name: /Apply edit/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /Apply edit/ }));
+    expect(studio.act).toHaveBeenCalledWith(expect.objectContaining({ type: 'edit_page', region: { x: 0.6, y: 0.6, w: 0.2, h: 0.15 } }));
+  });
+
+  it('clears an earlier mark when choosing a panel so its rectangle is the only edit scope', () => {
+    const { studio } = open('pg_1', withPanelBounds());
+    fireEvent.click(screen.getByRole('button', { name: 'Mark an area' }));
+    markRegion([40, 300], [200, 480]);
+    fireEvent.change(screen.getByLabelText('Panel to change'), { target: { value: '3' } });
+    expect(screen.queryByTestId('region-chip')).toBeNull();
+    expect(screen.getByTestId('panel-edit-boundary')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'Give Arjun his beard' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply edit/ }));
+    expect(studio.act).toHaveBeenCalledWith({ type: 'edit_page', pageId: 'pg_1', instruction: 'Give Arjun his beard', panelN: 3 });
   });
 
   it('adds an uploaded asset as an undoable image layer with no AI action', async () => {

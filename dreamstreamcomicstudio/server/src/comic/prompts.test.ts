@@ -1090,6 +1090,20 @@ describe('compileEdit', () => {
     expect(job.prompt).not.toContain('red outline');
   });
 
+  it('a bounded panel outputs only its context crop and retains page and cast references', () => {
+    const doc = baseDoc();
+    const job = compileEdit(doc, rendered(doc), { instruction: 'Red scarf', panelN: 2, hasRegion: false, panelCrop: { x: 0.1, y: 0.1, w: 0.5, h: 0.3 }, panelBox: { x: 0.14, y: 0.14, w: 0.42, h: 0.22 } });
+    expect(job.references[0].path).toBe('__panel_edit__');
+    expect(job.references[1].path).toBe('pages/p3.png');
+    expect(job.references.map((ref) => ref.label)).toContain('CHARACTER SHEET: MAYA');
+    expect(job.prompt).toContain('Output only the complete Image 1 crop');
+    expect(job.prompt).toContain('Image 2 is the full page for continuity only');
+    expect(job.prompt).toContain('The change is in panel 2, which shows: Action of panel 2.');
+    expect(job.prompt).toContain('Continuity context only — previous panel 1: Action of panel 1.');
+    expect(job.prompt).toContain('Continuity context only — next panel 3: Action of panel 3.');
+    expect(job.prompt).not.toContain('Output the full page at the same framing');
+  });
+
   it('refuses to edit a page that has no render', () => {
     const doc = baseDoc();
     expect(() => compileEdit(doc, page(1, [panel(1, ['maya'])]), { instruction: 'x', hasRegion: false })).toThrow(/render it first/);

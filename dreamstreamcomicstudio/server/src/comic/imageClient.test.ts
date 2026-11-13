@@ -213,6 +213,18 @@ describe('createImageGenerator — OpenRouter', () => {
     expect(result.dataUrl).toBe(`data:image/png;base64,${Buffer.from([1, 2, 3]).toString('base64')}`);
   });
 
+  it('singleRequest sends no retry, nudge, or alternate-route generation', async () => {
+    const gemini = { generateContent: vi.fn() } as unknown as GeminiModelsLike;
+    const a = setup({ ...OR, gemini: { key: 'platform-gemini', byok: false } }, [json({}, 429)], gemini);
+    await expect(a.generate(baseReq({ singleRequest: true }))).rejects.toMatchObject({ code: 'RATE_LIMIT' });
+    expect(a.fetchMock).toHaveBeenCalledTimes(1);
+    expect(gemini.generateContent).not.toHaveBeenCalled();
+    __resetImageClientForTests();
+    const b = setup(OR, [json({ data: [], usage: { cost: 0.002 } })]);
+    await expect(b.generate(baseReq({ singleRequest: true }))).rejects.toMatchObject({ code: 'NO_IMAGE', spentUsd: 0.002 });
+    expect(b.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('retries once on 429 (honouring Retry-After within bounds), then succeeds', async () => {
     const { generate, sleep, fetchMock } = setup(OR, [json({ error: { message: 'rate limited' } }, 429, { 'retry-after': '7' }), imagesOk()]);
     const result = await generate(baseReq());

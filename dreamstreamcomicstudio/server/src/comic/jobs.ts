@@ -167,9 +167,10 @@ import { enrichPagesQuote } from './actions/consistency.js';
 import { boardForCheck, boardImage } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
 import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
-import { cropForPanel, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
+import { cropForPanel, cropPanelContext, panelContextBox, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
+import { panelEditBounds } from '../../../shared/comic/panelEdit.js';
 import { panelizeAfterLetter } from './panelize/server.js';
-import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout } from './prompts.js';
+import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout, PANEL_EDIT_REFERENCE_PATH } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
@@ -1677,6 +1678,10 @@ const validateSpendAction = (doc: ComicDoc, action: GatedSpend): string | null =
       if (page.render.status !== 'ready' || !page.render.asset?.path) throw badRequest(`Page ${page.n} has no image to edit yet — draw it first.`);
       if (!clean(action.instruction, 2000)) throw badRequest('Say what to change on the page.');
       if ((action.region !== undefined || action.regionShape !== undefined) && !sanitizeBox(action.region)) throw badRequest('Mark a larger area before applying this edit.');
+      if (action.panelN !== undefined && action.region === undefined) {
+        const bounds = panelEditBounds(page, action.panelN);
+        if (bounds.ok === false) return bounds.reason;
+      }
       return null;
     }
     default:
@@ -2217,6 +2222,11 @@ interface ImageJob {
   keepStatusOnFailure?: boolean;
   region?: Box;
   regionShape?: 'ellipse';
+  /** Single-panel edits keep the existing attempt/lock pipeline, without automatic generation retries. */
+  singleRequest?: boolean;
+  panelCrop?: Box;
+  /** Recheck a scoped edit against the live image immediately before dispatch and paste. */
+  assertCurrent?: () => void;
   /** Page id to QC + letter after the image lands. */
   qcPageId?: string;
   /** Implicit request (draw what is missing or out of date): reuse rules R2/R3/R7 apply. */
@@ -2237,7 +2247,7 @@ interface ImageJob {
   /** The panel a `__panel__` reference crops (fix_panel). */
   panelId?: string;
   /** Turn the model's image into what is stored (fix_panel: paste into a copy of the page; edit_page: region paste-back). */
-  finish?: (input: { drawn: string; base: () => Promise<string>; doc: ComicDoc }) => Promise<string | null>;
+  finish?: (input: { drawn: string; base: () => Promise<string>; doc: ComicDoc; aspect: string }) => Promise<string | null>;
   /** The model's image can't be stored as it came: no finished image = the job fails honestly (paid, nothing changed). */
   finishRequired?: boolean;
   /** Preserve untouched pixels after a scoped edit's local composite. */
@@ -2730,9 +2740,19 @@ class RenderRun {
   }
 
   private editJob(p: Page, action: EditPageRun): ImageJob {
-    const region = sanitizeBox(action.region);
+    const scoped = action.panelN !== undefined && action.region === undefined ? panelEditBounds(p, action.panelN) : undefined;
+    if (scoped?.ok === false) throw badRequest(scoped.reason);
+    const panelBox = scoped?.ok ? scoped.box : undefined;
+    const panelCrop = panelBox ? panelContextBox(panelBox) : undefined;
+    const parentPath = p.render.asset?.path;
+    const assertCurrent = () => {
+      const current = findPage(this.session.doc, p.id);
+      const bounds = current && panelEditBounds(current, action.panelN!);
+      if (!current || current.render.asset?.path !== parentPath || !bounds?.ok || JSON.stringify(bounds.box) !== JSON.stringify(panelBox)) throw badRequest('The panel changed before this edit could be placed. Choose it again.');
+    };
+    const region = panelBox ?? sanitizeBox(action.region);
     // A marked edit changes only the selected pixels, unless whole-page output was requested explicitly.
-    const pasteBack = region && action.pasteBack !== 'page' ? region : undefined;
+    const pasteBack = region && (panelBox || action.pasteBack !== 'page') ? region : undefined;
     const panelN = Number.isInteger(action.panelN) && p.panels.some((x) => x.n === action.panelN) ? action.panelN : undefined;
     const instruction = clean(action.instruction, 2000);
     return {
@@ -2744,13 +2764,30 @@ class RenderRun {
       compile: (doc, opts) => {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
-        return compileEdit(doc, page, { instruction, ...(panelN !== undefined ? { panelN } : {}), hasRegion: !!region, ...this.compileOpts(opts) });
+        if (panelBox) {
+          const live = panelEditBounds(page, panelN!);
+          if (!live.ok || page.render.asset?.path !== parentPath || JSON.stringify(live.box) !== JSON.stringify(panelBox)) throw badRequest('The panel changed before this edit started. Choose it again; nothing was charged.');
+        }
+        return compileEdit(doc, page, { instruction, ...(panelN !== undefined ? { panelN } : {}), hasRegion: !!region && !panelBox, ...(panelCrop ? { panelCrop, panelBox } : {}), ...this.compileOpts(opts) });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
       keepStatusOnFailure: true,
       ...(region ? { region } : {}),
       ...(region && action.regionShape === 'ellipse' ? { regionShape: 'ellipse' as const } : {}),
-      qcPageId: p.id,
+      ...(panelCrop ? {
+        panelCrop, singleRequest: true, assertCurrent,
+        extraMeta: (doc: ComicDoc): Partial<VersionMeta> => {
+          const current = findPage(doc, p.id)!;
+          const qc = current.render.qc;
+          return {
+            ...(current.render.cuts ? { cuts: current.render.cuts } : {}),
+            // A panel edit cannot certify untouched panels against newly changed script or cast.
+            parts: current.render.parts,
+            aspect: current.render.aspect,
+            ...(qc ? { qc: { score: 0, checkedAt: 0, issues: ['Panel artwork changed; run a page check to review it.'], panelBoxes: qc.panelBoxes, panelShapes: qc.panelShapes, boxesFrom: qc.boxesFrom, drawnBoxes: qc.drawnBoxes, beats: qc.beats, crosses: qc.crosses } } : {})
+          };
+        }
+      } : { qcPageId: p.id }),
       implicit: false,
       note: instruction,
       ...(action.safe ? { safe: true } : {}),
@@ -2758,9 +2795,12 @@ class RenderRun {
         ? {
             finishRequired: true,
             losslessSave: true,
-            finish: async ({ drawn, base }: { drawn: string; base: () => Promise<string> }) => (await pasteRegion({
-              base, drawn, region: pasteBack, feather: REGION_FEATHER, ...(action.regionShape === 'ellipse' ? { shape: 'ellipse' as const } : {})
-            })).dataUrl
+            finish: async ({ drawn, base, aspect }: { drawn: string; base: () => Promise<string>; aspect: string }) => {
+              if (panelCrop) assertCurrent();
+              return (await pasteRegion({
+                base, drawn, region: pasteBack, feather: panelCrop ? 0 : REGION_FEATHER, ...(panelCrop ? { sourceBox: panelCrop, sourceAspect: aspect } : {}), ...(action.regionShape === 'ellipse' ? { shape: 'ellipse' as const } : {})
+              })).dataUrl;
+            }
           }
         : {})
     };
@@ -3426,6 +3466,7 @@ class RenderRun {
     // activity ends with the failure (the live status line never keeps drawing after the job failed).
     try {
       this.assertLockedModel(job, prepared.compiled.spec);
+      job.assertCurrent?.();
     } catch (err) {
       end(false);
       throw err;
@@ -3472,7 +3513,7 @@ class RenderRun {
     let abandonedUsd = 0;
     // What the failed attempts of this job were charged (the mid-run outage card's chargedUsd).
     let failedCharged = 0;
-    while (attempts < MAX_IMAGE_ATTEMPTS) {
+    while (attempts < (job.singleRequest ? 1 : MAX_IMAGE_ATTEMPTS)) {
       attempts += 1;
       const startedAt = Date.now();
       try {
@@ -3484,10 +3525,12 @@ class RenderRun {
           aspect: prepared.compiled.aspect,
           prompt: prepared.compiled.prompt,
           references: prepared.references,
+          ...(job.singleRequest ? { singleRequest: true } : {}),
           ...(this.preferRoute ? { preferRoute: this.preferRoute } : {}),
           // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
           ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
         };
+        job.assertCurrent?.();
         result = await ctx.images(request);
         if (safe && safeRetried) saferTake = true;
         break;
@@ -3520,7 +3563,7 @@ class RenderRun {
           rateLimited = true;
           this.noteRateLimit(job);
         }
-        if (abandoned) break; // retrying would pay twice
+        if (abandoned || job.singleRequest) break; // scoped edits never dispatch a second generation
         if (this.signal.aborted || lastError.code === 'CANCELLED') break;
         // Safe take: the image model's filter declined this take (not billed) — recompile one
         // notch gentler and try once more, within the approved spend (safety.md §3.2).
@@ -3567,7 +3610,7 @@ class RenderRun {
       });
       // Incident follow-up: a rate-limited image is re-queued once after the provider's
       // Retry-After (or 45 s) before it is marked failed.
-      if (lastError?.code === 'RATE_LIMIT' && !job.requeued && !this.signal.aborted && !this.stopReason) {
+      if (lastError?.code === 'RATE_LIMIT' && !job.singleRequest && !job.requeued && !this.signal.aborted && !this.stopReason) {
         job.failedCharged = round4((job.failedCharged || 0) + failedCharged);
         this.commit([{ op: 'render', target: job.target, patch: { status: 'queued', error: undefined, updatedAt: Date.now() } }]);
         return { outcome: { kind: 'requeue', afterMs: this.requeueDelay(lastRaw) }, asset: null };
@@ -3627,10 +3670,20 @@ class RenderRun {
       return { outcome: { kind: 'done' }, asset: null };
     }
     await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
+    // Storage and settlement await external work. Recheck immediately before the synchronous render commit,
+    // so an Undo or newer take that landed during either await cannot be overwritten by this older edit.
+    try {
+      job.assertCurrent?.();
+    } catch {
+      end(false);
+      success(' (not placed)');
+      this.fail(job, 'The panel was drawn, but the page changed before it could be placed. The newer page is unchanged.', attempts);
+      return { outcome: { kind: 'done' }, asset: null };
+    }
     const usd = success('');
 
     // Shape check (free): never an automatic redraw or fit — offer them.
-    const aspect = this.checkAspect(job, compiled, saved, result.route);
+    const aspect = job.panelCrop ? null : this.checkAspect(job, compiled, saved, result.route);
     // The safety verdict is pending until the check lands (the owner sees "Checking…").
     const asset: AssetRef = { ...saved, safety: { pending: true, at: Date.now() } };
     session.commit(
@@ -3682,14 +3735,14 @@ class RenderRun {
    * drawing the job started from (the version's parentPath, else the target's current asset), loaded only on demand.
    * An optional finish that fails stores the model's image as it came (today's behaviour). Never throws.
    */
-  private async finishImage(job: ImageJob, prepared: { docAtCompile: ComicDoc; meta: VersionMeta }, drawn: string): Promise<string | null> {
+  private async finishImage(job: ImageJob, prepared: { docAtCompile: ComicDoc; meta: VersionMeta; compiled: CompiledImageJob }, drawn: string): Promise<string | null> {
     const parent = prepared.meta.parentPath ?? getRender(prepared.docAtCompile, job.target)?.asset?.path;
     const base = async () => {
       if (!parent) throw new StudioError('NOT_FOUND', 'There is no drawing to paste into.', { status: 404 });
       return this.ctx.assets.loadDataUrl(parent);
     };
     try {
-      const out = await job.finish!({ drawn, base, doc: prepared.docAtCompile });
+      const out = await job.finish!({ drawn, base, doc: prepared.docAtCompile, aspect: prepared.compiled.aspect });
       if (typeof out === 'string' && out) return out;
     } catch (err) {
       logger.warn('comic_image_finish_failed', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), kind: job.kind, message: (err as Error)?.message });
@@ -3906,6 +3959,14 @@ class RenderRun {
       const attached: string[] = [];
       let dropped = false;
       for (const ref of compiled.references) {
+        if (ref.path === PANEL_EDIT_REFERENCE_PATH) {
+          const page = job.target.kind === 'page' ? findPage(docAtCompile, job.target.id) : undefined;
+          if (!job.panelCrop || !page?.render.asset?.path) throw badRequest('The panel image is no longer available.');
+          const dataUrl = await cropPanelContext(await this.ctx.assets.loadDataUrl(page.render.asset.path), job.panelCrop);
+          references.push({ label: ref.label, dataUrl });
+          attached.push(`${PANEL_EDIT_REFERENCE_PATH}:${page.render.asset.path}:${JSON.stringify(job.panelCrop)}`);
+          continue;
+        }
         if (ref.path === LAYOUT_REFERENCE_PATH) {
           if (!guide) continue; // never reached: the guide is rendered (or dropped) before this loop
           references.push({ label: ref.label, dataUrl: guide.dataUrl });
