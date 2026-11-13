@@ -93,7 +93,7 @@ const SharedBlocks: React.FC<{ c: Copy }> = ({ c }) => (
     </Block>
     <Block id="messages" title="Long messages">
       <div className="flex flex-col gap-3">
-        <StatusBanner tone="warning" title="Short message">
+        <StatusBanner tone="healthy" title="Short message">
           <MessageText role="status">Saved a moment ago.</MessageText>
         </StatusBanner>
         <StatusBanner tone="error" title="Long message">
