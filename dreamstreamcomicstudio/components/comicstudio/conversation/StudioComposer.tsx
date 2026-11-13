@@ -54,7 +54,8 @@ import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image 
 import { composerIsQualityHome } from '../qualityHome';
 import { TIER_PRESETS, getImageModel, resolveImageJob } from '../../../shared/comic/models';
 import { deriveLock } from '../../../shared/comic/modelLock';
-import { refInboxOf } from '../../../shared/comic/doc';
+import { refInboxOf, type RefAsset } from '../../../shared/comic/doc';
+import { canServeToOwner } from '../../../shared/comic/safety';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { REF_LIMITS } from '../../../shared/comic/refs';
 import { deleteInboxRef } from '../studioApi';
@@ -400,6 +401,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
+  const [savedPhotosOpen, setSavedPhotosOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -432,7 +434,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   // so it never hides, even in a composer narrower than ROOMY_PX (a compact "{Tier}" + lock there).
   const qualityHome = !inSheet && composerIsQualityHome(phone, ff.width);
   // On touch, or when the voice toggle has stepped aside, + opens the attach sheet (camera, toggle).
-  const attachSheet = coarse || !roomy;
+  const savedPhotos = doc ? refInboxOf(doc).filter((photo) => canServeToOwner(photo)) : [];
+  const attachSheet = coarse || !roomy || savedPhotos.length > 0;
   // The chip row scrolls sideways when the column is narrow — fade the clipped edge so it reads as "more".
   const [chipsClipped, setChipsClipped] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
   const measureChips = useCallback(() => {
@@ -629,6 +632,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   /** Another photo of this message already uses that inbox path. */
   const pathTaken = (path: string, exceptId: string) => {
+    if (attachmentsRef.current.some((a) => a.id !== exceptId && a.inboxPath === path)) return true;
     for (const [id, rt] of runtime.current) if (id !== exceptId && rt.inboxPath === path) return true;
     return false;
   };
@@ -885,6 +889,17 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     if (rt?.owned) dropInboxCopy(rt.inboxPath);
     // Its "Who's this?" menu (or "Assign all" over fewer than two photos) has nothing left to point at.
     setAssigning((cur) => (cur === id || (cur === 'all' && attachmentsRef.current.filter((a) => a.kind === 'image' && a.id !== id).length < 2) ? null : cur));
+  };
+
+  const attachSavedPhoto = (photo: RefAsset, index: number) => {
+    const id = attachId();
+    const name = photo.name || `Saved image ${index + 1}`;
+    const previewUrl = studio.urlFor(photo, { width: 96 });
+    setAttachments((prev) => {
+      if (prev.some((item) => item.inboxPath === photo.path) || prev.filter((item) => item.kind === 'image').length >= MAX_IMAGES) return prev;
+      return [...prev, { id, name, kind: 'image', mimeType: 'image/webp', dataUrl: '', inboxPath: photo.path, upload: 'done', previewUrl }];
+    });
+    setSavedPhotosOpen(false);
   };
 
   /** Retry a photo whose upload failed (it was going to go inline). */
@@ -1306,6 +1321,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       >
         <div role="menu" aria-label="Add to your message" className="flex flex-col p-1.5">
           {attachRow('photos', <ImageIcon className="h-4 w-4" />, 'Photo library', 'Character photos or style references', () => photoInputRef.current?.click())}
+          {savedPhotos.length > 0 && attachRow('saved', <ImageIcon className="h-4 w-4" />, 'Saved images', 'Reuse an image from this comic’s inbox', () => setSavedPhotosOpen(true))}
           {coarse && attachRow('camera', <Camera className="h-4 w-4" />, 'Take a photo', 'Use the camera — a person, a sketch, a place', () => cameraInputRef.current?.click())}
           {attachRow('script', <FileText className="h-4 w-4" />, 'Script or document', '.txt · .md · .docx · .pdf · .fdx · .fountain', () => scriptInputRef.current?.click())}
           {voiceOk && voiceSendOk && !showVoiceToggleInline && (
@@ -1324,6 +1340,39 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             </button>
           )}
         </div>
+      </AdaptiveSheet>
+
+      <AdaptiveSheet
+        open={savedPhotosOpen}
+        onClose={() => setSavedPhotosOpen(false)}
+        label="Saved images"
+        title="Saved images"
+        anchorRef={plusRef}
+        placement="above"
+        align="start"
+        presentation={inSheet ? 'bottom' : 'auto'}
+        className="w-72 p-1.5"
+      >
+        {savedPhotos.map((photo, index) => {
+          const attached = attachments.some((item) => item.inboxPath === photo.path);
+          const name = photo.name || `Saved image ${index + 1}`;
+          const url = studio.urlFor(photo, { width: 96 });
+          return (
+            <button
+              key={photo.path}
+              type="button"
+              disabled={attached || imageAttachments.length >= MAX_IMAGES}
+              onClick={() => attachSavedPhoto(photo, index)}
+              className={cx('flex min-h-[44px] w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left text-[13px] hover:bg-[var(--ds-hover)] disabled:opacity-60', RADIUS_PANEL, FOCUS_RING)}
+            >
+              <span aria-hidden className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-md bg-[var(--ds-well)]">
+                {url ? <img src={url} alt="" loading="lazy" className="size-full object-cover" /> : <ImageIcon className="size-4" />}
+              </span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{name}{attached && ' · Added'}</span>
+            </button>
+          );
+        })}
+        {imageAttachments.length >= MAX_IMAGES && <p className="px-2 py-1 text-[12px] text-[var(--ds-muted)]">This message already has {MAX_IMAGES} images.</p>}
       </AdaptiveSheet>
 
       {doc && (
@@ -1564,7 +1613,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               aria-label="Add images or a script"
               aria-haspopup={attachSheet ? 'menu' : undefined}
               aria-expanded={attachSheet ? attachOpen : undefined}
-              title={attachSheet ? 'Add a photo, take one, or attach a script' : 'Add character photos, style references or a script (.txt, .md)'}
+              title={attachSheet ? 'Attach an image or script' : 'Add character photos, style references or a script (.txt, .md)'}
               className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
             >
               <Plus className="h-4 w-4" />

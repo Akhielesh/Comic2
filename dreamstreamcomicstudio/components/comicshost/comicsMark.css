@@ -1,0 +1,26 @@
+[data-comics-mark-page] {
+  transform-box: fill-box;
+  transform-origin: left center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot='brand-lockup']:focus-visible [data-comics-mark-page] {
+    animation: comics-mark-turn 560ms cubic-bezier(.2, .7, .25, 1) both;
+  }
+
+  [data-slot='brand-lockup']:active [data-comics-mark-page] {
+    transform: translateX(1px) scaleX(.82);
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  [data-slot='brand-lockup']:hover [data-comics-mark-page] {
+    animation: comics-mark-turn 560ms cubic-bezier(.2, .7, .25, 1) both;
+  }
+}
+
+@keyframes comics-mark-turn {
+  0%, 100% { transform: none; }
+  45% { transform: translateX(2px) skewY(-9deg) scaleX(.57); }
+  73% { transform: translateX(-.5px) skewY(2deg) scaleX(1.04); }
+}

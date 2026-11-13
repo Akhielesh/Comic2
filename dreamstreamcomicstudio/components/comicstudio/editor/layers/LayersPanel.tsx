@@ -369,7 +369,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, pla
       {inOriginal && <p className={cn('m-0 text-[11px] leading-snug', MUTED)}>{inOriginal}</p>}
       {activeOverlay && (
         <section aria-label={`Arrange ${activeOverlay.label}`} className="min-w-0 space-y-2">
-          <h4 className={cn('m-0 break-words', OVERLINE)}>Arrange {activeOverlay.label}</h4>
+          <h4 className={cn('m-0 [overflow-wrap:anywhere]', OVERLINE)}>Arrange {activeOverlay.label}</h4>
           <div className="grid grid-cols-2 gap-1">
             {arrangeActions.map(({ move, label, shortcut, result }) => {
               const reason = inOriginal ?? (result.ok === false ? result.reason : undefined);
