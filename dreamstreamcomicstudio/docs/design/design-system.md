@@ -287,7 +287,9 @@ per job, all in `components/chat/studioDesign.ts` (re-exported from `components/
   stays one span; icons stay direct children; an icon-only button gets none). `BUTTON_BASE` has `max-w-full`, so a
   button never grows past its row. `Badge` does the same (`data-slot="badge-label"`) and sets a `title` only when the
   label is actually cut (measured on pointerenter; a caller's own `title` wins). The accessible name is always the
-  full text.
+  full text. Words directly in a Fragment (`<>Use {name}</>`) count as the button's own; words inside another element
+  (a `<b>`) are not wrapped. **A priced control shows its price beside the button, not in its label**: a cut label
+  would hide the amount.
 - **The row rule.** A row that can hold a Button with dynamic or translated text is `flex-wrap`: `max-w-full` caps a
   `shrink-0` button at its row, not at the space left in it.
 - **No ids in a Button label.** No model names, ids, slugs, URLs, paths or file names: the label span would cut them
@@ -296,10 +298,14 @@ per job, all in `components/chat/studioDesign.ts` (re-exported from `components/
   `data-slot="message"`, `lines` 2 / 3 / 4 / 6 (default 3). When the text runs past its lines it is clamped and a
   **Show more** / **Show less** text button follows the body as its sibling (`aria-expanded`, `aria-controls`, 44 px
   on touch). A short message is exactly one element. `role` / `aria-live` land on the body only, so a live region
-  never announces the toggle: **never put MessageText inside a live region; pass the role to it.** New text starts
-  collapsed. No timers; one ResizeObserver while collapsed.
+  never announces the toggle: **never put MessageText inside a live region; pass the role to it.** New words start
+  collapsed ("new" means new words, or a new `resetKey`, not a fresh JSX element), and keyboard focus on the toggle
+  stays through that. No timers; one ResizeObserver while collapsed.
 - **ErrorState** renders a string description in a `<p>` and any other node (a MessageText) in a `<div>`, so a block
-  never lands in a paragraph.
+  never lands in a paragraph. With a node description the alert role sits on the title and description, and the
+  MessageText toggle renders just after them (`MessageToggleSlot`), outside the alert: the alert holds only words and
+  toggling never re-announces it. Give that MessageText no role. StatusBanner has no slot yet, so a message that may
+  need Show more goes in an ErrorState, or in a MessageText with its own role outside any banner.
 - **The checks.** `tests/config/overflowGuard.test.ts` ratchets the static risks (one-line labels with nothing to cut
   them, `break-words`, `max-h-*` with no `overflow-*`, raw error text, ids in Button labels) against
   `tests/config/baselines/overflow.json`; `tests/e2e/overflow.spec.ts` injects the long strings into every scene and
