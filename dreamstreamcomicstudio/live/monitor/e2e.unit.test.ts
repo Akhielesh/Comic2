@@ -452,15 +452,19 @@ describe('sealed signaling', () => {
     const offer = { sdp: { type: 'offer' as const, sdp: 'v=0\r\no=- 1 2 IN IP4 192.168.1.20\r\na=fingerprint:sha-256 AB:CD\r\n' }, pc: 'p1', vid: 'v1', q: 'hd' as const };
     const sealed = await mom.keys.seal(cam.dev.devId, offer);
     expect(isSealedRtc(sealed)).toBe(true);
-    const wire = JSON.stringify({ t: 'rtc', to: 'camsid', d: sealed });
-    expect(wire).not.toMatch(/sdp|candidate|fingerprint|192\.168/);
+    const wire = JSON.parse(JSON.stringify({ t: 'rtc', to: 'camsid', d: sealed }));
+    // Ciphertext is random base64url and can contain words like "sdp". Check the wire's
+    // exact fields instead: no plaintext SDP, ICE candidates or other payload fields escape.
+    expect(Object.keys(wire).sort()).toEqual(['d', 't', 'to']);
+    expect(Object.keys(wire.d).sort()).toEqual(['ct', 'e', 'f', 'iv']);
     const opened = await cam.keys.open(sealed!);
     expect(opened).toEqual({ d: offer, from: mom.dev.devId });
     // A replay of the same sealed message is refused.
     expect(await cam.keys.open(sealed!)).toBeNull();
     // Candidates batch the same way.
     const ices = await cam.keys.seal(mom.dev.devId, { ices: [{ candidate: 'candidate:1 1 udp 2122260223 192.168.1.9 50000 typ host' }, null], pc: 'p1' });
-    expect(JSON.stringify(ices)).not.toMatch(/candidate|192\.168/);
+    expect(isSealedRtc(ices)).toBe(true);
+    expect(Object.keys(JSON.parse(JSON.stringify(ices))).sort()).toEqual(['ct', 'e', 'f', 'iv']);
     expect((await mom.keys.open(ices!))!.d.ices).toHaveLength(2);
     // Addressed to the camera: the nanny's device can't open it even with the key.
     const nan = await room.join('nan', 'viewer');
