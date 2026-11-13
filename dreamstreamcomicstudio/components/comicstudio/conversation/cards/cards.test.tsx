@@ -285,13 +285,17 @@ describe('StyleChoiceCard', () => {
 });
 
 describe('CastCard', () => {
-  it('lists characters with sheet status and opens the cast tab', () => {
+  it('lists characters with sheet status and opens character details before editing', () => {
     const studio = renderCard({ type: 'cast', id: 'card_c', characterIds: ['c_maya', 'c_arjun', 'c_vendor', 'gone'] });
     expect(screen.getByText('1 of 2 sheets ready')).toBeInTheDocument();
     expect(screen.getByText('Lead · cat burglar · Sheet ready')).toBeInTheDocument();
     expect(screen.getByText('Support · detective · No sheet yet')).toBeInTheDocument();
     expect(screen.getByText('Extra · Described in text')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Maya/ }));
+    const detail = screen.getByRole('dialog', { name: 'Maya' });
+    expect(within(detail).getByRole('img', { name: /Maya.*model sheet/i })).toBeInTheDocument();
+    expect(studio.setTab).not.toHaveBeenCalled();
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit character' }));
     expect(studio.setTab).toHaveBeenCalledWith('cast');
   });
 
