@@ -132,7 +132,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
         <Palette />
       </IconButton>
       {signedIn ? (
-        <Button variant={home ? 'outline' : 'default'} className={RADIUS_ROUND} onClick={onOpenComics}>
+        <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'px-2 medium:px-4')} onClick={onOpenComics}>
           My comics
         </Button>
       ) : (
@@ -143,7 +143,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
             </Button>
           )}
           {onSignInPage ? null : (
-            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group')} onClick={onSignIn}>
+            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group px-2 medium:px-4')} onClick={onSignIn}>
               Sign in
               <ArrowRight aria-hidden className={cn('hidden medium:block', ARROW_NUDGE)} />
             </Button>
@@ -165,7 +165,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   );
 
   return (
-    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions}>
+    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} innerClassName="px-2 medium:px-6">
       <div className={cn(HEADER_INNER, 'pointer-events-none absolute inset-x-0 top-full flex justify-end lg:hidden')}>
         <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'ds-scale-in pointer-events-auto mt-2 w-60 origin-top-right p-1')}>
           <ul className="flex flex-col">
