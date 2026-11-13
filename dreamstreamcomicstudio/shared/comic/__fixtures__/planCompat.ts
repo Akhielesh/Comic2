@@ -55,6 +55,12 @@ const plannedDoc = (): ComicDoc => {
   return doc;
 };
 
+/** This fixture represents a stored Ship 2 render from before prompt-context tracking existed. */
+const legacyPartsOf = (doc: ComicDoc, page: Page) => {
+  const { context: _context, ...parts } = partsOf(doc, page);
+  return parts;
+};
+
 const OVERFULL = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight so stay here and keep your eyes on the gate until I come back with the others';
 
 /** Every book the cases run on: plain, drawn, mixed, locked, an overfull page, and books carrying Ship 2 data. */
@@ -88,7 +94,7 @@ export const compatBooks = (): Record<string, ComicDoc> => {
     d.pages[2].continuity = { sceneId: 'sc_market', notes: ['Rain starts.'] };
     d.pages[0].panels[0].direction = { lens: 'wide', light: 'cold dusk', cast: { c_meera: { expression: 'wary', pos: 'left', depth: 'fg' } }, by: 'writer' };
     d.pages[1].panels[1].direction = { lens: 'normal', background: ['wet steps'], offPanel: ['c_guard'], by: 'derived' };
-    d.pages = d.pages.map((p) => (p.n <= 2 ? { ...p, render: { ...readyRender(`u/o/h/p${p.n}.webp`), specHash: pageSpecHash(d, p), parts: partsOf(d, p), anchorKeys: ['char:c_meera'] } } : p));
+    d.pages = d.pages.map((p) => (p.n <= 2 ? { ...p, render: { ...readyRender(`u/o/h/p${p.n}.webp`), specHash: pageSpecHash(d, p), parts: legacyPartsOf(d, p), anchorKeys: ['char:c_meera'] } } : p));
   });
   const lakeStoryDoc = lakeStory();
   return { planned, drawn, mixed, overfull, lake, lakePro, harbour, ship2, lakeStory: lakeStoryDoc };

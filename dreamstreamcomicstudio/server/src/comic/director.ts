@@ -151,7 +151,6 @@ RULES
 HOW TO USE TOOLS
 - Write your reply in the same message as your tool calls; never send tool calls without a sentence.
 - Several independent facts → several calls in one round. Use ids from the DOC SUMMARY; names work too.
-- An unchanged read_pages result points to the earlier full result in this turn. Use the earlier page details.
 - "Error: …" → fix the arguments once, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
 - A long pasted script: save_source (no arguments if the message says it was already saved, else useMessage:true), then offer the next step.

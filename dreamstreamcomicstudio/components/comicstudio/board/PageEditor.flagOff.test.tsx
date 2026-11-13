@@ -1,13 +1,12 @@
-// COMIC_PRO_EDITOR_V2 off: the page editor, its Pages entry and its toolbars render EXACTLY today's DOM (master plan
-// §2.2 "Flag off: exactly today"; PE-SHELL "flag off gives an unchanged DOM snapshot").
+// COMIC_PRO_EDITOR_V2 off: the page editor, its Pages entry and its toolbars retain the classic editor shell
+// (master plan §2.2; PE-SHELL). The Edit type and Page objects controls are available in both shells.
 //
-// The snapshots in __snapshots__/PageEditor.flagOff.test.tsx.snap were written on the base (756b5a70), BEFORE the
-// PE-SHELL code existed, and committed first: any change the shell makes to the flag-off tree fails here. Desktop
+// These snapshots guard the flag-off tree from accidentally mounting parts of the Pro workspace. Desktop
 // (1280 × 800, fine pointer), tablet portrait and phone (coarse), in Easy and in Pro, with and without a selection.
 //
 // One change is deliberate and flag-independent: DC-0 #10 (the phone toolbar sizes its buttons to their labels so
 // "Mark up" and "Lettering" read in full at 320 px). `asBase` maps exactly those class tokens back to the base's, so
-// the snapshot stays the base's byte for byte and nothing else may differ.
+// these unrelated class changes do not need a snapshot refresh.
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
