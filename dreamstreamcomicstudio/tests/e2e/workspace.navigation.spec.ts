@@ -13,12 +13,14 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       await qa.toBoard();
       const board = page.locator('[data-board]');
       const panel = page.locator('#board-panel');
+      const dockAssets = page.getByRole('region', { name: 'Book timeline', includeHidden: true }).getByRole('button', { name: 'Open Assets: every image in this comic', includeHidden: true });
       const rootFits = async () => {
         expect((await qa.pageWidths()).scrollWidth).toBeLessThanOrEqual(viewport.width + 1);
         expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(viewport.height + 1);
       };
       await expect(board).toBeVisible();
       await expect(panel).toHaveAttribute('aria-label', 'Pages workspace');
+      await expect(dockAssets).toHaveCount(phone ? 1 : 0);
       expect(await page.locator('[data-board-tabs]').count(), 'no second horizontal stage strip steals canvas height').toBe(0);
       const header = await page.getByRole('banner').boundingBox();
       expect(header!.height).toBeLessThanOrEqual(phone ? 45 : 49);
@@ -77,6 +79,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
         expect(await composer.inputValue(), 'draft in canvas mode').toBe('Keep the rooftop scene quiet.');
         expect((await board.boundingBox())!.width).toBeGreaterThan(widthBefore + 300);
       }
+      await expect(dockAssets).toHaveCount(phone ? 1 : 0);
       expect(await panel.evaluate((el) => el.scrollTop), 'changing chrome keeps the current canvas scroll').toBe(scrollBefore);
       await rootFits();
       await page.screenshot({ path: testInfo.outputPath('workspace.png') });

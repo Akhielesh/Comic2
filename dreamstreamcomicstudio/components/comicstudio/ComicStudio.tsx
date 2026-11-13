@@ -1242,7 +1242,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
 
       <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
-        {!navigationOverlay && <aside aria-label="Comic workspace navigation" className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>
+        {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>
           <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} compact={!navigationExpanded} onBack={onBack} onConversation={skipToComposer} onSelect={(tab) => { setTab(tab); showBoard(); }} footer={navigationFooter} />
         </aside>}
         <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
