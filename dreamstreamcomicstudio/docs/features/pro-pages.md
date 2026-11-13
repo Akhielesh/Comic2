@@ -358,7 +358,7 @@ that keeps today's behaviour:
 | `actions/panels.ts`, `actions/consistency.ts` (`rebind_panels`, `apply_finding`, `enrich_pages`), `actions/editor.ts` | B2, B7, B8 | `NOT_AVAILABLE`, nothing changed or charged |
 | `consistency/contactSheet.ts` `boardForCheck`, `boardImage` | B3 | no board (the page check runs as today) |
 | `consistency/findings.ts` `withFindings` | B3 | the QC report unchanged |
-| `consistency/schedule.ts` `runDrawsAnchors`, `scheduleRun`, `previousPageFor` | B7 | no anchors; today's order (page 1 alone, then the rest and the cover); the nearest drawn page before |
+| `consistency/schedule.ts` `runDrawsAnchors`, `scheduleRun`, `previousPageFor` | B7 (P5-TRUTH filled the run order) | no anchors. `COMIC_RUN_CHAINS` off: today's order (page 1 alone, then the rest and the cover) and the nearest drawn page before. On: scene chains (below) |
 | `panelize/server.ts` `panelizeAfterLetter`, `AUTO_PANELIZE_FLAG` | B2 | no ops (tracked, never awaited by the page job) |
 
 Still open for B7: whether settle `stored` may use a predecessor whose safety check is still pending as the next
@@ -371,3 +371,29 @@ Today the stub refuses first, so that text never reaches a prompt and is not scr
 `applyOp` brings back the translated lines of a page in Deleted when removing a language is undone (`lineIdsOf(doc,
 true)` for `translation` and `edition_balloon`), but the server's `findLine` searches live pages only, so that undo is
 still refused ("That line no longer exists.") until it also searches `trashOf(doc)`.
+
+## 12. Truer pages (P5-TRUTH, Program 5 R01)
+
+Free fixes to what the drawing model is told and in what order pages are drawn. No new data, no new model call, no SQL;
+stored looks are never rewritten (they are in every page's spec hash), so nothing drawn goes out of date. Two server
+flags (stages `off | admins | all`, read once per request through `server/src/comic/p5Flags.ts`; unset = off = today's
+prompts and order, byte for byte, pinned by the Ramayana golden suite) and one client constant.
+
+| Flag | What it changes | Where |
+|---|---|---|
+| `COMIC_STORY_FIXES` | A card's mood words ("serene calm smile", "a wide, friendly grin", "determined") stay out of identity anchors, CAST lines, sheets and the cover (`withoutMood`, `shared/comic/world/lookLint.ts`); colour names carry their hex and know saffron, gold, royal blue, vermilion, maroon, peacock blue, indigo and turmeric (`paletteWords(['#FF9933','#0055A5'])` → "saffron (#FF9933) and royal blue (#0055A5)"); a stored colour name is used as written; character and place sheets show the book palette as "Book accent colours (…never recolour…)", not "Palette:"; a sheet's legend line adds "Match its design and base colours; this page's light changes brightness, never hue."; the page header fits the style's medium (`mediumOf`: drawn, painted, rendered 3D, photographed) and a photographed style has no Linework line; the writer gives a line with no speaker to the one group card the panel shows, else (as today) to the panel's only character unless the line cheers that very character ("Hail Hanuman!" in a Hanuman-only panel stays an unnamed voice); a group name ("Vanaras", "Vanara army") resolves to its group card instead of a new walk-on; a bare crowd word ("Everyone", "All", "Voices", "the crowd") speaks for a group only when the panel shows that group, else it stays an unnamed voice and adds no one to the panel (a cheer in Ravana's court never draws the Vanara army into it); and a free plan note when a line praises its own speaker | `server/src/comic/prompts.ts` (`CompileOptions.storyFixes`), `server/src/comic/writer.ts` (`storyFixes`), `server/src/comic/jobs.ts` (`RenderRun.compileOpts`, `planPages`) |
+| `COMIC_RUN_CHAINS` | B7's run order: pages of one scene draw one after another, each from the page right before it (`PREVIOUS PAGE`, recorded as `continuityPath`); each scene's first page waits only for the book's first page, so scenes still draw side by side. Scenes are the ledger's, else derived from places (`continuity.ts deriveScenes`): **a page with no place continues the scene before it**. At a scene's first page there is no previous page (another scene's light never leaks in as continuity). Inside a chain the next page starts once the page before it is stored (settle `'stored'`); its page check runs while the next page draws. Wall time, measured with fake timers on the real `runAfter` and the runner's 3 slots (25 s a page, 5 s check; `schedule.test.ts`): the 10-page one-scene case goes from about 120 s to about 255 s (**about +135 s, not the planned +40 s**); a book in two 5-page scenes takes about 160 s. $0: no new model call. **Capped at `admins` in code** (`P5_FLAG_MAX`, `server/src/comic/p5Flags.ts`): `all` reads as `admins` until the owner accepts the wait, a colour check shows chained pages do not drift (off, pages 2 to 10 all share page 1 as their reference; on, page k sees only page k−1 and the cast sheets), and a chained page waits for a safety verdict that is not pending | `server/src/comic/consistency/schedule.ts` (`scheduleRun(doc, ids, { chains })`, `previousPageFor(doc, page, { chains })`) |
+| `CARD_LINT_STAGE` (code constant, `'admins'`) | A free "Card check" note on a cast card: the summary's skin, hair or eye colour against the field ("Summary says green, skin says warm tan plastic"), a time word in a fixed field ("Markings says \"after\": this sounds like a change over time"), a mood in the face or eyes. A warning only: nothing changed, blocked or spent. Off = one commit and a redeploy | `shared/comic/world/lookLint.ts` (`lintLook`, `cardLintOn`), `components/comicstudio/board/CastTab.tsx` (`CardCheck`) |
+
+Unflagged: with the `styleKey` anchor kind on (`COMIC_CONSISTENCY_ANCHORS`, off today), a page whose style key page is
+also its previous page attaches that picture once, as the previous page; the style slot falls back to a user style
+reference (`shared/comic/anchors.ts planAnchors`). Only when the previous page really gets a slot: with tight slots
+(`maxRefs`, one object slot) the picture keeps riding as the style key, as before, so it is never dropped.
+
+Known limits: the mood, group and praise word lists are English (plus "jai"); a comic written in another language gets
+none of the story fixes, and its prompts stay today's. Lasting traits stay ("laugh lines", "permanent scowl"); a field
+that is only an expression ("serene calm smile") comes out empty in the prompt, so the panel gives the feeling. With
+chains on, a scene's first page has no previous-page reference (today it gets the nearest earlier drawn page): the lead
+rules on this scene rule.
+
+Rollback: set the flag to `off` (instant); `CARD_LINT_STAGE = 'off'` and redeploy.

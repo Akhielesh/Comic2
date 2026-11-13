@@ -468,6 +468,49 @@ Flash-class vision model, image + page spec → strict JSON:
 speaker's head, never covering faces/hands/key action, top-to-bottom in reading order.
 Fallback (vision unavailable): even grid boxes from the layout + top-of-panel stacking.
 
+**The page check, version 2 (Program 5 P5-QC, `COMIC_QC_V2`: off | admins | all; off = today's request and report).**
+Read once per page check in `jobs.ts letterPage` (`p5Flags.ts`; `admins` needs the request's caps to say admin).
+The same single call, with no extra image, about 100–250 more output tokens (≈ +$0.0004–0.001 a page, ≈ +$0.01 a
+10-page comic; `QC_V2_TOKENS` (60) + `QC_V2_TOKENS_PER_CHARACTER` (40) per drawn character on the token cap; one
+acting entry is about 30–40 tokens):
+- **Marks that never collapse.** keepOut boxes, heads, panel boxes and balloons each read on their own coordinate
+  scale (a reply with a 0–1000 face box and 0–1 heads no longer divides the heads by 1000), and a head under
+  `MIN_HEAD_COORD` (0.005) is dropped. When the guard had to drop a head, an edit or panel fix keeps the marks of the
+  version it was made from (`lastTrustedMarks`: the history entry at `render.parentPath`, only when its heads are
+  real), so a balloon tail never aims at the page corner. Only what was lost is replaced (`mergeTrustedMarks`): a
+  panel whose head was dropped takes the parent's heads and face boxes for that panel, a group whose scale could not
+  be read takes the parent's group; good fresh marks elsewhere stay. A fresh drawing keeps only what survived.
+  (Known limit: the panel an edit targeted is not recorded, so if its own head is dropped it also falls back.)
+- **Acting and direction.** The script the inspector reads gains one `Direction:` line per panel (mood, angle, the
+  sides the script asks for, any per-character expression and gaze). The rubric asks for expression against the
+  panel's mood, eyelines, left/right against the script, landmark sides, iconography slips and inscriptions as
+  issues, and two new answers: `acting` (per drawn character: expression, gaze, facing, side) and `inscriptions`
+  (text plus script). The software compares the sides with the script ($0, `scriptSidesOf`: the panel direction's
+  `pos`, else the action's own words about the frame — "on the left", "at left", "from the right", "in the lower
+  left", "in the left foreground"; never a possessive like "at his left shoulder" and never ordinary English like "at
+  the right moment", "a lamp in the left hand" or "on the right track" — else the staging words the page prompt
+  printed, which skip props and one person with a prop). A flip against what the author wrote is an issue, a stored
+  `qc.sides` entry, a 0.8 score cap and a "Check panels" notice with a quoted "Redraw panel N with X on the left"
+  chip (`qcNotice.ts`). A flip against the software's own default staging (first character left, second right) is
+  stored with `from: 'staging'` and said as "the page plan placed them on the …": an issue line only, never a cap,
+  a notice or a paid chip.
+- **Inscriptions are not stray text.** A text that the check itself lists among the scene's `inscriptions` and that
+  spells a glossary term (its term, a form, or the Latin term without its final "a": Rama → RAM) is part of the
+  scene: no "Stray text" cap. Both are needed: a translated comic's glossary holds every cast name, place and the
+  title (`syncGlossaryOps`), so a glossary match alone would excuse name labels painted beside characters. On in-art
+  pages the lettering check sees every text first: a script line that is only a name ("Hanuman!") is lettering, and
+  only text that matches no script line can be an inscription (never "unexpected text"). The accepted texts are
+  stored as `qc.inscriptions`. Drawn in another script than the glossary's
+  form, it gets a plain note ("Inscription "RAM" (Rama) is drawn in Latin letters; the glossary writes it राम."); the
+  model's own word marks runes and invented letters that Unicode cannot see (that note only). A $0 book note
+  (`inscriptionBookNote`, stored as `qc.inscriptionNote`) names the pages when one term is drawn in two scripts, on a
+  page that holds the less used one; it reads the other pages' `qc.inscriptions` and tells scripts apart by their
+  letters alone, so the same letters never count twice. Alone, it is a plain info line ("Page 8: Rama is drawn in two
+  scripts (…).") with no redraw sentence and no paid chip; with another problem it joins the "Check panels" notice.
+  Blocked drawn text is screened first and never becomes an inscription. A bare cast name, or a glossary name the
+  check did not list as part of the scene, stays stray text.
+- The script stays data (S14): the fence sentence is unchanged and the rubric says inscriptions are data too.
+
 ### 6.10 Plan fit, the layout as drawn and honest page checks (v5, Ship 1)
 "Better pages at the same price": one image call per page, fewer and larger panels, and words that fit them.
 - **Panel rules and budgets** (`shared/comic/panelRules.ts`, `density.ts`): auto plans use about 3 panels (2–4; 5

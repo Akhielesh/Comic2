@@ -3,10 +3,49 @@
 // note 10), so runner tests run the guarded path, and LibraryDeps.spend / calls can become required in a later wave.
 // Fakes only: no network, no spend.
 import { describe, expect, it } from 'vitest';
+import { BLANK_LUMA_STDEV, measureImage } from '../imageMeasure.js';
+import { encodeLibraryImage } from './post.js';
 import { manifestView, startRun, stepRun } from './runner.js';
-import { TEST_MANIFEST, testLibrary } from './testkit.js';
+import { KIT_IMAGE_SPLIT, TEST_MANIFEST, pngDataUrl, testLibrary } from './testkit.js';
 
 const ADMIN = '00000000-0000-4000-8000-000000000001';
+
+describe('pngDataUrl: the kit image is never near blank', () => {
+  // The runner publishes a kit image only if the software check does not call it blank. Noise alone sat 4% above the
+  // blank threshold after the WebP encode and the 64×64 downscale, so a rare draw fell under it and the runner asked
+  // for another attempt: a run stayed "running" where a test expected "completed". The kit image must clear the
+  // threshold by a wide margin on every draw, at every shape the tests use.
+  it.each([
+    [320, 320, '1:1', 6],
+    [900, 1125, '4:5', 2] // the large shape takes most of a second per draw
+  ] as const)(
+    'a %i×%i draw measures at least three times the blank threshold after the library encode',
+    async (w, h, aspect, draws) => {
+      for (let i = 0; i < draws; i += 1) {
+        const enc = await encodeLibraryImage(await pngDataUrl(w, h));
+        const m = await measureImage(enc.full, aspect);
+        expect(m.blank).toBe(false);
+        expect(m.lumaStdev).toBeGreaterThanOrEqual(3 * BLANK_LUMA_STDEV);
+        expect(m.aspectOk).toBe(true);
+      }
+    },
+    30_000
+  );
+
+  it('keeps the requested mean: the two halves move by the same step in opposite directions', async () => {
+    const m = await measureImage((await encodeLibraryImage(await pngDataUrl(320, 320, 150))).full, '1:1');
+    expect(Math.abs(m.meanLuma - 150 / 255)).toBeLessThan(0.03);
+    expect(KIT_IMAGE_SPLIT / 255).toBeGreaterThan(3 * BLANK_LUMA_STDEV); // the step alone clears the margin, before any noise
+  });
+
+  it('stays an image at the edges of the range and at one pixel wide', async () => {
+    for (const [w, h, mean] of [[320, 320, 0], [320, 320, 255], [1, 8, 150], [2, 2, 10]] as const) {
+      const url = await pngDataUrl(w, h, mean);
+      const m = await measureImage(Buffer.from(url.split(',')[1], 'base64'));
+      expect([m.w, m.h]).toEqual([w, h]);
+    }
+  });
+});
 
 describe('testLibrary: the pass-through spend guard', () => {
   it('wires spend and calls on the deps: the model-test key by name, no app cap, a no-op ledger', async () => {

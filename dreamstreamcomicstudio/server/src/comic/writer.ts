@@ -662,6 +662,64 @@ const cleanLook = (raw: unknown): CharacterLook => {
   return look;
 };
 
+// ── Crowd voices (P5-TRUTH item 2, COMIC_STORY_FIXES) ─────────────────────────
+// A crowd's cheer is not the hero's line: a line with no speaker stays an unnamed voice instead of defaulting to the
+// panel's only character, and a group word ("Vanaras", "the army", "the crowd") resolves to a group cast member.
+
+/** Nouns that make a cast member a group ("Vanara army", "the villagers"). */
+const GROUP_NOUNS = /\b(?:army|armies|crowd|crowds|troop|troops|horde|host|band|villagers|people|soldiers|warriors|forces|mob|choir|chorus|tribe|clan|swarm|flock|pack|herd|squad|crew|council|court|onlookers|followers|monkeys)\b/i;
+/** Speaker words that mean "a crowd" without naming one. */
+const CROWD_WORDS = new Set(['crowd', 'crowds', 'army', 'everyone', 'all', 'voices', 'voice', 'chorus', 'soldiers', 'warriors', 'people', 'onlookers', 'villagers', 'mob', 'troops']);
+/** "Vanaras" → "vanara", "armies" → "army", "the army" → ["army"]. */
+const stemWords = (text: string): string[] =>
+  clean(text)
+    .toLowerCase()
+    .split(/[^\p{L}]+/u)
+    .filter((w) => w && w !== 'the')
+    .map((w) => (w.length > 4 && w.endsWith('ies') ? `${w.slice(0, -3)}y` : w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w));
+
+type CrowdCard = { id: string; name: string; count?: number; look?: { species?: string } };
+const isGroupCard = (c: CrowdCard): boolean => (typeof c.count === 'number' && c.count > 1) || GROUP_NOUNS.test(c.name);
+/** The words that name a group card ("Vanara army" → vanara, army; plus its species). */
+const groupStems = (c: CrowdCard): Set<string> => new Set([...stemWords(c.name), ...stemWords(c.look?.species || '')]);
+
+/** A speaker token that only says "a crowd" ("Everyone", "All", "Voices", "the soldiers") and names no one. */
+const isBareCrowd = (token: string): boolean => {
+  const words = stemWords(token);
+  return words.length > 0 && words.every((w) => CROWD_WORDS.has(w) || CROWD_WORDS.has(`${w}s`));
+};
+
+/** The group cast member a speaker token names by its own words ("Vanaras", "Vanara army"). Bare crowd words never
+ *  name a group here: they resolve only to the group the panel shows (groupInPanel), so a crowd word in Ravana's court
+ *  never draws the Vanara army into it. */
+const groupForToken = (token: string, groups: CrowdCard[]): string | undefined => {
+  const words = stemWords(token);
+  if (!words.length || isBareCrowd(token)) return undefined;
+  const named = groups.filter((g) => {
+    const stems = groupStems(g);
+    return words.some((w) => stems.has(w) && !CROWD_WORDS.has(w)) || words.every((w) => stems.has(w));
+  });
+  return named.length === 1 ? named[0].id : undefined;
+};
+
+/** The one group card a panel shows: in its castIds, or named by its action. */
+const groupInPanel = (castIds: string[], action: string, groups: CrowdCard[]): string | undefined => {
+  const listed = groups.filter((g) => castIds.includes(g.id));
+  if (listed.length === 1) return listed[0].id;
+  if (listed.length > 1) return undefined;
+  const words = new Set(stemWords(action));
+  const shown = groups.filter((g) => [...groupStems(g)].some((w) => words.has(w)));
+  return shown.length === 1 ? shown[0].id : undefined;
+};
+
+/** Praise words before a name: a line praising its own speaker ("Hail Hanuman!" said by Hanuman). */
+const praisesSelf = (text: string, name: string): boolean => {
+  const first = clean(name).split(/\s+/)[0];
+  if (!first) return false;
+  const n = first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b(?:hail|all hail|glory to|long live|praise|victory to|jai|bless(?:ed be)?|three cheers for|hooray for|mighty|great)\\b[^.!?]{0,24}\\b${n}\\b`, 'iu').test(text);
+};
+
 /** Resolves castIds / speakerIds (ids or names) to doc characters or new-cast drafts. */
 class CastResolver {
   private readonly byId = new Map<string, string>();
@@ -824,6 +882,8 @@ interface PlanNormalizeContext {
   pageCount: number;
   /** Effective content rating (post-plan pre-filter). */
   rating?: ContentRating;
+  /** P5-TRUTH (COMIC_STORY_FIXES): crowd lines stay crowd lines; a line praising its own speaker gets a free note. */
+  storyFixes?: boolean;
 }
 
 const safePrefilter = (text: string, rating: ContentRating) => {
@@ -875,6 +935,8 @@ interface NormalizedPlan {
   newCast: Character[];
   /** Pages whose blueprint the validator re-chose so their words fit ($0), by page id. */
   layoutFixes: Map<string, LayoutFix>;
+  /** COMIC_STORY_FIXES: free notes for the plan card about who says a line (never a repair round). */
+  speakerNotes?: string[];
 }
 
 /** A blueprint re-chosen in code so a page's dialogue fits (named to the user, never silent). */
@@ -942,6 +1004,10 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
     placeIds.set(normalizeName(p.name), p.id);
   }
   const nameOf = (id?: string) => (id ? doc.cast.find((c) => c.id === id)?.name || resolver.drafts.get(id)?.name : undefined);
+  const fixes = ctx.storyFixes === true;
+  const speakerNotes: string[] = [];
+  /** Every group card the plan can use: the book's and the ones this reply drafts. */
+  const crowdCards = (): CrowdCard[] => [...doc.cast, ...resolver.drafts.values()].filter(isGroupCard);
 
   const rawPages = json.pages.filter(isObject);
   const numbered = rawPages.every((p) => Number.isInteger(p.n)) && new Set(rawPages.map((p) => p.n)).size === rawPages.length;
@@ -986,12 +1052,31 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
       const lines: Line[] = [];
       for (const rl of asArray(rp.lines).filter(isObject)) {
         const speakerToken = clean(rl.speakerId);
-        let speakerId = speakerToken ? resolver.resolve(speakerToken, true, { speaker: true }) : undefined;
-        const kind = normalizeKind(rl.kind, !!speakerId);
+        const groups = fixes ? crowdCards() : [];
+        // With the fixes, a bare crowd word ("Everyone", "Voices") is the group the panel shows, else an unnamed voice:
+        // never a new walk-on called "Everyone", and never a group card that is not in the panel.
+        const crowdVoice = fixes && !!speakerToken && !resolver.find(speakerToken) && isBareCrowd(speakerToken);
+        let speakerId = crowdVoice
+          ? groupInPanel(castIds, action, groups)
+          : speakerToken
+            ? (fixes && !resolver.find(speakerToken) ? groupForToken(speakerToken, groups) : undefined) ?? resolver.resolve(speakerToken, true, { speaker: true })
+            : undefined;
+        const kind = normalizeKind(rl.kind, !!speakerId || crowdVoice);
         if (!SPOKEN_KINDS.has(kind)) speakerId = undefined;
-        else if (!speakerId && castIds.length === 1) speakerId = castIds[0];
+        // Today: a line with no speaker in a one-character panel is that character's. With the fixes the crowd the panel
+        // shows (one group card) speaks it first; else it is still the only character's, unless it cheers that very
+        // character ("Hail Hanuman!" in a Hanuman-only panel), which stays an unnamed voice.
+        else if (!speakerId && fixes && !crowdVoice) {
+          speakerId = groupInPanel(castIds, action, groups);
+          if (!speakerId && castIds.length === 1 && !praisesSelf(clean(rl.text), nameOf(castIds[0]) || '')) speakerId = castIds[0];
+        } else if (!speakerId && !fixes && castIds.length === 1) speakerId = castIds[0];
         const text = cleanLineText(rl.text, nameOf(speakerId));
         if (!text) continue;
+        if (fixes && speakerId && praisesSelf(text, nameOf(speakerId) || '')) {
+          speakerNotes.push(
+            `${label}, panel ${panels.length + 1}: ${nameOf(speakerId)} cheers ${nameOf(speakerId)} ("${clip(text, 60)}"). A crowd or another character usually says this; change the speaker if so.`
+          );
+        }
         // Speakers are visible — except a voice heard off-panel in a pov, insert or establishing shot (§3 C6).
         if (speakerId && !castIds.includes(speakerId) && !OFF_PANEL_SHOTS.has(shot)) castIds.push(speakerId);
         lines.push({ id: newId('ln'), kind, text, ...(speakerId ? { speakerId } : {}) });
@@ -1096,7 +1181,7 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
     }
     newCast.push(character);
   }
-  return { value: { pages, newCast, layoutFixes }, problems };
+  return { value: { pages, newCast, layoutFixes, ...(speakerNotes.length ? { speakerNotes } : {}) }, problems };
 };
 
 /** Make a full plan exactly `target` pages long: split the densest pages, merge the sparsest neighbors. */
@@ -1269,6 +1354,8 @@ export async function writePagePlan(args: {
   signal?: AbortSignal;
   /** Effective content rating (ctx.rating); default effectiveRating(doc). */
   rating?: ContentRating;
+  /** P5-TRUTH (COMIC_STORY_FIXES, read per request by the caller): crowd lines stay crowd lines. */
+  storyFixes?: boolean;
 }): Promise<{
   pages: Page[];
   newCast: Character[];
@@ -1280,6 +1367,7 @@ export async function writePagePlan(args: {
 }> {
   const { doc } = args;
   const rating = args.rating ?? effectiveRating(doc).rating;
+  const storyFixes = args.storyFixes === true;
   const revising = Array.isArray(args.pageIds) && args.pageIds.length > 0;
   const targets = revising ? doc.pages.filter((p) => args.pageIds!.includes(p.id)).sort((a, b) => a.n - b.n) : null;
   if (revising && !targets!.length) throw new StudioError('BAD_REQUEST', 'Those pages are no longer in the plan.', { status: 400 });
@@ -1303,7 +1391,7 @@ export async function writePagePlan(args: {
       user: writerUserMessage(doc, { instructions: args.instructions, targets }),
       schemaName: 'comic_page_plan',
       schema: PAGE_PLAN_SCHEMA,
-      validate: (json) => normalizePlan(json, { doc, targets, pageCount, rating }),
+      validate: (json) => normalizePlan(json, { doc, targets, pageCount, rating, storyFixes }),
       failure,
       temperature: 0.7,
       maxTokens: 2_500 + pagesToWrite * 1_400,
@@ -1322,7 +1410,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: group, pageCount, rating });
+          const check = normalizePlan(json, { doc, targets: group, pageCount, rating, storyFixes });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: alignToTargets(orderedRawPages(json), group), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1335,7 +1423,7 @@ export async function writePagePlan(args: {
       return result.value;
     });
     const combined = { pages: parts.flatMap((p) => p.pages), newCast: parts.flatMap((p) => p.newCast) };
-    const check = normalizePlan(combined, { doc, targets, pageCount, rating });
+    const check = normalizePlan(combined, { doc, targets, pageCount, rating, storyFixes });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   } else {
@@ -1383,7 +1471,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, rating });
+          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, rating, storyFixes });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: orderedRawPages(json), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1399,7 +1487,7 @@ export async function writePagePlan(args: {
       pages: parts.flatMap((p) => p.pages).map((p, i) => ({ ...p, n: i + 1 })),
       newCast: [...outlineResult.value.newCast, ...parts.flatMap((p) => p.newCast)]
     };
-    const check = normalizePlan(combined, { doc, targets: null, pageCount, rating });
+    const check = normalizePlan(combined, { doc, targets: null, pageCount, rating, storyFixes });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   }
@@ -1421,7 +1509,8 @@ export async function writePagePlan(args: {
   const countNote = revising ? undefined : panelCountNote(doc.format);
   const notes = [
     ...(countNote ? [countNote] : []),
-    ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!))
+    ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!)),
+    ...(normalized.speakerNotes ?? [])
   ];
   // Drop new characters that page-count enforcement removed from every page.
   const stillUsed = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));

@@ -53,10 +53,28 @@ export const FeedbackWidget: React.FC = () => {
     setStatus('idle');
   };
 
+  // Every delayed step goes through `later`, so leaving the page cancels it: a timer that fires after the widget is
+  // gone must not touch its state.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const later = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timers.current = timers.current.filter((t) => t !== id);
+      fn();
+    }, ms);
+    timers.current.push(id);
+  };
+  useEffect(
+    () => () => {
+      timers.current.forEach((t) => clearTimeout(t));
+      timers.current = [];
+    },
+    []
+  );
+
   const close = () => {
     setOpen(false);
     // Reset shortly after the close animation so a reopened panel is clean.
-    setTimeout(reset, 200);
+    later(reset, 200);
   };
 
   useEffect(() => {
@@ -95,7 +113,7 @@ export const FeedbackWidget: React.FC = () => {
       metadata: { widget: 'global_feedback' }
     });
     setStatus('sent');
-    setTimeout(close, 1400);
+    later(close, 1400);
   };
 
   return (

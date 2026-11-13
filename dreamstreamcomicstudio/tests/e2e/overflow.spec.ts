@@ -104,6 +104,17 @@ test.describe('overflow probe self-test @selftest', () => {
     expect(judgeOverflow('a@desk-light', { textEscapes: 3 }, listed)).toEqual({ over: [], under: [] });
     expect(judgeOverflow('a@desk-light', { textEscapes: 4 }, listed).over).toHaveLength(1);
     expect(judgeOverflow('a@desk-light', { textEscapes: 2 }, listed).under).toHaveLength(1);
+    // A listed pixel width may differ by 2 px between machines (the CI runner read 140 and 100 where the baseline says
+    // 139 and 99); counts and zeros stay exact.
+    const px = { 's@narrow-light': { textEscapes: 3, hOverflow: 139 }, 's@phone-dark': { textEscapes: 3, hOverflow: 99 } };
+    expect(judgeOverflow('s@narrow-light', { textEscapes: 3, hOverflow: 140 }, px)).toEqual({ over: [], under: [] });
+    expect(judgeOverflow('s@phone-dark', { textEscapes: 3, hOverflow: 100 }, px)).toEqual({ over: [], under: [] });
+    expect(judgeOverflow('s@narrow-light', { textEscapes: 3, hOverflow: 137 }, px)).toEqual({ over: [], under: [] });
+    expect(judgeOverflow('s@narrow-light', { textEscapes: 3, hOverflow: 142 }, px).over).toEqual(['s@narrow-light  hOverflow: 142, baseline 139']);
+    expect(judgeOverflow('s@narrow-light', { textEscapes: 3, hOverflow: 136 }, px).under).toHaveLength(1);
+    expect(judgeOverflow('s@narrow-light', { textEscapes: 4, hOverflow: 139 }, px).over).toEqual(['s@narrow-light  textEscapes: 4, baseline 3']);
+    expect(judgeOverflow('new@narrow-light', { hOverflow: 1 }, {}).over).toHaveLength(1);
+    expect(judgeOverflow('a@desk-light', { textEscapes: 3, hOverflow: 1 }, listed).over).toEqual(['a@desk-light  hOverflow: 1, baseline 0']);
     expect(updateOverflowBaseline(listed, { 'a@desk-light': { textEscapes: 5 }, 'b@desk-light': { hOverflow: 2 } }, 'shrink')).toEqual(listed);
     expect(updateOverflowBaseline(listed, { 'a@desk-light': { textEscapes: 1 } }, 'shrink')).toEqual({ 'a@desk-light': { textEscapes: 1 } });
     expect(updateOverflowBaseline(listed, { 'a@desk-light': {}, 'b@desk-light': { hOverflow: 2 } }, 'reset')).toEqual({ 'b@desk-light': { hOverflow: 2 } });
