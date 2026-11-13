@@ -8,6 +8,10 @@
  * row's height there, so the row never sits on it. With a mouse nothing changes: the row is hidden until the card is
  * hovered. It also shows when the keyboard reaches one of its buttons, so a focused button is never invisible.
  *
+ * The page header is part of the same promise. Its title and its New comic button sat on one row that could not
+ * wrap, so on a narrow phone the row was wider than the screen: the page scrolled sideways and the browser shrank it
+ * to fit, which also shrinks every button on it. The button now drops under the title when the two do not fit.
+ *
  * jsdom has no media queries, so two things are checked: the classes the card renders, and the CSS this app's own
  * Tailwind builds from exactly those classes.
  */
@@ -278,5 +282,26 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     const order = (cls: string) => root.index(ruleFor(root, cls).top);
     const touchAt = order(`${TOUCH}opacity-100`);
     for (const base of ['opacity-0', 'inset-0', 'bg-black/50', 'px-4']) expect(order(base), base).toBeLessThan(touchAt);
+  });
+});
+
+describe('My comics on a phone: the header', () => {
+  it('the New comic button drops under the title when the two do not fit side by side', async () => {
+    renderDashboard([studioProject]);
+    const title = screen.getByRole('heading', { level: 1, name: 'My comics' });
+    const create = screen.getByRole('button', { name: /new comic/i });
+    // The row that holds both: the nearest ancestor of the title that also holds the button.
+    let header = title.parentElement as HTMLElement;
+    while (!header.contains(create)) header = header.parentElement as HTMLElement;
+
+    // As before on a wide screen: one row, title on the left, button on the right, centred on each other.
+    expect(tokens(header)).toEqual(expect.arrayContaining(['flex', 'items-center', 'justify-between', 'mb-8']));
+    // New: the row may wrap, with a gap between its two lines (and between its two halves).
+    expect(tokens(header)).toEqual(expect.arrayContaining(['flex-wrap', 'gap-4']));
+    expect([...tokens(header)].sort()).toEqual(['flex', 'flex-wrap', 'gap-4', 'items-center', 'justify-between', 'mb-8']);
+
+    const root = await compile(tokens(header));
+    expect(ruleFor(root, 'flex-wrap')).toMatchObject({ decls: { 'flex-wrap': 'wrap' }, touchOnly: false });
+    expect(ruleFor(root, 'gap-4')).toMatchObject({ decls: { gap: '1rem' }, touchOnly: false });
   });
 });

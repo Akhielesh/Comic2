@@ -267,7 +267,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
         <>
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-brand-yellow border-4 border-black rounded-xl flex items-center justify-center shadow-comic transform -rotate-3">
                 <LayoutGrid className="w-8 h-8 text-black" />
