@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import postcss from 'postcss';
 import { describe, expect, it } from 'vitest';
 import * as design from '../chat/studioDesign';
-import { APP_ROOT, parseRules, topLevelSplit } from '../../tests/config/cssTokens';
+import { APP_ROOT, parseRules, tokenBlocks, topLevelSplit } from '../../tests/config/cssTokens';
 
 const req = createRequire(path.join(APP_ROOT, 'package.json'));
 
@@ -92,5 +92,61 @@ describe('the colour layer recipes compile and exist', () => {
     }
     expect(design.hueClass('dot', 5)).toBeNull();
     expect(design.hueClass('fill', -1)).toBeNull();
+  });
+
+  it('the "Ink, Paper & Colour" recipes compile to their tokens (CL-6): marks, text steps, tints, solids, ramps, washes, art tint, studio', async () => {
+    const all = [
+      ...design.HUE_MARK.dot, ...design.HUE_MARK.fill, ...design.HUE_MARK.stroke, ...design.HUE_TEXT, ...design.HUE_SOFT_BG, ...design.HUE_SOLID,
+      ...design.CHART_SEQ_FILL, ...design.CHART_SEQ_BG, ...design.CHART_DIV_FILL, ...design.CHART_DIV_BG,
+      design.CHART_PLOT_BG, design.INK_TILE, design.WASH_HERO, design.WASH_EMPTY, design.ART_SOFT_BG, design.ART_EDGE, design.STUDIO_SOFT_BG, design.STUDIO_MARK
+    ];
+    const css = await compile(all.join(' '));
+    for (let n = 1; n <= 7; n++) {
+      for (const decl of [`background-color: var(--ds-hue-${n})`, `fill: var(--ds-hue-${n})`, `stroke: var(--ds-hue-${n})`, `color: var(--ds-hue-${n}-text)`, `background-color: var(--ds-hue-${n}-soft)`, `background-color: var(--ds-hue-${n}-solid)`]) expect(css, decl).toContain(decl);
+    }
+    expect(css).toContain('color: var(--ds-on-hue)');
+    for (let n = 1; n <= 6; n++) expect(css).toContain(`fill: var(--ds-chart-seq-${n})`);
+    for (let n = 1; n <= 7; n++) expect(css).toContain(`background-color: var(--ds-chart-div-${n})`);
+    // The washes are background IMAGES (a gradient token), never a colour, and do not tile.
+    expect(css).toContain('background-image: var(--ds-wash-hero)');
+    expect(css).toContain('background-image: var(--ds-wash-empty)');
+    expect(css).toContain('background-repeat: no-repeat');
+    expect(css).toContain('background-color: var(--ds-art-soft)');
+    expect(css).toContain('border-color: var(--ds-art-edge)');
+    expect(css).toContain('background-color: var(--ds-studio-soft)');
+    expect(css).toContain('background-color: var(--ds-studio)');
+    expect(css).toContain('background-color: var(--ds-surface)');
+  });
+
+  it('the art scope is a hand-written class in index.css (ART_SCOPE), derived in light and dark', () => {
+    const index = readFileSync(path.join(APP_ROOT, 'index.css'), 'utf8');
+    expect(design.ART_SCOPE).toBe('ds-art-scope');
+    expect(index).toMatch(/\n\.ds-art-scope \{[^}]*--ds-art-soft: color-mix\(in oklab, var\(--ds-art\) 12%, var\(--ds-canvas\)\)/);
+    expect(index).toMatch(/\.dark \.ds-art-scope,\s*\.dark\.ds-art-scope \{[^}]*--ds-art-soft: color-mix\(in oklab, var\(--ds-art\) 18%/);
+  });
+
+  it('chartHue reads the chart order (ultramarine, magenta, leaf, sky, orange, teal, violet) and folds past seven; hueChip is ink on the tint', () => {
+    expect([0, 1, 2, 3, 4, 5, 6].map((i) => design.chartHue('fill', i))).toEqual([1, 2, 6, 7, 3, 4, 5].map((n) => `fill-[var(--ds-hue-${n})]`));
+    expect(design.chartHue('dot', 2)).toBe('bg-[var(--ds-hue-6)]');
+    expect(design.chartHue('stroke', 3)).toBe('stroke-[var(--ds-hue-7)]');
+    expect([7, -1, 1.5].map((i) => design.chartHue('fill', i))).toEqual([null, null, null]);
+    expect(design.HUE_MARK.dot).toHaveLength(7);
+    for (let i = 0; i < 7; i++) expect(design.hueChip(i)).toBe(`bg-[var(--ds-hue-${i + 1}-soft)] text-[var(--ds-ink)]`);
+    expect(design.hueChip(7)).toBe('bg-[var(--ds-well-strong)] text-[var(--ds-ink)]');
+    // The five-slot series recipes keep their meaning (Sparkline's series 0-4, "Other" past five).
+    expect(design.HUE_DOT).toEqual(design.HUE_MARK.dot.slice(0, 5));
+    expect(design.HUE_FILL).toEqual(design.HUE_MARK.fill.slice(0, 5));
+  });
+
+  it('every var()-derived colour-layer token is restated in all four token blocks, so a nested .dark panel or skin root recomputes it (critique M14)', () => {
+    const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(parseRules(readFileSync(path.join(APP_ROOT, 'index.css'), 'utf8')));
+    const derived = [...ROOT_TOKENS].filter(([k, v]) => /^--ds-(?:hue-\d-(?:soft|solid)|studio(?:-soft)?|art-(?:soft|edge)|wash-\w+)$/.test(k) && /var\(/.test(v)).map(([k]) => k);
+    expect(derived.length).toBe(7 + 7 + 2 + 2 + 2);
+    for (const [name, block] of Object.entries({ DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK })) {
+      expect(derived.filter((k) => !block.has(k)), name).toEqual([]);
+    }
+    // The soft tint follows its block's raised step: the dark blocks mix 16 %, the light ones 12 %.
+    expect(DARK_TOKENS.get('--ds-hue-4-soft')).toBe('color-mix(in srgb, var(--ds-hue-4) 16%, var(--ds-raised))');
+    expect(ATLAS_LIGHT.get('--ds-hue-4-soft')).toBe('color-mix(in srgb, var(--ds-hue-4) 12%, var(--ds-raised))');
   });
 });
