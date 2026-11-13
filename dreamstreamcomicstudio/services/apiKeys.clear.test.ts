@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addKey, listKeys, clearAllKeys, deleteKey, hasUsableKey } from './apiKeys';
+import { addKey, listKeys, clearAllKeys, deleteKey, hasUsableKey, updateKey, setKeyValidation, getProviderKeyValue } from './apiKeys';
 
 describe('clearAllKeys (sign-out security)', () => {
   beforeEach(() => {
@@ -35,5 +35,31 @@ describe('clearAllKeys (sign-out security)', () => {
     deleteKey(imported.id);
     expect(hasUsableKey('openrouter')).toBe(false);
     expect(window.localStorage.getItem('dreamstream_openrouter_key')).toBeNull();
+  });
+
+  it('rotating a key discards its old verdict and ignores an in-flight check of the previous secret', () => {
+    const key = addKey({ provider: 'openai', key: 'old-key' });
+    setKeyValidation(key.id, 'valid', 'Valid old key.', 'old-key');
+    updateKey(key.id, { key: 'replacement-key' });
+    setKeyValidation(key.id, 'valid', 'Late response for old key.', 'old-key');
+    expect(listKeys()[0]).toMatchObject({ key: 'replacement-key' });
+    expect(listKeys()[0].validation).toBeUndefined();
+    expect(listKeys()[0].validatedAt).toBeUndefined();
+  });
+
+  it('reads a legacy provider key added after the initial migration consistently', () => {
+    listKeys();
+    window.localStorage.setItem('dreamstream_nvidia_key', 'nvapi-later');
+    expect(hasUsableKey('nvidia')).toBe(true);
+    expect(getProviderKeyValue('nvidia')).toBe('nvapi-later');
+    addKey({ provider: 'nvidia', key: 'nvapi-active' });
+    expect(getProviderKeyValue('nvidia')).toBe('nvapi-active');
+  });
+
+  it('a malformed persisted key collection does not break every request', () => {
+    window.localStorage.setItem('dreamstream_api_keys_v2', '{"keys":[]}');
+    expect(listKeys()).toEqual([]);
+    window.localStorage.setItem('dreamstream_api_keys_v2', '[null,{},42]');
+    expect(listKeys()).toEqual([]);
   });
 });

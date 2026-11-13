@@ -120,7 +120,7 @@ export const platformKeyFor = (providerId?: string): string => {
 // their own existing default logic.
 const DEFAULT_TEXT_MODELS: Partial<Record<AIProviderId, string>> = {
   openai: 'gpt-4o-mini',
-  anthropic: 'claude-3-5-haiku-20241022',
+  anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-2.5-flash',
   deepseek: 'deepseek-chat',
   zai: 'glm-4.6',

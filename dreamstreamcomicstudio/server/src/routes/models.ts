@@ -2,9 +2,11 @@ import { Router, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
 import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
 import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from '../services/modelCatalogStore.js';
-import { getModelLatency } from '../services/telemetryAnalytics.js';
+import { getModelLatencyReport } from '../services/telemetryAnalytics.js';
 import { getModelPopularity, parsePopularityWindow } from '../services/usageAnalytics.js';
 import { requireAuth } from '../middleware/auth.js';
+import { allowedProviderFilter } from '../middleware/keys.js';
+import { attachAccountKeys } from '../middleware/accountKeys.js';
 import { hydrateAccessProfile } from '../middleware/requireAdmin.js';
 import { listModelScores, listMonthlyUsage, loadScoreMap } from '../services/modelStats.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
@@ -19,8 +21,8 @@ const parseSource = (value: unknown): CatalogFilters['source'] =>
   typeof value === 'string' && TEXT_PROVIDER_IDS.includes(value as ProviderId) ? (value as AIProviderId) : undefined;
 
 // Every direct provider beyond OpenRouter (which is the public `base` list). Each
-// contributes its curated catalog (always — so logged-out visitors see the models) plus
-// its live /models list when a key is present (BYOK header or a platform env key).
+// contributes a curated fallback or its live /models list when a key is present
+// (BYOK header or a platform env key).
 const DIRECT_SOURCES: AIProviderId[] = TEXT_PROVIDER_IDS.filter((id) => id !== 'openrouter') as AIProviderId[];
 
 // Merge the direct providers' models into the base (OpenRouter) catalog.
@@ -28,7 +30,7 @@ const DIRECT_SOURCES: AIProviderId[] = TEXT_PROVIDER_IDS.filter((id) => id !== '
 // NVIDIA's /models needs auth (unlike OpenRouter's public list): with a key we fetch live
 // AND harvest the public metadata into the cache; without one we serve the cached list so the
 // public models page stays populated. The OpenAI-compatible / Anthropic providers ship a
-// curated seed, so they're populated even keyless; a key augments them with live ids. We never
+// curated seed, so they're populated even keyless; a successful keyed list supplies live ids. We never
 // store keys — only public model metadata is cached.
 // EGRESS-DB E4: the cached NVIDIA rows change only when a keyed fetch harvests them, so a catalog request reads
 // them (and their callability) at most every 10 minutes per process, and a keyed list tops the cache up at most
@@ -61,7 +63,8 @@ export const resetModelsRouteCaches = (): void => {
   nvidiaPersistedAt = 0;
 };
 
-const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
+const withDirectProviderModels = async (req: Request, base: AnnotatedModel[], keyFor?: (id: AIProviderId) => string | null): Promise<AnnotatedModel[]> => {
+  const allow = allowedProviderFilter(req);
   const nvidiaCallability = await nvidiaCallabilityMemo.get().catch(() => new Map<string, boolean>());
   const attachCallability = (models: AnnotatedModel[], map: Map<string, boolean>): AnnotatedModel[] =>
     models.map((m) => (map.has(m.id) ? { ...m, apiCallable: map.get(m.id) } : m));
@@ -69,8 +72,10 @@ const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): P
   const lists = await Promise.all(
     DIRECT_SOURCES.map(async (id): Promise<AnnotatedModel[]> => {
       const def = getProviderDef(id);
-      const key = (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
-      let models = await getProviderModels(id, key);
+      const key = !allow(id) ? null : keyFor ? keyFor(id)
+        : req.apiKeys?.providerKeys ? req.apiKeys.providerKeys[id]?.key || null
+        : (def ? req.header(def.header)?.trim() : null) || (def ? process.env[def.keyEnv]?.trim() : null) || null;
+      let models = await getProviderModels(id, key, { platformFallback: false });
       if (id === 'nvidia') {
         if (!models.length) models = await nvidiaPersistedMemo.get();
         else if (Date.now() - nvidiaPersistedAt >= NVIDIA_PERSIST_INTERVAL_MS) {
@@ -91,6 +96,7 @@ const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): P
 // Query: ?free=&modality=image|text&refs=&source=openrouter|nvidia&q=&refresh=
 //        &product=chat_studio|stream_studio|comic_studio (capability-gated list)
 modelsRouter.get('/catalog', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   const modalityParam = req.query.modality;
   const filters: CatalogFilters = {
     free: parseBool(req.query.free),
@@ -122,6 +128,7 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
     sources,
     fetchedAt: result.fetchedAt,
     degraded: result.degraded,
+    stale: result.stale,
     message: result.message
   });
 });
@@ -155,7 +162,7 @@ modelsRouter.get('/usage-monthly', async (req: Request, res: Response, next) => 
 // model picker can flag slow models. Public + non-sensitive (aggregate timings only).
 modelsRouter.get('/speed', async (req: Request, res: Response, next) => {
   try {
-    res.json({ models: await getModelLatency(req.query.days) });
+    res.json(await getModelLatencyReport(req.query.days));
   } catch (err) {
     next(err);
   }
@@ -183,30 +190,38 @@ modelsRouter.get('/popularity', requireAuth, async (req: Request, res: Response,
 // only. Everyone else gets connection status and live key data for their OWN keys only (the
 // provider headers the client sends); with none, liveKey/credits are null and no /key or
 // /credits call is made. Sign-up is open, so "signed in" is not a trust boundary.
-modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => {
+modelsRouter.get('/verify', requireAuth, attachAccountKeys, async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   // Fail closed: an unreadable role means "not an admin".
   const isAdmin = await hydrateAccessProfile(req).then((p) => p.isAdmin, () => false);
-  const keyFor = (header: string, env: string): string | null =>
-    req.header(header) || (isAdmin ? process.env[env] : null) || null;
-  const openRouterKey = keyFor('X-OpenRouter-Key', 'OPENROUTER_API_KEY');
-  const nvidiaKey = keyFor('X-Nvidia-Key', 'NVIDIA_API_KEY');
-
-  const result = await getCatalog(true); // force live refresh of the OpenRouter catalog
-  const allModels = await withDirectProviderModels(req, result.models);
-
-  // Per-provider connection + model count (which sources have a usable key right now).
-  const providers: Record<string, { connected: boolean; modelCount: number }> = {};
-  for (const id of TEXT_PROVIDER_IDS) {
+  const allow = allowedProviderFilter(req);
+  const keyFor = (id: AIProviderId): string | null => {
+    if (!allow(id)) return null;
+    const resolved = req.apiKeys?.providerKeys?.[id];
+    if (resolved) return resolved.byok || isAdmin ? resolved.key?.trim() || null : null;
     const def = getProviderDef(id);
-    const key = def ? keyFor(def.header, def.keyEnv) : null;
-    providers[id] = { connected: Boolean(key), modelCount: allModels.filter((m) => m.source === id).length };
-  }
+    return (def ? req.header(def.header)?.trim() : null) || (isAdmin && def ? process.env[def.keyEnv]?.trim() : null) || null;
+  };
+  const openRouterKey = keyFor('openrouter');
 
-  // Live, authoritative OpenRouter data: per-KEY status (/key) AND account CREDITS (/credits).
-  // These can differ — a key may carry its own spend cap distinct from account credits remaining.
+  const result = await getCatalog(isAdmin);
+  const allModels = await withDirectProviderModels(req, result.models, keyFor);
+
+  // A stored key is only configuration. A successful authenticated provider response is
+  // connection evidence; a curated/cached fallback must never turn a rejected key green.
   const [openRouterKeyStatus, openRouterCredits] = openRouterKey
     ? await Promise.all([fetchOpenRouterKeyStatus(openRouterKey), fetchOpenRouterCredits(openRouterKey)])
     : [null, null];
+  const providers: Record<string, { connected: boolean; configured: boolean; status: 'verified' | 'unverified' | 'missing'; modelCount: number }> = {};
+  for (const id of TEXT_PROVIDER_IDS) {
+    const def = getProviderDef(id);
+    const key = def ? keyFor(id) : null;
+    const models = allModels.filter((model) => model.source === id);
+    const connected = Boolean(key) && (id === 'openrouter'
+      ? openRouterKeyStatus !== null
+      : models.some((model) => model.catalogOrigin === 'live'));
+    providers[id] = { connected, configured: Boolean(key), status: connected ? 'verified' : key ? 'unverified' : 'missing', modelCount: models.length };
+  }
 
   res.json({
     verifiedAt: Date.now(),
@@ -219,7 +234,7 @@ modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => 
     },
     sources: {
       openrouter: {
-        connected: Boolean(openRouterKey),
+        connected: providers.openrouter.connected,
         modelCount: allModels.filter((m) => m.source === 'openrouter').length,
         // Real OpenRouter key data (label/usage/limit/limit_remaining/is_free_tier/rate_limit/...).
         liveKey: openRouterKeyStatus,
@@ -227,9 +242,9 @@ modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => 
         credits: openRouterCredits
       },
       nvidia: {
-        connected: Boolean(nvidiaKey),
+        connected: providers.nvidia.connected,
         modelCount: allModels.filter((m) => m.source === 'nvidia').length,
-        note: 'NVIDIA Build is credit-based (free tier ~1,000 credits, 40 req/min); per-call USD cost is not reported.'
+        note: 'Model listing confirms access only. Availability depends on your NVIDIA account; per-call USD cost is not reported.'
       }
     },
     // Per-provider connection + counts for every direct source (openrouter, nvidia, openai,

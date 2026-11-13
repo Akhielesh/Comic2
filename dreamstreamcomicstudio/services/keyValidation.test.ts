@@ -14,6 +14,7 @@ type Call = { url: string; headers: Record<string, string>; body: string };
 const calls: Call[] = [];
 
 beforeEach(() => {
+  localStorage.clear();
   calls.length = 0;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(input), headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? '') });
@@ -23,6 +24,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('validateApiKey', () => {
+  it('checks an account-only key without sending any device secrets, preserving source governance', async () => {
+    localStorage.setItem('dreamstream_source_governance', JSON.stringify({ openrouter: false }));
+    await validateApiKey('openrouter');
+    expect(Object.keys(calls[0].headers).filter((h) => /-key$/i.test(h))).toEqual([]);
+    expect(calls[0].headers.Authorization).toBe('Bearer session-token');
+    expect(calls[0].headers['X-Allowed-Sources'].split(',')).not.toContain('openrouter');
+  });
   it('Gemini: the key travels only in X-Gemini-Key — not in the body or the URL — with the session token', async () => {
     const r = await validateApiKey('gemini', 'AIza-mine-secret');
     expect(r).toEqual({ provider: 'gemini', status: 'valid', valid: true, message: 'Valid Gemini key.' });

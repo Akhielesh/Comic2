@@ -20,18 +20,19 @@ export const refreshModelCatalog = async (): Promise<{ source: string; count: nu
   // seed and add live ids when a platform key exists. Never stores keys.
   const sources: SourceSpec[] = PROVIDERS_ORDERED.map((def) => ({
     id: def.id as AIProviderId,
-    key: process.env[def.keyEnv] || null
+    key: def.id === 'openrouter' ? null : process.env[def.keyEnv] || null
   }));
 
   const results: { source: string; count: number }[] = [];
   for (const { id, key } of sources) {
     const models = await getProviderModels(id, key);
-    if (models.length) {
-      await persistHarvestedModels(id, models);
+    const live = models.filter((model) => model.catalogOrigin === 'live');
+    if (live.length) {
+      await persistHarvestedModels(id, live);
     } else {
-      console.warn(`[catalog-refresh] ${id}: 0 models (platform key set? ${Boolean(key)})`);
+      console.warn(`[catalog-refresh] ${id}: No live listing; keeping the saved snapshot (platform key set? ${Boolean(key)})`);
     }
-    results.push({ source: id, count: models.length });
+    results.push({ source: id, count: live.length });
   }
   return results;
 };

@@ -336,30 +336,46 @@ const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {
   const seedById = new Map(seed.map((m) => [m.id, m]));
   if (!ctx?.apiKey) return seed;
   try {
-    const data = await anthropicFetch<any>('/models?limit=100', { method: 'GET' }, ANTHROPIC_REQUEST_TIMEOUT_MS, ctx);
-    const rows: any[] = Array.isArray(data?.data) ? data.data : [];
-    const live: CatalogModel[] = [];
-    for (const row of rows) {
-      const id = String(row?.id || '').trim();
-      if (!id || seedById.has(id)) continue;
-      live.push({
-        id,
-        name: String(row?.display_name || id),
-        source: 'anthropic',
-        contextLength: 200_000,
-        createdAt: row?.created_at ? Math.floor(Date.parse(row.created_at) / 1000) : undefined,
-        inputModalities: ['text', 'image'],
-        outputModalities: ['text'],
-        supportedParameters: ['reasoning'],
-        pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
-        isFree: false,
-        costClass: 'paid',
-        supportsImageOutput: false,
-        supportsImageInput: true,
-        supportsJsonOutput: true
-      });
-    }
-    return [...seed, ...live];
+    const live = new Map<string, CatalogModel>();
+    let after: string | undefined;
+    const cursors = new Set<string>();
+    do {
+      const path = `/models?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`;
+      const data = await anthropicFetch<any>(path, { method: 'GET' }, Math.min(ANTHROPIC_REQUEST_TIMEOUT_MS, 8_000), ctx);
+      const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+      for (const row of rows) {
+        const id = String(row?.id || '').trim();
+        if (!id) continue;
+        const curated = seedById.get(id);
+        const created = row?.created_at ? Math.floor(Date.parse(row.created_at) / 1000) : undefined;
+        live.set(id, curated ? { ...curated, catalogOrigin: 'live' } : {
+          id,
+          name: String(row?.display_name || id),
+          source: 'anthropic',
+          catalogOrigin: 'live',
+          pricingKnown: false,
+          pricingOrigin: 'unknown',
+          createdAt: Number.isFinite(created) ? created : undefined,
+          inputModalities: ['text', 'image'],
+          outputModalities: ['text'],
+          supportedParameters: ['reasoning'],
+          pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
+          isFree: false,
+          costClass: 'paid',
+          supportsImageOutput: false,
+          supportsImageInput: true,
+          supportsJsonOutput: true
+        });
+      }
+      if (!data?.has_more) break;
+      const next = typeof data?.last_id === 'string' ? data.last_id : rows.at(-1)?.id;
+      // Repeated/missing cursors mean an incomplete listing, not a fresh catalog.
+      if (!next || cursors.has(next)) throw new Error('Incomplete model listing');
+      cursors.add(next);
+      after = next;
+    } while (cursors.size < 20);
+    if (cursors.size >= 20) throw new Error('Model listing exceeded page budget');
+    return live.size ? [...live.values()] : seed;
   } catch {
     return seed;
   }

@@ -123,3 +123,22 @@ describe('openai-compatible generateTextStream index-less tool_calls (Gemini Ope
     expect(JSON.parse(result.toolCalls![0].arguments)).toEqual({ x: 1 });
   });
 });
+
+describe('live model availability', () => {
+  const provider = createOpenAICompatibleProvider({ id: 'openai', label: 'OpenAI', baseUrl: 'https://example.invalid/v1', timeoutMs: 1000, modelsPath: '/models' });
+  afterEach(() => vi.unstubAllGlobals());
+  it('uses the successful live list instead of retaining retired seed IDs', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'gpt-4o-mini' }, { id: 'brand-new-model' }, { id: 'brand-new-model' }] }))));
+    const models = await provider.listModels({ apiKey: 'test-key', byok: true });
+    expect(models.map((m) => m.id)).toEqual(['gpt-4o-mini', 'brand-new-model']);
+    expect(models.every((m) => m.catalogOrigin === 'live')).toBe(true);
+    expect(models.find((m) => m.id === 'gpt-4o-mini')?.pricingKnown).toBe(true);
+    expect(models.find((m) => m.id === 'brand-new-model')).toMatchObject({ pricingKnown: false, isFree: false });
+  });
+  it('marks an invalid-key fallback as curated instead of verified live', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('invalid key', { status: 401 })));
+    const models = await provider.listModels({ apiKey: 'invalid', byok: true });
+    expect(models.length).toBeGreaterThan(0);
+    expect(models.every((m) => m.catalogOrigin === 'curated')).toBe(true);
+  });
+});

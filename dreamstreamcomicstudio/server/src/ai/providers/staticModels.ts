@@ -3,9 +3,9 @@
 // WHY: most provider APIs either don't expose a public /models endpoint, or expose one
 // that returns bare ids with no pricing/context/capabilities. To give the Model Library
 // and chat picker rich, honest information (price, context, vision/reasoning) WITHOUT a
-// live key, every direct provider ships a curated seed list here. When a key IS present,
-// the live /models call (where available) is merged ON TOP and de-duplicated, so newly
-// released ids still appear even if this list lags.
+// live key, every direct provider ships a curated seed list here. A successful live
+// /models call supplies the current key's IDs and uses this metadata for exact matches.
+// The seed is a fallback, not evidence of current model availability or price freshness.
 //
 // Pricing is the published list price per 1M tokens (USD). These are reference figures —
 // the provider's own billing is always authoritative.
@@ -48,6 +48,9 @@ const toModel = (source: AIProviderId, s: Seed): CatalogModel => {
     id: s.id,
     name: s.name,
     source,
+    catalogOrigin: 'curated',
+    pricingKnown: true,
+    pricingOrigin: 'curated',
     description: s.desc,
     contextLength: s.ctx,
     createdAt: s.created,

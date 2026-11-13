@@ -69,18 +69,38 @@ export const loadPersistedModels = async (source?: string): Promise<AnnotatedMod
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return [];
   try {
     const admin = getSupabaseAdmin();
-    let query = admin.from(TABLE).select('payload, api_callable');
-    if (source) query = query.eq('source', source);
-    const { data, error } = await query;
-    if (error || !Array.isArray(data)) return [];
-    return data
-      .map((row: { payload?: unknown; api_callable?: boolean | null }) => {
-        const m = row.payload as AnnotatedModel;
-        // Merge the separately-probed hosted-API callability into the served model.
-        if (m && typeof row.api_callable === 'boolean') m.apiCallable = row.api_callable;
-        return m;
+    // Supabase caps each response. Read every page so large catalogs are not silently cut off.
+    type Row = { source?: string; payload?: unknown; api_callable?: boolean | null; last_seen_at?: string };
+    const rows: Row[] = [];
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      let query = admin.from(TABLE).select('source, payload, api_callable, last_seen_at')
+        .order('source').order('model_id').range(offset, offset + pageSize - 1);
+      if (source) query = query.eq('source', source);
+      const { data, error } = await query;
+      if (error || !Array.isArray(data)) return [];
+      rows.push(...data);
+      if (data.length < pageSize) break;
+    }
+    // This is a union of account-scoped discoveries, not an authoritative retirement list.
+    // A later harvest can come from a different key with a smaller entitlement set. Keep
+    // every model and expose its observation time; absence from another key is not removal.
+    return rows
+      .map((row): AnnotatedModel | null => {
+        const model = row.payload as AnnotatedModel;
+        if (!model?.id) return null;
+        const checkedAt = Date.parse(row.last_seen_at || '');
+        return {
+          ...model,
+          catalogOrigin: 'cached' as const,
+          // Older NVIDIA snapshots predate explicit price provenance. Listing access
+          // proves neither a free allowance nor a current per-call price.
+          ...(model.source === 'nvidia' && model.pricingKnown === undefined ? { pricingKnown: false, pricingOrigin: 'unknown' as const } : {}),
+          ...(Number.isFinite(checkedAt) ? { catalogCheckedAt: checkedAt } : {}),
+          ...(typeof row.api_callable === 'boolean' ? { apiCallable: row.api_callable } : {})
+        };
       })
-      .filter((m): m is AnnotatedModel => Boolean(m && (m as AnnotatedModel).id));
+      .filter((model): model is AnnotatedModel => model !== null);
   } catch {
     return [];
   }

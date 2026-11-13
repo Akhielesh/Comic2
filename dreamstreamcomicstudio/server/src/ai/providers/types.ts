@@ -154,6 +154,13 @@ export type CostClass =
   | 'paid';
 
 export type CatalogModel = {
+  /** Provenance of model availability, independent of pricing/capability annotations. */
+  catalogOrigin?: 'live' | 'curated' | 'cached';
+  /** Epoch milliseconds of discovery; does not assert current account access or price freshness. */
+  catalogCheckedAt?: number;
+  /** False when the listing API does not publish prices. Never display placeholder zeros as a quote. */
+  pricingKnown?: boolean;
+  pricingOrigin?: 'provider' | 'curated' | 'unknown';
   id: string;
   name: string;
   /** Which upstream source this model comes from (drives the Library "source" filter). */

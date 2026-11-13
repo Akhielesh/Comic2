@@ -1,6 +1,5 @@
 import { buildApiUrl } from './clientConfig';
-import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
-import { getActiveKeyValue } from './apiKeys';
+import { getProviderKeyValue } from './apiKeys';
 import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourceForStage } from './modelSelection';
 import { isStoredSession, supabase } from './supabase';
 import { isFreeOnly } from './freeOnlyMode';
@@ -46,15 +45,6 @@ export const clearCachedAuthToken = (): void => {
   cachedUserId = undefined;
 };
 
-const getGeminiKey = () => {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem('dreamstream_api_key');
-  } catch {
-    return null;
-  }
-};
-
 // Resolve the BYOK header for every enabled text provider from the shared registry, so a
 // key the user added for ANY provider is attached to requests (honoring governance). The
 // original providers keep their legacy single-key fallbacks. Image-only providers
@@ -63,9 +53,7 @@ const providerKeyHeaders = (): Record<string, string> => {
   const headers: Record<string, string> = {};
   for (const def of PROVIDERS_ORDERED) {
     if (!isProviderEnabled(def.id)) continue;
-    let key = getActiveKeyValue(def.id);
-    if (!key && def.id === 'openrouter') key = getOpenRouterKey();
-    if (!key && def.id === 'gemini') key = getGeminiKey();
+    const key = getProviderKeyValue(def.id);
     if (key) headers[def.header] = key;
   }
   return headers;
@@ -139,9 +127,9 @@ const getAuthToken = async (): Promise<string | undefined> => {
 // model/source selection, free-only, allowed-sources). Shared by post + postStream.
 const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string; expectedAccountId?: string; useSarvamKey?: boolean }): Promise<Record<string, string>> => {
   const providerHeaders = providerKeyHeaders();
-  const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
-  const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
-  const sarvamKey = options?.useSarvamKey && isProviderEnabled('sarvam') ? getActiveKeyValue('sarvam') : null;
+  const fluxKey = isProviderEnabled('pixazo') ? getProviderKeyValue('pixazo') : null;
+  const ideogramKey = isProviderEnabled('ideogram') ? getProviderKeyValue('ideogram') : null;
+  const sarvamKey = options?.useSarvamKey && isProviderEnabled('sarvam') ? getProviderKeyValue('sarvam') : null;
   const token = await getAuthToken();
   if (options?.expectedAccountId && (!token || token !== cachedAccessToken || cachedUserId !== options.expectedAccountId)) {
     throw new ApiError('The active account changed. Sign in again and retry.', 401);
@@ -153,7 +141,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
     'Content-Type': 'application/json',
     ...providerHeaders,
     // Explicit per-call Gemini key override (used by the legacy image path) wins.
-    ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : {}),
+    ...(options?.apiKey && isProviderEnabled('gemini') ? { 'X-Gemini-Key': options.apiKey.trim() } : {}),
     ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
     ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
     ...(sarvamKey ? { 'X-Sarvam-Key': sarvamKey } : {}),
@@ -238,8 +226,8 @@ export const patch = async <TReq, TRes>(path: string, body: TReq, options?: { si
 
 export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
   const providerHeaders = providerKeyHeaders();
-  const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
-  const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
+  const fluxKey = isProviderEnabled('pixazo') ? getProviderKeyValue('pixazo') : null;
+  const ideogramKey = isProviderEnabled('ideogram') ? getProviderKeyValue('ideogram') : null;
   const token = await getAuthToken();
 
   const res = await safeFetch(buildApiUrl(path), {

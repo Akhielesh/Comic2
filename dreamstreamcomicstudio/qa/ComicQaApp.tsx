@@ -58,7 +58,7 @@ import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
 import { QaAppSurface, type QaAppSkin } from './app/index';
 import { QaProSurface } from './pro/index';
-import { ModelLibraryScene, modelLibraryResponse } from './ModelLibraryScene';
+import { ModelLibraryScene } from './ModelLibraryScene';
 
 const FULL: React.CSSProperties = { height: '100dvh', width: '100%', overflow: 'hidden' };
 
@@ -127,10 +127,6 @@ const installNetworkShim = (params: QaHarnessParams) => {
     const sameOrigin = url.origin === window.location.origin;
     if (url.pathname.startsWith('/api/')) {
       recordQaOp('net', { method: init?.method || 'GET', path: url.pathname });
-      if (params.surface === 'model-library' && (init?.method || 'GET').toUpperCase() === 'GET') {
-        const response = modelLibraryResponse(url.pathname);
-        if (response !== undefined) return json(200, response);
-      }
       const pub = /^\/api\/comic\/public\/(s\/)?([^/]+)$/.exec(url.pathname);
       if (pub && (init?.method || 'GET').toUpperCase() === 'GET') {
         if (params.publicResult === 'slow') return new Promise<Response>(() => undefined);

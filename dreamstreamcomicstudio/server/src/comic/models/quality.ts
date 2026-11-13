@@ -59,6 +59,7 @@ export interface QualityBoardEntry {
   /** The leaderboard's own model name (so mappings are checkable). */
   name?: string;
   votes?: number;
+  samples?: number;
 }
 
 export interface QualityBoardSnapshot {
@@ -110,7 +111,12 @@ export const qualityEntriesFor = (orId: string | undefined, snap: QualitySnapsho
     const b = snap.boards[board];
     const e = b?.entries?.[orId];
     if (!b || !e || typeof e.score !== 'number') continue;
-    out.push({ board, ...(typeof e.rank === 'number' ? { rank: e.rank } : {}), ...(typeof b.of === 'number' ? { of: b.of } : {}), score: e.score, ...(e.ci ? { ci: e.ci } : {}), asOf: b.asOf, source: b.source });
+    out.push({
+      board, ...(typeof e.rank === 'number' ? { rank: e.rank } : {}), ...(typeof b.of === 'number' ? { of: b.of } : {}),
+      score: e.score, ...(e.ci ? { ci: e.ci } : {}),
+      ...(e.name ? { name: e.name } : {}), ...(typeof e.samples === 'number' ? { samples: e.samples } : {}),
+      ...(typeof e.votes === 'number' ? { votes: e.votes } : {}), asOf: b.asOf, source: b.source
+    });
   }
   return out;
 };

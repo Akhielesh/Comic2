@@ -102,19 +102,29 @@ export const recordModelUsage = (product: string, source: string, model: string)
 export const listMonthlyUsage = async (
   months: number
 ): Promise<Array<{ month: string; product: string; source: string; model: string; requests: number }>> => {
-  const span = Math.min(Math.max(months, 1), 24);
+  const span = Number.isFinite(months) ? Math.min(Math.max(Math.floor(months), 1), 24) : 6;
   const since = new Date();
+  // Subtract from the first: March 31 minus one month must include February,
+  // rather than overflow February's shorter month back into March.
+  since.setUTCDate(1);
   since.setUTCMonth(since.getUTCMonth() - (span - 1));
   const sinceKey = since.toISOString().slice(0, 7);
   try {
-    const { data, error } = await getSupabaseAdmin()
-      .from('model_usage_monthly')
-      .select('month, product, source, model, requests')
-      .gte('month', sinceKey)
-      .order('month', { ascending: true })
-      .limit(5000);
-    if (error) throw new Error(error.message);
-    return ((data || []) as Array<Record<string, unknown>>).map((r) => ({
+    const admin = getSupabaseAdmin();
+    const rows: Array<Record<string, unknown>> = [];
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await admin.from('model_usage_monthly')
+        .select('month, product, source, model, requests').gte('month', sinceKey)
+        .order('month', { ascending: true }).order('product', { ascending: true })
+        .order('source', { ascending: true }).order('model', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      if (!Array.isArray(data)) throw new Error('Monthly usage returned no readable rows.');
+      rows.push(...data);
+      if (data.length < pageSize) break;
+    }
+    return rows.map((r) => ({
       month: String(r.month),
       product: String(r.product),
       source: String(r.source),
@@ -123,6 +133,9 @@ export const listMonthlyUsage = async (
     }));
   } catch (err) {
     logger.warn('model_usage_read_failed', { message: (err as Error)?.message });
-    return [];
+    // The route forwards this to the shared error handler. An unavailable store
+    // must be HTTP 503, never a successful [] that charts interpret as no activity.
+    const message = 'Monthly model usage is temporarily unavailable.';
+    throw Object.assign(new Error(message), { status: 503, publicCode: 'MODEL_USAGE_UNAVAILABLE', publicMessage: message });
   }
 };

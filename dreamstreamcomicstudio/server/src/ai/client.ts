@@ -3,7 +3,9 @@ import { GEMINI_BASE_URL, NVIDIA_TEXT_MODEL } from '../config.js';
 import { geminiSchemaToJsonSchema } from './schemaConvert.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { TEXT_FALLBACK } from './autoRouter.js';
-import type { AIProviderId, ChatMessage } from './providers/types.js';
+import type { ChatMessage } from './providers/types.js';
+
+export type PipelineProvider = 'openrouter' | 'nvidia' | 'gemini';
 
 const isOpenRouterKey = (key: string) => key.startsWith('sk-or-');
 // NVIDIA Build keys are prefixed `nvapi-`. They route through the same OpenAI-compatible
@@ -52,10 +54,11 @@ const buildMessages = (contents: any, systemInstruction?: string): ChatMessage[]
  * unchanged (their parsing/grounding is untouched). The Gemini `responseSchema` is
  * converted to JSON Schema for json_schema output.
  */
-const createGatewayTextClient = (apiKey: string, providerId: AIProviderId, fallbackModel: string) => ({
+const createGatewayTextClient = (apiKey: string, providerId: 'openrouter' | 'nvidia', fallbackModel: string) => ({
   models: {
     generateContent: async (req: any) => {
-      // Use a real provider model id (contains a '/'); otherwise fall back to the default.
+      // Legacy callers can supply the Gemini default; gateway providers need their
+      // publisher/model id instead. Keep their existing fallback behavior.
       const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : fallbackModel;
       const cfg = req?.config || {};
       let schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
@@ -118,15 +121,20 @@ const createGatewayTextClient = (apiKey: string, providerId: AIProviderId, fallb
   }
 });
 
-export const createClient = (apiKey: string) => {
+export const createClient = (apiKey: string, providerId?: PipelineProvider) => {
   if (!apiKey) {
     throw new Error('AI API key not found.');
   }
-  // OpenRouter / NVIDIA key → unified gateway shim (text). Gemini key → real Google SDK client.
-  if (isOpenRouterKey(apiKey)) {
+  // Request routing is explicit: never infer a vendor from a secret when the route
+  // already knows it. Prefix inference remains for legacy non-route callers only.
+  if (providerId && providerId !== 'gemini') {
+    const fallback = providerId === 'openrouter' ? TEXT_FALLBACK : NVIDIA_TEXT_MODEL;
+    return createGatewayTextClient(apiKey, providerId, fallback) as unknown as GoogleGenAI;
+  }
+  if (!providerId && isOpenRouterKey(apiKey)) {
     return createGatewayTextClient(apiKey, 'openrouter', TEXT_FALLBACK) as unknown as GoogleGenAI;
   }
-  if (isNvidiaKey(apiKey)) {
+  if (!providerId && isNvidiaKey(apiKey)) {
     return createGatewayTextClient(apiKey, 'nvidia', NVIDIA_TEXT_MODEL) as unknown as GoogleGenAI;
   }
   // @ts-ignore - The SDK might support baseUrl in options

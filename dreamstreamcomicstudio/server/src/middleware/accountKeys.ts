@@ -113,6 +113,14 @@ export const hasAccountKeyFor = async (userId: string, provider: string): Promis
   return (await accountKeyProviders(userId)).includes(canonical);
 };
 
+/** Read one caller-owned key for a read-only connection check. Generation still uses
+ * attachAccountKeys, including its allowance and spending-consent policy. */
+export const accountKeyForValidation = async (userId: string, provider: AccountKeyProvider): Promise<string | null> => {
+  if (!isSecureStoreAvailable() || !getSupabaseCapabilityStatus().storagePersistenceEnabled) return null;
+  const account = await cache.getOrSet(userId, () => queryAccountKeys(userId));
+  return account[provider] || null;
+};
+
 /**
  * Fill in provider keys from the user's account store wherever the request didn't
  * carry one. Mounted after `requireAuth`, so `req.user` is always present here.
