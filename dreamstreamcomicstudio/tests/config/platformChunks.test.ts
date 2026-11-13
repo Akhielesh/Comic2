@@ -94,6 +94,27 @@ const PRO_ONLY: ProOnly[] = [
  */
 const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.html': 330_850 };
 
+/**
+ * The first-load STYLESHEET ceiling per HTML entry (CL-6): the gzip -9 bytes of the stylesheets the page
+ * links in its <head> (`<link rel="stylesheet" href="/assets/….css">`), which every visitor downloads before first
+ * paint. Every colour, motion, pattern and font rule lands there, and until R02 nothing measured it. The colour,
+ * motion and component work together stays within +5 kB gzip of eager CSS (and +2 kB of eager JS). Set from a lockfile-exact
+ * production build: CL-6 alone measured index.html 45,171 B and live.html 35,491 B (its base, 25d36fc7: 43,604 B and 35,491 B, so +1,567 B and +0 B: the
+ * colour tokens in all four blocks, the off block and the new recipe utilities); the ceiling is that plus
+ * 1 kB for zlib and build noise. The R02 integrator re-pins it on the merged R02 head (all four packages) the same
+ * way. A rise beyond the noise is a reviewed change, with its reason named here.
+ */
+export const EAGER_CSS_GZ_CEILING: Record<string, number> = { 'index.html': 46_195, 'live.html': 36_515 };
+
+/** The stylesheets an HTML entry links before first paint. */
+export const eagerStylesheets = (html: string): string[] =>
+  [...html.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*\bhref="\/assets\/([^"]+\.css)"/g)].map((m) => m[1]);
+/** Their gzip -9 total. */
+export const eagerCssGz = (dist: string, html: string): { files: string[]; gz: number } => {
+  const files = eagerStylesheets(readFileSync(path.join(dist, html), 'utf8'));
+  return { files, gz: files.reduce((sum, f) => sum + gzipSync(readFileSync(path.join(dist, 'assets', f)), { level: 9 }).length, 0) };
+};
+
 /** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
 const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;
 
@@ -169,6 +190,15 @@ describe('platform renderers stay out of the entry chunk (real build)', () => {
         expect(files.length, `${html} loads no module script`).toBeGreaterThan(0);
         const gz = files.reduce((sum, f) => sum + gzipSync(readFileSync(path.join(assets, f)), { level: 9 }).length, 0);
         expect(gz, `${html} first load is ${gz} B gz (${files.join(', ')}); lower EAGER_GZ_CEILING after a cut, or raise it with a lead decision`).toBeLessThanOrEqual(ceiling);
+      });
+    }
+
+    for (const [html, ceiling] of Object.entries(EAGER_CSS_GZ_CEILING)) {
+      it(`${html}: the first-load stylesheets stay under their gzip ceiling (${ceiling.toLocaleString('en')} B)`, () => {
+        if (!existsSync(path.join(DIST, html))) return;
+        const { files, gz } = eagerCssGz(DIST, html);
+        expect(files.length, `${html} links no stylesheet`).toBeGreaterThan(0);
+        expect(gz, `${html} first-load CSS is ${gz} B gz (${files.join(', ')}); lower EAGER_CSS_GZ_CEILING after a cut, or raise it with a lead decision`).toBeLessThanOrEqual(ceiling);
       });
     }
 

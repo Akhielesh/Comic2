@@ -82,8 +82,23 @@ as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
 `text-ds-ink/60` compiles to a `color-mix()` over the token. Never hardcode the paper/ink
 hexes; never put a slash opacity on a bare `var()` arbitrary value (`text-[var(--ds-ink)]/60`
 is invalid CSS) — accent tints use `bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the
-old literal `bg-[#D97757]/10`. Charts read `--ds-chart-1…5` (monochrome steps, ink first).
-Colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer): ink on paper, colour as a spot. The spark (`--ds-spark*`, SPARK_FILL / the Button `create` variant, MAKING_DOT / MAKING_SWEEP / MAKING_TEXT, `Progress tone="making"`, SPARK_RING_ON_ART) means creation only: one fill per view (never in a list), never on a price or a control that spends (Approve, Draw, Redraw, Translate, Get more), never the panel, never the reader (tests/config/sparkGuard.test.ts). Series and tags use `--ds-hue-1…5` (HUE_DOT/HUE_FILL/HUE_STROKE or `hueClass(kind, i)`, 0-based, fixed order, a legend always); `--ds-art` is a comic's own tint (ART_PLACEHOLDER, ART_GLOW).
+old literal `bg-[#D97757]/10`.
+Colour layer **"Ink, Paper & Colour"** (docs/design/design-system.md § Colour layer): text stays ink on paper,
+buttons that spend stay ink, colour never replaces a word. Colour has five jobs, each with its recipes in
+`studioDesign.ts`: tell things apart (seven hues `--ds-hue-1…7`, ultramarine, magenta, orange, teal, violet, leaf, sky;
+a tag is **ink text on the soft tint**, `hueChip(i)`; coloured words only on slots 1, 5, 7 via `HUE_TEXT`; words on a
+`HUE_SOLID` only on slots 1, 5, 6 in light, icons otherwise), show data (series take the hues in
+`CHART_HUE_ORDER` via `chartHue(kind, i)`, ultramarine, magenta, leaf, sky first; `CHART_SEQ_*` / `CHART_DIV_*` ramps; the
+ink steps `--ds-chart-1…5` stay for tiers and "Other"; a plot sits on `CHART_PLOT_BG`, never the raised step), warm a page
+(`WASH_HERO` / `WASH_EMPTY`, a hero or empty state only, once per page), a comic's own colour (`--ds-art` inside
+`ART_SCOPE`: `ART_SOFT_BG`, `ART_EDGE`, `ART_PLACEHOLDER`, `ART_GLOW`), and the studio you are in (`STUDIO_*` by
+`[data-ds-studio]`; Comic Studio has none). **No colour on or beside a price or a spend control** (Approve, Draw, Redraw,
+Translate, Get more); usage and spend *charts* may use hues from magenta on, never ultramarine or a ramp next to money.
+Never in the reader; no ultramarine or wash in navigation. `tests/config/colourUseGuard.test.ts` holds every use;
+`VITE_DS_COLOUR=off` (build time) turns every new token neutral with no component change. The spark (`--ds-spark*`,
+SPARK_FILL / the Button `create` variant, MAKING_DOT / MAKING_SWEEP / MAKING_TEXT, `Progress tone="making"`,
+SPARK_RING_ON_ART) still means creation only: one fill per view (never in a list), never on a price or a control that
+spends, never the panel, never the reader (tests/config/sparkGuard.test.ts).
 
 **Design skins** (`docs/design/atlas-skin.md`): the whole app renders in the Atlas
 language through one attribute, `data-ds-skin="atlas"`, which `index.html` ships on `<html>`
@@ -100,7 +115,7 @@ readable status text, always with a word or icon; `--ds-danger-mark` for dots an
 `--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm|feature|hero`,
 `--ds-shadow-soft|panel|lift|overlay`, `--ds-motion-fast|medium|slow|panel|modal|theme|enter|exit`,
 `--ds-motion-enter-quick|enter-slow|stagger`, `--ds-ease(-enter)`, `--ds-glass-blur`, `--ds-header-blur`,
-`--ds-on-danger`, `--ds-z-*`, `--ds-density-*`, `--ds-text-xl|2xl|3xl`, `--ds-chart-1…5`, `--ds-grid-dot`,
+`--ds-on-danger`, `--ds-z-*`, `--ds-density-*`, `--ds-text-xl|2xl|3xl`, `--ds-chart-1…5` (the ink steps), `--ds-grid-dot`,
 `--ds-spot-ink` — via the `studioDesign.ts` constants (`RADIUS_*`,
 `SHADOW_SOFT`, `TRANSITION`, `TONE_*`, `PRESS`, and the Atlas wave 5 recipes `FOCUS_RING`,
 `FIELD*`, `OVERLAY`, `SCRIM`, `CHIP*`, `STATUS_*`, `SEGMENTED_*`, `SECTION_*`, `TOAST*`, and the

@@ -583,6 +583,60 @@
   --ds-hue-4: #079a94;                                                  /* teal */
   --ds-hue-5: #9548cc;                                                  /* violet */
   --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* Colour layer "Ink, Paper & Colour" (CL-6; docs/design/design-system.md § Colour layer). Hues 6 and 7 (leaf,
+     sky) join 1-5: seven slots, no eighth (an eighth series reads the neutral chart step). Each hue has a mark (the
+     hue itself, >= 3:1 on the page and a card), a readable -text step (>= 4.5:1 on every surface and on its own
+     tint), an opaque -soft tint (12 % over the raised step in light, 16 % in dark: a tag chip is INK text on it), and
+     a -solid fill under the one label colour --ds-on-hue (text on it only on slots 1, 5 and 6 in light; icons
+     elsewhere). Sequential (one hue, six steps) and diverging (orange / grey / ultramarine) chart ramps sit beside
+     the ink steps --ds-chart-1..5, which do not change. Two washes (a hero and an empty state, never a working
+     view), and the per-studio accent (--ds-studio*, set by [data-ds-studio]; Comic Studio has none). Restated in
+     every block (the derived ones follow the block's raised step and ink). The build switch VITE_DS_COLOUR=off
+     marks <html data-ds-colour="off"> and the one block at the end of the colour layer points every one of these
+     names back to neutral. huePalette, tokenContrast, chartRamps, colourUseGuard and dsColourSwitch prove it. */
+  --ds-hue-6: #567d01;
+  --ds-hue-7: #0089c9;
+  --ds-hue-1-text: #4455c2;
+  --ds-hue-2-text: #aa3176;
+  --ds-hue-3-text: #a04c00;
+  --ds-hue-4-text: #01706c;
+  --ds-hue-5-text: #8244b0;
+  --ds-hue-6-text: #4a6c00;
+  --ds-hue-7-text: #00699b;
+  --ds-hue-1-soft: color-mix(in srgb, var(--ds-hue-1) 12%, var(--ds-raised));
+  --ds-hue-2-soft: color-mix(in srgb, var(--ds-hue-2) 12%, var(--ds-raised));
+  --ds-hue-3-soft: color-mix(in srgb, var(--ds-hue-3) 12%, var(--ds-raised));
+  --ds-hue-4-soft: color-mix(in srgb, var(--ds-hue-4) 12%, var(--ds-raised));
+  --ds-hue-5-soft: color-mix(in srgb, var(--ds-hue-5) 12%, var(--ds-raised));
+  --ds-hue-6-soft: color-mix(in srgb, var(--ds-hue-6) 12%, var(--ds-raised));
+  --ds-hue-7-soft: color-mix(in srgb, var(--ds-hue-7) 12%, var(--ds-raised));
+  --ds-hue-1-solid: var(--ds-hue-1);
+  --ds-hue-2-solid: var(--ds-hue-2);
+  --ds-hue-3-solid: var(--ds-hue-3);
+  --ds-hue-4-solid: var(--ds-hue-4);
+  --ds-hue-5-solid: var(--ds-hue-5);
+  --ds-hue-6-solid: var(--ds-hue-6);
+  --ds-hue-7-solid: var(--ds-hue-7);
+  --ds-on-hue: #ffffff;
+  --ds-chart-seq-1: #98aaee;
+  --ds-chart-seq-2: #788eeb;
+  --ds-chart-seq-3: #5b71e8;
+  --ds-chart-seq-4: #4250e3;
+  --ds-chart-seq-5: #312bd2;
+  --ds-chart-seq-6: #231da3;
+  --ds-chart-div-1: #9a4900;
+  --ds-chart-div-2: #d76900;
+  --ds-chart-div-3: #eeae7b;
+  --ds-chart-div-4: #d4d4d4;
+  --ds-chart-div-5: #aabbf5;
+  --ds-chart-div-6: #6a81f2;
+  --ds-chart-div-7: #3d44e8;
+  --ds-wash-hero: radial-gradient(70% 100% at 100% 0%, color-mix(in srgb, var(--ds-hue-2) 13%, transparent), transparent 62%), radial-gradient(70% 100% at 0% 0%, color-mix(in srgb, var(--ds-hue-1) 13%, transparent), transparent 60%), radial-gradient(60% 80% at 55% 100%, color-mix(in srgb, var(--ds-hue-3) 13%, transparent), transparent 62%);
+  --ds-wash-empty: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--ds-hue-2) 10%, transparent), transparent 70%), radial-gradient(90% 80% at 100% 100%, color-mix(in srgb, var(--ds-hue-6) 10%, transparent), transparent 65%);
+  --ds-studio: var(--ds-ink);
+  --ds-studio-soft: var(--ds-well-strong);
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
   /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
      picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
      because every colour token has one: tests/config/dsColours.test.ts). */
@@ -640,6 +694,50 @@
   --ds-hue-4: #04a19b;
   --ds-hue-5: #a155da;
   --ds-art: var(--ds-well-strong);
+  /* Colour layer "Ink, Paper & Colour" (CL-6): the dark steps (soft tints 16 %, ink labels on the solids). */
+  --ds-hue-6: #6e9e01;
+  --ds-hue-7: #0c9edc;
+  --ds-hue-1-text: #9bb0ff;
+  --ds-hue-2-text: #f496c3;
+  --ds-hue-3-text: #f99f66;
+  --ds-hue-4-text: #48c7c0;
+  --ds-hue-5-text: #cea2f5;
+  --ds-hue-6-text: #9bc466;
+  --ds-hue-7-text: #54c1fb;
+  --ds-hue-1-soft: color-mix(in srgb, var(--ds-hue-1) 16%, var(--ds-raised));
+  --ds-hue-2-soft: color-mix(in srgb, var(--ds-hue-2) 16%, var(--ds-raised));
+  --ds-hue-3-soft: color-mix(in srgb, var(--ds-hue-3) 16%, var(--ds-raised));
+  --ds-hue-4-soft: color-mix(in srgb, var(--ds-hue-4) 16%, var(--ds-raised));
+  --ds-hue-5-soft: color-mix(in srgb, var(--ds-hue-5) 16%, var(--ds-raised));
+  --ds-hue-6-soft: color-mix(in srgb, var(--ds-hue-6) 16%, var(--ds-raised));
+  --ds-hue-7-soft: color-mix(in srgb, var(--ds-hue-7) 16%, var(--ds-raised));
+  --ds-hue-1-solid: var(--ds-hue-1);
+  --ds-hue-2-solid: var(--ds-hue-2);
+  --ds-hue-3-solid: var(--ds-hue-3);
+  --ds-hue-4-solid: var(--ds-hue-4);
+  --ds-hue-5-solid: var(--ds-hue-5);
+  --ds-hue-6-solid: var(--ds-hue-6);
+  --ds-hue-7-solid: var(--ds-hue-7);
+  --ds-on-hue: #0a0a0a;
+  --ds-chart-seq-1: #4452bf;
+  --ds-chart-seq-2: #5161e6;
+  --ds-chart-seq-3: #6275ff;
+  --ds-chart-seq-4: #7a90ff;
+  --ds-chart-seq-5: #95a9ff;
+  --ds-chart-seq-6: #b1c1ff;
+  --ds-chart-div-1: #f4a25c;
+  --ds-chart-div-2: #de6f11;
+  --ds-chart-div-3: #91450d;
+  --ds-chart-div-4: #4a4a4a;
+  --ds-chart-div-5: #404dc1;
+  --ds-chart-div-6: #7085ff;
+  --ds-chart-div-7: #a2b2ff;
+  --ds-wash-hero: radial-gradient(70% 100% at 100% 0%, color-mix(in srgb, var(--ds-hue-2) 18%, transparent), transparent 62%), radial-gradient(70% 100% at 0% 0%, color-mix(in srgb, var(--ds-hue-1) 18%, transparent), transparent 60%), radial-gradient(60% 80% at 55% 100%, color-mix(in srgb, var(--ds-hue-3) 18%, transparent), transparent 62%);
+  --ds-wash-empty: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--ds-hue-2) 14%, transparent), transparent 70%), radial-gradient(90% 80% at 100% 100%, color-mix(in srgb, var(--ds-hue-6) 14%, transparent), transparent 65%);
+  --ds-studio: var(--ds-ink);
+  --ds-studio-soft: var(--ds-well-strong);
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
   /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
   --ds-develop-light: rgb(255 255 255 / 0.55);
   --ds-develop-sheen: rgba(255,255,255,0.15);
@@ -919,6 +1017,93 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 }
 .ds-map .ds-map-label::before { display: none; }
 
+/* ---- Colour layer "Ink, Paper & Colour" (CL-6): studio accents, the comic's own tint, and the off switch ----
+   The per-studio accent: one attribute picks the family for current-item tints, empty-state tiles and the product
+   dot; primary buttons stay ink. Comic Studio has none on purpose (inside a comic the colour is that comic's own
+   tint; outside, ink and the one spark), so [data-ds-studio="comic"] has no rule and keeps the neutral default. */
+[data-ds-studio="chat"] { --ds-studio: var(--ds-hue-4); --ds-studio-soft: var(--ds-hue-4-soft); }
+[data-ds-studio="live"] { --ds-studio: var(--ds-hue-2); --ds-studio-soft: var(--ds-hue-2-soft); }
+[data-ds-studio="models"] { --ds-studio: var(--ds-hue-5); --ds-studio-soft: var(--ds-hue-5-soft); }
+[data-ds-studio="atlas"] { --ds-studio: var(--ds-hue-7); --ds-studio-soft: var(--ds-hue-7-soft); }
+/* The comic's own tint: a component sets --ds-art inline (CL-8 derives it from the cover and clamps it to OKLCH
+   L 0.50-0.70, C 0.06-0.16) and puts ART_SCOPE on the same element; the soft card wash, the edge and the glow
+   are mixed here in OKLab over the page (over the raised step the default dark muted text fell to 4.08:1), so ink
+   and muted text keep 4.5:1 on the soft wash for every colour of the clamp box. Outside a scope
+   --ds-art-soft / --ds-art-edge are the plain card (the token blocks). */
+.ds-art-scope {
+  --ds-art-soft: color-mix(in oklab, var(--ds-art) 12%, var(--ds-canvas));
+  --ds-art-edge: color-mix(in oklab, var(--ds-art) 40%, var(--ds-canvas));
+  --ds-art-glow: color-mix(in oklab, var(--ds-art) 45%, transparent);
+}
+.dark .ds-art-scope,
+.dark.ds-art-scope {
+  --ds-art-soft: color-mix(in oklab, var(--ds-art) 18%, var(--ds-canvas));
+  --ds-art-edge: color-mix(in oklab, var(--ds-art) 45%, var(--ds-canvas));
+  --ds-art-glow: color-mix(in oklab, var(--ds-art) 40%, transparent);
+}
+/* THE OFF SWITCH (VITE_DS_COLOUR=off; vite.config.ts dsColourPlugin marks <html data-ds-colour="off"> in every HTML
+   entry at build time). This one block points every name the colour layer added back to neutral: tints
+   transparent, hue text the muted ink, solids the strong well under ink, the ramps the ink steps, no washes, no
+   studio accent, the comic's tint the plain card. A chart keeps its series and steps apart: hues 6 and 7 take two
+   different ink steps, and both ramps become one ordered grey ramp (the diverging poles dark and light, never mirrored
+   into the same grey). It wins over every token block by specificity, wherever it sits in
+   the file (html:root[...] is (0,2,1) against .dark[data-ds-skin]'s (0,2,0); the nested ones are (0,3,1)), on <html>
+   and on every element that restates the tokens (a nested skin root, a .dark subtree, a studio, an art scope). The hues 1-5, the spark and
+   the ink chart steps are not new and stay. tests/config/dsColourSwitch.test.ts. */
+html:root[data-ds-colour="off"],
+html:root[data-ds-colour="off"] .dark,
+html:root[data-ds-colour="off"] [data-ds-skin],
+html:root[data-ds-colour="off"] [data-ds-studio] {
+  --ds-hue-6: var(--ds-chart-2);
+  --ds-hue-7: var(--ds-chart-3);
+  --ds-hue-1-text: var(--ds-muted);
+  --ds-hue-2-text: var(--ds-muted);
+  --ds-hue-3-text: var(--ds-muted);
+  --ds-hue-4-text: var(--ds-muted);
+  --ds-hue-5-text: var(--ds-muted);
+  --ds-hue-6-text: var(--ds-muted);
+  --ds-hue-7-text: var(--ds-muted);
+  --ds-hue-1-soft: transparent;
+  --ds-hue-2-soft: transparent;
+  --ds-hue-3-soft: transparent;
+  --ds-hue-4-soft: transparent;
+  --ds-hue-5-soft: transparent;
+  --ds-hue-6-soft: transparent;
+  --ds-hue-7-soft: transparent;
+  --ds-hue-1-solid: var(--ds-well-strong);
+  --ds-hue-2-solid: var(--ds-well-strong);
+  --ds-hue-3-solid: var(--ds-well-strong);
+  --ds-hue-4-solid: var(--ds-well-strong);
+  --ds-hue-5-solid: var(--ds-well-strong);
+  --ds-hue-6-solid: var(--ds-well-strong);
+  --ds-hue-7-solid: var(--ds-well-strong);
+  --ds-on-hue: var(--ds-ink);
+  --ds-chart-seq-1: var(--ds-chart-5);
+  --ds-chart-seq-2: var(--ds-chart-4);
+  --ds-chart-seq-3: var(--ds-chart-3);
+  --ds-chart-seq-4: var(--ds-chart-2);
+  --ds-chart-seq-5: color-mix(in srgb, var(--ds-chart-2), var(--ds-chart-1));
+  --ds-chart-seq-6: var(--ds-chart-1);
+  --ds-chart-div-1: var(--ds-chart-1);
+  --ds-chart-div-2: var(--ds-chart-2);
+  --ds-chart-div-3: color-mix(in srgb, var(--ds-chart-2), var(--ds-chart-3));
+  --ds-chart-div-4: var(--ds-chart-3);
+  --ds-chart-div-5: color-mix(in srgb, var(--ds-chart-3), var(--ds-chart-4));
+  --ds-chart-div-6: var(--ds-chart-4);
+  --ds-chart-div-7: var(--ds-chart-5);
+  --ds-wash-hero: none;
+  --ds-wash-empty: none;
+  --ds-studio: var(--ds-ink);
+  --ds-studio-soft: var(--ds-well-strong);
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
+}
+html:root[data-ds-colour="off"] .ds-art-scope {
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
+  --ds-art-glow: transparent;
+}
+
 /* ==========================================================================
    ATLAS SKIN — `[data-ds-skin="atlas"]` (docs/design/atlas-skin.md)
    The Atlas design language (atlasd, branch claude/quirky-darwin-fpx23q @ 98240e5b, wave 8) applied to
@@ -1129,6 +1314,51 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-hue-4: #079a94;                                                  /* teal */
   --ds-hue-5: #9548cc;                                                  /* violet */
   --ds-art: var(--ds-well-strong);                                      /* a comic's art tint; the neutral well until a component sets it */
+  /* Colour layer "Ink, Paper & Colour" (CL-6): the same values as :root, restated so the derived tints follow
+     this block's raised step; the hero wash is stronger under the skin (white paper carries it). */
+  --ds-hue-6: #567d01;
+  --ds-hue-7: #0089c9;
+  --ds-hue-1-text: #4455c2;
+  --ds-hue-2-text: #aa3176;
+  --ds-hue-3-text: #a04c00;
+  --ds-hue-4-text: #01706c;
+  --ds-hue-5-text: #8244b0;
+  --ds-hue-6-text: #4a6c00;
+  --ds-hue-7-text: #00699b;
+  --ds-hue-1-soft: color-mix(in srgb, var(--ds-hue-1) 12%, var(--ds-raised));
+  --ds-hue-2-soft: color-mix(in srgb, var(--ds-hue-2) 12%, var(--ds-raised));
+  --ds-hue-3-soft: color-mix(in srgb, var(--ds-hue-3) 12%, var(--ds-raised));
+  --ds-hue-4-soft: color-mix(in srgb, var(--ds-hue-4) 12%, var(--ds-raised));
+  --ds-hue-5-soft: color-mix(in srgb, var(--ds-hue-5) 12%, var(--ds-raised));
+  --ds-hue-6-soft: color-mix(in srgb, var(--ds-hue-6) 12%, var(--ds-raised));
+  --ds-hue-7-soft: color-mix(in srgb, var(--ds-hue-7) 12%, var(--ds-raised));
+  --ds-hue-1-solid: var(--ds-hue-1);
+  --ds-hue-2-solid: var(--ds-hue-2);
+  --ds-hue-3-solid: var(--ds-hue-3);
+  --ds-hue-4-solid: var(--ds-hue-4);
+  --ds-hue-5-solid: var(--ds-hue-5);
+  --ds-hue-6-solid: var(--ds-hue-6);
+  --ds-hue-7-solid: var(--ds-hue-7);
+  --ds-on-hue: #ffffff;
+  --ds-chart-seq-1: #98aaee;
+  --ds-chart-seq-2: #788eeb;
+  --ds-chart-seq-3: #5b71e8;
+  --ds-chart-seq-4: #4250e3;
+  --ds-chart-seq-5: #312bd2;
+  --ds-chart-seq-6: #231da3;
+  --ds-chart-div-1: #9a4900;
+  --ds-chart-div-2: #d76900;
+  --ds-chart-div-3: #eeae7b;
+  --ds-chart-div-4: #d4d4d4;
+  --ds-chart-div-5: #aabbf5;
+  --ds-chart-div-6: #6a81f2;
+  --ds-chart-div-7: #3d44e8;
+  --ds-wash-hero: radial-gradient(70% 100% at 100% 0%, color-mix(in srgb, var(--ds-hue-2) 20%, transparent), transparent 62%), radial-gradient(70% 100% at 0% 0%, color-mix(in srgb, var(--ds-hue-1) 18%, transparent), transparent 60%), radial-gradient(60% 80% at 55% 100%, color-mix(in srgb, var(--ds-hue-3) 12%, transparent), transparent 62%);
+  --ds-wash-empty: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--ds-hue-2) 10%, transparent), transparent 70%), radial-gradient(90% 80% at 100% 100%, color-mix(in srgb, var(--ds-hue-6) 10%, transparent), transparent 65%);
+  --ds-studio: var(--ds-ink);
+  --ds-studio-soft: var(--ds-well-strong);
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
   /* The art "develop" (ImageDevelop in components/studio/kit/streamMotion.tsx, useImageReveal; MO-1): the light a
      picture develops out of and its one sheen sweep, read by inline styles (the named ds colours list them only
      because every colour token has one: tests/config/dsColours.test.ts). */
@@ -1211,6 +1441,50 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-hue-4: #04a19b;
   --ds-hue-5: #a155da;
   --ds-art: var(--ds-well-strong);
+  /* Colour layer "Ink, Paper & Colour" (CL-6): the dark steps, restated for this block's raised step. */
+  --ds-hue-6: #6e9e01;
+  --ds-hue-7: #0c9edc;
+  --ds-hue-1-text: #9bb0ff;
+  --ds-hue-2-text: #f496c3;
+  --ds-hue-3-text: #f99f66;
+  --ds-hue-4-text: #48c7c0;
+  --ds-hue-5-text: #cea2f5;
+  --ds-hue-6-text: #9bc466;
+  --ds-hue-7-text: #54c1fb;
+  --ds-hue-1-soft: color-mix(in srgb, var(--ds-hue-1) 16%, var(--ds-raised));
+  --ds-hue-2-soft: color-mix(in srgb, var(--ds-hue-2) 16%, var(--ds-raised));
+  --ds-hue-3-soft: color-mix(in srgb, var(--ds-hue-3) 16%, var(--ds-raised));
+  --ds-hue-4-soft: color-mix(in srgb, var(--ds-hue-4) 16%, var(--ds-raised));
+  --ds-hue-5-soft: color-mix(in srgb, var(--ds-hue-5) 16%, var(--ds-raised));
+  --ds-hue-6-soft: color-mix(in srgb, var(--ds-hue-6) 16%, var(--ds-raised));
+  --ds-hue-7-soft: color-mix(in srgb, var(--ds-hue-7) 16%, var(--ds-raised));
+  --ds-hue-1-solid: var(--ds-hue-1);
+  --ds-hue-2-solid: var(--ds-hue-2);
+  --ds-hue-3-solid: var(--ds-hue-3);
+  --ds-hue-4-solid: var(--ds-hue-4);
+  --ds-hue-5-solid: var(--ds-hue-5);
+  --ds-hue-6-solid: var(--ds-hue-6);
+  --ds-hue-7-solid: var(--ds-hue-7);
+  --ds-on-hue: #0a0a0a;
+  --ds-chart-seq-1: #4452bf;
+  --ds-chart-seq-2: #5161e6;
+  --ds-chart-seq-3: #6275ff;
+  --ds-chart-seq-4: #7a90ff;
+  --ds-chart-seq-5: #95a9ff;
+  --ds-chart-seq-6: #b1c1ff;
+  --ds-chart-div-1: #f4a25c;
+  --ds-chart-div-2: #de6f11;
+  --ds-chart-div-3: #91450d;
+  --ds-chart-div-4: #4a4a4a;
+  --ds-chart-div-5: #404dc1;
+  --ds-chart-div-6: #7085ff;
+  --ds-chart-div-7: #a2b2ff;
+  --ds-wash-hero: radial-gradient(70% 100% at 100% 0%, color-mix(in srgb, var(--ds-hue-2) 26%, transparent), transparent 62%), radial-gradient(70% 100% at 0% 0%, color-mix(in srgb, var(--ds-hue-1) 22%, transparent), transparent 60%), radial-gradient(60% 80% at 55% 100%, color-mix(in srgb, var(--ds-hue-3) 16%, transparent), transparent 62%);
+  --ds-wash-empty: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--ds-hue-2) 14%, transparent), transparent 70%), radial-gradient(90% 80% at 100% 100%, color-mix(in srgb, var(--ds-hue-6) 14%, transparent), transparent 65%);
+  --ds-studio: var(--ds-ink);
+  --ds-studio-soft: var(--ds-well-strong);
+  --ds-art-soft: var(--ds-raised);
+  --ds-art-edge: var(--ds-hairline);
   /* A softened develop light: it multiplies the 0.35 peak, so a noir page does not start milky (MO-1). */
   --ds-develop-light: rgb(255 255 255 / 0.55);
   --ds-develop-sheen: rgba(255,255,255,0.15);
