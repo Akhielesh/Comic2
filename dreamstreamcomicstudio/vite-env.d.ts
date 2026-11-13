@@ -11,3 +11,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** The onnxruntime-web version transformers.js resolves (vite.config.ts `ortRuntime()`): the voice runtime's `/ort/<version>/`. */
+declare const __ORT_WEB_VERSION__: string;

@@ -2,7 +2,7 @@
   "guard": "pulse",
   "test": "tests/config/pulseGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/pulseGuard.test.ts lowers it (see README.md).",
-  "totals": { "animate-bounce": 7, "animate-ping": 2, "animate-pulse": 32, "unguarded": 30 },
+  "totals": { "animate-bounce": 7, "animate-ping": 1, "animate-pulse": 31, "unguarded": 29 },
   "files": {
     "App.tsx": { "animate-pulse": 1, "unguarded": 1 },
     "components/AccountSettings.tsx": { "animate-pulse": 2, "unguarded": 2 },
@@ -14,7 +14,6 @@
     "components/admin/costs/CostBits.tsx": { "animate-pulse": 1, "unguarded": 1 },
     "components/chat/ChatMessageView.tsx": { "animate-bounce": 3, "animate-pulse": 2, "unguarded": 5 },
     "components/chat/DashboardsView.tsx": { "animate-pulse": 1, "unguarded": 1 },
-    "components/chat/DictationButton.tsx": { "animate-ping": 1, "animate-pulse": 1, "unguarded": 1 },
     "components/chat/artifacts/CurrencyConverter.tsx": { "animate-pulse": 1, "unguarded": 1 },
     "components/chat/artifacts/FlightStatus.tsx": { "animate-pulse": 1 },
     "components/chat/artifacts/LiveMonitorCard.tsx": { "animate-pulse": 2, "unguarded": 1 },

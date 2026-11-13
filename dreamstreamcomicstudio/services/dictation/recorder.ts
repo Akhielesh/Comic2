@@ -2,6 +2,14 @@
 // Float32 buffer at 16 kHz (Whisper's native rate) so we can transcribe partial
 // audio while recording and the full take on stop — no MediaRecorder containers,
 // no decode step, no audio ever leaving the page.
+//
+// The microphone is never left on: if anything after getUserMedia fails (the audio
+// graph, a context that will not start), every track is stopped before the error is
+// thrown, and stop() always stops every track and closes the context. When the browser
+// ends a track itself (permission revoked, the device unplugged), `onEnded` says so,
+// so the take never keeps saying "Listening" with nothing captured.
+
+import { DictationError } from './errors';
 
 export interface PcmRecorder {
   /** Audio captured so far, mono Float32 @ 16 kHz. */
@@ -33,15 +41,101 @@ export const dictationSupported = (): boolean =>
   typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof AudioContext !== 'undefined';
 
 /**
- * Start capturing the microphone. `onLevel` receives a 0..1 loudness roughly every
- * 50ms for the live waveform. Throws if the user denies mic permission.
+ * An AudioContext made inside the person's tap, so browsers that only start audio from a gesture
+ * (iOS Safari) let it run later, after a model download. Null where it cannot be made.
  */
-export const startPcmRecorder = async (onLevel?: (level: number) => void): Promise<PcmRecorder> => {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
-  });
-  const ctx = new AudioContext();
-  const source = ctx.createMediaStreamSource(stream);
+export const createAudioContext = (): AudioContext | null => {
+  try {
+    return typeof AudioContext === 'undefined' ? null : new AudioContext();
+  } catch {
+    return null;
+  }
+};
+
+const RESUME_WAIT_MS = 1500;
+
+/** Resume a suspended context; give up after a short wait (a context that never starts captures nothing). */
+const resumeContext = async (ctx: AudioContext): Promise<void> => {
+  if (ctx.state !== 'suspended') return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([ctx.resume(), new Promise<void>((r) => (timer = setTimeout(r, RESUME_WAIT_MS)))]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
+
+export interface PcmRecorderOptions {
+  /** A context made in the tap (createAudioContext). The recorder owns it from here and closes it on stop. */
+  context?: AudioContext | null;
+  /**
+   * The browser ended the microphone on its own (permission revoked in site settings, the device unplugged):
+   * capture has stopped, so the take must end too. Never called for our own stop().
+   */
+  onEnded?: () => void;
+}
+
+/**
+ * Start capturing the microphone. `onLevel` receives a 0..1 loudness roughly every
+ * 50ms for the live waveform. Throws if the user denies mic permission, and throws
+ * `audio-suspended` (after stopping the tracks) if the audio context will not start.
+ */
+export const startPcmRecorder = async (onLevel?: (level: number) => void, opts: PcmRecorderOptions = {}): Promise<PcmRecorder> => {
+  let ctx: AudioContext | null = opts.context ?? null;
+  const closeContext = () => {
+    try {
+      if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => undefined);
+    } catch {
+      /* already closed */
+    }
+  };
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+    });
+  } catch (e) {
+    closeContext();
+    throw e;
+  }
+  const tracks = stream.getTracks();
+  // The track's own `ended`: fired by the browser only, never by our stop() (and removed before it anyway).
+  let endedFired = false;
+  const onTrackEnded = () => {
+    if (endedFired) return;
+    endedFired = true;
+    opts.onEnded?.();
+  };
+  const unwatchTracks = () =>
+    tracks.forEach((t) => {
+      try {
+        t.removeEventListener?.('ended', onTrackEnded);
+      } catch {
+        /* nothing to remove */
+      }
+    });
+  const stopTracks = () => {
+    unwatchTracks();
+    tracks.forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        /* already ended */
+      }
+    });
+  };
+  let source: MediaStreamAudioSourceNode;
+  try {
+    ctx ??= new AudioContext();
+    await resumeContext(ctx);
+    if (ctx.state !== 'running') throw new DictationError('audio-suspended', `AudioContext is ${ctx.state}`);
+    source = ctx.createMediaStreamSource(stream);
+  } catch (e) {
+    stopTracks();
+    closeContext();
+    throw e;
+  }
+  const live = ctx as AudioContext;
   const chunks: Float32Array[] = [];
   let length = 0;
   let stopped = false;
@@ -49,11 +143,20 @@ export const startPcmRecorder = async (onLevel?: (level: number) => void): Promi
   // ScriptProcessorNode is deprecated but universally supported and exactly fits
   // "hand me raw PCM on the main thread" — an AudioWorklet adds a module round-trip
   // for no quality gain at dictation workloads.
-  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  let proc: ScriptProcessorNode;
+  let sink: GainNode;
+  try {
+    proc = live.createScriptProcessor(4096, 1, 1);
+    sink = live.createGain();
+  } catch (e) {
+    stopTracks();
+    closeContext();
+    throw e;
+  }
   proc.onaudioprocess = (e) => {
     if (stopped) return;
     const data = e.inputBuffer.getChannelData(0);
-    const copy = resample(data, ctx.sampleRate, TARGET_SAMPLE_RATE);
+    const copy = resample(data, live.sampleRate, TARGET_SAMPLE_RATE);
     chunks.push(copy);
     length += copy.length;
     if (onLevel) {
@@ -63,11 +166,17 @@ export const startPcmRecorder = async (onLevel?: (level: number) => void): Promi
     }
   };
   source.connect(proc);
+  for (const t of tracks) {
+    try {
+      t.addEventListener?.('ended', onTrackEnded);
+    } catch {
+      /* a track without events: the take still ends on Done, the limit or a hidden tab */
+    }
+  }
   // Keep the node pulling samples without echoing the mic to the speakers.
-  const sink = ctx.createGain();
   sink.gain.value = 0;
   proc.connect(sink);
-  sink.connect(ctx.destination);
+  sink.connect(live.destination);
 
   const merge = (): Float32Array => {
     const out = new Float32Array(length);
@@ -83,16 +192,18 @@ export const startPcmRecorder = async (onLevel?: (level: number) => void): Promi
     snapshot: merge,
     duration: () => length / TARGET_SAMPLE_RATE,
     stop: () => {
-      stopped = true;
-      try {
-        proc.disconnect();
-        source.disconnect();
-        sink.disconnect();
-      } catch {
-        /* already torn down */
+      if (!stopped) {
+        stopped = true;
+        try {
+          proc.disconnect();
+          source.disconnect();
+          sink.disconnect();
+        } catch {
+          /* already torn down */
+        }
+        stopTracks();
+        closeContext();
       }
-      stream.getTracks().forEach((t) => t.stop());
-      void ctx.close();
       return merge();
     }
   };

@@ -18,6 +18,9 @@
 //                                   before the server kept them: the reader has no stand-in; every surface, RD-A #12)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
 //                                   the studio and reader roots carry the attribute regardless)
+//                    &hf=route     (fetches to Hugging Face's hosts go on to the network, where the spec's own
+//                                   Playwright route answers them with stand-ins; recorded as `net` {routed}.
+//                                   Absent: refused like every other origin. studio.dictation.spec.ts)
 //   /qa/comic-qa.html?surface=app[&scene=<id>]&theme=light|dark&skin=atlas|none
 //                                 (DS-1b: the app-wide scenes, one page each, discovered by glob from
 //                                  qa/app/scenes — qa/app/index.tsx holds the scene contract; no scene = the index)
@@ -102,8 +105,13 @@ const publicPayload = (params: Omit<QaParams, 'surface'>) => {
   return { doc, urls };
 };
 
+/** Hugging Face and its file CDNs (huggingface.co, hf.co and their subdomains), where the voice model's weights live. */
+const isHuggingFaceHost = (host: string) => ['huggingface.co', 'hf.co'].some((h) => host === h || host.endsWith(`.${h}`));
+
 const installNetworkShim = (params: Omit<QaParams, 'surface'>) => {
   const realFetch = window.fetch.bind(window);
+  // ?hf=route: the spec answers Hugging Face itself (route.fulfill), so its requests must reach the network layer.
+  const routeHuggingFace = new URLSearchParams(window.location.search).get('hf') === 'route';
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     let url: URL;
@@ -131,6 +139,10 @@ const installNetworkShim = (params: Omit<QaParams, 'surface'>) => {
       }
       if (/\/event$/.test(url.pathname)) return new Response(null, { status: 204 });
       return json(503, { error: { message: 'QA harness: no backend (the studio never calls the network here).', code: 'NOT_AVAILABLE' } });
+    }
+    if (!sameOrigin && routeHuggingFace && url.protocol === 'https:' && isHuggingFaceHost(url.hostname)) {
+      recordQaOp('net', { routed: url.origin + url.pathname });
+      return realFetch(input, init);
     }
     if (!sameOrigin && !/^(data|blob):/.test(url.protocol)) {
       recordQaOp('net', { blocked: url.origin + url.pathname });
