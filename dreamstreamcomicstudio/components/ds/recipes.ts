@@ -26,6 +26,7 @@ export {
   ART_PLACEHOLDER,
   BENDAY,
   CHIP,
+  CLIP_TEXT,
   CHIP_VARIANT,
   CTA_LG,
   DANGER_FILL,
@@ -98,6 +99,8 @@ export {
   TEXT_XL,
   TONE_CHIP,
   TONE_TEXT,
+  TWO_LINE_TEXT,
+  WRAP_TEXT,
   Z
 } from '../chat/studioDesign';
 export type { Density, StatusState, StatusTone, ZLayer } from '../chat/studioDesign';

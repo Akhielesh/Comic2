@@ -57,6 +57,17 @@ export const RADIUS_CONTROL = 'rounded-[var(--ds-radius-control)]';
 export const RADIUS_PILL = 'rounded-[var(--ds-radius-chip)]';
 
 // ---------------------------------------------------------------------------
+// Long words (SPEC-overflow §3.1; docs/design/design-system.md "Long words")
+// ---------------------------------------------------------------------------
+
+/** The one long-word rule: a URL, an id or a long compound word may break inside its box instead of leaving it. */
+export const WRAP_TEXT = 'min-w-0 [overflow-wrap:anywhere]';
+/** A one-line label that may be cut: an ellipsis inside the edge. Only for labels that carry no unique information. */
+export const CLIP_TEXT = 'min-w-0 truncate';
+/** A label that carries information (a file, a style, a link): up to two lines, then an ellipsis. */
+export const TWO_LINE_TEXT = 'min-w-0 [overflow-wrap:anywhere] line-clamp-2';
+
+// ---------------------------------------------------------------------------
 // Color & type
 // ---------------------------------------------------------------------------
 
@@ -382,7 +393,7 @@ export const SECTION_HEADER = 'flex flex-wrap items-start justify-between gap-x-
 export const SECTION_ICON_TILE = `flex h-9 w-9 shrink-0 items-center justify-center ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-ink)]`;
 /** The card title is the body face, semibold (bridge D2: Atlas sets no display face on card titles). */
 export const SECTION_TITLE = 'm-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)]';
-export const SECTION_DESCRIPTION = 'm-0 mt-0.5 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]';
+export const SECTION_DESCRIPTION = `m-0 mt-0.5 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)] ${WRAP_TEXT}`;
 export const SECTION_BODY = 'px-5 py-5 sm:px-6';
 
 /**

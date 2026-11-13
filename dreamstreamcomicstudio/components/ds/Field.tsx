@@ -15,7 +15,7 @@
 import React, { createContext, useContext, useId } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { TONE_TEXT } from './recipes';
+import { TONE_TEXT, WRAP_TEXT } from './recipes';
 
 export interface FieldContextValue {
   id: string;
@@ -54,7 +54,7 @@ export function useFieldControl<T extends FieldControlProps>(props: T): T {
 }
 
 export const FIELD_LABEL = 'text-[length:var(--ds-text-base)] font-medium leading-5 text-[var(--ds-ink)]';
-export const FIELD_DESCRIPTION = 'm-0 text-pretty text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]';
+export const FIELD_DESCRIPTION = `m-0 text-pretty text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)] ${WRAP_TEXT}`;
 export const FIELD_ERROR = `m-0 flex items-start gap-1.5 text-[length:var(--ds-text-sm)] font-medium leading-5 ${TONE_TEXT.danger}`;
 
 export interface FieldProps {
@@ -100,7 +100,7 @@ export function Field({ label, description, error, id, required, disabled, hideL
       {error ? (
         <p id={errorId} data-slot="field-error" className={FIELD_ERROR}>
           <AlertCircle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0 [overflow-wrap:anywhere]">{error}</span>
+          <span className={WRAP_TEXT}>{error}</span>
         </p>
       ) : null}
     </div>

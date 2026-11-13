@@ -6,6 +6,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Long words in messages (SPEC-overflow §3.2; docs/design/design-system.md "Long words"): an alert's or a message
+   slot's text breaks a long URL or id inside its box instead of leaving it (overflow-wrap inherits). Base layer, so a
+   utility on a descendant (`truncate`, `whitespace-nowrap`) still wins; global, outside every [data-ds-skin] scope.
+   Alerts and our own slots only: not role="status" (short labels in tight rows) and not role="alertdialog" (whole
+   consent dialogs with prices and controls). tests/config/overflowCss.test.ts pins it, source and compiled. */
+@layer base {
+  [role="alert"], [data-slot="error-state"], [data-slot="message"] { overflow-wrap: anywhere; }
+  /* Safari < 15.4 has no `anywhere`; `word-break: break-word` gives the same breaks and the same lower min-content. */
+  @supports not (overflow-wrap: anywhere) {
+    [role="alert"], [data-slot="error-state"], [data-slot="message"], .\[overflow-wrap\:anywhere\] { word-break: break-word; }
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
