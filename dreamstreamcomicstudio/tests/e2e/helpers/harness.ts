@@ -269,10 +269,11 @@ export class QaHarness {
         },
         true
       );
-      // A transition between two equal values moves nothing, like a 0 s animation. The browser starts one on every element
+      // A transition between two equal values moves nothing, like a 0 s animation. Chromium 141 starts one on every element
       // with `transition: all` when an inherited value that depends on a custom property is resolved again to the same
       // colour: the Atlas skin's scrollbar-color is color-mix(var(--ds-ink) …), and any custom property set on <html>
-      // after the first paint (the safe-area insets, the app height) re-resolves it. Only two ends that differ are motion.
+      // after the first paint (the safe-area insets, the app height) re-resolves it. Chromium 156 no longer starts it, so
+      // the rule matters wherever an older engine runs the smoke. Only two ends that differ are motion.
       const sameEnds = (el: Element, prop: string) => {
         try {
           const key = prop.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());

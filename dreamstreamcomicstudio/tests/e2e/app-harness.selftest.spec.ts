@@ -134,19 +134,35 @@ test.describe('app harness probes', () => {
   test('recordMotionStarts: a transition between two equal values is not motion; one whose ends differ still is', async ({ page }, testInfo) => {
     const qa = harness(page, testInfo);
     await qa.recordMotionStarts();
-    // The page counts every transitionrun itself, so this test knows the equal-ends transition really started.
+    // The page counts every transitionrun itself, so this test knows each transition below really reached the recorder.
     await page.addInitScript(() => {
       const w = window as unknown as { __rawRuns?: string[] };
       w.__rawRuns = [];
-      document.addEventListener('transitionrun', (e) => w.__rawRuns!.push((e as TransitionEvent).propertyName), true);
+      document.addEventListener('transitionrun', (e) => w.__rawRuns!.push(`${(e as TransitionEvent).propertyName} #${(e.target as Element).id}`), true);
     });
     await serve(
       page,
-      `<main><div id="all" class="all">inherits the scrollbar colour</div><div id="fade" style="transition:opacity 150ms">fade</div></main>
+      `<main>
+         <div id="quirk" class="all">inherits the scrollbar colour</div>
+         <div id="same" class="same">two equal ends</div>
+         <div id="differs" class="differs">two ends that differ</div>
+         <div id="fade" style="transition:opacity 150ms">fade</div>
+       </main>
        <script>
+         // A transition as the recorder reads it: the property it runs on, and its first and last keyframes.
+         const run = (id, prop, key, from, to) => {
+           const el = document.getElementById(id);
+           el.getAnimations = () => [{ transitionProperty: prop, effect: { getKeyframes: () => [{ [key]: from }, { [key]: to }] } }];
+           el.dispatchEvent(new TransitionEvent('transitionrun', { propertyName: prop, bubbles: true }));
+         };
          requestAnimationFrame(() => requestAnimationFrame(() => {
-           // Any custom property set on the root resolves the inherited colour again, to the same colour.
+           // 1. Built by hand, so the test does not depend on which engine runs it: two equal ends, then two that differ.
+           run('same', 'scrollbar-color', 'scrollbarColor', 'rgba(17, 17, 17, 0.22) rgba(0, 0, 0, 0)', 'rgba(17, 17, 17, 0.22) rgba(0, 0, 0, 0)');
+           run('differs', 'color', 'color', 'rgb(17, 17, 17)', 'rgb(200, 0, 0)');
+           // 2. The engine's own. Chromium 141 starts a real equal-ends scrollbar-color transition on #quirk here (any custom
+           // property set on the root resolves the inherited colour again, to the same colour); Chromium 156 does not.
            document.documentElement.style.setProperty('--inset', '24px');
+           // 3. A real transition whose ends differ.
            document.getElementById('fade').style.opacity = '0.5';
          }));
        </script>`,
@@ -154,8 +170,9 @@ test.describe('app harness probes', () => {
     );
     await page.waitForTimeout(600);
     const raw = await page.evaluate(() => (window as unknown as { __rawRuns?: string[] }).__rawRuns ?? []);
-    expect(raw, 'the fixture really starts an equal-ends scrollbar-color transition').toContain('scrollbar-color');
-    expect(await qa.motionStarts()).toEqual(['transition opacity on div']);
+    expect(raw, 'both hand-built transitions and the real fade reached the page').toEqual(expect.arrayContaining(['scrollbar-color #same', 'color #differs', 'opacity #fade']));
+    // Whether or not this engine also started its own equal-ends transition on #quirk, only the two with different ends count.
+    expect([...((await qa.motionStarts()) ?? [])].sort()).toEqual(['transition color on div.differs', 'transition opacity on div']);
   });
 
   test('duplicateIds: an id carried twice is reported once', async ({ page }, testInfo) => {
