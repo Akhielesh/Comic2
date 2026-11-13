@@ -3,6 +3,7 @@
 // draft with a hint, or open the file picker. The composer is the only listener.
 
 import { sendOutcomeOf } from '../messageQueue';
+import type { ComicResearchResult } from '../../../shared/comic/research';
 
 export const COMPOSE_EVENT = 'comicstudio:compose';
 
@@ -20,6 +21,8 @@ export interface ComposeRequest {
   /** Open one of the composer's option panels (format / style / quality). Additive: composers
    *  that don't handle it just focus, so callers must never rely on it as their only path. */
   openPanel?: ComposerPanel;
+  /** Explicit research selection, scoped to the comic that requested it. */
+  research?: { projectId: string; result: ComicResearchResult; file?: File };
 }
 
 export type ComposerPanel = 'format' | 'style' | 'quality';

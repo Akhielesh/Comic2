@@ -1,4 +1,4 @@
-import type { ComicResearchResult, ComicResearchResults } from '../../../shared/comic/research.js';
+import { comicResearchText as text, normalizeComicResearch, type ComicResearchResult, type ComicResearchResults } from '../../../shared/comic/research.js';
 import { fetchJson } from '../ai/tools/http.js';
 import { TtlCache } from '../lib/cache.js';
 
@@ -17,24 +17,6 @@ interface CommonsResponse {
   }> };
 }
 
-const text = (value: unknown, limit: number): string => typeof value === 'string'
-  ? value.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, limit)
-  : '';
-
-const commonsThumb = (raw: unknown): string | undefined => {
-  if (typeof raw !== 'string') return undefined;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== 'https:' || url.port || url.username || url.password || !['thumb.wikimedia.org', 'upload.wikimedia.org'].includes(url.hostname)) return undefined;
-    if (!url.pathname.startsWith('/wikipedia/commons/thumb/')) return undefined;
-    url.search = '';
-    url.hash = '';
-    return url.href;
-  } catch {
-    return undefined;
-  }
-};
-
 export const parseComicResearch = (wiki?: ArticleResponse, commons?: CommonsResponse): ComicResearchResults => {
   const articles: ComicResearchResult[] = (Array.isArray(wiki?.pages) ? wiki.pages : []).slice(0, 4).flatMap((page) => {
     const title = text(page?.title, 160);
@@ -46,14 +28,13 @@ export const parseComicResearch = (wiki?: ArticleResponse, commons?: CommonsResp
     .sort((a, b) => (a.index ?? 999) - (b.index ?? 999)).flatMap((page) => {
     const file = text(page?.title, 240);
     const info = page?.imageinfo?.[0];
-    const thumbnail = commonsThumb(info?.thumburl);
+    const thumbnail = info?.thumburl;
     const license = text(info?.extmetadata?.LicenseShortName?.value, 65);
     const credit = text(info?.extmetadata?.Artist?.value, 160);
-    if (!file.startsWith('File:') || !thumbnail || !/^(?:CC[ -](?:BY\b|0\b)|public domain\b)/i.test(license) || !/^image\/(jpeg|png|webp)$/.test(info?.mime ?? '')) return [];
-    if (/^CC[ -]BY\b/i.test(license) && !credit) return [];
+    if (!file.startsWith('File:') || !/^image\/(jpeg|png|webp)$/.test(info?.mime ?? '')) return [];
     return [{ title: file.slice(5).replace(/\.(jpe?g|png|webp)$/i, ''), source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(file.replace(/ /g, '_'))}`, thumbnail, license, ...(credit ? { credit } : {}) }];
   });
-  return { articles, images, incomplete: !wiki || !commons };
+  return normalizeComicResearch({ articles, images, incomplete: !wiki || !commons })!;
 };
 
 export function searchComicResearch(query: string): Promise<ComicResearchResults> {

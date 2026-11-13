@@ -1,6 +1,6 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ExternalLink, ImagePlus, Search } from 'lucide-react';
-import type { ComicResearchResult, ComicResearchResults } from '../../../shared/comic/research';
+import { normalizeComicResearch, type ComicResearchResult, type ComicResearchResults } from '../../../shared/comic/research';
 import { post } from '../../../services/apiClient';
 import { DENSITY, FIELD } from '../../chat/studioDesign';
 import { Button } from '../../ds/Button';
@@ -9,13 +9,16 @@ import { cn } from '../../../lib/utils';
 interface Props {
   projectId: string;
   onAdd: (result: ComicResearchResult, file?: File) => void;
+  /** Director results use this same selector without starting a second search. */
+  suppliedResults?: ComicResearchResults;
 }
 
 const IMAGE_LIMIT = 2 * 1024 * 1024;
 
-export function ResearchPanel({ projectId, onAdd }: Props) {
+export function ResearchPanel({ projectId, onAdd, suppliedResults }: Props) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ComicResearchResults>();
+  const [foundResults, setResults] = useState<ComicResearchResults>();
+  const results = useMemo(() => normalizeComicResearch(suppliedResults ?? foundResults), [suppliedResults, foundResults]);
   const [state, setState] = useState<'idle' | 'searching' | 'adding' | 'search-error' | 'image-error'>('idle');
   const queryId = useId();
   const request = useRef<AbortController | null>(null);
@@ -83,11 +86,11 @@ export function ResearchPanel({ projectId, onAdd }: Props) {
 
   return (
     <div className="min-w-0 space-y-3 p-2 text-[13px]">
-      <form onSubmit={(event) => void search(event)} className="flex min-w-0 gap-2">
+      {!suppliedResults && <form onSubmit={(event) => void search(event)} className="flex min-w-0 gap-2">
         <label className="sr-only" htmlFor={queryId}>Place, event, or topic</label>
         <input id={queryId} value={query} onChange={(event) => setQuery(event.target.value)} className={cn(FIELD, DENSITY.coarse, 'min-w-0 flex-1 px-2')} maxLength={120} placeholder="Place, event, or topic" />
         <Button type="submit" size="sm" variant="outline" disabled={busy || query.trim().length < 2}><Search aria-hidden className="size-3.5" /> Search</Button>
-      </form>
+      </form>}
       {state === 'searching' && <p role="status">Searching Wikipedia and Wikimedia Commons…</p>}
       {state === 'adding' && <p role="status">Preparing the selected image…</p>}
       {state === 'search-error' && <p role="alert">Research is temporarily unavailable. Try again in a moment.</p>}
@@ -107,7 +110,7 @@ export function ResearchPanel({ projectId, onAdd }: Props) {
             </div>
           ))}
           {results.images.length > 0 && (
-            <ul className="grid grid-cols-2 gap-2" aria-label="Image references">
+            <ul className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-2" aria-label="Image references">
               {results.images.map((result) => (
                 <li key={result.source} className="min-w-0 rounded-md border border-[var(--ds-hairline)] p-1 [overflow-wrap:anywhere]">
                   <img alt="" src={result.thumbnail} crossOrigin="anonymous" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="aspect-[3/2] w-full rounded-sm object-cover" />

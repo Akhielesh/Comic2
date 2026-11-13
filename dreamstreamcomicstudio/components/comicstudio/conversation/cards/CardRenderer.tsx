@@ -26,13 +26,14 @@ import { NoticeCard } from './NoticeCard';
 import { OptionsCard } from './OptionsCard';
 import { PlanCard } from './PlanCard';
 import { RecapCard } from './RecapCard';
+import { ResearchCard } from './ResearchCard';
 import { RendersCard } from './RendersCard';
 import { SettledCardView } from './SettledCard';
 import { StyleChoiceCard } from './StyleChoiceCard';
 
 /** Card types this renderer handles itself (the original seven plus `recap` and the live agent's `conflict`); the rest come
  *  from the registry. */
-export const CARD_TYPES: ReadonlyArray<Card['type']> = ['options', 'style_choice', 'cast', 'plan', 'gate', 'renders', 'notice', 'recap', 'conflict'];
+export const CARD_TYPES: ReadonlyArray<Card['type']> = ['options', 'style_choice', 'cast', 'plan', 'gate', 'renders', 'notice', 'recap', 'conflict', 'research'];
 
 class CardBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -109,6 +110,9 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController;
         break;
       case 'recap':
         body = <RecapCard card={card} studio={studio} />;
+        break;
+      case 'research':
+        body = <ResearchCard card={card} studio={studio} />;
         break;
       case 'conflict':
         // The creator's edit and the director's collided mid-turn (agent-editor plan §3 A3.1): Keep mine / Use the director's.
