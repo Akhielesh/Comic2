@@ -54,7 +54,11 @@ export async function openSettings(qa: QaHarness): Promise<boolean> {
 
 export async function openSpend(qa: QaHarness): Promise<boolean> {
   const p = qa.page;
-  return clickIfVisible(qa.testInfo, 'Spend chip', p.getByRole('button', { name: /^spent|spend|\$\d/i }));
+  const chip = p.getByRole('button', { name: /^spent|spend|\$\d/i });
+  if (await chip.first().isVisible().catch(() => false)) return clickIfVisible(qa.testInfo, 'Spend chip', chip);
+  if (!(await openMoreMenu(qa))) return false;
+  await qa.settle(300);
+  return clickIfVisible(qa.testInfo, 'Spending', p.getByRole('menuitem', { name: /^spending/i }));
 }
 
 /**

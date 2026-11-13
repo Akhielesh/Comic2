@@ -146,7 +146,7 @@ const config: PlaywrightTestConfig = {
     // at 320 light, 360 dark and 1280 light. In layout-smoke's default projects, so it gates every UI pull request.
     { name: 'overflow', testMatch: /(^|\/)overflow\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
     // Three representative product sizes, without multiplying by the full device/scene matrix.
-    { name: 'shared-responsive', testMatch: /products\.responsive\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
+    { name: 'shared-responsive', testMatch: /(products\.responsive|workspace\.navigation)\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
     // The Python playground's runtime (services/pyodideRuntime.ts): Run starts the real worker, and every request must
     // stay on this origin. One desktop Chromium: the 13.5 MB runtime is loaded once, not once per device.
     { name: 'python-runtime', testMatch: /python\.runtime\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 1280, height: 800 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }

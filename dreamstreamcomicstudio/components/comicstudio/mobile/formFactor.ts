@@ -140,9 +140,9 @@ export const headerVariantFor = (ff: Pick<FormFactor, 'layout' | 'width'> & Part
       ? 'medium'
       : 'regular';
 
-/** The header pane switcher (Chat | Both | Board) shows on touch tablets, foldables and narrow windows. */
+/** Every split workspace can give the conversation or canvas the full width. */
 export const showsPaneSwitcher = (ff: Pick<FormFactor, 'layout' | 'width' | 'coarse'>): boolean =>
-  (ff.layout === 'split' || ff.layout === 'dual-screen') && (ff.coarse || ff.width < 1200);
+  ff.layout === 'split' || ff.layout === 'dual-screen';
 
 /** Shallow equality used by the shared store so consumers only re-render on a real change. */
 export const sameFormFactor = (a: FormFactor, b: FormFactor): boolean =>

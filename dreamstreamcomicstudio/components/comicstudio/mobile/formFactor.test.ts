@@ -112,7 +112,7 @@ describe('derived rules', () => {
       headerVariantFor(formFactorFor({ w: 1114, h: 720, coarse: true, segments: { count: 2, axis: 'horizontal', rects: [], hinge: { start: 540, end: 574 } } }))
     ).toBe('medium');
     expect(showsPaneSwitcher(formFactorFor({ w: 820, h: 1180, coarse: true }))).toBe(true);
-    expect(showsPaneSwitcher(formFactorFor({ w: 1440, h: 900 }))).toBe(false);
+    expect(showsPaneSwitcher(formFactorFor({ w: 1440, h: 900 }))).toBe(true);
     expect(showsPaneSwitcher(formFactorFor({ w: 1366, h: 1024, coarse: true }))).toBe(true);
     expect(showsPaneSwitcher(formFactorFor({ w: 390, h: 844, coarse: true }))).toBe(false);
   });
