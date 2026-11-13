@@ -1849,7 +1849,7 @@ describe('feature spend handlers, caps and adoption', () => {
 
   it('the translation Approve card names its languages in words, never by code (Hindi and Tamil; Hindi, Tamil and Telugu)', async () => {
     const run = vi.fn(async () => ({ outcome: { status: 'done' as const, message: 'Translated.' }, done: Promise.resolve() }));
-    const handler: ActionHandler = { type: 'translate', spend: true, estimate: async () => ({ usd: 0.4, imageCount: 0, model: 'Sonnet 5.5', lines: [] }), run };
+    const handler: ActionHandler = { type: 'translate', spend: true, estimate: async () => ({ usd: 0.4, imageCount: 0, model: 'translator', lines: [] }), run };
     const gateFor = async (languages: string[]) => {
       const doc = plannedDoc();
       doc.settings.confirm = 'always';
