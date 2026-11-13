@@ -4,12 +4,13 @@ import { editionProgress, i18nOf, lineSourceHash, textSourceHash } from '../../.
 import { applyOps } from '../../../../shared/comic/ops.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
+import { LANGUAGES } from '../../../../shared/comic/languages.js';
 import { JOB_TIMINGS } from '../jobs.js';
 import { newSession, scriptedLlm, testContext } from '../orchestrator.fakes.js';
 import { createDirectorTurn, type DirectorTurn } from '../tools.js';
 import { resetTranslationCalibration } from '../i18n/index.js';
 import { fakeLinguist, fakeTranslator, sixPageKidsDoc, times } from '../i18n/testing.js';
-import { I18N_PROMPT_RULES, i18nToolGroup, languagesSummary } from './i18n.js';
+import { I18N_PROMPT_RULES, i18nPromptRules, i18nToolGroup, languagesSummary } from './i18n.js';
 
 vi.mock('../safety/index.js', async (orig) => {
   const real = await orig<typeof import('../safety/index.js')>();
@@ -70,6 +71,50 @@ describe('i18n tool group', () => {
     expect(languagesSummary(doc)).toBe('Languages: source en; editions te (draft, 92%: 1 stale)');
     expect(languagesSummary(translated())).toBe('Languages: source en; editions te (publishable, 100%)');
   });
+
+  it('language words: every registry language by its English name and by its own name, "versions" and "mother tongue"', () => {
+    const { ctx } = setup();
+    const opens = (userText: string) => i18nToolGroup.when!(ctx, createDirectorTurn({ userText }));
+    expect(opens('in my mother tongue please')).toBe(true);
+    expect(opens('other versions for my cousins')).toBe(true);
+    for (const l of LANGUAGES) {
+      const english = l.english.replace(/\s*\(.*$/, '');
+      expect(opens(`add a ${english} one`), l.english).toBe(true);
+      expect(opens(`one more: ${l.endonym}`), l.endonym).toBe(true);
+    }
+    // In a sentence, any letter case; a longer word that only starts like a language name is not one.
+    expect(opens('y también en español, por favor')).toBe(true);
+    expect(opens('AUF DEUTSCH BITTE')).toBe(true);
+    expect(opens('the hero is a Germanic warrior')).toBe(false);
+    expect(opens('make the hero taller')).toBe(false);
+  });
+
+  it('the rule: translate the languages named, never ask which to "set active", and say truthfully when the user approves', () => {
+    expect(I18N_PROMPT_RULES).toContain('call translate_comic with the languages they named');
+    expect(I18N_PROMPT_RULES).toContain('Never use ask_user to choose languages');
+    expect(I18N_PROMPT_RULES).toMatch(/never offer to "switch" or "set active" a language/);
+    expect(I18N_PROMPT_RULES).toContain("Call set_comic_language only when they ask to change the comic's own language");
+    expect(I18N_PROMPT_RULES).toContain('If they named no language');
+    // ask_user is the tool that shows tappable options: banned for languages already named, used when none were. Its
+    // chip replies name a language, so the next turn opens the language tools (the phase gate reads only that turn).
+    expect(I18N_PROMPT_RULES).toContain('Never use ask_user to choose languages they already named');
+    expect(I18N_PROMPT_RULES).toMatch(/If they named no language, call ask_user once with multi: true and two to five languages[^.]*its reply is "Translate into <language>"/);
+    const { ctx } = setup();
+    expect(i18nToolGroup.when!(ctx, createDirectorTurn({ userText: 'Translate into Telugu' }))).toBe(true);
+    // The old promise was untrue under "big spends only" (a cheap translate started with no card).
+    expect(I18N_PROMPT_RULES).not.toContain('quotes first');
+    expect(I18N_PROMPT_RULES).toContain("the studio shows the price and waits for the user's Approve");
+    // The languages on offer are the real ones, never the comic's own.
+    expect(I18N_PROMPT_RULES).toContain('You can translate into: Hindi, Telugu, Tamil,');
+    expect(I18N_PROMPT_RULES).not.toMatch(/translate into: [^.]*English/);
+    const telugu = sixPageKidsDoc();
+    telugu.format = { ...telugu.format, language: 'te' };
+    expect(i18nPromptRules(telugu)).toMatch(/You can translate into: English, Hindi, Tamil,/);
+    const never = sixPageKidsDoc();
+    never.settings = { ...never.settings, confirm: 'never' };
+    expect(i18nToolGroup.promptRules!(never)).toBe(i18nPromptRules(never));
+    expect(i18nToolGroup.promptRules!(sixPageKidsDoc())).toBe(I18N_PROMPT_RULES);
+  });
 });
 
 describe('translate_comic', () => {
@@ -94,6 +139,8 @@ describe('translate_comic', () => {
     const { tools, turn, session, ctx } = setup(sixPageKidsDoc(), 'looks great, what next?');
     const out = await tools.translate_comic.execute({ languages: ['hi'] });
     expect(out).toMatch(/Quoted|Waiting|waiting/);
+    // The card names the languages by code; the director reads their names.
+    expect(out).toContain('That is Hindi: say the languages and the price in one line and stop');
     expect(turn.gated).toBe(true);
     expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'no_intent' });
     expect(ctx.llmFake.calls).toHaveLength(0);

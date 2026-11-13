@@ -12,7 +12,7 @@
 
 import type { ComicDoc, Line, Page } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, i18nOf, lineSourceHash, normalizeSource, translationStatus } from '../../../../shared/comic/i18n.js';
-import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
+import { LANGUAGES, languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import type { DocOp, SpendAction } from '../../../../shared/comic/ops.js';
 import { effectiveRating } from '../../../../shared/comic/safety.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
@@ -30,11 +30,34 @@ import { costFormatterFor, governDollars } from '../costText.js';
 import { pushNextSteps, type DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 
-const LANG_WORDS =
-  /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|bangla|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|mandarin|portuguese|indonesian|edition|glossary|subtitles?)\b|[ऀ-෿؀-ۿ぀-ヿ一-鿿가-힯]/i;
+const reEscape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** A registry name without its bracketed note: "Chinese (Simplified)" → "chinese", "中文（简体）" → "中文". */
+const bareName = (name: string) => name.replace(/\s*[（(].*$/u, '').trim().toLowerCase();
+/**
+ * Every language of the registry (shared/comic/languages.ts) by its English name and by its own name, plus two
+ * everyday names the registry spells differently. A language added there is recognised here with no second list.
+ */
+const LANGUAGE_NAMES: readonly string[] = [...new Set([...LANGUAGES.flatMap((l) => [bareName(l.english), bareName(l.endonym)]), 'bangla', 'mandarin'])];
+/** Names written in Latin letters ("hindi", "español"). Names in other scripts need no list: LANG_SCRIPTS matches them. */
+const LATIN_NAMES = LANGUAGE_NAMES.filter((name) => /^[\p{Script=Latin}\s]+$/u.test(name));
+/** Any letter of an Indic script, Arabic, kana, Han or Hangul: the user is writing (or naming) another language. */
+const LANG_SCRIPTS = String.raw`[\u0900-\u0DFF\u0600-\u06FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]`;
+/** Whole words only, for accented names too ("español" yes, "Germanic" no). */
+const wholeWord = (alternatives: string) => String.raw`(?<![\p{L}\p{N}_])(?:${alternatives})(?![\p{L}\p{N}_])`;
+
+/**
+ * Words that say a turn is about languages: they open this group, and they tell a translate the user asked for from
+ * one the director offered unasked. "versions" ("add Telugu and Hindi versions") and "mother tongue" count.
+ */
+const LANG_WORDS = new RegExp(
+  `${wholeWord(String.raw`translat\w*|languages?|${LATIN_NAMES.map(reEscape).join('|')}|editions?|glossary|subtitles?|versions?|mother tongue`)}|${LANG_SCRIPTS}`,
+  'iu'
+);
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const englishName = (code: string) => languageSpec(code)?.english || code;
+/** "Hindi", "Hindi and Tamil", "Hindi, Tamil and Telugu". */
+const listOf = (items: string[]) => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const int = (v: unknown): number | undefined => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN;
@@ -99,7 +122,11 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, action: Ex
     if (outcome.status === 'started') turn.spentUsd += outcome.estimate.usd;
     else if (outcome.status === 'gated') turn.gated = true;
     void ctx.track(started.done);
-    message = outcome.message;
+    // The Approve card names the languages by code: the director gets their names, and what the wait means.
+    message =
+      outcome.status === 'gated'
+        ? `${outcome.message} That is ${listOf(action.languages.map(englishName))}: say the languages and the price in one line and stop; nothing is spent until they tap Approve.`
+        : outcome.message;
   }
   const notes: string[] = [];
   const fix = overlayFix(ctx.session.doc, quote.byok);
@@ -125,7 +152,7 @@ function translateComicTool(ctx: StudioContext, turn: DirectorTurn): DirectorToo
     {
       type: 'object',
       properties: {
-        languages: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 19, description: 'Codes or names: ["te", "Hindi", "తెలుగు"].' },
+        languages: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 19, description: 'Every language the user named, as codes or names: ["te", "Hindi", "తెలుగు"].' },
         pages: { type: 'array', items: { type: 'integer', minimum: 1 }, description: 'Only these page numbers (default: the whole comic + titles).' },
         retranslate: { type: 'boolean', description: 'Translate again even lines that are up to date (costs money; only when the user asked).' },
         overwriteEdits: { type: 'boolean', description: "Also replace the author's own edited translations (only when the user asked)." }
@@ -416,7 +443,19 @@ export function languagesSummary(doc: ComicDoc): string | undefined {
   return `Languages: source ${doc.format.language}${parts.length ? `; editions ${parts.join(', ')}` : '; no translations'}${lettering}`;
 }
 
-export const I18N_PROMPT_RULES = `LANGUAGES. The comic is written in its source language (DOC SUMMARY). To make it readable in other languages call translate_comic: software reuses everything already translated for free, a writer-class translator does the rest and a linguist reviews every line; it quotes first and a waiting approval is handled like any other spend. Never "translate" by rewriting lines with edit_panel_text. To change one translated line use edit_translation; to check how a translation reads use read_translation (quote its gloss, never guess). To write the comic natively in another language, call set_comic_language with mode relabel BEFORE plan_pages. Reply in the user's language, but never change the comic's language unless they ask. Translated editions need overlay lettering: if the pages have lettering painted into the art, explain that converting means redrawing those pages without text (quote it) and ask before doing it. Readers choose among published languages when the comic is published; a language is publishable once it is translated and reviewed.`;
+/** What the director is told about languages; the languages on offer are the registry's, never the comic's own. */
+export function i18nPromptRules(doc?: ComicDoc): string {
+  const source = doc?.format.language || 'en';
+  const offered = LANGUAGES.filter((l) => !sameLanguage(l.code, source)).map((l) => l.english).join(', ');
+  // A small translation under "big spends only" (and every one under "never ask") starts at once; a big one, or any
+  // under "always ask", waits for the Approve card. The tool's own result says which happened.
+  const money =
+    "It is PAID: under this comic's money settings it either starts at once (a small spend) or the studio shows the price and waits for the user's Approve. Say the languages and what the tool reports in one line.";
+  return `LANGUAGES. The comic is written in its source language (DOC SUMMARY). To make it readable in other languages call translate_comic: software reuses everything already translated for free, a writer-class translator does the rest and a linguist reviews every line. ${money} When the user asks for the comic in other languages (a translation, "a Hindi version", "in Telugu too"), call translate_comic with the languages they named, all of them in one call. Never use ask_user to choose languages they already named, and never offer to "switch" or "set active" a language: adding a language never changes the comic's own. Call set_comic_language only when they ask to change the comic's own language. If they named no language, call ask_user once with multi: true and two to five languages that fit the story's setting (and the language the user writes in, when it is not the comic's): each option's label is the language's name and its reply is "Translate into <language>". You can translate into: ${offered}. Never "translate" by rewriting lines with edit_panel_text. To change one translated line use edit_translation; to check how a translation reads use read_translation (quote its gloss, never guess). To write the comic natively in another language, call set_comic_language with mode relabel BEFORE plan_pages. Reply in the user's language, but never change the comic's language unless they ask. Translated editions need overlay lettering: if the pages have lettering painted into the art, explain that converting means redrawing those pages without text (quote it) and ask before doing it. Readers choose among published languages when the comic is published; a language is publishable once it is translated and reviewed.`;
+}
+
+/** The rule for a comic written in English under the default "ask" settings (tests and docs quote it). */
+export const I18N_PROMPT_RULES = i18nPromptRules();
 
 export const i18nToolGroup: ToolGroup = {
   id: 'i18n',
@@ -426,7 +465,7 @@ export const i18nToolGroup: ToolGroup = {
     return hasEditions(doc) || LANG_WORDS.test(turn.userText || '') || !sameLanguage(doc.format.language || 'en', 'en');
   },
   tools: (ctx, turn) => [translateComicTool(ctx, turn), setComicLanguageTool(ctx, turn), editTranslationTool(ctx), readTranslationTool(ctx), setGlossaryTool(ctx)],
-  promptRules: () => I18N_PROMPT_RULES,
+  promptRules: (doc) => i18nPromptRules(doc),
   summaryLines(doc) {
     const line = languagesSummary(doc);
     return line ? [line] : [];
