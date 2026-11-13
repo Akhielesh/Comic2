@@ -31,6 +31,7 @@ import {
   FOCUS_RING,
   ON_ACCENT_TEXT,
   RADIUS_CONTROL,
+  CLIP_TEXT,
   SHADOW_SOFT,
   SPARK_FILL
 } from './recipes';
@@ -45,7 +46,7 @@ export const BUTTON_EXTENSION_VARIANTS: readonly ButtonVariant[] = ['create'];
 export const BUTTON_SIZES: readonly ButtonSize[] = ['sm', 'default', 'lg', 'icon'];
 
 /** Shape, type, motion and states shared by every variant (the focus outline is appended after the merge). */
-export const BUTTON_BASE = `inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap ${RADIUS_CONTROL} border text-[length:var(--ds-text-base)] font-medium transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-[invalid=true]:border-[var(--ds-danger-mark)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 ${DENSITY.coarse}`;
+export const BUTTON_BASE = `inline-flex max-w-full shrink-0 items-center justify-center gap-2 whitespace-nowrap ${RADIUS_CONTROL} border text-[length:var(--ds-text-base)] font-medium transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-[invalid=true]:border-[var(--ds-danger-mark)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 ${DENSITY.coarse}`;
 
 export const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   default: `border-transparent ${ACCENT_FILL} ${ON_ACCENT_TEXT} ${ACCENT_FILL_HOVER} ${SHADOW_SOFT}`,
@@ -71,6 +72,54 @@ export const BUTTON_SIZE: Record<ButtonSize, string> = {
  */
 export function buttonClasses({ variant = 'default', size = 'default', className }: { variant?: ButtonVariant; size?: ButtonSize; className?: string } = {}): string {
   return `${cn(BUTTON_BASE, BUTTON_VARIANT[variant], BUTTON_SIZE[size], className)} ${FOCUS_RING}`;
+}
+
+/**
+ * A button's label inside its own edge (SPEC-overflow §3.3): every run of consecutive string / number children becomes ONE
+ * `<span data-slot="button-label">` with CLIP_TEXT (so `{n} pages` stays one span), and a label too long for the row ends
+ * in an ellipsis inside the button instead of pushing past it. Elements (icons) stay direct children, so the `[&>svg]`
+ * and `has-[>svg]` sizing still apply; an icon-only button gets no span. The accessible name is unchanged (the cut is
+ * visual only). It is a safety net, not a licence: no ids, model names, slugs, URLs or file names in a label
+ * (tests/config/overflowGuard.test.ts G6), and a row that can hold a long or translated label is `flex-wrap`.
+ * Every `buttonClasses()` element uses it too (AlertDialog's action and cancel, ComicCard's link action).
+ */
+export function labelChildren(children: React.ReactNode): React.ReactNode {
+  return wrapTextRuns(children, (text, key) => (
+    <span key={key} data-slot="button-label" className={CLIP_TEXT}>
+      {text}
+    </span>
+  ));
+}
+
+/**
+ * Children with each run of consecutive string / number children (`{n} pages`) replaced by `wrap(text)`; elements stay
+ * as they are, and children with no visible text come back unchanged (so an icon-only control gets no wrapper).
+ * Shared by labelChildren and Badge.
+ */
+export function wrapTextRuns(children: React.ReactNode, wrap: (text: string, key: string) => React.ReactNode): React.ReactNode {
+  const out: React.ReactNode[] = [];
+  let run: Array<string | number> = [];
+  let wrapped = false;
+  const flush = () => {
+    if (!run.length) return;
+    const text = run.join('');
+    if (text.trim()) {
+      out.push(wrap(text, `text-${out.length}`));
+      wrapped = true;
+    } else out.push(text);
+    run = [];
+  };
+  // toArray keys every element child and drops null / boolean children.
+  for (const child of React.Children.toArray(children)) {
+    if (typeof child === 'string' || typeof child === 'number') run.push(child);
+    else {
+      flush();
+      out.push(child);
+    }
+  }
+  flush();
+  if (!wrapped) return children;
+  return out.length === 1 ? out[0] : out;
 }
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -102,7 +151,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       className={buttonClasses({ variant, size, className })}
     >
       {loading ? <Loader2 aria-hidden="true" data-slot="button-spinner" className="animate-spin motion-reduce:animate-none" /> : null}
-      {loading && size === 'icon' ? null : children}
+      {loading && size === 'icon' ? null : labelChildren(children)}
     </button>
   );
 });

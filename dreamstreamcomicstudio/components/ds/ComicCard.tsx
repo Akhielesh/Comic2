@@ -26,7 +26,7 @@
 import React from 'react';
 import { BookOpen, PenLine } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { Button, buttonClasses } from './Button';
+import { Button, buttonClasses, labelChildren } from './Button';
 import { CoverImage, type CoverImageProps } from './CoverImage';
 import { InlineMeta } from './InlineMeta';
 import { COARSE_HIT_AREA } from './layout';
@@ -100,7 +100,7 @@ const actionButton = (a: ComicCardAction | undefined, fallback: string, Icon: Re
     return (
       <a href={a.href} data-card-action={key} className={buttonClasses({ variant, size: 'sm', className: 'relative no-underline' })}>
         <Icon aria-hidden="true" />
-        {label}
+        {labelChildren(label)}
       </a>
     );
   }
