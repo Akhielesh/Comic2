@@ -208,6 +208,30 @@ describe('PagesTab', () => {
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_cover' });
   });
 
+  it('a textless cover shows its typed title on the art, and the empty card says how the title is made', () => {
+    const drawn = (lettering?: 'overlay') =>
+      makeSampleDoc((d) => {
+        if (lettering) d.cover.lettering = lettering;
+        d.cover.render = { status: 'ready', history: [], asset: asset('u/proj/cover.png', { w: 1000, h: 1500 }) };
+      });
+    const overlay = drawn('overlay');
+    const { unmount } = render(<PagesTab studio={makeStudio(overlay)} doc={overlay} />);
+    const cover = screen.getByTestId('cover-card');
+    expect(within(cover).getByRole('img', { name: /^Cover of/ })).toBeInTheDocument();
+    expect(within(cover).getByTestId('cover-title')).toBeInTheDocument();
+    unmount();
+    const painted = drawn();
+    const second = render(<PagesTab studio={makeStudio(painted)} doc={painted} />);
+    expect(within(screen.getByTestId('cover-card')).queryByTestId('cover-title')).toBeNull();
+    second.unmount();
+    const empty = makeSampleDoc((d) => (d.cover.lettering = 'overlay'));
+    render(<PagesTab studio={makeStudio(empty)} doc={empty} />);
+    const blank = screen.getByTestId('cover-card');
+    expect(blank).toHaveTextContent('The title is typed over the art, so you can change it for free.');
+    expect(blank).not.toHaveTextContent('lettered in');
+    expect(within(blank).queryByTestId('cover-title')).toBeNull();
+  });
+
   it('edits the cover text', () => {
     const studio = makeStudio();
     render(<PagesTab studio={studio} doc={studio.doc!} />);

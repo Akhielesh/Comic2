@@ -23,6 +23,7 @@ import {
   type VersionItem
 } from './bookModel';
 import { CompareView } from './CompareView';
+import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
@@ -94,6 +95,9 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   };
   const url = selected.blocked ? undefined : studio.urlFor(selected.asset, { width: compact ? 360 : 960 });
   const staleKind = target.kind === 'page' || target.kind === 'cover' ? target.kind : undefined;
+  // A textless cover's typed title, as readers see it: on the current version only. An older version may be
+  // a painted cover (from before the textless redraw), and its art would then carry the title twice.
+  const titleOn = target.kind === 'cover' && selected.current && !selected.blocked && !!url;
 
   const thumbs = (
     <div
@@ -202,6 +206,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
         <div className="flex min-w-0 items-start gap-3">
           <div className="relative w-24 shrink-0 overflow-hidden rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)]" style={{ aspectRatio: String(ratio), maxHeight: 150 }}>
             {selected.blocked ? <BlockedTile compact /> : url ? <img src={url} alt={`${label}, version ${selected.n}`} className="absolute inset-0 h-full w-full object-contain" draggable={false} /> : <span className="studio-shimmer absolute inset-0" aria-hidden />}
+            {titleOn && <CoverTitleLayer doc={doc} aspect={ratio} />}
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
             {badges}
@@ -241,6 +246,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
           }}
         >
           {selected.blocked ? <BlockedTile /> : url ? <img src={url} alt={`${label}, version ${selected.n}`} className="absolute inset-0 h-full w-full object-contain" draggable={false} /> : <span className="studio-shimmer absolute inset-0" aria-hidden />}
+          {titleOn && <CoverTitleLayer doc={doc} aspect={ratio} />}
           <button
             type="button"
             onClick={() => flip(-1)}

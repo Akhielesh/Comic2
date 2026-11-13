@@ -112,6 +112,8 @@ export interface ImageFrameProps {
   asset?: AssetRef;
   /** Small badges pinned to the top-left corner (aspect mismatch, "from older photos"). */
   badges?: React.ReactNode;
+  /** Drawn on the art itself, only while the image shows (inside the safety veil): a textless cover's typed title. */
+  onArt?: React.ReactNode;
 }
 
 export const ImageFrame: React.FC<ImageFrameProps> = ({
@@ -130,7 +132,8 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
   heavy,
   safety,
   asset: assetProp,
-  badges
+  badges,
+  onArt
 }) => {
   const [broken, setBroken] = useState<string | null>(null);
   const asset = assetProp ?? render?.asset;
@@ -160,6 +163,7 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
       <ImageDevelop key={asset?.path || url} active={isFreshRender(render)} className="h-full w-full" rounded="rounded-none">
         {img}
       </ImageDevelop>
+      {onArt}
     </div>
   ) : waiting ? (
     <div className="studio-shimmer absolute inset-0" role="img" aria-label={`Loading ${alt}`} />

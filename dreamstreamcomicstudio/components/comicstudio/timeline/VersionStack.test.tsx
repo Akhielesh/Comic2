@@ -128,6 +128,24 @@ describe('VersionStack', () => {
     expect(text).not.toMatch(/\$|cost uses a little/);
   });
 
+  it('a textless cover shows its typed title on the current version only (an older one may be painted)', () => {
+    const doc = richDoc();
+    doc.cover = { ...doc.cover, title: 'The Saffron Thief', lettering: 'overlay', render: { ...doc.cover.render, history: [A('cover-v1', 35)] } };
+    setup(doc, { target: { kind: 'cover' } });
+    expect(screen.getByText('v2 of 2 · current')).toBeInTheDocument();
+    expect(screen.getByTestId('cover-title')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Older version' }));
+    expect(screen.getByText('v1 of 2')).toBeInTheDocument();
+    expect(screen.queryByTestId('cover-title')).toBeNull();
+    // The compact (chat) stack letters it too; a painted cover never gets a second, typed title.
+    const compact = render(<VersionStack studio={makeFakeStudio({ doc })} target={{ kind: 'cover' }} compact />);
+    expect(within(compact.container).getByTestId('cover-title')).toBeInTheDocument();
+    compact.unmount();
+    const painted = render(<VersionStack studio={makeFakeStudio({ doc: richDoc() })} target={{ kind: 'cover' }} />);
+    expect(within(painted.container).getByText('v1 of 1 · current')).toBeInTheDocument();
+    expect(within(painted.container).queryByTestId('cover-title')).toBeNull();
+  });
+
   it('an undrawn image says so instead of showing an empty stack', () => {
     setup(richDoc(), { target: { kind: 'page', id: 'pg_2' } });
     expect(screen.getByText(/isn’t drawn yet/)).toBeInTheDocument();

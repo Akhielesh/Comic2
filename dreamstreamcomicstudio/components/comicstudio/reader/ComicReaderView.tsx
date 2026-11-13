@@ -29,6 +29,7 @@ import { fallbackLineIds, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { PLATFORM_CEILING, canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
 import { ComicPageView } from '../board/ComicPageView';
+import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { aspectNumber, pageAspectOf } from '../board/balloonGeometry';
 import { EmptyHint, IconButton, Segmented, cx, edgeFadeMask, useEdgeClip, useElementSize } from '../board/ui';
 import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
@@ -234,6 +235,8 @@ const ScrollPage: React.FC<{
         // Still paper, never a shimmer: the reader animates transform and opacity only.
         <div className="absolute inset-0" role="img" aria-label="Loading cover" style={{ background: 'var(--ds-reader-paper-back)' }} />
       )}
+      {/* A textless cover's typed title (cover.lettering 'overlay'), as in page mode; nothing for a painted one. */}
+      <CoverTitleLayer doc={doc} aspect={aspect} />
     </div>
   );
 };
