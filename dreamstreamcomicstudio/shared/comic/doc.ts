@@ -208,6 +208,8 @@ export interface QcReport {
   issues: string[];
   /** Panel rectangles in reading order (page renders). */
   panelBoxes?: Box[];
+  /** Per drawn panel: a measured rectangular frame, another shape, or unknown. Missing on older checks. */
+  panelShapes?: ('rect' | 'other' | 'unknown')[];
   /** Text the vision pass read off the image (in_art lettering verification / stray text). */
   textFound?: string[];
   checkedAt: number;

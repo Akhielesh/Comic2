@@ -128,6 +128,8 @@ const DEFAULT_AVOID = ['photorealism', 'muddy or blurry rendering', 'warped anat
 
 /** Path placeholder for the red-outlined copy of the page; the job runner substitutes the real image. */
 export const REGION_REFERENCE_PATH = '__region__';
+/** A bounded panel and its nearby context; generated locally before any image reservation. */
+export const PANEL_EDIT_REFERENCE_PATH = '__panel_edit__';
 
 /**
  * Path placeholder for the page layout guide (plan C9; panelize/wireframe.ts renders it from
@@ -2076,7 +2078,7 @@ export const compileStyleOption = (doc: ComicDoc, option: StyleOption, opts: Com
 export const compileEdit = (
   doc: ComicDoc,
   page: Page,
-  args: { instruction: string; panelN?: number; hasRegion: boolean } & CompileOptions
+  args: { instruction: string; panelN?: number; hasRegion: boolean; panelCrop?: Box; panelBox?: Box } & CompileOptions
 ): CompiledRenderJob => {
   const current = page.render.asset?.path;
   if (!current) throw new StudioError('BAD_REQUEST', `Page ${page.n} has no image to edit yet — render it first.`, { status: 400 });
@@ -2089,11 +2091,14 @@ export const compileEdit = (
   const instruction = sentence(safeText(asked, args)) || asked;
   const resolved = resolveJob(doc, 'edit');
   const { spec } = resolved;
-  const aspect = aspectFromSize(spec, page.render.asset?.w, page.render.asset?.h) || pageAspectFor(doc, spec, page.panels.length);
+  const aspect = args.panelCrop
+    ? aspectFromSize(spec, (page.render.asset?.w || 1) * args.panelCrop.w, (page.render.asset?.h || 1) * args.panelCrop.h) || pageAspectFor(doc, spec, page.panels.length)
+    : aspectFromSize(spec, page.render.asset?.w, page.render.asset?.h) || pageAspectFor(doc, spec, page.panels.length);
   const rating = artRatingFor(doc, args);
 
   const refs: PlannedReference[] = [
-    { kind: 'current_page', slot: 'object', label: 'CURRENT PAGE', path: current, instruction: 'The page to edit.' }
+    ...(args.panelCrop ? [{ kind: 'current_page' as const, slot: 'object' as const, label: 'PANEL WITH NEARBY CONTEXT', path: PANEL_EDIT_REFERENCE_PATH, instruction: 'Edit this crop only; return this crop at the same framing.' }] : []),
+    { kind: 'current_page', slot: 'object', label: 'CURRENT PAGE', path: current, instruction: args.panelCrop ? 'Continuity reference only: retain this page’s identities, palette, lighting and linework. Do not output the whole page.' : 'The page to edit.' }
   ];
   if (args.hasRegion) {
     refs.push({
@@ -2130,12 +2135,16 @@ export const compileEdit = (
       : '';
   const keepLettering =
     doc.format.lettering === 'in_art' ? 'lettering' : 'the empty balloon space (the art stays free of any text)';
+  const crop = args.panelCrop, target = args.panelBox;
+  const bounded = crop && target ? `Only change panel ${args.panelN} inside Image 1: left ${Math.round((target.x - crop.x) / crop.w * 100)}%, top ${Math.round((target.y - crop.y) / crop.h * 100)}%, right ${Math.round((target.x + target.w - crop.x) / crop.w * 100)}%, bottom ${Math.round((target.y + target.h - crop.y) / crop.h * 100)}%. Keep the surrounding context and framing fixed. Image 2 is the full page for continuity only.` : '';
   const prompt = [
-    `Edit Image 1, a finished comic page. Change only this: ${instruction}`,
+    args.panelCrop ? `Edit Image 1, a bounded comic panel crop. Change only this: ${instruction}` : `Edit Image 1, a finished comic page. Change only this: ${instruction}`,
+    bounded,
     where,
+    ...(args.panelCrop && panel ? page.panels.filter((other) => Math.abs(other.n - panel.n) === 1).slice(0, 2).map((other) => `Continuity context only — ${other.n < panel.n ? 'previous' : 'next'} panel ${other.n}: ${sentence(clip(safeText(other.action, args), 160))} Do not redraw this neighboring panel.`) : []),
     `Keep everything else exactly as it is: page layout, panel borders, every other panel, characters' identities and outfits, ${keepLettering}, colors and art style.` +
-      `${args.hasRegion ? ' Do not add a red outline to the result.' : ''} Output the full page at the same framing.`,
-    frameSentence(aspect, 'page'),
+      `${args.hasRegion ? ' Do not add a red outline to the result.' : ''} ${args.panelCrop ? 'Output only the complete Image 1 crop at the same framing; never output the full page or add panels.' : 'Output the full page at the same framing.'}`,
+    frameSentence(aspect, args.panelCrop ? 'panel crop' : 'page'),
     contentParagraph(doc, args),
     referenceLegend(refs)
   ]

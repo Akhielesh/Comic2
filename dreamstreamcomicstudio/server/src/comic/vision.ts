@@ -296,7 +296,7 @@ export const VISION_SCHEMA = strict({
   /** beat: the script panel whose moment this drawn panel shows (0 = none); crosses: art breaks over its border (plan §4.3). */
   panels: {
     type: 'array',
-    items: strict({ n: { type: 'integer' }, box: strict({ x: num, y: num, w: num, h: num }), beat: { type: 'integer' }, crosses: { type: 'boolean' } })
+    items: strict({ n: { type: 'integer' }, box: strict({ x: num, y: num, w: num, h: num }), beat: { type: 'integer' }, crosses: { type: 'boolean' }, shape: { type: 'string', enum: ['rect', 'other', 'unknown'] } })
   },
   issues: { type: 'array', items: { type: 'string' } },
   textFound: { type: 'array', items: { type: 'string' } },
@@ -417,7 +417,7 @@ const visionSystemPrompt = (doc: ComicDoc, tag: string, v2 = false): string => {
     '',
     `1. panels: the rectangle inside each panel border, in reading order (${rtl ? 'right-to-left, top-to-bottom' : 'left-to-right, top-to-bottom'}), n from 1. For borderless panels use the bounds of the art block. ` +
       'beat: the number of the script panel whose action this drawn panel shows best — it may differ from n when a moment landed in another panel; 0 when it shows none of them. ' +
-      'crosses: true when the art (a figure, an effect, a prop) breaks out over this panel\'s border into the gutter or a neighbouring panel, else false.',
+      'shape: rect only for a clear axis-aligned rectangular panel; other for oval, angled, irregular or border-breaking panels; unknown when uncertain. crosses: true when the art (a figure, an effect, a prop) breaks out over this panel\'s border into the gutter or a neighbouring panel, else false.',
     '2. issues: short, concrete problems versus the script — wrong panel count, a named character missing from or added to a panel, a character drawn with a different face, hair or outfit than elsewhere on the page, two characters merged or swapped, anatomy errors (extra fingers, broken limbs), garbled or unreadable art. Example: "Panel 3: Maya\'s scarf changed from red to blue." [] when the page is clean.' +
       (v2 ? ` ${V2_ISSUES_RUBRIC}` : ''),
     '3. extraOrMissingCharacters: per-panel notes such as "Panel 2: ARJUN missing" or "Panel 4: an extra unnamed man in the foreground" ([] when every panel shows exactly its listed characters; unnamed background figures the action calls for are fine). Speakers the script marks as off-panel voices are heard, not drawn — never report them missing.',
@@ -807,6 +807,7 @@ interface VisionReading {
   beats: (number | undefined)[];
   /** Per kept panel: art crosses its border (undefined = not answered). */
   crosses: (boolean | undefined)[];
+  shapes: ('rect' | 'other' | 'unknown')[];
   issues: string[];
   textFound: string[];
   characterNotes: string[];
@@ -1067,7 +1068,8 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
       return {
         box: { x, y, w: clamp(ux(b.w), 0, 1 - x), h: clamp(uy(b.h), 0, 1 - y) },
         beat: Number.isInteger(beat) && (beat as number) >= 0 ? (beat as number) : undefined,
-        crosses: typeof crosses === 'boolean' ? crosses : undefined
+        crosses: typeof crosses === 'boolean' ? crosses : undefined,
+        shape: ordered[i].shape === 'rect' ? 'rect' as const : ordered[i].shape === 'other' ? 'other' as const : 'unknown' as const
       };
     })
     .filter((p) => p.box.w >= 0.03 && p.box.h >= 0.03);
@@ -1097,6 +1099,7 @@ const normalizeVision = (json: unknown, doc: Pick<ComicDoc, 'cast'>, page: Page,
     panels,
     beats: kept.map((p) => p.beat),
     crosses: kept.map((p) => p.crosses),
+    shapes: kept.map((p) => p.shape),
     issues: strings(json.issues),
     textFound: strings(json.textFound),
     characterNotes: strings(json.extraOrMissingCharacters),
@@ -1580,6 +1583,7 @@ export async function analyzePageRender(args: {
     score: round4(clamp(score, 0, 1)),
     issues: dedupe(issues).slice(0, 14),
     panelBoxes: boxes.map(roundBox),
+    ...(countOk ? { panelShapes: reading.shapes } : {}),
     ...(textFound.length ? { textFound: textFound.slice(0, 60) } : {}),
     checkedAt,
     ...(result.model ? { model: result.model } : {}),
