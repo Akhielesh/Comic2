@@ -6,7 +6,7 @@ import React from 'react';
 import { Download, Keyboard, Share2, X } from 'lucide-react';
 import type { ReaderSettings } from '../../../shared/comic/doc';
 import type { LayoutPref } from './readerLayout';
-import type { ReaderPrefs, RoomLight, Tri, Wpm } from './readerPrefs';
+import type { ReaderPrefs, RoomLight, Tri } from './readerPrefs';
 import { HudButton } from './ReaderHud';
 
 export interface ReaderSettingsSheetProps {
@@ -168,21 +168,6 @@ export const ReaderSettingsSheet: React.FC<ReaderSettingsSheetProps> = (p) => {
             checked={prefs.reduceMotion || p.osReducedMotion}
             onChange={(reduceMotion) => p.onPrefs({ reduceMotion })}
             hint={p.osReducedMotion ? 'On in your device settings: pages crossfade.' : 'Pages crossfade instead of turning.'}
-          />
-        </div>
-        <div className="space-y-2 rounded-2xl bg-[var(--ds-reader-hud-wash)] p-3">
-          <p className="text-[12px] font-medium text-[var(--ds-reader-hud-muted)]">Guided View</p>
-          <Toggle label="Show the whole page first" checked={triValue(prefs.guidedOverview, creator.guidedOverview)} onChange={(v) => p.onPrefs({ guidedOverview: triFrom(v, creator.guidedOverview) })} />
-          <Toggle label="Balloons appear one by one" checked={prefs.balloonPop} onChange={(balloonPop) => p.onPrefs({ balloonPop })} />
-          <Choice<Wpm>
-            label="Play speed"
-            value={prefs.wpm}
-            onChange={(wpm) => p.onPrefs({ wpm })}
-            options={[
-              { value: 170, label: 'Slow' },
-              { value: 210, label: 'Normal' },
-              { value: 260, label: 'Fast' }
-            ]}
           />
         </div>
         <button type="button" onClick={p.onShortcuts} className="press inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--ds-reader-hud-wash)] text-[13px] outline-none hover:bg-[var(--ds-reader-hud-hover)] focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">

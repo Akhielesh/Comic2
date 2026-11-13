@@ -36,7 +36,7 @@ describe('registration and gate', () => {
       expect(t.spec.function.description.startsWith('FREE — ')).toBe(true);
     }
     expect(readerToolGroup.activity).toMatchObject({ set_reader_options: expect.any(String), set_chapter: expect.any(String) });
-    expect(readerToolGroup.promptRules?.(drawnDoc())).toMatch(/never the default/);
+    expect(readerToolGroup.promptRules?.(drawnDoc())).toMatch(/page-turn style/);
   });
 
   it('is on once the comic has a page plan (chapters and reader feel are planned too), off before', () => {
@@ -91,11 +91,12 @@ describe('set_reader_options', () => {
     expect(opsOf(ctx.events)).toEqual([]);
   });
 
-  it('explains that Guided View is never the default instead of silently doing nothing', async () => {
+  it('handles older Guided arguments while applying supported reader changes', async () => {
     const { tools, ctx } = setup();
-    expect(await tools().set_reader_options.execute({ guidedDefault: true })).toMatch(/never the default.*one tap/);
+    expect(await tools().set_reader_options.execute({ guidedDefault: true })).toMatch(/Guided View has been removed/);
     expect(opsOf(ctx.events)).toEqual([]);
-    expect(await tools().set_reader_options.execute({ guidedDefault: true, ambient: false })).toMatch(/plain dark[^]*one tap away rather than the default/);
+    expect(await tools().set_reader_options.execute({ guidedOverview: false, ambient: false })).toMatch(/plain dark[^]*Guided View has been removed/);
+    expect(opsOf(ctx.events)).toEqual([{ op: 'reader', patch: { ambient: false } }]);
   });
 
   it('with no arguments, describes the current reader', async () => {

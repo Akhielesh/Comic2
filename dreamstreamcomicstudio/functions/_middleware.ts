@@ -302,7 +302,7 @@ export function mainCsp(input: PolicyInput): string {
     ['default-src', ["'self'"]],
     ['script-src', ["'self'", ...INDEX_INLINE_SCRIPT_HASHES, "'wasm-unsafe-eval'", CDNJS, TURNSTILE_ORIGIN]],
     ['worker-src', ["'self'", 'blob:']],
-    ['connect-src', connectSources(input)],
+    ['connect-src', [...connectSources(input), 'https://thumb.wikimedia.org', 'https://upload.wikimedia.org']],
     ['img-src', ["'self'", 'data:', 'blob:', 'https:']],
     ['media-src', ["'self'", 'data:', 'blob:', 'https:']],
     ['style-src', ["'self'", "'unsafe-inline'", GOOGLE_FONTS_CSS]],

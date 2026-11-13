@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import {
   coverSpecHash,
   emptyRender,
@@ -632,14 +633,16 @@ describe('edit_page', () => {
     const doc = plannedDoc();
     doc.pages[0] = readyPage(doc.pages[0], 'u/user-1/p/proj-1/img/page1.webp');
     const session = newSession(doc);
-    const ctx = testContext(session);
-    ctx.assetsFake.files.set('u/user-1/p/proj-1/img/page1.webp', 'data:image/png;base64,Q1VSUkVOVA==');
+    const pixels = await sharp({ create: { width: 120, height: 120, channels: 3, background: '#eee' } }).png().toBuffer();
+    const original = `data:image/png;base64,${pixels.toString('base64')}`;
+    const ctx = testContext(session, { images: fakeImages(() => ({ dataUrl: original })) });
+    ctx.assetsFake.files.set('u/user-1/p/proj-1/img/page1.webp', original);
     const action: SpendAction = { type: 'edit_page', pageId: 'pg_1', instruction: 'Make it night', region: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, panelN: 2 };
     await runAction(ctx, action, { confirmed: true });
 
-    expect(ctx.assetsFake.outlines).toEqual([{ dataUrl: 'data:image/png;base64,Q1VSUkVOVA==', box: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } }]);
+    expect(ctx.assetsFake.outlines).toEqual([{ dataUrl: original, box: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } }]);
     const call = ctx.imagesFake.calls[0];
-    expect(call.references[0]).toEqual({ label: 'CURRENT PAGE', dataUrl: 'data:image/png;base64,Q1VSUkVOVA==' });
+    expect(call.references[0]).toEqual({ label: 'CURRENT PAGE', dataUrl: original });
     expect(call.references[1]).toEqual({ label: 'SAME PAGE — AREA TO CHANGE OUTLINED IN RED', dataUrl: 'data:image/png;base64,T1VUTElORUQ=' });
     expect(call.prompt).toContain('Make it night');
     const page = session.doc.pages[0];

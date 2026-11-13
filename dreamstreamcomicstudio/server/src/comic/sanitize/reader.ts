@@ -9,8 +9,7 @@
 // the whole batch with a 400 that says what to fix. Free text then goes through the batch-wide safety
 // pre-filter (sanitize/safety.ts patch screen), which covers reader credits/dedication.
 //
-// Guided View is never the default (decisions-final #11): the rejected alias `guidedDefault` gets a
-// clear message instead of a silent drop.
+// Older reader patches may carry guidedOverview in undo history. The reader ignores that field.
 //
 // Pro Edit (master plan §2.3, §2.5; PE-SERVER; PROGRAM3 bug B19): `motion` is the creator's choice whether readers play
 // the comic's animation, 'on' | 'off' (null clears it: the reader's default). A client may set it only while
@@ -67,7 +66,7 @@ const motionAllowed = (v: unknown, opts?: ReaderPatchOptions): boolean => PRO_ED
 export function sanitizeReaderPatch(raw: unknown, opts?: ReaderPatchOptions): Partial<ReaderSettings> {
   if (!isObject(raw)) throw bad('Invalid reader settings change.');
   if ('guidedDefault' in raw) {
-    throw bad('Guided View is never the default — readers open it with one tap. Use guidedOverview to choose whether it starts with the whole page.');
+    throw bad('Guided View has been removed. Readers can turn pages or scroll.');
   }
   const withMotion = 'motion' in raw && motionAllowed(raw.motion, opts);
   const unknown = Object.keys(raw).filter((k) => !KNOWN_KEYS.has(k) && !(k === 'motion' && withMotion));

@@ -210,8 +210,8 @@ export interface EncodedImage {
  * in-memory fakes (orchestrator.fakes.ts) implement every method so feature tests run offline.
  */
 export interface AssetStore {
-  /** Store a generated image (no cropping) under the project; returns its AssetRef. */
-  saveGenerated(args: { userId: string; projectId: string; dataUrl: string; model?: string }): Promise<AssetRef>;
+  /** Store a generated image under the project. Lossless is only for a server-composited WebP. */
+  saveGenerated(args: { userId: string; projectId: string; dataUrl: string; model?: string; lossless?: boolean }): Promise<AssetRef>;
   /** Store a user upload (image data URL) under the project. */
   saveUpload(args: { userId: string; projectId: string; dataUrl: string }): Promise<AssetRef>;
   /** Load a stored asset as a data URL (for references). Implementations cache. */
@@ -221,8 +221,8 @@ export interface AssetStore {
    * path to its bucket (storagePaths.bucketForPath); private paths sign with a 300 s TTL.
    */
   signUrls(paths: string[], opts?: { ttlSec?: number }): Promise<Record<string, string>>;
-  /** Draw a red outline box (normalized) on a copy of an image (Mark-up edits). */
-  outlineRegion(dataUrl: string, box: { x: number; y: number; w: number; h: number }): Promise<string>;
+  /** Draw a red outline on a copy of the image (Mark-up edits); box is normalized. */
+  outlineRegion(dataUrl: string, box: { x: number; y: number; w: number; h: number }, shape?: 'ellipse'): Promise<string>;
 
   // ── v5 (contract §12.5) ──
   /** Magic-byte sniff + pixel limits + AVIF + min edge 128 → WebP. */

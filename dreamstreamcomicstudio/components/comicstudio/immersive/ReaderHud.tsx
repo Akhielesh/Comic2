@@ -1,9 +1,9 @@
 // Reader HUD (reader.md §2.2): glass chips follow the room lighting. Top: close, title and position,
-// then language, Guided View, layout, settings and fullscreen. Bottom: the page scrubber (or panel
-// controls in Guided View). Auto-hides; padding follows safe areas; every control is ≥ 44 px.
+// then language, layout, settings and fullscreen. Bottom: the page scrubber.
+// Auto-hides; padding follows safe areas; every control is ≥ 44 px.
 
 import React from 'react';
-import { ChevronLeft, ChevronRight, Columns2, Download, Maximize2, Minimize2, Pause, Play, ScanEye, Settings2, Share2, Square, X } from 'lucide-react';
+import { Columns2, Download, Maximize2, Minimize2, Settings2, Share2, Square, X } from 'lucide-react';
 import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import type { LayoutPref } from './readerLayout';
 
@@ -36,10 +36,6 @@ export interface ReaderHudProps {
   chapter?: string;
   compact: boolean;
   language?: ReaderLanguageSlot;
-  guided: { on: boolean; playing: boolean; available: boolean; label?: string };
-  onGuided(): void;
-  onPlay(): void;
-  onPanel(delta: 1 | -1): void;
   layout: { effective: 'single' | 'spread' | 'scroll' | 'strip'; allowSpread: boolean; show: boolean };
   onLayout(pref: LayoutPref): void;
   onSettings(): void;
@@ -51,7 +47,6 @@ export interface ReaderHudProps {
   onDownload?: () => void;
   downloadBusy?: boolean;
   scrubber: React.ReactNode;
-  rtl: boolean;
   /** The HUD fades but stays in the accessibility tree; keyboard focus brings it back. */
   onFocusWithin(): void;
 }
@@ -104,15 +99,8 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
         <div className={`${bar} ${glass} shrink-0 justify-end`}>
           {p.language && p.language.options.length > 1 && (
             <div className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} min-w-0`} data-no-turn>
-              {/* Phones: globe-only trigger, so close + language + guided + settings + full screen fit at 320 px. */}
               <ReaderLanguagePicker {...p.language} compact={p.compact} />
             </div>
-          )}
-          {p.guided.available && (
-            <HudButton label={p.guided.on ? 'Leave Guided View' : 'Guided View — panel by panel'} active={p.guided.on} onClick={p.onGuided}>
-              <ScanEye className="h-5 w-5" aria-hidden />
-              {!p.compact && <span>Guided</span>}
-            </HudButton>
           )}
           {p.layout.show && !p.compact && (p.layout.allowSpread || p.layout.effective === 'spread') && (
             <HudButton
@@ -150,22 +138,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
           hidden ? `${HUD_HIDDEN_ROW} translate-y-1.5 opacity-0` : 'opacity-100'
         ].join(' ')}
       >
-        {p.guided.on ? (
-          <div className={`${bar} ${glass}`} data-no-turn>
-            <HudButton label={p.rtl ? 'Next panel' : 'Previous panel'} onClick={() => p.onPanel(p.rtl ? 1 : -1)}>
-              <ChevronLeft className="h-5 w-5" aria-hidden />
-            </HudButton>
-            <HudButton label={p.guided.playing ? 'Pause' : 'Play panel by panel'} active={p.guided.playing} onClick={p.onPlay}>
-              {p.guided.playing ? <Pause className="h-5 w-5" aria-hidden /> : <Play className="h-5 w-5" aria-hidden />}
-            </HudButton>
-            <span className="min-w-[6.5rem] px-1 text-center text-[12px] tabular-nums text-[var(--ds-reader-hud-muted)]">{p.guided.label}</span>
-            <HudButton label={p.rtl ? 'Previous panel' : 'Next panel'} onClick={() => p.onPanel(p.rtl ? -1 : 1)}>
-              <ChevronRight className="h-5 w-5" aria-hidden />
-            </HudButton>
-          </div>
-        ) : (
-          p.scrubber
-        )}
+        {p.scrubber}
       </div>
     </div>
   );

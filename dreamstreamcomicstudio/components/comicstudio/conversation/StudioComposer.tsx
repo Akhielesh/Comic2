@@ -49,8 +49,8 @@
 //  - A selection in the page editor shows as a focus chip ("Page 3 · 2 balloons ×"); the next
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
-import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Lock, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
+import React, { lazy, Suspense, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Lock, Palette, Plus, Search, Sparkles, Square, Users, X } from 'lucide-react';
 import { composerIsQualityHome } from '../qualityHome';
 import { TIER_PRESETS, getImageModel, resolveImageJob } from '../../../shared/comic/models';
 import { deriveLock } from '../../../shared/comic/modelLock';
@@ -109,6 +109,7 @@ const IMAGE_ACCEPT = ACCEPT_ATTR;
 const ACCEPT = `${IMAGE_ACCEPT},${SCRIPT_ACCEPT}`;
 /** Below this composer width the quality chip and the voice auto-send toggle step aside. */
 const ROOMY_PX = 400;
+const ResearchPanel = lazy(() => import('./ResearchPanel').then((module) => ({ default: module.ResearchPanel })));
 
 export type ComposerPanel = 'format' | 'style' | 'quality';
 
@@ -402,6 +403,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const [savedPhotosOpen, setSavedPhotosOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -422,6 +424,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const scriptInputRef = useRef<HTMLInputElement>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
+  const researchRef = useRef<HTMLButtonElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1342,6 +1345,29 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         </div>
       </AdaptiveSheet>
 
+      {doc && researchOpen && (
+        <AdaptiveSheet
+          open
+          onClose={() => setResearchOpen(false)}
+          label="Research for your comic"
+          title="Research for your comic"
+          anchorRef={researchRef}
+          placement="above"
+          presentation={inSheet ? 'bottom' : 'auto'}
+          className="w-[min(28rem,calc(100vw-1.5rem))]"
+        >
+          <Suspense fallback={<p role="status" className="p-2 text-[13px]">Opening research…</p>}>
+            <ResearchPanel key={doc.id} projectId={doc.id} onAdd={(result, file) => {
+              const credit = [result.credit, result.license].filter(Boolean).join(' · ');
+              const context = `${file ? 'Visual reference' : 'Research source'}: ${result.title}${credit ? ` (${credit})` : ''}\n${result.source}${result.description ? `\n${result.description}` : ''}`;
+              setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${context}` : context);
+              if (file) void addFiles([file]);
+              setResearchOpen(false);
+            }} />
+          </Suspense>
+        </AdaptiveSheet>
+      )}
+
       <AdaptiveSheet
         open={savedPhotosOpen}
         onClose={() => setSavedPhotosOpen(false)}
@@ -1617,6 +1643,18 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
             >
               <Plus className="h-4 w-4" />
+            </button>
+            <button
+              ref={researchRef}
+              type="button"
+              disabled={!ready}
+              aria-label="Research for your comic"
+              aria-expanded={researchOpen}
+              title="Find sources and images for your comic"
+              onClick={() => setResearchOpen((open) => !open)}
+              className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
+            >
+              <Search className="h-4 w-4" aria-hidden />
             </button>
             {voiceOk && (
               <>

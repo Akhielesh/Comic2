@@ -45,7 +45,7 @@ export interface DirectorTool {
 export type ToolGroupId =
   | 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader' | 'models' | 'history'
   // --- Ship 2 (pro plan §4.7; B10) ---
-  | 'layout' | 'consistency';
+  | 'layout' | 'consistency' | 'research';
 
 export interface ToolGroup {
   id: ToolGroupId;

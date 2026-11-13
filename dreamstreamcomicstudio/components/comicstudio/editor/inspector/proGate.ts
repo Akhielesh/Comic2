@@ -8,19 +8,14 @@
 // read them there); they are re-exported here under their names. Only the lazily loaded Pro modules import this file.
 
 import {
-  DRAWN_PRO_SFX_EFFECTS,
   PRO_BUBBLE_SHAPES,
   type LetterStylePatch,
-  type ProBubbleShape,
-  type ProSfxEffect
+  type ProBubbleShape
 } from '../../../../shared/comic/lettering/style';
 import type { ScriptId } from '../../../../shared/comic/languages';
 import { proFieldsWritable, stripProFields } from './proSwitch';
 
 export { duplicateCopyOptions, proFieldsWritable, proFontIds, proLooks, stripProFields, PRO_LOOKS_EXPORT, PRO_LOOK_IDS_EXPORT, type DuplicateCopyOptions, type ProLook } from './proSwitch';
-
-/** The SFX effects PE-LETTER draws in S2: its DRAWN_PRO_SFX_EFFECTS (halftone_fill needs canvas patterns: S3, PE-TONES). */
-export const PRO_SFX_DRAWN: readonly ProSfxEffect[] = DRAWN_PRO_SFX_EFFECTS;
 
 /** A Pro shape id (never a base one). */
 export const isProShape = (v: unknown): v is ProBubbleShape => typeof v === 'string' && (PRO_BUBBLE_SHAPES as readonly string[]).includes(v);

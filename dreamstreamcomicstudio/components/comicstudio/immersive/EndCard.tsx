@@ -1,11 +1,11 @@
 // The End card (reader.md §6.3): the last page of the book. "The End", the title, the creator's credits
 // line (or the public author name — never an email), who starred, and what to do next: read again,
-// Guided replay, share, another language, download, make your own. Focus lands on the heading when
+// share, another language, download, make your own. Focus lands on the heading when
 // the reader arrives here. The End card is a page: its focus ring is the paper's (--ds-reader-focus, ≥ 4.5:1
 // on the paper in both themes), never the app accent (white on the paper in the dark theme).
 
 import React from 'react';
-import { Download, Languages, RotateCcw, ScanEye, Share2, Sparkles } from 'lucide-react';
+import { Download, Languages, RotateCcw, Share2, Sparkles } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { readerOf } from '../../../shared/comic/doc';
 import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
@@ -18,7 +18,6 @@ export interface EndCardProps {
   chapters: { n: number; title: string }[];
   language?: ReaderLanguageSlot;
   onReadAgain(): void;
-  onGuidedReplay?: () => void;
   onShare?: () => void;
   onDownload?: () => void;
   downloadBusy?: boolean;
@@ -29,7 +28,7 @@ export interface EndCardProps {
 const btn =
   'press inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-paper-back)]';
 
-export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters, language, onReadAgain, onGuidedReplay, onShare, onDownload, downloadBusy, dense }) => {
+export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters, language, onReadAgain, onShare, onDownload, downloadBusy, dense }) => {
   const heading = React.useRef<HTMLHeadingElement>(null);
   React.useEffect(() => {
     if (active) heading.current?.focus({ preventScroll: true });
@@ -67,11 +66,6 @@ export const EndCard: React.FC<EndCardProps> = ({ doc, endCard, active, chapters
           <button type="button" onClick={onReadAgain} className={`${btn} bg-[var(--ds-reader-ink)] text-[var(--ds-reader-paper-back)] hover:opacity-90`}>
             <RotateCcw className="h-4 w-4" aria-hidden /> Read again
           </button>
-          {onGuidedReplay && (
-            <button type="button" onClick={onGuidedReplay} className={`${btn} bg-[var(--ds-reader-wash)] hover:bg-[var(--ds-reader-wash-strong)]`}>
-              <ScanEye className="h-4 w-4" aria-hidden /> Guided replay
-            </button>
-          )}
           {onShare && (
             <button type="button" onClick={onShare} className={`${btn} bg-[var(--ds-reader-wash)] hover:bg-[var(--ds-reader-wash-strong)]`}>
               <Share2 className="h-4 w-4" aria-hidden /> Share

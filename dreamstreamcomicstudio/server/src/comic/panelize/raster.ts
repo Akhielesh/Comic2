@@ -1,13 +1,14 @@
-// Raster work for one-panel fixes, region edits and flattening (pro plan §4.4 B8). STUB with fixed export names (K2b):
-// B8 replaces the bodies in place and owns this file from the moment K2b merges (pro plan §10 stub rule). Every body
-// is a no-op that keeps today's behaviour:
+// Raster work for one-panel fixes, region edits and flattening (pro plan §4.4 B8).
+// Region edits are composited below. The remaining K2b stubs keep today's behaviour:
 //   - cropForPanel → null: no `__panel__` reference can be made (a fix_panel job fails before any spend);
 //   - pasteIntoCut → null: nothing is pasted (a fix_panel result is never stored as a page);
-//   - pasteRegion → the model's whole image, as edit_page stores it today;
 //   - bakeComposition → null.
-// All of them run inside withSharpSlot once real; jobs.ts never lets one fail or hang a paid run without saying so.
 
+import sharp from 'sharp';
 import type { Box } from '../../../../shared/comic/doc.js';
+import { decodeImageDataUrl, MAX_GENERATED_BYTES, sniffImageType } from '../assets.js';
+import { MAX_REGION_PASTE_PIXELS, MAX_SOURCE_EDGE, withSharpSlot } from '../imageMeasure.js';
+import { StudioError } from '../types.js';
 
 /** Context kept around a panel's cut when it is cropped for a fix (pro plan §4.4: cut + 4%). */
 export const PANEL_CROP_CONTEXT = 0.04;
@@ -42,26 +43,103 @@ export async function pasteIntoCut(_input: PasteInput): Promise<string | null> {
 }
 
 export interface RegionPasteInput {
-  /** The page before the edit (loaded only when a body needs it). */
+  /** The page before the edit. */
   base: () => Promise<string>;
+  /** The model's full edited page. */
   drawn: string;
-  /** The marked region (image-normalized). */
+  /** The marked region (image-normalized; bounding box for an ellipse). */
   region: Box;
+  shape?: 'ellipse';
   feather?: number;
 }
 
 export interface RegionPasteResult {
   /** The image to store as the new version. */
   dataUrl: string;
-  /** Pasted into the region (false: the whole edited image, today's behaviour). */
+  /** Pasted into the region. An unavailable composite fails instead of returning the model's whole image. */
   pasted: boolean;
   /** The geometry guard moved a panel edge (IoU < 0.9): stored as a separate version instead. */
   separate?: boolean;
 }
 
-/** An edit pasted back into its marked region with a feather. STUB: the whole edited image (today's behaviour). */
+const REGION_RASTER_INPUT = { failOn: 'error' as const, limitInputPixels: MAX_REGION_PASTE_PIXELS };
+const RASTER_TYPES = new Set(['png', 'jpeg', 'webp', 'avif', 'gif']);
+
+const boundedRaster = (dataUrl: string) => {
+  if (typeof dataUrl !== 'string' || dataUrl.length > Math.ceil(MAX_GENERATED_BYTES / 3) * 4 + 256) throw new Error('Oversized raster');
+  const { buffer } = decodeImageDataUrl(dataUrl);
+  if (buffer.length > MAX_GENERATED_BYTES || !RASTER_TYPES.has(sniffImageType(buffer))) throw new Error('Unsupported raster');
+  return sharp(buffer, REGION_RASTER_INPUT);
+};
+
+const rasterSize = async (input: ReturnType<typeof sharp>) => {
+  const meta = await input.metadata();
+  const { width, height } = meta.autoOrient;
+  if (!width || !height || width > MAX_SOURCE_EDGE || height > MAX_SOURCE_EDGE || width * height > MAX_REGION_PASTE_PIXELS || (meta.pages ?? 1) !== 1) {
+    throw new Error('Unsupported raster dimensions');
+  }
+  return { width, height };
+};
+
+/** Paste the edited page's corresponding pixels into a copy of the original page, feathering inward only. */
 export async function pasteRegion(input: RegionPasteInput): Promise<RegionPasteResult> {
-  return { dataUrl: input.drawn, pasted: false };
+  try {
+    const { x, y, w, h } = input.region;
+    if (![x, y, w, h].every(Number.isFinite) || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.000001 || y + h > 1.000001) {
+      throw new Error('Invalid edit bounds');
+    }
+    // Read storage before taking a Sharp slot. Only the bounded decoding/composition holds it.
+    const baseUrl = await input.base();
+    return await withSharpSlot(async () => {
+      const base = boundedRaster(baseUrl);
+      const drawn = boundedRaster(input.drawn);
+      const { width, height } = await rasterSize(base);
+      const edited = await rasterSize(drawn);
+      if (Math.abs(Math.log((edited.width / edited.height) / (width / height))) > 0.05) throw new Error('Edited page has a different shape');
+
+      const x0 = x * width, y0 = y * height;
+      const x1 = Math.min(1, x + w) * width, y1 = Math.min(1, y + h) * height;
+      // Include only pixels whose centers lie inside the region. The right and bottom edges are exclusive.
+      const left = Math.ceil(x0 - 0.5), top = Math.ceil(y0 - 0.5);
+      const cropW = Math.ceil(x1 - 0.5) - left, cropH = Math.ceil(y1 - 0.5) - top;
+      if (cropW <= 0 || cropH <= 0) throw new Error('The marked region contains no pixels');
+
+      const { data, info } = await drawn.autoOrient().resize(width, height, { fit: 'fill' })
+        .extract({ left, top, width: cropW, height: cropH }).toColourspace('srgb').ensureAlpha().raw()
+        .timeout({ seconds: 12 }).toBuffer({ resolveWithObject: true });
+      if (info.channels !== 4) throw new Error('Could not decode edited pixels');
+
+      const rx = (x1 - x0) / 2, ry = (y1 - y0) / 2;
+      const radius = Math.min(rx, ry);
+      const feather = typeof input.feather === 'number' && Number.isFinite(input.feather) ? input.feather : REGION_FEATHER;
+      // Cap the feather at half the short radius so even a small mark keeps a fully edited core.
+      const featherPx = Math.min(radius / 2, Math.max(0, feather) * Math.min(width, height));
+      if (input.shape === 'ellipse' || featherPx > 0) {
+        for (let row = 0; row < cropH; row += 1) {
+          const py = top + row + 0.5;
+          const dy = (py - y0 - ry) / ry;
+          const insetY = Math.min(py - y0, y1 - py);
+          for (let col = 0; col < cropW; col += 1) {
+            const px = left + col + 0.5;
+            const edge = input.shape === 'ellipse'
+              ? (1 - Math.hypot((px - x0 - rx) / rx, dy)) * radius
+              : Math.min(insetY, px - x0, x1 - px);
+            const mask = edge <= 0 ? 0 : featherPx ? Math.min(1, edge / featherPx) : 1;
+            const alpha = (row * cropW + col) * 4 + 3;
+            data[alpha] = Math.round(data[alpha] * mask);
+          }
+        }
+      }
+
+      const composed = await base.autoOrient()
+        .composite([{ input: data, raw: { width: cropW, height: cropH, channels: 4 }, left, top }])
+        .webp({ lossless: true, effort: 1 }).timeout({ seconds: 12 }).toBuffer();
+      if (composed.length > MAX_GENERATED_BYTES) throw new Error('Composited page exceeds the save size');
+      return { dataUrl: `data:image/webp;base64,${composed.toString('base64')}`, pasted: true };
+    });
+  } catch (cause) {
+    throw new StudioError('NO_IMAGE', 'The edit couldn’t be placed in the marked area. The original page is unchanged.', { status: 502, retryable: true, cause });
+  }
 }
 
 /** The page's frames, art and printed overlays baked into one raster (flatten, "Bring my drawn comic"). STUB: null. */

@@ -10,7 +10,7 @@
 import { PROVIDERS_ORDERED, getProviderDef, type ProviderId } from '../shared/providers';
 
 // Every text provider (from the shared registry) plus the legacy image-only BYOK paths.
-export type ApiKeyProvider = ProviderId | 'pixazo' | 'ideogram';
+export type ApiKeyProvider = ProviderId | 'pixazo' | 'ideogram' | 'sarvam';
 
 /** Result of the last live validity check for a key (see services/keyValidation.ts). */
 export type KeyValidationState = 'unknown' | 'valid' | 'invalid' | 'unsupported';
@@ -66,10 +66,16 @@ export const PROVIDER_META: Record<ApiKeyProvider, ProviderMeta> = {
     header: 'X-Ideogram-Key',
     keysUrl: 'https://ideogram.ai/manage-api',
     hint: 'Ideogram image generation (typography-strong art). BYOK image models.'
+  },
+  sarvam: {
+    label: 'Sarvam AI',
+    header: 'X-Sarvam-Key',
+    keysUrl: 'https://dashboard.sarvam.ai',
+    hint: 'Optional Indian-language dialogue translation in Comic Studio.'
   }
 };
 
-export const ALL_PROVIDERS: ApiKeyProvider[] = [...PROVIDERS_ORDERED.map((d) => d.id), 'pixazo', 'ideogram'];
+export const ALL_PROVIDERS: ApiKeyProvider[] = [...PROVIDERS_ORDERED.map((d) => d.id), 'pixazo', 'ideogram', 'sarvam'];
 
 const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
@@ -99,7 +105,8 @@ const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
   tencent: 'dreamstream_tencent_key',
   xai: 'dreamstream_xai_key',
   pixazo: 'dreamstream_flux_key',
-  ideogram: 'dreamstream_ideogram_key'
+  ideogram: 'dreamstream_ideogram_key',
+  sarvam: 'dreamstream_sarvam_key'
 };
 
 const read = (k: string): string | null => {

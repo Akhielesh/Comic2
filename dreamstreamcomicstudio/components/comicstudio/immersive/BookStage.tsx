@@ -1,5 +1,5 @@
 // The book on the reading-room desk (reader.md §3.4, §4, §5): single pages, spreads and strips, the
-// pointer / wheel / pinch pipeline, the Leaf turn engine, and the Guided View camera.
+// pointer / wheel / pinch pipeline, the Leaf turn engine, and manual zoom.
 //
 // Every page in the mount window (views current ±1, plus a running turn's target) is one persistent
 // element at its slot. A turn only changes roles (static / under / front / back) and lets the engine
@@ -9,9 +9,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ReaderItem } from '../reader/readerModel';
-import { cubicBezier, decideRelease } from './flipPhysics';
+import { decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
-import { cameraDuration, cameraFor, spotlightRect, stopAtPoint, IDENTITY_CAMERA, type Camera, type GuidedStop } from './guidedModel';
+import { IDENTITY_CAMERA, type Camera } from './guidedModel';
 import { durationFor, recordBlankTurn, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
 import { emptyLeafRefs, PageLeaf, type LeafExtraRefs } from './PageLeaf';
 import { playPageTurn } from './paperSound';
@@ -20,7 +20,7 @@ import { isDoubleTap, scrollsInside, tapCommand, WheelAccumulator, type ReaderCo
 import type { ReaderEvent, ReaderState } from './readerMachine';
 import { gutterFor, ReaderSlot, slotImageSource, slotStandIn, type SlotImage, type SlotRefs } from './ReaderSlot';
 import { contentKey, LAYER_Z, mountWindow, planTurn, roleOf, type TurnPlan, type TurnStyle } from './turnPlan';
-import { Spotlight, useCameraAnimator } from './GuidedCamera';
+import { useCameraAnimator } from './GuidedCamera';
 import { holdUntilDecoded, pageImageCache, useCachedImage, pickVariant } from './pageImageCache';
 import { READER_TOKEN_DEFAULTS, readReaderTokens, type ReaderMotionTokens } from './readerTokens';
 import type { WidthClass } from '../mobile/formFactor';
@@ -46,14 +46,10 @@ export interface BookStageProps {
   dedication?: string;
   endCard: React.ReactNode;
   hinge?: { start: number; end: number };
-  stopsOf(view: number): GuidedStop[];
-  balloonPop: boolean;
   sound: boolean;
   /** Mouse peel teaser on page corners (fine pointers, motion allowed). */
   peel: boolean;
   onCommand(cmd: ReaderCommand): void;
-  /** Double-tap on a page: where (view, page-normalized point, and the tapped page's item in a spread). */
-  onDoubleTap(view: number, point: { x: number; y: number }, itemIndex?: number): void;
   onFrames(deltas: number[], kind: string): void;
   onImageError?(): void;
   onExpired?(): void;
@@ -100,7 +96,7 @@ interface DragInfo {
 }
 
 export const BookStage: React.FC<BookStageProps> = (props) => {
-  const { doc, items, views, state, dispatch, size, decision, widthClass, trim, aspectOf, rtl, turnStyle, lowPower, paper, img, dedication, endCard, hinge, stopsOf, balloonPop, sound } = props;
+  const { doc, items, views, state, dispatch, size, decision, widthClass, trim, aspectOf, rtl, turnStyle, lowPower, paper, img, dedication, endCard, hinge, sound } = props;
   const stageRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<HTMLDivElement>(null);
@@ -119,11 +115,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   const camera = useCameraAnimator(wrapperRef, spotRef, size);
   // Reader motion tokens (readerDesigns.css), read once per mount from the computed style; TS defaults until then.
   const tokens = useRef<ReaderMotionTokens>(READER_TOKEN_DEFAULTS);
-  const curves = useRef({ paper: cubicBezier(...READER_TOKEN_DEFAULTS.easePaper), camera: cubicBezier(...READER_TOKEN_DEFAULTS.easeCamera) });
   useLayoutEffect(() => {
     const t = readReaderTokens(stageRef.current);
     tokens.current = t;
-    curves.current = { paper: cubicBezier(...t.easePaper), camera: cubicBezier(...t.easeCamera) };
   }, []);
   /** A tapped turn waiting (≤ 300 ms) for its pages to decode: which corner shows the progress arc. */
   const [gate, setGate] = useState<{ dir: 1 | -1 } | null>(null);
@@ -133,7 +127,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     gateCancel.current = null;
   };
   const [layoutScale, setLayoutScale] = useState(1);
-  const [cameraIdle, setCameraIdle] = useState(true);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const layout = state.layout;
@@ -179,13 +172,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   };
   /** Every page of the view shows art: its page, or at least its stand-in. */
   const viewHasArt = (v: number): boolean => viewNeeds(v).every((n) => !!n.standIn && pageImageCache.isDecoded(n.standIn));
-  /** Warm a page's original (guided close-ups use it) at idle priority. */
-  const prefetchOriginal = (i: number) => {
-    const it = items[i];
-    if (!it || img.saveData) return;
-    const source = slotImageSource(it, 0, { ...img, original: true });
-    if (source?.url && source.path === it.asset.path) void pageImageCache.ensure(source.path, source.url, 'idle');
-  };
 
   // ── Turn plan ─────────────────────────────────────────────────────────────
   const plan: TurnPlan | null = useMemo(() => {
@@ -232,61 +218,16 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.view, views]);
 
-  // ── Guided camera ─────────────────────────────────────────────────────────
-  const pageRect1 = useMemo(() => ({ x: geom1.book.x, y: geom1.book.y, w: geom1.page.w, h: geom1.page.h }), [geom1]);
-  const guidedOn = state.guided.on;
-  const stops = useMemo(() => (guidedOn ? stopsOf(state.view) : []), [guidedOn, stopsOf, state.view]);
-  const stop = stops[Math.min(stops.length - 1, Math.max(0, state.guided.stop))];
-  const spotFor = useCallback(
-    (cam: Camera) => (guidedOn && stop && stop.panelIndex >= 0 && motion.kind === 'idle' ? spotlightRect(stop.box, pageRect1, cam) : null),
-    [guidedOn, stop, pageRect1, motion.kind]
-  );
-
   const settleCrisp = useCallback(
     (cam: Camera) => {
       if (settleTimer.current) clearTimeout(settleTimer.current);
       settleTimer.current = setTimeout(() => {
         const L = cam.s > 1.05 ? Math.round(cam.s * 1000) / 1000 : 1;
         setLayoutScale(L);
-        setCameraIdle(true);
       }, 120);
     },
     []
   );
-
-  // Camera follows the guided stop (or returns to the whole book).
-  useEffect(() => {
-    if (state.zoom && !guidedOn) return; // free zoom drives the camera itself
-    const busy = motion.kind !== 'idle';
-    const target = guidedOn && stop && !busy ? cameraFor(stop, pageRect1, size.w, size.h) : IDENTITY_CAMERA(size.w, size.h);
-    const from = camera.current.current;
-    const same = Math.abs(from.s - target.s) < 1e-3 && Math.abs(from.tx - target.tx) < 0.5 && Math.abs(from.ty - target.ty) < 0.5;
-    if (same) {
-      camera.set(target, spotFor(target));
-      if (layoutScale !== (target.s > 1.05 ? Math.round(target.s * 1000) / 1000 : 1)) settleCrisp(target);
-      return;
-    }
-    setCameraIdle(false);
-    // fit: 'width' scrolls the stage; the camera and its spotlight work from the top of the page.
-    if (guidedOn && fit === 'width' && stageRef.current) stageRef.current.scrollTop = 0;
-    // A close zoom lands on the original (layoutScale > 1.6): warm it now, during the glide, so the swap
-    // to full resolution is not a wait after the camera settles (reader.md §8.5).
-    if (guidedOn && stop && target.s > 1.6) prefetchOriginal(stop.itemIndex);
-    // Reduced motion: the camera cuts (no glide) behind a 140 ms fade (reader.md §8).
-    const wrap = wrapperRef.current;
-    if (reduced && wrap && typeof wrap.animate === 'function') wrap.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: tokens.current.spotFadeReduced, easing: 'ease-out' });
-    const zoomOutForTurn = busy && guidedOn;
-    const zooming = Math.abs(Math.log(target.s / Math.max(1e-6, from.s))) > 0.05;
-    camera.move({
-      to: target,
-      durationMs: reduced ? 0 : zoomOutForTurn ? 300 : cameraDuration(from, target, size.w, size.h),
-      ease: zooming ? 'camera' : 'paper',
-      easing: zooming ? curves.current.camera : curves.current.paper,
-      spotFor,
-      onDone: () => settleCrisp(target)
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guidedOn, stop, pageRect1.x, pageRect1.y, pageRect1.w, pageRect1.h, size.w, size.h, motion.kind, reduced]);
 
   // Keep the wrapper transform right after a re-layout at a new scale.
   useLayoutEffect(() => {
@@ -295,7 +236,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
 
   // Free zoom: the machine's zoom (null = reset).
   useEffect(() => {
-    if (guidedOn) return;
     if (!state.zoom) {
       // A pointer held down while zoomed was panning. Forget it, so the same drag cannot turn the page once
       // the zoom is gone (an arrow key, Escape or a double tap mid-pan); its release does nothing.
@@ -308,10 +248,10 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.zoom, guidedOn]);
+  }, [state.zoom]);
 
   // ── Engine lifecycle ──────────────────────────────────────────────────────
-  const ready = layoutScale === 1 && cameraIdle;
+  const ready = layoutScale === 1;
   useLayoutEffect(() => {
     if (!plan || motion.kind === 'idle') {
       cancelGate();
@@ -336,7 +276,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       return;
     }
     if (engine.current && engineMotion.current === motion) return;
-    if (!ready) return; // guided: zoom out first, the camera effect brings us back here
+    if (!ready) return; // Wait until manual zoom returns to the fit layout.
     cancelGate();
     if (engine.current) {
       engine.current.destroy();
@@ -549,7 +489,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     if ((e.target as HTMLElement).closest?.(INTERACTIVE)) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.current.size === 2 && !guidedOn && layout !== 'scroll') {
+    if (pointers.current.size === 2 && layout !== 'scroll') {
       // Two fingers: any leaf springs back, pinch zoom takes over.
       if (drag.current) endDrag(true);
       const [a, b] = [...pointers.current.values()];
@@ -590,7 +530,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    // Pinch zoom (free zoom, not in Guided View).
+    // Pinch zoom.
     if (pinch.current && pointers.current.size >= 2) {
       const [a, b] = [...pointers.current.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
@@ -627,7 +567,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     const dx = e.clientX - dn.x;
     const dy = e.clientY - dn.y;
     // Zoomed: one finger pans.
-    if (state.zoom && state.zoom.s > 1.05 && !guidedOn) {
+    if (state.zoom && state.zoom.s > 1.05) {
       const cam = camera.current.current;
       const next = clampCamera({ ...cam, tx: cam.tx + (e.clientX - dn.lx), ty: cam.ty + (e.clientY - dn.ly) });
       dn.lx = e.clientX;
@@ -636,13 +576,8 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       return;
     }
     if (Math.hypot(dx, dy) < DRAG_SLOP) return;
-    if (Math.abs(dy) > 1.4 * Math.abs(dx) || !canTurn() || guidedOn) {
+    if (Math.abs(dy) > 1.4 * Math.abs(dx) || !canTurn()) {
       // Vertical intent (or not turnable): not a tap any more, not a turn.
-      if (guidedOn && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-        down.current = null;
-        props.onCommand({ type: 'step', delta: (rtl ? dx > 0 : dx < 0) ? 1 : -1 });
-        return;
-      }
       if (Math.abs(dy) > 1.4 * Math.abs(dx)) down.current = null;
       return;
     }
@@ -710,27 +645,15 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     down.current = null;
     if (!dn || dn.id !== e.pointerId) return;
     if (Math.hypot(e.clientX - dn.x, e.clientY - dn.y) >= DRAG_SLOP || performance.now() - dn.t > 600) return;
-    // A tap: double-tap first, then outer zones turn, the middle toggles the HUD (after a beat).
+    // Double-tap resets a zoomed page. Otherwise the outer zones turn and the middle toggles the HUD.
     const tap = { t: performance.now(), x: e.clientX, y: e.clientY };
     const cmd = tapCommand(stageFraction(e.clientX), rtl);
-    // Double-tap belongs to the middle of the page (or anywhere while zoomed in, to zoom back out): two
-    // quick taps on an edge are two page turns, never "turn, then jump into Guided View mid-turn".
-    const doubleOk = cmd.type === 'hud' || (!!state.zoom && !guidedOn);
+    const doubleOk = !!state.zoom;
     if (doubleOk && isDoubleTap(lastTap.current, tap)) {
       lastTap.current = null;
       if (tapTimer.current) clearTimeout(tapTimer.current);
       tapTimer.current = null;
-      if (state.zoom && !guidedOn) {
-        dispatch({ type: 'ZOOM', zoom: null });
-        return;
-      }
-      const p = clientToBook({ x: e.clientX, y: e.clientY });
-      const slot = geom1.slots.find((s) => p.x >= s.x && p.x <= s.x + s.w) ?? geom1.slots[0];
-      const box = letterbox(slot.w, slot.h, slot.contentAspect);
-      const point = { x: (p.x - slot.x - box.x) / Math.max(1, box.w), y: (p.y - slot.y - box.y) / Math.max(1, box.h) };
-      const tapped = slot.content.kind === 'item' ? slot.content.index : undefined;
-      const viewForTap = tapped !== undefined ? views.findIndex((v) => v.items.includes(tapped)) : state.view;
-      props.onDoubleTap(viewForTap >= 0 ? viewForTap : state.view, point, tapped);
+      dispatch({ type: 'ZOOM', zoom: null });
       return;
     }
     lastTap.current = doubleOk ? tap : null;
@@ -742,7 +665,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       }, 250);
       return;
     }
-    if (state.zoom && state.zoom.s > 1.05 && !guidedOn) return;
+    if (state.zoom && state.zoom.s > 1.05) return;
     props.onCommand(cmd);
   };
 
@@ -761,7 +684,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
   };
 
-  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor (not in Guided View), a gentle step per notch
+  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor, a gentle step per notch
   // (wheelZoomFactor). A wheel over content that can still scroll that way (the End card when it overflows)
   // scrolls it instead of turning the page.
   useEffect(() => {
@@ -769,7 +692,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
-        if (guidedOn || layout === 'scroll') return;
+        if (layout === 'scroll') return;
         e.preventDefault();
         const rect = el.getBoundingClientRect();
         const cam = camera.current.current;
@@ -801,7 +724,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guidedOn, layout, rtl, state.zoom, size.w, size.h, geom1, fit]);
+  }, [layout, rtl, state.zoom, size.w, size.h, geom1, fit]);
 
   // fit: 'width' — a new page starts at its top.
   useEffect(() => {
@@ -810,16 +733,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
 
   // ── Render ────────────────────────────────────────────────────────────────
   const imgFull: SlotImage = useMemo(() => ({ ...img, original: layoutScale > 1.6 }), [img, layoutScale]);
-  const visibleLines = useMemo(() => {
-    if (!guidedOn || !balloonPop || !stop || stop.panelIndex < 0) return undefined;
-    const item = items[stop.itemIndex];
-    const page = item?.page;
-    if (!page) return undefined;
-    // Balloons of this panel and every earlier stop stay visible.
-    const shown = new Set<string>();
-    for (const st of stops.slice(0, state.guided.stop + 1)) for (const id of st.lineIds) shown.add(id);
-    return { itemIndex: stop.itemIndex, ids: shown as ReadonlySet<string> };
-  }, [guidedOn, balloonPop, stop, stops, state.guided.stop, items]);
 
   const W = geomL.page.w;
   const H = geomL.page.h;
@@ -985,7 +898,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
                 tone={props.paperTone}
                 paper={paper}
                 letteringAriaHidden
-                visibleLineIds={visibleLines && visibleLines.itemIndex === itemIndex ? visibleLines.ids : undefined}
                 onImageError={props.onImageError}
                 onExpired={props.onExpired}
                 dedication={dedication}
@@ -1014,7 +926,6 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         </div>
         {gate && <TurnGateArc dir={gate.dir} rtl={rtl} x={bookX} y={bookY} w={geomL.book.w} h={H} />}
       </div>
-      <Spotlight ref={spotRef} reduced={reduced} />
     </div>
   );
 };

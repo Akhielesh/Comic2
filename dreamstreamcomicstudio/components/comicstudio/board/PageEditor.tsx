@@ -252,11 +252,12 @@ const NEW_LINE_TEXT: Record<LineKind, string> = {
 };
 
 /** The edit_page action for an instruction (+ optional marked region / panel). */
-export const editActionFor = (pageId: string, instruction: string, region?: Box | null, panelN?: number): StudioAction => ({
+export const editActionFor = (pageId: string, instruction: string, region?: Box | null, panelN?: number, regionShape?: 'ellipse'): StudioAction => ({
   type: 'edit_page',
   pageId,
   instruction: instruction.trim(),
   ...(region ? { region } : {}),
+  ...(region && regionShape ? { regionShape } : {}),
   ...(panelN ? { panelN } : {})
 });
 
@@ -323,6 +324,11 @@ const CORNERS: { id: Corner; label: string; x: 0 | 1; y: 0 | 1 }[] = [
   { id: 'se', label: 'bottom-right', x: 1, y: 1 }
 ];
 const MARK_NUDGE = 0.01;
+type MarkShape = 'box' | 'circle';
+const CAMERA_ANGLES = [
+  ['', 'Auto'], ['eye level', 'Eye level'], ['low angle', 'Low angle'], ['high angle', 'High angle'],
+  ["bird's-eye view", 'Bird’s-eye view'], ["worm's-eye view", 'Worm’s-eye view'], ['dutch tilt', 'Dutch tilt']
+] as const;
 
 /**
  * Mark-up: drag a box on the art (one finger on touch; a second finger cancels it and pinches instead).
@@ -332,8 +338,9 @@ const MarkupLayer: React.FC<{
   active: boolean;
   region: Box | null;
   panelN?: number;
+  shape: MarkShape;
   onRegion: (region: Box) => void;
-}> = ({ active, region, panelN, onRegion }) => {
+}> = ({ active, region, panelN, shape, onRegion }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Box | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
@@ -341,6 +348,15 @@ const MarkupLayer: React.FC<{
   const zoom = useZoom();
   const touches = useRef(new Set<number>());
   useEffect(() => () => cleanup.current?.(), []);
+
+  const markedBox = (fixed: Point, end: Point, rect: Pick<DOMRect, 'width' | 'height'>) => {
+    if (shape === 'box' || !rect.width || !rect.height) return regionFromPoints(fixed, end);
+    const diameter = Math.min(Math.abs(end.x - fixed.x) * rect.width, Math.abs(end.y - fixed.y) * rect.height);
+    return regionFromPoints(fixed, {
+      x: fixed.x + Math.sign(end.x - fixed.x) * diameter / rect.width,
+      y: fixed.y + Math.sign(end.y - fixed.y) * diameter / rect.height
+    });
+  };
 
   /** Track one pointer from `fixed` (a new box's start, or the corner opposite the one being dragged). */
   const track = (e: React.PointerEvent, fixed: Point, keepIfTiny: boolean) => {
@@ -369,7 +385,7 @@ const MarkupLayer: React.FC<{
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== e.pointerId) return;
       end = toPagePoint(ev.clientX, ev.clientY, rect);
-      const box = regionFromPoints(fixed, end);
+      const box = markedBox(fixed, end, rect);
       if (box || !keepIfTiny) setDraft(box);
     };
     const up = (ev: PointerEvent) => {
@@ -378,7 +394,7 @@ const MarkupLayer: React.FC<{
       cleanup.current?.();
       end = toPagePoint(ev.clientX, ev.clientY, rect);
       setDraft(null);
-      const box = regionFromPoints(fixed, end);
+      const box = markedBox(fixed, end, rect);
       if (box) onRegion(box); // a click (or a corner squeezed to nothing) changes nothing
     };
     const cancel = (ev: PointerEvent) => {
@@ -418,7 +434,14 @@ const MarkupLayer: React.FC<{
     e.stopPropagation();
     const k = e.shiftKey ? MARK_NUDGE * 5 : MARK_NUDGE;
     const moving = { x: (c.x ? region.x + region.w : region.x) + step[0] * k, y: (c.y ? region.y + region.h : region.y) + step[1] * k };
-    const box = regionFromPoints(opposite(region, c), moving);
+    const fixed = opposite(region, c);
+    const rect = ref.current?.getBoundingClientRect();
+    if (shape === 'circle' && rect?.width && rect.height) {
+      if (step[0]) moving.y = fixed.y + (c.y ? 1 : -1) * Math.abs(moving.x - fixed.x) * rect.width / rect.height;
+      else moving.x = fixed.x + (c.x ? 1 : -1) * Math.abs(moving.y - fixed.y) * rect.height / rect.width;
+      if (moving.x < 0 || moving.x > 1 || moving.y < 0 || moving.y > 1) return;
+    }
+    const box = rect ? markedBox(fixed, moving, rect) : regionFromPoints(fixed, moving);
     if (box) onRegion(box);
   };
 
@@ -435,13 +458,13 @@ const MarkupLayer: React.FC<{
     >
       {active && !shown && (
         <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center px-2">
-          <span className="max-w-full truncate rounded-full bg-black/70 px-3 py-1 text-[12px] font-medium text-white shadow">Drag a box around the area to change</span>
+          <span className="max-w-full truncate rounded-full bg-black/70 px-3 py-1 text-[12px] font-medium text-white shadow">{shape === 'circle' ? 'Drag a circle around the object' : 'Drag a box around the area to change'}</span>
         </div>
       )}
       {shown && (
         <div
           data-testid="markup-region"
-          className="pointer-events-none absolute border-2 border-red-500 bg-red-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.7)]"
+          className={cx('pointer-events-none absolute border-2 border-red-500 bg-red-500/10 shadow-[0_0_0_1px_rgba(255,255,255,0.7)]', shape === 'circle' && 'rounded-full')}
           style={{ left: `${shown.x * 100}%`, top: `${shown.y * 100}%`, width: `${shown.w * 100}%`, height: `${shown.h * 100}%` }}
         >
           {!draft && (
@@ -666,6 +689,35 @@ const PanelEditor: React.FC<{
           {panel.castIds.length ? ` · ${panel.castIds.map((id) => castName(doc, id)).join(', ')}` : ' · no one'}
         </p>
       </header>
+      {!edition && (
+        <details className="mb-1.5 min-w-0 text-[12px]">
+          <summary className="w-fit cursor-pointer py-1.5 text-[var(--ds-ink)] coarse:min-h-[44px] coarse:py-3">Camera</summary>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex min-w-0 flex-col gap-1 text-[var(--ds-muted)]">
+              Shot size
+              <select
+                className={cx(SELECT_CLS, 'min-w-0')}
+                value={panel.shot}
+                onChange={(event) => patch([{ op: 'panel', pageId: page.id, id: panel.id, patch: { shot: event.target.value as Panel['shot'] } }])}
+              >
+                {Object.entries(SHOT_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="flex min-w-0 flex-col gap-1 text-[var(--ds-muted)]">
+              Camera angle
+              <select
+                className={cx(SELECT_CLS, 'min-w-0')}
+                value={panel.angle ?? ''}
+                onChange={(event) => patch([{ op: 'panel', pageId: page.id, id: panel.id, patch: { angle: event.target.value || null } as Partial<Panel> }])}
+              >
+                {CAMERA_ANGLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                {panel.angle && !CAMERA_ANGLES.some(([value]) => value === panel.angle) && <option value={panel.angle}>{panel.angle}</option>}
+              </select>
+            </label>
+          </div>
+          <p className="mt-1 text-[var(--ds-muted)]">Saved to the panel plan and used the next time the page is drawn.</p>
+        </details>
+      )}
       <InlineField
         label={`Panel ${panel.n} action`}
         multiline
@@ -728,6 +780,7 @@ interface EditorBodyProps {
 const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, layout, edition, onEdition, tools, onTools, pro, onZoom }) => {
   const [mode, setMode] = useState<Mode>('move');
   const [region, setRegion] = useState<Box | null>(null);
+  const [markShape, setMarkShape] = useState<MarkShape>('box');
   const [instruction, setInstruction] = useState('');
   const [editIntent, setEditIntent] = useState<'describe' | 'add' | 'replace' | 'remove'>('describe');
   const [panelN, setPanelN] = useState<number | undefined>(undefined);
@@ -1217,7 +1270,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     const editInstruction = editIntent === 'describe'
       ? instruction
       : `${{ add: 'Add an object', replace: 'Replace or change an object', remove: 'Remove an object' }[editIntent]} within the selected area. ${instruction.trim()} Preserve the surrounding art and other objects.`;
-    const action = editActionFor(sourcePage.id, editInstruction, region, panelN);
+    const action = editActionFor(sourcePage.id, editInstruction, region, panelN, markShape === 'circle' ? 'ellipse' : undefined);
     fire('edit', () => studio.act(action));
     setInstruction('');
     setEditIntent('describe');
@@ -1689,7 +1742,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                   />
                 }
               >
-                <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} onRegion={markRegion} />
+                <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} shape={markShape} onRegion={markRegion} />
                 {pro.pro && tool === 'shapes' && pro.parts.compose && (
                   <Suspense fallback={null}>
                     <ShapePlaceLayerLazy doc={doc} page={sourcePage} onPlace={placeShape} onRefused={setNotice} />
@@ -1794,6 +1847,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               <SquareDashed className="h-3 w-3" aria-hidden /> Mark an area
             </GhostButton>
           )}
+          <GhostButton size="xs" disabled={!artOk || busy} onClick={() => {
+            clearRegion();
+            setMarkShape(markShape === 'circle' ? 'box' : 'circle');
+            changeMode('markup');
+          }}>
+            {markShape === 'circle' ? 'Mark a box' : 'Circle an object'}
+          </GhostButton>
           <label className="inline-flex items-center gap-1.5 text-[12px] text-[var(--ds-muted)]">
             Where
             <select

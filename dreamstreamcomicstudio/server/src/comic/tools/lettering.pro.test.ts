@@ -18,6 +18,7 @@ vi.mock('../../../../shared/comic/ops.js', async (importOriginal) => {
 });
 
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import { sfxStyleIds } from '../../../../shared/comic/lettering/sfxCatalog.js';
 import { LETTERING_PRESET_IDS, PRO_LETTERING_PRESET_IDS } from '../../../../shared/comic/lettering/style.js';
 import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
 import { requestedLetteringPreset } from '../replies.js';
@@ -38,6 +39,21 @@ const setup = (mutate?: (doc: ComicDoc) => void) => {
 };
 const presetEnum = (tool: ReturnType<typeof setup>['tool']) =>
   (tool.spec.function.parameters as { properties: { preset: { enum: string[] } } }).properties.preset.enum;
+const sfxEnum = (tool: ReturnType<typeof setup>['tool']) =>
+  (tool.spec.function.parameters as { properties: { style: { properties: { sfx_effect: { enum: string[] } } } } }).properties.style.properties.sfx_effect.enum;
+
+it('offers and writes only drawn SFX styles allowed by the Pro gate', async () => {
+  const base = setup();
+  expect(sfxEnum(base.tool)).toEqual(sfxStyleIds());
+  const scope = { scope: 'kind', kind: 'sfx' };
+  expect(await base.call({ ...scope, style: { sfx_effect: 'extrude3d' } })).toMatch(/^Error: Unknown sound-effect style/);
+  sw.on = true;
+  const pro = setup();
+  expect(sfxEnum(pro.tool)).toEqual(sfxStyleIds(true));
+  expect(await pro.call({ ...scope, style: { sfx_effect: 'extrude3d' } })).toMatch(/3D extrude sound effects/);
+  expect(pro.ctx.session.doc.letterStyle?.kinds?.sfx).toMatchObject({ sfxEffect: 'extrude3d' });
+  expect(await pro.call({ ...scope, style: { sfx_effect: 'halftone_fill' } })).toMatch(/^Error: Unknown sound-effect style/);
+});
 
 describe('set_lettering_style and the Pro looks (PE-LETTER #4, #21)', () => {
   it('switch off: the enum, the description and the parser stay on the 8 base looks; a Pro look is refused', async () => {

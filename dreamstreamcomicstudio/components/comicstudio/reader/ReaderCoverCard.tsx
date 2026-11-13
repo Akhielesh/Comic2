@@ -1,14 +1,15 @@
 // The public reader's cover card (reader.md §2.1, sharing.md §7.2): the cover on the reading-room
 // colour, the title, logline, "by …", page count and reading direction, then **Read** (the immersive
-// reader with its cover intro — the click is the gesture fullscreen needs) and **Guided** (panel by
-// panel). It paints instantly from the server-injected boot card, before the comic itself arrives.
+// reader with its cover intro). It paints instantly from the server-injected boot card, before the comic itself arrives.
 // The room is the same in both themes (like the immersive reader), so its ink is fixed white.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpen, Rows3, ScanEye, Sparkles } from 'lucide-react';
+import { BookOpen, Rows3, Sparkles } from 'lucide-react';
+import { dirOf } from '../../../shared/comic/languages';
 import type { ContentRating } from '../../../shared/comic/safety';
 import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../../chat/studioDesign';
 import { RatingBadge } from '../safety/RatingBadge';
+import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import './readerCoverCard.css';
 
 export interface ReaderCoverCardProps {
@@ -28,13 +29,13 @@ export interface ReaderCoverCardProps {
   themeColor?: string;
   /** The comic is still on its way (buttons wait, the cover already shows). */
   loading?: boolean;
+  languageChoice?: ReaderLanguageSlot;
   onRead(): void;
-  onGuided?(): void;
   /** Read inline, on this page (no full screen). */
   onReadHere?(): void;
   /** Footer call to action (hidden in embeds). */
   cta?: { label: string; href: string };
-  labels?: { read?: string; guided?: string; readHere?: string; readsRightToLeft?: string };
+  labels?: { read?: string; readHere?: string; readsRightToLeft?: string; chooseLanguage?: string };
   onCoverReady?(): void;
   onReadingIntent?(): void;
   /** The cover image failed (expired link). */
@@ -67,8 +68,8 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
   rating,
   themeColor,
   loading,
+  languageChoice,
   onRead,
-  onGuided,
   onReadHere,
   cta,
   labels,
@@ -139,6 +140,20 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
               </div>
             )}
           </div>
+          {languageChoice && (
+            <label className="flex w-full max-w-64 flex-col gap-1.5 text-left text-[13px] font-medium text-white/90">
+              {labels?.chooseLanguage || 'Choose a language'}
+              <select
+                value={languageChoice.current}
+                onChange={(event) => languageChoice.onChange(event.currentTarget.value)}
+                className="min-h-11 w-full rounded-xl border border-white/30 bg-[var(--ds-reader-room)] px-3 text-[16px] text-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]"
+              >
+                {languageChoice.options.map(({ code, label, native }) => (
+                  <option key={code} value={code} lang={code} dir={dirOf(code)}>{native && native !== label ? `${native} (${label})` : label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="reader-cover-card-actions flex max-w-full flex-wrap items-center justify-center gap-2">
             <button
               type="button"
@@ -151,11 +166,6 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
             >
               <BookOpen className="h-4 w-4" aria-hidden /> {loading ? 'Opening…' : labels?.read || 'Read'}
             </button>
-            {onGuided && (
-              <button type="button" onClick={onGuided} onFocus={onReadingIntent} onPointerEnter={onReadingIntent} disabled={loading} className={`${BTN} bg-white/15 text-white hover:bg-white/25`}>
-                <ScanEye className="h-4 w-4" aria-hidden /> {labels?.guided || 'Guided View'}
-              </button>
-            )}
           </div>
           {onReadHere && (
             <button

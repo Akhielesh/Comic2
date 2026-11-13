@@ -1,13 +1,11 @@
 // Vertical reader (reader.md §4.1): webtoons — and any comic when the reader picks Scroll — as one
 // smooth column. Pages decode through the shared cache only as they approach the viewport; offscreen
 // pages skip layout and paint (content-visibility) with their real aspect reserved, so long comics
-// stay cheap. The HUD hides on scroll down and returns on scroll up; Guided View scrolls each panel's
-// centre into view. The End card closes the column.
+// stay cheap. The HUD hides on scroll down and returns on scroll up. The End card closes the column.
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ReaderItem } from '../reader/readerModel';
-import type { GuidedStop } from './guidedModel';
 import { letterbox } from './readerLayout';
 import { SlotContentView, type SlotImage } from './ReaderSlot';
 
@@ -32,7 +30,6 @@ export interface WebtoonStageProps {
   /** Gapless for webtoons, a gutter between pages otherwise. */
   gapless: boolean;
   endCard: React.ReactNode;
-  guided: { on: boolean; itemIndex: number; stop?: GuidedStop };
   onScrollDirection(dir: 'up' | 'down'): void;
   onVisibleItem(itemIndex: number): void;
   onProgress(fraction: number): void;
@@ -90,7 +87,7 @@ const WebtoonPage: React.FC<{
 };
 
 export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(function WebtoonStage(props, ref) {
-  const { doc, items, size, aspectOf, img, paper, reduced, gapless, endCard, guided } = props;
+  const { doc, items, size, aspectOf, img, paper, reduced, gapless, endCard } = props;
   const scroller = useRef<HTMLDivElement>(null);
   const pageEls = useRef(new Map<number, HTMLDivElement>());
   const [near, setNear] = useState<ReadonlySet<number>>(() => new Set([0, 1, 2]));
@@ -168,17 +165,6 @@ export const WebtoonStage = forwardRef<WebtoonStageHandle, WebtoonStageProps>(fu
     [scrollTo]
   );
 
-  // Guided View in a column: centre the current panel.
-  useEffect(() => {
-    if (!guided.on) return;
-    const el = scroller.current;
-    const page = pageEls.current.get(guided.itemIndex);
-    if (!el || !page) return;
-    const box = guided.stop && guided.stop.panelIndex >= 0 ? guided.stop.box : undefined;
-    const h = page.offsetHeight;
-    const top = box ? page.offsetTop + (box.y + box.h / 2) * h - el.clientHeight / 2 : page.offsetTop;
-    scrollTo(Math.max(0, top));
-  }, [guided.on, guided.itemIndex, guided.stop, scrollTo]);
 
   const onScroll = () => {
     const el = scroller.current;

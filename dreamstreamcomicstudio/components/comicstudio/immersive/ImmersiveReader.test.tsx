@@ -111,17 +111,15 @@ describe('ImmersiveReader', () => {
     expect(counter()).toBe('Page 1 of 6');
   });
 
-  it('G opens Guided View one tap away: overview, then "Panel 1 of 3" announced', () => {
+  it('keeps normal page navigation when the old Guided shortcuts are used', () => {
     reduce = true;
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={() => undefined} />);
-    expect(root().dataset.guided).toBe('false');
+    expect(screen.queryByRole('button', { name: /guided|panel by panel/i })).toBeNull();
     press('g');
-    expect(root().dataset.guided).toBe('true');
-    expect(screen.getByTestId('reader-live').textContent).toBe('Page 1. Whole page.');
+    press('p');
+    expect(counter()).toBe('Page 1 of 6');
     press('ArrowRight');
-    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 1 of 3\. Panel 1\. The spice market at dawn/);
-    press('ArrowRight');
-    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 2 of 3\..*Maya whispers: “Just one more…”/);
+    expect(counter()).toBe('Page 2 of 6');
   });
 
   it('deep links: ?p=3 opens page 3; an undrawn page shows the nearest one and says so', () => {
@@ -135,14 +133,7 @@ describe('ImmersiveReader', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Page 3 isn’t drawn yet — showing page 1.');
   });
 
-  it('?guided=1&panel=2 opens Guided View at that panel', () => {
-    reduce = true;
-    render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} initialGuided initialPanel={2} onExit={() => undefined} />);
-    expect(root().dataset.guided).toBe('true');
-    expect(screen.getByTestId('reader-live').textContent).toMatch(/^Panel 2 of 3/);
-  });
-
-  it('double-tapping the right-hand page of a spread opens Guided View on that page (not the left one)', () => {
+  it('double-tapping an unzoomed spread keeps the same pages', () => {
     reduce = true;
     setViewport(1280, 800);
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={2} onExit={() => undefined} />);
@@ -159,18 +150,14 @@ describe('ImmersiveReader', () => {
       tap(890);
       tap(890);
     });
-    expect(root().dataset.guided).toBe('true');
-    expect(counter()).toBe('Page 3 of 6');
+    expect(root().dataset.layout).toBe('spread');
+    expect(counter()).toBe('Pages 2–3 of 6');
   });
 
-  it('Escape: leave Guided View first, then close the reader', () => {
+  it('Escape closes the reader from a normal page', () => {
     reduce = true;
     const onExit = vi.fn();
     render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} initialPage={1} onExit={onExit} />);
-    press('g');
-    press('Escape');
-    expect(root().dataset.guided).toBe('false');
-    expect(onExit).not.toHaveBeenCalled();
     press('Escape');
     expect(onExit).toHaveBeenCalledTimes(1);
   });

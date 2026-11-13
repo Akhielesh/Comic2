@@ -50,11 +50,19 @@ const group = (g: Partial<ToolGroup> & Pick<ToolGroup, 'id' | 'priority'>): Tool
 describe('tool registry', () => {
   it('registers every feature group exactly once and never core', () => {
     const ids = toolGroups().map((g) => g.id);
-    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'models', 'publish', 'reader', 'refs', 'safety', 'timeline']);
+    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'models', 'publish', 'reader', 'refs', 'research', 'safety', 'timeline']);
     expect(TOOL_GROUPS).toBe(toolGroups());
     expect(toolGroupById('core')).toBeUndefined();
     expect(toolGroupById('constructor')).toBeUndefined();
     expect(toolGroupById('lettering')?.id).toBe('lettering');
+  });
+
+  it('only offers comic research when the creator asks to look something up', () => {
+    const ctx = testContext(newSession(plannedDoc()));
+    const generic = { ...createDirectorTurn(), userText: 'Make the colors warmer' };
+    const researching = { ...generic, userText: 'Research Kyoto Station before we draw it' };
+    expect(directorToolNames(buildTurnToolset(ctx, generic, toolGroups()).tools)).not.toContain('research_comic');
+    expect(directorToolNames(buildTurnToolset(ctx, researching, toolGroups()).tools)).toContain('research_comic');
   });
 
   it('every feature group is real: its own non-core tools, each with an activity label, and well-formed rules/lines', () => {

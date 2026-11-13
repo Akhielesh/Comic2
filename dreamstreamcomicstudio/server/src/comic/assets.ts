@@ -35,7 +35,7 @@ import {
   isPublicationPath,
   isQuarantinePath
 } from './storagePaths.js';
-import { MAX_INPUT_PIXELS, MAX_SOURCE_EDGE, SHARP_INPUT, withSharpSlot } from './imageMeasure.js';
+import { MAX_INPUT_PIXELS, MAX_REGION_PASTE_PIXELS, MAX_SOURCE_EDGE, SHARP_INPUT, withSharpSlot } from './imageMeasure.js';
 import { sniffImageType } from '../services/sharpGuard.js';
 import { fitToAspect as deriveFitToAspect } from './derive.js';
 
@@ -48,7 +48,7 @@ export const MAX_UPLOAD_EDGE = 2048;
 /** Smallest edge a reference photo may have (contract §12.5, refs.md §3). */
 export const MIN_REF_EDGE = REF_LIMITS.minEdgePx;
 /** Generated renders can be large (4K pages); refuse absurd payloads before decoding. */
-const MAX_GENERATED_BYTES = 40 * 1024 * 1024;
+export const MAX_GENERATED_BYTES = 40 * 1024 * 1024;
 /** Public-bucket signed URL lifetime (1 h). */
 export const SIGNED_URL_TTL_SECONDS = SIGNED_TTL_SEC.public;
 /** Private-bucket (refs, quarantine) signed URL lifetime: 5 minutes, never longer. */
@@ -330,7 +330,7 @@ export class DataUrlLru {
  * Draw the Mark-up box as an SVG overlay: a thick pure-red rectangle (≈0.6% of the long
  * edge), inset so the whole stroke stays inside the image even at the borders.
  */
-export const buildOutlineSvg = (width: number, height: number, box: { x: number; y: number; w: number; h: number }): string => {
+export const buildOutlineSvg = (width: number, height: number, box: { x: number; y: number; w: number; h: number }, shape?: 'ellipse'): string => {
   const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
   const x0 = clamp01(box.x);
   const y0 = clamp01(box.y);
@@ -346,15 +346,18 @@ export const buildOutlineSvg = (width: number, height: number, box: { x: number;
   const right = Math.max(Math.min(x1 * width, width - half), left + 1);
   const bottom = Math.max(Math.min(y1 * height, height - half), top + 1);
   const r = (n: number) => Math.round(n * 10) / 10;
+  const outline = shape === 'ellipse'
+    ? `<ellipse cx="${r((left + right) / 2)}" cy="${r((top + bottom) / 2)}" rx="${r((right - left) / 2)}" ry="${r((bottom - top) / 2)}" `
+    : `<rect x="${r(left)}" y="${r(top)}" width="${r(right - left)}" height="${r(bottom - top)}" `;
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<rect x="${r(left)}" y="${r(top)}" width="${r(right - left)}" height="${r(bottom - top)}" ` +
+    outline +
     `fill="none" stroke="#FF0000" stroke-width="${stroke}" stroke-linejoin="miter"/></svg>`
   );
 };
 
 /** Composite the outline onto a copy of the image; returns a WebP data URL at the same size. */
-export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y: number; w: number; h: number }): Promise<string> => {
+export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y: number; w: number; h: number }, shape?: 'ellipse'): Promise<string> => {
   const { buffer } = decodeImageDataUrl(dataUrl);
   return withSharpSlot(async () => {
     let meta: Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
@@ -366,7 +369,7 @@ export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y:
     const width = meta.width || 0;
     const height = meta.height || 0;
     if (!width || !height) throw new StudioError('BAD_REQUEST', 'The page image could not be read for Mark-up.', { status: 400 });
-    const svg = buildOutlineSvg(width, height, box);
+    const svg = buildOutlineSvg(width, height, box, shape);
     const out = await sharp(buffer, SHARP_INPUT)
       .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
       .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })
@@ -1043,7 +1046,7 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     return ref;
   };
 
-  const saveGenerated: AssetStore['saveGenerated'] = async ({ userId, projectId, dataUrl, model }) => {
+  const saveGenerated: AssetStore['saveGenerated'] = async ({ userId, projectId, dataUrl, model, lossless }) => {
     const { buffer } = decodeImageDataUrl(dataUrl);
     if (buffer.byteLength > MAX_GENERATED_BYTES) {
       throw new StudioError('NO_IMAGE', 'The image model returned an oversized image. Please try again.', { status: 502, retryable: true });
@@ -1051,9 +1054,11 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
     let encoded: { data: Buffer; width?: number; height?: number };
     try {
       encoded = await withSharpSlot(async () => {
-        const { data, info } = await sharp(buffer, SHARP_INPUT)
-          .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })
-          .toBuffer({ resolveWithObject: true });
+        if (lossless && sniffImageType(buffer) !== 'webp') throw new Error('Expected a composited WebP');
+        const raster = lossless
+          ? sharp(buffer, { failOn: 'error', limitInputPixels: MAX_REGION_PASTE_PIXELS }).webp({ lossless: true, effort: 1 }).timeout({ seconds: 12 })
+          : sharp(buffer, SHARP_INPUT).webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT });
+        const { data, info } = await raster.toBuffer({ resolveWithObject: true });
         return { data, width: info.width, height: info.height };
       });
     } catch (err) {
@@ -1062,6 +1067,9 @@ function createSupabaseAssetStoreInternal(opts: SupabaseAssetStoreOptions): Stor
         retryable: true,
         cause: err
       });
+    }
+    if (lossless && encoded.data.byteLength > MAX_GENERATED_BYTES) {
+      throw new StudioError('NO_IMAGE', 'The finished image is too large to save.', { status: 502, retryable: true });
     }
     return store({
       userId,

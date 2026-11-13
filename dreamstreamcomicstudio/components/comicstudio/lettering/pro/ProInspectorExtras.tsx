@@ -9,7 +9,6 @@
 //   ProStackButtons    Forward, Backward, Duplicate
 //   ProAlign           align to the selection, panel or page; space across and down
 //   ProStyleClipboard  Copy style / Paste style
-//   ProSfxPicker       the 5 Pro SFX effects PE-LETTER draws (only while Pro fields are writable)
 //   ProTextEffects     gradient, up to 3 outlines, glow, warp (only while Pro fields are writable)
 // Every edit is free, labelled and undoable, through the inspector's `apply` (studio.patch); never editActionFor, never
 // studio.act.
@@ -19,7 +18,7 @@ import { ArrowDown, ArrowUp, ClipboardCopy, ClipboardPaste, CopyPlus, Plus, X } 
 import type { Balloon, ComicDoc, Line, Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
 import type { LetterPlan } from '../../../../shared/comic/lettering/layout';
-import { WARP_STYLES, type FillGradient, type Glow, type LetterStylePatch, type ProSfxEffect, type StrokeLayer, type WarpStyle } from '../../../../shared/comic/lettering/style';
+import { WARP_STYLES, type FillGradient, type Glow, type LetterStylePatch, type StrokeLayer, type WarpStyle } from '../../../../shared/comic/lettering/style';
 import { PRO_LETTER_LIMITS } from '../../../../shared/comic/limits';
 import { WARP_SCRIPT_NOTE } from '../../../../shared/comic/pro/types';
 import type { EditResult } from '../../../../shared/comic/editor/scene';
@@ -29,11 +28,11 @@ import { MUTED, RADIUS_CONTROL } from '../../../chat/studioDesign';
 import { Segmented } from '../../board/ui';
 import { isTypingTarget, kindForKey } from '../../editor/inspector/keys';
 import { setStyleClip, styleClip, styleClipboardKey, useStyleClip } from '../../editor/inspector/styleClipboard';
-import { PRO_SFX_DRAWN, proFieldsWritable, stripProFields, writablePatch } from '../../editor/inspector/proGate';
+import { proFieldsWritable, stripProFields, writablePatch } from '../../editor/inspector/proGate';
 import { ColorField } from '../ColorField';
 import { NumberField, type NumberCommit } from '../NumberField';
 import { kindWord } from '../LetteringInspector';
-import { PANEL_BTN, PANEL_LABEL, PRO_SFX_LABEL, Toggle } from '../ProLetteringPanel';
+import { PANEL_BTN, PANEL_LABEL, Toggle } from '../ProLetteringPanel';
 import { FILL_SWATCHES, TEXT_SWATCHES } from '../panelTypes';
 import { duplicateLineOps, kindOps, pinKeepingSizeOps, zOrderOps, type AlignEdge } from '../styleOps';
 import { alignToEdit, copyStyleOf, distributeToEdit, pasteStyleOps, type AlignTo } from '../proStyleOps';
@@ -229,27 +228,6 @@ export const ProStyleClipboard: React.FC<{ doc: ComicDoc; page: Page; ids: reado
     </div>
   );
 };
-
-// ── Pro SFX effects ──────────────────────────────────────────────────────────
-
-/** The 5 Pro SFX effects PE-LETTER draws in S2 (a Pro field: rendered only while writable). */
-export const ProSfxPicker: React.FC<{ value: string | undefined; onPick(effect: ProSfxEffect): void }> = ({ value, onPick }) =>
-  proFieldsWritable() ? (
-    <div role="radiogroup" aria-label="Pro sound effect style" data-testid="pro-sfx" className="grid grid-cols-3 gap-1">
-      {PRO_SFX_DRAWN.map((e) => (
-        <button
-          key={e}
-          type="button"
-          role="radio"
-          aria-checked={value === e}
-          onClick={() => onPick(e)}
-          className={cn(PANEL_BTN, 'px-1', value === e && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
-        >
-          {PRO_SFX_LABEL[e]}
-        </button>
-      ))}
-    </div>
-  ) : null;
 
 // ── Pro text effects ─────────────────────────────────────────────────────────
 

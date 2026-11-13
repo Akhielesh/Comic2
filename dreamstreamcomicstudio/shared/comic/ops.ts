@@ -358,7 +358,7 @@ export type SpendAction =
     } & Quoted)
   /** pasteBack (Ship 2): with a region marked, only the region is put back into the page ('region', the default) or the
    *  whole edited image is kept ('page'). */
-  | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean; pasteBack?: 'region' | 'page' } & Quoted)
+  | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; regionShape?: 'ellipse'; panelN?: number; safe?: boolean; pasteBack?: 'region' | 'page' } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
   /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):

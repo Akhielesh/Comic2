@@ -37,7 +37,7 @@ export const ReaderShortcuts: React.FC<{ open: boolean; onClose(): void }> = ({ 
             </div>
           ))}
         </dl>
-        <p className="mt-2 text-[11px] text-[var(--ds-reader-hud-muted)]">On touch screens: swipe or tap the edges to turn, tap the middle for controls, double-tap a panel for Guided View, pinch to zoom.</p>
+        <p className="mt-2 text-[11px] text-[var(--ds-reader-hud-muted)]">On touch screens: swipe or tap the edges to turn, tap the middle for controls, and pinch to zoom.</p>
       </div>
     </div>
   );

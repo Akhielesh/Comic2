@@ -29,17 +29,10 @@ export const parsePublicComicPath = (pathname: string | null | undefined): Publi
 export interface PublicReaderStart {
   /** 1-based page (0 = cover). */
   page?: number;
-  guided?: boolean;
-  /** 1-based panel (with guided). */
-  panel?: number;
 }
 
-/** Where the reader starts, from the share link's query (`?p=`, `?guided=1`, `?panel=`). `?lang=` is read by the language hook. */
+/** Start at the requested page, including on older links that also specify a panel. */
 export const readerStartFromSearch = (search: string | null | undefined): PublicReaderStart => {
   const r = parseReaderParams(search || '');
-  return {
-    ...(r.p !== undefined ? { page: Math.min(500, r.p) } : {}),
-    ...(r.guided ? { guided: true } : {}),
-    ...(r.guided && r.panel !== undefined ? { panel: r.panel } : {})
-  };
+  return r.p === undefined ? {} : { page: Math.min(500, r.p) };
 };

@@ -209,7 +209,7 @@ export const SystemErrorScreen: React.FC<{ message: string; onRetry: () => void;
 // Every other view sits on the canvas token, light or dark.
 export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['dashboard', 'learn', 'editor', 'fontlab']);
 /** The root's page under the views: the canvas token, or the legacy light page for the views above. */
-export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-slate-50' : CANVAS_BG);
+export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-neutral-50' : CANVAS_BG);
 /**
  * The root div's classes. A gated view (product_access) shows the product gate, which is on the DS, so it
  * always sits on the canvas, even for a legacy-paper view such as the dashboard. The comics host's own views

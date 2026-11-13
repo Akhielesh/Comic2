@@ -124,7 +124,8 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
   const speechEndRef = useRef<TakeEnd | null>(null);
   /** Web Speech: ends the live take and delivers its words (the end event, or the watchdog with `cut`). */
   const speechCompleteRef = useRef<((cut?: boolean) => void) | null>(null);
-  const partialBusyRef = useRef(false);
+  // A cancelled decode can still be running on the shared Whisper model.
+  const transcriptionRef = useRef<Promise<void> | null>(null);
   const timersRef = useRef<number[]>([]);
   const cleanupsRef = useRef<Array<() => void>>([]);
   // Keep the latest callbacks without retriggering effects mid-recording.
@@ -165,8 +166,14 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     } catch {
       /* already closed */
     }
-    partialBusyRef.current = false;
   }, []);
+
+  const trackTranscription = (pass: Promise<void>) => {
+    transcriptionRef.current = pass;
+    void pass.finally(() => {
+      if (transcriptionRef.current === pass) transcriptionRef.current = null;
+    });
+  };
 
   const resetMeters = () => {
     setLevel(0);
@@ -300,17 +307,13 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
       // Live-ish partials: re-transcribe the take so far, skipping if a pass is
       // still running (a long take decodes slower than the interval).
       timersRef.current.push(
-        window.setInterval(async () => {
-          if (partialBusyRef.current || recorderRef.current !== recorder || !isLive(take)) return;
-          partialBusyRef.current = true;
-          try {
-            const text = await transcribe(asr, recorder.snapshot());
+        window.setInterval(() => {
+          if (transcriptionRef.current || recorderRef.current !== recorder || !isLive(take)) return;
+          trackTranscription(transcribe(asr, recorder.snapshot()).then((text) => {
             if (isLive(take) && recorderRef.current === recorder && text) cbRef.current.onPartial?.(text);
-          } catch {
+          }).catch(() => {
             /* partial pass is best-effort */
-          } finally {
-            partialBusyRef.current = false;
-          }
+          }));
         }, PARTIAL_INTERVAL_MS)
       );
     })();
@@ -332,11 +335,14 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
     resetMeters();
     setStatus('transcribing');
     const model = settingsRef.current.model;
-    void (async () => {
+    const previous = transcriptionRef.current;
+    trackTranscription((async () => {
       try {
+        // Finish any earlier decode before starting another. A cancelled take may still be waiting here.
+        if (previous) await previous;
+        if (!isLive(take)) return;
         const asr = await loadWhisper(model);
-        // Wait out any in-flight partial pass so we don't decode concurrently.
-        while (partialBusyRef.current) await new Promise((r) => setTimeout(r, 60));
+        if (!isLive(take)) return;
         const text = await transcribe(asr, audio);
         if (!isLive(take)) return;
         setStatus('idle');
@@ -345,7 +351,7 @@ export const useDictation = ({ onPartial, onFinal }: UseDictationOptions) => {
       } catch (e) {
         fail(take, dictationError('transcribe', e));
       }
-    })();
+    })());
   };
 
   // ---- Web Speech engine ----------------------------------------------------

@@ -25,11 +25,11 @@ describe('keyCommand', () => {
     expect(keyCommand({ key: 'End' }, book)).toEqual({ type: 'end' });
   });
 
-  it('G / F / P / ? / Esc', () => {
-    expect(keyCommand({ key: 'g' }, book)).toEqual({ type: 'guided' });
-    expect(keyCommand({ key: 'G' }, book)).toEqual({ type: 'guided' });
+  it('F / ? / Esc are active and the former Guided shortcuts are ignored', () => {
+    expect(keyCommand({ key: 'g' }, book)).toBeNull();
+    expect(keyCommand({ key: 'G' }, book)).toBeNull();
     expect(keyCommand({ key: 'f' }, book)).toEqual({ type: 'fullscreen' });
-    expect(keyCommand({ key: 'P' }, book)).toEqual({ type: 'play' });
+    expect(keyCommand({ key: 'P' }, book)).toBeNull();
     expect(keyCommand({ key: '?' }, book)).toEqual({ type: 'shortcuts' });
     expect(keyCommand({ key: 'Escape' }, book)).toEqual({ type: 'escape' });
   });
@@ -97,8 +97,8 @@ describe('WheelAccumulator', () => {
   });
 
   it('the shortcuts sheet lists every key command', () => {
-    const keys = SHORTCUTS.map((s) => s.keys).join(' ');
-    for (const k of ['←', 'Space', 'Page Up', 'Home', 'G', 'P', 'F', 'Esc', '?']) expect(keys).toContain(k);
+    const keys = SHORTCUTS.map((s) => s.keys);
+    expect(keys).toEqual(['← →', 'Space · Shift+Space', 'Page Up · Page Down', 'Home · End', '↑ ↓', 'F', 'Esc', '?']);
   });
 });
 

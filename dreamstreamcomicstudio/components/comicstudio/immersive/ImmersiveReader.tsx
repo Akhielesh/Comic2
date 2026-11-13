@@ -2,14 +2,13 @@
 //
 // A dark reading room in a portal above everything: the book on the desk with a custom page-turn
 // engine (paper fold, hardcover cover, riffles; slide/fade on low-end devices; crossfades under
-// reduced motion), Guided View one tap away (never the default), the cover intro (immersive only,
+// reduced motion), the cover intro (immersive only,
 // once per session per comic), the End card, an auto-hiding glass HUD, ambient colour from the page,
-// a screen-reader transcript, wake lock, and Back closes it. Deep links: ?p= ?lang= ?guided=1 ?panel=.
+// a screen-reader transcript, wake lock, and Back closes it. Deep links: ?p= ?lang=.
 // Everything is client-side and free: no AI call, no server request beyond the page images.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ScanEye } from 'lucide-react';
 import { bookOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/comic/doc';
 import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
@@ -31,9 +30,8 @@ import { averagePalette, roomBackground, themeColorFor, type Palette } from './a
 import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
 import { EndCard } from './EndCard';
-import { guidedStops, stopAtPoint, type GuidedStop } from './guidedModel';
 import { cacheLimitsFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
-import { panelTranscript, pageTranscript } from './pageTranscript';
+import { pageTranscript } from './pageTranscript';
 import { closePaperSound, primePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
 import { bookGeometry, bookViews, decideLayout, firstItemOfView, letterbox, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
@@ -87,10 +85,7 @@ export interface ImmersiveReaderProps {
    * line the reader shows when it is done (the host's own notice sits behind this full-screen reader).
    */
   onDownload?(): Promise<string | void> | string | void;
-  /** Open in Guided View (deep link ?guided=1), optionally at a 1-based panel (?panel=). */
-  initialGuided?: boolean;
-  initialPanel?: number;
-  /** Write ?p= / ?lang= / ?guided= / ?panel= back with replaceState as the reader settles (public reader). */
+  /** Write ?p= / ?lang= with replaceState as the public reader settles. */
   syncUrl?: boolean;
   /** A page image failed to load or its signed link expired (the host re-signs). */
   onImageError?(): void;
@@ -176,8 +171,6 @@ export const nearestPalette = (views: BookView[], view: number, paletteOf: (item
 };
 
 const HUD_IDLE_MS = 2500;
-const words = (t: string) => (t.match(/\S+/g) || []).length;
-const readMs = (text: string, wpm: number) => Math.max(650, Math.round((words(text) * 60_000) / wpm));
 
 /** What a finished PDF says: what came out, what was left out, and the export's own notice (fonts…). */
 export const pdfDownloadNote = (res: Pick<PdfExportResult, 'pages' | 'failed' | 'skipped' | 'notice'>): string => {
@@ -277,8 +270,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     return { start: r[0].right, end: r[1].left };
   }, [decision.perSegment, ff.segments]);
 
-  // ── Views per layout (guided reads one page at a time) ───────────────────
-  // Views and guided stops are memoized per input set (stable identities keep the stage calm).
+  // Views are memoized per layout so the stage can preserve the current page on resize.
   const viewsCache = useMemo(() => new Map<string, BookView[]>(), [items, firstPageRight]);
   const viewsFor = useCallback(
     (layout: ReaderLayout): BookView[] => {
@@ -292,30 +284,16 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     },
     [viewsCache, items, firstPageRight]
   );
-  const stopsCache = useMemo(() => new Map<number, GuidedStop[]>(), [localized, items, eff.guidedOverview]);
-  const stopsFor = useCallback(
-    (layout: ReaderLayout, view: number): GuidedStop[] => {
-      const first = viewsFor(layout)[view]?.items[0];
-      if (first === undefined) return [];
-      let s = stopsCache.get(first);
-      if (!s) {
-        s = guidedStops(localized, items[first], first, { overview: eff.guidedOverview });
-        stopsCache.set(first, s);
-      }
-      return s;
-    },
-    [viewsFor, stopsCache, localized, items, eff.guidedOverview]
-  );
   const ctxFor = useCallback(
-    (layout: ReaderLayout): MachineCtx => ({ views: viewsFor(layout).length, stopsOf: (v) => stopsFor(layout, v).length, overview: eff.guidedOverview }),
-    [viewsFor, stopsFor, eff.guidedOverview]
+    (layout: ReaderLayout): MachineCtx => ({ views: viewsFor(layout).length }),
+    [viewsFor]
   );
   const ctxRef = useRef(ctxFor);
   ctxRef.current = ctxFor;
 
   // ── Machine ───────────────────────────────────────────────────────────────
   const initial = useMemo(() => {
-    const layout0: ReaderLayout = props.initialGuided && decision.layout !== 'scroll' ? 'single' : decision.layout;
+    const layout0 = decision.layout;
     const vs = bookViews(items, layout0 === 'spread' ? 'spread' : 'single', { endCard: true, firstPageRight });
     let view = 0;
     let note: string | undefined;
@@ -324,7 +302,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       view = viewIndexOfItem(vs, r.index);
       if (!r.exact && props.initialPage !== 'cover' && items.length) note = `Page ${props.initialPage} isn’t drawn yet — showing ${r.shownN ? `page ${r.shownN}` : 'the cover'}.`;
     }
-    const playIntro = props.intro && props.initialPage === undefined && !props.initialGuided && !introPlayed(doc.id) && items[0]?.kind === 'cover';
+    const playIntro = props.intro && props.initialPage === undefined && !introPlayed(doc.id) && items[0]?.kind === 'cover';
     return { layout0, view, note, playIntro };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -373,18 +351,16 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     (e: ReaderEvent) => {
       // Any turn tucks the HUD away on touch screens (it comes back with a centre tap).
       if ((e.type === 'STEP' || e.type === 'DRAG_START' || e.type === 'GOTO') && ff.coarse) dispatchRaw({ type: 'HUD', show: false });
-      if (e.type !== 'PLAY' && e.type !== 'TURN_DONE' && e.type !== 'HUD' && state.guided.playing && (e.type === 'STEP' || e.type === 'GOTO' || e.type === 'DRAG_START' || e.type === 'ZOOM')) dispatchRaw({ type: 'PLAY', on: false });
       dispatchRaw(e);
     },
-    [ff.coarse, state.guided.playing]
+    [ff.coarse]
   );
 
   // ── Sync flags into the machine ───────────────────────────────────────────
   useEffect(() => dispatchRaw({ type: 'REDUCED', on: reduced }), [reduced]);
   useEffect(() => dispatchRaw({ type: 'LOW_POWER', on: low.lowPower }), [low.lowPower]);
 
-  // Layout follows the room (rotation, resize, explicit choice) and Guided View (one page at a time).
-  const effectiveLayout: ReaderLayout = state.guided.on && decision.layout !== 'scroll' ? 'single' : decision.layout;
+  const effectiveLayout = decision.layout;
   const prevLayout = useRef<{ layout: ReaderLayout; views: BookView[] }>({ layout: state.layout, views });
   useLayoutEffect(() => {
     const prev = prevLayout.current;
@@ -489,53 +465,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // ── Guided ────────────────────────────────────────────────────────────────
-  const stops = useMemo(() => (state.guided.on ? stopsFor(state.layout, view) : []), [state.guided.on, stopsFor, state.layout, view]);
-  const stopsOfView = useCallback((v: number) => stopsFor(state.layout, v), [stopsFor, state.layout]);
-  const guidedAvailable = items.some((i) => (i.page?.panels.length ?? 0) > 0);
-  const toggleGuided = useCallback(
-    (on = !state.guided.on, at?: { item: number; stop: number }) => {
-      if (!on) {
-        dispatch({ type: 'GUIDED', on: false });
-        return;
-      }
-      const target: ReaderLayout = decision.layout === 'scroll' ? 'scroll' : 'single';
-      const item = at?.item ?? firstItemOfView(views, view);
-      const vs = viewsFor(target);
-      const v = viewIndexOfItem(vs, item);
-      if (target !== state.layout) dispatchRaw({ type: 'LAYOUT', layout: target, view: v });
-      dispatch({ type: 'GUIDED', on: true, at: { view: v, stop: at?.stop ?? 0 } });
-    },
-    [state.guided.on, state.layout, decision.layout, views, view, viewsFor, dispatch]
-  );
-  // Deep link: ?guided=1&panel=K.
-  useEffect(() => {
-    if (!props.initialGuided || !guidedAvailable) return;
-    const item = firstItemOfView(views, view);
-    const st = stopsFor(decision.layout === 'scroll' ? 'scroll' : 'single', viewIndexOfItem(viewsFor('single'), item));
-    const panelIdx = props.initialPanel ? st.findIndex((s) => s.panelIndex >= 0 && st.filter((x) => x.panelIndex >= 0).indexOf(s) === props.initialPanel! - 1) : 0;
-    toggleGuided(true, { item, stop: Math.max(0, panelIdx) });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Autoplay: hold each stop long enough to read it, then move on. Any other input pauses.
-  useEffect(() => {
-    if (!state.guided.on || !state.guided.playing || state.motion.kind !== 'idle') return;
-    const st = stops[state.guided.stop];
-    const item = st ? items[st.itemIndex] : undefined;
-    let ms = 2600;
-    if (st && item?.page && st.panelIndex >= 0) {
-      const lines = item.page.panels[st.panelIndex]?.lines ?? [];
-      ms = Math.min(7500, Math.max(1800, 450 + lines.reduce((a, l) => a + (l.text.trim() ? readMs(l.text, prefs.wpm) : 0), 0) + 500));
-    } else if (item?.page) ms = 1300;
-    if (view >= views.length - 1) {
-      dispatchRaw({ type: 'PLAY', on: false });
-      return;
-    }
-    const t = setTimeout(() => dispatchRaw({ type: 'PANEL', delta: 1 }), ms);
-    return () => clearTimeout(t);
-  }, [state.guided.on, state.guided.playing, state.guided.stop, state.motion.kind, view, views.length, stops, items, prefs.wpm]);
-
   // ── Commands (keys, taps, wheel, HUD) ─────────────────────────────────────
   const webtoonRef = useRef<WebtoonStageHandle>(null);
   const onCommand = useCallback(
@@ -543,30 +472,22 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       switch (cmd.type) {
         case 'step':
           if (state.phase === 'intro') dispatch({ type: 'STEP', delta: cmd.delta });
-          else if (state.layout === 'scroll' && !state.guided.on) webtoonRef.current?.scrollByViewport(cmd.delta * 0.85);
+          else if (state.layout === 'scroll') webtoonRef.current?.scrollByViewport(cmd.delta * 0.85);
           else dispatch({ type: 'STEP', delta: cmd.delta });
           break;
         case 'home':
-          if (state.guided.on) dispatch({ type: 'STOP', stop: 0 });
-          else if (state.layout === 'scroll') webtoonRef.current?.toTop();
+          if (state.layout === 'scroll') webtoonRef.current?.toTop();
           else dispatch({ type: 'GOTO', view: 0 });
           break;
         case 'end':
-          if (state.guided.on) dispatch({ type: 'STOP', stop: Math.max(0, stops.length - 1) });
-          else if (state.layout === 'scroll') webtoonRef.current?.toBottom();
+          if (state.layout === 'scroll') webtoonRef.current?.toBottom();
           else dispatch({ type: 'GOTO', view: views.length - 1 });
           break;
         case 'scroll':
           webtoonRef.current?.scrollByViewport(cmd.amount);
           break;
-        case 'guided':
-          if (guidedAvailable) toggleGuided();
-          break;
         case 'fullscreen':
           void immersive.toggleFullscreen();
-          break;
-        case 'play':
-          if (guidedAvailable) dispatch({ type: 'PLAY', on: !state.guided.playing });
           break;
         case 'shortcuts':
           setShortcutsOpen((o) => !o);
@@ -585,7 +506,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           break;
       }
     },
-    [state, stops.length, views.length, guidedAvailable, toggleGuided, immersive, shortcutsOpen, settingsOpen, pokeHud, dispatch]
+    [state, views.length, immersive, shortcutsOpen, settingsOpen, pokeHud, dispatch]
   );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -658,35 +579,22 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     if (state.motion.kind !== 'idle' || state.phase === 'intro') return;
     const chap = firstItem !== undefined ? chapterOf(items, firstItem) : undefined;
     const chapterStart = chap && firstItem === chap.startIndex ? ` Chapter: ${chap.title}.` : '';
-    if (!state.guided.on) setAnnounce(isEnd && !current?.items.length ? 'The End.' : `${counter}.${chapterStart}`);
+    setAnnounce(isEnd && !current?.items.length ? 'The End.' : `${counter}.${chapterStart}`);
     const n = pageNOfView(views, items, view);
     props.onPageChange?.(n);
-    if (firstItem !== undefined && items[firstItem]) writePosition(doc.id, { key: items[firstItem].key, at: Date.now(), ...(state.guided.on ? { panel: state.guided.stop } : {}) });
+    if (firstItem !== undefined && items[firstItem]) writePosition(doc.id, { key: items[firstItem].key, at: Date.now() });
     if (props.syncUrl) {
-      const panelOrdinal = state.guided.on ? stops.slice(0, state.guided.stop + 1).filter((s) => s.panelIndex >= 0).length : 0;
       // ?lang= only for an edition other than the comic's own language — like the inline reader, the
       // language switch (syncLangToUrl) and the canonical share links (publish-share-reader-08).
       const lang = language?.current && !sameLanguage(language.current, doc.format.language) ? language.current : undefined;
-      urlSync.schedule({ p: n, lang, guided: state.guided.on, panel: panelOrdinal || undefined });
+      urlSync.schedule({ p: n, lang });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, state.motion.kind, state.guided.on, state.guided.stop, state.phase, language?.current]);
-
-  // Guided announcements: "Panel 2 of 5" + that panel's words.
-  useEffect(() => {
-    if (!state.guided.on || state.motion.kind !== 'idle') return;
-    const st = stops[state.guided.stop];
-    const item = st ? items[st.itemIndex] : undefined;
-    const panels = stops.filter((s) => s.panelIndex >= 0);
-    if (st && item?.page && st.panelIndex >= 0) {
-      const ordinal = panels.indexOf(st) + 1;
-      setAnnounce(`Panel ${ordinal} of ${panels.length}. ${panelTranscript(localized, item.page, st.panelIndex, ordinal)}`);
-    } else if (item) setAnnounce(`${item.label}. Whole page.`);
-  }, [state.guided.on, state.guided.stop, state.motion.kind, stops, items, localized]);
+  }, [view, state.motion.kind, state.phase, language?.current]);
 
   // Resume chip: offered, never automatic.
   const [resume, setResume] = useState<{ view: number; label: string } | null>(() => {
-    if (props.initialPage !== undefined || props.initialGuided) return null;
+    if (props.initialPage !== undefined) return null;
     const pos = readPosition(doc.id);
     const idx = pos ? items.findIndex((i) => i.key === pos.key) : -1;
     if (!pos || idx < 0 || !shouldOfferResume(pos, idx, Date.now())) return null;
@@ -850,9 +758,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const title = localized.cover.title || localized.brief.title || 'Untitled comic';
   const visibleItems = current?.items ?? [];
   const transcript = visibleItems.map((i) => ({ key: items[i]?.key ?? String(i), paras: pageTranscript(localized, items[i]) }));
-  const guidedPanels = stops.filter((s) => s.panelIndex >= 0);
-  const curStop = stops[state.guided.stop];
-  const guidedLabel = curStop && curStop.panelIndex >= 0 ? `Panel ${guidedPanels.indexOf(curStop) + 1} of ${guidedPanels.length}` : 'Whole page';
   const endCardNode = (
     <EndCard
       doc={localized}
@@ -862,7 +767,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       language={language}
       dense={ff.widthClass === 'compact'}
       onReadAgain={() => dispatch({ type: 'GOTO', view: 0 })}
-      onGuidedReplay={guidedAvailable ? () => toggleGuided(true, { item: items.findIndex((i) => i.kind === 'page'), stop: 0 }) : undefined}
       onShare={share}
       onDownload={download}
       downloadBusy={downloading}
@@ -881,7 +785,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       data-testid="immersive-reader"
       data-layout={state.layout}
       data-phase={state.phase}
-      data-guided={state.guided.on ? 'true' : 'false'}
       // Portaled to <body>, so the reader carries the Atlas skin attribute itself: its chrome (HUD,
       // sheets, end card) follows the skin while the room stays a content surface (--ds-reader-*).
       data-ds-skin={COMIC_STUDIO_SKIN}
@@ -934,10 +837,9 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
             reduced={reduced}
             gapless={kind === 'webtoon'}
             endCard={endCardNode}
-            guided={{ on: state.guided.on, itemIndex: firstItem ?? 0, stop: curStop }}
             onScrollDirection={(d) => (d === 'down' ? dispatchRaw({ type: 'HUD', show: false }) : pokeHud(true))}
             onVisibleItem={(i) => {
-              if (!state.guided.on && i !== firstItem) dispatchRaw({ type: 'GOTO', view: viewIndexOfItem(views, i) });
+              if (i !== firstItem) dispatchRaw({ type: 'GOTO', view: viewIndexOfItem(views, i) });
             }}
             onProgress={() => undefined}
             onTapCenter={() => onCommand({ type: 'hud' })}
@@ -965,23 +867,9 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
               dedication={creator.dedication}
               endCard={endCardNode}
               hinge={hinge}
-              stopsOf={stopsOfView}
-              balloonPop={prefs.balloonPop && !reduced}
               sound={prefs.sound}
               peel={ff.hover && !ff.coarse && !reduced}
               onCommand={onCommand}
-              onDoubleTap={(v, point, tapped) => {
-                if (!guidedAvailable) return;
-                if (state.guided.on) {
-                  toggleGuided(false);
-                  return;
-                }
-                // The page under the finger (the right-hand page of a spread is not the view's first item).
-                const item = tapped ?? firstItemOfView(views, v);
-                const vs = viewsFor('single');
-                const st = stopsFor('single', viewIndexOfItem(vs, item));
-                toggleGuided(true, { item, stop: stopAtPoint(st, point) });
-              }}
               onFrames={(deltas) => low.reportFrames(deltas)}
               onImageError={props.onImageError}
               onExpired={props.onImageError}
@@ -1027,11 +915,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           chapter={chapter?.title}
           compact={ff.widthClass === 'compact'}
           language={language}
-          guided={{ on: state.guided.on, playing: state.guided.playing, available: guidedAvailable, label: guidedLabel }}
-          onGuided={() => toggleGuided()}
-          onPlay={() => dispatch({ type: 'PLAY', on: !state.guided.playing })}
-          onPanel={(d) => dispatch({ type: 'PANEL', delta: d })}
-          layout={{ effective: state.layout, allowSpread: decision.allowSpread, show: kind !== 'webtoon' && kind !== 'strip' && !state.guided.on }}
+          layout={{ effective: state.layout, allowSpread: decision.allowSpread, show: kind !== 'webtoon' && kind !== 'strip' }}
           onLayout={onLayout}
           onSettings={() => setSettingsOpen((o) => !o)}
           settingsOpen={settingsOpen}
@@ -1041,7 +925,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           onShare={share}
           onDownload={download}
           downloadBusy={downloading}
-          rtl={rtl}
           onFocusWithin={() => pokeHud(true)}
           scrubber={
             state.layout === 'scroll' ? null : (
@@ -1091,18 +974,6 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
             {toast}
           </p>
         </div>
-      )}
-
-      {/* Guided View hint for small panels on phones (shown once per open, never the default). */}
-      {guidedAvailable && !state.guided.on && ff.widthClass === 'compact' && state.phase === 'reading' && state.hud && view === 1 && (
-        <button
-          type="button"
-          data-no-turn
-          onClick={() => toggleGuided(true)}
-          className="press absolute left-1/2 top-[calc(var(--sa-top)+68px)] z-[44] inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-[var(--ds-reader-panel)] px-4 text-[13px] font-medium shadow-lg backdrop-blur-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]"
-        >
-          <ScanEye className="h-4 w-4" aria-hidden /> Read panel by panel
-        </button>
       )}
 
       {/* Screen readers: the page's words in reading order, and what changed. */}

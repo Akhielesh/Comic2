@@ -2213,7 +2213,7 @@ export interface TurnToolset {
  * top left" and "swap the order of these two lines" lost the whole lettering group before `line`, `dialogue`, `said`
  * and the position words were here (spot-check 5).
  */
-const LETTERING_WORDS = String.raw`fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|italics?|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?|lines?|dialogues?|said|says|speech|speaks?|narrat\w*`;
+const LETTERING_WORDS = String.raw`fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|italics?|colou?rs?|shouts?|whispers?|thoughts?|sfx|sound[- ]effects?|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?|lines?|dialogues?|said|says|speech|speaks?|narrat\w*`;
 /**
  * A page is the OBJECT of the sentence ("move the second page to the top", "duplicate the top page", "delete the page at
  * the bottom"): a page action, where top / bottom / corner are about the book, not a balloon. A page named as a frame

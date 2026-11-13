@@ -58,7 +58,7 @@ describe('sanitizeReaderPatch', () => {
   });
 
   it('explains instead of silently dropping the rejected alias guidedDefault', () => {
-    rejects(() => sanitizeReaderPatch({ guidedDefault: true }), /never the default/);
+    rejects(() => sanitizeReaderPatch({ guidedDefault: true }), /Guided View has been removed/);
   });
 
   it('strips control and bidi-override characters from text', () => {

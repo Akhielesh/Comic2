@@ -677,14 +677,15 @@ describe('letterPage → board, findings, panelize (through their stubs)', () =>
 });
 
 describe('edit_page → raster.pasteRegion; render_pages.followFrames → a guide from the frames', () => {
-  it('a region edit goes through pasteRegion; the stub stores the whole edited image (today); a real paste is stored', async () => {
+  it('sends a circular mask to the compositor and stores the pasted output', async () => {
     const doc = drawnDoc();
     doc.settings = { ...doc.settings, confirm: 'never' };
     const session = newSession(doc);
     const ctx = testContext(session);
     const region = { x: 0.1, y: 0.1, w: 0.3, h: 0.3 };
-    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', instruction: 'Add a lantern', region }, { confirmed: true })).done;
-    expect(vi.mocked(pasteRegion)).toHaveBeenCalledWith(expect.objectContaining({ region, feather: 0.02, drawn: TINY_PNG }));
+    vi.mocked(pasteRegion).mockResolvedValueOnce({ dataUrl: TINY_PNG, pasted: true });
+    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', instruction: 'Add a lantern', region, regionShape: 'ellipse' }, { confirmed: true })).done;
+    expect(vi.mocked(pasteRegion)).toHaveBeenCalledWith(expect.objectContaining({ region, shape: 'ellipse', feather: 0.02, drawn: TINY_PNG }));
     const first = findPage(session.doc, 'pg_1')!.render;
     expect(first).toMatchObject({ origin: 'edit', parentPath: own('p1') });
     expect(ctx.assetsFake.files.get(first.asset!.path)).toBe(TINY_PNG);

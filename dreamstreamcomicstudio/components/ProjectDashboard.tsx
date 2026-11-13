@@ -9,6 +9,7 @@ import { DataRescue } from './DataRescue';
 import { ReadinessChecklist } from './ReadinessChecklist';
 import { getFluxKeyInfo } from '../services/appSettings';
 import { SmartImage } from './common/SmartImage';
+import { LoadingState } from './ds/LoadingState';
 import { streamStudio } from './comicstudio/studioApi';
 import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../services/studioDeepLink';
 
@@ -491,24 +492,24 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
               return (
                 <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
-                  <div className="aspect-video bg-slate-100 border-b-4 border-black relative overflow-hidden">
+                  <div className="aspect-video bg-neutral-100 border-b-4 border-black relative overflow-hidden">
                     {primaryPreview ? (
                       <SmartImage
                         src={primaryPreview}
                         fallbackSources={fallbackPreviews}
                         alt={`${project.name} cover`}
 	                        className={`w-full h-full object-cover ${isStudio ? 'object-top' : ''} ${!hasCoverPreview && !hasPanelPreview && !hasPageStudioPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
-                        loadingComponent={<div className="w-full h-full flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-brand-blue border-t-transparent rounded-full animate-spin"></div></div>}
-                        fallbackIcon={<div className="font-display text-4xl text-brand-blue/30">?</div>}
+                        loadingComponent={<LoadingState variant="inline" title="Loading cover…" className="h-full w-full justify-center bg-[var(--ds-canvas)]" />}
+                        fallbackIcon={<BookOpen className="size-8 text-neutral-500" aria-hidden />}
                         containerClassName="w-full h-full"
                       />
                     ) : isStudio ? (
-                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-slate-50 text-slate-400 ${CARD_COVER_TOUCH}`}>
+                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-neutral-50 text-neutral-600 ${CARD_COVER_TOUCH}`}>
                         <MessageSquare className="h-9 w-9" aria-hidden />
                         <span className="text-xs font-bold">Nothing drawn yet</span>
                       </div>
                     ) : (
-                      <div className={`w-full h-full flex items-center justify-center bg-brand-blue/10 text-brand-blue/50 font-display text-6xl ${CARD_COVER_TOUCH}`}>?</div>
+                      <div className={`w-full h-full flex items-center justify-center bg-neutral-100 text-neutral-500 ${CARD_COVER_TOUCH}`}><BookOpen className="size-9" aria-hidden /></div>
                     )}
 
                     {isStudio && (
