@@ -85,6 +85,8 @@ export interface ConversationPaneProps {
    * of the line plus a "N pages rendering · View" pill).
    */
   onViewActivity?: () => void;
+  initialIdea?: { id: string; text: string };
+  onInitialIdeaConsumed?: (id: string) => void;
 }
 
 /** Messages before the last few skip offscreen rendering (`content-visibility: auto`). */
@@ -96,7 +98,7 @@ const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null) => {
   else (ref as React.MutableRefObject<T | null>).current = value;
 };
 
-export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity }) => {
+export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity, initialIdea, onInitialIdeaConsumed }) => {
   const { doc, drafts, pendingMessage, messageBusy } = studio;
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -323,7 +325,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
           <ActivityLine studio={studio} className="mb-0.5" onView={onViewActivity} />
           <QueuedMessages studio={studio} className="mb-1.5" />
           {aboveComposer}
-          <StudioComposer studio={studio} apiRef={setComposer} />
+          <StudioComposer studio={studio} apiRef={setComposer} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />
         </div>
       </div>
     </section>
