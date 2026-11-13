@@ -47,7 +47,6 @@ describe('BoardPane', () => {
   it.each<[BoardTab, RegExp | string]>([
     ['story', 'Notes the comic follows'],
     ['cast', /Cast · 3/],
-    ['style', 'Your style'],
     ['pages', 'Plan draft — review the scripts, then render'],
     // The Read tab's own toolbar (the inline reader's counter text belongs to ComicReaderView).
     ['read', 'Read full screen']
@@ -55,6 +54,15 @@ describe('BoardPane', () => {
     render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab })} />);
     const panel = screen.getByRole('tabpanel');
     expect(within(panel).getAllByText(marker).length).toBeGreaterThan(0);
+  });
+
+  it('renders the style tab with current style and look selection', () => {
+    render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'style' })} />);
+    const workspace = screen.getByRole('tabpanel', { name: /^Style/ });
+    expect(within(workspace).getByRole('heading', { name: 'Your style', exact: true })).toBeInTheDocument();
+    expect(within(workspace).getByRole('tab', { name: 'Current style' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(within(workspace).getByRole('tab', { name: 'Choose a look' }));
+    expect(within(workspace).getByRole('heading', { name: 'Quick presets' })).toBeInTheDocument();
   });
 
   it('answers an open spend gate right on the board', () => {
