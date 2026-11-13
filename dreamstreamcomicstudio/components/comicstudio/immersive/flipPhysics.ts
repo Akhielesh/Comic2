@@ -16,7 +16,7 @@ export const COVER_SPRING: Spring = { stiffness: 140, damping: 22, mass: 1.4 };
 /**
  * Auto-turn durations (ms): the TS defaults of the reader motion tokens (readerDesigns.css, readerTokens.ts).
  * The engine's `durationFor` and the riffle read these (or the computed CSS values), so there is one source
- * of truth. Fade is the DS entrance (--ds-motion-enter, 280 ms) everywhere.
+ * of truth. Fade is 280 ms everywhere (readerDesigns.css spells it: the skin's 200 ms entrance does not shorten a turn).
  */
 export const TURN_MS = { single: 560, spread: 680, board: 820, slide: 420, fade: 280, riffleLeaf: 180, riffleStagger: 70 } as const;
 /** A queued turn chained onto a running one plays faster. */

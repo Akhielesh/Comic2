@@ -1251,7 +1251,7 @@ html:root[data-ds-colour="off"] .ds-art-scope {
   --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 6%, transparent);  /* bg-destructive/[0.06] */
   --ds-toast-edge: color-mix(in srgb, var(--ds-hairline) 70%, transparent);           /* toast: border-border/70 */
   --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);                      /* --motion-ease-enter */
-  --ds-motion-enter: 280ms;                                            /* --motion-enter-quick */
+  --ds-motion-enter: 200ms;                                            /* --motion-enter-quick */
   --ds-motion-exit: 160ms;                                             /* --motion-exit */
   /* Chrome type scale. Atlas's body is 14 px (--text-sm) and its large step 16 px; the 11 and
      13 px steps have no Atlas equivalent and stay (Atlas uses 11 px for its own micro labels). */
@@ -1266,13 +1266,14 @@ html:root[data-ds-colour="off"] .ds-art-scope {
   --ds-text-4xl: 2.25rem;               /* --text-4xl */
   --ds-text-5xl: 3rem;                  /* --text-5xl */
   --ds-text-7xl: 4.5rem;                /* --text-7xl */
-  /* DS-1a. Motion: Atlas's --motion-enter-quick (an alias of the 280 ms entrance, restated so it follows
-     this block), --motion-enter (420 ms) and --motion-stagger-step. The danger label: white on Atlas's
+  /* Motion: Atlas's --motion-enter-quick (an alias of the 200 ms entrance, restated so it follows
+     this block), --motion-enter (240 ms) and --motion-stagger-step (24 ms): the Atlas design branch keeps
+     every entrance within 150-250 ms (outside the skin they stay 280 / 420 / 40 ms). The danger label: white on Atlas's
      red in both themes. Atlas has no z or density tokens: the ladder and the row heights are restated
      with the same values so every token has a skin value (atlasSkin.test.ts). */
   --ds-motion-enter-quick: var(--ds-motion-enter);
-  --ds-motion-enter-slow: 420ms;                                       /* --motion-enter */
-  --ds-motion-stagger: 40ms;                                           /* --motion-stagger-step */
+  --ds-motion-enter-slow: 240ms;                                       /* --motion-enter */
+  --ds-motion-stagger: 24ms;                                           /* --motion-stagger-step */
   --ds-on-danger: #ffffff;                                             /* --destructive under text-white */
   --ds-z-stage: 0;
   --ds-z-chrome: 40;
@@ -1493,7 +1494,13 @@ html:root[data-ds-colour="off"] .ds-art-scope {
 /* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast
    tokens): hairlines become real edges, secondary text darkens, field edges and focus go to full
    ink. Only under the skin; Atlas's own Settings toggle (.atlas-high-contrast) has no Comic Studio
-   counterpart. ---- */
+   counterpart. The colour layer follows the Atlas design branch: the hues and status colours that fall
+   short of a firm mark are moved along their own hue (light magenta, orange, teal, sky, success and
+   warning darker; dark ultramarine and violet lighter), each mark at least 4.5:1 on the page. The light teal
+   #06847f sits just under the 0.10 chroma floor for a hue, at the most chroma sRGB has at that lightness:
+   the one exemption, pinned in atlasHighContrast.test.ts. Their soft tints, solids and status text inks are
+   declared on this same element, so they recompute from the moved colour (atlasHighContrast.test.ts);
+   the dark base block outranks the light one here, so the light moves never reach the dark theme. ---- */
 @media (prefers-contrast: more) {
   [data-ds-skin="atlas"] {
     --ds-hairline: rgba(0,0,0,0.32);
@@ -1502,6 +1509,12 @@ html:root[data-ds-colour="off"] .ds-art-scope {
     --ds-ring: #000000;
     --ds-control-border: color-mix(in srgb, var(--ds-ink) 70%, transparent);
     --ds-control-border-hover: var(--ds-ink);
+    --ds-hue-2: #cd3c8e;
+    --ds-hue-3: #ba5b03;
+    --ds-hue-4: #06847f;
+    --ds-hue-7: #006a9d;
+    --ds-success: #12873d;
+    --ds-warning: #a46a07;
   }
   .dark[data-ds-skin="atlas"],
   .dark [data-ds-skin="atlas"] {
@@ -1511,6 +1524,8 @@ html:root[data-ds-colour="off"] .ds-art-scope {
     --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
     --ds-muted: #d4d4d4;
     --ds-ring: #ffffff;
+    --ds-hue-1: #5a6dfd;
+    --ds-hue-5: #a45adb;
   }
 }
 

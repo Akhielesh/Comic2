@@ -263,6 +263,36 @@ describe('ImageDevelop waits for the art, then develops on the compositor', () =
     expect([...props(anims)].sort()).toEqual(['opacity', 'transform']);
   });
 
+  // The sheen crosses the picture while it develops and ends with it, never after: it starts one fast step in and
+  // runs for the slow step, cut to what is left of the develop. Under the skin's shorter entrances (develop 240 ms,
+  // fast 100, slow 200) the plain sum would end at 300 ms, after the picture has finished developing.
+  it.each([
+    ['outside the skin (the fallbacks, pinned to index.css)', {}, { develop: 420, delay: 120, sheen: 300 }],
+    ['under the skin (develop 240, fast 100, slow 200)', { '--ds-motion-enter-slow': '240ms', '--ds-motion-fast': '100ms', '--ds-motion-slow': '200ms' }, { develop: 240, delay: 100, sheen: 140 }],
+    // A fast step as long as the develop or longer: the sheen has no time left, and its delay is cut too.
+    ['a fast step longer than the develop (develop 240, fast 300)', { '--ds-motion-enter-slow': '240ms', '--ds-motion-fast': '300ms', '--ds-motion-slow': '200ms' }, { develop: 240, delay: 240, sheen: 0 }],
+  ] as const)('the sheen ends with the develop, never after it (%s)', async (_label, tokens, want) => {
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = real(el, pseudo);
+      const values = tokens as Record<string, string>;
+      return new Proxy(style, {
+        get(target, prop) {
+          if (prop === 'getPropertyValue') return (name: string) => values[name] ?? target.getPropertyValue(name);
+          const v = Reflect.get(target, prop, target);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+    });
+    const anims = await developFrames({ width: 320 });
+    const sheen = anims.find((a) => (a.el as HTMLElement).hasAttribute('data-develop-sheen'));
+    const develop = anims.find((a) => a.keyframes.some((k) => k.transform === 'none'));
+    expect(develop?.timing.duration).toBe(want.develop);
+    expect(sheen?.timing.delay).toBe(want.delay);
+    expect(sheen?.timing.duration).toBe(want.sheen);
+    expect(Number(sheen?.timing.delay) + Number(sheen?.timing.duration)).toBeLessThanOrEqual(Number(develop?.timing.duration));
+  });
+
   it('a picture already in memory swaps in with no develop (fromCache: a remount, a second surface)', () => {
     vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
     vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(640);

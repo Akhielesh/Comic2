@@ -1254,8 +1254,10 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
       expect(ATLAS_LIGHT.get(k), `${k} light`).toBe(ROOT_TOKENS.get(k));
       expect(ATLAS_DARK.get(k), `${k} dark`).toBe(DARK_TOKENS.get(k));
     }
-    // "Increase contrast" changes nothing in the layer: every value already clears its bar (below).
-    for (const block of [ATLAS_LIGHT_MORE, ATLAS_DARK_MORE]) expect(LAYER_TOKENS.filter((k) => block.has(k))).toEqual([]);
+    // "Increase contrast" moves only the hues that fall short of a firm mark (light magenta, orange, teal; dark
+    // ultramarine and violet: atlasHighContrast.test.ts), never the spark or the art tint, and restates nothing derived.
+    expect(LAYER_TOKENS.filter((k) => ATLAS_LIGHT_MORE.has(k))).toEqual(['--ds-hue-2', '--ds-hue-3', '--ds-hue-4']);
+    expect(LAYER_TOKENS.filter((k) => ATLAS_DARK_MORE.has(k))).toEqual(['--ds-hue-1', '--ds-hue-5']);
     // The values D7 chose: ultramarine #3d44e8 in light, #8b9bfe in dark (the logo stays terracotta: --ds-accent).
     expect(ROOT_TOKENS.get('--ds-spark')).toBe('#3d44e8');
     expect(DARK_TOKENS.get('--ds-spark')).toBe('#8b9bfe');
@@ -1435,9 +1437,11 @@ describe('token contrast — the colour layer "Ink, Paper & Colour" (CL-6) in al
   let cachedLayer: Pair[] | null = null;
   const measureLayer = () => (cachedLayer ??= pairs());
 
-  it('defines every new name in all four blocks, and "increase contrast" needs none of them', () => {
+  it('defines every new name in all four blocks, and "increase contrast" moves only the light sky (no derived token)', () => {
     for (const block of [ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK]) expect(COLOUR_TOKENS.filter((k) => !block.has(k))).toEqual([]);
-    for (const block of [ATLAS_LIGHT_MORE, ATLAS_DARK_MORE]) expect(COLOUR_TOKENS.filter((k) => block.has(k))).toEqual([]);
+    // The text steps, tints, solids, ramps and washes are derived on the skin element itself, so they follow.
+    expect(COLOUR_TOKENS.filter((k) => ATLAS_LIGHT_MORE.has(k))).toEqual(['--ds-hue-7']);
+    expect(COLOUR_TOKENS.filter((k) => ATLAS_DARK_MORE.has(k))).toEqual([]);
     expect(COLOUR_TOKENS).toHaveLength(43);
   });
 

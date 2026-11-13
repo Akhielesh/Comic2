@@ -387,7 +387,7 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
 
   it('the enter / exit vocabulary: long-tail ease-out to arrive, quicker exits', () => {
     expect(ATLAS_LIGHT.get('--ds-ease-enter')).toBe('cubic-bezier(0.16, 1, 0.3, 1)');
-    expect(ATLAS_LIGHT.get('--ds-motion-enter')).toBe('280ms');
+    expect(ATLAS_LIGHT.get('--ds-motion-enter')).toBe('200ms');
     expect(ATLAS_LIGHT.get('--ds-motion-exit')).toBe('160ms');
   });
 
@@ -422,7 +422,14 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
       '--ds-muted': '#404040',
       '--ds-ring': '#000000',
       '--ds-control-border': 'color-mix(in srgb, var(--ds-ink) 70%, transparent)',
-      '--ds-control-border-hover': 'var(--ds-ink)'
+      '--ds-control-border-hover': 'var(--ds-ink)',
+      // The colour layer's marks, moved along their own hue (atlasHighContrast.test.ts measures them).
+      '--ds-hue-2': '#cd3c8e',
+      '--ds-hue-3': '#ba5b03',
+      '--ds-hue-4': '#06847f',
+      '--ds-hue-7': '#006a9d',
+      '--ds-success': '#12873d',
+      '--ds-warning': '#a46a07'
     });
     // The dark base block (0,2,0) outranks the light high-contrast block (0,1,0), so the soft
     // hairline is restated for dark (tokenContrast.test.ts measures it strengthening in both themes).
@@ -430,7 +437,9 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
       '--ds-hairline': 'oklch(0.52 0 0)',
       '--ds-hairline-soft': 'color-mix(in srgb, var(--ds-hairline) 60%, transparent)',
       '--ds-muted': '#d4d4d4',
-      '--ds-ring': '#ffffff'
+      '--ds-ring': '#ffffff',
+      '--ds-hue-1': '#5a6dfd',
+      '--ds-hue-5': '#a45adb'
     });
     // Only under the skin: no :root or .dark block in the media query.
     expect(rules.some((r) => r.parents.includes('@media (prefers-contrast: more)') && /^(:root|\.dark)$/.test(r.selector))).toBe(false);
@@ -474,13 +483,20 @@ describe('Atlas skin — DS-1a tokens (z ladder, densities, heading steps, motio
     expect(tapMin).toBe(ROOT_TOKENS.get('--ds-density-touch'));
   });
 
-  it('motion: -enter-quick is an alias of the 280 ms entrance (the existing token keeps its name and value), -enter-slow 420 ms and -stagger 40 ms (Atlas)', () => {
-    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
-      expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
-      expect(block.get('--ds-motion-enter')).toBe('280ms');
-      expect(block.get('--ds-motion-enter-slow')).toBe('420ms');
-      expect(block.get('--ds-motion-stagger')).toBe('40ms');
+  it('motion: -enter-quick is an alias of the entrance; outside the skin 280 / 420 / 40 ms, under it Atlas’s 200 / 240 / 24 ms', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
+    expect([ROOT_TOKENS, ATLAS_LIGHT].map((b) => ['--ds-motion-enter', '--ds-motion-enter-slow', '--ds-motion-stagger'].map((k) => b.get(k)))).toEqual([
+      ['280ms', '420ms', '40ms'],
+      ['200ms', '240ms', '24ms']
+    ]);
+    // Atlas's entrance rule: 150-250 ms for every entrance under the skin.
+    for (const k of ['--ds-motion-enter', '--ds-motion-enter-slow']) {
+      const ms = parseFloat(ATLAS_LIGHT.get(k)!);
+      expect(ms, k).toBeGreaterThanOrEqual(150);
+      expect(ms, k).toBeLessThanOrEqual(250);
     }
+    // Theme-invariant: the dark block restates none of them.
+    for (const k of ['--ds-motion-enter', '--ds-motion-enter-quick', '--ds-motion-enter-slow', '--ds-motion-stagger']) expect(ATLAS_DARK.has(k), k).toBe(false);
   });
 
   it('the danger label: white on the red, ink on the default dark theme’s light red (tokenContrast.test.ts measures both)', () => {

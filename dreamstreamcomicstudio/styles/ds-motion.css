@@ -4,11 +4,12 @@
  * Framework-free CSS, imported at the top of index.css: no Tailwind directive, so any page or Worker
  * bundle can take it as it is. Ported from Atlas app/globals.css ("Motion system"), atlas-* renamed to
  * ds-* and reading the --ds-* tokens:
- *   Atlas --motion-enter (420 ms)        → --ds-motion-enter-slow    page and section entrances, staggers
- *   Atlas --motion-enter-quick (280 ms)  → --ds-motion-enter-quick   fades, scale-ins, slide-ins
+ *   Atlas --motion-enter (240 ms)        → --ds-motion-enter-slow    page and section entrances, staggers
+ *   Atlas --motion-enter-quick (200 ms)  → --ds-motion-enter-quick   fades, scale-ins, slide-ins
  *   Atlas --motion-ease / -ease-enter    → --ds-ease / --ds-ease-enter
  *   Atlas --motion-spring                → --ds-ease-spring
- *   Atlas --motion-stagger-step (40 ms)  → --ds-motion-stagger
+ *   Atlas --motion-stagger-step (24 ms)  → --ds-motion-stagger
+ * (the skin's values; outside the skin the same tokens are 420 / 280 / 40 ms).
  *   Atlas --foreground / --muted-foreground / --border → --ds-ink / --ds-muted / --ds-hairline
  * The spotlight group is not here (it belongs to the header and home work).
  *

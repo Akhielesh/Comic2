@@ -45,9 +45,9 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-z-tooltip` | `100` | same | tooltips |
 | `--ds-density-compact` / `-comfortable` / `-touch` | `28px` / `36px` / `44px` | same | control row heights; touch = every control under a coarse pointer (= `--tap-min`) |
 | `--ds-text-xl` / `-2xl` / `-3xl` | `1.25rem` / `1.5rem` / `1.875rem` | same (Atlas `--text-xl…3xl`) | heading steps above the 11–16 px chrome scale |
-| `--ds-motion-enter-quick` | `var(--ds-motion-enter)` (280 ms) | same | Atlas's name for the 280 ms entrance; `--ds-motion-enter` keeps its name and value |
-| `--ds-motion-enter-slow` | `420ms` | same (Atlas `--motion-enter`) | page and section entrances |
-| `--ds-motion-stagger` | `40ms` | same (Atlas `--motion-stagger-step`) | the step between list items |
+| `--ds-motion-enter-quick` | `var(--ds-motion-enter)` (280 ms) | the same alias (200 ms) | Atlas's name for the quick entrance; `--ds-motion-enter` keeps its name |
+| `--ds-motion-enter-slow` | `420ms` | `240ms` (Atlas `--motion-enter`) | page and section entrances |
+| `--ds-motion-stagger` | `40ms` | `24ms` (Atlas `--motion-stagger-step`) | the step between list items |
 | `--ds-on-danger` | `#ffffff`; `.dark` `#1a1915` | `#ffffff` (both themes) | the label on a solid danger fill: white on the red, ink on the default dark theme's light red (white there is 2.8:1) |
 | `--ds-glass-blur` (wave 9) | `12px` | `0` | the frosted glass of GLASS, GLASS_STRONG and MENU; Atlas surfaces are opaque |
 | `--ds-header-blur` (wave 9) | `18px` | same | the sticky header's glass layer (HEADER_GLASS), the one blur Atlas keeps |
@@ -71,7 +71,8 @@ its own pill, edges and marks. `--ds-on-danger` on the danger fill and on its ho
 
 **Reader tokens (RD-A).** `components/comicstudio/immersive/readerDesigns.css` on `[data-reader-root]` is the reader's
 one motion and ink token set (not skin tokens: reserved DreamStream reader-scope names, `atlas-skin.md`), and
-`readerTokens.ts` reads it once per mount; "fade" is 280 ms everywhere. Room-side focus and progress use
+`readerTokens.ts` reads it once per mount; "fade" is 280 ms and "slide" 420 ms everywhere, spelled there rather than read
+from the entrance tokens (a page turn is reading, and the skin's entrances are shorter). Room-side focus and progress use
 `--ds-reader-hud-focus` / `--ds-reader-accent` (Night `#fafafa`, Day `#3b3026`), ≥ 3:1 on the room and the HUD glass
 (`tokenContrast.test.ts`, "the reader rooms"). The rest of the reader contract (never-blank turns, stand-ins, the
 device-sized cache, preloads) is in `docs/features/comic-reader.md`.
@@ -143,6 +144,14 @@ step.
   hues 6 and 7 take two different ink steps, and both ramps become one ordered grey ramp (the diverging poles dark and
   light, never the same grey). Hues 1 to 5 keep their colour, as before the layer. No component change.
   Turning it off or on again takes a rebuild and a redeploy (`docs/infrastructure/ENV_MATRIX.md`).
+- **Increase contrast** (the OS setting, under the skin): the marks that fall short move along their own hue, light
+  magenta, orange, teal, sky, success and warning darker (each at least 4.5:1 on the page), dark ultramarine and violet
+  lighter; the tints, solids and status inks follow, and every gate above still holds, except that the light teal sits
+  at the most chroma sRGB has for it (0.095, under the 0.10 floor; the one exemption) (`atlasHighContrast.test.ts`;
+  values in `atlas-skin.md`). With the off switch, these moves still apply to hues 1 to 5 and to success and warning,
+  which are not new; hues 6 and 7 stay the off switch's ink steps.
+- **A status colour or a ramp step is never a text colour** (`text-[var(--ds-warning)]`, `text-ds-chart-seq-3`): words
+  and the icon beside them read the `-text` inks (`statusInkGuard.test.ts`, no allowlist).
 
 **Where colour may go now** (adds to the CL-0 table below): tag chips (`hueChip`), the part of a comic you are in
 (CL-9), a comic's card (CL-8, `ART_SCOPE`), the landing's hero wash and four 56 px solid feature tiles (ink, magenta,
@@ -600,8 +609,12 @@ editor kit (Program 2, promoted to `components/ds/creative` in DS-10).
 ### Motion classes and hooks (wave 9)
 
 `styles/ds-motion.css` is Atlas's motion system, renamed `ds-*` and reading the tokens (`--ds-motion-enter-slow`
-420 ms for page and list entrances, `--ds-motion-enter-quick` 280 ms for fades and pops, `--ds-motion-stagger`
-40 ms, `--ds-ease-enter`): entrances `.ds-rise-in .ds-fade-in .ds-scale-in .ds-slide-in-right .ds-blur-in
+for page and list entrances, `--ds-motion-enter-quick` for fades and pops, `--ds-motion-stagger` between list items:
+240 / 200 / 24 ms under the skin, every entrance within Atlas's 150-250 ms, and 420 / 280 / 40 ms outside it;
+`--ds-ease-enter`; besides these classes, the cover and library image fades read `--ds-motion-enter` in script, the
+progress fill (`Progress`) glides on `--ds-motion-enter-slow`, as Atlas's own progress bar moves within that range, and
+the landing's stagger is a multiple of `--ds-motion-stagger`, so all of them change with the skin too; only the reader's
+page turns spell their own times): entrances `.ds-rise-in .ds-fade-in .ds-scale-in .ds-slide-in-right .ds-blur-in
 .ds-pop .ds-draw .ds-flash` (backwards fill, landing on `transform: none`), `.ds-stagger` (children, or
 `--ds-i` to place one), `.ds-reveal` (on the scroll timeline only, so it is visible without JavaScript),
 `.ds-disclosure` (a `<details>` whose body glides), `.ds-lift` and `.ds-link`, the loading and live loops
@@ -672,7 +685,8 @@ The rules:
   + 8 px, measured on open and on resize). From sm it hangs from the bell. It stops 1rem above the screen's bottom.
 - NavDropdown opens on hover for pointerType `'mouse'` only; touch and pen open it by tap. Both triggers are disclosures
   (no aria-haspopup).
-- Overlays enter with `ds-scale-in` (280 ms) and the tab hint with `ds-fade-in`, never the 420 ms `ds-rise-in`.
+- Overlays enter with `ds-scale-in` (the quick entrance, 200 ms under the skin) and the tab hint with `ds-fade-in`, never
+  the slower `ds-rise-in`.
 - **UserAvatar** (`components/UserAvatar.tsx`, DS-2 #6 at the S2b integration) is on the Atlas tokens: a hairline ring
   on `--ds-well`, the initial in `MUTED`, the signed-in dot on `--ds-success`. An avatar with `onClick` (CommentSection)
   is a real, named button.

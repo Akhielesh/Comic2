@@ -43,8 +43,8 @@ export interface TabBarItem<Id extends string = string> {
 /** How long the "why is this unavailable" bubble stays after a tap on a disabled item. */
 export const TAB_HINT_MS = 2600;
 /**
- * The bubble's entrance: the 280 ms overlay fade (FADE_IN, styles/ds-motion.css; still under reduced motion), not
- * the 420 ms page entrance.
+ * The bubble's entrance: the quick overlay fade (FADE_IN, --ds-motion-enter-quick; styles/ds-motion.css; still under reduced motion), not
+ * the slower page entrance.
  */
 const HINT_ENTER = FADE_IN;
 

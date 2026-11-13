@@ -24,12 +24,12 @@ glass except the sticky header's blur; modal scrims dim without blur. 12 px card
 (and chips), 4 px small; 16 px feature cards and a 28 px hero frame. IBM Plex Sans body at 14 px, semibold
 for card, sheet and empty-state titles; Space Grotesk only for display type (page and public titles,
 `.ds-font-display`). Charts are five monochrome steps of the ink. Motion is
-100 / 150 / 200 ms on `cubic-bezier(.2,.8,.2,1)`, panels 220 ms, modals 180 ms, entrances 280 ms on a
-long-tail ease-out and exits a quicker 160 ms, the theme switch one 260 ms cross-fade of the page,
+100 / 150 / 200 ms on `cubic-bezier(.2,.8,.2,1)`, panels 220 ms, modals 180 ms, entrances 200 / 240 ms (a 24 ms
+stagger step) on a long-tail ease-out and exits a quicker 160 ms, the theme switch one 260 ms cross-fade of the page,
 press feedback (scale .98 / .97), tooltips after 300 ms — all off under reduced motion. A crisp 2 px
 ink focus outline offset 2 px on every control; fields with an edge that clears 3:1; inverted-ink
 selection; thin ink-tinted scrollbars; 44 px touch targets; the OS increase-contrast setting
-strengthens hairlines, secondary text and field edges. Dark theme = the same system inverted
+strengthens hairlines, secondary text, field edges and the colour marks. Dark theme = the same system inverted
 (#0a0a0a paper, #fafafa ink). Generic icons are lucide; brand marks only from checked-in SVGs.
 
 ## Scope and mechanism
@@ -137,8 +137,16 @@ Under the OS **increase contrast** setting (`@media (prefers-contrast: more)`, w
 Atlas's high-contrast tokens: `--ds-hairline` `rgba(0,0,0,0.32)` / dark `oklch(0.52 0 0)` (the soft
 hairline 60 % of it in both themes — the dark block restates it, because the base dark block outranks
 the light high-contrast one), `--ds-muted` `#404040` / `#d4d4d4`, `--ds-ring` `#000` / `#fff`,
-`--ds-control-border` ink 70 % and its hover the full ink. (Atlas's own Settings toggle,
-`.atlas-high-contrast`, has no Comic Studio counterpart.)
+`--ds-control-border` ink 70 % and its hover the full ink. The colour layer's marks move along their
+own hue so a dot or a thin bar reads as surely as text: light `--ds-hue-2` `#cd3c8e`, `--ds-hue-3`
+`#ba5b03`, `--ds-hue-4` `#06847f`, `--ds-hue-7` `#006a9d`, `--ds-success` `#12873d`, `--ds-warning`
+`#a46a07`; dark `--ds-hue-1` `#5a6dfd`, `--ds-hue-5` `#a45adb`, the branch's values exactly. Every light mark is
+at least 4.5:1 on the page. The light teal has OKLCH chroma 0.095, just under the 0.10 floor for a hue, because sRGB
+has no more chroma at that lightness and hue; it is the one exemption from the floor, pinned to the gamut's limit.
+Their soft tints, solids and status text inks are declared on the skin element itself and recompute from the moved colour; the dark base block
+outranks the light high-contrast one, so the light moves never reach the dark theme
+(`tests/config/atlasHighContrast.test.ts`). (Atlas's own Settings toggle, `.atlas-high-contrast`, has no
+Comic Studio counterpart.)
 
 The `-text` variants are the readable status colours (≥ 4.5:1 on the page, on cards, on the soft
 glass, on overlays and their highlighted menu rows and on the tinted status surfaces, all six contexts;
@@ -174,10 +182,10 @@ comics host and the Comic Studio roots do, and the other pages read this default
 | `--ds-ease` | `--motion-ease` | `cubic-bezier(0.2, 0.8, 0.2, 1)` | `cubic-bezier(0.4, 0, 0.2, 1)` (Tailwind's default) |
 | `--ds-ease-spring` | `--motion-spring` | `cubic-bezier(0.34, 1.36, 0.64, 1)` | same |
 | `--ds-ease-enter` (wave 5) | `--motion-ease-enter` | `cubic-bezier(0.16, 1, 0.3, 1)` | same |
-| `--ds-motion-enter` / `-exit` (wave 5) | `--motion-enter-quick` / `--motion-exit` | 280 / 160 ms | same |
-| `--ds-motion-enter-quick` (DS-1a) | `--motion-enter-quick` | an alias of the 280 ms `--ds-motion-enter` | same |
-| `--ds-motion-enter-slow` (DS-1a) | `--motion-enter` (page and section entrances) | 420 ms | same |
-| `--ds-motion-stagger` (DS-1a) | `--motion-stagger-step` | 40 ms | same |
+| `--ds-motion-enter` / `-exit` | `--motion-enter-quick` / `--motion-exit` | 200 / 160 ms | 280 / 160 ms |
+| `--ds-motion-enter-quick` | `--motion-enter-quick` | an alias of the 200 ms `--ds-motion-enter` | an alias of the 280 ms `--ds-motion-enter` |
+| `--ds-motion-enter-slow` | `--motion-enter` (page and section entrances) | 240 ms | 420 ms |
+| `--ds-motion-stagger` | `--motion-stagger-step` | 24 ms | 40 ms |
 | `--ds-tooltip-delay` | `--tooltip-delay` | 300 ms | 300 ms |
 | `--ds-glass-blur` (wave 9, bridge D3) | none: Atlas surfaces are opaque | `0` | 12 px (`backdrop-blur-md`; GLASS, GLASS_STRONG, MENU) |
 | `--ds-header-blur` (wave 9, bridge D3) | the sticky header's `blur(18px)` | 18 px | 18 px (HEADER_GLASS, once content scrolls under) |
@@ -313,6 +321,23 @@ track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a
 - `--ds-overlay-hover` in light is Atlas's item highlight (`bg-accent`, `#efefef`) rather than
   `--menu-hover` (`#f2f2f2`): menus under the light skin highlight one step deeper than before.
 
+**Deliberate differences from Atlas** (the colour layer and the shell, as of the Atlas design branch at `43b2f8ec`):
+- **Diverging chart steps 4-7.** Ours are light `#d4d4d4 #aabbf5 #6a81f2 #3d44e8`, dark `#4a4a4a #404dc1 #7085ff
+  #a2b2ff`; the Atlas design branch carries `#e5e5e5 #a3b4f2 #6279f1 #322cd3` / `#3d3d3d #3d48b5 #6275fc #a2b2ff`.
+  `tests/config/chartRamps.test.ts` asks for a grey midpoint and two arms equal within 0.01 OKLab L; ours pass
+  (0.000-0.001), the branch's arms differ by up to 0.059 L in light and 0.041 in dark.
+- **Chart series order.** Charts take the hues in `CHART_HUE_ORDER` = [1, 2, 6, 7, 3, 4, 5]; the branch uses the plain
+  order 1-7. The plain order puts magenta and teal 1.1 ΔE apart under deuteranopia (`huePalette.test.ts`).
+- **Hue text steps.** Ours are measured hexes (`--ds-hue-N-text`, ≥ 4.5:1 on every surface and on the hue's own tint);
+  the branch mixes 60 % of the hue into the ink.
+- **The dark tag tint base.** Our soft tint mixes the hue into the raised step (`#1a1a1a` in dark), the branch into its
+  card (`#111111`); ink and the text steps are measured on ours.
+- **Not taken yet:** per-hue glyph colours on a solid (the branch puts dark glyphs on magenta, orange, teal and sky in
+  light; we keep one `--ds-on-hue` and icons only there); a named neutral hue and a named "Other" series token, and the
+  chart animations (grow-x / grow-y) and forced-colours chart marks, which wait for the charts work; the shell patterns
+  (the workspace frame and its wide steps, the left-dock slide-in, the floating offline pill, the skeleton loading
+  panel), which wait for the shell work.
+
 ## The transitional accent shim (Phase D0 only)
 
 Many Comic Studio files still hard-code the terracotta literal in Tailwind utilities
@@ -409,7 +434,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- The Atlas repository, its design branch, commit **`c567c621`** (checked for the S2b release on 2026-11-12). The
+- The Atlas repository, its design branch, commit **`43b2f8ec`** (2026-11-13): taken from it are the
+  high-contrast hue and status overrides, the shorter entrances under the skin (200 / 240 ms, a 24 ms step) and the
+  guard against a status colour or a chart step used as text; what differs on purpose is listed under "Deliberate
+  differences from Atlas" above. Before it, commit **`c567c621`** (checked 2026-11-12). The
   design files are byte-identical from `0677199b` through `c567c621`: the one commit after `7a6f3e16` touches none of
   them, and the 4 commits after `292b17b6` change only `lib/server`, deploy, CI and docs, nothing to port. At the S2a
   check (`292b17b6`) the 7 commits since `0677199b` changed connector,
@@ -423,7 +451,7 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
   agreed with the Atlas session from `0677199b`. Previous syncs `7a6f3e16`, `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
   `496f265c`, `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
-  `git diff c567c621 <design branch> -- app/globals.css
+  `git diff 43b2f8ec <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).

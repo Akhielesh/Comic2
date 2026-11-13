@@ -41,7 +41,7 @@ export const BELL_COUNT = 'pointer-events-none absolute -right-0.5 -top-0.5 flex
  * 1rem above the bottom of the screen and its list scrolls.
  */
 export const BELL_PANEL = `fixed inset-x-4 top-[var(--bell-top,4rem)] flex max-h-[calc(100dvh-var(--bell-top,4rem)-1rem)] flex-col overflow-hidden sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[22rem] ${OVERLAY}`;
-/** The overlay entrance (styles/ds-motion.css: 280 ms, fade and grow from 96 %; still under reduced motion). */
+/** The overlay entrance (styles/ds-motion.css: --ds-motion-enter-quick, fade and grow from 96 %; still under reduced motion). */
 export const BELL_PANEL_ENTER = SCALE_IN;
 /** The gap between the bell and the panel's top, in px (the `sm:mt-2` of the wider layout). */
 const PANEL_GAP_PX = 8;

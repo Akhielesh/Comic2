@@ -16,8 +16,10 @@
   --ds-reader-turn: 560ms;                               /* paper, one page */
   --ds-reader-turn-spread: 680ms;                        /* paper across a spread */
   --ds-reader-turn-board: 820ms;                         /* the hardcover board */
-  --ds-reader-turn-slide: var(--ds-motion-enter-slow);   /* 420 ms: strip, low power, "slide" */
-  --ds-reader-turn-fade: var(--ds-motion-enter);         /* 280 ms: "fade" (one value; was 180 vs 300) */
+  /* The slide and fade turns are the reader's own times, not the DS entrances: under the skin those are
+     200 / 240 ms, and a page turn is reading, not an entrance. */
+  --ds-reader-turn-slide: 420ms;                         /* strip, low power, "slide" */
+  --ds-reader-turn-fade: 280ms;                          /* "fade" (one value; was 180 vs 300) */
   --ds-reader-riffle-leaf: 180ms;
   --ds-reader-riffle-step: 70ms;
   --ds-reader-chain: 0.65;                               /* a chained turn plays this much faster */
