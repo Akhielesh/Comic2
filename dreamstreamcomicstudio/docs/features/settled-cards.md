@@ -228,8 +228,9 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
 
 ### 8.1 Who sees it
 
-- **Settled rows are behind `SETTLED_CARDS`** (`'admins'` in S2): `ConversationPane` builds the settle index only when
-  `settledCardsOn(studio.caps.admin)`. Everyone else sees today's live cards, unchanged.
+- **Settled rows are behind `SETTLED_CARDS`** (`'all'` since R00; `'admins'` in S2 and S2b): `ConversationPane` builds
+  the settle index only when `settledCardsOn(studio.caps.admin)`, which is now true for every viewer. With `'off'` every
+  card is live again (`settledCards.off.test.tsx`).
 - **For everyone** (they change no card, only how the conversation is drawn and when the queue waits):
   - the fresh-only entrance (MO-2, bug B24) and the memoised rows (PF-7a, perf F9);
   - A1's queue no longer waits on a question the creator moved past (§8.6);
