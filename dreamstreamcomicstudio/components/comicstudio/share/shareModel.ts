@@ -105,9 +105,12 @@ export function readyOffLink(view: PublicationOwnerView | null | undefined, doc:
     .slice(0, Math.max(0, MAX_LINK_LANGUAGES - onLink.length));
 }
 
-/** Languages in words, as their chips name them: "हिन्दी", "हिन्दी and తెలుగు", then a count ("3 languages"). */
+/** Each language's own name, as its chip names it ("हिन्दी"); a code the app does not know stays as it is. */
+export const languageEndonyms = (langs: readonly string[]): string[] => langs.map((l) => languageSpec(l)?.endonym || l);
+
+/** Languages in words, short enough for a button: "हिन्दी", "हिन्दी and తెలుగు", then a count ("3 languages"). */
 export function languageNames(langs: readonly string[]): string {
-  const names = langs.map((l) => languageSpec(l)?.endonym || l);
+  const names = languageEndonyms(langs);
   return names.length <= 2 ? names.join(' and ') : `${names.length} languages`;
 }
 

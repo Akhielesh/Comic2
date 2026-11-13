@@ -64,6 +64,9 @@ const ADMIN = { ...DEFAULT_CAPS, admin: true };
 const studioFor = (doc: ComicDoc, publication: PublicationOwnerView | null, admin = true) => makeFakeStudio({ doc, publication, caps: admin ? ADMIN : DEFAULT_CAPS });
 
 /** The sheet's markup with React's generated ids taken out (they differ between two mounts of the same tree). */
+/** A paragraph by its whole text (language names sit in <bdi> elements, so the text spans several nodes). */
+const paragraph = (text: string) => screen.getByText((_, el) => el?.tagName === 'P' && el.textContent === text);
+
 const markup = () => document.querySelector('[data-share-layout]')!.outerHTML.replace(/(id|for|aria-describedby|aria-labelledby)="[^"]*"/g, '$1=""');
 
 beforeEach(() => {
@@ -130,7 +133,7 @@ describe('ShareSheet: a finished language reaches the live link in one tap (AH-2
     expect(screen.getByText(/changes since publishing/)).toBeInTheDocument();
     const plain = screen.getByRole('button', { name: 'Update' });
     expect(plain).toHaveAccessibleDescription('Readers still get English only');
-    expect(screen.getByText('Readers still get English only')).toBeVisible();
+    expect(paragraph('Readers still get English only')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Update with हिन्दी' }));
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.publishComic).mock.calls[0]).toEqual([studio.doc!.id, { visibility: 'unlisted', languages: ['en', 'hi'] }]);
@@ -163,6 +166,29 @@ describe('ShareSheet: a finished language reaches the live link in one tap (AH-2
     fireEvent.click(within(row).getByRole('button', { name: 'Add हिन्दी and తెలుగు to the link' }));
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.publishComic).mock.calls[0][1]).toEqual({ visibility: 'unlisted', languages: ['en', 'ta', 'hi', 'te'] });
+  });
+
+  it('a right-to-left name sits in its own <bdi>, so it never reorders the words around it', () => {
+    const UR: LangRow = { lang: 'ur', publishable: true, blocking: [], requested: false };
+    render(<ShareSheet studio={studioFor(docWith(['hi', 'ur']), liveView([EN, HI_READY, UR]))} open onClose={vi.fn()} />);
+    const row = screen.getByRole('group', { name: 'Languages ready for your link' });
+    expect(row).toHaveTextContent('हिन्दी and اردو are ready. Readers of your link still get English only.');
+    const isolated = [...row.querySelectorAll('bdi')].map((b) => b.textContent);
+    expect(isolated).toEqual(expect.arrayContaining(['اردو', 'हिन्दी', 'English']));
+    expect(within(row).getByRole('button', { name: 'Add हिन्दी and اردو to the link' }).querySelectorAll('bdi')).toHaveLength(2);
+  });
+
+  it('three or more: the button keeps a count, and the names it will add are said beside it (and describe it)', () => {
+    const TA: LangRow = { lang: 'ta', publishable: true, blocking: [], requested: false };
+    const { unmount } = render(<ShareSheet studio={studioFor(docWith(['hi', 'te', 'ta']), liveView([EN, HI_READY, TE_READY, TA]))} open onClose={vi.fn()} />);
+    const row = screen.getByRole('group', { name: 'Languages ready for your link' });
+    expect(row).toHaveTextContent('हिन्दी, తెలుగు and தமிழ் are ready.');
+    const add = within(row).getByRole('button', { name: 'Add 3 languages to the link' });
+    expect(add).toHaveAccessibleDescription(/हिन्दी, తెలుగు and தமிழ் are ready/);
+    unmount();
+    render(<ShareSheet studio={studioFor(docWith(['hi', 'te', 'ta']), liveView([EN, HI_READY, TE_READY, TA], { behind: true }))} open onClose={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Update with 3 languages' })).toHaveAccessibleDescription('हिन्दी, తెలుగు and தமிழ் are ready.');
+    expect(paragraph('हिन्दी, తెలుగు and தமிழ் are ready.')).toBeVisible();
   });
 
   it('offers nothing for a translation that is not finished, one already on the link, or a comic that is not live', () => {

@@ -25,7 +25,7 @@ import { CheckFailed, PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
-import { comicTitle, editionOnLinkOn, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, languageNames, LIBRARY_HREF, pageIdsFor, readyOffLink, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
+import { comicTitle, editionOnLinkOn, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, languageEndonyms, languageNames, LIBRARY_HREF, pageIdsFor, readyOffLink, shareLinkFor, statusLine, VISIBILITY_HINT } from './shareModel';
 import { ChangesSincePublishLink } from '../history/ChangesSincePublishLink';
 
 export interface ShareSheetProps {
@@ -60,6 +60,25 @@ type Confirm = null | 'unpublish' | 'regenerate' | 'public';
 const ADD_LANGUAGE_BTN = cx('min-h-[44px] px-3 font-semibold disabled:opacity-50 touch-manipulation', ACCENT_BG, ACCENT_BG_HOVER, ON_ACCENT_TEXT, RADIUS_CONTROL, FOCUS_RING);
 const PLAIN_UPDATE_BTN = cx('min-h-[44px] px-3 font-semibold text-[var(--ds-ink)] disabled:opacity-50 touch-manipulation', CONTROL_BTN, FOCUS_RING);
 
+/**
+ * Language names in a line, each in its own <bdi> so a right-to-left name (اردو, العربية) never reorders the words and
+ * punctuation around it. `short` is the button label: past two names it is a count, and the full list sits beside it.
+ */
+const Names: React.FC<{ langs: readonly string[]; short?: boolean }> = ({ langs, short }) => {
+  const names = languageEndonyms(langs);
+  if (short && names.length > 2) return <>{languageNames(langs)}</>;
+  return (
+    <>
+      {names.map((n, i) => (
+        <React.Fragment key={`${i}-${n}`}>
+          {i > 0 && (i === names.length - 1 ? ' and ' : ', ')}
+          <bdi>{n}</bdi>
+        </React.Fragment>
+      ))}
+    </>
+  );
+};
+
 export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose }) => {
   const doc = studio.doc;
   const view = studio.publication;
@@ -77,6 +96,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // AH-2: the "add a finished language" republish is under way (its own button says so; `busy` covers every action).
   const [adding, setAdding] = useState(false);
   const checkSeq = useRef(0);
+  // Try again unmounts the alert that holds it: keep keyboard and screen-reader focus inside the sheet.
+  const refocusAfterCheck = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const dragStart = useRef<number | null>(null);
@@ -104,6 +125,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // instead of leaving the sheet on what it would say for a comic that was never published.
   const checkComic = () => {
     const seq = (checkSeq.current += 1);
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    refocusAfterCheck.current = !!active && !!panelRef.current?.contains(active) && !!active.closest('[role="alert"]');
     setCheck('loading');
     studio.refreshPublication().then(
       () => seq === checkSeq.current && setCheck('ok'),
@@ -125,6 +148,13 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // After Try again: the "Checking your comic…" line if the sheet shows one, else the sheet itself (never <body>).
+  useEffect(() => {
+    if (!refocusAfterCheck.current || check !== 'loading') return;
+    refocusAfterCheck.current = false;
+    (panelRef.current?.querySelector<HTMLElement>('[data-check-status]') ?? panelRef.current)?.focus();
+  }, [check]);
 
   // Focus management, Esc, scroll lock.
   useEffect(() => {
@@ -208,11 +238,13 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const title = comicTitle(doc);
   const live = !!view?.slug && view.status === 'live';
   // Until the owner view arrives (or when it could not be fetched), the doc's own mirror says whether the comic is
-  // published, as the header's Share button reads it: a published comic never shows as "Private" in between.
-  const mirror = view ? null : doc.publication || null;
+  // published, as the header's Share button reads it: a published comic never shows as "Private" in between. Once the
+  // server has answered, its answer wins: no owner view means not published, however stale the mirror is.
+  const mirror = view || check === 'ok' ? null : doc.publication || null;
   const suspended = view ? view.status === 'suspended' : mirror?.status === 'suspended';
   const published = live || mirror?.status === 'live';
-  const checking = !view && (check === 'loading' || !!studio.publicationLoading);
+  // Only the sheet's own check (on open, or Try again) reads as checking: a later refetch never holds up Publish.
+  const checking = !view && check === 'loading';
   const checkFailed = !view && !checking && check === 'error';
   const status = statusLine(view, mirror);
   const url = shareLinkFor(view) || '';
@@ -246,8 +278,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   // their own button; the plain Update never adds one.
   const editionsOn = editionOnLinkOn(studio.caps?.admin);
   const readyLangs = editionsOn && live ? readyOffLink(view, doc) : [];
-  const readyNames = languageNames(readyLangs);
-  const onLinkNames = languageNames(view?.languages || []);
   const updateRequest = (alsoExclude: string[] = [], alsoLanguages: string[] = []): PublishRequest | null => {
     if (!view) return null;
     const excludePageIds = [...new Set([...excluded, ...alsoExclude])];
@@ -467,8 +497,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                   </button>
                 )}
                 {readyLangs.length > 0 && (
-                  <button type="button" disabled={busy} aria-busy={adding || undefined} onClick={addReady} className={ADD_LANGUAGE_BTN}>
-                    {adding ? 'Updating…' : `Update with ${readyNames}`}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    aria-busy={adding || undefined}
+                    aria-describedby={readyLangs.length > 2 ? `${hintId}-ready` : undefined}
+                    onClick={addReady}
+                    className={ADD_LANGUAGE_BTN}
+                  >
+                    {adding ? 'Updating…' : <>Update with <Names short langs={readyLangs} /></>}
                   </button>
                 )}
                 <button
@@ -481,9 +518,14 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                   {busy && !adding ? 'Updating…' : 'Update'}
                 </button>
               </div>
+              {readyLangs.length > 2 && (
+                <p id={`${hintId}-ready`} className="m-0 w-full text-right text-[12px] text-[var(--ds-muted)]">
+                  <Names langs={readyLangs} /> are ready.
+                </p>
+              )}
               {readyLangs.length > 0 && (
                 <p id={`${hintId}-update`} className="m-0 w-full text-right text-[12px] text-[var(--ds-muted)]">
-                  Readers still get {onLinkNames} only
+                  Readers still get <Names langs={view.languages} /> only
                 </p>
               )}
             </div>
@@ -494,11 +536,11 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
               aria-label="Languages ready for your link"
               className={cx('flex min-w-0 flex-wrap items-center justify-between gap-2 border px-3 py-2 text-[13px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.healthy)}
             >
-              <span className="min-w-0">
-                {readyNames} {readyLangs.length === 1 ? 'is' : 'are'} ready. Readers of your link still get {onLinkNames} only.
+              <span id={`${hintId}-ready`} className="min-w-0">
+                <Names langs={readyLangs} /> {readyLangs.length === 1 ? 'is' : 'are'} ready. Readers of your link still get <Names langs={view?.languages || []} /> only.
               </span>
-              <button type="button" disabled={busy} aria-busy={adding || undefined} onClick={addReady} className={ADD_LANGUAGE_BTN}>
-                {adding ? 'Adding…' : `Add ${readyNames} to the link`}
+              <button type="button" disabled={busy} aria-busy={adding || undefined} aria-describedby={`${hintId}-ready`} onClick={addReady} className={ADD_LANGUAGE_BTN}>
+                {adding ? 'Adding…' : <>Add <Names short langs={readyLangs} /> to the link</>}
               </button>
             </div>
           )}
@@ -526,8 +568,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {!live && !suspended && !mirror && (
             <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.</p>
           )}
-          {mirror && checking && (
-            <p role="status" className="m-0 text-[13px] text-[var(--ds-muted)]">
+          {checking && (
+            <p role="status" tabIndex={-1} data-check-status className="m-0 text-[13px] text-[var(--ds-muted)] focus:outline-none">
               Checking your comic…
             </p>
           )}

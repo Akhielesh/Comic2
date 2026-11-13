@@ -346,6 +346,13 @@ describe('PublishPanel — a first publish starts with every finished language t
     expect(screen.getByRole('button', { name: 'Update published version' })).toBeInTheDocument();
   });
 
+  it('a paused link is not a first publish: a finished Hindi edition stays unticked', () => {
+    const doc = withHindi(makeSampleDoc());
+    const paused: PublicationOwnerView = { ...unpublishedView([EN, HI]), visibility: 'unlisted', status: 'suspended', slug: 'Ab3dEf6hIj9kLm2nP', languages: ['en'], defaultLang: 'en', publishedRev: 3 };
+    render(<PublishPanel doc={doc} view={paused} visibility="unlisted" tickReady onPublish={vi.fn()} />);
+    expect(screen.getByRole('checkbox', { name: /हिन्दी/ })).not.toBeChecked();
+  });
+
   it('ticks no more languages than one publication carries (12 with the original)', () => {
     const doc = withHindi(makeSampleDoc());
     const langs = ['hi', 'te', 'ta', 'kn', 'ml', 'mr', 'bn', 'gu', 'pa', 'ur', 'es', 'fr', 'pt'];

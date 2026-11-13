@@ -455,8 +455,8 @@ describe('ShareSheet: honest while the comic is being checked (AH-1)', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
   });
 
-  it('the studio still fetching the owner view (publicationLoading) reads as checking too', async () => {
-    const studio = makeFakeStudio({ publication: null, publicationLoading: true });
+  it('the studio already fetching the owner view reads as checking too (the sheet\'s check shares that request)', async () => {
+    const studio = makeFakeStudio({ publication: null, publicationLoading: true, refreshPublication: vi.fn(() => new Promise<void>(() => undefined)) });
     render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
     await act(async () => undefined);
     fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
@@ -548,6 +548,84 @@ describe('ShareSheet: honest while the comic is being checked (AH-1)', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
     expect(screen.getByText('Draw at least one page to publish.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+  });
+});
+
+// Review of AH-1: the mirror only stands in until the server answers; Try again keeps focus in the sheet; only the
+// sheet's own check reads as checking.
+describe('ShareSheet: once the server has answered, its answer wins (AH-1 review)', () => {
+  const mirrorOf = () => ({ visibility: 'unlisted' as const, status: 'live' as const, slug: SLUG, publishedRev: 4, publishedAt: 1, languages: ['en'] });
+  const privateView = () => view({ visibility: 'private', status: null, slug: undefined, url: undefined, stats: undefined });
+
+  it('the server says "not published" (no owner view after a good check): Private, even with a stale mirror, and Library + link opens the publish panel', async () => {
+    const doc = makeSampleDoc();
+    doc.publication = mirrorOf(); // stale: unpublished on another device, or the doc refresh has not landed
+    const studio = makeFakeStudio({ doc, publication: null, refreshPublication: vi.fn(async () => undefined) });
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    await act(async () => undefined);
+    expect(screen.getByText('Private — only you can see it')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Private' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
+    expect(screen.queryByRole('alertdialog', { name: 'List it in the Library?' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument();
+    expect(api.updatePublication).not.toHaveBeenCalled();
+  });
+
+  it('after Unpublish the sheet says Private even when the doc refresh fails and its mirror still says live', async () => {
+    vi.mocked(api.unpublishComic).mockResolvedValueOnce(null as never);
+    const doc = makeSampleDoc();
+    doc.publication = mirrorOf();
+    const studio = makeFakeStudio({ doc, publication: view(), refresh: vi.fn(async () => Promise.reject(new Error('offline'))) });
+    const { rerender } = render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    await act(async () => undefined);
+    fireEvent.click(within(screen.getByRole('region', { name: 'Danger zone' })).getByRole('button', { name: 'Unpublish' }));
+    fireEvent.click(within(screen.getByRole('alertdialog', { name: 'Unpublish?' })).getByRole('button', { name: 'Unpublish' }));
+    await waitFor(() => expect(studio.refresh).toHaveBeenCalled());
+    // The server's owner view is gone (useStudio maps the 404 to null); the doc still holds the old mirror.
+    rerender(<ShareSheet studio={{ ...studio, publication: null }} open onClose={vi.fn()} />);
+    expect(screen.getByText('Private — only you can see it')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Private' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('after Try again the focus stays inside the dialog (the alert and its button unmount), on the "Checking your comic…" line', async () => {
+    let fail = true;
+    const refreshPublication = vi.fn(() => (fail ? Promise.reject(new Error('offline')) : new Promise<void>(() => undefined)));
+    const studio = makeFakeStudio({ publication: null, refreshPublication });
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    retry.focus();
+    fail = false;
+    fireEvent.click(retry);
+    expect(refreshPublication).toHaveBeenCalledTimes(2);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('status'));
+    expect(screen.getByRole('status')).toHaveTextContent('Checking your comic…');
+  });
+
+  it('Try again inside the publish panel keeps the focus in the dialog too', async () => {
+    let fail = true;
+    const refreshPublication = vi.fn(() => (fail ? Promise.reject(new Error('offline')) : new Promise<void>(() => undefined)));
+    render(<ShareSheet studio={makeFakeStudio({ publication: null, refreshPublication })} open onClose={vi.fn()} />);
+    await screen.findByRole('button', { name: 'Try again' });
+    fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    retry.focus();
+    fail = false;
+    fireEvent.click(retry);
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  });
+
+  it('a refetch after a good check (publicationLoading) never turns Publish back into a disabled "Checking your comic…"', async () => {
+    const studio = makeFakeStudio({ publication: privateView() });
+    const { rerender } = render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    await act(async () => undefined);
+    fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
+    expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+    // A never-published comic: the studio refetches (after a refusal, or a doc change) and its owner view is null meanwhile.
+    rerender(<ShareSheet studio={{ ...studio, publication: null, publicationLoading: true }} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Checking your comic…' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Publish' })).not.toHaveAttribute('aria-busy');
   });
 });
 

@@ -114,9 +114,9 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
   const readiness = view?.readiness;
   const publishable = new Set((readiness?.languages || []).filter((l) => l.publishable).map((l) => l.lang));
   const live = !!view?.slug && view.status === 'live';
-  // AH-2: a first publish (nothing live yet) starts with every finished edition ticked, in the doc's order. An update
+  // AH-2: a first publish (no link yet, live or paused) starts with every finished edition ticked, in the doc's order. An update
   // of a live link keeps to what the link carries: the sheet offers the rest in its own row, never silently.
-  const preTick = !!tickReady && !live;
+  const preTick = !!tickReady && !view?.slug;
   const readyKey = preTick ? editions.filter((l) => l !== source && publishable.has(l)).join(' ') : '';
   // The original is always published (readers always get it; the server adds it even when left out).
   const startLanguages = (): string[] => {
