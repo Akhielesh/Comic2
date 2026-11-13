@@ -10,6 +10,7 @@
 import React from 'react';
 import { ArrowRightLeft, Clock3, ExternalLink, KeyRound, RotateCcw } from 'lucide-react';
 import type { OutageOption } from '../../../shared/comic/modelHealth';
+import { getImageModel } from '../../../shared/comic/models';
 import type { StudioAction } from '../../../shared/comic/ops';
 import type { CostFormat } from '../conversation/cost';
 import { cx } from '../conversation/ui';
@@ -44,7 +45,8 @@ export const optionText = (option: OutageOption, cost: CostFormat): { label: str
           ? `redraw ${option.redrawCount} drawn ${option.redrawCount === 1 ? 'image' : 'images'} ${cost.approx(option.redrawUsd)} to keep the book consistent`
           : 'nothing drawn yet to redraw';
       const family = option.consistency === 'same_family' ? 'same family' : 'a different look';
-      return { label: `Try ${option.nickname} instead`, price: per, detail: `${family} · ${redraw}` };
+      const variableInputs = getImageModel(option.modelId)?.tokenRateCeilings ? ' · input costs vary' : '';
+      return { label: `Try ${option.nickname} instead`, price: `${per}${variableInputs}`, detail: `${family} · ${redraw}` };
     }
     default:
       return { label: 'Option' };
@@ -72,7 +74,7 @@ export const OptionButton: React.FC<{
       {ICON[option.kind]}
       <span className="min-w-0">
         <span className="[overflow-wrap:anywhere]">{t.label}</span>
-        {t.price && <span className="ml-1 whitespace-nowrap tabular-nums text-[var(--ds-muted)]">· {t.price}</span>}
+        {t.price && <span className="ml-1 tabular-nums text-[var(--ds-muted)]">· {t.price}</span>}
         {!compact && t.detail && <span className="block text-[11.5px] font-normal leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{t.detail}</span>}
       </span>
     </>

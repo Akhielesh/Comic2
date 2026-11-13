@@ -40,6 +40,8 @@ import { fakeModelHealth } from './health.fakes.js';
 const T0 = 1_760_000_000_000;
 const NB21 = getImageModel('nano-banana-2.1')!;
 const PRO = getImageModel('nano-banana-pro')!;
+const FLARE = getImageModel('gpt-image-2.6-flare')!;
+const SUNBURST = getImageModel('gpt-image-2.6-sunburst')!;
 const OR_ID = NB21.routes.openrouter!;
 const GEM_ID = NB21.routes.gemini!;
 
@@ -499,6 +501,10 @@ describe('getModelHealth', () => {
     for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'RATE_LIMIT', at: T0 - 10_000 });
     const pre = await h.preflightImageRun({ specs: [NB21], keys: mixed, doc: lockedDoc(), caps: resolveStudioCaps({ byok: true, isAdmin: false }) });
     expect(pre.ok).toBe(false);
+    expect(pre.options.filter((o) => o.kind === 'switch_model')).toMatchObject([
+      { modelId: PRO.id, usdPerImage: imagePriceUsd(PRO, '2K') },
+      { modelId: FLARE.id, usdPerImage: Math.round(imagePriceUsd(FLARE, '1K') * PLATFORM_MARKUP * 10_000) / 10_000 }
+    ]);
     const health = await h.getModelHealth(NB21, { keys: mixed });
     expect(health.routes.map((r) => `${r.route}:${r.state}`)).toEqual(['gemini:down']);
     expect(health.state).toBe('down');
@@ -644,12 +650,20 @@ describe('process-wide port + fake', () => {
     const fake = fakeModelHealth({ now: T0 });
     __setModelHealthForTests(fake);
     fake.setPublic(OR_ID, failing);
+    fake.setPublic(PRO.routes.openrouter!, serving);
+    fake.setPublic(FLARE.routes.openrouter!, serving);
+    fake.setPublic(SUNBURST.routes.openrouter!, failing);
     const out = await preflightImageRun({ specs: [NB21], keys: PLATFORM, doc: lockedDoc(), caps: paidCaps });
     expect(out.ok).toBe(false);
-    expect(out.options.map((o) => o.kind)).toEqual(['wait_and_retry', 'add_key', 'switch_model']);
+    expect(out.options).toMatchObject([
+      { kind: 'wait_and_retry' },
+      { kind: 'add_key' },
+      { kind: 'switch_model', modelId: PRO.id },
+      { kind: 'switch_model', modelId: FLARE.id }
+    ]);
     expect(fake.preflights).toHaveLength(1);
-    // The blocked model's public data, then the switch candidate's (a down model is never offered).
-    expect(fake.fetches.map((f) => f.url)).toEqual([openrouterEndpointsUrl(OR_ID), openrouterEndpointsUrl(PRO.routes.openrouter!)]);
+    // The blocked model and all fitting candidates are checked, including the down candidate left out of the options.
+    expect(fake.fetches.map((f) => f.url)).toEqual([OR_ID, PRO.routes.openrouter!, SUNBURST.routes.openrouter!, FLARE.routes.openrouter!].map(openrouterEndpointsUrl));
     expect(fake.fetches.every((f) => Object.keys(f.headers).length === 0)).toBe(true);
     // Forced states skip the setup; the clock moves with setNow.
     fake.reset();
