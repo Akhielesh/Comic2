@@ -152,9 +152,8 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
           TRANSITION,
           model.current ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]',
           model.suggested && 'ring-2 ring-[var(--ds-ring)]',
-          // Hover strengthens the border, never the fill (the muted lines keep their contrast).
-          actionable && 'hover:border-[var(--ds-muted)]',
-          model.disabled && 'opacity-80'
+          // Only an actionable row gains a hover border. Every row keeps its metadata and Details readable.
+          actionable && 'hover:border-[var(--ds-muted)]'
         )}
       >
         <div className="min-w-0 flex-1 px-3 py-1.5">

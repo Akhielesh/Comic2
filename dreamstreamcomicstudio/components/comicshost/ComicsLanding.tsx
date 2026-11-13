@@ -32,6 +32,7 @@ const TEXT_LINK = cn(
   RADIUS_CONTROL,
   FOCUS_RING
 );
+const FOOTER_LINK = cn(TEXT_LINK, DENSITY.coarseSquare, 'justify-center');
 
 const LOOKS = SAMPLE_LOOKS.map((id) => ({ id, name: getStylePreset(id)?.name ?? id }));
 
@@ -141,10 +142,10 @@ export function ComicsLanding({
 
       <footer className={HEADER_INNER}>
         <nav aria-label="Comic Studio links" className="flex flex-wrap gap-x-6 border-t border-[var(--ds-hairline)] py-3 text-[length:var(--ds-text-sm)]">
-          <button type="button" className={TEXT_LINK} onClick={onBrowseGallery}>Library</button>
-          <button type="button" className={TEXT_LINK} onClick={onOpenPrivacy}>Privacy Policy</button>
-          <button type="button" className={TEXT_LINK} onClick={onOpenTerms}>Terms &amp; Conditions</button>
-          <a href={CONTACT_HREF} className={TEXT_LINK}>Contact</a>
+          <button type="button" className={FOOTER_LINK} onClick={onBrowseGallery}>Library</button>
+          <button type="button" className={FOOTER_LINK} onClick={onOpenPrivacy}>Privacy Policy</button>
+          <button type="button" className={FOOTER_LINK} onClick={onOpenTerms}>Terms &amp; Conditions</button>
+          <a href={CONTACT_HREF} className={FOOTER_LINK}>Contact</a>
         </nav>
       </footer>
     </div>
