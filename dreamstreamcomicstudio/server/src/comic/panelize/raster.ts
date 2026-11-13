@@ -51,6 +51,10 @@ export interface RegionPasteInput {
   region: Box;
   shape?: 'ellipse';
   feather?: number;
+  /** Page-space bounds represented by a bounded model output; absent means the full page. */
+  sourceBox?: Box;
+  /** Discrete output aspect requested from the model for a bounded crop. */
+  sourceAspect?: string;
 }
 
 export interface RegionPasteResult {
@@ -81,7 +85,33 @@ const rasterSize = async (input: ReturnType<typeof sharp>) => {
   return { width, height };
 };
 
-/** Paste the edited page's corresponding pixels into a copy of the original page, feathering inward only. */
+/** A little local context, clipped at the page edge; never a guessed panel boundary. */
+export const panelContextBox = (box: Box): Box => {
+  const x = Math.max(0, box.x - PANEL_CROP_CONTEXT), y = Math.max(0, box.y - PANEL_CROP_CONTEXT);
+  return { x, y, w: Math.min(1, box.x + box.w + PANEL_CROP_CONTEXT) - x, h: Math.min(1, box.y + box.h + PANEL_CROP_CONTEXT) - y };
+};
+
+const pixelBox = (box: Box, width: number, height: number) => {
+  if (![box.x, box.y, box.w, box.h].every(Number.isFinite) || box.x < 0 || box.y < 0 || box.w <= 0 || box.h <= 0 || box.x + box.w > 1.000001 || box.y + box.h > 1.000001) throw new Error('Invalid crop bounds');
+  const left = Math.ceil(box.x * width - 0.5), top = Math.ceil(box.y * height - 0.5);
+  const w = Math.ceil(Math.min(1, box.x + box.w) * width - 0.5) - left;
+  const h = Math.ceil(Math.min(1, box.y + box.h) * height - 0.5) - top;
+  if (w <= 0 || h <= 0) throw new Error('The crop contains no pixels');
+  return { left, top, width: w, height: h };
+};
+
+/** Exact bounded context sent to the model, using the same pixel rounding as pasteRegion. */
+export async function cropPanelContext(dataUrl: string, box: Box): Promise<string> {
+  return withSharpSlot(async () => {
+    const input = boundedRaster(dataUrl);
+    const { width, height } = await rasterSize(input);
+    const buffer = await input.autoOrient().extract(pixelBox(box, width, height)).webp({ lossless: true, effort: 1 }).timeout({ seconds: 12 }).toBuffer();
+    if (buffer.length > MAX_GENERATED_BYTES) throw new Error('Panel crop exceeds the save size');
+    return `data:image/webp;base64,${buffer.toString('base64')}`;
+  });
+}
+
+/** Paste the edited image's corresponding pixels into a copy of the page, feathering inward only. */
 export async function pasteRegion(input: RegionPasteInput): Promise<RegionPasteResult> {
   try {
     const { x, y, w, h } = input.region;
@@ -95,7 +125,10 @@ export async function pasteRegion(input: RegionPasteInput): Promise<RegionPasteR
       const drawn = boundedRaster(input.drawn);
       const { width, height } = await rasterSize(base);
       const edited = await rasterSize(drawn);
-      if (Math.abs(Math.log((edited.width / edited.height) / (width / height))) > 0.05) throw new Error('Edited page has a different shape');
+      const source = pixelBox(input.sourceBox ?? { x: 0, y: 0, w: 1, h: 1 }, width, height);
+      const requested = input.sourceBox && input.sourceAspect?.split(':').map(Number);
+      const sourceRatio = requested && requested.length === 2 && requested.every((n) => Number.isFinite(n) && n > 0) ? requested[0] / requested[1] : source.width / source.height;
+      if (Math.abs(Math.log((edited.width / edited.height) / sourceRatio)) > 0.05) throw new Error('Edited image has a different shape');
 
       const x0 = x * width, y0 = y * height;
       const x1 = Math.min(1, x + w) * width, y1 = Math.min(1, y + h) * height;
@@ -104,8 +137,9 @@ export async function pasteRegion(input: RegionPasteInput): Promise<RegionPasteR
       const cropW = Math.ceil(x1 - 0.5) - left, cropH = Math.ceil(y1 - 0.5) - top;
       if (cropW <= 0 || cropH <= 0) throw new Error('The marked region contains no pixels');
 
-      const { data, info } = await drawn.autoOrient().resize(width, height, { fit: 'fill' })
-        .extract({ left, top, width: cropW, height: cropH }).toColourspace('srgb').ensureAlpha().raw()
+      if (left < source.left || top < source.top || left + cropW > source.left + source.width || top + cropH > source.top + source.height) throw new Error('Panel lies outside its context');
+      const { data, info } = await drawn.autoOrient().resize(source.width, source.height, { fit: 'fill' })
+        .extract({ left: left - source.left, top: top - source.top, width: cropW, height: cropH }).toColourspace('srgb').ensureAlpha().raw()
         .timeout({ seconds: 12 }).toBuffer({ resolveWithObject: true });
       if (info.channels !== 4) throw new Error('Could not decode edited pixels');
 

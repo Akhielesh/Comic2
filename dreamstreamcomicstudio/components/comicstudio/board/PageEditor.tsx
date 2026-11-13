@@ -108,6 +108,7 @@ import {
   renderModelNickname
 } from './boardModel';
 import { panelBoxesFor, panelForRegion, regionFromPoints, toPagePoint, type Point } from './pageLayout';
+import { panelEditBounds } from '../../../shared/comic/panelEdit';
 import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, cx, useClickGuard, useElementSize, useFocusTrap } from './ui';
 import type { PatchOptions } from '../types';
 import type { StudioMode } from '../../../shared/comic/capabilities';
@@ -1257,6 +1258,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     setRegion(null);
     setPanelN(undefined);
   };
+  const selectedPanelBounds = panelN && !region ? panelEditBounds(sourcePage, panelN) : undefined;
   const changeMode = (m: Mode) => {
     setMode(m);
     setAddKind(null);
@@ -1264,7 +1266,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     if (pro.pro && railed) settleTool(m === 'markup' ? 'markup' : 'select');
   };
 
-  const canEdit = artOk && !busy && instruction.trim().length > 0 && (editIntent === 'describe' || !!region || !!panelN);
+  const canEdit = artOk && !busy && selectedPanelBounds?.ok !== false && instruction.trim().length > 0 && (editIntent === 'describe' || !!region || !!panelN);
   const submitEdit = () => {
     if (!canEdit) return;
     const editInstruction = editIntent === 'describe'
@@ -1743,6 +1745,16 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 }
               >
                 <MarkupLayer active={mode === 'markup' && artOk && !busy} region={region} panelN={panelN} shape={markShape} onRegion={markRegion} />
+                {selectedPanelBounds?.ok && (
+                  <div
+                    data-testid="panel-edit-boundary"
+                    aria-hidden="true"
+                    className="pointer-events-none absolute border-2 border-dashed border-[var(--ds-accent)] ring-1 ring-white"
+                    style={{ left: `${selectedPanelBounds.box.x * 100}%`, top: `${selectedPanelBounds.box.y * 100}%`, width: `${selectedPanelBounds.box.w * 100}%`, height: `${selectedPanelBounds.box.h * 100}%` }}
+                  >
+                    <span className="absolute left-1 top-1 rounded bg-[var(--ds-surface-strong)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--ds-ink)]">Panel {panelN}</span>
+                  </div>
+                )}
                 {pro.pro && tool === 'shapes' && pro.parts.compose && (
                   <Suspense fallback={null}>
                     <ShapePlaceLayerLazy doc={doc} page={sourcePage} onPlace={placeShape} onRefused={setNotice} />
@@ -1859,9 +1871,14 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             <select
               aria-label="Panel to change"
               value={panelN ? String(panelN) : ''}
-              onChange={(e) => setPanelN(e.target.value ? Number(e.target.value) : undefined)}
+              onChange={(e) => {
+                setRegion(null);
+                setPanelN(e.target.value ? Number(e.target.value) : undefined);
+                setMode('move');
+              }}
               className={SELECT_CLS}
-              disabled={!artOk}
+              disabled={!artOk || busy}
+              aria-describedby={selectedPanelBounds ? 'pe-panel-scope' : undefined}
             >
               <option value="">Whole page</option>
               {sourcePage.panels.map((p) => (
@@ -1872,6 +1889,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             </select>
           </label>
         </div>
+        {selectedPanelBounds && (
+          <p id="pe-panel-scope" role="status" className="mt-2 text-[12px] leading-relaxed text-[var(--ds-muted)]">
+            {selectedPanelBounds.ok === true
+              ? `Only panel ${panelN} will change. Art outside the outlined rectangle stays exactly as it is.`
+              : selectedPanelBounds.reason}
+          </p>
+        )}
         <PrimaryButton className="mt-3 w-full min-w-0" busy={busyKey === 'edit'} disabled={!canEdit} onClick={submitEdit}>
           <WandSparkles className="h-3.5 w-3.5 shrink-0" aria-hidden /> <span className="shrink-0">Apply edit</span>
           <span className="min-w-0 truncate font-normal opacity-85">· {cost(editPrice)}</span>

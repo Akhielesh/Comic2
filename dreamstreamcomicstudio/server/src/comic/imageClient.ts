@@ -1074,8 +1074,8 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     const errCtx = { route: picked.route, byok: picked.key.byok, model: req.spec.nickname };
     const started = now();
     let prompt = req.prompt;
-    let transientRetries = 1;
-    let nudgeRetries = 1;
+    let transientRetries = req.singleRequest ? 0 : 1;
+    let nudgeRetries = req.singleRequest ? 0 : 1;
     let spent: number | undefined;
     let lastText: string | undefined;
 
@@ -1230,7 +1230,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         err instanceof StudioError &&
         !error.abandoned &&
         (error.code === 'RATE_LIMIT' || (error.code === 'PROVIDER_ERROR' && (error.retryable || isRoutePausedError(err))));
-      const alt = fallbackable && !req.signal?.aborted ? fallback : null;
+      const alt = !req.singleRequest && fallbackable && !req.signal?.aborted ? fallback : null;
       if (!alt) throw err;
       logger.warn('comic_image_route_fallback', { from: picked.route, to: alt.route, model: req.spec.id, code: error.code });
       const primarySpent = typeof error.spentUsd === 'number' && error.spentUsd > 0 ? error.spentUsd : 0;

@@ -6,6 +6,8 @@
 // anchor keys, letterPage's board / findings / panelize, edit_page's region paste-back and render_pages.followFrames.
 // Fakes only: no paid call, no network, synthetic docs.
 
+import sharp from 'sharp';
+import { decodeImageDataUrl } from './assets.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cutFor, emptyRender, findPage, type AssetRef, type ComicDoc, type PanelCuts } from '../../../shared/comic/doc.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
@@ -34,7 +36,7 @@ import {
   startAction
 } from './jobs.js';
 import { KEYS, newSession, plannedDoc, testContext, TINY_PNG } from './orchestrator.fakes.js';
-import { cropForPanel, PANEL_CROP_CONTEXT, pasteRegion } from './panelize/raster.js';
+import { cropForPanel, cropPanelContext, PANEL_CROP_CONTEXT, pasteRegion } from './panelize/raster.js';
 import { panelizeAfterLetter } from './panelize/server.js';
 import { renderLayoutGuide } from './panelize/wireframe.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
@@ -66,7 +68,7 @@ vi.mock('./actions/panelFix.js', async (importOriginal) => {
 vi.mock('./panelize/raster.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./panelize/raster.js')>();
   // PANEL_CROP_CONTEXT is B8's to tune: a value other than the stub's shows jobs.ts passes raster's own constant.
-  return { ...actual, PANEL_CROP_CONTEXT: 0.06, cropForPanel: vi.fn(actual.cropForPanel), pasteRegion: vi.fn(actual.pasteRegion) };
+  return { ...actual, PANEL_CROP_CONTEXT: 0.06, cropForPanel: vi.fn(actual.cropForPanel), cropPanelContext: vi.fn(actual.cropPanelContext), pasteRegion: vi.fn(actual.pasteRegion) };
 });
 vi.mock('./panelize/server.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./panelize/server.js')>();
@@ -104,7 +106,7 @@ afterEach(() => {
   Object.assign(JOB_TIMINGS, TIMINGS);
   vi.restoreAllMocks();
   vi.mocked(analyzePageRender).mockReset();
-  for (const fn of [scheduleRun, runDrawsAnchors, fixPanelProblem, compileFixPanel, finishFixPanel, fixPanelMeta, cropForPanel, pasteRegion, panelizeAfterLetter, boardForCheck, withFindings, renderLayoutGuide]) {
+  for (const fn of [scheduleRun, runDrawsAnchors, fixPanelProblem, compileFixPanel, finishFixPanel, fixPanelMeta, cropForPanel, cropPanelContext, pasteRegion, panelizeAfterLetter, boardForCheck, withFindings, renderLayoutGuide]) {
     (fn as unknown as { mockRestore?: () => void }).mockRestore?.();
   }
   vi.useRealTimers();
@@ -673,6 +675,104 @@ describe('letterPage → board, findings, panelize (through their stubs)', () =>
     expect(page.render.status).toBe('ready');
     expect(page.render.qc).toMatchObject({ score: 0.9 });
     expect(page.render.cuts).toBeUndefined();
+  });
+});
+
+describe('verified single-panel edit', () => {
+  const verifiedDoc = () => {
+    const doc = drawnDoc();
+    doc.settings.confirm = 'never';
+    doc.pages[0].render.qc = { ...QC, boxesFrom: 'vision', panelShapes: ['rect', 'rect', 'rect'], beats: [1, 2, 3], crosses: [] };
+    return doc;
+  };
+  it('uses one bounded request, lossless panel paste, no paid page recheck, and retains undo geometry', async () => {
+    const doc = verifiedDoc();
+    const session = newSession(doc), ctx = testContext(session);
+    vi.mocked(cropPanelContext).mockResolvedValue(TINY_PNG);
+    vi.mocked(pasteRegion).mockResolvedValue({ dataUrl: TINY_PNG, pasted: true });
+    const save = vi.spyOn(ctx.assetsFake, 'saveGenerated');
+    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', panelN: 2, instruction: 'Red scarf', pasteBack: 'page' }, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(ctx.imagesFake.calls[0]).toMatchObject({ singleRequest: true, prompt: expect.stringContaining('bounded comic panel crop') });
+    expect(vi.mocked(pasteRegion)).toHaveBeenCalledWith(expect.objectContaining({ region: QC.panelBoxes[1], sourceBox: expect.any(Object), feather: 0 }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ lossless: true }));
+    expect(analyzePageRender).not.toHaveBeenCalled();
+    const render = session.doc.pages[0].render;
+    expect(render).toMatchObject({ parentPath: own('p1'), origin: 'edit', cuts: CUTS, qc: { checkedAt: 0, panelShapes: ['rect', 'rect', 'rect'] } });
+    expect(render.history.map((v) => v.path)).toContain(own('p1'));
+  });
+  it('runs real crop and compositor end to end, retaining every outside pixel and allowing another panel edit', async () => {
+    const raster = await vi.importActual<typeof import('./panelize/raster.js')>('./panelize/raster.js');
+    vi.mocked(cropPanelContext).mockImplementation(raster.cropPanelContext);
+    vi.mocked(pasteRegion).mockImplementation(raster.pasteRegion);
+    const image = async (r: number, g: number, b: number) => `data:image/png;base64,${(await sharp({ create: { width: 120, height: 180, channels: 3, background: { r, g, b } } }).png().toBuffer()).toString('base64')}`;
+    const doc = verifiedDoc();
+    const session = newSession(doc), ctx = testContext(session);
+    ctx.assetsFake.generatedSize = { w: 120, h: 180 };
+    ctx.assetsFake.files.set(own('p1'), await image(20, 80, 140));
+    const edited = await image(210, 110, 40);
+    ctx.imagesFake.behave = () => ({ dataUrl: edited });
+    const action = { type: 'edit_page' as const, pageId: 'pg_1', panelN: 2, instruction: 'Red scarf' };
+    await (await startAction(ctx, action, { confirmed: true })).done;
+    const output = ctx.assetsFake.files.get(session.doc.pages[0].render.asset!.path)!;
+    const pixels = await sharp(decodeImageDataUrl(output).buffer).removeAlpha().raw().toBuffer();
+    for (let y = 0; y < 180; y += 1) for (let x = 0; x < 120; x += 1) {
+      const actual = [...pixels.subarray((y * 120 + x) * 3, (y * 120 + x) * 3 + 3)];
+      expect(actual).toEqual(x < 60 && y >= 90 ? [210, 110, 40] : [20, 80, 140]);
+    }
+    const first = session.doc.pages[0].render.asset!.path;
+    await (await startAction(ctx, { ...action, instruction: 'Blue scarf' }, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(2);
+    expect(session.doc.pages[0].render.parentPath).toBe(first);
+    expect(analyzePageRender).not.toHaveBeenCalled();
+  });
+
+  it.each(['RATE_LIMIT', 'SAFETY_BLOCKED', 'PROVIDER_ERROR'] as const)('does not retry or requeue %s', async (code) => {
+    const session = newSession(verifiedDoc()), ctx = testContext(session);
+    vi.mocked(cropPanelContext).mockResolvedValue(TINY_PNG);
+    ctx.imagesFake.behave = () => new StudioError(code, 'Failed', { retryable: true });
+    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', panelN: 2, instruction: 'Red scarf' }, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(session.doc.pages[0].render.asset?.path).toBe(own('p1'));
+    expect(session.doc.pages[0].render.status).toBe('ready');
+  });
+  it('blocks an unknown or nonrectangular boundary before reservation', async () => {
+    for (const shape of ['unknown', 'other'] as const) {
+      const doc = verifiedDoc(); doc.pages[0].render.qc!.panelShapes![1] = shape;
+      const session = newSession(doc), ctx = testContext(session);
+      const result = await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', panelN: 2, instruction: 'Red scarf' }, { confirmed: true });
+      await result.done;
+      expect(ctx.imagesFake.calls).toHaveLength(0);
+      expect(ctx.billingFake.reserves).toHaveLength(0);
+      expect(session.doc.pages[0].render.asset?.path).toBe(own('p1'));
+    }
+  });
+  it('does not overwrite a newer page while the composited asset is being saved', async () => {
+    const session = newSession(verifiedDoc()), ctx = testContext(session);
+    vi.mocked(cropPanelContext).mockResolvedValue(TINY_PNG);
+    vi.mocked(pasteRegion).mockResolvedValue({ dataUrl: TINY_PNG, pasted: true });
+    const save = ctx.assetsFake.saveGenerated.bind(ctx.assetsFake);
+    vi.spyOn(ctx.assetsFake, 'saveGenerated').mockImplementation(async (input) => {
+      const saved = await save(input);
+      session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: drawn('newer-during-save') } }], { origin: 'user' });
+      return saved;
+    });
+    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', panelN: 2, instruction: 'Red scarf' }, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(session.doc.pages[0].render.asset?.path).toBe(own('newer-during-save'));
+    expect(session.doc.spend.entries.some((entry) => entry.label.includes('not placed'))).toBe(true);
+  });
+
+  it('does not overwrite a newer page when the generation returns', async () => {
+    const session = newSession(verifiedDoc()), ctx = testContext(session);
+    vi.mocked(cropPanelContext).mockResolvedValue(TINY_PNG);
+    ctx.imagesFake.behave = () => {
+      session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: drawn('newer') } }], { origin: 'user' });
+      return {};
+    };
+    await (await startAction(ctx, { type: 'edit_page', pageId: 'pg_1', panelN: 2, instruction: 'Red scarf' }, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(session.doc.pages[0].render.asset?.path).toBe(own('newer'));
   });
 });
 

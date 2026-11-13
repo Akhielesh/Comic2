@@ -2,7 +2,7 @@
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { decodeImageDataUrl } from '../assets.js';
-import { pasteRegion } from './raster.js';
+import { cropPanelContext, panelContextBox, pasteRegion } from './raster.js';
 
 const ORIGINAL = [27, 83, 149, 255];
 const EDITED = [197, 107, 44, 255];
@@ -70,5 +70,31 @@ describe('pasteRegion', () => {
     await assertFailure({ base, drawn: 'data:image/png;base64,PHN2Zz4=', region });
     await assertFailure({ base, drawn: await solid(EDITED, 200, 100), region });
     await assertFailure({ base: async () => { throw new Error('Storage timed out'); }, drawn: original, region });
+  });
+});
+
+
+describe('bounded panel crop', () => {
+  it('crops nearby context and pastes only the selected panel, including fractional edges', async () => {
+    const base = await solid(ORIGINAL, 100, 100);
+    const panel = { x: 0.205, y: 0.305, w: 0.4, h: 0.3 };
+    const sourceBox = panelContextBox(panel);
+    const crop = await read(await cropPanelContext(base, sourceBox));
+    expect([crop.width, crop.height]).toEqual([48, 38]);
+    const drawn = await solid(EDITED, 48, 38);
+    const out = await read((await pasteRegion({ base: async () => base, drawn, region: panel, sourceBox, feather: 0 })).dataUrl);
+    for (let y = 0; y < 100; y += 1) for (let x = 0; x < 100; x += 1) {
+      const inside = x >= 20 && x < 60 && y >= 30 && y < 60;
+      expect(out.pixel(x, y)).toEqual(inside ? EDITED : ORIGINAL);
+    }
+  });
+
+  it('maps the requested model aspect to the crop but rejects a different response aspect', async () => {
+    const base = await solid(ORIGINAL);
+    const region = { x: 0.3, y: 0.3, w: 0.3, h: 0.2 };
+    const sourceBox = panelContextBox(region);
+    const out = await pasteRegion({ base: async () => base, drawn: await solid(EDITED, 60, 40), region, sourceBox, sourceAspect: '3:2', feather: 0 });
+    expect((await read(out.dataUrl)).pixel(40, 40)).toEqual(EDITED);
+    await expect(pasteRegion({ base: async () => base, drawn: await solid(EDITED, 40, 80), region, sourceBox, sourceAspect: '3:2' })).rejects.toMatchObject({ code: 'NO_IMAGE' });
   });
 });

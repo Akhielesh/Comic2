@@ -766,11 +766,12 @@ describe('A3 honest panel checks: beats, crosses, drawn boxes (plan §4.3)', () 
 
   it('schema round trip: panels require beat and crosses; a conforming reply becomes stored, JSON-stable checks', async () => {
     const item = (VISION_SCHEMA.properties.panels as { items: { required: string[]; properties: Record<string, { type: string }> } }).items;
-    expect(item.required).toEqual(['n', 'box', 'beat', 'crosses']);
+    expect(item.required).toEqual(['n', 'box', 'beat', 'crosses', 'shape']);
     expect(item.properties.beat.type).toBe('integer');
     expect(item.properties.crosses.type).toBe('boolean');
 
     const reply = v2Reply();
+    reply.panels = reply.panels.map((panel) => ({ ...panel, shape: 'rect' }));
     expect(conforms(VISION_SCHEMA as Record<string, unknown>, reply)).toEqual([]);
     expect(conforms(VISION_SCHEMA as Record<string, unknown>, v1Reply)).toContain('$.panels[0].beat: required'); // the model is asked for them
 
@@ -831,6 +832,19 @@ describe('A3 honest panel checks: beats, crosses, drawn boxes (plan §4.3)', () 
     expect(out.qc.issues).toEqual(["Panel 1's picture looks like panel 2's moment.", "Panel 2's picture looks like panel 1's moment."]);
     expect(out.qc.score).toBe(0.98); // reported, not scored here (check v2 adds the caps)
     for (const b of out.balloons) within(b, b.lineId === 'l4' ? bottom : top);
+  });
+
+  it('panel shapes follow their own measured boxes through sorting and dropped slivers', async () => {
+    const reply = v2Reply({ panels: [
+      { n: 3, box: bottom, beat: 2, crosses: false, shape: 'other' },
+      { n: 1, box: top, beat: 1, crosses: false, shape: 'rect' },
+      { n: 2, box: { x: 0.1, y: 0.1, w: 0.001, h: 0.001 }, beat: 0, crosses: false, shape: 'rect' }
+    ] });
+    const result = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: reply }]).llm });
+    expect(result.qc.panelBoxes).toEqual([top, bottom]);
+    expect(result.qc.panelShapes).toEqual(['rect', 'other']);
+    const legacy = await analyzePageRender({ doc: doc(), page: twoPanel(), dataUrl: 'data:x', llm: fakeLlm([{ json: v2Reply() }]).llm });
+    expect(legacy.qc.panelShapes).toEqual(['unknown', 'unknown']);
   });
 
   it('beats: only stored when every drawn panel answered; a beat past the plan means none; undrawn moments are named', async () => {
