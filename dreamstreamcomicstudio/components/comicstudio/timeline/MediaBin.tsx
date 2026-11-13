@@ -3,7 +3,8 @@
 // deleted pages and the archive — grouped by what it belongs to, in book order. Filters, search and
 // sort are local; tiles sign their URLs only when they scroll into view (cheap on a 300-image
 // archive). "Examples from the library" shows the platform library for inspiration when it is
-// available. The archive counter ("Archive 12/300") makes the cap visible, never silent.
+// available. The archive counter ("Archive 241/300") shows from 80 % full, so the cap is never a surprise and
+// never noise; past the cap the studio says what it removed.
 
 import React, { useId, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search, Star } from 'lucide-react';
@@ -29,6 +30,9 @@ import { OVERLINE } from '../../chat/studioDesign';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
+
+/** The archive counter and its rule show from this share of the cap (80 %). */
+export const ARCHIVE_LINE_FROM = 0.8;
 
 export interface MediaBinProps {
   studio: StudioController;
@@ -133,6 +137,8 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
   if (!doc) return null;
   const examples = library.status === 'ready' ? [...library.byKind('cover_example'), ...library.byKind('genre_example')].slice(0, 12) : [];
   const archive = archiveUsage(doc);
+  // The archive line earns its place only near the cap (6B PU-2): "Archive 0/300" on every visit was noise.
+  const archiveNearFull = archive.cap > 0 && archive.used >= archive.cap * ARCHIVE_LINE_FROM;
   const spentOnImages = all.reduce((n, it) => n + (typeof it.costUsd === 'number' ? it.costUsd : 0), 0);
 
   const toggle = (key: string) =>
@@ -197,7 +203,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Page 3, MAYA, cover…"
-              className="h-9 w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] pl-8 pr-3 text-[16px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none sm:text-[12.5px]"
+              className="h-9 w-full rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] pl-8 pr-3 text-[16px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none sm:text-[12.5px]"
             />
           </div>
           <label htmlFor={sortId} className="sr-only">
@@ -207,7 +213,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
             id={sortId}
             value={sort}
             onChange={(e) => setSort(e.target.value as MediaSort)}
-            className="h-9 shrink-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:text-[12.5px]"
+            className="h-9 shrink-0 rounded-xl border coarse:h-11 border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:text-[12.5px]"
           >
             <option value="book">Book order</option>
             <option value="newest">Newest first</option>
@@ -264,15 +270,19 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
         </section>
       )}
 
+      {(archiveNearFull || spentOnImages > 0) && (
       <footer className="border-t border-[var(--ds-hairline-soft)] pt-2 text-[11.5px] leading-relaxed text-[var(--ds-muted)]">
-        <p>
-          <span className="font-semibold tabular-nums text-[var(--ds-ink)]">
-            Archive {archive.used}/{archive.cap}
-          </span>{' '}
-          · Starred images are never removed. Once the archive is full, the oldest unstarred versions that nothing uses are removed — the studio tells you when.
-        </p>
+        {archiveNearFull && (
+          <p data-archive-line>
+            <span className="font-semibold tabular-nums text-[var(--ds-ink)]">
+              Archive {archive.used}/{archive.cap}
+            </span>{' '}
+            · Starred images are never removed. Once the archive is full, the oldest unstarred versions that nothing uses are removed — the studio tells you when.
+          </p>
+        )}
         {spentOnImages > 0 && <p className="tabular-nums">Recorded image cost of everything here: {amountInSentence(cost.exact(spentOnImages), 'some of your usage')}.</p>}
       </footer>
+      )}
 
       <TimelineDialog open={preview !== null && !!flat[preview]} onClose={() => setPreview(null)} title={preview !== null && flat[preview] ? flat[preview].owner.label : 'Image'} wide>
         {preview !== null && flat[preview] && <MediaPreview studio={studio} doc={doc} items={flat} index={preview} onIndex={setPreview} edit={edit} />}
