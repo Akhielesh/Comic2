@@ -822,6 +822,11 @@ export function legacyImportOps(
   const script = typeof state.script === 'string' ? state.script.trim().slice(0, 200_000) : '';
   if (script) ops.push({ op: 'source', patch: { script, updatedAt: Date.now() } });
 
+  const creativeDirection = str(state.creativeDirection, 2000);
+  if (creativeDirection) ops.push({ op: 'note_add', text: `Original creative direction: ${creativeDirection}` });
+  const continuity = str(state.continuitySummary, 2000);
+  if (continuity) ops.push({ op: 'note_add', text: `Continuity from the classic edition: ${continuity}` });
+
   const cast: string[] = [];
   const characters = Array.isArray(state.characters) ? state.characters.filter(isObject) : [];
   characters.slice(0, 24).forEach((c, i) => {
@@ -884,8 +889,14 @@ export function legacyImportOps(
   }
   const aspect = typeof state.styleAspectRatio === 'string' ? state.styleAspectRatio : '';
   const pageModel = resolveImageJob('page', 'standard').spec;
-  if ((ASPECT_RATIOS as string[]).includes(aspect) && pageModel.aspects.includes(aspect as never)) {
-    ops.push({ op: 'format', patch: { pageAspect: aspect as never } });
+  const aspectIsSupported = (ASPECT_RATIOS as string[]).includes(aspect) && pageModel.aspects.includes(aspect as never);
+  // Classic initializes approvedPageCount even before a creator confirms the plan. A page count explicitly
+  // chosen in Layout takes precedence; otherwise only carry a confirmed count the new studio can honor.
+  const plan = isObject(state.storyPlanning) ? state.storyPlanning : {};
+  const pageCount = [state.pageCount, plan.approved === true ? plan.approvedPageCount : undefined]
+    .find((value): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= DOC_LIMITS.pages);
+  if (aspectIsSupported || pageCount !== undefined) {
+    ops.push({ op: 'format', patch: { ...(aspectIsSupported ? { pageAspect: aspect as never } : {}), ...(pageCount !== undefined ? { pageCount } : {}) } });
   }
   return { ops, summary: { title, words: (script.match(/\S+/g) || []).length, cast, places, style: !!stylePrompt } };
 }
