@@ -2,8 +2,9 @@
 //
 // Views are BookView indexes (the End card is the last view). Turns go idle → turn → (TURN_DONE) idle;
 // drags go idle → drag → settle(commit|cancel) → idle; the view changes only when a turn commits.
-// Reduced motion changes the view at once (the stage crossfades). Guided View works in single-page
-// layout, so a view is one page there and `guided.stop` indexes that page's stops.
+// Reduced motion changes the view at once (the stage crossfades). A turn always starts from the whole
+// page: any zoom resets when it begins. Guided View works in single-page layout, so a view is one page
+// there and `guided.stop` indexes that page's stops.
 
 import type { ReaderLayout } from './readerLayout';
 import type { Vec } from './flipGeometry';
@@ -134,7 +135,9 @@ export const readerReducer = (s: ReaderState, e: ReaderEvent, ctx: MachineCtx): 
         return s;
       }
       if (m.kind === 'drag') return s;
-      if (zoomed(s)) return s;
+      // Zoomed in: an explicit step (a key, a button) still turns the page, and startTurn / land clear the
+      // zoom. The stage keeps a pan from turning by accident: it sends no step from an edge tap or a wheel
+      // while zoomed, and DRAG_START below refuses a swipe.
       return step(s, e.delta, ctx);
     }
     case 'GOTO': {
