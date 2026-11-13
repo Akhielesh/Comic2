@@ -1264,8 +1264,9 @@ interface OutlineResult {
 
 const normalizeOutline = (json: unknown, pageCount: number): StructuredCheck<OutlineResult> => {
   if (!isObject(json) || !Array.isArray(json.pages)) return { problems: ['The reply must be a JSON object with a "pages" array.'] };
-  const pages = json.pages
-    .filter(isObject)
+  // Use declared chronology just as finished page replies do. Ambiguous (missing/duplicate)
+  // labels retain encounter order; valid entries are still renumbered and count-checked below.
+  const pages = orderedRawPages(json)
     .map((p) => ({
       n: 0,
       summary: clean(p.summary),
