@@ -230,10 +230,11 @@ Atlas's six variants are untouched). Progress takes `tone="making"` (`PROGRESS_M
 | Tags (colour mode, medium, kind) | — | a 6 px dot before the word, in a neutral chip | — | — |
 | Art-adjacent surfaces | — | — | — | placeholder, glow, reader room |
 | Empty-state art | one spot element per drawing | — | — | — |
-| Landing | "Start creating", signed out only | — | — | `The Paper Boat` sample pages and six style previews |
+| Comic Studio landing | No global spark; the primary uses scoped Atlas ink or Paper cobalt | — | — | `The Last Tram` sample pages and a separate six-look `The Paper Boat` comparison |
 
 When more than one place wants the one spark, page content wins in this order: the My comics header's New comic, then
-the composer Send, then the landing hero. The panel's New comic stays ink.
+the composer Send. The panel's New comic stays ink. The Comic Studio landing uses `comics-primary-action` with
+`variant="default"`: neutral ink in Atlas and cobalt in Paper, without changing the shared creation tokens.
 
 **Where colour is forbidden** (§3.8): body text, headings, navigation labels and chrome icons (except a status icon
 and the making dot beside its words); focus rings (they stay `--ds-focus`); card, sheet, dialog, menu and toast

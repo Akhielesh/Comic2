@@ -46,6 +46,7 @@ const NAMED_FILES = [
   ...SHARE,
   'components/modals/ProjectInfoModal.tsx',
   'components/comicshost/ComicsLanding.tsx',
+  'components/comicshost/ComicsHeader.tsx',
   'components/layout/StaticSiteHeader.tsx',
   'components/PublicGallery.tsx',
   'components/ProjectDashboard.tsx',
@@ -66,7 +67,7 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
 
   it('the public shelf is the Library: no "Gallery" label on the landing or in the share flow, and the header and the shelf say Library', () => {
     // (ProjectInfoModal's "Mastery Gallery" is a different thing: the learning exercises, not public comics.)
-    for (const file of [...SHARE, 'components/comicshost/ComicsLanding.tsx']) {
+    for (const file of [...SHARE, 'components/comicshost/ComicsLanding.tsx', 'components/comicshost/ComicsHeader.tsx']) {
       const hits = uiText(file).filter((s) => /\bgallery\b/i.test(s) && !isAddress(s));
       expect(hits, file).toEqual([]);
     }
@@ -92,7 +93,9 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     }
     // Both Backs in the studio (the header and the loading skeleton).
     expect(uiText('components/comicstudio/ComicStudio.tsx').filter((s) => s === 'Back to My comics')).toHaveLength(2);
-    expect(uiText('components/comicshost/ComicsLanding.tsx')).toContain('My comics');
+    // The shared header owns navigation; the landing hero starts a new comic.
+    expect(uiText('components/comicshost/ComicsHeader.tsx')).toContain('My comics');
+    expect(uiText('components/comicshost/ComicsLanding.tsx')).toContain('Start creating');
   });
 
   it('publishing reads "Link only" / "Library + link" in the sheet, the card and the status line', () => {

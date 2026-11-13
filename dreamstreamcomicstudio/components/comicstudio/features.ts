@@ -70,7 +70,8 @@ export const BUILTIN_CARD_TYPES: ReadonlySet<Card['type']> = new Set<Card['type'
   'renders',
   'notice',
   'recap',
-  'conflict'
+  'conflict',
+  'research'
 ]);
 
 /** Board tabs BoardPane renders itself, with their merge positions for registered tabs. */

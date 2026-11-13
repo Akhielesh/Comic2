@@ -515,6 +515,33 @@ describe('StudioComposer — attachments', () => {
 });
 
 describe('StudioComposer — external requests', () => {
+  it('adds a selected research image through the upload pipeline and preserves the draft and attribution', async () => {
+    const path = 'u/1/ref/inbox/station.webp';
+    const uploadRef = vi.fn(async () => ({ ref: { path } }));
+    const studio = makeFakeStudio({ uploadRef: uploadRef as never });
+    render(<StudioComposer studio={studio} />);
+    fireEvent.change(textarea(), { target: { value: 'Keep the station entrance visible.' } });
+    const result = { title: 'Station exterior', source: 'https://commons.wikimedia.org/wiki/File:Station.jpg', credit: 'Photographer', license: 'CC BY 4.0' };
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'station.png', { type: 'image/png' });
+    act(() => composeInStudio({ research: { projectId: studio.doc!.id, result, file } }));
+    await waitFor(() => expect(uploadRef).toHaveBeenCalledWith(file, { kind: 'inbox' }, expect.objectContaining({ name: 'station.png' })));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    expect(textarea().value).toBe(`Keep the station entrance visible.\n\nVisual reference: Station exterior (Photographer · CC BY 4.0)\n${result.source}`);
+    expect(textarea()).toHaveFocus();
+    expect(studio.send).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenCalledWith(expect.stringContaining(result.source), { attachments: [], inboxPaths: [path] });
+  });
+
+  it('ignores research downloads belonging to a different comic', () => {
+    const studio = makeFakeStudio();
+    render(<StudioComposer studio={studio} />);
+    act(() => composeInStudio({ research: { projectId: 'previous_comic', result: { title: 'Station', source: 'https://en.wikipedia.org/wiki/Station' }, file: new File(['image'], 'station.png', { type: 'image/png' }) } }));
+    expect(textarea().value).toBe('');
+    expect(studio.uploadRef).not.toHaveBeenCalled();
+    expect(studio.send).not.toHaveBeenCalled();
+  });
+
   it('fills the draft and hint from the composer bus', async () => {
     render(<StudioComposer studio={makeFakeStudio()} />);
     act(() => composeInStudio({ text: 'Turn my script into a comic:\n\n', hint: 'Paste your script below' }));

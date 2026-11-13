@@ -111,7 +111,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
   const from = (table: string) => {
     const q: RecordedQuery = { table, columns: '*', filters: [], head: false, single: false };
     const predicates: Array<{ column: string; test: (row: Row) => boolean }> = [];
-    let order: { column: string; ascending: boolean } | undefined;
+    const orders: Array<{ column: string; ascending: boolean }> = [];
     let range: [number, number] | undefined;
     let limit: number | undefined;
     let mode: 'select' | 'upsert' | 'insert' | 'delete' = 'select';
@@ -145,12 +145,15 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       const missing = columnsRead(q.columns).find((c) => state.missingColumns.has(c));
       if (missing) return { data: null, error: { code: '42703', message: `column ${table}.${missing} does not exist` } };
       let matched = rows.filter((r) => predicates.every(({ column, test }) => state.ignoredFilterColumns.has(column) || test(r)));
-      if (order) {
-        const { column, ascending } = order;
+      if (orders.length) {
         matched = [...matched].sort((a, b) => {
-          const x = a[column] as string | number;
-          const y = b[column] as string | number;
-          return (x < y ? -1 : x > y ? 1 : 0) * (ascending ? 1 : -1);
+          for (const { column, ascending } of orders) {
+            const x = a[column] as string | number;
+            const y = b[column] as string | number;
+            const compared = (x < y ? -1 : x > y ? 1 : 0) * (ascending ? 1 : -1);
+            if (compared) return compared;
+          }
+          return 0;
         });
       }
       if (range) matched = matched.slice(range[0], range[1] + 1);
@@ -188,7 +191,16 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       },
       ilike: (column: string, pattern: string) => {
         q.filters.push(`${column}=ilike.${pattern}`);
-        predicates.push({ column, test: (r) => String(r[column]).toLowerCase() === pattern.toLowerCase() });
+        let source = '';
+        for (let i = 0; i < pattern.length; i += 1) {
+          const character = pattern[i];
+          if (character === '\\' && i + 1 < pattern.length) source += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          else if (character === '%') source += '.*';
+          else if (character === '_') source += '.';
+          else source += character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        const matcher = new RegExp(`^${source}$`, 'isu');
+        predicates.push({ column, test: (r) => matcher.test(String(r[column])) });
         return builder;
       },
       gt: (column: string, value: unknown) => {
@@ -197,7 +209,8 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
         return builder;
       },
       order: (column: string, opts?: { ascending?: boolean }) => {
-        order = { column, ascending: opts?.ascending ?? true };
+        const order = { column, ascending: opts?.ascending ?? true };
+        orders.push(order);
         q.filters.push(`order=${column}.${order.ascending ? 'asc' : 'desc'}`);
         return builder;
       },

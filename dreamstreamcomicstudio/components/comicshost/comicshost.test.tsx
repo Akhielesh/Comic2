@@ -65,9 +65,12 @@ describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the float
     expect(comicsChromeFor('gallery', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'gallery' });
   });
 
-  it('signed in, only the landing is comics chrome; every other view keeps the app header and the widgets', () => {
+  it('signed in, the public journey stays in Comic Studio; working views retain their app chrome', () => {
     expect(comicsChromeFor('home', on(true))).toMatchObject({ owns: true, header: false, widgets: false });
-    for (const view of ['auth', 'privacy', 'terms', 'gallery', 'dashboard', 'comicstudio', 'reader', 'settings']) {
+    for (const view of ['auth', 'privacy', 'terms', 'gallery']) {
+      expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: true, header: true, widgets: false });
+    }
+    for (const view of ['dashboard', 'comicstudio', 'reader', 'settings']) {
       expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: false, header: false, widgets: true });
     }
   });
@@ -128,10 +131,11 @@ describe('useComicsHost', () => {
     for (const view of ['dashboard', 'comicstudio', 'reader', 'settings', 'learn']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
-  it('signed in, only the landing is comics chrome: the Library, Privacy, Terms and the dashboard keep the app header and its account menu', () => {
+  it('signed in, the Library and public pages retain Comic Studio chrome while working views keep their app header', () => {
     const { result } = renderHook(() => useComicsHost({ view: 'dashboard', setView: vi.fn(), signedIn: true, ready: true, hostname: COMICS }));
     expect(result.current.ownsChrome('home')).toBe(true);
-    for (const view of ['gallery', 'privacy', 'terms', 'auth', 'dashboard', 'comicstudio']) expect(result.current.ownsChrome(view), view).toBe(false);
+    for (const view of ['gallery', 'privacy', 'terms', 'auth']) expect(result.current.ownsChrome(view), view).toBe(true);
+    for (const view of ['dashboard', 'comicstudio']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
   it('starts each view change at the top of the page on the comics host (never on the first render, never on the main site)', () => {
@@ -210,12 +214,14 @@ describe('ComicsLanding', () => {
     expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
   });
 
-  it('offers signed-in visitors their comics and the Library', () => {
+  it('offers signed-in visitors creation, their comics and the Library', () => {
     const h = handlers();
-    render(<ComicsLanding signedIn {...h} />);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'My comics' }));
+    const onStartCreating = vi.fn();
+    render(<ComicsLanding signedIn {...h} onStartCreating={onStartCreating} />);
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start creating' }));
+    expect(onStartCreating).toHaveBeenCalledTimes(1);
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' }));
-    expect(h.onOpenComics).toHaveBeenCalledTimes(2);
+    expect(h.onOpenComics).toHaveBeenCalledTimes(1);
     fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
@@ -254,18 +260,18 @@ describe('ComicsLanding', () => {
       // Nothing in the header is a filled button on the landing (the ink primary or the spark).
       const fills = [...header.querySelectorAll('[data-slot="button"]')].filter((b) => ['default', 'create'].includes(b.getAttribute('data-variant') || ''));
       expect(fills.map((b) => b.textContent?.trim())).toEqual([]);
-      // The hero carries the one fill: the spark signed out, the ink primary signed in.
-      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', signedIn ? 'default' : 'create');
+      // The hero carries the one fill, scoped to the Comic Studio theme.
+      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', 'default');
+      expect(screen.getByTestId('comics-hero-cta')).toHaveClass('comics-primary-action');
       unmount();
     }
   });
 
-  it('one spark: signed out exactly one create fill (the hero), signed in none; never hard white', () => {
+  it('uses the scoped comic primary without the global purple spark', () => {
     for (const signedIn of [false, true]) {
       const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
       const sparks = container.querySelectorAll('[data-variant="create"]');
-      expect(sparks).toHaveLength(signedIn ? 0 : 1);
-      if (!signedIn) expect(sparks[0]).toBe(screen.getByTestId('comics-hero-cta'));
+      expect(sparks).toHaveLength(0);
       expect(container.innerHTML).not.toMatch(/(?<![\w-])text-white(?![\w-])/);
       unmount();
     }

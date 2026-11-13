@@ -5,9 +5,9 @@
 //   - a signed-in visitor opening the bare host goes straight to their comics (the dashboard;
 //     product gating for `comic_studio` still applies there, in App.tsx);
 //   - a signed-out visitor sees the Comic Studio landing (App renders <ComicsLanding/> for 'home');
-//   - the landing's own chrome (ComicsHeader, no floating widgets) carries on into the views a signed-out visitor
-//     reaches from it — sign-in, Privacy, Terms and the Library — so the journey stays in one product (signed in,
-//     those keep the app header and its account menu), and each view change starts at the top of the page (never
+//   - the landing's own chrome (ComicsHeader, no floating widgets) carries on into the views a visitor
+//     reaches from it — sign-in, Privacy, Terms and the Library — before and after sign-in. Account settings
+//     remain reachable from the product menu, and each view change starts at the top of the page (never
 //     with its title under the sticky header);
 //   - views that belong to other products (Chat Studio, Operator Console, model catalog) open on
 //     the main site instead (replace(), so Back never loops), and nothing of theirs renders here.
@@ -38,9 +38,8 @@ export interface ComicsHostBoot {
   /** True while the current view is being handed to the main site (render a loader, not the view). */
   leaving: boolean;
   /**
-   * The comics host renders its own chrome for this view (comicsChromeFor): the landing for everyone; sign-in,
-   * Privacy, Terms and the Library for a signed-out visitor. The suite header and the floating widgets step aside;
-   * signed in, every view but the landing keeps the app header (its account menu and notifications).
+   * The comics host renders its own chrome for the landing, sign-in, Privacy, Terms and the Library, regardless
+   * of sign-in state. The suite header and floating widgets step aside; the product menu retains account access.
    */
   ownsChrome: (view: string) => boolean;
 }
