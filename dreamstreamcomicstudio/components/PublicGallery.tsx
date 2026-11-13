@@ -161,7 +161,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const [projects, setProjects] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [loadNotice, setLoadNotice] = useState<string | null>(null);
     const [hasMore, setHasMore] = useState(false);
     const [nextOffset, setNextOffset] = useState(0);
     const [filter, setFilter] = useState<GallerySort>('trending');
@@ -176,6 +176,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const effectiveSort = useRef<'likes_count' | 'created_at'>('likes_count');
     const pageBusy = useRef(false);
     const sampleTitle = useRef<HTMLHeadingElement>(null);
+    const libraryTitle = useRef<HTMLHeadingElement>(null);
+    const previousSample = useRef<SampleStory | null>(null);
+    const sampleReturnScroll = useRef(0);
     const sampleTrigger = useRef<HTMLAnchorElement | null>(null);
     const newResults = useRef<HTMLLIElement | null>(null);
     const focusNextPage = useRef(false);
@@ -193,23 +196,35 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     }, []);
 
     useEffect(() => {
-        if (sample) sampleTitle.current?.focus({ preventScroll: true });
+        if (sample) {
+            previousSample.current = sample;
+            sampleTitle.current?.focus({ preventScroll: true });
+        } else if (previousSample.current) {
+            previousSample.current = null;
+            const frame = window.requestAnimationFrame(() => {
+                (sampleTrigger.current ?? libraryTitle.current)?.focus({ preventScroll: true });
+                window.scrollTo({ top: sampleReturnScroll.current, behavior: 'instant' });
+            });
+            return () => window.cancelAnimationFrame(frame);
+        }
     }, [sample]);
 
     const navigateSample = (event: React.MouseEvent<HTMLAnchorElement>, story: SampleStory | null) => {
         if (!plainClick(event)) return;
         event.preventDefault();
-        if (story) sampleTrigger.current = event.currentTarget;
+        if (story) {
+            sampleTrigger.current = event.currentTarget;
+            sampleReturnScroll.current = window.scrollY;
+        }
         window.history.pushState(window.history.state, '', libraryHref(story ?? undefined));
         setSample(story);
         if (story) window.scrollTo({ top: 0, behavior: 'instant' });
-        else window.requestAnimationFrame(() => sampleTrigger.current?.focus());
     };
 
     const fetchPage = useCallback(async (offset: number, generation: number) => {
         if (generation !== requestGeneration.current || pageBusy.current) return;
         pageBusy.current = true;
-        setError(null);
+        setLoadNotice(null);
         if (offset === 0) setLoading(true);
         else setLoadingMore(true);
         try {
@@ -275,7 +290,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             setHasMore(received.length === GALLERY_PAGE_SIZE);
             setNextOffset(offset + received.length);
         } catch {
-            if (generation === requestGeneration.current) setError(offset === 0 ? 'The community Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
+            if (generation === requestGeneration.current) setLoadNotice(offset === 0 ? 'The community Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
         } finally {
             if (generation === requestGeneration.current) {
                 pageBusy.current = false;
@@ -350,7 +365,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 )}
                 <div hidden={!!sample}>
                     <header className="library-heading">
-                        <div><p className="library-eyebrow">The reading room</p><h1>Library</h1><p>Small stories. New worlds. Find your next read.</p></div>
+                        <div><p className="library-eyebrow">The reading room</p><h1 ref={libraryTitle} tabIndex={-1}>Library</h1><p>Small stories. New worlds. Find your next read.</p></div>
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
                     {showSamples && (
@@ -359,7 +374,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                             <div className="library-sample-grid">
                                 {SAMPLES.map((story) => (
                                     <a key={story.id} href={libraryHref(story.id)} onClick={(event) => navigateSample(event, story.id)} className={cn('library-sample-card', FOCUS_RING)} aria-label={`Read ${story.title}`}>
-                                        <div className="library-sample-image" data-story={story.id}><img src={story.image} alt="" width={story.id === 'paper-boat' ? 768 : 480} height={story.id === 'paper-boat' ? 1152 : 384} decoding="async" /></div>
+                                        <div className="library-sample-image" data-story={story.id}><img src={story.image} srcSet={story.id === 'last-tram' ? '/assets/comic-sample/last-tram-page-1-480.webp 480w, /assets/comic-sample/last-tram-page-1-768.webp 768w, /assets/comic-sample/last-tram-page-1-1200.webp 1200w' : undefined} sizes={story.id === 'last-tram' ? '(max-width: 639px) 44vw, 24vw' : undefined} alt="" width={story.id === 'paper-boat' ? 768 : 480} height={story.id === 'paper-boat' ? 1152 : 384} decoding="async" /></div>
                                         <div className="library-sample-copy"><p className="library-eyebrow">Sample comic</p><h3>{story.title}</h3><p className="library-sample-note">{story.note}</p><p className="library-sample-detail">{story.detail}</p><span className="library-read-link">Read the story <ArrowRight aria-hidden /></span></div>
                                     </a>
                                 ))}
@@ -380,7 +395,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                             {(query || kidsOnly) && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearFilters}>Clear filters</button>}
                         </div>
                         <p id="library-search-help" className="library-search-help">{searchKind === 'creator' ? 'Search an exact username, with or without @.' : 'Search titles across the community Library.'}{kidsOnly && ' Only published comics rated G or PG are included.'}</p>
-                        <p className="library-results-count" role="status" aria-live="polite">{loading || isSearching ? 'Finding your next read…' : error && projects.length === 0 ? 'Community comics are temporarily unavailable.' : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}${hasMore ? ' shown · more to discover' : ''}`}</p>
+                        <p className="library-results-count" role="status" aria-live="polite">{loading || isSearching ? 'Finding your next read…' : loadNotice && projects.length === 0 ? 'Community comics are temporarily unavailable.' : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}${hasMore ? ' shown · more to discover' : ''}`}</p>
                         {likeError && <p className="library-inline-error" role="alert">{likeError}</p>}
                         {loading ? (
                             <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: 8 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
@@ -402,9 +417,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                                         </li>;
                                     })}
                                 </ul>}
-                                {!error && filteredProjects.length === 0 && <div className="library-empty"><BookOpen aria-hidden /><h3>{hasMore ? 'Keep exploring the Library.' : query ? 'No matching comics.' : kidsOnly ? 'No kids-friendly comics yet.' : 'The next story could be yours.'}</h3><p>{hasMore ? 'No readable comics appeared in this batch. Load the next comics below.' : query ? 'Try another title or an exact creator username.' : kidsOnly ? 'Only published comics rated G or PG show here.' : 'Community comics will appear here when creators publish them. In the meantime, enjoy a Studio sample above.'}</p>{(query || kidsOnly) && <Button variant="outline" onClick={clearFilters}>Clear filters</Button>}</div>}
-                                {error && <div role="alert" className="library-load-error"><p>{error}</p><p>{showSamples ? 'Studio samples are still available above.' : 'Check your connection and try again.'}</p><Button variant="outline" onClick={() => void fetchPage(projects.length ? nextOffset : 0, requestGeneration.current)}>Try again</Button></div>}
-                                {hasMore && !error && <div className="library-more"><Button type="button" variant="outline" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading more comics…' : 'Load more comics'}{!loadingMore && <ArrowRight aria-hidden />}</Button><p>Showing {filteredProjects.length} comics. Keep exploring at your own pace.</p></div>}
+                                {!loadNotice && filteredProjects.length === 0 && <div className="library-empty"><BookOpen aria-hidden /><h3>{hasMore ? 'Keep exploring the Library.' : query ? 'No matching comics.' : kidsOnly ? 'No kids-friendly comics yet.' : 'The next story could be yours.'}</h3><p>{hasMore ? 'No readable comics appeared in this batch. Load the next comics below.' : query ? 'Try another title or an exact creator username.' : kidsOnly ? 'Only published comics rated G or PG show here.' : 'Community comics will appear here when creators publish them. In the meantime, enjoy a Studio sample above.'}</p>{(query || kidsOnly) && <Button variant="outline" onClick={clearFilters}>Clear filters</Button>}</div>}
+                                {loadNotice && <div role="alert" className="library-load-error"><p className="[overflow-wrap:anywhere]">{loadNotice}</p><p>{showSamples ? 'Studio samples are still available above.' : 'Check your connection and try again.'}</p><Button variant="outline" onClick={() => void fetchPage(nextOffset, requestGeneration.current)}>Try again</Button></div>}
+                                {hasMore && !loadNotice && <div className="library-more"><Button type="button" variant="outline" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading more comics…' : 'Load more comics'}{!loadingMore && <ArrowRight aria-hidden />}</Button><p>Showing {filteredProjects.length} comics. Keep exploring at your own pace.</p></div>}
                             </>
                         )}
                     </section>

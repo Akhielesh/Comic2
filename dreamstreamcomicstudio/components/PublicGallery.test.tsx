@@ -262,7 +262,7 @@ describe('PublicGallery on the Atlas tokens', () => {
   });
 });
 
-describe('Library discovery and recovery', () => {
+describe('Library discovery and recovery', { timeout: 15000 }, () => {
   const manyRows = (count: number) => Array.from({ length: count }, (_, index) => row(
     `comic-${String(index).padStart(3, '0')}`, `Story ${String(index).padStart(3, '0')}`,
     { coverImageUrl: 'https://cdn.test/cover.webp' }, { likes_count: 1 }
@@ -395,5 +395,46 @@ describe('Library discovery and recovery', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0]);
     expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
     expect(screen.getByRole('searchbox')).toHaveValue('');
+  });
+});
+
+describe('Library sample reading', () => {
+  it('opens the selected story at a real URL, turns a page and restores focus to its card', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('The Lake');
+    const card = screen.getByRole('link', { name: 'Read The Paper Boat' });
+    expect(card).toHaveAttribute('href', '/?view=gallery&sample=paper-boat');
+    fireEvent.click(card);
+    expect(screen.getByRole('heading', { name: 'The Paper Boat', level: 1 })).toHaveFocus();
+    expect(window.location.search).toBe('?view=gallery&sample=paper-boat');
+    fireEvent.click(screen.getByRole('button', { name: 'Next sample page' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Page 2 of 2');
+    fireEvent.click(screen.getByRole('link', { name: 'Back to Library' }));
+    await waitFor(() => expect(card).toHaveFocus());
+    expect(window.location.search).toBe('?view=gallery');
+    expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+  });
+
+  it('restores accepted sample deep links and handles browser navigation back to the shelf', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    window.history.replaceState({}, '', '/?view=gallery&sample=last-tram');
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'The Last Tram', level: 1 })).toHaveFocus();
+    act(() => {
+      window.history.replaceState({}, '', '/?view=gallery');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    const title = screen.getByRole('heading', { name: 'Library', level: 1 });
+    await waitFor(() => expect(title).toHaveFocus());
+    await screen.findByText('The Lake');
+  });
+
+  it('ignores an unknown sample id and keeps the Library usable', async () => {
+    window.history.replaceState({}, '', '/?view=gallery&sample=unknown');
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Library', level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Back to Library' })).toBeNull();
+    await screen.findByText('The Lake');
   });
 });

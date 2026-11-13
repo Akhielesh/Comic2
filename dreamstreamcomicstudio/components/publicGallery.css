@@ -36,8 +36,8 @@
 .library-samples { padding-block: 1.5rem 2.5rem; border-top: 1px solid var(--ds-hairline); }
 .library-sample-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
 .library-sample-card { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1fr); border: 1px solid var(--ds-hairline); border-radius: .625rem; overflow: hidden; background: var(--ds-well); min-width: 0; text-decoration: none; }
-.library-sample-image { min-width: 0; min-height: 13.75rem; overflow: hidden; background: var(--ds-well); }
-.library-sample-image img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 220ms ease; }
+.library-sample-image { position: relative; min-width: 0; min-height: 15rem; overflow: hidden; background: var(--ds-well); }
+.library-sample-image img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 220ms ease; }
 .library-sample-image[data-story='last-tram'] img { object-position: center; }
 .library-sample-image[data-story='paper-boat'] img { object-position: center 42%; }
 .library-sample-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: clamp(1rem, 2vw, 1.75rem); }
