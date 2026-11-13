@@ -48,7 +48,7 @@ import {
   topLevelSplit,
   withAlpha
 } from './cssTokens';
-import { separation } from './paletteChecks';
+import { oklabOf as oklabOfHex, separation } from './paletteChecks';
 
 const rules = parseRules(css);
 const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
@@ -211,6 +211,19 @@ function pairs(): Pair[] {
       const on = token('--ds-on-spark', ctx);
       out.push({ ctx, fg: '--ds-on-spark', bg: fill, ratio: ratio(on, bg), min: 4.5 });
       out.push({ ctx, fg: '--ds-on-spark at 90 %', bg: fill, ratio: ratio(over(withAlpha(on, 0.9), bg), bg), min: 4.5 });
+    }
+    // The colour layer "Ink, Paper & Colour" (CL-6): each hue's text step on every surface and on its own opaque soft
+    // tint; the one label colour on each solid fill, at 4.5:1 where words are allowed on it (slots 1, 5 and 6 in
+    // light, all seven in dark) and at 3:1 (an icon) elsewhere.
+    const dark = /dark/.test(ctx);
+    for (const slot of design.HUE_SLOTS) {
+      const fg = `--ds-hue-${slot}-text`;
+      for (const [bg, c] of [...surfaces(ctx), [`hue-${slot}-soft`, token(`--ds-hue-${slot}-soft`, ctx)] as const]) {
+        out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), over(c, token('--ds-canvas', ctx))), min: 4.5 });
+      }
+      const words = dark || design.HUE_SOLID_TEXT_SLOTS.includes(slot);
+      const solid = over(token(`--ds-hue-${slot}-solid`, ctx), token('--ds-canvas', ctx));
+      out.push({ ctx, fg: words ? '--ds-on-hue' : '--ds-on-hue (icon)', bg: `hue-${slot}-solid`, ratio: ratio(token('--ds-on-hue', ctx), solid), min: words ? 4.5 : 3 });
     }
   }
   return out;
@@ -707,7 +720,7 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
     // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas. --ds-spark
     // is gated as a mark (≥ 3:1), not as text, so it is NOT a measured text token: words in the spark use SPARK_TEXT
     // (--ds-spark-text, ≥ 4.5:1). Its one text-[…] spelling is MAKING_DOT, skipped by name below.
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`)]);
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', '--ds-spark-text', '--ds-on-spark', ...TONES.map((t) => `--ds-${t}-text`), ...design.HUE_SLOTS.map((n) => `--ds-hue-${n}-text`), '--ds-on-hue']);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
       if (name === 'MAKING_DOT') continue; // a mark: currentColor of LiveDot, gated ≥ 3:1 in the colour-layer describe
@@ -1204,6 +1217,21 @@ describe('Atlas wave 5 outcomes — "increase contrast" strengthens both hairlin
 const SPARK_TOKENS = ['--ds-spark', '--ds-spark-hover', '--ds-on-spark', '--ds-spark-text', '--ds-spark-soft', '--ds-spark-glow'] as const;
 const HUE_TOKENS = ['--ds-hue-1', '--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-hue-5'] as const;
 const LAYER_TOKENS = [...SPARK_TOKENS, ...HUE_TOKENS, '--ds-art'] as const;
+/**
+ * The names the colour layer "Ink, Paper & Colour" adds (CL-6; tests/config/dsColourSwitch.test.ts holds the same list
+ * to the off switch): two more hues, each hue's text step, soft tint and solid, the one label colour, the two chart
+ * ramps, the two washes, the studio accent and the art tint's card defaults. They read the hues by design.
+ */
+const COLOUR_TOKENS = [
+  '--ds-hue-6', '--ds-hue-7',
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-text`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-soft`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-hue-${n}-solid`),
+  '--ds-on-hue',
+  ...[1, 2, 3, 4, 5, 6].map((n) => `--ds-chart-seq-${n}`),
+  ...[1, 2, 3, 4, 5, 6, 7].map((n) => `--ds-chart-div-${n}`),
+  '--ds-wash-hero', '--ds-wash-empty', '--ds-studio', '--ds-studio-soft', '--ds-art-soft', '--ds-art-edge'
+] as const;
 /** Every status colour a spark could be mistaken for: the fills and marks, and the readable text inks. */
 const STATUS_COLOURS = ['--ds-success', '--ds-warning', '--ds-danger', '--ds-danger-mark', '--ds-info', '--ds-success-text', '--ds-warning-text', '--ds-danger-text', '--ds-info-text'] as const;
 /** The separation floors (design §3.11, PROGRAM3 CL-0): normal vision ≥ 15, the worse of protanopia and deuteranopia ≥ 8. */
@@ -1353,7 +1381,7 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
     const leaks: string[] = [];
     for (const [blockName, block] of Object.entries({ ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE })) {
       for (const [k, v] of block) {
-        if ((LAYER_TOKENS as readonly string[]).includes(k)) continue;
+        if ((LAYER_TOKENS as readonly string[]).includes(k) || (COLOUR_TOKENS as readonly string[]).includes(k)) continue;
         if (/var\(--ds-(?:spark|hue-|art\b)/.test(v)) leaks.push(`${blockName} ${k}: ${v}`);
       }
     }
@@ -1377,6 +1405,189 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
     for (const ctx of ALL_CONTEXTS) expect(token('--ds-spark-glow', ctx).a, ctx).toBeLessThanOrEqual(0.3);
     // The art tint defaults to the strong well: neutral until a component sets the comic's colour inline.
     for (const ctx of ALL_CONTEXTS) expect(token('--ds-art', ctx), ctx).toEqual(token('--ds-well-strong', ctx));
+  });
+});
+
+// ── The colour layer "Ink, Paper & Colour" (CL-6) ───────────────────────────────
+/**
+ * Seven hues with a readable text step, an opaque soft tint and a solid each; the one label colour on a solid; two
+ * washes; the studio accent; the comic's tint on a card. Measured in all six contexts like the rest of the layer.
+ */
+const COLOUR_TEXT = {
+  light: ['#4455c2', '#aa3176', '#a04c00', '#01706c', '#8244b0', '#4a6c00', '#00699b'],
+  // Slots 1, 2 and 5 are 4 % lighter than the first proposal's #97adff / #f492c1 / #cc9ef5: on a hovered row over the default
+  // dark raised step those measured 4.40 to 4.42:1.
+  dark: ['#9bb0ff', '#f496c3', '#f99f66', '#48c7c0', '#cea2f5', '#9bc466', '#54c1fb']
+} as const;
+const BASE_CONTEXTS = ['default light', 'default dark', 'atlas light', 'atlas dark'] as const;
+const isDark = (ctx: ContextName) => ctx.includes('dark');
+/** An OKLab mix (CSS `color-mix(in oklab, a p%, b)`), for the art tint; both colours opaque. */
+function mixOklab(a: Rgba, b: Rgba, p: number): Rgba {
+  const lab = (c: Rgba) => oklabOfHex(hexOf(c));
+  const [la, lb] = [lab(a), lab(b)];
+  const m = [0, 1, 2].map((i) => la[i] * p + lb[i] * (1 - p));
+  return oklchToRgb(m[0], Math.hypot(m[1], m[2]), ((Math.atan2(m[2], m[1]) * 180) / Math.PI + 360) % 360);
+}
+/** The hue and percentage of each radial stop of a wash token (`color-mix(in srgb, var(--ds-hue-N) P%, transparent)`). */
+const washStops = (value: string) => [...value.matchAll(/color-mix\(in srgb, var\((--ds-hue-\d)\) (\d+)%, transparent\)/g)].map((m) => ({ hue: m[1], pct: +m[2] / 100 }));
+
+describe('token contrast — the colour layer "Ink, Paper & Colour" (CL-6) in all six contexts', () => {
+  let cachedLayer: Pair[] | null = null;
+  const measureLayer = () => (cachedLayer ??= pairs());
+
+  it('defines every new name in all four blocks, and "increase contrast" needs none of them', () => {
+    for (const block of [ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK]) expect(COLOUR_TOKENS.filter((k) => !block.has(k))).toEqual([]);
+    for (const block of [ATLAS_LIGHT_MORE, ATLAS_DARK_MORE]) expect(COLOUR_TOKENS.filter((k) => block.has(k))).toEqual([]);
+    expect(COLOUR_TOKENS).toHaveLength(43);
+  });
+
+  it('pins the text steps, the opaque soft tints (12 % light, 16 % dark, over the raised step), the solids and the one label colour', () => {
+    for (const ctx of BASE_CONTEXTS) {
+      const dark = isDark(ctx);
+      expect(design.HUE_SLOTS.map((n) => lookup(`--ds-hue-${n}-text`, ctx)), ctx).toEqual([...COLOUR_TEXT[dark ? 'dark' : 'light']]);
+      for (const n of design.HUE_SLOTS) {
+        expect(lookup(`--ds-hue-${n}-soft`, ctx), `${ctx} ${n}`).toBe(`color-mix(in srgb, var(--ds-hue-${n}) ${dark ? 16 : 12}%, var(--ds-raised))`);
+        expect(token(`--ds-hue-${n}-soft`, ctx).a, `${ctx} soft ${n} is opaque`).toBe(1);
+        expect(lookup(`--ds-hue-${n}-solid`, ctx)).toBe(`var(--ds-hue-${n})`);
+      }
+      expect(lookup('--ds-on-hue', ctx)).toBe(dark ? '#0a0a0a' : '#ffffff');
+    }
+  });
+
+  it('every hue text step is ≥ 4.5:1 on every surface (hovered, selected and raised rows included) and on its own tint, in every context', () => {
+    const all = measureLayer();
+    for (const ctx of ALL_CONTEXTS) {
+      for (const n of design.HUE_SLOTS) {
+        const rows = all.filter((p) => p.ctx === ctx && p.fg === `--ds-hue-${n}-text`);
+        expect(rows.length, `${ctx} ${n}`).toBe(surfaces(ctx).size + 1);
+        expect(rows.some((p) => p.bg === `hue-${n}-soft`)).toBe(true);
+      }
+    }
+    expect(all.filter((p) => /--ds-hue-\d-text/.test(p.fg) && p.ratio < 4.5).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+  });
+
+  it('a tag chip is ink on the tint: ink ≥ 4.5:1 on every soft tint and on the studio tint, in every context (a chip on an art-tinted card too: the tint is opaque)', () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const ink = token('--ds-ink', ctx);
+      for (const n of design.HUE_SLOTS) {
+        const tint = token(`--ds-hue-${n}-soft`, ctx);
+        if (ratio(ink, tint) < 4.5) under.push(`${ctx}: ink on hue-${n}-soft = ${ratio(ink, tint).toFixed(2)}`);
+        // The same chip over an art-tinted card is the same colour: the soft tint does not let the card through.
+        const onArt = over(tint, mixOklab(hexColor('#c0392b'), over(token('--ds-raised', ctx), token('--ds-canvas', ctx)), 0.18));
+        expect(hexOf(onArt), `${ctx} hue-${n} chip on an art card`).toBe(hexOf(tint));
+      }
+      if (ratio(ink, over(token('--ds-studio-soft', ctx), token('--ds-canvas', ctx))) < 4.5) under.push(`${ctx}: ink on studio-soft`);
+    }
+    expect(under).toEqual([]);
+    expect(design.hueChip(1)).toBe('bg-[var(--ds-hue-2-soft)] text-[var(--ds-ink)]');
+    expect(design.hueChip(7)).toBe('bg-[var(--ds-well-strong)] text-[var(--ds-ink)]');
+  });
+
+  it('the label on a solid: ≥ 4.5:1 where words are allowed (slots 1, 5, 6 in light; all seven in dark), ≥ 3:1 for an icon elsewhere', () => {
+    const all = measureLayer();
+    expect(all.filter((p) => p.fg.startsWith('--ds-on-hue') && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    expect([...design.HUE_SOLID_TEXT_SLOTS]).toEqual([1, 5, 6]);
+    // The rule is load-bearing: white on magenta, orange, teal and sky is under 4.5:1 in light (4.39, 3.43, 3.47, 3.87).
+    for (const ctx of ['default light', 'atlas light'] as const) {
+      const words = design.HUE_SLOTS.filter((n) => ratio(token('--ds-on-hue', ctx), token(`--ds-hue-${n}-solid`, ctx)) >= 4.5);
+      expect(words, ctx).toEqual([1, 5, 6]);
+    }
+    for (const ctx of ['default dark', 'atlas dark'] as const) {
+      for (const n of design.HUE_SLOTS) expect(ratio(token('--ds-on-hue', ctx), token(`--ds-hue-${n}-solid`, ctx)), `${ctx} ${n}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(design.HUE_SOLID[1]).toBe('bg-[var(--ds-hue-2-solid)] text-[var(--ds-on-hue)]');
+  });
+
+  it('hues 6 and 7 (leaf, sky) are ≥ 3:1 on the canvas and on a card in every context, like 1-5', () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const s = surfaces(ctx);
+      for (const hue of ['--ds-hue-6', '--ds-hue-7']) for (const bg of ['canvas', 'surface/canvas']) if (ratio(token(hue, ctx), s.get(bg)!) < 3) under.push(`${ctx}: ${hue} on ${bg}`);
+    }
+    expect(under).toEqual([]);
+  });
+
+  it('status look-alikes: coloured hue TEXT only on slots 1, 5 and 7, the ones ≥ 10 ΔE from every status text in every context', () => {
+    const statusTexts = TONES.map((t) => `--ds-${t}-text`);
+    const nearest = (n: number, ctx: ContextName) => Math.min(...statusTexts.map((s) => separation(opaque(`--ds-hue-${n}-text`, ctx), opaque(s, ctx)).normal));
+    const clear = design.HUE_SLOTS.filter((n) => BASE_CONTEXTS.every((ctx) => nearest(n, ctx) >= 10));
+    expect([...design.HUE_TEXT_SLOTS]).toEqual([1, 5, 7]);
+    for (const n of design.HUE_TEXT_SLOTS) expect(clear, `slot ${n}`).toContain(n);
+  });
+
+  it('the hero and empty washes: ink and muted text stay ≥ 4.5:1 at the peak of every wash colour, in every context', () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const canvas = token('--ds-canvas', ctx);
+      for (const wash of ['--ds-wash-hero', '--ds-wash-empty']) {
+        const stops = washStops(lookup(wash, ctx));
+        expect(stops.length, `${ctx} ${wash}`).toBeGreaterThanOrEqual(2);
+        for (const { hue, pct } of stops) {
+          const peak = over(withAlpha(token(hue, ctx), pct), canvas);
+          for (const fg of ['--ds-ink', '--ds-muted']) {
+            const r = ratio(token(fg, ctx), peak);
+            if (r < 4.5) under.push(`${ctx}: ${fg} on ${wash} at ${hue} ${Math.round(pct * 100)} % = ${r.toFixed(2)}`);
+          }
+        }
+      }
+    }
+    expect(under).toEqual([]);
+    // The strengths: Atlas light 20 / 18 / 12 %, dark 26 / 22 / 16 %; the default skin 13 % (light) and 18 % (dark).
+    const pcts = (ctx: ContextName) => washStops(lookup('--ds-wash-hero', ctx)).map((s) => Math.round(s.pct * 100));
+    expect(pcts('atlas light')).toEqual([20, 18, 12]);
+    expect(pcts('atlas dark')).toEqual([26, 22, 16]);
+    expect(pcts('default light')).toEqual([13, 13, 13]);
+    expect(pcts('default dark')).toEqual([18, 18, 18]);
+    // Magenta, ultramarine and orange behind the hero; magenta and leaf behind an empty state (no gold, no spark-blue there).
+    expect(washStops(lookup('--ds-wash-hero', 'atlas light')).map((s) => s.hue)).toEqual(['--ds-hue-2', '--ds-hue-1', '--ds-hue-3']);
+    expect(washStops(lookup('--ds-wash-empty', 'atlas light')).map((s) => s.hue)).toEqual(['--ds-hue-2', '--ds-hue-6']);
+  });
+
+  it('the comic’s own tint on a card (.ds-art-scope, mixed in OKLab): ink and muted ≥ 4.5:1 on the soft wash for every colour of the clamp box', () => {
+    const scope = tokensOf(rules, (s) => s === '.ds-art-scope');
+    const scopeDark = tokensOf(rules, (s) => s === '.dark .ds-art-scope, .dark.ds-art-scope');
+    expect(scope.get('--ds-art-soft')).toBe('color-mix(in oklab, var(--ds-art) 12%, var(--ds-canvas))');
+    expect(scopeDark.get('--ds-art-soft')).toBe('color-mix(in oklab, var(--ds-art) 18%, var(--ds-canvas))');
+    const clampBox: Rgba[] = [];
+    for (const L of [0.5, 0.7]) for (const C of [0.06, 0.16]) for (const h of [0, 60, 120, 180, 240, 300]) clampBox.push(oklchToRgb(L, C, h));
+    const under: string[] = [];
+    for (const ctx of BASE_CONTEXTS) {
+      const canvas = token('--ds-canvas', ctx);
+      const p = isDark(ctx) ? 0.18 : 0.12;
+      for (const art of clampBox) {
+        const soft = mixOklab(art, canvas, p);
+        for (const fg of ['--ds-ink', '--ds-muted']) {
+          const r = ratio(token(fg, ctx), soft);
+          if (r < 4.5) under.push(`${ctx}: ${fg} on art ${hexOf(art)} = ${r.toFixed(2)}`);
+        }
+      }
+    }
+    expect(under).toEqual([]);
+    // Outside a scope the art tints are the plain card.
+    for (const ctx of BASE_CONTEXTS) {
+      expect(lookup('--ds-art-soft', ctx)).toBe('var(--ds-raised)');
+      expect(lookup('--ds-art-edge', ctx)).toBe('var(--ds-hairline)');
+    }
+  });
+
+  it('the studio accents: Chat teal, Live magenta, Models violet, Atlas sky; Comic Studio none (the neutral default)', () => {
+    const studio = (name: string) => tokensOf(rules, (s) => s === `[data-ds-studio="${name}"]`);
+    expect(studio('chat').get('--ds-studio')).toBe('var(--ds-hue-4)');
+    expect(studio('live').get('--ds-studio')).toBe('var(--ds-hue-2)');
+    expect(studio('models').get('--ds-studio')).toBe('var(--ds-hue-5)');
+    expect(studio('atlas').get('--ds-studio')).toBe('var(--ds-hue-7)');
+    for (const name of ['chat', 'live', 'models', 'atlas']) {
+      const hue = /--ds-hue-(\d)/.exec(studio(name).get('--ds-studio')!)![1];
+      expect(studio(name).get('--ds-studio-soft'), name).toBe(`var(--ds-hue-${hue}-soft)`);
+    }
+    // No studio takes ultramarine (the spark keeps its one meaning), and Comic Studio has no rule.
+    expect(rules.filter((r) => /data-ds-studio="comic"/.test(r.selector))).toEqual([]);
+    expect(rules.filter((r) => /\[data-ds-studio=/.test(r.selector) && /--ds-hue-1\b/.test(r.body))).toEqual([]);
+    for (const ctx of BASE_CONTEXTS) {
+      expect(lookup('--ds-studio', ctx)).toBe('var(--ds-ink)');
+      expect(lookup('--ds-studio-soft', ctx)).toBe('var(--ds-well-strong)');
+    }
   });
 });
 

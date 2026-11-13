@@ -5,7 +5,7 @@
  * are untouched. colourLayer.css.test.ts compiles the recipes and checks the hand-written classes.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import * as studioDesign from '../chat/studioDesign';
 import { Button, BUTTON_EXTENSION_VARIANTS, BUTTON_VARIANT, BUTTON_VARIANTS, buttonClasses } from './Button';
@@ -97,5 +97,37 @@ describe('Progress `tone="making"` — the spark bar while the studio draws', ()
   it('indeterminate making still pulses only when motion is allowed', () => {
     render(<Progress label="Drawing" tone="making" />);
     expectClasses(screen.getByRole('progressbar', { name: 'Drawing' }).querySelector('[data-slot="progress-bar"]')!, PROGRESS_MAKING, 'w-1/3 motion-safe:animate-pulse');
+  });
+});
+
+describe('the colour specimen (CL-6, "Ink, Paper & Colour")', () => {
+  it('shows the seven hues with an ink chip, an icon in the text step and an icon on each solid; words on a solid only on slots 1, 5 and 6', async () => {
+    const { ColourSpecimen } = await import('./specimens/ColourSpecimen');
+    const { container } = render(<ColourSpecimen />);
+    const hues = within(screen.getByRole('list', { name: 'The seven hues' })).getAllByRole('listitem');
+    expect(hues).toHaveLength(7);
+    hues.forEach((li, i) => {
+      const chip = li.querySelector(`.bg-\\[var\\(--ds-hue-${i + 1}-soft\\)\\]`) as HTMLElement;
+      expect(chip, `slot ${i + 1} chip`).not.toBeNull();
+      expect(chip).toHaveClass('text-[var(--ds-ink)]');
+      const solid = li.querySelector(`.bg-\\[var\\(--ds-hue-${i + 1}-solid\\)\\]`) as HTMLElement;
+      expect(solid.textContent, `slot ${i + 1} solid holds an icon`).toBe('');
+    });
+    // The words-on-a-solid row uses exactly slots 1, 5 and 6.
+    const worded = [...container.querySelectorAll('[class*="-solid)]"]')].filter((el) => (el.textContent ?? '').trim()).map((el) => /--ds-hue-(\d)-solid/.exec(el.className)![1]);
+    expect(worded).toEqual(['1', '5', '6']);
+    // Charts: a legend in chart order, the plot on the card, never the raised step.
+    expect(within(screen.getByRole('list', { name: 'Chart series legend' })).getAllByRole('listitem')).toHaveLength(7);
+    const plot = screen.getByRole('img', { name: 'Sample bars, one per series' });
+    expect(plot.closest('.bg-\\[var\\(--ds-surface\\)\\]')).not.toBeNull();
+    expect([...plot.querySelectorAll('rect')].map((r) => r.getAttribute('class'))).toEqual([1, 2, 6, 7, 3, 4, 5].map((n) => `fill-[var(--ds-hue-${n})]`));
+    // Studios: four accents and Comic Studio's none; a comic's tint inside its art scope.
+    expect([...container.querySelectorAll('[data-ds-studio]')].map((el) => el.getAttribute('data-ds-studio'))).toEqual(['chat', 'live', 'models', 'atlas', 'comic']);
+    const art = container.querySelector('[data-qa-art]') as HTMLElement;
+    expect(art).toHaveClass('ds-art-scope', 'bg-[var(--ds-art-soft)]', 'border-[color:var(--ds-art-edge)]');
+    expect(art.style.getPropertyValue('--ds-art')).toBe('var(--ds-hue-3)');
+    // No price and no spend control anywhere; no spark fill.
+    expect(container.textContent).not.toMatch(/\$|¢|of your usage|Approve|Redraw|Translate|Get more/);
+    expect(container.querySelector('[data-variant="create"]')).toBeNull();
   });
 });

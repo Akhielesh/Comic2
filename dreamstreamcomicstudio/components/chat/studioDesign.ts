@@ -558,6 +558,90 @@ export const hueClass = (kind: 'dot' | 'fill' | 'stroke', i: number): string | n
 };
 
 // ---------------------------------------------------------------------------
+// Colour layer "Ink, Paper & Colour" (CL-6; docs/design/design-system.md § Colour layer). Text stays ink on paper,
+// buttons that spend stay ink, and colour never replaces a word. Colour does five jobs: tell things apart (the seven
+// hues), show data (the hues in CHART_HUE_ORDER, the sequential and diverging ramps), warm a page (the two washes,
+// never a working view), carry a comic's own colour (ART_*), and name the studio you are in (STUDIO_*; Comic Studio
+// has none). Never on or beside a price or a spend control (tests/config/colourUseGuard.test.ts). Every recipe below
+// reads a token, so VITE_DS_COLOUR=off (one CSS block in index.css) turns them all neutral with no component change.
+// The arrays are indexed by slot - 1 (index 0 is slot 1, ultramarine), like HUE_DOT above.
+// ---------------------------------------------------------------------------
+
+/** The seven hue slots (1-based, as in the token names --ds-hue-1…7) and their names. There is no eighth hue. */
+export const HUE_SLOTS = [1, 2, 3, 4, 5, 6, 7] as const;
+export type HueSlot = (typeof HUE_SLOTS)[number];
+export const HUE_NAMES = ['ultramarine', 'magenta', 'orange', 'teal', 'violet', 'leaf', 'sky'] as const;
+/**
+ * The order chart series take the hues: ultramarine, magenta, leaf, sky, then orange, teal, violet. Under
+ * deuteranopia magenta and teal are 1.1 ΔE apart, so the plain slot order fails; the first four here are the safest
+ * four-set (worst all-pairs 8.9 ΔE light, 9.1 dark, over normal, protan, deutan and tritan vision). Five or more
+ * series are always labelled. A chart mark may use slot 1: a chart mark is not a spark fill.
+ */
+export const CHART_HUE_ORDER = [1, 2, 6, 7, 3, 4, 5] as const;
+/** The seven marks for dots and legend swatches, SVG fills and SVG strokes (≥ 3:1 on the page and a card). */
+export const HUE_MARK = {
+  dot: ['bg-[var(--ds-hue-1)]', 'bg-[var(--ds-hue-2)]', 'bg-[var(--ds-hue-3)]', 'bg-[var(--ds-hue-4)]', 'bg-[var(--ds-hue-5)]', 'bg-[var(--ds-hue-6)]', 'bg-[var(--ds-hue-7)]'],
+  fill: ['fill-[var(--ds-hue-1)]', 'fill-[var(--ds-hue-2)]', 'fill-[var(--ds-hue-3)]', 'fill-[var(--ds-hue-4)]', 'fill-[var(--ds-hue-5)]', 'fill-[var(--ds-hue-6)]', 'fill-[var(--ds-hue-7)]'],
+  stroke: ['stroke-[var(--ds-hue-1)]', 'stroke-[var(--ds-hue-2)]', 'stroke-[var(--ds-hue-3)]', 'stroke-[var(--ds-hue-4)]', 'stroke-[var(--ds-hue-5)]', 'stroke-[var(--ds-hue-6)]', 'stroke-[var(--ds-hue-7)]']
+} as const;
+/**
+ * The n-th chart series' (0-based) mark class in CHART_HUE_ORDER, or null past the seventh (fold the rest into "Other",
+ * an ink chart step). Charts draw on CHART_PLOT_BG, never on a raised fill.
+ */
+export const chartHue = (kind: 'dot' | 'fill' | 'stroke', i: number): string | null =>
+  Number.isInteger(i) && i >= 0 && i < CHART_HUE_ORDER.length ? HUE_MARK[kind][CHART_HUE_ORDER[i] - 1] : null;
+/** A plot area's own surface: the card, never the raised step (hues 1, 2 and 5 fall under 3:1 on the default dark raised fill). */
+export const CHART_PLOT_BG = 'bg-[var(--ds-surface)]';
+/**
+ * Each hue's readable text step (≥ 4.5:1 on every surface and on its own soft tint). For icons beside words, and as
+ * coloured TEXT only on slots 1, 5 and 7 (HUE_TEXT_SLOTS: the others sit near a status colour). Body text stays ink.
+ */
+export const HUE_TEXT = ['text-[var(--ds-hue-1-text)]', 'text-[var(--ds-hue-2-text)]', 'text-[var(--ds-hue-3-text)]', 'text-[var(--ds-hue-4-text)]', 'text-[var(--ds-hue-5-text)]', 'text-[var(--ds-hue-6-text)]', 'text-[var(--ds-hue-7-text)]'] as const;
+export const HUE_TEXT_SLOTS: readonly HueSlot[] = [1, 5, 7];
+/** Each hue's opaque soft tint (12 % light, 16 % dark, over the raised step): a tag chip's ground, a current-item tint. */
+export const HUE_SOFT_BG = ['bg-[var(--ds-hue-1-soft)]', 'bg-[var(--ds-hue-2-soft)]', 'bg-[var(--ds-hue-3-soft)]', 'bg-[var(--ds-hue-4-soft)]', 'bg-[var(--ds-hue-5-soft)]', 'bg-[var(--ds-hue-6-soft)]', 'bg-[var(--ds-hue-7-soft)]'] as const;
+/**
+ * A solid hue tile (a 56 px feature tile, a counter) with the one label colour on it (white in light, ink in dark).
+ * Never a button. In light the label is an ICON on slots 2, 3, 4 and 7 (white on them is 3.4 to 4.4:1); words are
+ * allowed on slots 1, 5 and 6 in light (HUE_SOLID_TEXT_SLOTS) and on all seven in dark.
+ */
+export const HUE_SOLID = [
+  'bg-[var(--ds-hue-1-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-2-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-3-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-4-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-5-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-6-solid)] text-[var(--ds-on-hue)]',
+  'bg-[var(--ds-hue-7-solid)] text-[var(--ds-on-hue)]'
+] as const;
+export const HUE_SOLID_TEXT_SLOTS: readonly HueSlot[] = [1, 5, 6];
+/** The ink tile beside the hue tiles (the landing's first feature tile): the ink fill with the page colour on it. */
+export const INK_TILE = 'bg-[var(--ds-ink)] text-[var(--ds-canvas)]';
+/**
+ * A tag chip: INK text on a hue's soft tint, no dot (coloured text and dots belong to status). `i` is 0-based like the
+ * arrays (0 = slot 1); past the seventh, the neutral well.
+ */
+export const hueChip = (i: number): string =>
+  Number.isInteger(i) && i >= 0 && i < HUE_SOFT_BG.length ? `${HUE_SOFT_BG[i]} text-[var(--ds-ink)]` : 'bg-[var(--ds-well-strong)] text-[var(--ds-ink)]';
+/** Sequential ramp (one hue, light to strong): magnitude. Steps under 3:1 on the plot always carry a value label or the table. */
+export const CHART_SEQ_FILL = ['fill-[var(--ds-chart-seq-1)]', 'fill-[var(--ds-chart-seq-2)]', 'fill-[var(--ds-chart-seq-3)]', 'fill-[var(--ds-chart-seq-4)]', 'fill-[var(--ds-chart-seq-5)]', 'fill-[var(--ds-chart-seq-6)]'] as const;
+export const CHART_SEQ_BG = ['bg-[var(--ds-chart-seq-1)]', 'bg-[var(--ds-chart-seq-2)]', 'bg-[var(--ds-chart-seq-3)]', 'bg-[var(--ds-chart-seq-4)]', 'bg-[var(--ds-chart-seq-5)]', 'bg-[var(--ds-chart-seq-6)]'] as const;
+/** Diverging ramp (orange arm, grey midpoint, ultramarine arm): polarity around a middle value. */
+export const CHART_DIV_FILL = ['fill-[var(--ds-chart-div-1)]', 'fill-[var(--ds-chart-div-2)]', 'fill-[var(--ds-chart-div-3)]', 'fill-[var(--ds-chart-div-4)]', 'fill-[var(--ds-chart-div-5)]', 'fill-[var(--ds-chart-div-6)]', 'fill-[var(--ds-chart-div-7)]'] as const;
+export const CHART_DIV_BG = ['bg-[var(--ds-chart-div-1)]', 'bg-[var(--ds-chart-div-2)]', 'bg-[var(--ds-chart-div-3)]', 'bg-[var(--ds-chart-div-4)]', 'bg-[var(--ds-chart-div-5)]', 'bg-[var(--ds-chart-div-6)]', 'bg-[var(--ds-chart-div-7)]'] as const;
+/** The hero wash (landing): magenta, ultramarine and orange behind the headline, once per page; text on it stays ink. */
+export const WASH_HERO = 'bg-[image:var(--ds-wash-hero)] bg-no-repeat';
+/** The empty-state wash (magenta and leaf): only where the action is not a spend control. Never a working view. */
+export const WASH_EMPTY = 'bg-[image:var(--ds-wash-empty)] bg-no-repeat';
+/** The comic's own tint: put ART_SCOPE on the element that sets --ds-art inline, then read the derived tints inside it. */
+export const ART_SCOPE = 'ds-art-scope';
+export const ART_SOFT_BG = 'bg-[var(--ds-art-soft)]';
+export const ART_EDGE = 'border-[color:var(--ds-art-edge)]';
+/** The studio accent ([data-ds-studio]): a current-item tint or an empty-state tile with ink on it, and the 2 px marker. */
+export const STUDIO_SOFT_BG = 'bg-[var(--ds-studio-soft)]';
+export const STUDIO_MARK = 'bg-[var(--ds-studio)]';
+
+// ---------------------------------------------------------------------------
 // Public pages (the comics landing; Atlas app/page.tsx and PublicSiteChrome, design values only): the pill
 // shape, the feature and hero radii, the product-proof shadow, the display type steps and the inverse panel's
 // buttons. Token-driven like the rest (--ds-radius-pill, --ds-shadow-hero, --ds-text-md / 4xl / 5xl / 7xl).

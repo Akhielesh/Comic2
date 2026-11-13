@@ -76,7 +76,91 @@ one motion and ink token set (not skin tokens: reserved DreamStream reader-scope
 (`tokenContrast.test.ts`, "the reader rooms"). The rest of the reader contract (never-blank turns, stand-ins, the
 device-sized cache, preloads) is in `docs/features/comic-reader.md`.
 
-## Colour layer ("Ink & Spark")
+## Colour layer ("Ink, Paper & Colour")
+
+CL-6 (R02) widens the CL-0 layer below ("Ink & Spark") into **"Ink, Paper & Colour"**. The base does not change: text
+is ink on paper (or paper on ink), buttons that spend stay ink, colour never replaces a word, and the spark keeps its
+one meaning. What changes is that colour now has **five jobs**, seven hues to do them with, and guards that hold each
+use to its job.
+
+**The five jobs.**
+
+| Job | Tokens | Recipes (`components/chat/studioDesign.ts`, re-exported by `components/ds/recipes.ts`) |
+| --- | --- | --- |
+| 1. Tell things apart | `--ds-hue-1…7` (the mark), `--ds-hue-N-text`, `--ds-hue-N-soft`, `--ds-hue-N-solid`, `--ds-on-hue` | `HUE_MARK.dot/fill/stroke`, `HUE_TEXT`, `HUE_SOFT_BG`, `HUE_SOLID`, `hueChip(i)`, `INK_TILE` |
+| 2. Show data | the hues in `CHART_HUE_ORDER`, `--ds-chart-seq-1…6`, `--ds-chart-div-1…7` (the ink steps `--ds-chart-1…5` are unchanged) | `chartHue(kind, i)`, `CHART_SEQ_FILL/BG`, `CHART_DIV_FILL/BG`, `CHART_PLOT_BG` |
+| 3. Warm a page | `--ds-wash-hero`, `--ds-wash-empty` | `WASH_HERO`, `WASH_EMPTY` |
+| 4. A comic's own colour | `--ds-art` (set inline), `--ds-art-soft`, `--ds-art-edge`, `--ds-art-glow` (inside `.ds-art-scope`) | `ART_SCOPE`, `ART_SOFT_BG`, `ART_EDGE`, `ART_PLACEHOLDER`, `ART_GLOW` |
+| 5. The studio you are in | `--ds-studio`, `--ds-studio-soft`, by `[data-ds-studio]`: chat teal, live magenta, models violet, atlas sky; **Comic Studio none** (inside a comic the colour is that comic's tint) | `STUDIO_SOFT_BG`, `STUDIO_MARK` |
+
+**The seven hues** (no eighth: an eighth series reads the neutral chart step; gold was dropped, it read as warning).
+Every name is in all four token blocks (mirrored in both brand skins and the named `ds` colours), the derived ones
+restated so a nested `.dark` panel or skin root recomputes them.
+
+| Slot | Name | Mark light / dark | Text step light / dark |
+| --- | --- | --- | --- |
+| 1 | ultramarine (the spark's family) | `#3d44e8` / `#5568fd` | `#4455c2` / `#9bb0ff` |
+| 2 | magenta | `#d13d91` / `#d84497` | `#aa3176` / `#f496c3` |
+| 3 | orange | `#db6b04` / `#df6e07` | `#a04c00` / `#f99f66` |
+| 4 | teal | `#079a94` / `#04a19b` | `#01706c` / `#48c7c0` |
+| 5 | violet | `#9548cc` / `#a155da` | `#8244b0` / `#cea2f5` |
+| 6 | leaf | `#567d01` / `#6e9e01` | `#4a6c00` / `#9bc466` |
+| 7 | sky | `#0089c9` / `#0c9edc` | `#00699b` / `#54c1fb` |
+
+Soft tint: the hue at 12 % (light) or 16 % (dark) over `--ds-raised`, opaque. Solid: the mark, under `--ds-on-hue`
+(white in light, ink in dark). Sequential: light `#98aaee … #231da3`, dark `#4452bf … #b1c1ff`. Diverging: light
+`#9a4900 #d76900 #eeae7b #d4d4d4 #aabbf5 #6a81f2 #3d44e8`, dark `#f4a25c #de6f11 #91450d #4a4a4a #404dc1 #7085ff #a2b2ff`.
+Hero wash: magenta, ultramarine and orange at 20 / 18 / 12 % under the Atlas skin (26 / 22 / 16 % dark), 13 % in the
+default skin (18 % dark). Empty wash: magenta and leaf at 10 % (14 % dark). The dark text steps for slots 1, 2 and 5 are
+4 % lighter than the first draft's values: those measured 4.40 to 4.42:1 on a hovered row over the default dark raised
+step.
+
+**The rules.**
+- **A tag is ink on a tint, no dot** (`hueChip`). Coloured text and dots belong to status. Coloured *words* in a hue
+  only on slots 1, 5 and 7 (`HUE_TEXT_SLOTS`; the others sit within 10 ΔE of a status text); elsewhere the text step
+  colours an icon beside ink words.
+- **Words on a solid** only on slots 1, 5 and 6 in light (`HUE_SOLID_TEXT_SLOTS`; white on magenta, orange, teal and sky
+  is 3.4 to 4.4:1), on all seven in dark. Elsewhere a solid carries an icon (≥ 3:1). A solid is never a button.
+- **Charts take the hues in `CHART_HUE_ORDER` = [1, 2, 6, 7, 3, 4, 5]**: ultramarine, magenta, leaf, sky first, the safest
+  four for colour-blind readers (every pair ≥ 8.9 ΔE light, 9.1 dark, normal, protan, deutan and tritan); the plain slot
+  order fails (magenta and teal are 1.1 ΔE apart under deuteranopia). **The any-two rule:** where any two marks can
+  touch (scatter, maps, small multiples) use at most four, from ultramarine, magenta, leaf and sky; five or more series
+  are always labelled. A plot draws on `CHART_PLOT_BG` (the card), never on the raised step (hues 1, 2 and 5 fall under
+  3:1 on the default dark raised fill). Ramp steps under 3:1 on the plot always carry a value label or the table twin.
+  A chart mark on slot 1 is not a spark fill.
+- **Spend and price.** No colour on or beside a price or a spend control (Approve, Draw, Redraw, Translate, Get more):
+  not on the element, not on a sibling, not on a wrapper that holds the control. A recipe kept in a variable is judged
+  where it is used. Usage and spend *charts* may be coloured, the charts only, starting at magenta, never ultramarine
+  or a ramp next to money.
+- **The inverse (ink) panel** (`INVERSE_SURFACE`) takes no tint, chip or coloured words: the steps are tuned for paper
+  (light text steps are about 3.2:1 on ink). A chart mark (a tooltip swatch) may draw there.
+- **Washes** only on a hero or an empty state whose action does not spend, once per page; never a working view.
+- **Navigation** takes no ultramarine and no wash (the studio accent's 2 px marker is allowed). **The reader** takes
+  no colour-layer token at all; the comic page keeps `--ds-reader-*`.
+- **The off switch.** `VITE_DS_COLOUR=off` (build time) marks every HTML entry `<html data-ds-colour="off">`; one block
+  in `index.css` points every name above back to neutral (tints transparent, hue text muted, solids the strong well
+  under ink, ramps the ink steps, no washes, no studio accent, the art tint the plain card). Charts stay readable:
+  hues 6 and 7 take two different ink steps, and both ramps become one ordered grey ramp (the diverging poles dark and
+  light, never the same grey). Hues 1 to 5 keep their colour, as before the layer. No component change.
+  Turning it off or on again takes a rebuild and a redeploy (`docs/infrastructure/ENV_MATRIX.md`).
+
+**Where colour may go now** (adds to the CL-0 table below): tag chips (`hueChip`), the part of a comic you are in
+(CL-9), a comic's card (CL-8, `ART_SCOPE`), the landing's hero wash and four 56 px solid feature tiles (ink, magenta,
+leaf, sky: no ultramarine tile, so the one blue "create" button keeps its meaning; CL-10), empty states (CP-4), charts
+(CH6-1, CL-7), the studio accent (CL-11). A screen should not show more than three hue families outside charts and art.
+
+**Guards** (CL-6): `huePalette` (seven slots, the chart order's first four for all pairs, the raised step reported),
+`tokenContrast` ("Ink, Paper & Colour": every text step on every surface and its tint, ink on every tint, the label on a
+solid, the status look-alike rule, ink and muted at the peak of each wash, the comic's tint across the clamp box, the
+studio accents), `chartRamps` (one hue, steps ≥ 0.06 L, the nearest step ≥ 2:1, a grey midpoint, equal arms),
+`colourUseGuard` (the rules above, over every app file's syntax tree), `dsColourSwitch` (the switch and the neutral
+block), `platformChunks` (`EAGER_CSS_GZ_CEILING`: every colour rule lands in the first-load stylesheet; the
+colour, motion and component work together stays within +5 kB gzip of eager CSS), and the layout smoke's `@colour` budget (6 % strong colour at most on working
+views; the floors in `tests/e2e/baselines/colourFloors.json`, landing 4 %, Library 3 %, empty 2 %, board 1 %, model
+picker 1 %, each `enforce: false` until the package named beside it reaches it). The specimen is
+`components/ds/specimens/ColourSpecimen.tsx` (QA scenes `colour-layer` and `ds-gallery`).
+
+### The CL-0 base ("Ink & Spark")
 
 A DreamStream extension, not from Atlas (CL-0; the Atlas session has the 12 names as such, `atlas-skin.md`
 "DreamStream extensions"). The studio is black ink on white paper. Colour is a **spot**, like a single printed ink,
@@ -157,7 +241,7 @@ colour as the only signal; hues as status or status as series; inside the comic 
 | One series (magnitude over time) | `--ds-chart-1` |
 | Ordinal or sequential (tiers, buckets) | `--ds-chart-1 → 5` (ink steps) |
 | Highlight one against the rest | the one in `--ds-spark`, the rest in `--ds-chart-4` |
-| Categorical identity, 2–5 series | `--ds-hue-1…5` in fixed order, a legend always; ≤ 4 series also labelled directly; "Other" past five |
+| Categorical identity, 2–7 series | the hues in `CHART_HUE_ORDER` (`chartHue`), a legend always; ≤ 4 series also labelled directly; "Other" past seven (the five-slot `hueClass` keeps its slot order for the charts already on it) |
 | Good / bad state | the Atlas status tokens, an icon and words; never mixed with hues in one chart |
 | Spend / price charts (any series count) | ink steps `--ds-chart-1 → 5`, never the spark family: light `--ds-hue-1` is the spark's own colour, and colour never nudges spending. `StackedBars palette="ink"` (Insights spend by kind); "Other" past five is an outline in `--ds-chart-3` |
 
@@ -352,6 +436,12 @@ each.
 
 <Checkbox label="Select all pages" checked={some ? 'indeterminate' : all} onCheckedChange={setAll} />
 ```
+
+The Comic Studio kit buttons (`components/comicstudio/board/ui.tsx`) take an opt-in `keepFocusWhileBusy`
+(`board/busyButton.ts`, a module with no imports, so the conversation kit and the reader can use it without
+pulling in the board kit): while busy, the button stays focusable (`aria-disabled`; click and Enter are
+swallowed) instead of `disabled`. Only the board gate's Approve uses it; when that gate closes, focus moves to
+the board tab panel. Every other busy kit button is still `disabled`.
 
 **Labels**
 

@@ -1,6 +1,7 @@
 // @vitest-environment node
 /**
- * The categorical hues of the colour layer (--ds-hue-1…5; design.md §3.4 and §3.9, V.1 and V.2-13), read from
+ * The categorical hues of the colour layer (--ds-hue-1…7 since CL-6, "Ink, Paper & Colour": leaf and sky joined the
+ * five; design.md §3.4 and §3.9, V.1 and V.2-13), read from
  * index.css and validated as a data-viz palette with tests/config/paletteChecks.ts, light and dark:
  *   - lightness band and chroma floor (a hue that reads as grey is not a hue);
  *   - adjacent pairs ≥ 8 ΔE under protanopia and deuteranopia, and ≥ 15 under normal vision (stacks, bars, lines);
@@ -11,11 +12,12 @@
  * Mutation proofs live here too: the orange the report started from fails the paper, and the order is load-bearing.
  */
 import { describe, expect, it } from 'vitest';
-import { checkCategorical, contrastRatio, oklchOf, separation, type PaletteMode } from './paletteChecks';
+import { CHART_HUE_ORDER } from '../../components/chat/studioDesign';
+import { checkCategorical, contrastRatio, deltaE, oklchOf, separation, type CvdKind, type PaletteMode } from './paletteChecks';
 import { indexCss, over, parseRules, resolveColor, type Rgba, tokenBlocks } from './cssTokens';
 
 const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(parseRules(indexCss));
-const SLOTS = ['--ds-hue-1', '--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-hue-5'] as const;
+const SLOTS = ['--ds-hue-1', '--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-hue-5', '--ds-hue-6', '--ds-hue-7'] as const;
 const hexOf = (c: Rgba) => `#${[c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
 /** A token through a cascade of blocks (var() followed), as an opaque hex over the given page. */
 function tokenHex(name: string, blocks: Array<Map<string, string>>, page?: Rgba): string {
@@ -48,7 +50,7 @@ function chartSurfaces(mode: PaletteMode): string[] {
 }
 
 describe('hue palette — the tokens are a validated categorical set', () => {
-  it('five slots, the same values with and without the skin, in a fixed order whose first slot is the spark family', () => {
+  it('seven slots, the same values with and without the skin, in a fixed order whose first slot is the spark family', () => {
     for (const mode of ['light', 'dark'] as const) {
       const base = mode === 'light' ? ROOT_TOKENS : DARK_TOKENS;
       const skin = mode === 'light' ? ATLAS_LIGHT : ATLAS_DARK;
@@ -57,8 +59,10 @@ describe('hue palette — the tokens are a validated categorical set', () => {
       const spark = oklchOf(base.get('--ds-spark')!);
       expect(Math.abs(oklchOf(palette(mode)[0]).h - spark.h), mode).toBeLessThan(5);
     }
-    expect(palette('light')).toEqual(['#3d44e8', '#d13d91', '#db6b04', '#079a94', '#9548cc']);
-    expect(palette('dark')).toEqual(['#5568fd', '#d84497', '#df6e07', '#04a19b', '#a155da']);
+    expect(palette('light')).toEqual(['#3d44e8', '#d13d91', '#db6b04', '#079a94', '#9548cc', '#567d01', '#0089c9']);
+    expect(palette('dark')).toEqual(['#5568fd', '#d84497', '#df6e07', '#04a19b', '#a155da', '#6e9e01', '#0c9edc']);
+    // No eighth slot: an eighth series reads the neutral chart step (gold was dropped: it read as the warning colour).
+    for (const block of [ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK]) expect(block.has('--ds-hue-8')).toBe(false);
   });
 
   it('the chart surfaces are the real ones: paper, Atlas white and soft, the dark pages and the default dark card', () => {
@@ -141,6 +145,84 @@ describe('hue palette — mutation proofs (the gates bite)', () => {
     for (const mode of ['light', 'dark'] as const) {
       const p = palette(mode);
       expect(checkCategorical([p[0], p[1], p[2], p[4], p[3]], { mode, surfaces: chartSurfaces(mode) }).ok, mode).toBe(true);
+    }
+  });
+});
+
+// ── CL-6: the chart order and the raised step ────────────────────────
+const KINDS: Array<CvdKind | undefined> = [undefined, 'protan', 'deutan', 'tritan'];
+/** The worst ΔE of all pairs of a set, over normal vision and the three simulated dichromacies. */
+function worstAllPairs(hexes: readonly string[]): { deltaE: number; pair: string } {
+  let worst = { deltaE: Infinity, pair: '' };
+  for (let i = 0; i < hexes.length; i++) {
+    for (let j = i + 1; j < hexes.length; j++) {
+      for (const kind of KINDS) {
+        const d = deltaE(hexes[i], hexes[j], kind);
+        if (d < worst.deltaE) worst = { deltaE: d, pair: `${hexes[i]}↔${hexes[j]} (${kind ?? 'normal'})` };
+      }
+    }
+  }
+  return worst;
+}
+const inChartOrder = (mode: PaletteMode) => CHART_HUE_ORDER.map((slot) => palette(mode)[slot - 1]);
+
+describe('hue palette — charts take the hues in CHART_HUE_ORDER', () => {
+  it('the order is ultramarine, magenta, leaf, sky, then orange, teal, violet: every slot once', () => {
+    expect([...CHART_HUE_ORDER]).toEqual([1, 2, 6, 7, 3, 4, 5]);
+    expect([...CHART_HUE_ORDER].sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  for (const mode of ['light', 'dark'] as const) {
+    it(`${mode}: the first four of the chart order are ≥ 8 ΔE apart for ALL pairs, in normal, protan, deutan and tritan vision`, () => {
+      const worst = worstAllPairs(inChartOrder(mode).slice(0, 4));
+      expect(worst.deltaE, worst.pair).toBeGreaterThanOrEqual(8);
+      // The measured margins: 8.9 light, 9.1 dark.
+      expect(worst.deltaE).toBeGreaterThan(mode === 'light' ? 8.8 : 9);
+    });
+
+    it(`${mode}: …while the plain slot order 1-4 fails that test (magenta and teal collapse under deuteranopia)`, () => {
+      const worst = worstAllPairs(palette(mode).slice(0, 4));
+      expect(worst.deltaE).toBeLessThan(2);
+      expect(worst.pair).toContain('deutan');
+      expect(worst.pair).toContain(palette(mode)[1]);
+      expect(worst.pair).toContain(palette(mode)[3]);
+    });
+  }
+
+  it('the chart order still passes the adjacent gates as a sequence (stacks and lines draw neighbours side by side)', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      const report = checkCategorical(inChartOrder(mode), { mode, surfaces: chartSurfaces(mode) });
+      expect(report.ok, mode).toBe(true);
+    }
+  });
+});
+
+describe('hue palette — the raised step is reported, never a plot surface', () => {
+  /** Each context's raised step, painted over its page. */
+  const raisedOf = (mode: PaletteMode) =>
+    Object.entries(CASCADES)
+      .filter(([, c]) => c.mode === mode)
+      .map(([name, { blocks }]) => ({ name, hex: tokenHex('--ds-raised', blocks, resolveColor(tokenHex('--ds-canvas', blocks))) }));
+
+  it('reports every hue under 3:1 on a raised fill: in default dark, ultramarine, magenta and violet', () => {
+    const under: string[] = [];
+    for (const mode of ['light', 'dark'] as const) {
+      for (const { name, hex } of raisedOf(mode)) {
+        palette(mode).forEach((hue, i) => {
+          if (contrastRatio(hue, hex) < 3) under.push(`${name}: hue-${i + 1} ${contrastRatio(hue, hex).toFixed(2)}:1 on raised ${hex}`);
+        });
+      }
+    }
+    expect(under.map((u) => u.split(' ').slice(0, 4).join(' '))).toEqual(['default dark: hue-1 2.60:1', 'default dark: hue-2 2.82:1', 'default dark: hue-5 2.62:1']);
+  });
+
+  it('so a plot area sits on the card: CHART_PLOT_BG reads --ds-surface (≥ 3:1 for every hue), never --ds-raised', async () => {
+    const { CHART_PLOT_BG } = await import('../../components/chat/studioDesign');
+    expect(CHART_PLOT_BG).toBe('bg-[var(--ds-surface)]');
+    expect(CHART_PLOT_BG).not.toMatch(/raised/);
+    for (const mode of ['light', 'dark'] as const) {
+      const report = checkCategorical(palette(mode), { mode, surfaces: chartSurfaces(mode) });
+      expect(report.lowContrast, mode).toEqual([]);
     }
   });
 });

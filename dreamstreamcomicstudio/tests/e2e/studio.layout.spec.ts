@@ -84,4 +84,127 @@ test.describe('studio layout', () => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p', state: 'load-error' });
     await qa.check('studio', 'load-error', { checks: ['overflow', 'offscreen', 'collision', 'popover', 'spill'] });
   });
+  // ── FX-15: studio controls show their whole words ─────────────────────────────────────────────────────────────
+  // Measured in the browser (jsdom has no layout): components/comicstudio/board/segmented.width.test.tsx pins the
+  // contract, these prove the result on every device project, plus 1280 and 390 on the desktop projects.
+
+  /** Every radio label in the named groups: scrollWidth <= clientWidth on the radio and everything inside it. */
+  const cutRadioLabels = (page: import('@playwright/test').Page, groups: RegExp) =>
+    page.evaluate((src) => {
+      const re = new RegExp(src);
+      const out: Array<{ group: string; label: string; cut: number }> = [];
+      for (const g of document.querySelectorAll<HTMLElement>('[role="radiogroup"][aria-label]')) {
+        const name = g.getAttribute('aria-label') || '';
+        if (!re.test(name) || !g.offsetParent) continue;
+        for (const r of g.querySelectorAll<HTMLElement>('[role="radio"]')) {
+          for (const el of [r, ...r.querySelectorAll<HTMLElement>('*')]) {
+            if (el instanceof SVGElement) continue;
+            const cut = el.scrollWidth - el.clientWidth;
+            if (el.clientWidth > 0 && cut > 0) out.push({ group: name, label: (r.textContent || '').trim(), cut });
+          }
+        }
+      }
+      return out;
+    }, groups.source);
+
+  test('FX-15: every segmented label (Card size, cast tier, Editor view) shows its whole word', async ({ qa, page, device }) => {
+    const widths = device.isMobile ? [null] : [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+    for (const size of widths) {
+      if (size) await page.setViewportSize(size);
+      const at = size ? `${size.width}` : device.name;
+      await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
+      await qa.toBoard();
+      expect.soft(await page.locator('[role="radiogroup"][aria-label="Card size"]').count(), `Card size is on the Pages tab (${at})`).toBe(1);
+      expect.soft(await cutRadioLabels(page, /^Card size$/), `Card size labels whole at ${at}`).toEqual([]);
+      // The board tab count: the 11 px chrome step, never the old 10 px.
+      const badgePx = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Board"] [role="tab"] > span.tabular-nums')].map((b) => parseFloat(getComputedStyle(b).fontSize))
+      );
+      expect.soft(badgePx.length, `a board tab carries a count (${at})`).toBeGreaterThan(0);
+      for (const px of badgePx) expect.soft(px, `board tab count font size at ${at}`).toBeGreaterThanOrEqual(11);
+      // The Easy | Pro switch in the regular header (wide windows only).
+      expect.soft(await cutRadioLabels(page, /^Editor view$/), `Editor view labels whole at ${at}`).toEqual([]);
+
+      await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'cast' });
+      await qa.toBoard();
+      expect.soft(await page.locator('[role="radiogroup"][aria-label$=" tier"]').count(), `cast tiers are on the Cast tab (${at})`).toBeGreaterThan(0);
+      expect.soft(await cutRadioLabels(page, / tier$/), `cast tier labels whole at ${at}`).toEqual([]);
+    }
+    // Phones: the Easy | Pro switch lives at the top of the ⋯ menu.
+    if (device.isMobile) {
+      await qa.open({ surface: 'studio', fixture: 'heist-12p' });
+      if (await openMoreMenu(qa)) {
+        await qa.settle(400);
+        expect.soft(await cutRadioLabels(page, /^Editor view$/), 'Editor view labels whole in the ⋯ menu').toEqual([]);
+        await closeTopLayer(page);
+      }
+    }
+  });
+
+  test('FX-15: one tap on the phone approval strip shows the full label and the full price', async ({ qa, page }) => {
+    await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
+    await qa.toBoard();
+    const banner = page.locator('[data-gate-banner="compact"]');
+    test.skip(!(await banner.isVisible().catch(() => false)), 'the one-line strip is for narrow boards (phones, narrow panes)');
+    await banner.locator('[data-gate-summary]').click();
+    await qa.settle(250);
+    const parts = await banner.locator('[data-gate-summary] > span:not(.sr-only)').evaluateAll((els) =>
+      els.map((el) => ({ text: (el.textContent || '').trim(), cut: el.scrollWidth - el.clientWidth, right: el.getBoundingClientRect().right }))
+    );
+    expect(parts.length, 'label and price').toBe(2);
+    for (const p of parts) {
+      expect.soft(p.cut, `"${p.text}" is not cut`).toBeLessThanOrEqual(0);
+      expect.soft(p.right, `"${p.text}" stays on screen`).toBeLessThanOrEqual(page.viewportSize()!.width);
+    }
+    await qa.check('board', 'gate-open');
+  });
+
+  test('FX-15: Enter on Approve keeps focus there; a second Enter sends nothing', async ({ qa, page }) => {
+    await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
+    await qa.toBoard();
+    const approve = page.locator('[data-gate-banner] button', { hasText: /^Approve$/ }).first();
+    test.skip(!(await approve.isVisible().catch(() => false)), 'no approval banner on this layout');
+    await qa.clearOps();
+    await approve.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    expect(await approve.evaluate((el) => document.activeElement === el), 'focus on Approve 0.3 s later (was <body>)').toBe(true);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(4700);
+    expect(await approve.evaluate((el) => document.activeElement === el), 'focus on Approve 5 s later').toBe(true);
+    const approvals = (await qa.ops()).filter((o) => o.kind === 'act' && (o.payload as { type?: string } | undefined)?.type === 'approve_gate');
+    expect(approvals.length, 'one approval sent for two Enters').toBe(1);
+  });
+
+  test('FX-15: the conflict card label stays inside its tile at 768', async ({ qa, page, device }) => {
+    test.skip(device.isMobile, 'a set viewport; once per desktop project');
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await qa.open({ surface: 'studio', fixture: 'heist-12p', state: 'conflict' });
+    await qa.toChat();
+    const scroller = await markConversationScroller(page);
+    if (scroller) await qa.scroll(scroller, 'bottom');
+    const tiles = await page.locator('[data-conflict-versions] > div').evaluateAll((els) =>
+      els.map((tile) => {
+        const label = tile.querySelector(':scope > span')!;
+        const t = tile.getBoundingClientRect();
+        const l = label.getBoundingClientRect();
+        return { label: (label.textContent || '').trim(), spill: Math.max(l.right - (t.right - 1), label.scrollWidth - label.clientWidth) };
+      })
+    );
+    expect(tiles.length, 'the conflict card renders its version tiles').toBeGreaterThan(0);
+    for (const t of tiles) expect.soft(t.spill, `"${t.label}" inside its tile`).toBeLessThanOrEqual(0);
+  });
+
+  test('FX-15: Assets search and sort are 44 px on touch', async ({ qa, page, device }) => {
+    test.skip(!device.coarse, 'coarse pointers only');
+    await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'media' });
+    await qa.toBoard();
+    const search = page.locator('#board-panel input[type="search"]').first();
+    test.skip(!(await search.isVisible().catch(() => false)), 'the Assets tab shows once the comic has an image');
+    const sort = page.locator('#board-panel select').first();
+    for (const [name, el] of [['search', search], ['sort', sort]] as const) {
+      const h = await el.evaluate((n) => n.getBoundingClientRect().height);
+      expect.soft(h, `Assets ${name} height on touch`).toBeGreaterThanOrEqual(44);
+    }
+  });
 });

@@ -132,6 +132,50 @@ export function dsSkinEverywherePlugin(value: string | undefined): Plugin {
   };
 }
 
+/**
+ * The colour layer's one switch (CL-6; docs/design/design-system.md § Colour layer, docs/infrastructure/ENV_MATRIX.md).
+ * VITE_DS_COLOUR is read at build time: exactly `off` marks the <html> start tag of EVERY HTML entry Vite builds
+ * (index.html, live.html, the QA harness: no file-name filter, so one switch rolls back every page) with
+ * `data-ds-colour="off"`, and one CSS block at the end of the colour layer in index.css then points every new colour
+ * token back to neutral. Any other value, or none, leaves every page as it is (colour on). No component changes
+ * either way. Turning it off or on again takes a rebuild and a redeploy.
+ */
+export const DS_COLOUR_VAR = 'VITE_DS_COLOUR';
+/** The attribute (and value) the off switch writes on <html>; index.css keys its neutral block on it. */
+export const DS_COLOUR_OFF_ATTR = 'data-ds-colour="off"';
+
+/** True when the build keeps the colour layer: every value but exactly `off`. */
+export const dsColourOn = (value: string | undefined): boolean => value !== 'off';
+
+/** The <html> start tag with `data-ds-colour="off"` (any earlier data-ds-colour replaced); nothing else changes. */
+export function markDsColourOff(html: string): string {
+  return html.replace(/<html\b[^>]*>/i, (tag) => {
+    const bare = tag.replace(/\s+data-ds-colour(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?(?=[\s/>])/gi, '');
+    return bare.replace(/^<html\b/i, (open) => `${open} ${DS_COLOUR_OFF_ATTR}`);
+  });
+}
+
+/** The build-log warning for a value that looks like "off" but is not exactly `off` (the colour stays on). */
+export function dsColourWarning(value: string | undefined): string | null {
+  if (value === undefined || value === 'off') return null;
+  if (!/^\s*(?:off|false|0|no|disabled?)\s*$/i.test(value)) return null;
+  return `${DS_COLOUR_VAR}="${value}" keeps the colour layer: only the exact value "off" turns it off`;
+}
+
+export function dsColourPlugin(value: string | undefined): Plugin {
+  return {
+    name: 'ds-colour',
+    configResolved(config) {
+      const warning = dsColourWarning(value);
+      if (warning) config.logger.warn(warning);
+    },
+    transformIndexHtml: {
+      order: 'pre',
+      handler: (html) => (dsColourOn(value) ? html : markDsColourOff(html))
+    }
+  };
+}
+
 /** The onnxruntime-web that @huggingface/transformers itself imports: its dist folder, version, and the version it pins. */
 export interface OrtRuntimeSource {
   /** `<package>/dist`, where the ort-wasm-* files live. */
@@ -482,7 +526,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR]), ortRuntime(), pyodideRuntime()],
+    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR]), dsColourPlugin(env[DS_COLOUR_VAR] ?? process.env[DS_COLOUR_VAR]), ortRuntime(), pyodideRuntime()],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
     // count as browser code for the licence gate too.
     worker: { format: 'es', plugins: () => [licence.worker()] },

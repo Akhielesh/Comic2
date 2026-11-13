@@ -43,7 +43,10 @@ import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { BUTTON_EXTENSION_VARIANTS, BUTTON_VARIANT, BUTTON_VARIANTS } from '../../components/ds/Button';
 import { PROGRESS_MAKING } from '../../components/ds/Progress';
-import { APP_ROOT, listScannedFiles, matchesGlob, REAL_TREE_TIMEOUT, scriptKindOf, tempTree } from './classLists';
+import { APP_ROOT, listScannedFiles, matchesGlob, REAL_TREE_TIMEOUT, tempTree } from './classLists';
+import { COST_FACTORIES, elementOf, isStringy, labelsOf, parse, PRICE_CALLS, PRICE_IDENTS, priceIn, siblingsOf, SPEND_LABEL } from './priceDetect';
+
+export { PRICE_CALLS, PRICE_IDENTS };
 
 const TEST_FILE = 'tests/config/sparkGuard.test.ts';
 
@@ -98,35 +101,6 @@ const ANY_SPARK_LITERAL = /--ds-spark|(?<![\w-])(?:[\w\-[\]&:()>.*/@]+:)?(?:bg|t
 /** The recipes that put the spark on screen. */
 const SPARK_RECIPES = new Set(['SPARK_FILL', 'SPARK_TEXT', 'SPARK_SOFT_BG', 'SPARK_RING_ON_ART', 'MAKING_DOT', 'MAKING_SWEEP', 'MAKING_TEXT', 'BENDAY', 'PROGRESS_MAKING']);
 
-/**
- * Every function in the app that returns a price or a governed share of the allowance (called bare or as
- * `module.name(…)`). Keep this in step with the formatters: a new one that is missing here can sit beside the spark.
- */
-export const PRICE_CALLS: ReadonlySet<string> = new Set([
-  // shared/comic/models.ts and platform-core cost/wording.ts formatUsd; services/costDisplay.ts; conversation/cost.ts;
-  // board/costFormat.ts (V.2-12).
-  'formatUsd', 'formatCostForUser', 'usageSafeSpendText', 'formatSpend', 'formatPrice', 'formatPriceCompact', 'priceText', 'costFormat', 'costFormatFor', 'useCostFormat',
-  // services/modelCatalog.ts costLabel ("$0.040/img", the chat model picker and suggester beside the composer Send)
-  // and platform-core cost/wording.ts costLabel / usageLabel / governText.
-  'costLabel', 'usageLabel', 'governText',
-  // The Model Lab's spend button ("Run · ≈ {formatLabUsd(…)}", models/lab/labApi.ts), services/imageModelRanking.ts,
-  // and the export review (steps/comicCostDisplay.ts comicCostView / localCostLabel / formatUsageShare).
-  'formatLabUsd', 'formatImagePrice', 'localCostLabel', 'formatUsageShare', 'comicCostView',
-  // services/costDisplay.ts: the governed share shortened for a chip, and in a sentence.
-  'compactUsageShare', 'amountInSentence'
-]);
-/** Price constants: the governed "uses a little of your usage" while the share is unknown (costDisplay.ts, wording.ts). */
-export const PRICE_IDENTS: ReadonlySet<string> = new Set(['UNKNOWN_USAGE_SHARE', 'UNKNOWN_USAGE_SHARE_IN_SENTENCE']);
-/** CostFormat's methods (components/comicstudio/conversation/cost.ts and board/costFormat.ts). */
-const COST_METHODS = new Set(['exact', 'approx', 'badge', 'spoken', 'saved', 'quote', 'spent']);
-const COST_FACTORIES = new Set(['useCostFormat', 'costFormat', 'costFormatFor']);
-/** Dollars, cents, a templated dollar amount, or a governed share of the allowance ("≈2% of your usage", "a little of your usage"). */
-const PRICE_TEXT = /\$\s?\d|\$\$\{|¢|\bof\s+your\s+(?:usage|month|allowance)\b/i;
-/** JSX text ending in a dollar sign, right before an expression: `<span>${amount}</span>` is the text "$", then {amount}. */
-const DOLLAR_BEFORE_EXPRESSION = /\$\s*$/;
-/** The spend controls (§3.7): they stay the ink primary whether or not a price shows. */
-const SPEND_LABEL = /^(?:Approve|Draw|Redraw|Translate|Get\s+more)\b/i;
-
 export interface SparkUse {
   line: number;
   token: string;
@@ -150,8 +124,6 @@ export interface SpendSpark {
   text: string;
 }
 
-const parse = (source: string, fileName: string) => ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
-const isStringy = (n: ts.Node): n is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral => ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n);
 
 /** The file's `const` initializers by name (a name declared twice in different scopes keeps both). */
 type Consts = Map<string, ts.Expression[]>;
@@ -228,62 +200,6 @@ function usesIn(sf: ts.SourceFile, lines: readonly string[]): SparkUse[] {
 /** Every spark use in a source (fills and any other spark). */
 export const sparkUses = (source: string, fileName = 'file.tsx'): SparkUse[] => usesIn(parse(source, fileName), source.split('\n'));
 
-/** The JSX element a node sits on (the element whose attributes or className hold it), if any. */
-function elementOf(node: ts.Node): ts.JsxElement | ts.JsxSelfClosingElement | null {
-  for (let n: ts.Node | undefined = node; n; n = n.parent) {
-    if (ts.isJsxAttribute(n)) {
-      const owner = n.parent.parent; // JsxAttributes → JsxOpeningElement | JsxSelfClosingElement
-      return ts.isJsxOpeningElement(owner) ? owner.parent : (owner as ts.JsxSelfClosingElement);
-    }
-    if (ts.isSourceFile(n) || ts.isFunctionLike(n) && !ts.isArrowFunction(n)) return null;
-  }
-  return null;
-}
-
-/** The element's siblings in its parent element or fragment (through `{cond && …}` and ternaries). */
-function siblingsOf(el: ts.Node): ts.Node[] {
-  let child: ts.Node = el;
-  while (child.parent && (ts.isParenthesizedExpression(child.parent) || ts.isBinaryExpression(child.parent) || ts.isConditionalExpression(child.parent) || ts.isJsxExpression(child.parent))) child = child.parent;
-  const parent = child.parent;
-  if (parent && (ts.isJsxElement(parent) || ts.isJsxFragment(parent))) return parent.children.filter((c) => c !== child && !(ts.isJsxText(c) && !c.text.trim()));
-  return [];
-}
-
-/** The JSX child right after a text child, if any. */
-function jsxNext(n: ts.JsxText): ts.Node | undefined {
-  const p = n.parent;
-  if (!ts.isJsxElement(p) && !ts.isJsxFragment(p)) return undefined;
-  return p.children[p.children.indexOf(n) + 1];
-}
-const isExpression = (n: ts.Node | undefined): boolean => !!n && ts.isJsxExpression(n) && !!n.expression;
-
-/** The first price inside a subtree, described, or null. */
-function priceIn(root: ts.Node, sf: ts.SourceFile, costNames: Set<string>): string | null {
-  let found: string | null = null;
-  const visit = (n: ts.Node) => {
-    if (found) return;
-    if (ts.isCallExpression(n)) {
-      const callee = n.expression;
-      if (ts.isIdentifier(callee) && PRICE_CALLS.has(callee.text)) found = `${callee.text}()`;
-      else if (ts.isPropertyAccessExpression(callee) && PRICE_CALLS.has(callee.name.text)) found = `${callee.getText(sf)}()`;
-      else if (ts.isPropertyAccessExpression(callee) && COST_METHODS.has(callee.name.text)) {
-        const obj = callee.expression.getText(sf);
-        if (costNames.has(obj) || /cost|price|fmt/i.test(obj)) found = `${obj}.${callee.name.text}()`;
-      }
-    } else if (ts.isIdentifier(n) && PRICE_IDENTS.has(n.text)) {
-      found = n.text;
-    } else if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && /(?:^|\.)Price[A-Z]?\w*$/.test(n.tagName.getText(sf))) {
-      found = `<${n.tagName.getText(sf)}>`;
-    } else if ((isStringy(n) || ts.isJsxText(n) || ts.isTemplateExpression(n)) && PRICE_TEXT.test(n.getText(sf))) {
-      found = JSON.stringify(n.getText(sf).trim().slice(0, 60));
-    } else if (ts.isJsxText(n) && DOLLAR_BEFORE_EXPRESSION.test(n.text) && isExpression(jsxNext(n))) {
-      found = JSON.stringify(`${n.text.trim()}{…}`);
-    }
-    if (!found) ts.forEachChild(n, visit);
-  };
-  visit(root);
-  return found;
-}
 
 /** Spark fills with a price inside the element that carries them, or in a sibling element (rule 5). */
 export function pricesBesideSpark(source: string, fileName = 'file.tsx'): PriceBeside[] {
@@ -307,29 +223,6 @@ export function pricesBesideSpark(source: string, fileName = 'file.tsx'): PriceB
   return out;
 }
 
-/** The plain text an element says: its text children and string children, nested elements included. */
-function textOf(children: readonly ts.JsxChild[]): string {
-  const parts: string[] = [];
-  for (const c of children) {
-    if (ts.isJsxText(c)) parts.push(c.text);
-    else if (ts.isJsxExpression(c) && c.expression && isStringy(c.expression)) parts.push(c.expression.text);
-    else if (ts.isJsxElement(c) || ts.isJsxFragment(c)) parts.push(textOf(c.children));
-    else parts.push(' ');
-  }
-  return parts.join('').replace(/\s+/g, ' ').trim();
-}
-/** The element's own labels: its text, and its aria-label / title / label strings. */
-function labelsOf(el: ts.JsxElement | ts.JsxSelfClosingElement): string[] {
-  const out: string[] = [];
-  const attrs = (ts.isJsxElement(el) ? el.openingElement : el).attributes.properties;
-  for (const a of attrs) {
-    if (!ts.isJsxAttribute(a) || !a.initializer || !['aria-label', 'title', 'label'].includes(a.name.getText())) continue;
-    const v = ts.isJsxExpression(a.initializer) ? a.initializer.expression : a.initializer;
-    if (v && isStringy(v)) out.push(v.text.trim());
-  }
-  if (ts.isJsxElement(el)) out.push(textOf(el.children));
-  return out.filter(Boolean);
-}
 
 /** Spark fills on a spend control: the element's own label starts with Approve, Draw, Redraw, Translate or Get more (rule 6). */
 export function spendSparks(source: string, fileName = 'file.tsx'): SpendSpark[] {
@@ -748,11 +641,16 @@ describe('spark guard — the app', () => {
     for (const v of BUTTON_VARIANTS) expect(BUTTON_VARIANT[v], v).not.toMatch(/--ds-spark/);
     expect(design.SPARK_FILL).toBe('bg-[var(--ds-spark)] text-[var(--ds-on-spark)] hover:bg-[var(--ds-spark-hover)]');
     expect(PROGRESS_MAKING).toBe('bg-[var(--ds-spark)]');
-    // No ink recipe reads the spark: focus, the primary, status and charts stay as they were.
+    // No ink recipe reads the spark or the colour layer: focus, the primary, status and the ink chart steps stay as they
+    // were. Only the layer's own families do (CL-6 adds the chart ramps, the washes, the studio accent and the chip).
     for (const [name, value] of Object.entries(design)) {
-      if (/^(?:SPARK_|MAKING_|HUE_|ART_|BENDAY|hueIndex|hueClass)/.test(name)) continue;
+      if (/^(?:SPARK_|MAKING_|HUE_|ART_|BENDAY|hueIndex|hueClass|hueChip|chartHue|CHART_SEQ_|CHART_DIV_|WASH_|STUDIO_)/.test(name)) continue;
       const strings = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
-      for (const s of strings) expect(s, name).not.toMatch(/--ds-(?:spark|hue-|art\b)/);
+      for (const s of strings) expect(s, name).not.toMatch(/--ds-(?:spark|hue-|art\b|studio|wash-|chart-seq|chart-div|on-hue)/);
     }
+    // A chart mark on slot 1 (ultramarine, the spark's hue) is NOT a spark fill: the spark rule counts controls, tiles
+    // and rings. tests/config/colourUseGuard.test.ts holds the colour layer's own rules.
+    expect(design.chartHue('fill', 0)).toBe('fill-[var(--ds-hue-1)]');
+    expect(sparkUses(`<rect className="${design.chartHue('fill', 0)}" />`).filter((u) => u.fill)).toEqual([]);
   });
 });

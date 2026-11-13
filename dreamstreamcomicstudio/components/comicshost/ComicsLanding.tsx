@@ -1,8 +1,11 @@
 // The front page of comics.dreamstreamstudio.ai: Comic Studio's own landing and sign-in entry, in the Atlas
 // public composition (design values only, from Atlas's public page: a centred hero over a dot grid, the product
 // proof, a band, a steps rail, a bento, an inverse panel, a three-column footer) on the DreamStream tokens and
-// recipes, with the Ink & Spark colour layer: ink on paper, colour as a spot, the spark only on the one
-// creation call to action ("Start creating", signed out; none signed in).
+// recipes, with the colour layer "Ink, Paper & Colour": text stays ink on paper; the hero carries the one hero wash
+// (magenta, ultramarine and orange, full bleed behind the headline and the calls to action, down to the drawn
+// pages); the four feature tiles are solid 56 px tiles in ink, magenta, leaf and sky with one label colour (no
+// ultramarine tile, so the one blue "Start creating" keeps its meaning); the spark is only on that one creation call to action (signed out; none signed in). Every
+// colour reads a token, so VITE_DS_COLOUR=off (a build-time switch) turns the wash off and the tiles neutral.
 //
 // The header is ComicsHeader (the app's AppHeader, the same object and height as the studio's header). The proof
 // is a replica of the studio's own screen (StudioPreview: the Director's plan card beside drawn pages) and every
@@ -13,7 +16,7 @@
 // motion. No price, cost or model name anywhere on the page.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, Download, Link2, MessageSquareText, SlidersHorizontal, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, Download, Link2, MessageSquareText, Printer, SlidersHorizontal, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { mainAppUrl } from '../../services/productHost';
 import {
@@ -26,6 +29,8 @@ import {
   DISPLAY_SECTION,
   FOCUS_RING,
   FOCUS_RING_FLUSH,
+  HUE_SOLID,
+  INK_TILE,
   INVERSE_ACTION,
   INVERSE_ACTION_QUIET,
   INVERSE_SURFACE,
@@ -38,7 +43,8 @@ import {
   RADIUS_HERO,
   RADIUS_PANEL,
   RADIUS_ROUND,
-  SHADOW_HERO
+  SHADOW_HERO,
+  WASH_HERO
 } from '../chat/studioDesign';
 import { HEADER_INNER } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
@@ -73,18 +79,26 @@ const STEPS: ReadonlyArray<{ title: string; body: string }> = [
   { title: 'Polish and share', body: 'Change panels and lettering in Easy or Pro, then read it, share a link or export it.' }
 ];
 
-const FEATURES: ReadonlyArray<{ icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; title: string; body: string }> = [
+/**
+ * The feature bento. Each card leads with a solid 56 px tile in its own colour (ink, magenta, leaf, sky: the landing's
+ * four), an icon only on it (white in light, ink in dark; words on magenta and sky would fall under 4.5:1).
+ */
+const FEATURES: ReadonlyArray<{ icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; tile: string; title: string; body: string }> = [
   {
     icon: Users,
+    tile: INK_TILE,
     title: 'Characters that stay themselves',
     body: 'Reference sheets and a locked style keep faces, outfits and colours consistent from the cover to the last page.'
   },
   {
     icon: MessageSquareText,
+    tile: HUE_SOLID[1],
     title: 'Lettering you control',
     body: 'Balloons, captions and sound effects are real text. Move, restyle or rewrite them without redrawing a panel.'
   },
-  { icon: SlidersHorizontal, title: 'Easy or Pro', body: 'Talk it through in Easy, or switch to Pro for finer control of panels and lettering.' }
+  { icon: SlidersHorizontal, tile: HUE_SOLID[5], title: 'Easy or Pro', body: 'Talk it through in Easy, or switch to Pro for finer control of panels and lettering.' },
+  // What the studio's own Reader tab offers (board/ReaderTab.tsx: Print, the PDF, the pages as images).
+  { icon: Printer, tile: HUE_SOLID[6], title: 'Print it or keep it', body: 'When it’s finished, print it, save a PDF, or download the pages as images in one ZIP.' }
 ];
 
 const PROMISES: ReadonlyArray<{ icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>; text: string }> = [
@@ -164,49 +178,55 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
 
       <main>
         {/* 1 · Hero and the product proof */}
-        <section aria-labelledby="comics-hero-title" className="relative overflow-hidden">
+        <section data-testid="comics-hero" aria-labelledby="comics-hero-title" className="relative overflow-hidden">
           <div aria-hidden className="ds-grid-backdrop pointer-events-none absolute inset-0" />
-          <div className={cn(HEADER_INNER, 'relative')}>
-            <div className="ds-stagger mx-auto flex max-w-5xl flex-col items-center pb-10 pt-12 text-center sm:pb-14 sm:pt-24">
-              <p
-                className={cn(
-                  RADIUS_ROUND,
-                  'inline-flex items-center gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] px-3.5 py-1.5 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]'
-                )}
-              >
-                <span aria-hidden className={cn(RADIUS_ROUND, 'size-1.5 bg-[var(--ds-ink)]')} />
-                In beta · new accounts by invite
-              </p>
-              <h1 id="comics-hero-title" className={cn(DISPLAY_HERO, 'mt-7 max-w-4xl text-[var(--ds-ink)]')}>
-                <span className="block">Talk it through.</span>
-                <span className="block">Get a finished comic.</span>
-              </h1>
-              <p className={cn(PUBLIC_LEAD, 'mt-5 max-w-2xl medium:mt-6')}>
-                Tell the Comic Director your idea — a script, an outline or one line. It plans every page with you, keeps your cast on-model and
-                letters every balloon.
-              </p>
-              <div className="mt-8 flex w-full flex-col gap-3 medium:mt-9 medium:w-auto medium:flex-row medium:justify-center">
-                {/* The one creation call to action: the spark signed out, the ink primary signed in (one element, so
-                    the spark is spelled once in this file: tests/config/sparkGuard.test.ts). */}
-                <Button
-                  data-testid="comics-hero-cta"
-                  variant={signedIn ? 'default' : 'create'}
-                  size="lg"
-                  className={cn(CTA_LG, 'group w-full medium:w-auto')}
-                  onClick={signedIn ? onOpenComics : onSignIn}
+          {/* The page's one wash (colourUseGuard WASH_FILES), full bleed behind the headline and the calls to action, so
+              its three colours (ultramarine left, magenta right, orange low) meet behind the words and the orange rises
+              to the top edge of the drawn pages. On the whole section the opaque proof hid the orange and stretched the
+              other two into edge bands on phones. Text on it stays ink. */}
+          <div data-testid="comics-hero-wash" className={cn(WASH_HERO, 'relative')}>
+            <div className={cn(HEADER_INNER, 'relative')}>
+              <div className="ds-stagger mx-auto flex max-w-5xl flex-col items-center pb-10 pt-12 text-center sm:pb-14 sm:pt-24">
+                <p
+                  className={cn(
+                    RADIUS_ROUND,
+                    'inline-flex items-center gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] px-3.5 py-1.5 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]'
+                  )}
                 >
-                  {signedIn ? 'Open your comics' : 'Start creating'}
-                  <ArrowRight aria-hidden className={ARROW_NUDGE} />
-                </Button>
-                <Button variant="outline" size="lg" className={cn(CTA_LG, 'w-full medium:w-auto')} onClick={signedIn ? onBrowseGallery : onRequestAccess}>
-                  {signedIn ? 'Browse the Library' : 'Request access'}
-                </Button>
-              </div>
-              {!signedIn && (
-                <p className="mt-5 max-w-md text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
-                  New accounts are invite-only during the beta. Already have a DreamStream account? It works here too.
+                  <span aria-hidden className={cn(RADIUS_ROUND, 'size-1.5 bg-[var(--ds-ink)]')} />
+                  In beta · new accounts by invite
                 </p>
-              )}
+                <h1 id="comics-hero-title" className={cn(DISPLAY_HERO, 'mt-7 max-w-4xl text-[var(--ds-ink)]')}>
+                  <span className="block">Talk it through.</span>
+                  <span className="block">Get a finished comic.</span>
+                </h1>
+                <p className={cn(PUBLIC_LEAD, 'mt-5 max-w-2xl medium:mt-6')}>
+                  Tell the Comic Director your idea — a script, an outline or one line. It plans every page with you, keeps your cast on-model and
+                  letters every balloon.
+                </p>
+                <div className="mt-8 flex w-full flex-col gap-3 medium:mt-9 medium:w-auto medium:flex-row medium:justify-center">
+                  {/* The one creation call to action: the spark signed out, the ink primary signed in (one element, so
+                      the spark is spelled once in this file: tests/config/sparkGuard.test.ts). */}
+                  <Button
+                    data-testid="comics-hero-cta"
+                    variant={signedIn ? 'default' : 'create'}
+                    size="lg"
+                    className={cn(CTA_LG, 'group w-full medium:w-auto')}
+                    onClick={signedIn ? onOpenComics : onSignIn}
+                  >
+                    {signedIn ? 'Open your comics' : 'Start creating'}
+                    <ArrowRight aria-hidden className={ARROW_NUDGE} />
+                  </Button>
+                  <Button variant="outline" size="lg" className={cn(CTA_LG, 'w-full medium:w-auto')} onClick={signedIn ? onBrowseGallery : onRequestAccess}>
+                    {signedIn ? 'Browse the Library' : 'Request access'}
+                  </Button>
+                </div>
+                {!signedIn && (
+                  <p className="mt-5 max-w-md text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
+                    New accounts are invite-only during the beta. Already have a DreamStream account? It works here too.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
           <figure
@@ -274,20 +294,23 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                 </li>
               ))}
             </ol>
-            <ul className="mt-12 grid gap-4 sm:mt-14 lg:grid-cols-3">
-              {FEATURES.map(({ icon: Icon, title, body }) => (
+            <ul className="mt-12 grid gap-4 sm:mt-14 md:grid-cols-2">
+              {FEATURES.map(({ icon: Icon, tile, title, body }) => (
                 <li key={title} className={cn('group ds-reveal border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 medium:p-7', RADIUS_FEATURE, LIFT)}>
                   <span
                     aria-hidden
+                    data-feature-tile
                     className={cn(
-                      'flex size-10 items-center justify-center bg-[var(--ds-ink)] text-[var(--ds-canvas)] transition-transform duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] can-hover:motion-safe:group-hover:-rotate-6 can-hover:motion-safe:group-hover:scale-105',
-                      RADIUS_PANEL
+                      'flex size-14 items-center justify-center transition-transform duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] can-hover:motion-safe:group-hover:-rotate-6 can-hover:motion-safe:group-hover:scale-105',
+                      RADIUS_PANEL,
+                      tile
                     )}
                   >
-                    <Icon aria-hidden className="size-5" />
+                    <Icon aria-hidden className="size-6" />
                   </span>
-                  {/* Two lines tall from lg (3.5rem at leading-7), so the three bodies start on one line. */}
-                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-6 text-[var(--ds-ink)] lg:min-h-14')}>{title}</h3>
+                  {/* Two lines tall in the two-column tablet grid (3.5rem at leading-7), so the bodies in a row start
+                      level; from lg every title fits one line. */}
+                  <h3 className={cn(DISPLAY_CARD_TITLE, 'mt-6 text-[var(--ds-ink)] md:min-h-14 lg:min-h-0')}>{title}</h3>
                   <p className={cn(PUBLIC_BODY, 'mt-2 max-w-xl')}>{body}</p>
                 </li>
               ))}

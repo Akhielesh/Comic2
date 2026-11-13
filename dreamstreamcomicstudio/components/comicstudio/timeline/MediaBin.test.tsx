@@ -40,14 +40,15 @@ describe('feature module', () => {
 });
 
 describe('MediaBin', () => {
-  it('groups every image by owner in book order, with filters, counts and the archive counter', () => {
+  it('groups every image by owner in book order, with filters and counts (the archive line waits for 80 % full)', () => {
     setup();
     const groups = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
     expect(groups.slice(0, 2)).toEqual(['Cover', 'Page 1']);
     expect(groups).toContain('MAYA references');
     expect(groups).toContain('Chat uploads');
     expect(groups).toContain('Deleted page 4');
-    expect(screen.getByText('Archive 2/300')).toBeInTheDocument();
+    // 2 of 300: the counter is noise this far from the cap; the Archived filter still counts them.
+    expect(screen.queryByText(/^Archive \d+\/300$/)).toBeNull();
     expect(screen.getByRole('radio', { name: /Archived\s*2/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: /Deleted/ }));
     expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Deleted page 4', 'Deleted page 9']);
@@ -189,7 +190,23 @@ describe('MediaBin', () => {
     empty.style = { ...empty.style, options: [] };
     setup(empty);
     expect(screen.getByText('No images yet')).toBeInTheDocument();
-    expect(screen.getByText('Archive 0/300')).toBeInTheDocument();
+    // No "Archive 0/300" line (and no empty footer rule) on an empty comic.
+    expect(screen.queryByText(/^Archive /)).toBeNull();
+    expect(document.querySelector('footer')).toBeNull();
+  });
+
+  it('shows the archive counter and its rule from 80 % full, and not one version before', () => {
+    const withArchive = (n: number) => {
+      const d = richDoc();
+      d.archive = Array.from({ length: n }, (_, i) => ({ ...A(`old-${i}`, i + 1), targetKey: 'page:pg_1', label: 'Page 1', archivedAt: i + 1 }));
+      return d;
+    };
+    const { unmount } = setup(withArchive(239));
+    expect(screen.queryByText(/^Archive \d+\/300$/)).toBeNull();
+    unmount();
+    setup(withArchive(240));
+    expect(screen.getByText('Archive 240/300')).toBeInTheDocument();
+    expect(screen.getByText(/Starred images are never removed/)).toBeInTheDocument();
   });
 });
 

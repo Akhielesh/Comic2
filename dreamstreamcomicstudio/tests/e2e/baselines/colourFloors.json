@@ -1,0 +1,19 @@
+{
+  "comment": "The colour budget of the colour layer \"Ink, Paper & Colour\" (CL-6). tests/e2e/layout.smoke.spec.ts @colour measures, on the real screen with every picture hidden, the share of the interface in strong colour (OKLCH chroma above chromaMin). Working views stay at or under ceiling.share. Each floor is the minimum for a screen that should feel coloured; an entry with enforce:false is measured and reported (a test annotation) but never fails; flipping enforce to true is the only way a floor turns on, and it is done by the package or integrator named in switchedOnBy, once the screen reaches it.",
+  "chromaMin": 0.1,
+  "ceiling": {
+    "share": 0.06,
+    "scenes": [
+      { "id": "board-pages", "open": { "surface": "studio", "fixture": "stress", "tab": "pages" }, "board": true },
+      { "id": "editor-drawn", "open": { "surface": "editor", "fixture": "stress", "page": 1 } },
+      { "id": "conversation", "open": { "surface": "studio", "fixture": "stress" } }
+    ]
+  },
+  "floors": [
+    { "id": "landing", "floor": 0.04, "enforce": false, "open": { "surface": "app", "scene": "landing" }, "switchedOnBy": "the change that brings real art or a stronger colour into the landing hero, once the screen reaches the floor" },
+    { "id": "library", "floor": 0.03, "enforce": false, "open": { "surface": "app", "scene": "ds-content" }, "switchedOnBy": "CL-8 (each comic's own tint on its card; the P6-D integrator)" },
+    { "id": "empty", "floor": 0.02, "enforce": false, "open": { "surface": "studio", "fixture": "empty" }, "switchedOnBy": "CP-4 (pictures and a wash on empty screens)" },
+    { "id": "board", "floor": 0.01, "enforce": false, "open": { "surface": "studio", "fixture": "stress", "tab": "pages" }, "board": true, "switchedOnBy": "CL-9 (the part you are in keeps its colour; the P6-D integrator)" },
+    { "id": "model-picker", "floor": 0.01, "enforce": false, "open": { "surface": "kit", "kit": "model-picker", "fixture": "heist-12p" }, "switchedOnBy": "CP-2 (the model comparison as a real table)" }
+  ]
+}

@@ -65,6 +65,7 @@ import {
   RADIUS_PANEL,
   type CheckedState
 } from '../../../components/ds';
+import { ColourSpecimen } from '../../../components/ds/specimens/ColourSpecimen';
 
 const ROW = 'flex min-w-0 flex-wrap items-center gap-2';
 const STACK = 'flex min-w-0 flex-col gap-4';
@@ -476,11 +477,21 @@ function ColourLayer() {
   );
 }
 
+/** The colour layer "Ink, Paper & Colour" (CL-6): the seven hues, chart order and ramps, washes, studio accents and a comic's tint. */
+function InkPaperColour() {
+  return (
+    <SectionCard title="Ink, Paper & Colour" description="Seven hues with five jobs: tell things apart, show data, warm a page, a comic's own colour, the studio you are in." icon={<Palette />}>
+      <ColourSpecimen />
+    </SectionCard>
+  );
+}
+
 function Gallery() {
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <Buttons />
       <ColourLayer />
+      <InkPaperColour />
       <Fields />
       <Choices />
       <Labels />

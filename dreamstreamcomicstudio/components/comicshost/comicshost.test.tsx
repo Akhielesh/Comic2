@@ -296,11 +296,12 @@ describe('ComicsLanding', () => {
     }
   });
 
-  it('the feature spots are drawn in one ink: no terracotta anywhere beside the hero spark (DS-3 #5)', () => {
+  it('the feature spots are the four CL-10 tiles (ink, magenta, leaf, sky; never ultramarine) and no terracotta anywhere beside the hero spark (DS-3 #5)', () => {
+    // DS-3 #5 drew all three spots in ink; CL-10 ("Ink, Paper & Colour") makes them four solid tiles, the first still
+    // ink, none in the spark's ultramarine (the full rule is in ComicsLanding.atlas.test.tsx).
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
     const spots = [...container.querySelectorAll('#how-it-works ul > li > span[aria-hidden]')];
-    expect(spots).toHaveLength(3);
-    for (const spot of spots) expect(spot.className).toContain('bg-[var(--ds-ink)]');
+    expect(spots.map((spot) => /bg-\[var\(--ds-(ink|hue-\d-solid)\)\]/.exec(spot.className)?.[1])).toEqual(['ink', 'hue-2-solid', 'hue-6-solid', 'hue-7-solid']);
     expect(container.innerHTML.toLowerCase()).not.toMatch(/#d97757|#c2643f|#c2603f/);
   });
 

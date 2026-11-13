@@ -26,7 +26,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController, StudioTab } from '../types';
 import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
-import { ACCENT_SOFT_BG, HAIRLINE, OVERLINE, RADIUS_PANEL } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, CLIP_TEXT, HAIRLINE, OVERLINE, RADIUS_PANEL, WRAP_TEXT } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -95,9 +95,50 @@ export const GateBanner: React.FC<{
 }> = ({ studio, compact = false, dense = false }) => {
   const gate = studio.doc?.gate;
   const { busyKey, fire } = useClickGuard(4000);
+  // The gate this banner already sent an approval for. Approve keeps focus while it is sent, so a second Enter lands
+  // on it again; the 4 s click guard alone would let that Enter send a second approval once it ends. The gate's
+  // answer stays held until the gate closes (or a new gate opens), and is released only if the approval failed, so
+  // the user can try again.
+  const [answeredGateId, setAnsweredGateId] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
   const cost = useCostFormat(studio.caps);
-  if (!gate || gate.status !== 'open') return null;
+  const open = !!gate && gate.status === 'open';
+  // When the gate the user answered closes, the banner (and the Approve that held focus) unmounts and the browser
+  // drops focus to <body>. If focus was inside the banner and nothing else took it, move it to the board's tab
+  // panel, so a keyboard user carries on from the board instead of from the top of the page.
+  const focusInside = useRef(false);
+  useEffect(() => {
+    if (open || !focusInside.current) return;
+    focusInside.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    document.getElementById('board-panel')?.focus({ preventScroll: true });
+  }, [open]);
+  if (!gate || !open) return null;
+  const onFocusIn = () => {
+    focusInside.current = true;
+  };
+  const onFocusOut = (e: React.FocusEvent) => {
+    // Focus moved to a real element outside the banner: the user went elsewhere, so leave their focus alone.
+    if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) focusInside.current = false;
+  };
+  const approving = busyKey === 'approve' || answeredGateId === gate.id;
+  const approve = () => {
+    if (approving) return;
+    const gateId = gate.id;
+    setAnsweredGateId(gateId);
+    const release = () => setAnsweredGateId((cur) => (cur === gateId ? null : cur));
+    fire('approve', () =>
+      Promise.resolve(studio.act({ type: 'approve_gate', gateId })).then(
+        (out) => {
+          // A failed approval (offline, refused) may be sent again; a skipped duplicate means one is already in flight.
+          const o = out as { ok?: unknown; skipped?: unknown } | undefined;
+          if (o && o.ok === false && !o.skipped) release();
+        },
+        release
+      )
+    );
+  };
   const price = cost.quote(gate.estimateUsd);
   // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
   const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
@@ -105,10 +146,12 @@ export const GateBanner: React.FC<{
   const overBudget = gate.reason === 'budget' ? ' · over your budget cap' : '';
   const buttons = (
     <div className="flex shrink-0 gap-2">
-      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={busyKey === 'approve'} onClick={() => fire('approve', () => studio.act({ type: 'approve_gate', gateId: gate.id }))}>
+      {/* keepFocusWhileBusy: Enter on Approve leaves focus on Approve while it is sent (a disabled button dropped it
+          to <body>), and a second Enter sends nothing until the gate closes or the approval fails. */}
+      <PrimaryButton size={compact ? 'xs' : 'sm'} busy={approving} keepFocusWhileBusy onClick={approve}>
         Approve
       </PrimaryButton>
-      <GhostButton size={compact ? 'xs' : 'sm'} disabled={busyKey === 'approve'} onClick={() => fire('decline', () => studio.act({ type: 'decline_gate', gateId: gate.id }))}>
+      <GhostButton size={compact ? 'xs' : 'sm'} disabled={approving} onClick={() => fire('decline', () => studio.act({ type: 'decline_gate', gateId: gate.id }))}>
         Not now
       </GhostButton>
     </div>
@@ -121,6 +164,8 @@ export const GateBanner: React.FC<{
         role="region"
         aria-label="Waiting for your approval"
         data-gate-banner="compact"
+        onFocus={onFocusIn}
+        onBlur={onFocusOut}
         className={cx('mx-2 shrink-0 border border-[var(--ds-hairline)] px-2.5 text-[var(--ds-ink)]', RADIUS_PANEL, ACCENT_SOFT_BG, dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -129,11 +174,21 @@ export const GateBanner: React.FC<{
             onClick={() => setDetails((d) => !d)}
             aria-expanded={details}
             title={`${gate.title} · ${price} · ${images}${overBudget}`}
-            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]"
+            data-gate-summary={details ? 'open' : 'closed'}
+            className={cx(
+              'flex min-h-[36px] min-w-0 flex-1 gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
+              // Opened (one tap; a phone has no hover title): the whole label and the whole price, wrapped onto as
+              // many lines as they need — closed it was "Draw the re… · ≈ $1.…" (the phone gate label).
+              details ? 'flex-wrap items-start py-1' : 'items-center'
+            )}
           >
-            <span className="min-w-0 truncate font-semibold">{gate.title}</span>
-            <span className="min-w-0 max-w-[45%] shrink-0 truncate tabular-nums text-[var(--ds-muted)]">· {price}</span>
-            <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'rotate-180')} aria-hidden />
+            <span className={cx('font-semibold', details ? WRAP_TEXT : CLIP_TEXT)}>{gate.title}</span>
+            <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[45%] shrink-0 truncate')}>
+              {/* Closed, the price shares the title's line ("Title · price"). Opened, it may wrap onto its own line, so it
+                  drops the separator rather than start a line with a dangling "·"; the gap still parts the two. */}
+              {details ? price : `· ${price}`}
+            </span>
+            <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'mt-0.5 rotate-180')} aria-hidden />
             <span className="sr-only">{details ? 'Hide details' : 'Show details'}</span>
           </button>
           {buttons}
@@ -153,6 +208,8 @@ export const GateBanner: React.FC<{
       role="region"
       aria-label="Waiting for your approval"
       data-gate-banner="full"
+      onFocus={onFocusIn}
+      onBlur={onFocusOut}
       className={cx('mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border border-[var(--ds-hairline)] px-3 py-2.5 sm:mx-4', RADIUS_PANEL, ACCENT_SOFT_BG)}
     >
       <div className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">
@@ -203,7 +260,8 @@ FrozenWhileEditing.displayName = 'FrozenWhileEditing';
 const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ children, active }) => (
   <span
     className={cx(
-      'min-w-[1.25rem] rounded-full px-1.5 py-px text-center text-[10px] font-semibold tabular-nums leading-4',
+      // The 11 px step of the chrome scale (--ds-text-xs; it follows the user's text size), not a spelled 10 px (FX-15).
+      'min-w-[1.25rem] rounded-full px-1.5 py-px text-center text-[length:var(--ds-text-xs)] font-semibold tabular-nums leading-4',
       active ? 'bg-[#D97757]/15 text-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
     )}
   >

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useId, useState } from 'react';
 import { Loader2, Copy, Check, Send, Gift } from 'lucide-react';
 import { getReferral, sendReferral, type ReferralInfo } from '../services/invites';
 
@@ -18,6 +18,10 @@ export const InviteFriends: React.FC = () => {
   const [msg, setMsg] = useState<string | null>(null);
   const [details, setDetails] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const ids = useId();
+  const linkId = `${ids}-link`;
+  const copyWhyId = `${ids}-copy-why`;
+  const emailsId = `${ids}-emails`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,13 +87,19 @@ export const InviteFriends: React.FC = () => {
       {error && <div className="rounded-lg border-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
       <div>
-        <label className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-1">Your invite link</label>
+        <label htmlFor={linkId} className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-1">Your invite link</label>
         <div className="flex items-center gap-2">
-          <input readOnly className={`${inputCls} font-mono text-xs`} value={loading ? 'Loading…' : ref?.url || ''} />
-          <button className={`${btnCls} bg-brand-yellow`} onClick={copy} disabled={!ref}>
+          <input id={linkId} readOnly className={`${inputCls} min-w-0 font-mono text-xs`} value={loading ? 'Loading…' : ref?.url || ''} />
+          <button className={`${btnCls} bg-brand-yellow shrink-0`} onClick={copy} disabled={!ref} aria-describedby={ref ? undefined : copyWhyId}>
             {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
+        {/* A disabled Copy says why: the link is still loading, or it could not be loaded. */}
+        {!ref && (
+          <div id={copyWhyId} className="mt-1 text-xs text-slate-500">
+            {loading ? 'No link to copy yet: it is still loading.' : 'No link to copy: your invite link could not be loaded.'}
+          </div>
+        )}
         {ref && (
           <div className="mt-1 text-xs text-slate-500">
             Used {ref.used} of {ref.max}.
@@ -126,14 +136,22 @@ export const InviteFriends: React.FC = () => {
       )}
 
       <div className="border-t-2 border-dashed border-slate-300 pt-3 space-y-2">
-        <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">Or email them directly (up to 10)</label>
+        <label htmlFor={emailsId} className="block text-xs font-bold uppercase tracking-wide text-slate-600">Or email them directly (up to 10)</label>
         <textarea
+          id={emailsId}
           className={`${inputCls} min-h-[60px] font-mono text-xs`}
           value={emails}
           onChange={(e) => setEmails(e.target.value)}
-          placeholder="friend@example.com, another@example.com"
+          placeholder="Email addresses, separated by commas"
         />
-        <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a short personal note (optional)" maxLength={240} />
+        <input
+          className={inputCls}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          aria-label="A short personal note (optional)"
+          placeholder="Add a short personal note (optional)"
+          maxLength={240}
+        />
         <button className={`${btnCls} bg-brand-blue text-white`} onClick={handleSend} disabled={busy || !emails.trim()}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send invites
         </button>

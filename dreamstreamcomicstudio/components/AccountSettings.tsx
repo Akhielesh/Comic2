@@ -12,6 +12,7 @@ import {
 } from '../services/db';
 import { getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
+import { FOCUS_RING, WRAP_TEXT } from './chat/studioDesign';
 import { SUPPORT_EMAIL } from './legal/contacts';
 import { ApiConfiguration } from './ApiConfiguration';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -34,6 +35,10 @@ import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
+
+// The photo button fills a round overflow-hidden frame, so the shared ring (drawn 2 px outside the element) would be
+// clipped away entirely. This one is drawn 4 px inside the button, where the frame cannot clip it.
+const AVATAR_FOCUS_RING = FOCUS_RING.replace('focus-visible:outline-offset-2', 'focus-visible:outline-offset-[-4px]');
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -109,8 +114,9 @@ const ContactSection = () => {
             </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
-                    <label className="font-bold text-xs uppercase">Your Email</label>
+                    <label htmlFor="contact-email" className="font-bold text-xs uppercase">Your Email</label>
                     <input
+                        id="contact-email"
                         type="email"
                         required
                         value={contactEmail}
@@ -119,8 +125,9 @@ const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Phone Number (Optional)</label>
+                    <label htmlFor="contact-phone" className="font-bold text-xs uppercase">Phone Number (Optional)</label>
                     <input
+                        id="contact-phone"
                         type="tel"
                         value={phone}
                         onChange={e => setPhone(e.target.value)}
@@ -128,8 +135,9 @@ const ContactSection = () => {
                     />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Message (300 words max)</label>
+                    <label htmlFor="contact-message" className="font-bold text-xs uppercase">Message (300 words max)</label>
                     <textarea
+                        id="contact-message"
                         required
                         rows={6}
                         value={msg}
@@ -165,6 +173,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         resolveInitialUiState<SettingsTab>('settings.tab', 'tab', (v): v is SettingsTab => isSettingsTab(v), initialTab)
     );
     const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
+    const avatarInputRef = useRef<HTMLInputElement>(null);
     const [loading, setLoading] = useState(true);
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [privateProfile, setPrivateProfile] = useState<UserPrivateProfile | null>(null);
@@ -351,6 +360,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
         const file = e.target.files[0];
+        // Picking the same file again must fire onChange again (a retry after a failed upload).
+        e.target.value = '';
         const reader = new FileReader();
         reader.onloadend = async () => {
             try {
@@ -587,6 +598,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
+    // The sign-in email cannot be edited here, so it is read-only text (role=textbox, aria-readonly), not a disabled
+    // input: an input cannot wrap (an ordinary 30-character address was cut on phones) and a disabled one cannot be
+    // focused, scrolled or selected, so the hidden part could not be reached at all.
     const renderProfile = () => (
         <div className="space-y-8 animate-fade-in max-w-2xl">
             {requireDobCompletion && (
@@ -601,46 +615,66 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             )}
             {renderMessage(profileMessage)}
 
-            <div className="flex items-start gap-8">
-                <div className="relative group">
-                    <div
-                        className="w-32 h-32 rounded-full border-4 border-black overflow-hidden bg-slate-200 cursor-pointer"
-                        onClick={() => avatarUrl && setPreviewAvatar(avatarUrl)}
-                    >
+            {/* Phones: the photo sits above the fields, so every field gets the card's full width (an email beside a
+                128 px photo was cut at 390 px). From sm the photo and the fields share one row again. */}
+            <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start sm:gap-8">
+                <div className="relative group shrink-0">
+                    <div className="w-32 h-32 rounded-full border-4 border-black overflow-hidden bg-slate-200">
                         {avatarUrl ? (
-                            <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                            <button
+                                type="button"
+                                onClick={() => setPreviewAvatar(avatarUrl)}
+                                aria-label="View profile photo"
+                                className={`block w-full h-full cursor-zoom-in ${AVATAR_FOCUS_RING}`}
+                            >
+                                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                            </button>
                         ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-400">
                                 <UserIcon size={48} />
                             </div>
                         )}
                     </div>
-                    <label className="absolute bottom-0 right-0 bg-brand-yellow border-2 border-black p-2 rounded-full cursor-pointer hover:bg-yellow-300 shadow-comic transition-transform hover:scale-105 z-10">
-                        <Upload size={16} />
-                        <input type="file" className="hidden" accept="image/*" onChange={handleAvatarUpload} />
-                    </label>
+                    {/* A real button opens the hidden file input: a <label> around a display:none input has no name and
+                        no keyboard can reach it. */}
+                    <button
+                        type="button"
+                        onClick={() => avatarInputRef.current?.click()}
+                        aria-label={avatarUrl ? 'Change profile photo' : 'Upload a profile photo'}
+                        title={avatarUrl ? 'Change profile photo' : 'Upload a profile photo'}
+                        className={`absolute bottom-0 right-0 w-11 h-11 flex items-center justify-center bg-brand-yellow border-2 border-black rounded-full cursor-pointer hover:bg-yellow-300 shadow-comic transition-transform hover:scale-105 z-10 ${FOCUS_RING}`}
+                    >
+                        <Upload size={16} aria-hidden />
+                    </button>
+                    <input ref={avatarInputRef} type="file" className="hidden" tabIndex={-1} aria-hidden accept="image/*" onChange={handleAvatarUpload} />
                 </div>
 
-                <div className="flex-1 space-y-4">
+                <div className="w-full min-w-0 flex-1 space-y-4">
                     <div>
-                        <label className="font-display text-lg">Username *</label>
+                        <label htmlFor="account-username" className="font-display text-lg">Username *</label>
                         <input
+                            id="account-username"
                             type="text"
                             value={username}
                             onChange={e => setUsername(e.target.value)}
+                            autoComplete="username"
+                            aria-describedby="account-username-hint"
                             className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
-                            placeholder="Super_hero"
                         />
-                        <p className="text-xs text-slate-500 mt-1">3-20 chars, letters/numbers/underscore only.</p>
+                        <p id="account-username-hint" className="text-xs text-slate-500 mt-1">3-20 chars, letters/numbers/underscore only.</p>
                     </div>
                     <div>
-                        <label className="font-display text-lg">Email</label>
-                        <input
-                            type="text"
-                            value={user?.email || ''}
-                            disabled
-                            className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-500 cursor-not-allowed"
-                        />
+                        <span id="account-email-label" className="block font-display text-lg">Email</span>
+                        <div
+                            id="account-email"
+                            role="textbox"
+                            aria-readonly="true"
+                            aria-labelledby="account-email-label"
+                            tabIndex={0}
+                            className={`w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-600 select-text ${WRAP_TEXT} ${FOCUS_RING}`}
+                        >
+                            {user?.email || ''}
+                        </div>
                     </div>
                     <div>
                         <label htmlFor="account-display-name" className="font-display text-lg">Name *</label>
@@ -652,7 +686,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             maxLength={NAME_MAX}
                             autoComplete="name"
                             className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
-                            placeholder="Super Hero"
                         />
                         <p className="text-xs text-slate-500 mt-1">
                             Shown in every studio — in Stream Studio, family and nursery members see it too.
@@ -661,18 +694,21 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label className="font-display text-lg">Phone Number</label>
+                            <label htmlFor="account-phone" className="font-display text-lg">Phone Number</label>
                             <input
+                                id="account-phone"
                                 type="tel"
                                 value={phoneNumber}
                                 onChange={(e) => setPhoneNumber(e.target.value)}
+                                autoComplete="tel"
                                 className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
-                                placeholder="+1 555 123 4567"
+                                placeholder="Optional"
                             />
                         </div>
                         <div>
-                            <label className="font-display text-lg">Date of Birth {requireDobCompletion ? '*' : ''}</label>
+                            <label htmlFor="account-dob" className="font-display text-lg">Date of Birth {requireDobCompletion ? '*' : ''}</label>
                             <input
+                                id="account-dob"
                                 type="date"
                                 value={dob}
                                 onChange={(e) => setDob(e.target.value)}
@@ -815,9 +851,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <h3 className="font-display text-2xl">Change Password</h3>
                     <form onSubmit={handleChangePassword} className="space-y-4">
                         <div>
-                            <label className="font-bold text-xs uppercase">New Password</label>
+                            <label htmlFor="account-new-password" className="font-bold text-xs uppercase">New Password</label>
                             <input
+                                id="account-new-password"
                                 type="password"
+                                autoComplete="new-password"
                                 value={newPassword}
                                 onChange={(e) => setNewPassword(e.target.value)}
                                 className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
@@ -826,9 +864,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             />
                         </div>
                         <div>
-                            <label className="font-bold text-xs uppercase">Confirm Password</label>
+                            <label htmlFor="account-confirm-password" className="font-bold text-xs uppercase">Confirm Password</label>
                             <input
+                                id="account-confirm-password"
                                 type="password"
+                                autoComplete="new-password"
                                 value={confirmNewPassword}
                                 onChange={(e) => setConfirmNewPassword(e.target.value)}
                                 className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
@@ -1012,6 +1052,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
     );
 
+    const showAdminChip = isAdmin || isModerator;
     const navGroups: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: React.ReactNode; show?: boolean }> }> = [
         {
             label: 'Account',
@@ -1037,7 +1078,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         {
             label: 'Platform',
             items: [
-                { id: 'admin', label: 'Admin Console', icon: <Shield size={17} />, show: isAdmin || isModerator }
+                { id: 'admin', label: 'Admin Console', icon: <Shield size={17} />, show: showAdminChip }
             ]
         }
     ];
@@ -1053,6 +1094,27 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     };
 
     const isFirstLoad = loading && !profile;
+
+    // Phones: the section row scrolls sideways, so bring the current chip into view (a deep link to Legal or
+    // Contact, a reload on a later tab). Only the row scrolls, never the page; from md the list is a column.
+    const navRowRef = useRef<HTMLElement>(null);
+    useEffect(() => {
+        const row = navRowRef.current;
+        if (!row) return;
+        const reveal = () => {
+            if (row.scrollWidth <= row.clientWidth) return;
+            const chip = row.querySelector<HTMLElement>('[aria-current="page"]');
+            if (!chip) return;
+            row.scrollLeft = Math.max(0, chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2);
+        };
+        reveal();
+        // The row only scrolls below md: crossing the breakpoint (a rotation, a narrowed window) re-centres it.
+        const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 768px)') : null;
+        mq?.addEventListener?.('change', reveal);
+        return () => mq?.removeEventListener?.('change', reveal);
+        // showAdminChip: the Admin chip only appears once admin access resolves after mount, so a deep link to
+        // ?tab=admin has no current chip on the first run.
+    }, [activeTab, showAdminChip]);
 
     return (
         <div className="min-h-screen bg-slate-50 pb-20">
@@ -1088,14 +1150,20 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             </div>
 
             <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-8 grid grid-cols-1 md:grid-cols-4 gap-6 md:gap-8">
-                <nav className="space-y-5 md:sticky md:top-24 self-start" aria-label="Settings sections">
+                {/* Under md the section list is ONE sideways-scrolling row of chips (group names hidden), so the first
+                    setting is on the first screen of a phone instead of below a 600 px list. From md it is the column. */}
+                <nav
+                    ref={navRowRef}
+                    className="relative min-w-0 -mx-4 px-4 sm:-mx-6 sm:px-6 md:mx-0 md:px-0 flex gap-2 overflow-x-auto overscroll-x-contain py-1 md:block md:space-y-5 md:overflow-visible md:py-0 md:sticky md:top-24 self-start"
+                    aria-label="Settings sections"
+                >
                     {navGroups.map((group) => {
                         const items = group.items.filter((item) => item.show !== false);
                         if (items.length === 0) return null;
                         return (
-                            <div key={group.label}>
-                                <div className="px-4 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</div>
-                                <div className="space-y-1">
+                            <div key={group.label} className="contents md:block">
+                                <div className="hidden md:block px-4 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</div>
+                                <div className="contents md:block md:space-y-1">
                                     {items.map((item) => {
                                         const active = activeTab === item.id;
                                         return (
@@ -1103,7 +1171,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                                 key={item.id}
                                                 onClick={() => setActiveTab(item.id)}
                                                 aria-current={active ? 'page' : undefined}
-                                                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${active ? 'text-white' : 'text-slate-500 hover:text-black hover:bg-slate-200/70'}`}
+                                                className={`relative shrink-0 md:w-full min-h-11 flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${FOCUS_RING} ${active ? 'text-white' : 'text-slate-500 hover:text-black hover:bg-slate-200/70'}`}
                                             >
                                                 {active && (
                                                     <motion.span
@@ -1121,13 +1189,13 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         );
                     })}
 
-                    <div className="pt-2 border-t-2 border-slate-200">
+                    <div className="contents md:block md:pt-2 md:border-t-2 md:border-slate-200">
                         <button
                             onClick={async () => {
                                 await signOut();
                                 onSignedOut?.();
                             }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm text-red-600 hover:bg-red-50 transition-colors"
+                            className={`shrink-0 md:w-full min-h-11 flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm text-red-600 hover:bg-red-50 transition-colors ${FOCUS_RING}`}
                         >
                             <LogOut size={17} /> Sign Out
                         </button>
@@ -1169,7 +1237,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <div className="fixed inset-0 z-[250] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setPreviewAvatar(null)}>
                     <div className="bg-white p-2 rounded-2xl border-4 border-black shadow-2xl max-w-lg w-full relative">
                         <button
+                            type="button"
                             onClick={() => setPreviewAvatar(null)}
+                            aria-label="Close photo preview"
                             className="absolute -top-4 -right-4 bg-red-500 text-white p-2 rounded-full border-2 border-black hover:bg-red-600 transition-colors"
                         >
                             <X size={20} />

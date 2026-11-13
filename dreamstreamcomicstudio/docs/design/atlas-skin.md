@@ -476,6 +476,21 @@ The colour layer "Ink & Spark" (CL-0; `docs/design/design-system.md` § Colour l
 | `--ds-hue-5` | `#9548cc` | `#a155da` |
 | `--ds-art` | `var(--ds-well-strong)` | `var(--ds-well-strong)` |
 
+The colour layer "Ink, Paper & Colour" (CL-6, R02; `docs/design/design-system.md` § Colour layer) adds 43 names in all
+four blocks: `--ds-hue-6` leaf (`#567d01` / `#6e9e01`) and `--ds-hue-7` sky (`#0089c9` / `#0c9edc`); for each of the seven
+hues a readable `--ds-hue-N-text`, an opaque `--ds-hue-N-soft` (12 % light, 16 % dark, over `--ds-raised`) and a
+`--ds-hue-N-solid`; the one label colour `--ds-on-hue` (`#ffffff` / `#0a0a0a`); the chart ramps `--ds-chart-seq-1…6` and
+`--ds-chart-div-1…7` (`--ds-chart-1…5`, the bridge's ink steps, are unchanged); the washes `--ds-wash-hero` (stronger
+under this skin: 20 / 18 / 12 % light, 26 / 22 / 16 % dark) and `--ds-wash-empty`; the studio accent `--ds-studio` /
+`--ds-studio-soft` (`[data-ds-studio]`: chat teal, live magenta, models violet, **atlas sky**; Comic Studio none); and the
+art tint's card defaults `--ds-art-soft` / `--ds-art-edge` (derived inside `.ds-art-scope`). The build switch
+`VITE_DS_COLOUR=off` turns all of them neutral.
+
+**Offered to Atlas** (the same colours in Atlas; we never edit Atlas, the Atlas session decides):
+`--hue-1…7` with the marks above, `--hue-N-text` and `--hue-N-soft` with the same values and rules (a tag is ink on the
+soft tint; coloured words only on slots 1, 5 and 7; a chart takes the hues in the order 1, 2, 6, 7, 3, 4, 5), and the
+studio accent sky for Atlas itself. Atlas's `--chart-1…5` stay its ink steps.
+
 Also DreamStream's own: the art develop tokens `--ds-develop-light` (`rgb(255 255 255)`; dark
 `rgb(255 255 255 / 0.55)`) and `--ds-develop-sheen` (white at 0.18; dark 0.15), read by `ImageDevelop` (MO-1).
 
