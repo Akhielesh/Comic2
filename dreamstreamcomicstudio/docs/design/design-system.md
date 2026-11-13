@@ -437,6 +437,12 @@ each.
 <Checkbox label="Select all pages" checked={some ? 'indeterminate' : all} onCheckedChange={setAll} />
 ```
 
+The Comic Studio kit buttons (`components/comicstudio/board/ui.tsx`) take an opt-in `keepFocusWhileBusy`
+(`board/busyButton.ts`, a module with no imports, so the conversation kit and the reader can use it without
+pulling in the board kit): while busy, the button stays focusable (`aria-disabled`; click and Enter are
+swallowed) instead of `disabled`. Only the board gate's Approve uses it; when that gate closes, focus moves to
+the board tab panel. Every other busy kit button is still `disabled`.
+
 **Labels**
 
 ```tsx

@@ -43,7 +43,7 @@ import { costNamesOf, elementOf, isStringy, labelsOf, parse, priceIn, siblingsOf
 
 /** Where hero and empty-state washes may go (rule 3): one element per file. CL-10 puts the hero wash on the landing. */
 export const WASH_FILES: Record<string, string> = {
-  'components/comicshost/ComicsLanding.tsx': 'the comics landing hero (CL-10): one wash behind the headline and the drawn pages'
+  'components/comicshost/ComicsLanding.tsx': 'the comics landing hero (CL-10): one wash behind the headline and the calls to action, down to the drawn pages'
 };
 /** Files that show the layer as specimens (rule 3 does not apply; rules 1, 2, 4 do). */
 export const SPECIMENS: readonly string[] = ['components/ds/specimens/**', 'qa/app/scenes/colour-layer.tsx', 'qa/app/scenes/ds-gallery.tsx'];
