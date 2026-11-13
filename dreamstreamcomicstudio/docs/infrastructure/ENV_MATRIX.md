@@ -165,6 +165,26 @@ reads them yet. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
 | `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` / `true` / `1` / `all` / `everyone` = everyone, `admins` = off (signed-out readers cannot be checked), anything else = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
 | *(not an env var)* `PRO_EDIT_OPS_PATCHABLE` | `shared/comic/ops.ts`: a **code constant**, `false`. While false, the `motion` / `page_motion` ops (`PRO_EDIT_OPS`) are not in `CLIENT_PATCHABLE_OPS`, so no client can write motion, and the server sanitizer refuses them | `false` | — | Flipped only by the S2 integration, and only after the PE-SERVER sanitizer is in production and the dangling-motion prune is settled (`docs/features/pro-edit.md` §7). PE-0 itself must be in production one deploy before that |
 
+## Comic Studio: truer pages and the page check v2 (Program 5 R01)
+
+Server only. `server/src/comic/p5Flags.ts` (`P5_FLAG_ENV`) reads each one once per job run (`jobs.ts`, the runner's
+`p5FlagsFor`) or once per page check (`letterPage`), never mid-job. Stages `off` | `admins` | `all` (case and spaces
+ignored; `everyone` = `all`; a bare `on` / `true` / `1` / `yes` means **admins only**; unset or anything else = `off`).
+"Admins" is the request's caps (`caps.admin`), which fail closed; share-link readers have no caps and keep today's
+behaviour. Unset = today's prompts, run order and page-check report, byte for byte (pinned by the Ramayana golden suite,
+`server/src/comic/golden/ramayana.golden.test.ts`). No flag here adds a model or image call. Backend env: a `vars`
+entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row; a `vars` entry wins over D1. The admin week is on from
+this release: `COMIC_STORY_FIXES` and `COMIC_QC_V2` are `admins` in `api-proxy/wrangler.jsonc` (as `COMIC_STEER` is), so
+an admin's new drawings get the fixes at once and nobody else's change. Rolling back = set the var to `off` (or remove
+the line) and deploy the API Worker (minutes). `COMIC_RUN_CHAINS` is not set anywhere.
+
+| Var | Turns on | Default | Cost | Safe to go to `all` when |
+|---|---|---|---|---|
+| `COMIC_STORY_FIXES` | P5-TRUTH prompt fixes: mood words stay out of identity anchors, CAST lines, sheets and the cover (no fixed smile); colour names carry their hex codes (saffron, vermilion, peacock blue, …); sheets show the book palette as accents that never recolour; the page header fits the style's medium; crowd lines stay crowd lines. English (plus "jai") only: other languages keep today's prompts. See `docs/features/pro-pages.md` §12 | unset = `off`; **production: `admins`** (`api-proxy/wrangler.jsonc`) | — | One admin week with the Ramayana golden suite green and no new page-check complaints |
+| `COMIC_RUN_CHAINS` | P5-TRUTH run order (B7): pages of one scene draw one after another, each from the page right before it (`PREVIOUS PAGE`); scenes still draw side by side; a page with no place continues the scene before it. Each next page starts once the page before it is stored, before its safety verdict lands. **Capped at `admins` in code** (`P5_FLAG_MAX` in `p5Flags.ts`): `all` or `everyone` reads as `admins` until the gates on the right are met and the cap is lifted in a code change | unset (`off`) | No money (no new call). **Time:** a 10-page comic in one scene takes about +135 s (about 120 s → 255 s, measured with fake timers on the real runner), not the +40 s first planned | The owner accepts the longer wait for one-scene comics; the lead has ruled on the scene rule (a page with no place; a scene's first page has no previous page); a colour check shows chained pages do not drift from page 1 (today pages 2 to 10 all share page 1 as their reference); a chained page waits for a safety verdict that is not pending. Then lift the cap |
+| `COMIC_QC_V2` | P5-QC page check v2: heads keep their own scale and never collapse, acting and gaze per character, left/right sides from the frame words, drawn names read as inscriptions; an edit keeps its parent's trusted marks. Stores `qc.inscriptions`. See `docs/features/comic-studio-v4.md` | unset = `off`; **production: `admins`** (`api-proxy/wrangler.jsonc`) | 💸 about 100–250 more output tokens a page in the same call (≈ +$0.0004–0.001 a page, ≈ +1 ¢ a 10-page comic). Before `all`, lift `QC_USD_PER_PAGE` (`jobs.ts`) and the plan quote's check part by about $0.001 a page | One admin week; the quote follows the new per-page check cost |
+| *(not an env var)* `CARD_LINT_STAGE` | `shared/comic/world/lookLint.ts`: a **code constant**, `'admins'`. The free "Card check" note on a cast card when its look contradicts itself (a warning only: nothing changed, blocked or spent) | `admins` | — | One admin week with no false warnings. Off = set `'off'` and redeploy |
+
 ## Comic Studio: library and admin image spend (Program 3 ST-A, ST-4)
 
 Server only. `server/src/comic/library/adminSpend.ts` reads its two per call, at a Build / Regenerate click or a Model

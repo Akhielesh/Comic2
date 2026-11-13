@@ -1636,3 +1636,103 @@ describe('review: safety and reference-gate hardening', () => {
     expect(job.prompt).toContain('CHARACTER SHEET: SISTERS. Match their face, hairstyle, body type, outfit and colors exactly. It shows one member of the group of 3');
   });
 });
+
+// ── P5-TRUTH (COMIC_STORY_FIXES): the drawing instructions tell the truth ──────────────────────────────────────────
+// The Ramayana golden case (server/src/comic/__fixtures__/ramayana-setu.doc.json, text only) compiled with the real
+// compiler. With the flag off every prompt is today's (the golden suite's "today" pins); each test below fails without
+// its piece of the fix.
+import * as truth from './prompts.js';
+import { compileCasePages, insideAnchors, loadRamayanaCase, whoLines } from './golden/promptChecks.js';
+
+describe('P5-TRUTH: prompts with COMIC_STORY_FIXES', () => {
+  const ON = { storyFixes: true } as const;
+  const lakshmana = (doc: ComicDoc) => doc.cast.find((c) => c.name === 'Lakshmana')!;
+
+  it('page-1 Who lines hold no expression word inside "(Image n — …)", while the panel mood and the eyes-calm action stay', () => {
+    const page1 = compileCasePages(loadRamayanaCase(), ON)[0].job.prompt;
+    const who = whoLines(page1);
+    expect(who.length).toBe(2);
+    for (const line of who) for (const anchor of insideAnchors(line)) expect(anchor).not.toMatch(/smile|grin|serene|calm|determined|frown/i);
+    // Rama's anchor keeps his identity.
+    expect(who[0]).toContain('black topknot hairpiece, ayodhya yellow dhoti');
+    // The CAST block states no mood for Rama or Sugriva either.
+    const cast = page1.split('CAST ON THIS PAGE')[1].split('\n\n')[0];
+    expect(cast).not.toMatch(/serene calm smile|friendly grin/);
+    expect(cast).toContain('face: monkey face');
+    // What the owner wrote for the panel is untouched.
+    expect(page1).toContain('eyes calm');
+    expect(page1).toContain('serene, rising magical glow');
+    // Flag off: today's anchor, smile and all.
+    expect(whoLines(compileCasePages(loadRamayanaCase())[0].job.prompt)[0]).toContain('serene calm smile');
+  });
+
+  it('colour names carry their code and know the epic colours: saffron (#FF9933) and royal blue (#0055A5)', () => {
+    expect(truth.paletteWords(['#FF9933', '#0055A5'], ON)).toBe('saffron (#FF9933) and royal blue (#0055A5)');
+    expect(truth.paletteWords(['#FF9933', '#FFD700', '#0055A5'], ON)).toBe('saffron (#FF9933), gold (#FFD700) and royal blue (#0055A5)');
+    // A stored name is used as written; a short hex is spelled out; two codes that share a name both stay.
+    expect(truth.paletteWords(['peacock blue', '#f93', '#FF9934'], ON)).toBe('peacock blue, saffron (#FF9933) and saffron (#FF9934)');
+    expect(truth.paletteWords(['#E34234', '#800000', '#E8A317'], ON)).toBe('vermilion (#E34234), maroon (#800000) and turmeric (#E8A317)');
+    // Flag off: today's words.
+    expect(truth.paletteWords(['#FF9933', '#0055A5'])).toBe('coral and teal');
+  });
+
+  it('the Lakshmana sheet says "Book accent colours" and has no "Palette:"; the place sheet the same', () => {
+    const doc = loadRamayanaCase();
+    const on = compileCharacterSheet(doc, lakshmana(doc), ON).prompt;
+    expect(on).toContain('Book accent colours (backgrounds and effects only; never recolour this character): gold (#FFD700)');
+    expect(on).not.toContain('Palette:');
+    // The card's own colours are still the character's.
+    expect(on).toContain('Colors: green, silver, tan.');
+    expect(compileCharacterSheet(doc, lakshmana(doc), {}).prompt).toContain('Palette: yellow, crimson, teal, coral and green.');
+    const place = compilePlaceSheet(doc, doc.places[0], ON).prompt;
+    expect(place).toContain("Book accent colours (light and effects only; never recolour this place's own materials):");
+    expect(place).not.toContain('Palette:');
+  });
+
+  it("the Rama sheet's face line holds no mood (the sheet draws its own three expressions)", () => {
+    const doc = loadRamayanaCase();
+    const rama = doc.cast.find((c) => c.name === 'Rama')!;
+    expect(compileCharacterSheet(doc, rama, ON).prompt).not.toContain('Face: serene calm smile');
+    expect(compileCharacterSheet(doc, rama, {}).prompt).toContain('Face: serene calm smile.');
+  });
+
+  it('the toy-diorama header has no "drawn and colored" and no Linework line; a drawn style keeps today\'s header', () => {
+    const page1 = compileCasePages(loadRamayanaCase(), ON)[0].job.prompt;
+    expect(page1).not.toContain('drawn and colored');
+    expect(page1).toContain('It must look like a professionally photographed published page');
+    expect(page1).not.toContain('Linework:');
+    const today = compileCasePages(loadRamayanaCase())[0].job.prompt;
+    expect(today).toContain('It must look like a professionally drawn and colored published page.');
+    expect(today).toContain('Linework:');
+    expect(truth.mediumOf({ spec: DEFAULT_STYLE_SPEC })).toBe('drawn');
+    expect(truth.mediumOf({ spec: 'Transparent watercolor washes with visible paper texture.' })).toBe('painted');
+    expect(truth.mediumOf({ spec: 'Glossy 3D CGI figures.' })).toBe('rendered');
+    // "rendering" and "photorealism" are not media.
+    expect(truth.mediumOf({ spec: 'Clean inks with careful rendering; no photorealism.' })).toBe('drawn');
+  });
+
+  it("the sheet legend keeps base colours: this page's light changes brightness, never hue", () => {
+    const pages = compileCasePages(loadRamayanaCase(), ON);
+    const legend = pages[0].job.prompt.split('REFERENCE IMAGES')[1].split('\n\n')[0];
+    expect(legend).toMatch(/CHARACTER SHEET: RAMA\. .*Match its design and base colours; this page's light changes brightness, never hue\./);
+    expect(compileCasePages(loadRamayanaCase())[0].job.prompt).not.toContain('never hue');
+  });
+
+  it('the cover takes the same truths (no mood in its CAST lines, colour codes in its palette)', () => {
+    const doc = loadRamayanaCase();
+    const cover = compileCover(doc, ON).prompt;
+    expect(cover).not.toContain('serene calm smile');
+    expect(cover).toContain('saffron (#FF9933)');
+    expect(compileCover(doc, {}).prompt).toContain('serene calm smile');
+  });
+
+  it('identityAnchor and describeLook take the flag directly (a stored look is never rewritten)', () => {
+    const doc = loadRamayanaCase();
+    const rama = doc.cast.find((c) => c.name === 'Rama')!;
+    const before = JSON.stringify(rama.look);
+    expect(identityAnchor(rama, ON)).not.toMatch(/smile|serene|calm/);
+    expect(identityAnchor(rama)).toMatch(/serene calm smile/);
+    expect(truth.describeLook(rama, ON)).not.toMatch(/face:/);
+    expect(JSON.stringify(rama.look)).toBe(before);
+  });
+});

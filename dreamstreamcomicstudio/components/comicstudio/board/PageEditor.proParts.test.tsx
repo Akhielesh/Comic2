@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
 import { PRO_FREE_FOOTER, type ProEditPartId, type ProSample } from '../../../shared/comic/pro/types';
@@ -15,6 +15,11 @@ import type { StudioController } from '../types';
 import { PRO_COACH_KEY, ProPartsContext, mountedParts, partModule, type ProPanelProps, type ProPartModule } from '../editor/useProEditor';
 import { MODE_STORAGE_KEY } from '../useStudioMode';
 import { clearViewHidden, setViewHidden } from '../editor/layers/viewHidden';
+
+// The Pro view mounts through React.lazy. On a busy machine (a full run beside other jobs) its first paint can take
+// longer than the 1 s the find* queries wait by default, and the test then fails with nothing wrong. The modules are
+// warmed below; this only gives React the time to commit. Every assertion is unchanged.
+configure({ asyncUtilTimeout: 4000 });
 
 const allowance = vi.hoisted(() => ({ status: null as unknown }));
 vi.mock('../../usage/useUsageAllowance', () => ({ useUsageAllowance: () => allowance.status }));

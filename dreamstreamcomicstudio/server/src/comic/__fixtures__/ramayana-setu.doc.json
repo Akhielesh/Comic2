@@ -1,0 +1,967 @@
+{
+  "v": 1,
+  "id": "rama-setu",
+  "brief": {
+    "tone": "epic, colorful, detailed",
+    "genre": "mythological fantasy / brick adventure",
+    "notes": [
+      "Toy brick homage aesthetic: modular plastic figurines and brick-built sets with visible studs and seam lines.",
+      "Retelling an authentic Hindu mythological legend across 10 pages with 2 panels per page.",
+      "Each boulder is a textured multi-piece brick element with painted Devnagari runes 'RAM' glowing faintly.",
+      "Tiny details include a miniature brick squirrel helping roll tiny 1x1 studs into the bridge foundation."
+    ],
+    "title": "Brick Legends: Rama Setu",
+    "themes": [
+      "devotion",
+      "good vs evil",
+      "heroism",
+      "mythology"
+    ],
+    "logline": "Prince Rama and his loyal Vanara army inscribe holy names onto giant stone toy-bricks to construct the legendary floating causeway to Lanka.",
+    "premise": "To rescue Sita from the fortress kingdom of Lanka, Prince Rama and Lakshmana ally with Sugriva's Vanara army. Led by Nila and the mighty Hanuman, the devoted monkey warriors carve sacred names onto massive toy-brick boulders that miraculously float upon the ocean, assembling the grand Rama Setu block by block.",
+    "setting": "Ancient mythical India built entirely out of intricate modular toy bricks and studs"
+  },
+  "format": {
+    "kind": "comic",
+    "language": "en",
+    "colorMode": "color",
+    "lettering": "overlay",
+    "pageCount": 10,
+    "pageAspect": "2:3",
+    "panelsPerPage": 2,
+    "readingDirection": "ltr"
+  },
+  "style": {
+    "name": "Toy Brick Mythos",
+    "spec": "Detailed miniature plastic toy brick aesthetic: glossy injection-molded figurines with painted faces and ornate gold accessories, set against grand temples and chariots constructed entirely from authentic modular plastic bricks with visible studs, vibrant cinematic lighting, and tilt-shift depth of field.",
+    "avoid": [
+      "flesh-and-blood realistic humans",
+      "blurry backgrounds"
+    ],
+    "status": "locked",
+    "palette": [
+      "#FFD700",
+      "#C8102E",
+      "#0055A5",
+      "#FF9933",
+      "#2E7D32"
+    ],
+    "linework": "Crisp, clean linework defining shiny plastic edges, seam lines, modular brick studs, and miniature printed expressions.",
+    "refs": [],
+    "options": []
+  },
+  "cast": [
+    {
+      "id": "c_rama",
+      "name": "Rama",
+      "tier": "lead",
+      "role": "The righteous divine prince and avatar",
+      "personality": "Dharmic, serene, resolute, compassionate",
+      "voice": "Noble, calm, commanding with gentle grace",
+      "look": {
+        "age": "young adult",
+        "eyes": "noble painted eyes",
+        "face": "serene calm smile",
+        "hair": "black topknot hairpiece",
+        "skin": "sky-blue toy plastic",
+        "build": "slender modular toy figure",
+        "props": "ornate golden bow and translucent brick arrows",
+        "outfit": "ayodhya yellow dhoti, ornate gold armor breastplate, quiver of arrows on back",
+        "palette": "azure blue, gold, yellow",
+        "summary": "Sky-blue plastic minifigure prince in a yellow dhoti and gold breastplate, carrying an ornate golden bow."
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_hanuman",
+      "name": "Hanuman",
+      "kind": "creature",
+      "tier": "lead",
+      "role": "Divine Vanara hero and Rama's greatest devotee",
+      "personality": "Fiercely devoted, humble, possessing boundless strength",
+      "voice": "Humble, powerful, resonant with devotion",
+      "look": {
+        "eyes": "wide fiery devoted eyes",
+        "face": "warm monkey-warrior face with sculpted jaw",
+        "hair": "golden fur texture with ornate golden crown",
+        "skin": "golden-tan plastic",
+        "build": "sturdy muscular toy figure",
+        "props": "heavy golden brick mace (gada)",
+        "outfit": "saffron loincloth, jeweled necklace, armlets",
+        "palette": "saffron orange, gold, white",
+        "summary": "Golden-tan monkey warrior minifigure with an ornate gold crown, saffron waistcloth, and a heavy golden mace."
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_nila",
+      "name": "Nila",
+      "kind": "creature",
+      "tier": "support",
+      "role": "Chief engineer of the Rama Setu bridge",
+      "personality": "Brilliant, meticulous architect, dutiful",
+      "voice": "Focused, practical, architectural commander",
+      "look": {
+        "eyes": "determined painted eyes",
+        "face": "focused architect expression",
+        "hair": "brown fur cap piece",
+        "skin": "brown plastic",
+        "build": "athletic toy minifigure",
+        "props": "brick-built measuring rod and carved chisel",
+        "outfit": "red and gold sash with surveyor tools",
+        "palette": "dark brown, red, gold",
+        "summary": "Brown monkey architect minifigure with surveyor tools and a red-gold sash directing construction."
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_lakshmana",
+      "name": "Lakshmana",
+      "tier": "support",
+      "role": "Rama's devoted younger brother and fellow archer",
+      "personality": "Loyal, fiery, protective, practical",
+      "voice": "Earnest and direct, a little impatient",
+      "look": {
+        "age": "young adult",
+        "eyes": "black dot eyes",
+        "face": "determined printed face with firm brows",
+        "hair": "black molded topknot",
+        "skin": "warm tan plastic",
+        "build": "lean, sturdy minifigure build",
+        "props": "silver-tipped bow",
+        "gender": "male",
+        "outfit": "green dhoti, silver chest armor, quiver on back",
+        "palette": "green, silver, tan",
+        "summary": "Green-skinned plastic minifigure warrior prince in a green dhoti and silver armor, carrying a bow."
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_sugriva",
+      "name": "Sugriva",
+      "kind": "creature",
+      "tier": "support",
+      "role": "King of the Vanaras and Rama's ally",
+      "personality": "Regal, grateful, determined",
+      "voice": "Warm, kingly, firm",
+      "look": {
+        "age": "adult",
+        "eyes": "black dot eyes",
+        "face": "monkey face with a wide, friendly grin",
+        "hair": "reddish-brown molded fur cap",
+        "skin": "russet brown plastic",
+        "build": "broad, stocky minifigure build",
+        "props": "ornate royal staff",
+        "gender": "male",
+        "outfit": "maroon cape, gold crown, gold armbands",
+        "palette": "maroon, gold, russet",
+        "species": "Vanara (monkey)",
+        "summary": "Red-brown monkey king minifigure with a gold crown and a royal maroon cape.",
+        "markings": "lighter tan muzzle and ears"
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_varuna",
+      "name": "Varuna",
+      "kind": "creature",
+      "tier": "support",
+      "role": "God of the ocean who blesses the crossing",
+      "personality": "Majestic, gracious, ancient",
+      "voice": "Deep and rolling like the tide",
+      "look": {
+        "age": "ageless",
+        "eyes": "white dot eyes",
+        "face": "calm and majestic with a white beard piece",
+        "hair": "white wave-shaped hair piece",
+        "skin": "translucent deep blue plastic",
+        "build": "tall and imposing",
+        "props": "golden trident",
+        "gender": "male",
+        "outfit": "coral and pearl armor, sea-green sash",
+        "palette": "deep blue, aqua, pearl white",
+        "species": "water deity",
+        "summary": "Towering deep-blue translucent minifigure god rising from the waves, with a pearl crown and a trident.",
+        "markings": "wave patterns on his arms"
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    },
+    {
+      "id": "c_squirrel",
+      "name": "Squirrel",
+      "kind": "animal",
+      "tier": "support",
+      "role": "Tiny helper who carries studs of sand into the bridge seams",
+      "personality": "Humble, tireless, brave",
+      "voice": "Tiny, cheerful chirps",
+      "look": {
+        "age": "young",
+        "eyes": "tiny black dot eyes",
+        "face": "round, eager printed face",
+        "build": "very small, one-brick-sized",
+        "props": "1x1 round studs of sand",
+        "gender": "female",
+        "palette": "warm brown, cream",
+        "species": "squirrel",
+        "summary": "Tiny brown brick-built squirrel with a big curled tail, rolling 1x1 round studs.",
+        "markings": "three pale stripes down its back after Rama's blessing"
+      },
+      "refs": [],
+      "sheet": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "3:2",
+        "resolution": "2K"
+      }
+    }
+  ],
+  "places": [
+    {
+      "id": "pl_01",
+      "name": "Southern Shore of Rameshwaram",
+      "look": "Vast turquoise plastic ocean with translucent 1x1 round plate waves, meeting a sandy tan stud shoreline framed by palm trees built of brown cylinders and green foliage bricks; across the horizon looms the jagged dark obsidian and red brick ramparts of Lanka.",
+      "refs": [],
+      "sheet": {
+        "status": "none"
+      }
+    }
+  ],
+  "pages": [
+    {
+      "n": 1,
+      "id": "pg_01",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "On the sand-stud shore, Rama, Lakshmana and Sugriva look across the endless turquoise ocean toward the dark towers of Lanka. Lakshmana wonders how an army could ever cross, and Rama calmly calls on the ocean for passage.",
+      "turnHook": "Rama calls on the ocean itself for passage, and the water begins to glow and swirl.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "angle": "high angle",
+          "mood": "vast, uneasy, bright turquoise morning",
+          "action": "The brick-built ocean stretches to the dark towers of Lanka on the horizon. Rama stands in the center foreground, Lakshmana on his left, Sugriva on his right, all seen from behind on the stud shoreline beside brick palm trees.",
+          "id": "pn_01_1",
+          "castIds": [
+            "c_rama",
+            "c_lakshmana",
+            "c_sugriva"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_01_1_1",
+              "kind": "speech",
+              "text": "Brother, the sea has no end in sight. How can even Sugriva's great army cross such water?",
+              "speakerId": "c_lakshmana"
+            },
+            {
+              "id": "ln_01_1_2",
+              "kind": "speech",
+              "text": "Not a single raft could survive those waves.",
+              "speakerId": "c_sugriva"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "medium",
+          "angle": "low angle",
+          "mood": "serene, rising magical glow",
+          "action": "Rama turns to the waves with one hand raised, eyes calm. Lakshmana stands at his left shoulder, Sugriva at his right. Glowing swirls spiral through the translucent round-plate waves behind them.",
+          "id": "pn_01_2",
+          "castIds": [
+            "c_rama",
+            "c_lakshmana",
+            "c_sugriva"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_01_2_1",
+              "kind": "speech",
+              "text": "Lord of the waters, hear me. I ask for passage, so that justice may reach the far shore.",
+              "speakerId": "c_rama"
+            },
+            {
+              "id": "ln_01_2_2",
+              "kind": "sfx",
+              "text": "WHOOOSH!"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 2,
+      "id": "pg_02",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Varuna, the ocean god, rises from the waves and promises that stones bearing Rama's name will float. Nila steps forward with rolled plans and offers to build the causeway.",
+      "turnHook": "Nila unrolls his plans and points to the jagged mountains inland, where the stone for the bridge must be found.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "wide",
+          "angle": "worm's-eye view",
+          "mood": "majestic, awe-struck, shimmering blue light",
+          "action": "Varuna towers over the shore, rising from the translucent waves. Rama stands small in the lower left foreground, looking up. Varuna's pearl crown gleams and his trident is raised over the glowing water.",
+          "id": "pn_02_1",
+          "castIds": [
+            "c_varuna",
+            "c_rama"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_02_1_1",
+              "kind": "speech",
+              "text": "Rama, I hear you. Any stone that bears your name shall float upon my waters. Build, and I will hold the bridge.",
+              "speakerId": "c_varuna"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "medium",
+          "mood": "hopeful, focused, warm daylight",
+          "action": "Nila unrolls a long plan scroll and points inland. Nila is on the left with his red-gold sash and surveyor tools. Rama stands on the right, listening, with the glowing waves behind them.",
+          "id": "pn_02_2",
+          "castIds": [
+            "c_nila",
+            "c_rama"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_02_2_1",
+              "kind": "speech",
+              "text": "My lord, let me build it. A causeway, straight and strong, in blocks that lock together.",
+              "speakerId": "c_nila"
+            },
+            {
+              "id": "ln_02_2_2",
+              "kind": "speech",
+              "text": "But the stone we need lies there, in those jagged mountains.",
+              "speakerId": "c_nila"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 3,
+      "id": "pg_03",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Hanuman springs across the sky to the jagged brick mountains and tears giant multi-piece bricks from the cliffs while Vanara warriors cheer. He hoists a house-sized boulder onto his shoulder, but the stone is still plain and blank.",
+      "turnHook": "Hanuman hoists a boulder the size of a house onto his shoulder, but the stone is still blank and plain.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "angle": "low angle",
+          "mood": "heroic, dynamic, golden sunlight",
+          "action": "Hanuman soars in a huge leap over the jagged brick peaks, mace in hand, toward a cliff face of stacked stone bricks. Tiny Vanara warriors cheer on the ledges below.",
+          "id": "pn_03_1",
+          "castIds": [
+            "c_hanuman"
+          ],
+          "lines": [
+            {
+              "id": "ln_03_1_1",
+              "kind": "shout",
+              "text": "Jai Shri Ram! Mountains, lend your stones to Rama's bridge!",
+              "speakerId": "c_hanuman"
+            },
+            {
+              "id": "ln_03_1_2",
+              "kind": "sfx",
+              "text": "KRAAAK!"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "full",
+          "angle": "low angle",
+          "mood": "triumphant, dusty, bright",
+          "action": "A huge plain boulder sits on Hanuman's shoulder, its gray multi-piece surface blank and unmarked. Hanuman stands in the center on the quarry floor, grinning. Vanaras in the foreground cheer and wave their chisels.",
+          "id": "pn_03_2",
+          "castIds": [
+            "c_hanuman"
+          ],
+          "lines": [
+            {
+              "id": "ln_03_2_1",
+              "kind": "speech",
+              "text": "Hail Hanuman! Hail mighty Hanuman!",
+              "speakerId": "c_hanuman"
+            },
+            {
+              "id": "ln_03_2_2",
+              "kind": "speech",
+              "text": "Strong stone, yes, but still plain and blank. It needs the name of our Lord.",
+              "speakerId": "c_hanuman"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 4,
+      "id": "pg_04",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "At the shoreline workyard, rows of Vanaras kneel at the massive blocks and carve the sacred name RAM in Devnagari. Nila checks each block while Rama watches in silence as the runes glow faintly, and the first finished block is rolled toward the water.",
+      "turnHook": "The first finished block is rolled to the water's edge, and everyone holds their breath to see whether it will sink.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "angle": "high angle",
+          "mood": "busy, reverent, warm afternoon light",
+          "action": "Rows of Vanaras kneel at massive gray blocks, chiseling the Devnagari name RAM into each one. Faint runes glow on the finished blocks. Nila walks along the rows on the left with his surveyor tools.",
+          "id": "pn_04_1",
+          "castIds": [
+            "c_nila"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_04_1_1",
+              "kind": "caption",
+              "text": "The shoreline workyard, Rameshwaram."
+            },
+            {
+              "id": "ln_04_1_2",
+              "kind": "speech",
+              "text": "Every stroke true, every rune deep. The name must be perfect.",
+              "speakerId": "c_nila"
+            },
+            {
+              "id": "ln_04_1_3",
+              "kind": "sfx",
+              "text": "TINK! TINK! TINK!"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "medium",
+          "mood": "hushed, expectant, soft golden glow",
+          "action": "The first finished block glows with its RAM runes at the center, being rolled toward the water. Rama stands silent on the right with hands folded, watching. Nila on the left holds up his tool, tense. Vanaras push at the block.",
+          "id": "pn_04_2",
+          "castIds": [
+            "c_rama",
+            "c_nila"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_04_2_1",
+              "kind": "speech",
+              "text": "Gently now. Roll it to the water's edge.",
+              "speakerId": "c_nila"
+            },
+            {
+              "id": "ln_04_2_2",
+              "kind": "speech",
+              "text": "Will it float, or will it sink?"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 5,
+      "id": "pg_05",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Hanuman gently releases the first carved brick, and it bobs weightlessly on the turquoise water with its runes glowing. Rama smiles, Nila nods, and the Vanaras erupt in joy as the army surges toward the quarry line.",
+      "turnHook": "The stone floats, so the real work can begin, and the whole army surges toward the quarry line.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "close_up",
+          "mood": "breathless, then wondrous, glowing blue-gold",
+          "action": "The glowing RAM brick floats on the turquoise round-plate waves, rocking lightly. Hanuman's open hands hover at the left, just released. Rama and Nila watch from the right edge, wide-eyed and hopeful.",
+          "id": "pn_05_1",
+          "castIds": [
+            "c_hanuman",
+            "c_rama",
+            "c_nila"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_05_1_1",
+              "kind": "whisper",
+              "text": "By Rama's name, I let go.",
+              "speakerId": "c_hanuman"
+            },
+            {
+              "id": "ln_05_1_2",
+              "kind": "sfx",
+              "text": "BLOOP..."
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "wide",
+          "angle": "low angle",
+          "mood": "jubilant, bright sunshine",
+          "action": "The brick floats on the water in the center while Vanaras leap and cheer on the shore. Rama smiles on the left, Nila nods beside him, and Hanuman raises his mace on the right. The army begins to surge inland.",
+          "id": "pn_05_2",
+          "castIds": [
+            "c_rama",
+            "c_nila",
+            "c_hanuman"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_05_2_1",
+              "kind": "shout",
+              "text": "It floats! Jai Shri Ram!"
+            },
+            {
+              "id": "ln_05_2_2",
+              "kind": "speech",
+              "text": "The stone holds. Now to the quarry, all of you! We have a bridge to build!",
+              "speakerId": "c_nila"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 6,
+      "id": "pg_06",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "The grand assembly line begins. Long lines of Vanaras roll glowing megaliths into the surf, where Nila directs them to snap each block into place while Hanuman lifts the heaviest pieces overhead. Down in the foundation, something tiny is already at work.",
+      "turnHook": "Down among the foundation stones, something tiny is busy, too small for the army to notice.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "angle": "high angle",
+          "mood": "busy, triumphant, bright morning sun",
+          "action": "A long line of Vanaras hauls glowing RAM-runed megaliths down the sand toward the surf. Nila stands on the left on a block, pointing with a surveyor rod. Hanuman on the right lifts a huge block overhead.",
+          "id": "pn_06_1",
+          "castIds": [
+            "c_nila",
+            "c_hanuman"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_06_1_1",
+              "kind": "speech",
+              "text": "Roll them in rows! Align every stud, and keep the runes facing the sky!",
+              "speakerId": "c_nila"
+            },
+            {
+              "id": "ln_06_1_2",
+              "kind": "shout",
+              "text": "Jai Shri Ram! Make way for the heavy stones!",
+              "speakerId": "c_hanuman"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "insert",
+          "angle": "low angle",
+          "mood": "hushed, curious, glowing rune light",
+          "action": "A glowing block clicks onto the studs of the bridge foundation. In the dark seam at its base, a tiny brown shape with a curled tail huddles, unnoticed by the boots and feet passing above.",
+          "id": "pn_06_2",
+          "castIds": [
+            "c_squirrel"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_06_2_1",
+              "kind": "sfx",
+              "text": "CLICK!"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 7,
+      "id": "pg_07",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "A tiny brick squirrel rolls single 1x1 studs of sand into the seams of the foundation. Rama notices, kneels and strokes its back three times in blessing while the Vanaras watch.",
+      "turnHook": "Three pale stripes glow on the squirrel's back, and beyond it the bridge now stretches past the horizon.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "wide",
+          "mood": "tender, warm golden afternoon",
+          "action": "The Squirrel in the foreground pushes a round 1x1 sand stud into a seam between two giant blocks. Rama approaches from the right and kneels with a gentle smile. Vanaras pause in the background, watching.",
+          "id": "pn_07_1",
+          "castIds": [
+            "c_squirrel",
+            "c_rama"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_07_1_1",
+              "kind": "speech",
+              "text": "Little one, you carry grains of sand while giants carry mountains. Your devotion weighs no less than theirs.",
+              "speakerId": "c_rama"
+            },
+            {
+              "id": "ln_07_1_2",
+              "kind": "sfx",
+              "text": "Chk-chk!"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "close_up",
+          "mood": "reverent, soft golden glow",
+          "action": "Rama's blue hand strokes the Squirrel's back three times in blessing. Three pale glowing stripes mark its brown fur. Behind them, in soft haze, the glowing bridge runs far past the horizon, and Vanaras watch in awe.",
+          "id": "pn_07_2",
+          "castIds": [
+            "c_rama",
+            "c_squirrel"
+          ],
+          "placeId": "pl_01",
+          "lines": [
+            {
+              "id": "ln_07_2_1",
+              "kind": "speech",
+              "text": "The Lord has blessed the smallest builder of all!"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 8,
+      "id": "pg_08",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Seen from high above, the bridge stretches halfway across the ocean in arches and roadways of interlocking glowing bricks. Nila and Hanuman survey it from a high span while the Vanaras keep working.",
+      "turnHook": "Far ahead, the golden gates of Lanka rise from the haze, and only a single span remains.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "angle": "bird's-eye view",
+          "mood": "awe-inspiring, bright turquoise and gold",
+          "action": "The Rama Setu curves across the turquoise ocean, a marvel of studded arches and roadways glowing with RAM runes. Tiny Vanaras swarm along it, and Nila and Hanuman stand small on a high span.",
+          "id": "pn_08_1",
+          "castIds": [
+            "c_nila",
+            "c_hanuman"
+          ],
+          "lines": [
+            {
+              "id": "ln_08_1_1",
+              "kind": "caption",
+              "text": "Day after day, the Setu climbed from the shore and strode out over the sea."
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "medium",
+          "angle": "low angle",
+          "mood": "determined, hazy golden light",
+          "action": "Nila on the left holds his surveyor tools and Hanuman stands on the right with his mace on his shoulder, both on a high arch. Far behind them, golden gates rise faintly from the haze.",
+          "id": "pn_08_2",
+          "castIds": [
+            "c_nila",
+            "c_hanuman"
+          ],
+          "lines": [
+            {
+              "id": "ln_08_2_1",
+              "kind": "speech",
+              "text": "Look, Hanuman. Lanka's golden gates. One span remains, no more.",
+              "speakerId": "c_nila"
+            },
+            {
+              "id": "ln_08_2_2",
+              "kind": "speech",
+              "text": "Then let us finish it, Nila. Our Lord is waiting on the far shore.",
+              "speakerId": "c_hanuman"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    },
+    {
+      "n": 9,
+      "id": "pg_09",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Nila stands at the leading edge and carefully places the final keystone segment, locking the bridge against the golden gates of Lanka. The stone clicks home and the gap is closed.",
+      "turnHook": "The bridge is complete, and Rama must now lead his army across it to Lanka's gates.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "mood": "tense, golden light, held breath",
+          "action": "At the bridge's leading edge, a single span-wide gap lies before the towering golden gates of Lanka. Nila stands at the brink with his surveyor rod, while Hanuman lowers a glowing keystone and Vanaras steady the ropes.",
+          "id": "pn_09_1",
+          "castIds": [
+            "c_nila",
+            "c_hanuman"
+          ],
+          "lines": [
+            {
+              "id": "ln_09_1_1",
+              "kind": "speech",
+              "text": "Steady now. Lower it one stud at a time. Mind the seams, brothers.",
+              "speakerId": "c_nila"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "insert",
+          "angle": "high angle",
+          "mood": "triumphant, radiant golden glow",
+          "action": "The keystone slots into the last gap, its RAM runes flaring bright gold. The seam locks flush against the foot of Lanka's golden gate.",
+          "id": "pn_09_2",
+          "castIds": [],
+          "lines": [
+            {
+              "id": "ln_09_2_1",
+              "kind": "sfx",
+              "text": "CLICK!"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "edit",
+        "aspect": "2:3",
+        "resolution": "2K",
+        "note": "Why doesn't it even have a fancy gate? That makes no sense."
+      }
+    },
+    {
+      "n": 10,
+      "id": "pg_10",
+      "layout": "Row 1: one wide panel. Row 2: one wide panel.",
+      "summary": "Rama, Hanuman and Lakshmana stand at the head of the finished bridge with the whole Vanara army behind them. They raise their bows and maces toward Lanka's towers as the glowing bridge shines behind them.",
+      "turnHook": "The bridge is built and the army is ready, so the march to rescue Sita begins.",
+      "panels": [
+        {
+          "n": 1,
+          "size": "wide",
+          "shot": "establishing",
+          "mood": "solemn, resolute, golden glow against dark storm clouds",
+          "action": "At the head of the glowing bridge, Rama stands in the center with Hanuman on the left and Lakshmana on the right. Behind them the Vanara army fills the span. Ahead, Lanka's dark towers loom under a stormy sky.",
+          "id": "pn_10_1",
+          "castIds": [
+            "c_rama",
+            "c_hanuman",
+            "c_lakshmana"
+          ],
+          "lines": [
+            {
+              "id": "ln_10_1_1",
+              "kind": "speech",
+              "text": "The sea has become a road. Now let dharma walk it.",
+              "speakerId": "c_rama"
+            },
+            {
+              "id": "ln_10_1_2",
+              "kind": "speech",
+              "text": "Sita, we are coming.",
+              "speakerId": "c_lakshmana"
+            }
+          ]
+        },
+        {
+          "n": 2,
+          "size": "wide",
+          "shot": "full",
+          "angle": "low angle",
+          "mood": "triumphant, heroic, blazing golden light",
+          "action": "Rama raises his golden bow, Lakshmana his bow, and Hanuman his mace toward Lanka's towers. The Vanara army behind them thrusts chisels and ropes skyward, as the bridge's runes blaze like a golden road.",
+          "id": "pn_10_2",
+          "castIds": [
+            "c_rama",
+            "c_hanuman",
+            "c_lakshmana"
+          ],
+          "lines": [
+            {
+              "id": "ln_10_2_1",
+              "kind": "shout",
+              "text": "Jai Shri Ram!",
+              "speakerId": "c_hanuman"
+            },
+            {
+              "id": "ln_10_2_2",
+              "kind": "shout",
+              "text": "Jai Shri Ram! On to Lanka!"
+            }
+          ]
+        }
+      ],
+      "render": {
+        "status": "ready",
+        "origin": "render",
+        "aspect": "2:3",
+        "resolution": "2K"
+      }
+    }
+  ],
+  "cover": {
+    "render": {
+      "status": "ready",
+      "origin": "render",
+      "aspect": "2:3",
+      "resolution": "2K"
+    }
+  },
+  "book": {
+    "endPage": false,
+    "backCover": "none",
+    "titlePage": false,
+    "uniformTrim": true,
+    "firstPageRight": true
+  },
+  "reader": {
+    "turn": "paper",
+    "ambient": true,
+    "paperTexture": true,
+    "guidedOverview": true
+  },
+  "settings": {
+    "confirm": "big",
+    "quality": "standard",
+    "reviewFirstRender": true
+  },
+  "letterStyle": {
+    "auto": true,
+    "presetId": "classic"
+  },
+  "planStatus": "approved",
+  "planInputHash": "rama-setu-plan",
+  "conversation": [
+    {
+      "id": "msg_brief_1",
+      "role": "user",
+      "at": 1700000000000,
+      "text": "I want you to create a highly detailed toy-brick story about an actual Hindu mythology. Keep it sensible but highly detailed, with really good attention to detail, for about 10 pages with about 2 panels per page. Give me a cover as well."
+    },
+    {
+      "id": "msg_brief_2",
+      "role": "user",
+      "at": 1700000000000,
+      "text": "Let's do the Vanara army building the floating brick bridge Rama Setu to Lanka."
+    }
+  ],
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000
+}

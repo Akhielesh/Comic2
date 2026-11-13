@@ -998,3 +998,115 @@ describe('writer plan fit', () => {
     expect(drawn.newCast.find((c) => c.name === 'Radio')!.tier).toBe('support');
   });
 });
+
+// ── P5-TRUTH item 2 (COMIC_STORY_FIXES): crowd voices are not the hero's lines ─────────────────────────────────────
+describe('P5-TRUTH: crowd lines with COMIC_STORY_FIXES', () => {
+  const hanumanDoc = (army = false) =>
+    baseDoc((d) => {
+      d.format.pageCount = 1;
+      d.cast = [
+        { id: 'ch_hanuman', name: 'Hanuman', tier: 'lead', kind: 'creature', look: { summary: 'Golden monkey warrior' }, refs: [], sheet: emptyRender() },
+        ...(army
+          ? [{ id: 'ch_army', name: 'Vanara army', tier: 'support' as const, kind: 'creature' as const, count: 12, look: { summary: 'Brick-built monkey warriors', species: 'Vanara' }, refs: [], sheet: emptyRender() }]
+          : [])
+      ];
+    });
+  const cheer = (lines: Record<string, unknown>[], action = 'Hanuman lifts a boulder while tiny Vanara warriors cheer below.') =>
+    plan([rawPage(1, [rawPanel({ action, castIds: ['ch_hanuman'], lines })])]);
+  const linesOf = (doc: ComicDoc, reply: unknown, storyFixes = true) =>
+    normalizePlan(reply, { doc, targets: null, pageCount: 1, storyFixes }).value!.pages[0].panels[0];
+
+  it("{speakerId:'', text:'Hail Hanuman!'} in a one-cast panel keeps no speaker (today it became Hanuman's own line)", () => {
+    const reply = cheer([{ kind: 'shout', speakerId: '', text: 'Hail Hanuman!' }]);
+    const panel = linesOf(hanumanDoc(), reply);
+    expect(panel.lines[0].speakerId).toBeUndefined();
+    expect(panel.castIds).toEqual(['ch_hanuman']);
+    // Flag off: today's default to the panel's only character.
+    expect(linesOf(hanumanDoc(), reply, false).lines[0].speakerId).toBe('ch_hanuman');
+  });
+
+  it('with a Vanara army card, the unnamed cheer resolves to the army the panel shows', () => {
+    const panel = linesOf(hanumanDoc(true), cheer([{ kind: 'shout', speakerId: '', text: 'Hail Hanuman!' }]));
+    expect(panel.lines[0].speakerId).toBe('ch_army');
+    // The army is drawn (the action shows it), so it joins the panel's cast like any speaker.
+    expect(panel.castIds).toEqual(['ch_hanuman', 'ch_army']);
+    // A panel that does not show the army never guesses it into a quiet scene: the plain line stays Hanuman's (today's
+    // default for a one-character panel) and the army is not drawn.
+    const quiet = linesOf(hanumanDoc(true), cheer([{ kind: 'speech', speakerId: '', text: 'Who goes there?' }], 'Hanuman alone on a cliff at night.'));
+    expect(quiet.lines[0].speakerId).toBe('ch_hanuman');
+    expect(quiet.castIds).toEqual(['ch_hanuman']);
+  });
+
+  it('a group word ("Vanaras", "the army", "the crowd") resolves to the group card instead of a new walk-on', () => {
+    for (const token of ['Vanaras', 'the army', 'the crowd', 'Vanara']) {
+      const check = normalizePlan(cheer([{ kind: 'shout', speakerId: token, text: 'Jai Shri Ram!' }]), { doc: hanumanDoc(true), targets: null, pageCount: 1, storyFixes: true });
+      expect(check.value!.pages[0].panels[0].lines[0].speakerId, token).toBe('ch_army');
+      expect(check.value!.newCast, token).toEqual([]);
+    }
+    // Flag off: "Vanaras" is a new auto extra, as today.
+    const today = normalizePlan(cheer([{ kind: 'shout', speakerId: 'Vanaras', text: 'Jai Shri Ram!' }]), { doc: hanumanDoc(true), targets: null, pageCount: 1 });
+    expect(today.value!.newCast.map((c) => c.name)).toEqual(['Vanaras']);
+    // A real name still wins over a group word.
+    const named = normalizePlan(cheer([{ kind: 'speech', speakerId: 'Hanuman', text: 'Stand back.' }]), { doc: hanumanDoc(true), targets: null, pageCount: 1, storyFixes: true });
+    expect(named.value!.pages[0].panels[0].lines[0].speakerId).toBe('ch_hanuman');
+  });
+
+  it("a bare crowd word never pulls the book's only group card into a panel that does not show it (Lanka court)", () => {
+    const lanka = baseDoc((d) => {
+      d.format.pageCount = 1;
+      d.cast = [
+        { id: 'ch_ravana', name: 'Ravana', tier: 'lead', look: { summary: 'Ten-headed demon king' }, refs: [], sheet: emptyRender() },
+        { id: 'ch_army', name: 'Vanara army', tier: 'support', kind: 'creature', count: 12, look: { summary: 'Brick-built monkey warriors', species: 'Vanara' }, refs: [], sheet: emptyRender() }
+      ];
+    });
+    const court = (speakerId: string) =>
+      plan([rawPage(1, [rawPanel({ action: 'Ravana sits on his throne in the Lanka court; demons bow.', castIds: ['ch_ravana'], shot: 'medium', lines: [{ kind: 'shout', speakerId, text: 'Long live the king!' }] })])]);
+    for (const token of ['Everyone', 'All', 'Voices', 'Soldiers', 'Courtiers', 'the crowd']) {
+      const out = normalizePlan(court(token), { doc: lanka, targets: null, pageCount: 1, storyFixes: true }).value!;
+      const panel = out.pages[0].panels[0];
+      expect(panel.castIds, token).not.toContain('ch_army');
+      expect(panel.lines[0].speakerId, token).not.toBe('ch_army');
+    }
+    // A bare crowd word adds no walk-on either: the line stays an unnamed voice, still a shout.
+    const everyone = normalizePlan(court('Everyone'), { doc: lanka, targets: null, pageCount: 1, storyFixes: true }).value!;
+    expect(everyone.pages[0].panels[0].lines[0]).toMatchObject({ kind: 'shout', text: 'Long live the king!' });
+    expect(everyone.pages[0].panels[0].lines[0].speakerId).toBeUndefined();
+    expect(everyone.newCast).toEqual([]);
+    // Where the army is in the panel, the same crowd word is the army.
+    const camp = plan([rawPage(1, [rawPanel({ action: 'Vanara warriors cheer on the shore.', castIds: ['ch_army'], lines: [{ kind: 'shout', speakerId: 'Everyone', text: 'Jai Shri Ram!' }] })])]);
+    expect(normalizePlan(camp, { doc: lanka, targets: null, pageCount: 1, storyFixes: true }).value!.pages[0].panels[0].lines[0].speakerId).toBe('ch_army');
+  });
+
+  it('a plain solo line with no speaker still goes to the panel\'s only character; only a cheer for them stays unnamed', () => {
+    const solo = plan([rawPage(1, [rawPanel({ action: 'Hanuman alone on a cliff at night.', castIds: ['ch_hanuman'], lines: [{ kind: 'speech', speakerId: '', text: 'I must cross the sea.' }] })])]);
+    for (const army of [false, true]) {
+      const panel = normalizePlan(solo, { doc: hanumanDoc(army), targets: null, pageCount: 1, storyFixes: true }).value!.pages[0].panels[0];
+      expect(panel.lines[0].speakerId, String(army)).toBe('ch_hanuman');
+      expect(panel.castIds).toEqual(['ch_hanuman']);
+    }
+  });
+
+  it('a line praising its own speaker gets a free note on the plan card, never a repair round', async () => {
+    const reply = cheer([{ kind: 'shout', speakerId: 'Hanuman', text: 'Hail Hanuman! Hail mighty Hanuman!' }]);
+    const check = normalizePlan(reply, { doc: hanumanDoc(), targets: null, pageCount: 1, storyFixes: true });
+    expect(check.problems).toEqual([]);
+    expect(check.value!.speakerNotes).toEqual([
+      'Page 1, panel 1: Hanuman cheers Hanuman ("Hail Hanuman! Hail mighty Hanuman!"). A crowd or another character usually says this; change the speaker if so.'
+    ]);
+    expect(normalizePlan(reply, { doc: hanumanDoc(), targets: null, pageCount: 1 }).value!.speakerNotes).toBeUndefined();
+    // Through the writer: one call, the note reaches the plan card's notes.
+    let calls = 0;
+    const llm: LlmClient = {
+      complete: async () => {
+        calls += 1;
+        return { text: JSON.stringify(reply), json: reply, model: 'stand-in', byok: false, provider: 'openrouter' } as LlmResult;
+      }
+    };
+    const out = await writePagePlan({ doc: hanumanDoc(), llm, storyFixes: true });
+    expect(calls).toBe(1);
+    expect(out.notes).toContain(check.value!.speakerNotes![0]);
+    // Another character's praise is fine.
+    const other = cheer([{ kind: 'shout', speakerId: 'Hanuman', text: 'Glory to Rama!' }]);
+    expect(normalizePlan(other, { doc: hanumanDoc(), targets: null, pageCount: 1, storyFixes: true }).value!.speakerNotes).toBeUndefined();
+  });
+});

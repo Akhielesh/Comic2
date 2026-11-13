@@ -101,3 +101,56 @@ every tool a golden turn needs must be offered (tool-choice accuracy stays 100 %
 prompt (system prompt + doc summary + core tool specs) may grow at most 15 % over the wave-0
 baseline (18,413 chars on commit `d785cac`). Other packages add their own scenario files here
 (for example `kids-telugu.json`); fixtures for the docs live in `fixtures.ts`.
+
+## The Ramayana golden case (`ramayana.golden.test.ts`, $0, run in CI)
+
+The render goldens above are synthetic. This one is the owner's own comic: the Ramayana book "Brick Legends: Rama
+Setu" (10 pages, 20 panels), kept as **text only** in `../__fixtures__/ramayana-setu.doc.json` with the owner's consent. It is the quality test every prompt, writer, run-order and page-check change must pass.
+
+- **What the fixture keeps:** the brief (and the two messages that asked for it, in tidied words: nothing a person
+  typed is kept word for word), format, style words and palette, the
+  cast cards (names, looks, colours, roles), the place, every page's panels, actions, lines, layout sentence, summary
+  and turn hook, the plan status, and one edit note on page 9 (also in tidied words). Every id is rewritten (`rama-setu` for the comic, readable ids such as
+  `c_rama`, `pg_03`, `pn_03_1` for the rest) and every time is one constant.
+- **What it never holds:** user, owner or project ids, names or emails of people, any asset path, link, storage key
+  or image, model, version or job ids, chat other than the brief, usage or cost rows, share links.
+  `promptChecks.ts` `privacyLeaks()` fails the golden if any of that comes back: no `@`, link, storage path or image
+  file of any kind, no uuid, no hex run of 8 or more (including the original's `pg_` + hex ids), no ISO date, no epoch
+  time but the one constant, no mixed letter-and-digit token, and no id outside the allowed spellings (`rama-setu`,
+  `c_<name>`, `pg_NN`, `pn_NN_N`, `ln_NN_N_N`, `pl_NN`, `msg_brief_N`); only the allowed top-level fields. The guard is
+  proved on every run: each kind of leak is put into the fixture one at a time and must be caught. The plan hash is a
+  placeholder (`rama-setu-plan`), so no value of the original doc carries over.
+- **How it compiles like the real thing:** `promptChecks.ts` `loadRamayanaCase()` gives every render that was drawn a
+  synthetic in-memory image, so the compiler attaches the same references and writes the same `(Image n — …)`
+  anchors as on the day. Compiled with this tree, the fixture's 10 page prompts, cover, cast sheet and page-9 edit are
+  byte-identical to the original comic's (checked once, out of the repository, when the fixture was made).
+- **`../__fixtures__/ramayana-setu.expected.json`:** what the case measured on the day (17 "serene calm smile" hits in
+  6 page prompts, "coral and teal", the cover cast, the run order, the collapsed heads), the page each page really
+  continued from, the page-check reply shapes, and a numbers-only colour baseline of the drawn pages. The replies are
+  **rebuilt, not captured** (`replyShapesNote`): page 3 is a good page's stored marks; pages 4 and 9 are one guess that
+  reproduces the stored marks exactly (heads as fractions plus one 0–1000 face box on a panel the page does not have,
+  which sets the scale and is then dropped, so keepOut stays `[]` as stored) and carry the text the check really read
+  (`राम`; `RAM`, `RAM`: Rama's name on the bridge stones).
+- **Two kinds of test.** "Today" tests pin those measurements. `it.fails` tests state what a correct Ramayana page
+  needs (no expression inside an identity anchor; saffron and royal blue; Lakshmana on the cover; page 3 after page 2;
+  heads that keep their own scale while a good page keeps its own; Rama's name on the stones read as an inscription,
+  not stray text; an edit note understood before it is drawn). The package that fixes a fault turns its `it.fails`
+  into `it` and keeps the "today" pin for its flag off, so flags-off prompts stay byte-identical.
+- **A third kind: must stay true after every fix.** Each panel's mood, every sentence of its action (where the left and
+  right positions live), its shot and its angle reach that panel's block of the page prompt outside the anchors
+  (`panelDirectionMisses`), on every entry of `CASE_COMPILE_VARIANTS`; a package with a compiler flag adds its flag-on
+  variant there. Page 3's two Hanuman heads survive the page check. So a fix can never pass by deleting the feeling
+  words from the whole prompt, or by dropping every head; the golden proves the first by trying it.
+- **Not pinned yet, on purpose:** whether a page with no place (pages 3, 8, 9, 10) continues the scene before it is
+  still open, so the "page 3 after page 2" fault is not flipped yet; the canon check (Nila is not Nala, Varuna is not Sagara)
+  belongs to a later wave; the case has no glossary (i18n is stripped), so a test that needs Rama → राम adds that one
+  entry to its in-memory doc.
+- **Helpers** for later packages: `mustContain`, `mustNotContain`, `insideAnchors`, `outsideAnchors`, `panelBlocks`,
+  `panelDirectionMisses`, `whoLines`, `expressionWordsInAnchors`, `countOf`, `compileCasePages`, `compileCaseCover`,
+  `compileCaseEdit`, `privacyLeaks`.
+
+**Never put the case (or any `.json`) in this folder:** `golden.test.ts` allows 3 to 5 render scripts here and `run.ts`
+(the paid renderer) renders every `.json` it finds. The golden test checks that no script here mentions the case.
+
+The Program 5 server flags are read by `../p5Flags.ts` (`COMIC_STORY_FIXES`, `COMIC_RUN_CHAINS`, `COMIC_QC_V2`; each
+off | admins | all, unset or unknown = off = today).

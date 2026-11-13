@@ -254,3 +254,49 @@ describe('qcNoticeFor after a real page check (fake vision, no paid call)', () =
     expect(qcNoticeFor(out.qc, pg, { doc: doc(), quote })).toBeNull();
   });
 });
+
+// ── P5-QC (COMIC_QC_V2): wording for the new findings ───────────────────────
+
+describe('qcNoticeFor: the page check v2 findings (P5-QC)', () => {
+  it('a character on the wrong side raises "Check panels" with the script\'s side and a quoted panel redraw', () => {
+    const n = qcNoticeFor(qc({ sides: [{ panel: 3, castId: 'meera', drawn: 'right', script: 'left' }] }), marketPage(), { doc: doc(), quote });
+    expect(n).toBeTruthy();
+    expect(n!.tone).toBe('info');
+    expect(n!.text).toBe(
+      'Check panels on page 2: MEERA is on the right in panel 3; the script has them on the left. Open page 2 to fix one panel, or say “redraw page 2” for a new take.'
+    );
+    expect(n!.fixes[0]).toMatchObject({ label: 'Redraw panel 3 with MEERA on the left', free: false, action: { type: 'edit_page', panelN: 3, quotedUsd: 0.069 } });
+    expect((n!.fixes[0].action as { instruction: string }).instruction).toContain('place MEERA on the left side of the panel');
+  });
+
+  it('a flip about a character the panel no longer lists is ignored (the page changed since the check)', () => {
+    expect(qcNoticeFor(qc({ sides: [{ panel: 2, castId: 'meera', drawn: 'right', script: 'left' }] }), marketPage(), { doc: doc(), quote })).toBeNull();
+  });
+
+  it('the book note on scripts speaks on its own, calmly, and offers no paid chip', () => {
+    const n = qcNoticeFor(qc({ inscriptionNote: 'Rama is drawn in two scripts (राम on pages 4–6, RAM on pages 8–9).' }), marketPage(), { doc: doc(), quote });
+    expect(n).toEqual({
+      tone: 'info',
+      text: 'Page 2: Rama is drawn in two scripts (राम on pages 4–6, RAM on pages 8–9).',
+      fixes: []
+    });
+  });
+
+  it('a flip against the default staging (not the script) raises no notice and no paid chip', () => {
+    const staged = qc({ sides: [{ panel: 3, castId: 'meera', drawn: 'right', script: 'left', from: 'staging' }] });
+    expect(qcNoticeFor(staged, marketPage(), { doc: doc(), quote })).toBeNull();
+  });
+
+  it('with another problem, the book note joins the "Check panels" notice as one more sentence', () => {
+    const n = qcNoticeFor(
+      qc({ sides: [{ panel: 3, castId: 'meera', drawn: 'right', script: 'left' }], inscriptionNote: 'Rama is drawn in two scripts (राम on pages 4–6, RAM on pages 8–9).' }),
+      marketPage(),
+      { doc: doc(), quote }
+    );
+    expect(n!.text).toContain('Check panels on page 2: MEERA is on the right in panel 3; the script has them on the left; Rama is drawn in two scripts');
+  });
+
+  it('a report without the v2 fields reads exactly as before', () => {
+    expect(qcNoticeFor(qc(), marketPage(), { doc: doc(), quote })).toBeNull();
+  });
+});
