@@ -300,7 +300,7 @@ async function strongColourShare(qa: QaHarness, chromaMin: number): Promise<numb
   const style = await page.addStyleTag({ content: 'img, picture, video, canvas, svg image { visibility: hidden !important; }' });
   await qa.settle(150);
   const shot = (await page.screenshot()).toString('base64');
-  await style.evaluate((el) => el.remove());
+  await style.evaluate((el) => (el as Element).remove());
   return page.evaluate(
     async ({ b64, min }) => {
       const img = new Image();
