@@ -84,14 +84,16 @@ const sameScope = (a: TranslateAction, b: TranslateAction) =>
 
 /**
  * A second translate_comic call in the turn that already opened an Approve card for the languages the user asked for
- * ("add telugu and hindi versions" sent as [Telugu], then [Hindi]): close that card and quote both languages on one new
- * card, instead of refusing the second call and silently dropping its language. Undefined: nothing to merge.
+ * ("add telugu and hindi versions" sent as [Telugu], then [Hindi]): drop that card and quote both languages on one new
+ * card (which replaces the old gate), instead of refusing the second call and silently dropping its language. Undefined: nothing to merge.
  */
 async function mergeIntoAskedGate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<TranslateAction | undefined> {
   const mine = askedGates.get(turn);
   const open = ctx.session.doc.gate;
   if (!mine || !open || open.id !== mine.gateId || open.status !== 'open' || !sameScope(mine.action, action)) return undefined;
-  await startAction(ctx, { type: 'decline_gate', gateId: open.id }, { confirmed: true, caps: ctx.caps, origin: 'director' });
+  // The new card takes the one gate slot and the studio stamps the old one 'replaced' by the system (jobs.ts
+  // commitGate). Never decline_gate here: that is the creator's own "Not now", and the settled card and the director
+  // would both read that the user turned the translation down.
   const card = turn.cards.findIndex((c) => c.type === 'gate' && c.gateId === open.id);
   if (card >= 0) turn.cards.splice(card, 1);
   askedGates.delete(turn);

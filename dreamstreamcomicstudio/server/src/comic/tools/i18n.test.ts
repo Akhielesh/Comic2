@@ -10,7 +10,7 @@ import { runDirectorTurn } from '../director.js';
 import { MAX_TOOLS_PER_TURN } from '../extensions.js';
 import { sixPageDrawnDoc } from '../golden/fixtures.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
-import { newSession, plannedDoc, scriptedLlm, testContext } from '../orchestrator.fakes.js';
+import { newSession, opsOf, plannedDoc, scriptedLlm, testContext } from '../orchestrator.fakes.js';
 import { buildTurnToolset, createDirectorTurn, type DirectorTurn } from '../tools.js';
 import { toolGroups } from './index.js';
 import { resetTranslationCalibration } from '../i18n/index.js';
@@ -228,6 +228,19 @@ describe('translate_comic', () => {
     const reply = session.doc.conversation[session.doc.conversation.length - 1];
     expect(reply.cards!.filter((c) => c.type === 'gate')).toEqual([expect.objectContaining({ gateId: gate.id })]);
     expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+    // The studio replaced the first card; the user never said "Not now" (settled cards, S2b): no gate is recorded as
+    // declined, and no card is stamped as closed by the user.
+    const ops = opsOf(ctx.events);
+    expect(ops.filter((o) => o.op === 'gate').map((o) => (o as { gate: { status: string } }).gate.status)).not.toContain('declined');
+    expect(JSON.stringify(ops)).not.toMatch(/"by":"user"/);
+    // A late tap on the replaced card (an old tab, a replayed request) is refused and spends nothing.
+    const firstId = ops.map((o) => (o.op === 'gate' ? (o as { gate: { id: string } }).gate.id : '')).find((id) => id && id !== gate.id)!;
+    expect(firstId).toBeTruthy();
+    await expect(startAction(ctx, { type: 'approve_gate', gateId: firstId }, { confirmed: true, origin: 'user' })).rejects.toThrow(/no longer open/);
+    await ctx.settled();
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'open' });
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+    expect(i18nOf(session.doc).editions).toEqual({});
   });
 
   it('a second call for other pages or options is still refused: only the languages gather on one card', async () => {
