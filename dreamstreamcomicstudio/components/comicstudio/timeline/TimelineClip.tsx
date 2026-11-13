@@ -24,10 +24,11 @@ import { BlockedTile, cx, FOCUS_RING } from './ui';
 export const CLIP_THUMB_H = { full: 64, compact: 52 } as const;
 const CLIP_W = { full: [44, 116], compact: [34, 76] } as const;
 
-export const clipThumbWidth = (ratio: number, compact: boolean): number => {
-  const h = compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full;
+export const clipThumbWidth = (ratio: number, compact: boolean, height?: number): number => {
+  const h = height ?? (compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full);
   const [lo, hi] = compact ? CLIP_W.compact : CLIP_W.full;
-  return Math.round(Math.min(hi, Math.max(lo, h * (Number.isFinite(ratio) && ratio > 0 ? ratio : 2 / 3))));
+  const scale = h / (compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full);
+  return Math.round(Math.min(hi * scale, Math.max(lo, h * (Number.isFinite(ratio) && ratio > 0 ? ratio : 2 / 3))));
 };
 
 const ringFor = (clip: ClipVM): string => {
@@ -69,6 +70,8 @@ export interface TimelineClipProps {
   doc: ComicDoc;
   urlFor: StudioController['urlFor'];
   compact: boolean;
+  /** Resizable book dock; the compact page-editor strip keeps its fixed size. */
+  thumbHeight?: number;
   selected: boolean;
   tabIndex: 0 | -1;
   /** "Redraw ≈ $0.06" hint on hover/focus (registry price, printed for the viewer); undefined hides it. */
@@ -94,6 +97,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   doc,
   urlFor,
   compact,
+  thumbHeight,
   selected,
   tabIndex,
   nextPrice,
@@ -110,9 +114,9 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
   onPointerDown,
   onContextMenu
 }) => {
-  const h = compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full;
-  const w = clipThumbWidth(clip.ratio, compact);
-  const url = clip.asset && !clip.blocked ? urlFor(clip.asset, { width: 240 }) : undefined;
+  const h = thumbHeight ?? (compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full);
+  const w = clipThumbWidth(clip.ratio, compact, h);
+  const url = clip.asset && !clip.blocked ? urlFor(clip.asset, { width: w > 240 ? 1080 : w > 120 ? 480 : 240 }) : undefined;
   const busy = clip.status === 'queued' || clip.status === 'rendering';
   const short = clip.kind === 'page' ? `P${clip.page?.n ?? ''}` : clip.kind === 'cover' ? 'Cover' : clip.label;
   const money = cost?.exact;
@@ -170,7 +174,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
       style={{ transform: shift ? `translateX(${shift}px)${lifted ? ' scale(1.04)' : ''}` : lifted ? 'scale(1.04)' : undefined, minWidth: 44 }}
     >
       <span className="sr-only">{clipAriaLabel(clip, money)}</span>
-      <div className={cx('relative overflow-hidden rounded-lg bg-[var(--ds-well)]', ringFor(clip))} style={{ width: w, height: h }} aria-hidden>
+      <div data-timeline-thumb className={cx('relative overflow-hidden rounded-lg bg-[var(--ds-well)]', ringFor(clip))} style={{ width: w, height: h }} aria-hidden>
         {body}
         {busy && (
           <span className="absolute inset-0 flex items-center justify-center bg-black/25" aria-hidden>
@@ -234,6 +238,7 @@ export const AddClip: React.FC<{
   label: string;
   hint: string;
   compact: boolean;
+  thumbHeight?: number;
   tabIndex: 0 | -1;
   ghost?: boolean;
   disabled?: boolean;
@@ -241,8 +246,8 @@ export const AddClip: React.FC<{
   onActivate(): void;
   onKeyDown(e: React.KeyboardEvent<HTMLDivElement>): void;
   onFocus(): void;
-}> = ({ label, hint, compact, tabIndex, ghost, disabled, itemRef, onActivate, onKeyDown, onFocus }) => {
-  const h = compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full;
+}> = ({ label, hint, compact, thumbHeight, tabIndex, ghost, disabled, itemRef, onActivate, onKeyDown, onFocus }) => {
+  const h = thumbHeight ?? (compact ? CLIP_THUMB_H.compact : CLIP_THUMB_H.full);
   return (
     <div
       ref={itemRef}
