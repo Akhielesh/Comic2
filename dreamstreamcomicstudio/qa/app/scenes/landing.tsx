@@ -1,7 +1,4 @@
-// QA scene `landing` (the scene contract is in qa/app/index.tsx): the comics host’s front page as a
-// signed-out visitor first sees it — the Atlas public composition in paper and ink, the studio replica and the
-// procedural comic pages, and the one spark call to action ("Start creating"). The page brings its own <main>. Every
-// handler is a no-op: nothing here navigates, reaches the network or spends.
+// Signed-out Comic Studio landing, with the bundled sample reader and local-only navigation callbacks.
 
 import React from 'react';
 import { ComicsLanding } from '../../../components/comicshost/ComicsLanding';

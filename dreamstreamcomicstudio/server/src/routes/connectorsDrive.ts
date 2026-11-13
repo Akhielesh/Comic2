@@ -15,6 +15,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { connectorRegistry } from '../connectors/index.js';
+import { disconnectAccountConnector } from '../connectors/disconnect.js';
 import { getValidAccessToken } from '../connectors/credentials.js';
 import { isGoogleOAuthConfigured } from '../connectors/oauth.js';
 import {
@@ -26,10 +27,8 @@ import {
 } from '../connectors/driveSave.js';
 import { DRIVE_SAVE_CONNECTOR_ID, GoogleDriveSaveConnector } from '../connectors/connectors/googleDriveSave.js';
 import {
-  deleteConnection,
   getActiveConnection,
   listConnections,
-  loadCredentials,
   setConnectionStatus,
   updateConnectionMetadata
 } from '../connectors/store.js';
@@ -177,32 +176,12 @@ driveSaveRouter.post('/disconnect', async (req, res, next) => {
   try {
     const userId = userIdOf(req, res);
     if (!userId) return;
-    const all = await listConnections(userId);
-    const mine = all.filter((c) => c.connector_id === DRIVE_SAVE_CONNECTOR_ID);
-    const connector = connectorRegistry.get(DRIVE_SAVE_CONNECTOR_ID);
+    let remaining = await listConnections(userId);
+    const mine = remaining.filter((c) => c.connector_id === DRIVE_SAVE_CONNECTOR_ID);
     let revoked = false;
     for (const conn of mine) {
-      const sharesGrant = all.some(
-        (c) =>
-          c.id !== conn.id &&
-          c.connector_id !== DRIVE_SAVE_CONNECTOR_ID &&
-          c.auth_type === 'user_oauth' &&
-          c.status !== 'disconnected' &&
-          c.account_identifier === conn.account_identifier &&
-          connectorRegistry.get(c.connector_id)?.metadata.providerGroup === 'google'
-      );
-      if (!sharesGrant && connector) {
-        const creds = await loadCredentials(conn.id).catch(() => null);
-        if (creds) {
-          await connector
-            .revoke({ accessToken: creds.accessToken, refreshToken: creds.refreshToken })
-            .then(() => {
-              revoked = true;
-            })
-            .catch((e) => logger.warn('drive_save_revoke_failed', { message: (e as Error)?.message }));
-        }
-      }
-      await deleteConnection(conn.id);
+      revoked = (await disconnectAccountConnector(conn, remaining)) || revoked;
+      remaining = remaining.filter((row) => row.id !== conn.id);
     }
     res.json({ ok: true, revoked });
   } catch (err) {

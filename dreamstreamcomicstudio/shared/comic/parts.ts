@@ -8,6 +8,7 @@
 
 import { findPlace, hashString, scenesOf, stableStringify, type ComicDoc, type Page, type Panel, type PanelParts, type VersionParts } from './doc.js';
 import { CONSISTENCY_LIMITS } from './limits.js';
+import { pageContextHash } from './continuity.js';
 
 /** Six-hex fingerprint of a value (stableStringify, so key order never matters). */
 export const partHash = (value: unknown): string => hashString(stableStringify(value ?? null)).slice(0, 6);
@@ -40,9 +41,16 @@ export const panelPartsOf = (doc: Pick<ComicDoc, 'cast' | 'places'>, panel: Pane
  * What `page` would be drawn from now: per panel (by id), the page's continuity (with its scene), the places its panels
  * use (by id) and the props its continuity names. Capped at CONSISTENCY_LIMITS.partsKeys keys (panels first). Pure.
  */
-export const partsOf = (doc: Pick<ComicDoc, 'cast' | 'places' | 'scenes'>, page: Pick<Page, 'panels' | 'continuity'>): VersionParts => {
+export const partsOf = (doc: Pick<ComicDoc, 'cast' | 'places' | 'scenes'> & Partial<Pick<ComicDoc, 'pages'>>, page: Pick<Page, 'panels' | 'continuity'> & Partial<Pick<Page, 'id' | 'n'>>): VersionParts => {
   let budget: number = CONSISTENCY_LIMITS.partsKeys;
   const out: VersionParts = {};
+  if (doc.pages && page.id && page.n !== undefined) {
+    const current = doc.pages.find((p) => p.id === page.id);
+    if (current) {
+      const contextDoc = { ...doc, pages: doc.pages.map((p) => p.id === page.id ? { ...p, ...page } : p) } as ComicDoc;
+      out.context = pageContextHash(contextDoc, contextDoc.pages.find((p) => p.id === page.id)!);
+    }
+  }
   const panels: Record<string, PanelParts> = {};
   for (const panel of page.panels || []) {
     if (budget <= 0) break;

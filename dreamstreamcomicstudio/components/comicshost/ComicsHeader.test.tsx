@@ -76,8 +76,10 @@ describe('ComicsHeader', () => {
     expect(signIn).toHaveAttribute('data-variant', 'outline');
     expect(signIn.className.split(/\s+/)).toContain(RADIUS_ROUND);
     fireEvent.click(signIn);
-    fireEvent.click(within(actions).getByRole('button', { name: /^request access$/i }));
     expect(p.onSignIn).toHaveBeenCalledTimes(1);
+    expect(within(actions).queryByRole('button', { name: /^request access$/i })).toBeNull();
+    fireEvent.click(within(actions).getByRole('button', { name: 'Menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Request access' }));
     expect(p.onRequestAccess).toHaveBeenCalledTimes(1);
     expect(within(actions).queryByRole('button', { name: /my comics/i })).toBeNull();
   });
@@ -98,8 +100,8 @@ describe('ComicsHeader', () => {
 
   it('the menu rows per state and page: section links on the landing only, Request access only signed out', () => {
     const cases: Array<[Partial<ComicsHeaderProps>, string[]]> = [
-      [{ signedIn: false, page: 'home' }, ['How it works', 'Looks', 'Library', 'Request access']],
-      [{ signedIn: true, page: 'home' }, ['How it works', 'Looks', 'Library']],
+      [{ signedIn: false, page: 'home' }, ['Looks', 'Library', 'Request access']],
+      [{ signedIn: true, page: 'home' }, ['Looks', 'Library']],
       [{ signedIn: false, page: 'other' }, ['Library', 'Request access']],
       [{ signedIn: true, page: 'other' }, ['Library']]
     ];
@@ -110,7 +112,7 @@ describe('ComicsHeader', () => {
       // is hidden from lg, so without it a desktop visitor on sign-in or a legal page had no way to the Library).
       const nav = screen.getByRole('navigation', { name: 'Comic Studio' });
       expect(within(nav).getAllByRole('button').map((b) => b.textContent), JSON.stringify(over)).toEqual(
-        over.page === 'home' ? ['How it works', 'Looks', 'Library'] : ['Library']
+        over.page === 'home' ? ['Looks', 'Library'] : ['Library']
       );
       expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'lg:flex']));
       unmount();

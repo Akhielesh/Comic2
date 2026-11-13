@@ -23,10 +23,8 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 /**
  * The furthest stage a flag may reach in this build. Scene chains stop at 'admins' until three things hold: the owner
- * has accepted the longer wait (about +2 minutes for 10 pages in one scene), a colour check shows that drawing each page
- * from the one before does not drift (today pages 2 to 10 all share page 1 as their reference), and a chained page is
- * never drawn from a page whose safety verdict is still pending. Lifting this cap is a code change that comes with
- * those checks; setting COMIC_RUN_CHAINS=all alone admits admins only.
+ * has accepted the longer wait (about +3 minutes for 10 pages in one scene with safety checks), and a colour check
+ * shows that drawing each page from the one before does not drift. Setting COMIC_RUN_CHAINS=all alone admits admins only.
  */
 export const P5_FLAG_MAX: Readonly<Partial<Record<P5Flag, FlagStage>>> = Object.freeze({ runChains: 'admins' });
 

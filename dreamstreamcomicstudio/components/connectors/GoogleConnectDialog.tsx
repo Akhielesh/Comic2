@@ -146,8 +146,8 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
             {willConsent && (
               <p className="mb-3 flex items-start gap-2 text-xs text-[var(--ds-muted)]">
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                Least-privilege, read-only access. A Google consent window opens; tokens are encrypted at rest
-                and you can change this anytime.
+                Review the permissions for each service on Google’s consent screen. You can change
+                what is connected at any time.
               </p>
             )}
             {!configured && (

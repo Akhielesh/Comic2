@@ -52,7 +52,7 @@ describe('RefsDrawer', () => {
     expect(within(main).getByTitle('Main photo')).toBeInTheDocument();
     const picker = screen.getByTestId('refs-picker') as HTMLInputElement;
     expect(picker.multiple).toBe(true);
-    expect(picker.accept).toBe('image/jpeg,image/png,image/webp,image/gif,image/avif');
+    expect(picker.accept).toBe('image/jpeg,image/png,image/webp,image/gif,image/avif,image/svg+xml,.svg');
     expect(screen.getByTestId('refs-camera').getAttribute('capture')).toBe('environment');
     expect(screen.getByText(/Your photos stay private to you/)).toBeInTheDocument();
   });

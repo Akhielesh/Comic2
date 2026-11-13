@@ -644,9 +644,9 @@ export const staleReasons = (doc: ComicDoc, page: Page, version: Pick<VersionMet
   for (const id of Object.keys(was)) {
     if (!is[id] && !page.panels.some((p) => p.id === id)) out.push({ part: 'panel_removed', panelId: id, text: 'A panel was removed' });
   }
-  // `cont` fingerprints this page's own continuity record and its scene (parts.ts partsOf), not state carried from
-  // earlier pages: an edit to page 1's outfit never marks page 3 here.
-  if (before.cont !== now.cont) out.push({ part: 'continuity', text: CONTINUITY_STALE_TEXT });
+  // Legacy `cont` covers the page's own ledger. Newly rendered versions also record the resolved prompt context,
+  // so upstream changes matter only where they actually carry into this page.
+  if (before.cont !== now.cont || (before.context !== undefined && before.context !== now.context)) out.push({ part: 'continuity', text: CONTINUITY_STALE_TEXT });
   for (const [id, hash] of Object.entries(now.places ?? {})) {
     const old = before.places?.[id];
     if (old !== undefined && old !== hash) {

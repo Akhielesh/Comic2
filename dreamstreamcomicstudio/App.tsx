@@ -18,7 +18,6 @@ const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/Pag
 // Comic Studio v4 — the conversational studio (docs/features/comic-studio-v4.md).
 const ComicStudio = lazyImportWithRetry(() => import('./components/comicstudio/ComicStudio').then(module => ({ default: module.ComicStudio })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
-const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
 // Comic Studio's own front page on comics.dreamstreamstudio.ai (components/comicshost).
@@ -82,6 +81,7 @@ import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from '
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
+import { mainAppUrl } from './services/productHost';
 import { safeNext } from './services/safeNext';
 import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
@@ -99,7 +99,6 @@ type AppView =
   | 'editor'
   | 'reader'
   | 'learn'
-  | 'how-it-works'
   | 'gallery'
   | 'models'
   | 'chat'
@@ -123,7 +122,7 @@ type AppView =
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.
 //  Project workspaces restore through the ?view=…&id= deep-link path instead.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'privacy', 'terms', 'settings',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -418,12 +417,15 @@ const App: React.FC = () => {
     setCurrentView('settings');
   };
 
-  // The FAQ lives on the main site's home page (#home-faq). The comics host's home is its own landing, which has
-  // none: a FAQ entry there (the dashboard's, the readers') lands on the landing's "How it works" instead of the top.
+  // The FAQ lives on the main site's home page.
   const handleOpenFaq = () => {
+    if (comicsHost.active) {
+      window.location.assign(mainAppUrl('/#home-faq'));
+      return;
+    }
     handleBackToHome();
     window.setTimeout(() => {
-      document.getElementById(comicsHost.active ? 'how-it-works' : 'home-faq')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('home-faq')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 180);
   };
 
@@ -813,7 +815,6 @@ const App: React.FC = () => {
       view === 'dashboard' ||
       view === 'auth' ||
       view === 'learn' ||
-      view === 'how-it-works' ||
       view === 'gallery' ||
       view === 'models' ||
       view === 'chat' ||
@@ -1219,13 +1220,6 @@ const App: React.FC = () => {
             <Suspense fallback={<div className="min-h-screen bg-neutral-950" />}>
               <OperatorConsoleView isAdmin={isAdmin} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
             </Suspense>
-          )}
-
-          {effectiveView === 'how-it-works' && (
-            <HowItWorks
-              onBack={handleBackToHome}
-              onGetStarted={() => setCurrentView(user ? 'dashboard' : 'auth')}
-            />
           )}
 
           {effectiveView === 'privacy' && (

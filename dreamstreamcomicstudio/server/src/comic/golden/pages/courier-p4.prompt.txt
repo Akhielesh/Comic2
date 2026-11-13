@@ -10,7 +10,7 @@ REFERENCE IMAGES (in the order attached):
 Image 1 — CHARACTER SHEET: DEV. Match his face, hairstyle, body type, outfit and colors exactly.
 Image 2 — CHARACTER SHEET: ISHA. Match her face, hairstyle, body type, outfit and colors exactly.
 Image 3 — STYLE BOARD. Match its rendering style, line quality and color treatment (not its content).
-Image 4 — PREVIOUS PAGE. Keep lighting, outfits and props continuous with it (not its layout).
+Image 4 — PREVIOUS PAGE. Use the last panel's established designs, geography and lighting where the script continues them. The current page's actions and changes control the story. Ignore the reference page's panel layout and lettering.
 
 CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people. Each keeps the same face, hair, outfit and colors in every panel:
 - DEV (Image 1): Lanky 18-year-old tinkerer; male; hair: messy black curls under welding goggles; outfit: oil-stained grey kurta with rolled sleeves; colors: grey, copper; props: a satchel of copper tools.
@@ -19,10 +19,15 @@ CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplica
 LOCATIONS:
 - EAST GATE: Crumbling stone archway over a shuttered depot by a canal.
 
+STORY HANDOFF — Page 3 ended with: They follow the van, beat 4.
+Use that as the starting state for this page, without redrawing that moment. The current panel actions control what happens and changes.
+
 PAGE LAYOUT — 4 panels, read left-to-right, top-to-bottom:
 Row 1: one wide panel. Rows 2–3: one tall panel on the left beside two stacked panels on the right.
 Measured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 30%): panel 2 on the left, 42% wide, 63% tall (rows 2–3); panel 3 on the right, 52% wide. Row 3 (next 30%): panel 4 on the right, 52% wide.
 Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
+
+READING SEQUENCE — draw the panels as successive moments in one story. In a continuous scene, keep identities, screen direction, geography, and object state until the action changes them. Show each action or reaction once; on a cut, establish the new time or place.
 
 PANELS:
 PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).

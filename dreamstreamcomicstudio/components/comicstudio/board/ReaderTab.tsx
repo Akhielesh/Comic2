@@ -29,7 +29,7 @@
 // duplicate homes (docs/design/clean-and-smooth.md, C2).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
+import { Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Images, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
 import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
@@ -41,7 +41,7 @@ import { ExportError, friendlyExportError } from '../export/errors';
 import type { PitchDeckResult } from '../export/pitchDeck';
 import { openPrintView } from '../export/printView';
 import { exportLanguagesZip, exportPngZip } from '../export/zipExport';
-import { collectExportSlots, exportLanguages } from '../export/sequence';
+import { collectExportSlots, exportLanguages, hasFinishedPageArt } from '../export/sequence';
 import { oneLanguageZipFits, planZipMemory } from '../export/zipMemory';
 import { plateWidthFor } from '../export/batch';
 import { exportComicPdf } from '../export/pdfExport';
@@ -57,6 +57,8 @@ import { useShareCapabilities } from '../share/useShareCapabilities';
 import { OVERLINE, RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
 import { CLEAR } from './boardModel';
 import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
+
+const LARGE_PNG_EDGE = 3840;
 
 const MOTION_ASPECTS: { aspect: MotionAspect; label: string }[] = [
   { aspect: '9:16', label: 'Portrait' },
@@ -247,6 +249,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const set = (s: ExportState) => mounted.current && setState(s);
   const working = state.kind === 'working';
   const drawn = !!doc.cover.render.asset?.path || doc.pages.some((p) => !!p.render.asset?.path);
+  const gifReady = doc.pages.filter(hasFinishedPageArt).length >= 2;
   const exportLabel = editionName ? ` (${editionName})` : '';
   // The exporters get the SOURCE doc and the edition's code: "-te" file names, that script's faces.
   const exportLang = L.lang;
@@ -312,10 +315,10 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
       .catch((err: Error) => set({ kind: 'error', text: err?.message || 'Couldn’t open the print view.' }));
   };
 
-  const zip = () =>
+  const zip = (longEdge?: number) =>
     run(
-      `Preparing pages${exportLabel}…`,
-      (signal, onProgress) => exportPngZip(doc, studio.urlFor, { lang: exportLang, signal, onProgress }),
+      `Preparing ${longEdge ? 'large PNG ' : ''}pages${exportLabel}…`,
+      (signal, onProgress) => exportPngZip(doc, studio.urlFor, { lang: exportLang, ...(longEdge ? { longEdge, large: true } : {}), signal, onProgress }),
       (r) => exportDoneState(`Downloaded ${r.fileName} (${r.files} images).`, [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped], r.notice, draftNote),
       'Export failed.'
     );
@@ -354,6 +357,17 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
       (r: PitchDeckResult) =>
         exportDoneState(`Downloaded ${r.fileName} (${r.slides} slides).`, [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped], r.notice, draftNote),
       'Pitch deck export failed.'
+    );
+
+  const gif = () =>
+    run(
+      `Preparing the GIF preview${exportLabel}…`,
+      async (signal, onProgress) => {
+        const { exportComicGif } = await import('../export/gifExport');
+        return exportComicGif(doc, studio.urlFor, { lang: exportLang, signal, onProgress });
+      },
+      (r) => exportDoneState(`Downloaded ${r.fileName} (${r.frames} pages).`, r.skipped, r.notice, draftNote),
+      'GIF export failed.'
     );
 
   const motion = (aspect: MotionAspect) => {
@@ -544,7 +558,14 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           </p>
           <SheetRow icon={<Printer className="h-4 w-4" />} label="Print" hint="Crisp vector lettering — choose “Save as PDF” there" onClick={print} disabled={working} />
           <SheetRow icon={<FileDown className="h-4 w-4" />} label="PDF" hint="A print-ready PDF, downloaded directly" onClick={pdf} disabled={working} />
-          <SheetRow icon={<FileArchive className="h-4 w-4" />} label="PNG pages (ZIP)" hint="Every page as a lettered image" onClick={zip} disabled={working} />
+          <SheetRow icon={<FileArchive className="h-4 w-4" />} label="PNG pages (ZIP)" hint="Every page as a lettered image" onClick={() => zip()} disabled={working} />
+          <SheetRow
+            icon={<FileArchive className="h-4 w-4" />}
+            label="Large PNG pages"
+            hint="Resize up to 3,840 px on your device. Lettering stays sharp."
+            onClick={() => zip(LARGE_PNG_EDGE)}
+            disabled={working}
+          />
           {allLanguages.length > 1 && (
             <SheetRow
               icon={<Languages className="h-4 w-4" />}
@@ -563,6 +584,13 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
             />
           )}
           {platformDocsVisible(true) && <PitchDeckRow onClick={pitchDeck} disabled={working} />}
+          <SheetRow
+            icon={<Images className="h-4 w-4" />}
+            label="GIF preview"
+            hint="Loop up to 12 finished pages"
+            onClick={gif}
+            disabled={working || !gifReady}
+          />
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 px-2.5 py-2">
             <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--ds-ink)]">
               <Clapperboard className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-hidden /> Motion comic

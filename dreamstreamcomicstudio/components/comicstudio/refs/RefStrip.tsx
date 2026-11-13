@@ -19,7 +19,7 @@ import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import type { StudioController } from '../types';
-import { ACCEPT_ATTR } from './downscale';
+import { ACCEPT_ATTR, isSvgFile } from './downscale';
 import { RefsDrawer } from './RefsDrawer';
 import { ownerLabel, sheetHint } from './refsModel';
 import { UploadQueue } from './UploadQueue';
@@ -64,7 +64,7 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
   const more = refs.length - shown.length;
   const openDrawer = () => (onOpen ? onOpen() : setOpen(true));
   const add = (files: File[]) => files.length && void uploads.add(files, owner);
-  const imgs = (list: FileList | null | undefined) => Array.from(list || []).filter((f) => !f.type || f.type.startsWith('image/') || /\.(heic|heif|avif)$/i.test(f.name));
+  const imgs = (list: FileList | null | undefined) => Array.from(list || []).filter((f) => isSvgFile(f) || !f.type || f.type.startsWith('image/') || /\.(heic|heif|avif)$/i.test(f.name));
 
   return (
     <div className={cx('min-w-0', className)}>

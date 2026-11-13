@@ -100,21 +100,21 @@ describe('COMIC_RUN_CHAINS in the job runner', () => {
     expect(page('pg_2').continuityPath).toBe(page('pg_1').asset?.path);
   });
 
-  it('all is capped at admins in this build: a non-admin\'s run keeps today\'s order and page 3 continues from page 1', async () => {
+  it('all is capped at admins in this build: a non-admin still uses the default paired schedule', async () => {
     process.env.COMIC_RUN_CHAINS = 'all';
     const { session } = await renderAll(false);
     expect(vi.mocked(scheduleRun).mock.calls[0]).toHaveLength(2);
     const page = (id: string) => session.doc.pages.find((p) => p.id === id)!.render;
-    expect(page('pg_3').continuityPath).toBe(page('pg_1').asset?.path);
+    expect(page('pg_3').continuityPath).toBe(page('pg_2').asset?.path);
   });
 
-  it('off: today\'s call (no options) and page 3 continues from page 1', async () => {
-    const { session } = await renderAll(true);
+  it('off: the default pair carries page 2 artwork into page 3 with exactly one draw per page', async () => {
+    const { session, ctx } = await renderAll(true);
     expect(vi.mocked(scheduleRun)).toHaveBeenCalledWith(expect.anything(), ['pg_1', 'pg_2', 'pg_3']);
     expect(vi.mocked(scheduleRun).mock.calls[0]).toHaveLength(2);
     const page = (id: string) => session.doc.pages.find((p) => p.id === id)!.render;
-    // Pages 2 and 3 start together once page 1 is done, so both continue from page 1 (the case's fault).
-    expect(page('pg_3').continuityPath).toBe(page('pg_1').asset?.path);
+    expect(ctx.imagesFake.calls).toHaveLength(3);
+    expect(page('pg_3').continuityPath).toBe(page('pg_2').asset?.path);
   });
 });
 

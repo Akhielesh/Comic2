@@ -2,7 +2,7 @@
 // Owner: P1-REFS. Shared with the composer (which used to reject anything over 10 MB BEFORE
 // shrinking — a 15 MB, 48 MP phone JPEG was refused for no reason).
 //
-//   original file (≤ 40 MB, JPG/PNG/WebP/GIF/AVIF, or a HEIC the browser can decode)
+//   original file (≤ 40 MB raster, or ≤ 1 MB static SVG)
 //     → sha256 of the ORIGINAL bytes (first 16 hex: the exact-duplicate hint)
 //     → decode upright (EXIF orientation honoured)
 //     → long edge ≤ 2048 → WebP 0.9 (JPEG fallback) — never larger than the original
@@ -11,16 +11,18 @@
 
 import { REF_LIMITS, UPLOAD_MIME } from '../../../shared/comic/refs';
 import { HEIC_HELP, isHeicFile, readHead } from './heic';
+import { MAX_SVG_BYTES, STATIC_SVG_HELP, SVG_MIME, staticSvgImage } from './staticSvg';
 
-/** The file-picker `accept`: HEIC deliberately omitted so iOS hands us JPEG (refs.md §7.4). */
-export const ACCEPT_ATTR = 'image/jpeg,image/png,image/webp,image/gif,image/avif';
+/** HEIC deliberately omitted so iOS hands us JPEG (refs.md §7.4). */
+export const RASTER_ACCEPT_ATTR = 'image/jpeg,image/png,image/webp,image/gif,image/avif';
+export const ACCEPT_ATTR = `${RASTER_ACCEPT_ATTR},${SVG_MIME},.svg`;
 /** Stored long edge (the server keeps ≤ 2048 too). */
 export const MAX_EDGE = 2048;
 /** Below this, an allowed original that needs no resize is sent as is (no generation loss). */
 const SEND_AS_IS_BYTES = 1.5 * 1024 * 1024;
 const QUALITY = 0.9;
 
-export type PrepareErrorCode = 'empty' | 'type' | 'too_big' | 'heic' | 'decode' | 'too_small';
+export type PrepareErrorCode = 'empty' | 'type' | 'too_big' | 'heic' | 'decode' | 'too_small' | 'svg';
 
 export class PrepareError extends Error {
   readonly code: PrepareErrorCode;
@@ -33,11 +35,14 @@ export class PrepareError extends Error {
 
 export const PREPARE_COPY: Record<Exclude<PrepareErrorCode, 'heic'>, string> = {
   empty: 'That file is empty.',
-  type: 'Use a JPG, PNG, WebP, GIF or AVIF image.',
+  type: 'Use a JPG, PNG, WebP, GIF, AVIF or static SVG image.',
   too_big: `That photo is over ${Math.round(REF_LIMITS.maxSourceBytes / 1024 / 1024)} MB — choose a smaller one.`,
   decode: "That file couldn't be opened as an image.",
-  too_small: `That image is too small to be useful (under ${REF_LIMITS.minEdgePx} px).`
+  too_small: `That image is too small to be useful (under ${REF_LIMITS.minEdgePx} px).`,
+  svg: STATIC_SVG_HELP
 };
+
+const SVG_SIZE_COPY = 'That SVG is over 1 MB. Choose a smaller SVG or export it as PNG.';
 
 export interface PreparedImage {
   blob: Blob;
@@ -58,10 +63,12 @@ export interface DecodedImage {
   close?(): void;
 }
 
+type RasterMime = 'image/webp' | 'image/jpeg' | 'image/png';
+
 /** Seams for tests and odd browsers. */
 export interface PrepareDeps {
   decode?(file: Blob): Promise<DecodedImage>;
-  encode?(img: DecodedImage, w: number, h: number, type: 'image/webp' | 'image/jpeg', quality: number): Promise<Blob | null>;
+  encode?(img: DecodedImage, w: number, h: number, type: RasterMime, quality: number): Promise<Blob | null>;
   digest?(bytes: ArrayBuffer): Promise<ArrayBuffer>;
 }
 
@@ -77,6 +84,7 @@ const typeOf = (file: Blob & { name?: string }): string => {
   return (ext && EXT_TYPE[ext]) || '';
 };
 const isMarkup = (type: string, name: string) => /svg|html|xml|^text\//i.test(type) || /\.(svg|html?|xml)$/i.test(name);
+export const isSvgFile = (file: Blob & { name?: string }): boolean => file.type.toLowerCase() === SVG_MIME || /\.svg$/i.test(nameOf(file));
 
 const toHex16 = (buf: ArrayBuffer) =>
   Array.from(new Uint8Array(buf).slice(0, 8))
@@ -131,7 +139,7 @@ async function defaultDecode(file: Blob): Promise<DecodedImage> {
   }
 }
 
-async function defaultEncode(img: DecodedImage, w: number, h: number, type: 'image/webp' | 'image/jpeg', quality: number): Promise<Blob | null> {
+async function defaultEncode(img: DecodedImage, w: number, h: number, type: RasterMime, quality: number): Promise<Blob | null> {
   if (typeof OffscreenCanvas !== 'undefined') {
     const canvas = new OffscreenCanvas(w, h);
     const ctx = canvas.getContext('2d');
@@ -169,16 +177,20 @@ export async function prepareImageFile(file: Blob & { name?: string }, deps: Pre
   const name = nameOf(file);
   if (!file || !file.size) throw new PrepareError('empty', PREPARE_COPY.empty);
   const type = typeOf(file);
-  if (isMarkup(type, name)) throw new PrepareError('type', PREPARE_COPY.type);
-  const heic = await isHeicFile(file);
-  if (!heic && type && !ALLOWED.has(type)) throw new PrepareError('type', PREPARE_COPY.type);
+  const svg = isSvgFile(file);
+  if (svg && file.size > MAX_SVG_BYTES) throw new PrepareError('too_big', SVG_SIZE_COPY);
+  if (!svg && isMarkup(type, name)) throw new PrepareError('type', PREPARE_COPY.type);
+  const heic = !svg && await isHeicFile(file);
+  if (!svg && !heic && type && !ALLOWED.has(type)) throw new PrepareError('type', PREPARE_COPY.type);
   if (file.size > REF_LIMITS.maxSourceBytes) throw new PrepareError('too_big', PREPARE_COPY.too_big);
 
   const hash = await sha256Hex16(file, deps.digest);
   let img: DecodedImage;
   try {
-    img = await (deps.decode || defaultDecode)(file);
+    const source = svg ? staticSvgImage(new Uint8Array(await readAll(file)), MAX_EDGE) : file;
+    img = await (deps.decode || defaultDecode)(source);
   } catch {
+    if (svg) throw new PrepareError('svg', PREPARE_COPY.svg);
     if (heic) throw new PrepareError('heic', HEIC_HELP);
     // A file whose bytes say "image" but the browser can't read (corrupt, exotic codec).
     throw new PrepareError('decode', PREPARE_COPY.decode);
@@ -189,14 +201,18 @@ export async function prepareImageFile(file: Blob & { name?: string }, deps: Pre
     if (Math.min(width, height) < REF_LIMITS.minEdgePx) throw new PrepareError('too_small', PREPARE_COPY.too_small);
     const target = fitEdge(width, height);
     const resized = target.w !== width || target.h !== height;
-    const sendable = !heic && ALLOWED.has(type) && file.size <= REF_LIMITS.maxUploadBytes;
+    const sendable = !svg && !heic && ALLOWED.has(type) && file.size <= REF_LIMITS.maxUploadBytes;
     // Small and already the right size: send the original (the server re-encodes anyway).
     if (!resized && sendable && file.size <= SEND_AS_IS_BYTES) {
       return { blob: file, mimeType: type, w: width, h: height, ...(hash ? { hash } : {}), name, bytes: file.size, sourceBytes: file.size };
     }
     const encode = deps.encode || defaultEncode;
     let blob = await encode(img, target.w, target.h, 'image/webp', QUALITY);
-    if (!blob) blob = await encode(img, target.w, target.h, 'image/jpeg', QUALITY);
+    if (!blob || blob.type !== 'image/webp') {
+      const fallback = svg ? 'image/png' : 'image/jpeg';
+      blob = await encode(img, target.w, target.h, fallback, QUALITY);
+      if (blob?.type !== fallback) blob = null;
+    }
     // Never larger than the original when the original could be sent as it is.
     if ((!blob || blob.size >= file.size) && sendable && !resized) {
       return { blob: file, mimeType: type, w: width, h: height, ...(hash ? { hash } : {}), name, bytes: file.size, sourceBytes: file.size };
@@ -206,8 +222,9 @@ export async function prepareImageFile(file: Blob & { name?: string }, deps: Pre
       throw new PrepareError('decode', PREPARE_COPY.decode);
     }
     if (blob.size > REF_LIMITS.maxUploadBytes) {
-      const smaller = await encode(img, target.w, target.h, 'image/jpeg', 0.8);
-      if (!smaller || smaller.size > REF_LIMITS.maxUploadBytes) throw new PrepareError('too_big', 'That photo is still over 10 MB after shrinking — choose a smaller one.');
+      const compactType = svg ? 'image/webp' : 'image/jpeg';
+      const smaller = await encode(img, target.w, target.h, compactType, 0.8);
+      if (smaller?.type !== compactType || smaller.size > REF_LIMITS.maxUploadBytes) throw new PrepareError('too_big', 'That image is still over 10 MB after shrinking — choose a smaller one.');
       blob = smaller;
     }
     return { blob, mimeType: blob.type, w: target.w, h: target.h, ...(hash ? { hash } : {}), name, bytes: blob.size, sourceBytes: file.size };
@@ -220,6 +237,7 @@ export async function prepareImageFile(file: Blob & { name?: string }, deps: Pre
 export async function quickReject(file: Blob & { name?: string }): Promise<string | null> {
   const name = nameOf(file);
   if (!file.size) return PREPARE_COPY.empty;
+  if (isSvgFile(file)) return file.size > MAX_SVG_BYTES ? SVG_SIZE_COPY : null;
   const type = typeOf(file);
   if (isMarkup(type, name)) return PREPARE_COPY.type;
   if (type && !ALLOWED.has(type) && !(await isHeicFile(file))) return PREPARE_COPY.type;

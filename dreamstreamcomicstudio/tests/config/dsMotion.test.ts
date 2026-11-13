@@ -42,7 +42,7 @@ describe('styles/ds-motion.css', () => {
     expect(defined.has('ds-marquee-track')).toBe(true);
   });
 
-  it('collides with nothing index.css already defines (.studio-*, .hiw-*, .animate-*, .press, .ds-gallery-*, .ds-map*, the skin classes)', () => {
+  it('collides with nothing index.css already defines (.studio-*, .animate-*, .press, .ds-gallery-*, .ds-map*, the skin classes)', () => {
     const indexClasses = new Set([...stripComments(indexCss).matchAll(/\.((?:ds|studio|hiw|animate)-[\w-]+|press)\b/g)].map((m) => m[1]));
     expect([...defined].filter((c) => indexClasses.has(c))).toEqual([]);
     for (const c of defined) expect(c, c).not.toMatch(/^(?:studio|hiw|animate)-|^press$|^ds-gallery|^ds-map/);

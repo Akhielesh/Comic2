@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { DocOp } from '../../../shared/comic/ops';
 import { PageEditor, editActionFor, fitPageToStage, lineKindOps } from './PageEditor';
 import { SAMPLE_NOW, fakeUrlFor, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc';
@@ -178,6 +178,49 @@ describe('PageEditor', () => {
     fireEvent.change(screen.getByLabelText('Panel to change'), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: /Apply edit/ }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'edit_page', pageId: 'pg_1', instruction: 'Give Arjun his beard', panelN: 3 });
+  });
+
+  it('requires a region or panel for an object edit and keeps the selected panel in the action', () => {
+    const { studio } = open();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Edit type' }), { target: { value: 'add' } });
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'A blue toolbox by the car.' } });
+    const apply = screen.getByRole('button', { name: /Apply edit/ });
+    expect(apply).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Panel to change'), { target: { value: '2' } });
+    fireEvent.click(apply);
+    expect(studio.act).toHaveBeenCalledWith({
+      type: 'edit_page',
+      pageId: 'pg_1',
+      panelN: 2,
+      instruction: 'Add an object within the selected area. A blue toolbox by the car. Preserve the surrounding art and other objects.'
+    });
+  });
+
+  it('adds an uploaded asset as an undoable image layer with no AI action', async () => {
+    const doc = makeSampleDoc();
+    const path = `u/user/p/${doc.id}/ref/sticker.webp`;
+    doc.refInbox = [{ path, name: 'Toolbox', source: 'upload', at: 1, w: 400, h: 400 }];
+    const { studio } = open('pg_1', doc);
+    fireEvent.click(screen.getByRole('button', { name: 'Place image' }));
+    await waitFor(() => expect(studio.patch).toHaveBeenCalledWith(
+      [expect.objectContaining({ op: 'layer', pageId: 'pg_1', patch: expect.objectContaining({ kind: 'image', src: { path } }) })],
+      { undo: true, label: 'Add image object', onFailed: expect.any(Function) }
+    ));
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
+  it('does not select or announce a placed object when its save is rejected', async () => {
+    const doc = makeSampleDoc();
+    doc.refInbox = [{ path: `u/user/p/${doc.id}/ref/sticker.webp`, name: 'Toolbox', source: 'upload', at: 1 }];
+    const { studio } = open('pg_1', doc);
+    vi.mocked(studio.patch).mockImplementation(async (_ops, opts) => opts?.onFailed?.(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Place image' }));
+    await waitFor(() => {
+      expect(studio.patch).toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Place image' })).toBeEnabled();
+    });
+    expect(screen.queryByText(/Image placed/)).not.toBeInTheDocument();
+    expect(studio.setSelection).not.toHaveBeenCalled();
   });
 
   it('cannot edit a page that has no drawing yet', () => {

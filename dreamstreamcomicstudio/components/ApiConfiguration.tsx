@@ -28,7 +28,7 @@ import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpSe
 import type { McpServerConfig } from '../apiTypes';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { useAuth } from '../contexts/AuthContext';
-import { reconcileProviderMirror, syncByokKeyToServer } from '../services/byokSync';
+import { reconcileProviderMirror } from '../services/byokSync';
 import {
   USAGE_EXHAUSTED_COPY,
   fetchAllowanceStatus,
@@ -234,7 +234,12 @@ const UsageMeter: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null }> = ({ 
 
 // ── A single key row ──────────────────────────────────────────────────────────
 
-const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: () => void }> = ({ k, fundsUrl, onChange }) => {
+const KeyRow: React.FC<{
+  k: ManagedApiKey;
+  fundsUrl?: string | null;
+  onChange: () => void;
+  onActiveKeyChange: () => void;
+}> = ({ k, fundsUrl, onChange, onActiveKeyChange }) => {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(k.label);
   const [limit, setLimit] = useState(k.limitUsd != null ? String(k.limitUsd) : '');
@@ -263,11 +268,23 @@ const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: (
     onChange();
   };
 
+  const activate = () => {
+    setActiveKey(k.id);
+    onActiveKeyChange();
+  };
+
+  const remove = () => {
+    if (!confirm(`Delete "${k.label}"?`)) return;
+    deleteKey(k.id);
+    if (k.active) onActiveKeyChange();
+    else onChange();
+  };
+
   return (
     <div className={`${HAIRLINE} rounded-xl p-3 ${k.active ? `${ACCENT_SOFT_BG} border-[#D97757]/30` : 'bg-[var(--ds-surface-soft)]'}`}>
       <div className="flex items-start gap-3">
         <button
-          onClick={() => { setActiveKey(k.id); void reconcileProviderMirror(k.provider); onChange(); }}
+          onClick={activate}
           title={k.active ? 'Active key' : 'Set as active'}
           className={`mt-0.5 w-5 h-5 shrink-0 rounded-full border flex items-center justify-center ${TRANSITION} ${k.active ? `${ACCENT_BG} border-transparent text-white` : 'border-[var(--ds-hairline)] bg-[var(--ds-surface)]'}`}
         >
@@ -319,7 +336,7 @@ const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: (
             <>
               <button onClick={verify} disabled={checking} title="Verify key is valid" className={`${CONTROL_BTN} p-1.5 disabled:opacity-40`}><RefreshCw className={`w-3.5 h-3.5 ${checking ? 'animate-spin' : ''}`} /></button>
               <button onClick={() => setEditing(true)} title="Edit label / limit" className={`${CONTROL_BTN} p-1.5`}><Pencil className="w-3.5 h-3.5" /></button>
-              <button onClick={() => { if (confirm(`Delete "${k.label}"?`)) { deleteKey(k.id); void reconcileProviderMirror(k.provider); onChange(); } }} title="Delete key" className={`${CONTROL_BTN} p-1.5 text-red-500 hover:text-red-600`}><Trash2 className="w-3.5 h-3.5" /></button>
+              <button onClick={remove} title="Delete key" className={`${CONTROL_BTN} p-1.5 text-red-500 hover:text-red-600`}><Trash2 className="w-3.5 h-3.5" /></button>
             </>
           )}
         </div>
@@ -328,18 +345,17 @@ const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: (
   );
 };
 
-const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> = ({ provider, onChange }) => {
-  const { user } = useAuth();
+const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void; onActiveKeyChange: () => void }> = ({ provider, onChange, onActiveKeyChange }) => {
   const [label, setLabel] = useState('');
   const [key, setKey] = useState('');
   const [limit, setLimit] = useState('');
 
-  const add = async () => {
+  const add = () => {
     if (!key.trim()) return;
-    addKey({ provider, label, key, limitUsd: limit.trim() ? Number(limit) : null });
-    if (user) await syncByokKeyToServer(provider, key.trim());
+    const added = addKey({ provider, label, key, limitUsd: limit.trim() ? Number(limit) : null });
     setLabel(''); setKey(''); setLimit('');
-    onChange();
+    if (added.active) onActiveKeyChange();
+    else onChange();
   };
 
   // Gentle, non-blocking format hint: most providers' keys carry a known prefix.
@@ -354,7 +370,7 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
       </div>
       <div className="flex gap-2">
         <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key${prefix ? ` (${prefix}…)` : ''}`} className={`${INPUT} font-mono ${prefixMismatch ? 'border-amber-500' : ''}`} />
-        <PrimaryBtn onClick={() => void add()} disabled={!key.trim()}><Plus className="w-3.5 h-3.5" /> Add</PrimaryBtn>
+        <PrimaryBtn onClick={add} disabled={!key.trim()}><Plus className="w-3.5 h-3.5" /> Add</PrimaryBtn>
       </div>
       {prefixMismatch && (
         <p className="text-[11px] text-amber-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> Most {PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span> — double-check you pasted the right one.</p>
@@ -518,6 +534,8 @@ const ProviderCard: React.FC<{
   onToggleOpen: () => void;
   onChange: () => void;
 }> = ({ provider, keys, count, open, onToggleOpen, onChange }) => {
+  const { user } = useAuth();
+  const [syncStatus, setSyncStatus] = useState<'syncing' | 'failed' | null>(null);
   const meta = PROVIDER_META[provider];
   const def = getProviderDef(provider);
   const accountMeta = getAccountKeyMeta();
@@ -526,6 +544,19 @@ const ProviderCard: React.FC<{
   const active = providerKeys.find((k) => k.active);
   const hasKey = providerKeys.length > 0 || accountMeta.some((m) => m.provider === provider);
   const overLimit = active ? isOverLimit(active) : false;
+
+  const syncActiveKey = async () => {
+    if (!user) return;
+    setSyncStatus('syncing');
+    const result = await reconcileProviderMirror(user.id, provider);
+    setSyncStatus(result === 'failed' ? 'failed' : null);
+    onChange();
+  };
+
+  const onActiveKeyChange = () => {
+    onChange();
+    void syncActiveKey();
+  };
 
   // Status pill: Off (governance) | No key (greyed) | Limit reached | Connected.
   const status: { label: string; cls: string } = !enabled
@@ -590,8 +621,15 @@ const ProviderCard: React.FC<{
               Add a {meta.label} key to unlock its models. {def?.freeTier ? 'This provider has a free tier.' : 'Usage is billed to your key.'}
             </div>
           )}
-          {providerKeys.map((k) => <KeyRow key={k.id} k={k} fundsUrl={def?.fundsUrl} onChange={onChange} />)}
-          <AddKeyForm provider={provider} onChange={onChange} />
+          {providerKeys.map((k) => <KeyRow key={k.id} k={k} fundsUrl={def?.fundsUrl} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />)}
+          <AddKeyForm provider={provider} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />
+          {syncStatus === 'syncing' && <p role="status" className={`text-xs ${MUTED}`}>Syncing the active key to your account…</p>}
+          {syncStatus === 'failed' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p role="status" className={`text-xs ${MUTED}`}>This device is updated. Your account key could not sync.</p>
+              <button type="button" onClick={() => void syncActiveKey()} className={`text-xs underline ${INK}`}>Retry sync</button>
+            </div>
+          )}
         </div>
       )}
     </div>

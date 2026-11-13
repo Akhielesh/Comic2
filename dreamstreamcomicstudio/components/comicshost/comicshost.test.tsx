@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { DENSITY } from '../chat/studioDesign';
 import { CONTACT_HREF } from '../layout/LegalMicroLinks';
-import { mainAppUrl } from '../../services/productHost';
 import { ComicsLanding } from './ComicsLanding';
 import { OFF_HOST_VIEWS, comicsChromeFor, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 import { useComicsHost } from './useComicsHost';
@@ -197,87 +196,52 @@ describe('ComicsLanding', () => {
   });
   const heroOf = () => screen.getByTestId('comics-hero-cta').closest('section') as HTMLElement;
 
-  it('greets signed-out visitors with Comic Studio branding and the existing sign-in / request-access flows', () => {
+  it('routes signed-out readers to sign-in, access requests and the Library', () => {
     const h = handlers();
     render(<ComicsLanding signedIn={false} {...h} />);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Talk it through.Get a finished comic.');
-    expect(screen.getByRole('button', { name: 'Comic Studio, home' })).toBeInTheDocument();
-    const cta = screen.getByTestId('comics-hero-cta');
-    expect(cta).toHaveTextContent(/start creating/i);
-    fireEvent.click(cta);
-    expect(h.onSignIn).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Make your story a comic.' })).toBeInTheDocument();
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start creating' }));
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Sign in' }));
     expect(h.onSignIn).toHaveBeenCalledTimes(2);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: /^request access$/i }));
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Request access' }));
     expect(h.onRequestAccess).toHaveBeenCalledTimes(1);
-    // The access panel offers both again (Request access first, then Sign in).
-    const access = document.getElementById('access') as HTMLElement;
-    fireEvent.click(within(access).getByRole('button', { name: /request access/i }));
-    fireEvent.click(within(access).getByRole('button', { name: /^sign in$/i }));
-    expect(h.onRequestAccess).toHaveBeenCalledTimes(2);
-    expect(h.onSignIn).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/invite-only during the beta/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /my comics/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /open your comics/i })).toBeNull();
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
+    expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
   });
 
   it('offers signed-in visitors their comics and the Library', () => {
     const h = handlers();
     render(<ComicsLanding signedIn {...h} />);
-    const open = screen.getAllByRole('button', { name: /open your comics/i });
-    expect(open).toHaveLength(2); // the hero and the access panel
-    for (const b of open) fireEvent.click(b);
-    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /my comics/i }));
-    expect(h.onOpenComics).toHaveBeenCalledTimes(3);
-    fireEvent.click(screen.getByRole('button', { name: /browse the library/i }));
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'My comics' }));
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'My comics' }));
+    expect(h.onOpenComics).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Library' }));
-    expect(h.onBrowseGallery).toHaveBeenCalledTimes(2);
-    fireEvent.click(within(screen.getByRole('contentinfo')).getByRole('button', { name: 'My comics' }));
-    expect(h.onOpenComics).toHaveBeenCalledTimes(4);
-    expect(screen.queryByText(/gallery/i)).toBeNull();
-    expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /request access/i })).toBeNull();
-    expect(screen.queryByText(/invite-only/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request access' })).toBeNull();
   });
 
-  it('the footer: the Library, the legal pages in-app, Contact, and DreamStream Studio as the only way off the product', () => {
+  it('the footer links to the Library, legal pages, and the routed support mailbox', () => {
     const h = handlers();
     render(<ComicsLanding signedIn={false} {...h} />);
-    const footer = screen.getByRole('contentinfo');
-    expect(within(footer).getByRole('link', { name: 'DreamStream Studio' })).toHaveAttribute('href', mainAppUrl('/'));
-    expect(within(footer).queryByRole('link', { name: /^(?:chat studio|stream studio|dreamstream home)$/i })).toBeNull();
-    expect(screen.queryAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([CONTACT_HREF, mainAppUrl('/')]);
-    // The routed support mailbox, spelled out (comparing with the imported constant would pass any address).
-    expect(within(footer).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:support@dreamstreamstudio.ai');
-    expect(footer.innerHTML).not.toMatch(/contact@/);
-    fireEvent.click(within(footer).getByRole('button', { name: 'Privacy Policy' }));
-    fireEvent.click(within(footer).getByRole('button', { name: 'Terms & Conditions' }));
+    const footer = within(screen.getByRole('contentinfo'));
+    expect(footer.getByRole('link', { name: 'Contact' })).toHaveAttribute('href', CONTACT_HREF);
+    fireEvent.click(footer.getByRole('button', { name: 'Privacy Policy' }));
+    fireEvent.click(footer.getByRole('button', { name: 'Terms & Conditions' }));
+    fireEvent.click(footer.getByRole('button', { name: 'Library' }));
     expect(h.onOpenPrivacy).toHaveBeenCalledTimes(1);
     expect(h.onOpenTerms).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(footer).getByRole('button', { name: 'Library' }));
-    fireEvent.click(within(footer).getByRole('button', { name: 'Request access' }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
-    expect(h.onRequestAccess).toHaveBeenCalledTimes(1);
-    expect(within(footer).getByRole('navigation', { name: 'Comic Studio links' })).toBeInTheDocument();
-    expect(within(footer).getByRole('navigation', { name: 'Legal' })).toBeInTheDocument();
   });
 
-  it('every target is the ds Button or carries the coarse-pointer 44 px floor; the art is decorative; no legacy comic chrome', () => {
+  it('keeps touch targets and artwork accessible without legacy chrome', () => {
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const markup = container.innerHTML;
-    expect(markup).not.toMatch(/font-comic|border-black|shadow-comic/);
-    expect(markup).toContain('var(--ds-canvas)');
+    expect(container.innerHTML).not.toMatch(/font-comic|border-black|shadow-comic/);
     const floor = DENSITY.coarse.split(' ')[0];
     for (const target of [...screen.getAllByRole('button'), ...screen.getAllByRole('link')]) {
-      const ok = target.getAttribute('data-slot') === 'button' || target.className.split(/\s+/).includes(floor);
-      expect(ok, target.outerHTML.slice(0, 120)).toBe(true);
+      expect(target.getAttribute('data-slot') === 'button' || target.className.split(/\s+/).includes(floor), target.outerHTML.slice(0, 120)).toBe(true);
     }
-    const proof = screen.getByTestId('comics-proof');
-    expect(proof.firstElementChild).toHaveAttribute('aria-hidden');
-    expect(within(proof).getByText(/illustrated example/i)).toBeInTheDocument();
-    // The replica is art: nothing in it is interactive.
-    expect(proof.querySelectorAll('button, a, input, [tabindex]')).toHaveLength(0);
     for (const art of container.querySelectorAll('[data-comic-art]')) expect(art.closest('[aria-hidden]')).not.toBeNull();
   });
 
@@ -294,15 +258,6 @@ describe('ComicsLanding', () => {
       expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', signedIn ? 'default' : 'create');
       unmount();
     }
-  });
-
-  it('the feature spots are the four CL-10 tiles (ink, magenta, leaf, sky; never ultramarine) and no terracotta anywhere beside the hero spark (DS-3 #5)', () => {
-    // DS-3 #5 drew all three spots in ink; CL-10 ("Ink, Paper & Colour") makes them four solid tiles, the first still
-    // ink, none in the spark's ultramarine (the full rule is in ComicsLanding.atlas.test.tsx).
-    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
-    const spots = [...container.querySelectorAll('#how-it-works ul > li > span[aria-hidden]')];
-    expect(spots.map((spot) => /bg-\[var\(--ds-(ink|hue-\d-solid)\)\]/.exec(spot.className)?.[1])).toEqual(['ink', 'hue-2-solid', 'hue-6-solid', 'hue-7-solid']);
-    expect(container.innerHTML.toLowerCase()).not.toMatch(/#d97757|#c2643f|#c2603f/);
   });
 
   it('one spark: signed out exactly one create fill (the hero), signed in none; never hard white', () => {

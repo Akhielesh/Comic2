@@ -12,6 +12,17 @@
   } catch (e) {
     pref = 'light';
   }
+  try {
+    var host = window.location.hostname.toLowerCase().replace(/\.$/, '');
+    if (
+      (host === 'comics.dreamstreamstudio.ai' || host === 'comic.dreamstreamstudio.ai') &&
+      window.localStorage.getItem('ds.comic-theme.v1') === 'paper'
+    ) {
+      document.documentElement.setAttribute('data-comic-theme', 'paper');
+    }
+  } catch (e) {
+    /* Atlas is the default when storage is unavailable. */
+  }
   var dark = pref === 'dark';
   if (pref === 'system') {
     try {

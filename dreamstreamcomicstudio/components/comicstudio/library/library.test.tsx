@@ -122,11 +122,10 @@ describe('useComicLibrary', () => {
 });
 
 describe('LibraryImage', () => {
-  it('renders only the fallback when the asset is not published (or the API is down)', async () => {
+  it('uses bundled art for a curated style when the library is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('x', { status: 503 })));
-    render(<LibraryImage id="style.noir-ink" fallback={<span>procedural</span>} />);
-    expect(screen.getByText('procedural')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('img')).not.toBeInTheDocument());
+    const { container } = render(<LibraryImage id="style.noir-ink" fallback={<span>procedural</span>} />);
+    await waitFor(() => expect(container.querySelector('img')).toHaveAttribute('src', '/assets/comic-sample/noir-ink-thumb.webp'));
   });
 
   it('fades the image in over its fallback, with srcset and size; drops back on error', async () => {
@@ -149,6 +148,9 @@ describe('LibraryImage', () => {
     act(() => {
       fireEvent.error(img);
     });
+    const bundled = container.querySelector('img[src$="/noir-ink-thumb.webp"]')!;
+    expect(bundled).toBeInTheDocument();
+    fireEvent.error(bundled);
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByText('procedural')).toBeInTheDocument();
   });
@@ -171,7 +173,8 @@ describe('StylePresetsCard', () => {
     expect(radios[0]).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(radios[0]);
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'use_preset', presetId: 'watercolor-storybook' }));
-    expect(document.querySelectorAll('[data-preset-thumb]')).toHaveLength(2);
+    await waitFor(() => expect(document.querySelector('img[src$="/watercolor-storybook-thumb.webp"]')).toBeInTheDocument());
+    expect(document.querySelector('[data-preset-thumb="cartoon-strip"]')).toBeInTheDocument();
   });
 
   it('is one tab stop: arrow keys move between styles without picking, Enter picks', async () => {

@@ -1,0 +1,28 @@
+/* A landscape phone can show the cover and reading controls together. Portrait keeps the full cover stack. */
+@media (orientation: landscape) and (min-width: 34rem) and (max-height: 32rem) {
+  .reader-cover-card .reader-cover-card-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+    max-width: 42rem;
+    column-gap: clamp(1rem, 5vw, 3rem);
+  }
+
+  .reader-cover-card .reader-cover-card-art {
+    justify-self: center;
+  }
+
+  .reader-cover-card .reader-cover-card-details {
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .reader-cover-card .reader-cover-card-summary {
+    align-items: flex-start;
+    text-align: start;
+  }
+
+  .reader-cover-card .reader-cover-card-meta,
+  .reader-cover-card .reader-cover-card-actions {
+    justify-content: flex-start;
+  }
+}

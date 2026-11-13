@@ -198,6 +198,7 @@ export interface ShareHeadContext {
   lang?: string;
   page?: number;
   embed?: boolean;
+  guided?: boolean;
 }
 
 /** The language this view renders in: the requested one if published, else the default. */
@@ -272,7 +273,9 @@ export function renderShareHead(rpc: ShareCardRpc, ctx: ShareHeadContext): strin
   out.push(
     `<link rel="alternate" type="application/json+oembed" href="${escAttr(`${ctx.origin.replace(/\/+$/, '')}/api/comic/oembed?url=${encodeURIComponent(comicShareUrl(rpc.slug))}&format=json`)}" title="${escAttr(title)}">`
   );
-  if (rpc.card.coverUrl) out.push(`<link rel="preload" as="image" href="${escAttr(rpc.card.coverUrl)}" fetchpriority="high">`);
+  const startPage = ctx.page ?? rpc.startPage;
+  const startsWithCover = startPage == null || startPage === 0 || (!ctx.embed && ctx.guided);
+  if (startsWithCover && rpc.card.coverUrl) out.push(`<link rel="preload" as="image" href="${escAttr(rpc.card.coverUrl)}" fetchpriority="high">`);
   const boot = {
     slug: rpc.slug,
     lang,

@@ -102,6 +102,8 @@ export interface PlaceArgs {
   keep?: 'pinned' | 'all';
   /** Only (re)place these lines (locked ones never move); every other stored balloon stays. */
   only?: readonly string[];
+  /** Keep earlier preview geometry while reading a page whose balloons were never saved. */
+  preservePreview?: boolean;
   /**
    * Lines lettered in whole words only: never narrower than their longest word (nor than their first width,
    * when even that splits one), even if that costs reading order or a clean spot (the planner's retry of a
@@ -395,6 +397,14 @@ const TEXT_COST = 2000;
 const COVER_AIM = 0.95;
 /** Weight of the client's busy-area cells (hands and action weigh 150, faces 400). */
 const GRID_BUSY_COST = 100;
+/** Prefer a clear side-by-side reading order over a closer aim at the speaker. */
+const DIALOGUE_ROW_COST = 12;
+
+/** Bubbles sharing a visible row should advance horizontally, even with staggered top edges. */
+const backwardsDialogueRow = (first: Box, second: Box, rtl: boolean): boolean => {
+  const vertical = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y);
+  return vertical > Math.min(first.h, second.h) / 4 && (rtl ? second.x > first.x : second.x < first.x);
+};
 
 /**
  * Coverage of a panel's picture by lettering outlines (density.ts units): Σ fill × area(outline ∩ panel) ÷ area(panel).
@@ -541,11 +551,13 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
      * Where the reader meets each kept line of this panel (its stored top-left), or undefined: a line this call
      * places, or a stored balloon the owner put in another panel (it says nothing about this panel's order).
      */
-    const anchors = lines.map((line): { x: number; y: number } | undefined => {
+    const anchors = lines.map((line): { text: Box; spoken: boolean } | undefined => {
       if (!isKept(line)) return undefined;
       const b = existing.get(line.id)!;
       const cx = b.x + b.w / 2;
-      return cx >= box.x && cx <= box.x + box.w && b.y >= box.y - GAP && b.y <= box.y + box.h ? { x: b.x, y: b.y } : undefined;
+      if (cx < box.x || cx > box.x + box.w || b.y < box.y - GAP || b.y > box.y + box.h) return undefined;
+      const h = sizeOf(args, line, b.w, langOf(line)).h;
+      return { text: { x: b.x, y: b.y, w: b.w, h }, spoken: SPOKEN.has(line.kind) };
     });
 
     /**
@@ -556,7 +568,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     const letterPanel = (compact: boolean): number => {
       let stuck = 0;
       let spokenSeen = 0;
-      let prevInPanel: { x: number; y: number } | undefined;
+      let prevInPanel: (typeof anchors)[number];
       lines.forEach((line, k) => {
         const lang = langOf(line);
         const spoken = SPOKEN.has(line.kind);
@@ -573,7 +585,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const prevAt = prevInPanel;
         const ahead = anchors
           .slice(k + 1)
-          .filter((a): a is { x: number; y: number } => !!a && (!prevAt || !readsBefore(a.x, a.y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE)));
+          .filter((a): a is NonNullable<typeof prevAt> => !!a && (!prevAt || !readsBefore(a.text.x, a.text.y, prevAt.text.x, prevAt.text.y, rtl, ROW_TOLERANCE)));
         const prior = existing.get(line.id);
         const head = spoken ? (args.heads || []).find((h) => h && h.panel === panel.n && !!line.speakerId && h.characterId === line.speakerId) : undefined;
         const headPt = head ? head.mouth ?? head.head : undefined;
@@ -640,9 +652,8 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           const outline: Box = { x: x + b.x, y: y + b.y, w: b.w, h: b.h };
           const text: Box = { x, y, w, h: size.h };
           let tip = spoken && size.tail !== false ? tailTip(text, box, headPt, faces, aspect, box.x + stageX * box.w) : null;
-          // A spilled balloon sits away from its panel: its tail points home but stays short, so it never
-          // reaches back across the balloons that filled the panel.
-          if (tip && spill) tip = shortenTail(text, tip, aspect, SPILL_TAIL_LEN);
+          // Keep long automatic tails pointing at their speaker without crossing much of the art.
+          if (tip && (spill || !args.preservePreview)) tip = shortenTail(text, tip, aspect, spill ? SPILL_TAIL_LEN : AUTO_TAIL_LEN);
           // The full gap (a hair more than the render-time settle asks for, so a rounded placement never
           // needs a nudge): what is clean here stays clean when drawn.
           const overlapOf = (t: { x: number; y: number } | null): number => {
@@ -676,8 +687,12 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           for (const a of other) otherHit += covered(outline, a);
           // Read in turn: after the previous line of the panel, and before every later line fixed in it — as
           // stored (rounded), so judged with a hair of margin.
-          let order = prevAt && mayReadBefore(x, y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE) ? 1 : 0;
-          for (const a of ahead) if (!surelyBefore(x, y, a.x, a.y, rtl, ROW_TOLERANCE)) order = 1;
+          let order = prevAt && mayReadBefore(x, y, prevAt.text.x, prevAt.text.y, rtl, ROW_TOLERANCE) ? 1 : 0;
+          for (const a of ahead) if (!surelyBefore(x, y, a.text.x, a.text.y, rtl, ROW_TOLERANCE)) order = 1;
+          const backwardsRow = !args.preservePreview && spoken && (
+            (prevAt?.spoken && backwardsDialogueRow(prevAt.text, text, rtl)) ||
+            ahead.some((a) => a.spoken && backwardsDialogueRow(text, a.text, rtl))
+          );
           const cx = x + w / 2;
           const dist = spill ? distToRegion(outline, box, aspect) : 0;
           let aim = 0;
@@ -694,6 +709,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
             // A spilled balloon stays as close to its panel as the page allows.
             300 * dist +
             40 * order +
+            (backwardsRow ? DIALOGUE_ROW_COST : 0) +
             bend +
             // The in-order fallback may reach into the panel's inner padding (never past the panel or the safe area).
             (bendable && outside(outline, region) > 1e-6 ? 6 : 0) +
@@ -814,7 +830,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
               // Just above the row of each later line fixed in the panel (read before it): the grid's rows can
               // straddle that row's edge, and a spot on the edge is not read in turn.
               for (const a of ahead) {
-                const y = a.y - ROW_TOLERANCE - 2 * ORDER_MARGIN;
+                const y = a.text.y - ROW_TOLERANCE - 2 * ORDER_MARGIN;
                 if (y < yLo) continue;
                 for (const x of xs) flush.push({ x, y: Math.min(y, yHi), bias: 0 });
               }
@@ -946,7 +962,9 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           balloon.tailX = round4(pick.tip.x);
           balloon.tailY = round4(pick.tip.y);
         } else if (spoken) {
-          const tip = tailTip({ x: pick.x, y: pick.y, w: pick.w, h: pick.h }, box, headPt, faces, aspect, box.x + stageX * box.w);
+          const text = { x: pick.x, y: pick.y, w: pick.w, h: pick.h };
+          const aim = tailTip(text, box, headPt, faces, aspect, box.x + stageX * box.w);
+          const tip = args.preservePreview ? aim : shortenTail(text, aim, aspect, pick.spill ? SPILL_TAIL_LEN : AUTO_TAIL_LEN);
           balloon.tailX = round4(tip.x);
           balloon.tailY = round4(tip.y);
         }
@@ -966,7 +984,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           text: { x: pick.x, y: pick.y, w: pick.w, h: pick.h },
           fill
         });
-        prevInPanel = { x: balloon.x, y: balloon.y };
+        prevInPanel = { text: { x: balloon.x, y: balloon.y, w: balloon.w, h: pick.h }, spoken };
       });
       return stuck;
     };
@@ -1063,6 +1081,8 @@ export const ROW_TOLERANCE = 0.02;
 
 /** Longest tail (page widths) a balloon that spilled out of its panel draws toward it. */
 const SPILL_TAIL_LEN = 0.09;
+/** A tail aimed within its own panel can reach farther without spanning the artwork. */
+const AUTO_TAIL_LEN = 0.16;
 
 /** Pull a tail tip toward its box so the visible tail is at most `maxLen` page widths long. */
 const shortenTail = (r: Box, tip: { x: number; y: number }, aspect: number, maxLen: number): { x: number; y: number } => {

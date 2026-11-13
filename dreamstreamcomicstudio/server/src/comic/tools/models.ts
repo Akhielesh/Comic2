@@ -265,8 +265,8 @@ const reachableRoutes = (spec: ImageModelSpec, keys: StudioKeys): { route: Image
 const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9.]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 const MODEL_ALIASES: [RegExp, string][] = [
-  [/\bflare\b/, 'gpt-image-2.5-flare'],
-  [/\b(?:gpt|openai|chatgpt|dall ?e|sunburst)\b/, 'gpt-image-2.5'],
+  [/\bflare\b/, 'gpt-image-2.6-flare'],
+  [/\b(?:gpt|openai|chatgpt|sunburst)\b/, 'gpt-image-2.6-sunburst'],
   [/\b(?:seedream|bytedance)\b/, 'seedream-5-pro'],
   [/\bflux\b/, 'flux-3'],
   [/\b(?:nano ?banana|gemini|banana)\b.*\bpro\b|\bpro\b.*\b(?:nano ?banana|gemini)\b/, 'nano-banana-pro'],
@@ -288,6 +288,13 @@ export const resolveModelName = (raw: unknown): ImageModelSpec | undefined => {
       const n = normName(name);
       if (n && q.includes(` ${n} `)) return m;
     }
+  }
+  const version = /\b(?:chat)?gpt (?:image )?(\d+(?:\.\d+)?)\b/.exec(q)?.[1];
+  if (version) {
+    const flare = /\bflare\b/.test(q);
+    if (version === '2.5') return getImageModel(flare ? 'gpt-image-2.5-flare' : 'gpt-image-2.5');
+    if (version === '2.6') return getImageModel(flare ? 'gpt-image-2.6-flare' : 'gpt-image-2.6-sunburst');
+    return undefined;
   }
   for (const [re, id] of MODEL_ALIASES) if (re.test(q)) return getImageModel(id);
   return undefined;

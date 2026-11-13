@@ -15,6 +15,7 @@ import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { COMIC_STUDIO_SKIN } from '../../../services/productHost';
+import { useComicTheme } from '../useComicTheme';
 import { Z } from '../../chat/studioDesign';
 import { ExportError } from '../export/errors';
 import type { PdfExportResult } from '../export/pdfExport';
@@ -224,6 +225,7 @@ const pageNOfView = (views: BookView[], items: ReaderItem[], view: number): numb
 
 export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   const { doc, urlFor, language, endCard, onExit, allowDownload = true, onDownload } = props;
+  const { theme } = useComicTheme();
   // ── Document ──────────────────────────────────────────────────────────────
   // Keyed on the language CODE: hosts pass the slot as an inline object, and a new object on every host
   // render must not re-localize the book (new items → new views → every page re-rendered mid-turn).
@@ -878,6 +880,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       // Portaled to <body>, so the reader carries the Atlas skin attribute itself: its chrome (HUD,
       // sheets, end card) follows the skin while the room stays a content surface (--ds-reader-*).
       data-ds-skin={COMIC_STUDIO_SKIN}
+      data-comic-theme={theme}
       // The reader's own token set (readerDesigns.css): motion, ink on paper, and the room's accent / focus.
       data-reader-root=""
       className={cx('gesture-root fixed inset-0 overflow-hidden text-white outline-none', Z.reader, fullscreenCursorHidden && 'cursor-none')}

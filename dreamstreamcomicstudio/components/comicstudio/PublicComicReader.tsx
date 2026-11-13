@@ -25,6 +25,7 @@ import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo } from '
 import { canServeToOwner, isContentRating, type ContentRating } from '../../shared/comic/safety';
 import { languageSpec, sameLanguage } from '../../shared/comic/languages';
 import { COMIC_STUDIO_SKIN, COMICS_ORIGIN } from '../../services/productHost';
+import { useComicTheme } from './useComicTheme';
 import { CANVAS_BG } from '../chat/studioDesign';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
@@ -33,6 +34,8 @@ import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
 import { nextLanguage, readStoredReaderLang, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
+import { connectionHints, pageImageCache } from './immersive/pageImageCache';
+import { slotStandIn } from './immersive/ReaderSlot';
 import { ExportError } from './export/errors';
 import { publicExportLanguage, publicExportLanguages } from './export/publicLanguages';
 import { EmptyArt } from './library/procedural/EmptyArt';
@@ -40,7 +43,7 @@ import { useFormFactor } from './mobile/useFormFactor';
 import { ComicReaderView, ReaderMenu, type ReaderMenuItem } from './reader/ComicReaderView';
 import { ReaderCoverCard } from './reader/ReaderCoverCard';
 import { readerStartFromSearch, type PublicReaderStart } from './reader/publicComicRoute';
-import { readerItems } from './reader/readerModel';
+import { readerItems, resolvePageN } from './reader/readerModel';
 import { RatingBadge } from './safety/RatingBadge';
 import { ReportDialog } from './safety/ReportDialog';
 import { ShareButton } from './share/ShareButton';
@@ -172,6 +175,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   track
 }) => {
   const ff = useFormFactor();
+  const { theme } = useComicTheme();
   const urlFor = useMemo(() => urlForMap(urls), [urls]);
   const published = mode === 'slug' ? publication?.languages : undefined;
   // A share link without ?lang= means the author's default edition (buildShareUrl drops lang when it
@@ -197,6 +201,21 @@ const ReaderShell: React.FC<ShellProps> = ({
   const [page, setPage] = useState(0);
   const [reportOpen, setReportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const warmedPage = useRef<string | undefined>(undefined);
+
+  // Warm one small image before the reader opens. The page's slot reuses this decoded entry.
+  // Wait for the current cover to load first, and skip speculative traffic on metered or slow links.
+  const warmFirstPage = useCallback(() => {
+    if (mode !== 'slug' || view !== 'card' || status !== 'ready' || immersive || !localized || document.hidden) return;
+    const net = connectionHints();
+    if (net.saveData || net.slow) return;
+    const items = readerItems(localized);
+    const item = start.page ? items[resolvePageN(items, start.page).index] : items.find((entry) => entry.kind === 'page');
+    const src = item && slotStandIn(item, { urlFor });
+    if (!src || src.url === warmedPage.current) return;
+    warmedPage.current = src.url;
+    void pageImageCache.ensure(src.path, src.url, 'next');
+  }, [mode, view, status, immersive, localized, start.page, urlFor]);
 
   // ── Title ──
   const title = localized?.cover.title || localized?.brief.title || boot?.card.title || 'Comic';
@@ -373,8 +392,13 @@ const ReaderShell: React.FC<ShellProps> = ({
     }
   }, [shareUrl, onShareClick, title]);
 
-  const coverUrl = (doc && urlFor(doc.cover.render.asset)) || boot?.card.coverUrl;
-  const coverAspect = doc?.cover.render.asset?.w && doc.cover.render.asset.h ? doc.cover.render.asset.w / doc.cover.render.asset.h : parseAspect(boot?.card.aspect) ?? (doc ? aspectNumber(doc.format.pageAspect) : undefined);
+  // Keep the publication's preloaded cover variant after the snapshot arrives. Only try the
+  // original when the variant fails, so an ordinary share never downloads the cover twice.
+  const coverAsset = doc?.cover.render.asset;
+  const originalCoverUrl = coverAsset && urlFor(coverAsset);
+  const shareCoverUrl = mode === 'slug' ? publication?.card.coverUrl || boot?.card.coverUrl : undefined;
+  const coverUrl = shareCoverUrl || originalCoverUrl;
+  const coverAspect = coverAsset?.w && coverAsset.h ? coverAsset.w / coverAsset.h : parseAspect(boot?.card.aspect) ?? (doc ? aspectNumber(doc.format.pageAspect) : undefined);
   const pageCount = doc ? readerItems(doc).filter((i) => i.kind === 'page').length : boot?.card.pageCount;
   const rtl = doc?.format.readingDirection === 'rtl';
   const compact = ff.widthClass === 'compact';
@@ -502,6 +526,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           logline={logline}
           creator={boot?.card.creator}
           coverUrl={coverUrl}
+          fallbackCoverUrl={shareCoverUrl && originalCoverUrl !== shareCoverUrl ? originalCoverUrl : undefined}
           aspect={coverAspect}
           pageCount={pageCount}
           kindLabel={boot?.card.kindLabel}
@@ -509,6 +534,8 @@ const ReaderShell: React.FC<ShellProps> = ({
           rating={rating}
           themeColor={boot?.card.themeColor}
           loading={status !== 'ready'}
+          onCoverReady={warmFirstPage}
+          onReadingIntent={warmFirstPage}
           onRead={() => openImmersive(false)}
           onGuided={() => openImmersive(true)}
           onReadHere={() => setView('inline')}
@@ -585,6 +612,7 @@ const ReaderShell: React.FC<ShellProps> = ({
       // The public reader renders in the Atlas design language wherever it is mounted (the comics
       // host sets the same attribute on <html>; on the apex this root is the skin's boundary).
       data-ds-skin={COMIC_STUDIO_SKIN}
+      data-comic-theme={theme}
     >
       {header}
       <main

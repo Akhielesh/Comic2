@@ -647,6 +647,16 @@ describe('Images-API transport (api.openrouter === images)', () => {
   };
   const gptOk = () =>
     json({ model: 'openai/gpt-image-2.5-sunburst-2026-09-08', provider: 'OpenAI', data: [{ b64_json: 'R1BU', media_type: 'image/png' }], usage: { cost: 0.1646 } });
+  const tokenEndpoint = (rate = 0.00003, inputImageRate = 0.000008): OrImageEndpoint => ({
+    provider_name: 'OpenAI',
+    provider_tag: 'openai',
+    pricing: [
+      { billable: 'output_image', unit: 'token', cost_usd: rate },
+      { billable: 'input_image', unit: 'token', cost_usd: inputImageRate },
+      { billable: 'input_text', unit: 'token', cost_usd: 0.000005 }
+    ],
+    supported_parameters: { input_references: { max: 16 }, quality: { values: ['medium', 'high', 'max'] } }
+  });
 
   it('sends the model fixed (no models list), the pinned quality, allow_fallbacks between ITS endpoints only up to the quote, and ≤ min(OpenRouter, vendor) references', async () => {
     const { generate, bodyOf, lookups } = imagesSetup([endpoint('OpenAI', 0.2107), endpoint('Azure', 0.31)], [gptOk()]);
@@ -676,6 +686,53 @@ describe('Images-API transport (api.openrouter === images)', () => {
     expect(planImagesApi(imagesPro, [studio], '2K', 0.1)).toEqual({ refuse: 'no provider serves 2K at the quoted price', referenceCap: 14 });
     // No endpoint lists the resolution at all.
     expect(planImagesApi(imagesPro, [vertex], '4K', 1)).toEqual({ refuse: 'no provider serves 4K for it', referenceCap: imagesPro.refs.total });
+  });
+
+  it.each(['sunburst', 'flare'])('routes GPT Image 2.6 %s raster edits with their original page first', async (variant) => {
+    const spec = getImageModel(`gpt-image-2.6-${variant}`)!;
+    const { generate, fetchMock, bodyOf } = imagesSetup([tokenEndpoint()], [
+      json({ model: `openai/gpt-image-2.6-${variant}-20261104`, provider: 'OpenAI', data: [{ b64_json: 'R1BU' }], usage: { cost: 0.061 } })
+    ]);
+    const annotated = 'data:image/png;base64,YW5ub3RhdGlvbg==';
+    const result = await generate({
+      ...baseReq({
+        spec,
+        resolution: '1K',
+        prompt: 'Add a small compass to the marked area. Keep the rest of the page the same.',
+        references: [ref('CURRENT PAGE'), ref('MARKED REGION', annotated)]
+      }),
+      maxUsd: 0.0527
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toMatch(/\/images$/);
+    expect(bodyOf(0)).toEqual({
+      model: `openai/gpt-image-2.6-${variant}`,
+      prompt: 'Add a small compass to the marked area. Keep the rest of the page the same.',
+      aspect_ratio: '2:3',
+      n: 1,
+      output_format: 'png',
+      quality: 'high',
+      provider: { allow_fallbacks: true, only: ['openai'] },
+      input_references: [{ type: 'image_url', image_url: { url: PNG } }, { type: 'image_url', image_url: { url: annotated } }]
+    });
+    expect(result).toMatchObject({ costUsd: 0.061, providerName: 'OpenAI', modelVersion: `openai/gpt-image-2.6-${variant}-20261104` });
+  });
+
+  it('makes no 2.6 call if pricing is missing or input or output rates exceed their limits', async () => {
+    const spec = getImageModel('gpt-image-2.6-sunburst')!;
+    const missingInput = tokenEndpoint();
+    missingInput.pricing = missingInput.pricing!.filter((line) => line.billable !== 'input_text');
+    for (const endpoints of [null, [missingInput], [tokenEndpoint(0.00004)], [tokenEndpoint(0.00003, 0.000009)]]) {
+      const { generate, fetchMock } = imagesSetup(endpoints, []);
+      const error = await generate({ ...baseReq({ spec, resolution: '1K' }), maxUsd: 0.0527 }).catch((err) => err);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(error).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false, spentUsd: 0 });
+    }
+  });
+
+  it('prices the legacy GPT Image 2.5 token endpoint without allowing a rate increase', () => {
+    expect(planImagesApi(GPT, [tokenEndpoint()], undefined, 0.2107)).toEqual({ only: ['openai'], referenceCap: 16 });
+    expect(planImagesApi(GPT, [tokenEndpoint(0.00004)], undefined, 0.2107).refuse).toBeTruthy();
   });
 
   it('endpoint data but none within the quote: NO call, a classified non-retryable refusal with the H reason', async () => {

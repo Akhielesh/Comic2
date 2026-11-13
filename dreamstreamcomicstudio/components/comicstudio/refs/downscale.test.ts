@@ -1,11 +1,12 @@
 // refs.md §9 client: prepareImageFile — sha256 of the ORIGINAL bytes, downscale ≤ 2048, never larger
 // than the original, a 15 MB phone JPEG is accepted (regression: the composer rejected > 10 MB BEFORE
-// shrinking), > 40 MB / SVG / too-small refused with friendly copy, HEIC decode failure is honest.
+// shrinking), > 40 MB / unsafe SVG / too-small refused with friendly copy, HEIC decode failure is honest.
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { REF_LIMITS } from '../../../shared/comic/refs';
 import { HEIC_HELP, ftypKind, isHeicFile } from './heic';
 import { ACCEPT_ATTR, PrepareError, fitEdge, prepareImageFile, quickReject, sha256Hex16, type DecodedImage, type PrepareDeps } from './downscale';
+import { MAX_SVG_BYTES } from './staticSvg';
 
 const JPEG_HEAD = [0xff, 0xd8, 0xff, 0xe0];
 const bytesOf = (size: number, head: number[] = JPEG_HEAD): Uint8Array => {
@@ -56,10 +57,10 @@ describe('prepareImageFile', () => {
     expect(out.mimeType).toBe('image/jpeg');
   });
 
-  it('refuses honestly: over 40 MB, SVG/HTML, empty, too small, undecodable', async () => {
+  it('refuses honestly: over 40 MB, invalid SVG/HTML, empty, too small, undecodable', async () => {
     const big = fileOf(REF_LIMITS.maxSourceBytes + 1, 'huge.jpg', 'image/jpeg');
     await expect(prepareImageFile(big, deps(9000, 9000))).rejects.toMatchObject({ code: 'too_big', message: 'That photo is over 40 MB — choose a smaller one.' });
-    await expect(prepareImageFile(new File(['<svg/>'], 'x.svg', { type: 'image/svg+xml' }), deps(10, 10))).rejects.toMatchObject({ code: 'type' });
+    await expect(prepareImageFile(new File(['<svg/>'], 'x.svg', { type: 'image/svg+xml' }), deps(10, 10))).rejects.toMatchObject({ code: 'svg' });
     await expect(prepareImageFile(new File(['<html>'], 'x.html', { type: 'text/html' }), deps(10, 10))).rejects.toMatchObject({ code: 'type' });
     await expect(prepareImageFile(new File([], 'empty.jpg', { type: 'image/jpeg' }), deps(10, 10))).rejects.toMatchObject({ code: 'empty' });
     await expect(prepareImageFile(fileOf(5000, 'icon.png', 'image/png'), deps(100, 64))).rejects.toMatchObject({ code: 'too_small', message: expect.stringMatching(/under 128 px/) });
@@ -70,8 +71,20 @@ describe('prepareImageFile', () => {
   it('GIF and AVIF are accepted (first frame / decoded by the browser)', async () => {
     await expect(prepareImageFile(fileOf(3_000_000, 'cat.gif', 'image/gif', [0x47, 0x49, 0x46, 0x38]), deps(500, 400))).resolves.toMatchObject({ w: 500, h: 400 });
     await expect(prepareImageFile(fileOf(3_000_000, 'cat.avif', 'image/avif'), deps(3000, 2000))).resolves.toMatchObject({ w: 2048, h: 1365 });
-    expect(ACCEPT_ATTR.split(',')).toEqual(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']);
+    expect(ACCEPT_ATTR.split(',')).toEqual(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/svg+xml', '.svg']);
     expect(ACCEPT_ATTR).not.toMatch(/heic/);
+  });
+
+  it('decodes a bounded SVG image and uses PNG when WebP is unavailable to preserve transparency', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16"><rect width="16" height="16" fill="#c00"/></svg>';
+    const file = new File([svg], 'sticker.SVG', { type: 'application/octet-stream' });
+    const d = deps(2048, 1024);
+    d.encode.mockImplementationOnce(async () => null);
+    const out = await prepareImageFile(file, d);
+    expect(out).toMatchObject({ mimeType: 'image/png', w: 2048, h: 1024, sourceBytes: file.size, hash: createHash('sha256').update(svg).digest('hex').slice(0, 16) });
+    expect(out.blob).not.toBe(file);
+    expect(d.decode).toHaveBeenCalledWith(expect.objectContaining({ type: 'image/svg+xml' }));
+    expect(d.encode.mock.calls.map(([, , , type]) => type)).toEqual(['image/webp', 'image/png']);
   });
 });
 
@@ -104,7 +117,8 @@ describe('helpers', () => {
   });
 
   it('quickReject pre-checks without decoding', async () => {
-    expect(await quickReject(fileOf(10, 'x.svg', 'image/svg+xml'))).toMatch(/JPG, PNG/);
+    expect(await quickReject(fileOf(10, 'x.svg', 'image/svg+xml'))).toBeNull();
+    expect(await quickReject(fileOf(MAX_SVG_BYTES + 1, 'x.svg', 'image/svg+xml'))).toMatch(/over 1 MB/);
     expect(await quickReject(fileOf(REF_LIMITS.maxSourceBytes + 1, 'big.jpg', 'image/jpeg'))).toMatch(/over 40 MB/);
     expect(await quickReject(fileOf(10, 'ok.jpg', 'image/jpeg'))).toBeNull();
   });

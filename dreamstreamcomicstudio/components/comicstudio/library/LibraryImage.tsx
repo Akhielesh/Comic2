@@ -1,13 +1,13 @@
 // A platform library image with a procedural fallback (contract §13.3, assets.md §6; owner P1-LIBRARY).
 //
-// Three tiers, never blank: the published library image when there is one, else the caller's
-// procedural art (PresetThumb, EmptyArt, …), which itself sits on the preset's CSS gradient.
+// Published previews take priority. Curated presets can use bundled artwork when the published
+// preview is missing or fails. Other assets use the caller's procedural art.
 // While the image loads and decodes the fallback stays visible underneath; only once the picture is
 // decoded (components/ds/useImageReveal) does it fade in over it (opacity, plus a 2 % settle on fine
 // pointers; none under reduced motion, none for a picture the browser already holds), and when that
 // entrance has finished the fallback is unmounted, freeing its SVG filters (styles.md §7.3 M12). No
 // layout shift: the row's w/h are set, the box is the caller's (and it keeps its size once the
-// fallback is gone). On error, or when the asset isn't published, only the fallback renders.
+// fallback is gone). The procedural fallback remains available when bundled art fails.
 // An asset with an LQIP (asset.lqip: a ~300-byte blurred WebP, already sanitized by useComicLibrary;
 // P3-ST2) paints it over the fallback and behind the picture until the picture is in, so the box
 // shows the real colours from the first frame. It is a static background, never a CSS filter or an
@@ -23,6 +23,7 @@ import {
   useImageReveal
 } from '../../ds/useImageReveal';
 import { useComicLibrary } from './useComicLibrary';
+import { bundledStylePreview } from './sampleArt';
 
 export interface LibraryImageProps {
   /** Library id, e.g. "style.watercolor-storybook". */
@@ -35,6 +36,24 @@ export interface LibraryImageProps {
 }
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+
+function BundledPreview({ src, alt, className, fallback }: Pick<LibraryImageProps, 'alt' | 'className' | 'fallback'> & { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <>{fallback}</>;
+
+  return (
+    <img
+      src={src}
+      alt={alt ?? ''}
+      width={480}
+      height={240}
+      loading="lazy"
+      decoding="async"
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback, className, alt }) => {
   const library = useComicLibrary();
@@ -82,7 +101,12 @@ export const LibraryImage: React.FC<LibraryImageProps> = ({ id, sizes, fallback,
     // fromCache and reduced are read once, when the picture is revealed: a later change never replays it.
   }, [revealed, key]);
 
-  if (!asset || reveal.phase === 'error') return <>{fallback}</>;
+  if (!asset && (library.status === 'idle' || library.status === 'loading')) return <>{fallback}</>;
+
+  if (!asset || reveal.phase === 'error') {
+    const bundled = bundledStylePreview(id);
+    return bundled ? <BundledPreview key={bundled} src={bundled} alt={alt} className={className} fallback={fallback} /> : <>{fallback}</>;
+  }
 
   const srcSet = [
     asset.thumbs[320] ? `${asset.thumbs[320]} 320w` : '',

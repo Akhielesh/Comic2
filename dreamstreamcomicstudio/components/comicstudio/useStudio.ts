@@ -756,7 +756,10 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   /** User content edit (contract §13.1): undoable unless `undo: false`; drags/scrubs coalesce by key. */
   const patch = useCallback(
     (ops: DocOp[], opts: PatchOptions = {}): Promise<void> =>
-      enqueuePatch(ops, { record: opts?.undo === false ? null : { label: opts?.label, coalesce: opts?.coalesce } }),
+      enqueuePatch(ops, {
+        record: opts?.undo === false ? null : { label: opts?.label, coalesce: opts?.coalesce },
+        onFailed: opts?.onFailed
+      }),
     [enqueuePatch]
   );
 

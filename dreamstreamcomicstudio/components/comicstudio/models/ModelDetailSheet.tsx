@@ -136,6 +136,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
           <p className={MUTED}>{PRICE_UNPUBLISHED}</p>
         )}
         {typeof data?.perRefUsd === 'number' && <p className={MUTED}>Each reference image adds {cost.badge(data.perRefUsd * markup)}.</p>}
+        {spec?.outputTokenEstimate !== undefined && <p className={MUTED}>The estimate covers image output. Prompts and reference images are billed separately.</p>}
       </section>
 
       <section className={SECTION} aria-label="Providers">
@@ -205,7 +206,9 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
             <li className={ROW}>
               {holdsCharacters((facts?.refs ?? spec?.refs)?.characters ?? 0)} · up to {(facts?.refs ?? spec?.refs)?.total ?? 0} reference images
             </li>
-            {(facts?.resolutions ?? spec?.resolutions) && (
+            {spec?.fixedResolution ? (
+              <li className={ROW}>Size: fixed {spec.fixedResolution} tier · PNG</li>
+            ) : (facts?.resolutions ?? spec?.resolutions) && (
               <li className={ROW}>Sizes: {(facts?.resolutions ?? spec!.resolutions).length ? (facts?.resolutions ?? spec!.resolutions).join(' · ') : 'one fixed size'}</li>
             )}
             <li className={ROW}>Page shapes: {(facts?.aspects ?? spec?.aspects ?? []).join(' · ')}</li>

@@ -114,7 +114,7 @@ export const imageEndpointLabel = (ep: OrImageEndpoint, all: OrImageEndpoint[]):
 };
 
 /** One endpoint's candidate price per resolution (models.md §4.3 mapping rules). */
-const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolution[], provider: string): Map<Resolution, Candidate> => {
+const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolution[], provider: string, spec?: ImageModelSpec): Map<Resolution, Candidate> => {
   const out = new Map<Resolution, Candidate>();
   const lines: OrPricingLine[] = Array.isArray(ep.pricing) ? ep.pricing : [];
   const outputs = lines.filter((l) => l && (l.billable === undefined || l.billable === 'output_image'));
@@ -172,6 +172,10 @@ const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolu
         const conflicted = modelId === 'google/gemini-nano-banana-2.1' && r === '4K';
         const source = conflicted ? GOOGLE_PRICING_PAGE_SOURCE : GOOGLE_TOKEN_TABLE_SOURCE;
         out.set(r, { provider, usd, basis: 'vendor_table', note: `${tokens} tokens × $${round4((tokenLine.cost_usd as number) * 1_000_000)}/M (${source})${conflicted ? ` · ${google4kConflictNote(usd)}` : ''}` });
+      } else if (r === '1K' && isFiniteNumber(spec?.outputTokenEstimate)) {
+        const estimate = spec.outputTokenEstimate;
+        const usd = round6(estimate * (tokenLine.cost_usd as number));
+        out.set(r, { provider, usd, basis: 'vendor_table', note: `Estimated ${estimate.toLocaleString('en-US')} output tokens at ${spec.fixedQuality} quality (OpenAI image calculator; input tokens billed separately)` });
       } else {
         out.set(r, { provider, usd: null, basis: 'openrouter_endpoint', note: PER_TOKEN_NOTE });
       }
@@ -223,7 +227,7 @@ export const mapEndpointPricing = (input: EndpointPricingInput): EndpointPricing
       const served = endpointResolutions(ep);
       return !served.length || served.includes(r);
     });
-    const candidates = serving.map((ep) => endpointCandidates(input.modelId, ep, wanted, imageEndpointLabel(ep, endpoints)).get(r)).filter((c): c is Candidate => !!c);
+    const candidates = serving.map((ep) => endpointCandidates(input.modelId, ep, wanted, imageEndpointLabel(ep, endpoints), input.spec).get(r)).filter((c): c is Candidate => !!c);
     const priced = candidates.filter((c) => isFiniteNumber(c.usd));
     if (priced.length) {
       priced.forEach((c) => providers.add(c.provider));

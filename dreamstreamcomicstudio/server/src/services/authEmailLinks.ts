@@ -152,7 +152,6 @@ const MAIN_HANDOFF_VIEWS = new Set([
   'gallery',
   'models',
   'learn',
-  'how-it-works',
   'privacy',
   'terms'
 ]);
@@ -165,6 +164,7 @@ export const parseMainHandoffPath = (value: unknown): string | null => {
   if (value === undefined || value === null || value === '') return '/';
   if (typeof value !== 'string' || value.length > 64) return null;
   if (value === '/' || value === '/models') return value;
+  if (value === '/?view=how-it-works') return '/';
   const m = /^\/\?view=([a-z][a-z-]{0,23})$/.exec(value);
   return m && MAIN_HANDOFF_VIEWS.has(m[1]) ? value : null;
 };

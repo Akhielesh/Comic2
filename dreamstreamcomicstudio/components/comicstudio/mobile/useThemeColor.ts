@@ -36,11 +36,11 @@ export function useThemeColor(color?: string, enabled = true): void {
       for (const m of metas) m.setAttribute('content', value);
     };
     apply();
-    // The app toggles `dark` on <html>; re-read the canvas when it flips.
+    // Re-read the canvas when either appearance choice changes.
     let observer: MutationObserver | null = null;
     if (!color && typeof MutationObserver !== 'undefined') {
       observer = new MutationObserver(apply);
-      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-comic-theme'] });
     }
     return () => {
       observer?.disconnect();

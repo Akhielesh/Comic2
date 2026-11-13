@@ -16,6 +16,7 @@
 import { CONSISTENCY_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { scenesOf, type CastStateChange, type ComicDoc, type Page, type Scene } from './doc.js';
 import { canServeToOwner } from './safety.js';
+import { hashString, stableStringify } from './hash.js';
 
 // ── Carry rules ──────────────────────────────────────────────────────────────
 
@@ -181,6 +182,14 @@ export const sceneIndex = (doc: Pick<ComicDoc, 'pages' | 'places' | 'scenes'>, o
   return { from, byPage, since, scenes };
 };
 
+/** Whether a page starts in a different scene or place from the previous page's final panel. */
+export const crossesPageScene = (scenes: SceneIndex, before: Page, after: Page): boolean => {
+  if (scenes.byPage[before.id] !== scenes.byPage[after.id]) return true;
+  const from = before.panels.at(-1)?.placeId;
+  const to = after.panels[0]?.placeId;
+  return !!from && !!to && from !== to;
+};
+
 // ── The fold ─────────────────────────────────────────────────────────────────
 
 interface Fold {
@@ -326,6 +335,28 @@ export const resolveContinuity = (doc: ComicDoc, pageOrId: Page | string): Conti
     return false;
   });
   return out;
+};
+
+/** Content read by the page prompt beyond its own panels. Excludes ledger provenance and carry timestamps. */
+export const pageContextHash = (doc: ComicDoc, page: Page): string => {
+  const before = doc.pages.find((p) => p.n === page.n - 1);
+  const action = before?.panels.at(-1)?.action?.replace(/\s+/g, ' ').trim();
+  const handoff = before && action && !crossesPageScene(sceneIndex(doc), before, page) ? [before.n, action] : null;
+  const state = resolveContinuity(doc, page);
+  const visible = new Set(page.panels.flatMap((p) => p.castIds));
+  const cast = Object.fromEntries(Object.entries(state?.cast ?? {}).filter(([id]) => visible.has(id)).map(([id, value]) => {
+    const { since: _since, ...content } = value;
+    return [id, content];
+  }));
+  const scene = state?.sceneFrom === 'ledger' ? state.scene : undefined;
+  return hashString(stableStringify([
+    handoff,
+    scene ? [scene.name, scene.time, scene.weather, scene.light, scene.palette] : null,
+    cast,
+    Object.fromEntries(Object.entries(state?.props ?? {}).map(([name, value]) => [name, value.state])),
+    Object.keys(state?.gone ?? {}).sort(),
+    state?.notes ?? []
+  ])).slice(0, 6);
 };
 
 // ── Lint ─────────────────────────────────────────────────────────────────────

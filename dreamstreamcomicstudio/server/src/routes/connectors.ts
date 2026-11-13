@@ -20,6 +20,7 @@ import {
   CONNECTORS_OAUTH_STATE_TTL_MS
 } from '../config.js';
 import { connectorRegistry } from '../connectors/index.js';
+import { disconnectAccountConnector } from '../connectors/disconnect.js';
 import { GoogleCalendarConnector } from '../connectors/connectors/googleCalendar.js';
 import { buildClientCatalog } from '../connectors/catalog.js';
 import {
@@ -35,11 +36,9 @@ import { connectorDashboardData, retrieveItems } from '../connectors/retrieval.j
 import { ConnectorAuthError, type NormalizedKind } from '../connectors/types.js';
 import {
   consumeOAuthState,
-  deleteConnection,
   getOwnedConnection,
   getSyncState,
   listConnections,
-  loadCredentials,
   saveCredentials,
   saveOAuthState,
   setConnectionStatus,
@@ -176,6 +175,7 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
     for (const id of state.connectorIds) {
       const connector = connectorRegistry.get(id);
       if (!connector) continue;
+      if (!googleServiceScopeGranted(connector.metadata.id, connector.metadata.requiredScopes, result.grantedScopes)) continue;
       const connection = await upsertConnection({
         userId: state.userId,
         connectorId: id,
@@ -187,12 +187,18 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
       });
       await saveCredentials(connection.id, state.userId, 'oauth2', result.tokens);
       if (connector.metadata.capabilities.syncable) {
-        await triggerSync(state.userId, connection.id, 'full');
+        await triggerSync(state.userId, connection.id, 'full').catch((err) => {
+          logger.warn('connector_initial_sync_failed', { connector: id, message: (err as Error)?.message });
+        });
       }
       connected.push(id);
     }
 
-    return renderCallbackClose(res, { connected: connected.join(',') });
+    if (!connected.length) return fail('missing_permissions');
+    return renderCallbackClose(res, {
+      connected: connected.join(','),
+      ...(connected.length < state.connectorIds.length ? { connector_error: 'missing_permissions' } : {})
+    });
   } catch (err) {
     logger.warn('connector_oauth_callback_failed', {
       connector: state.connectorIds.join(','),
@@ -202,6 +208,13 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
     return fail(reason);
   }
 });
+
+function googleServiceScopeGranted(connectorId: string, required: string[], granted: string[]): boolean {
+  return required.every((scope) => scope.includes('/userinfo.') || granted.includes(scope) ||
+    // Google's full Drive scope is a valid grant for both reading files and saving recordings.
+    ((connectorId === 'google_drive' || connectorId === 'google_drive_save') && granted.includes('https://www.googleapis.com/auth/drive'))
+  );
+}
 
 // ============================================================================
 // AUTHENTICATED: catalog, connections, connect, sync, disconnect, query
@@ -384,16 +397,9 @@ connectorsRouter.delete('/connections/:connectionId', async (req, res, next) => 
     const conn = await getOwnedConnection(userId, String(req.params.connectionId || ''));
     if (!conn) return res.json({ ok: true }); // already gone — idempotent
 
-    const connector = connectorRegistry.get(conn.connector_id);
-    if (connector && conn.auth_type === 'user_oauth') {
-      const creds = await loadCredentials(conn.id).catch(() => null);
-      if (creds) {
-        await connector
-          .revoke({ accessToken: creds.accessToken, refreshToken: creds.refreshToken })
-          .catch((e) => logger.warn('connector_revoke_failed', { message: (e as Error)?.message }));
-      }
-    }
-    await deleteConnection(conn.id);
+    const group = connectorRegistry.get(conn.connector_id)?.metadata.providerGroup;
+    const siblings = conn.auth_type === 'user_oauth' && group ? await listConnections(userId) : [];
+    await disconnectAccountConnector(conn, siblings);
     res.json({ ok: true });
   } catch (err) {
     next(err);

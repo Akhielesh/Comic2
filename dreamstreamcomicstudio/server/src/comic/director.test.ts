@@ -193,6 +193,36 @@ describe('runDirectorTurn', () => {
     expect(toolMsgs[1].content).toBe('Error: unknown tool "no_such_tool".');
   });
 
+  it('sends unchanged page details once in a turn and sends changed dialogue in full', async () => {
+    const doc = plannedDoc();
+    const page = doc.pages[0];
+    page.panels.forEach((panel, i) => {
+      panel.action = `The courier carries the sealed letter past the market stalls, keeping it dry in the rain. Beat ${i + 1}.`;
+    });
+    const session = newSession(doc);
+    const llm = scriptedLlm({ director: [
+      { toolCalls: [toolCall('first-read', 'read_pages', { pages: [1] })] },
+      { toolCalls: [toolCall('second-read', 'read_pages', { pages: [1] })] },
+      () => {
+        const line = session.doc.pages[0].panels[1].lines[0];
+        session.commit([{ op: 'line', pageId: page.id, panelId: page.panels[1].id, id: line.id, patch: { text: 'Keep the sealed letter dry.' } }]);
+        return { toolCalls: [toolCall('third-read', 'read_pages', { pages: [1] })] };
+      },
+      { text: 'The line now mentions the sealed letter.' }
+    ] });
+
+    await runDirectorTurn(testContext(session, { llm }), { text: 'Check page one and keep the letter dry.', attachments: [] });
+
+    const results = llm.calls.at(-1)!.messages.filter((m) => m.role === 'tool');
+    expect(results).toHaveLength(3);
+    expect(results[0]).toMatchObject({ tool_call_id: 'first-read', content: expect.stringContaining('Line on page 1') });
+    expect(results[1]).toMatchObject({ tool_call_id: 'second-read', content: expect.stringContaining('first-read') });
+    expect(String(results[0].content).length).toBe(544);
+    expect(String(results[1].content).length).toBe(102);
+    expect(results[2]).toMatchObject({ tool_call_id: 'third-read', content: expect.stringContaining('Keep the sealed letter dry.') });
+    expect(results[2].content).toContain('PAGE 1:');
+  });
+
   it('stops honoring tools after 8 rounds and forces a written answer (tools still sent)', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const looping = Array.from({ length: 8 }, (_, i) => ({ toolCalls: [toolCall(`n${i}`, 'add_notes', { notes: [`note ${i}`] })] }));

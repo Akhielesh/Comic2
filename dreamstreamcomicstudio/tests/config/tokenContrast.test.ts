@@ -1356,29 +1356,6 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
     }
   });
 
-  it('How It Works (a light page in dark): with the kill switch off in default dark, every headline gradient stop is ≥ 3:1 on white (the light stops are pinned)', () => {
-    const paint = rules.filter((r) => r.parents.length === 0 && r.selector === '.hiw-gradient-text');
-    expect(paint).toHaveLength(1);
-    const stops = [...paint[0].body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1]);
-    expect(stops).toEqual(['--ds-info', '--ds-danger', '--ds-warning', '--ds-info']);
-    const pinSelector = (s: string) => /\.dark\b[^,]*\s\.hiw-gradient-text$/.test(s);
-    expect(rules.filter((r) => pinSelector(r.selector)).map((r) => r.selector)).toEqual([':root.dark .hiw-gradient-text']);
-    const pinned = tokensOf(rules, pinSelector);
-    const white = hexColor('#ffffff');
-    const under: string[] = [];
-    for (const stop of new Set(stops)) {
-      // The words see the pin when there is one, else the default dark token.
-      const value = pinned.get(stop);
-      expect(value, `${stop} is pinned`).toBeDefined();
-      expect(value, `${stop} pins the light :root value`).toBe(lookup(stop, 'default light'));
-      const r = ratio(resolve(value ?? lookup(stop, 'default dark'), 'default dark'), white);
-      if (r < 3) under.push(`${stop} ${value} = ${r.toFixed(2)}`);
-    }
-    expect(under).toEqual([]);
-    // Without the pin the words would read the dark stops: the neutral info is 1.3:1 on white (the old blue was 2.5).
-    expect(ratio(token('--ds-info', 'default dark'), white)).toBeLessThan(1.5);
-  });
-
   it('the spark stays out of the ink system: focus, ring, accent, charts, status and reader tokens read no layer token', () => {
     const leaks: string[] = [];
     for (const [blockName, block] of Object.entries({ ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE })) {

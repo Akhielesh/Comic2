@@ -123,10 +123,43 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(screen.getByRole('button', { name: /Opening/ })).toBeDisabled();
     d.resolve(payload());
     const read = await screen.findByRole('button', { name: /Start reading/ });
+    expect(screen.getByRole('img', { name: 'Cover of The Saffron Thief' })).toHaveAttribute('src', 'https://cdn.test/cover.jpg');
     fireEvent.click(read);
     const dialog = screen.getByTestId('immersive-reader');
     expect(dialog).toHaveAttribute('data-phase', 'intro');
     expect(api.loadPublicComicBySlug).toHaveBeenCalledWith(SLUG, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it.each([false, true])('warms only the first page’s small variant after cover load (Save-Data: %s)', async (saveData) => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'connection');
+    Object.defineProperty(navigator, 'connection', { configurable: true, value: { saveData, effectiveType: '4g' } });
+    try {
+      const d = snapshotDoc((comic) => {
+        for (const p of comic.pages) p.render.asset!.variants = [{ path: p.render.asset!.path.replace('.webp', '-480.webp'), w: 480, h: 720 }];
+      });
+      const data = payload({}, d);
+      for (const p of d.pages) {
+        const { path } = p.render.asset!.variants![0];
+        data.urls[path] = `https://public.test/${path}`;
+      }
+      api.loadPublicComicBySlug.mockResolvedValue(data);
+      const ensure = vi.spyOn(pageImageCache, 'ensure');
+      render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+      const read = await screen.findByRole('button', { name: /Start reading/ });
+      expect(ensure).not.toHaveBeenCalled();
+      fireEvent.load(screen.getByRole('img', { name: /Cover of/ }));
+      if (saveData) {
+        fireEvent.focus(read);
+        expect(ensure).not.toHaveBeenCalled();
+      } else {
+        const path = d.pages[0].render.asset!.variants![0].path;
+        fireEvent.focus(read);
+        expect(ensure).toHaveBeenCalledExactlyOnceWith(path, data.urls[path], 'next');
+      }
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, 'connection', descriptor);
+      else Reflect.deleteProperty(navigator, 'connection');
+    }
   });
 
   it('says "This link isn’t active" for any dead link — no retry, no hint of why', async () => {

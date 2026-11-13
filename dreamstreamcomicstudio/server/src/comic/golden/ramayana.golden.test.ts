@@ -108,6 +108,15 @@ describe('the Ramayana golden case: the fixture', () => {
     expect(compileCaseEdit(doc).prompt.startsWith(today.editPromptHead)).toBe(true);
   });
 
+  it('page 9 starts from page 8’s bridge work even though its stored image referenced page 7', () => {
+    const doc = loadRamayanaCase();
+    const job = compileCasePages(doc).find(({ n }) => n === 9)!.job;
+    expect(job.references).toContainEqual({ label: 'PREVIOUS PAGE', path: pageByN(doc, 7).render.asset!.path });
+    expect(job.prompt).toContain('This reference does not establish the current scene');
+    expect(job.prompt).toContain('STORY HANDOFF — Page 8 ended with: Nila on the left holds his surveyor tools');
+    expect(job.prompt).toContain('The keystone slots into the last gap');
+  });
+
   it('is a fresh copy on every load, and synthetic image stand-ins never reach the fixture file', () => {
     const a = loadRamayanaCase();
     a.pages[0].panels[0].action = 'changed';
@@ -213,12 +222,14 @@ describe('the Ramayana golden case: today (what the case measured on the day)', 
     mustNotContain(compileCaseCover(doc).prompt, 'LAKSHMANA');
   });
 
-  it(`page 3 waits for page ${today.page3WaitsFor}, as every page does`, () => {
+  it('now pairs page 3 with page 2 instead of its historical dependency on page 1', () => {
     const doc = loadRamayanaCase();
     const ids = doc.pages.map((p) => p.id);
     const run = scheduleRun(doc, ids);
-    expect(run.after[pageId(doc, 3)]).toBe(pageId(doc, today.page3WaitsFor));
-    for (const p of doc.pages.slice(1)) expect(run.after[p.id]).toBe(pageId(doc, 1));
+    expect(today.page3WaitsFor).toBe(1);
+    expect(run.after[pageId(doc, 3)]).toBe(pageId(doc, 2));
+    expect(run.after[pageId(doc, 5)]).toBe(pageId(doc, 4));
+    expect(run.after[pageId(doc, 4)]).toBe(pageId(doc, 1));
   });
 
   it('the page-4 and page-9 reply shapes (boxes 0–1000, heads 0–1) collapse the heads into the page corner', () => {

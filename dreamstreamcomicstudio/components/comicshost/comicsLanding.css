@@ -1,0 +1,114 @@
+@media (min-width: 1024px) {
+  .comics-title {
+    font-size: clamp(var(--ds-text-5xl), 5vw, var(--ds-text-7xl));
+  }
+
+  .comics-title span {
+    display: block;
+  }
+
+  .comics-hero {
+    grid-template-columns: minmax(0, 0.93fr) minmax(0, 1.07fr);
+  }
+}
+
+.comics-sample-viewport {
+  padding-block: clamp(0.75rem, 1.5vw, 1.25rem);
+  overflow: hidden;
+}
+
+.comics-sample-track {
+  --page-gutter: clamp(0.5rem, 1.4vw, 1rem);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--page-gutter);
+  width: 173%;
+  margin-inline-start: 8%;
+  transition: transform var(--ds-motion-theme) var(--ds-ease-enter);
+}
+
+.comics-sample-track[data-page='1'] {
+  transform: translateX(calc(-50% - var(--page-gutter) / 2));
+}
+
+.comics-sample-page {
+  min-width: 0;
+}
+
+.comics-sample-art {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 6 / 5;
+  overflow: hidden;
+  border: 1px solid var(--ds-hairline);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-soft);
+}
+
+.comics-sample-art > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.comics-sample-art > img[data-reveal='revealed'] {
+  animation: comics-sample-replace var(--ds-motion-enter-quick) var(--ds-ease-enter) both;
+}
+
+.comics-sample-art > img[data-reveal='error'] {
+  visibility: hidden;
+}
+
+.comics-sample-caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: clamp(0.5rem, 2.5vw, 1.5rem);
+  padding: 0 0.75rem 0.75rem;
+}
+
+.comics-sample-cover {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: min(68dvh, 34rem);
+  border-radius: var(--ds-radius-sm);
+}
+
+.comics-look-scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--ds-motion-panel) var(--ds-ease-enter);
+}
+
+.comics-look[aria-pressed='true'] .comics-look-art {
+  outline: 2px solid var(--ds-focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .comics-look:hover .comics-look-scene {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes comics-sample-replace {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comics-sample-track,
+  .comics-look-scene {
+    transition: none;
+  }
+
+  .comics-sample-art > img[data-reveal='revealed'] {
+    animation: none;
+  }
+}

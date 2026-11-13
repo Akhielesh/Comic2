@@ -15,12 +15,14 @@ const ex = vi.hoisted(() => ({
   zipAll: vi.fn(),
   print: vi.fn(),
   motion: vi.fn(),
+  gif: vi.fn(),
   plan: null as null | { fits: boolean; maxEdge?: number },
   oneFits: null as null | boolean,
   planCalls: [] as unknown[][]
 }));
 vi.mock('../export/pdfExport', () => ({ exportComicPdf: ex.pdf }));
 vi.mock('../export/zipExport', () => ({ exportPngZip: ex.zip, exportLanguagesZip: ex.zipAll }));
+vi.mock('../export/gifExport', () => ({ exportComicGif: ex.gif }));
 vi.mock('../export/printView', () => ({ openPrintView: ex.print }));
 vi.mock('../export/motionComic', async (importOriginal) => ({ ...(await importOriginal<typeof import('../export/motionComic')>()), exportMotionComic: ex.motion }));
 vi.mock('../export/zipMemory', async (importOriginal) => {
@@ -54,7 +56,7 @@ beforeEach(() => {
   ex.plan = null;
   ex.oneFits = null;
   ex.planCalls = [];
-  for (const f of [ex.pdf, ex.zip, ex.zipAll, ex.print, ex.motion]) f.mockReset();
+  for (const f of [ex.pdf, ex.zip, ex.zipAll, ex.print, ex.motion, ex.gif]) f.mockReset();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -114,6 +116,29 @@ describe('ReaderTab exports', () => {
     expect(status).toHaveTextContent('saved at up to 1,472 px');
     expect((ex.zip.mock.calls[0][2] as { lang?: string }).lang).toBe('en');
     expect(ex.zip.mock.calls[0][0]).toBe(doc);
+  });
+
+  it('exports larger PNGs through the existing device memory budget', async () => {
+    ex.zip.mockResolvedValue({ fileName: 'comic-pages-large.zip', files: 2, failed: [], skipped: [] });
+    const doc = makeSampleDoc();
+    const studio = makeStudio(doc);
+    render(<ReaderTab studio={studio} doc={doc} />);
+    fireEvent.click(within(openSheet()).getByRole('button', { name: /^Large PNG pages/ }));
+    expect(await screen.findByText(/Downloaded comic-pages-large/)).toBeInTheDocument();
+    expect(ex.zip).toHaveBeenCalledWith(doc, studio.urlFor, expect.objectContaining({ longEdge: 3840, lang: 'en' }));
+  });
+
+  it('exports the selected edition as a GIF after two pages are drawn', async () => {
+    ex.gif.mockResolvedValue({ fileName: 'comic-te-preview.gif', frames: 2, skipped: [] });
+    const doc = withTelugu();
+    const art = doc.pages.find((page) => page.render.asset)?.render.asset;
+    doc.pages[1].render = { ...doc.pages[1].render, status: 'ready', asset: { ...art!, path: 'qa/page-2.webp' } };
+    const studio = makeStudio(doc);
+    render(<ReaderTab studio={studio} doc={doc} />);
+    pickTelugu();
+    fireEvent.click(within(openSheet()).getByRole('button', { name: /^GIF preview/ }));
+    expect(await screen.findByText(/Downloaded comic-te-preview/)).toBeInTheDocument();
+    expect(ex.gif).toHaveBeenCalledWith(doc, studio.urlFor, expect.objectContaining({ lang: 'te' }));
   });
 
   it('print and motion get the edition too, and show their notice', async () => {

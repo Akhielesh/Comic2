@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const validateApiKey = vi.hoisted(() =>
   vi.fn(async (provider: string) => ({ provider, status: 'valid' as const, valid: true, message: 'Valid key.' }))
 );
+const reconcileProviderMirror = vi.hoisted(() => vi.fn(async (): Promise<'synced' | 'failed'> => 'synced'));
 vi.mock('../services/keyValidation', () => ({ validateApiKey }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
 vi.mock('../services/modelCatalog', () => ({ fetchModelCatalog: vi.fn(async () => ({ models: [] })) }));
 vi.mock('./ModelSelectionPanel', () => ({ ModelSelectionPanel: () => null }));
-vi.mock('../services/byokSync', () => ({ reconcileProviderMirror: vi.fn(async () => undefined), syncByokKeyToServer: vi.fn(async () => undefined) }));
+vi.mock('../services/byokSync', () => ({ reconcileProviderMirror }));
 vi.mock('../services/usageAllowance', () => ({
   USAGE_EXHAUSTED_COPY: '',
   fetchAllowanceStatus: vi.fn(async () => null),
@@ -53,6 +54,7 @@ const openProvider = (provider: 'openrouter' | 'nvidia') => {
 beforeEach(() => {
   window.localStorage.clear();
   validateApiKey.mockClear();
+  reconcileProviderMirror.mockClear();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   vi.setSystemTime(T0);
 });
@@ -108,6 +110,34 @@ describe('API Configuration key validation', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(validateApiKey).toHaveBeenCalledTimes(1);
     expect(validateApiKey).toHaveBeenCalledWith('openrouter', 'sk-or-new');
+    expect(reconcileProviderMirror).toHaveBeenCalledWith('user-1', 'openrouter');
+  });
+
+  it('keeps the account key untouched when a spare is added and syncs it once activated', async () => {
+    const original = seedKey('openrouter', 'sk-or-original', 0);
+    render(<ApiConfiguration />);
+    await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-spare' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
+    expect(listKeys().find((key) => key.active)?.id).toBe(original.id);
+    expect(reconcileProviderMirror).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByTitle('Set as active')); });
+    expect(listKeys().find((key) => key.active)?.key).toBe('sk-or-spare');
+    expect(reconcileProviderMirror).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces a failed account sync and lets the user retry without re-entering the key', async () => {
+    reconcileProviderMirror.mockResolvedValueOnce('failed');
+    render(<ApiConfiguration />);
+    if (!screen.queryByPlaceholderText(/Paste OpenRouter API key/)) await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-new' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
+    expect(screen.getByRole('status')).toHaveTextContent('Your account key could not sync');
+    expect(listKeys().find((key) => key.active)?.key).toBe('sk-or-new');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry sync' })); });
+    expect(reconcileProviderMirror).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Retry sync' })).not.toBeInTheDocument();
   });
 
   it('a check that could not run shows no Invalid badge, stores nothing, and the next open re-checks', async () => {

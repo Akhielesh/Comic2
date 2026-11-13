@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Radio } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Radio } from 'lucide-react';
 import { Button } from './Button';
 import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
@@ -36,6 +36,12 @@ const MOCK_MESSAGES = [
 ];
 
 export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenPrivacy, onOpenTerms, onNavigate }) => {
+  useEffect(() => {
+    if (window.location.hash === '#home-faq') {
+      document.getElementById('home-faq')?.scrollIntoView();
+    }
+  }, []);
+
   const { user } = useAuth();
   // Comic Studio has its own address: on the production main site link there (in-app entry stays
   // available for signed-in people — a separate host means a separate sign-in).
@@ -74,12 +80,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-yellow transition-colors flex items-center gap-2"
               >
                 <Mail size={18} /> Request access
-              </button>
-              <button
-                onClick={() => onNavigate?.('how-it-works')}
-                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-blue hover:text-white transition-colors"
-              >
-                See how it works
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-6 text-sm font-bold text-slate-500">
@@ -452,7 +452,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <li><a href={`mailto:${SUPPORT_EMAIL}`} className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
               <li><button onClick={scrollToUpdates} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Sparkles size={16} /> Stay Updated</button></li>
               <li><button onClick={() => setFaqOpen(0)} className="flex items-center gap-2 hover:text-brand-yellow text-left"><HelpCircle size={16} /> FAQs</button></li>
-              <li><button onClick={() => onNavigate?.('how-it-works')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Info size={16} /> About</button></li>
             </ul>
           </div>
           <div>

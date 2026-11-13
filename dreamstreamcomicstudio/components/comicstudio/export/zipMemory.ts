@@ -19,7 +19,7 @@
 // The estimate is pessimistic (painted art compresses poorly as PNG) and the budget is a fraction of the
 // device's memory. Numbers are judgement calls (no owner decision yet); they live here, in one place.
 
-import { MAX_EXPORT_EDGE, DEFAULT_PLATE_WIDTH } from './rasterize';
+import { MAX_EXPORT_EDGE, DEFAULT_PLATE_WIDTH, plateRasterSize } from './rasterize';
 import type { ExportSlot } from './sequence';
 
 /** Painted, lettered art as PNG: ~2.5 bytes per pixel (canvas PNGs of AI art run ~1.8–2.5). Conservative. */
@@ -93,9 +93,10 @@ const artEdge = (slot: ExportSlot, longEdge?: number): number => {
 };
 
 /** The long edge (px) of a software plate (width = plateWidth, height from the trim aspect). */
-const plateEdge = (slot: ExportSlot, plateWidth: number): number => {
+const plateEdge = (slot: ExportSlot, plateWidth: number, longEdge?: number): number => {
   const a = Number.isFinite(slot.aspect) && slot.aspect > 0 ? slot.aspect : 2 / 3;
-  return Math.min(MAX_EXPORT_EDGE, Math.max(plateWidth, plateWidth / a));
+  const { width, height } = plateRasterSize(a, { plateWidth, longEdge });
+  return Math.max(width, height);
 };
 
 /** Estimated PNG bytes for one copy of every slot, with every long edge capped at `cap`. */
@@ -103,7 +104,7 @@ const bytesFor = (slots: readonly ExportSlot[], longEdge: number | undefined, pl
   let total = 0;
   for (const s of slots) {
     const plate = !!s.plate;
-    const edge = Math.min(cap, plate ? plateEdge(s, plateWidth) : artEdge(s, longEdge));
+    const edge = Math.min(cap, plate ? plateEdge(s, plateWidth, longEdge) : artEdge(s, longEdge));
     total += edge * edge * ratioOf(s.aspect) * (plate ? PLATE_BYTES_PER_PIXEL : PNG_BYTES_PER_PIXEL);
   }
   return total;
@@ -123,7 +124,7 @@ export function planZipMemory(
   const plateWidth = opts.plateWidth && opts.plateWidth > 0 ? opts.plateWidth : DEFAULT_PLATE_WIDTH;
   const art = slots.filter((s) => !s.plate);
   const fullEdge = Math.round(
-    Math.max(0, ...art.map((s) => artEdge(s, opts.longEdge)), ...slots.filter((s) => s.plate).map((s) => plateEdge(s, plateWidth)))
+    Math.max(0, ...art.map((s) => artEdge(s, opts.longEdge)), ...slots.filter((s) => s.plate).map((s) => plateEdge(s, plateWidth, opts.longEdge)))
   );
   const at = (cap: number) => bytesFor(slots, opts.longEdge, plateWidth, cap) * copies;
   const fullBytes = at(Infinity);

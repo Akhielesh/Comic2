@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addKey, listKeys, clearAllKeys } from './apiKeys';
+import { addKey, listKeys, clearAllKeys, deleteKey, hasUsableKey } from './apiKeys';
 
 describe('clearAllKeys (sign-out security)', () => {
   beforeEach(() => {
@@ -26,5 +26,14 @@ describe('clearAllKeys (sign-out security)', () => {
     clearAllKeys();
     const dump = JSON.stringify(window.localStorage);
     expect(dump).not.toContain('sk-or-super-secret-value');
+  });
+
+  it('removes the legacy fallback when a provider’s last active key is deleted', () => {
+    window.localStorage.setItem('dreamstream_openrouter_key', 'legacy-key');
+    const [imported] = listKeys();
+    expect(imported.key).toBe('legacy-key');
+    deleteKey(imported.id);
+    expect(hasUsableKey('openrouter')).toBe(false);
+    expect(window.localStorage.getItem('dreamstream_openrouter_key')).toBeNull();
   });
 });

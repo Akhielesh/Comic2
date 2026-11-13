@@ -95,7 +95,10 @@ describe('listedPickerRows (every registry model is in the catalog)', () => {
     const all = allRows();
     expect(all).toHaveLength(IMAGE_MODELS.length);
     const listed = listedPickerRows(all, lakeDoc());
-    expect(ids(listed).sort()).toEqual(['gpt-image-2.5', 'gpt-image-2.5-flare', 'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro']);
+    expect(ids(listed).sort()).toEqual([
+      'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst',
+      'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro'
+    ]);
     // FLUX.3 was removed (models.md §2.2); Nano Banana 2 and the legacy model are for existing comics only; Lite is
     // used by no default. None of them will be offered, so none reads "Not available in Comic Studio yet".
     for (const id of ['flux-3', 'nano-banana-2', 'nano-banana-legacy', 'nano-banana-lite']) expect(ids(listed)).not.toContain(id);

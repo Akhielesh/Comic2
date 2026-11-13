@@ -151,6 +151,7 @@ RULES
 HOW TO USE TOOLS
 - Write your reply in the same message as your tool calls; never send tool calls without a sentence.
 - Several independent facts → several calls in one round. Use ids from the DOC SUMMARY; names work too.
+- An unchanged read_pages result points to the earlier full result in this turn. Use the earlier page details.
 - "Error: …" → fix the arguments once, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
 - A long pasted script: save_source (no arguments if the message says it was already saved, else useMessage:true), then offer the next step.
@@ -817,6 +818,9 @@ async function directorTurnBody(
   let extraRounds = 0;
   /** Tool rounds allowed: MAX_TOOL_ROUNDS, plus one per extra round that starts at the limit (so a late note can act). */
   let toolRoundCap = MAX_TOOL_ROUNDS;
+  // Full results stay in the model's transcript. Compare each fresh read to the original bytes so an edit or undo
+  // that changes the page details is always sent in full. No cross-turn or cross-project state.
+  const pageReadResults = new Map<string, string>();
   try {
     let rounds = 0;
     for (;;) {
@@ -898,7 +902,13 @@ async function directorTurnBody(
           turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: output.slice(0, 16_000) });
+        let content = output.slice(0, 16_000);
+        if (call.name === 'read_pages' && content.length > 240 && /^PAGE \d+:/.test(content)) {
+          const earlier = pageReadResults.get(content);
+          if (earlier !== undefined) content = `Unchanged page details. Use the full read_pages result from tool call ${earlier} earlier in this turn.`;
+          else pageReadResults.set(content, call.id);
+        }
+        messages.push({ role: 'tool', tool_call_id: call.id, content });
       }
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       // ask_user ends the turn: the question and its chips are the reply.

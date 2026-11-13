@@ -1,6 +1,5 @@
 // @vitest-environment node
-// B7's run order with COMIC_RUN_CHAINS (P5-TRUTH item 8): pages of one scene draw one after another, each from the page
-// right before it; scenes still draw side by side. Chains off = today's order (page 1 alone, then everything after it).
+// Default scene pairs and optional full scene chains, using the same dependency runner as real renders.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, type ComicDoc } from '../../../../shared/comic/doc.js';
 import { loadRamayanaCase, pageByN } from '../golden/promptChecks.js';
@@ -27,9 +26,8 @@ describe('scheduleRun with chains (COMIC_RUN_CHAINS)', () => {
     for (let n = 2; n <= 10; n += 1) expect(run.after[id(doc, n)], `page ${n}`).toBe(id(doc, n - 1));
     expect(run.order).toEqual(ids(doc));
     expect(run.coverAfter).toBe(id(doc, 1));
-    // Inside a chain the next page starts once the page before it is STORED (pro plan §4.2), not after its page check.
-    expect(run.settle).toBe('stored');
-    // Chains off: today's settle.
+    // The next page starts after the predecessor's safety verdict, including in a chain.
+    expect(run.settle).toBe('done');
     expect(scheduleRun(doc, ids(doc)).settle).toBe('done');
   });
 
@@ -51,11 +49,26 @@ describe('scheduleRun with chains (COMIC_RUN_CHAINS)', () => {
     expect(run.after).toEqual({ [id(doc, 4)]: null, [id(doc, 5)]: id(doc, 4), [id(doc, 7)]: null });
   });
 
-  it('chains off is today: page 1 alone, then every page after it', () => {
+  it('the default draws page 1 first, then consecutive pairs without serializing the book', () => {
     const doc = loadRamayanaCase();
     const run = scheduleRun(doc, ids(doc));
-    for (const p of doc.pages.slice(1)) expect(run.after[p.id]).toBe(id(doc, 1));
+    expect(ids(doc).map((pageId) => run.after[pageId])).toEqual([null, ...[1, 2, 1, 4, 1, 6, 1, 8, 1].map((n) => id(doc, n))]);
     expect(scheduleRun(doc, ids(doc), { chains: false })).toEqual(run);
+  });
+
+  it('starts a new pair at a recorded scene cut, a changed location, or a gap in requested pages', () => {
+    const doc = loadRamayanaCase();
+    doc.scenes = [{ id: 'shore', name: 'Shore' }, { id: 'later', name: 'Later at the shore' }];
+    pageByN(doc, 1).continuity = { sceneId: 'shore' };
+    pageByN(doc, 3).continuity = { sceneId: 'later' };
+    pageByN(doc, 2).panels.at(-1)!.placeId = 'pl_01';
+    pageByN(doc, 3).panels[0].placeId = 'pl_01';
+    pageByN(doc, 8).panels.at(-1)!.placeId = 'pl_01';
+    pageByN(doc, 9).panels[0].placeId = 'pl_02';
+    const targets = [1, 2, 3, 4, 6, 8, 9, 10].map((n) => id(doc, n));
+    const run = scheduleRun(doc, targets);
+    expect(targets.map((pageId) => run.after[pageId])).toEqual([null, ...[1, 1, 3, 1, 1, 1, 9].map((n) => id(doc, n))]);
+    expect(run.order).toEqual(targets);
   });
 
   it('an unknown page id starts at once and keeps its place in the order', () => {
@@ -81,6 +94,13 @@ describe('previousPageFor with chains', () => {
     expect(previousPageFor(doc, pageByN(doc, 8), { chains: true })?.n).toBe(6);
     // assumeDrawn (a run in progress) counts a page the run will have drawn.
     expect(previousPageFor(doc, pageByN(doc, 8), { chains: true, assumeDrawn: new Set([id(doc, 7)]) })?.n).toBe(7);
+  });
+
+  it('does not pick an unfinished safety verdict as previous art', () => {
+    const doc = loadRamayanaCase();
+    pageByN(doc, 2).render.asset!.safety = { pending: true, at: 1 };
+    expect(previousPageFor(doc, pageByN(doc, 3), { chains: true })?.n).toBe(1);
+    expect(previousPageFor(doc, pageByN(doc, 3))?.n).toBe(1);
   });
 });
 
@@ -129,23 +149,35 @@ const wallSeconds = async (schedule: RunSchedule, pageIds: readonly string[]): P
 describe('scene chains: the wall time they cost (measured, not estimated)', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('the 10-page one-scene case: today about 120 s; with chains about 255 s, so about +135 s, not +40 s', async () => {
+  it('the 10-page one-scene case: the default pairs match the old parallel wall time in the controlled run', async () => {
     const doc = loadRamayanaCase();
-    const today = await wallSeconds(scheduleRun(doc, ids(doc)), ids(doc));
+    const pages = ids(doc);
+    const schedule = scheduleRun(doc, pages);
+    const unpaired = { ...schedule, after: Object.fromEntries(pages.map((page, i) => [page, i ? pages[0] : null])) };
+    const paired = await wallSeconds(schedule, schedule.order);
+    const old = await wallSeconds(unpaired, pages);
     const chained = await wallSeconds(scheduleRun(doc, ids(doc), { chains: true }), ids(doc));
-    // Today: page 1 alone (image + check), then 9 pages three at a time.
-    expect(today).toBe(4 * (IMAGE_S + CHECK_S));
-    // Chains: each page starts when the one before it is stored, so only the last page's check is not overlapped.
-    expect(chained).toBe(10 * IMAGE_S + CHECK_S);
-    expect(chained - today).toBe(135);
+    expect(old).toBe(4 * (IMAGE_S + CHECK_S));
+    expect(paired).toBe(old);
+    expect(chained).toBe(10 * (IMAGE_S + CHECK_S));
+  });
+
+  it('the 20-page one-scene shape: the default pairs also match the old parallel wall time', async () => {
+    const doc = loadRamayanaCase();
+    doc.pages = Array.from({ length: 20 }, (_, i) => ({ ...doc.pages[i % doc.pages.length], id: `race_${i + 1}`, n: i + 1 }));
+    const pages = ids(doc);
+    const schedule = scheduleRun(doc, pages);
+    const unpaired = { ...schedule, after: Object.fromEntries(pages.map((page, i) => [page, i ? pages[0] : null])) };
+    expect(pages.filter((page, i) => i > 0 && schedule.after[page] === pages[i - 1])).toHaveLength(10);
+    expect(await wallSeconds(unpaired, pages)).toBe(240);
+    expect(await wallSeconds(schedule, schedule.order)).toBe(240);
   });
 
   it('two scenes of five pages run side by side: the extra time is about one scene, not the whole book', async () => {
     const doc = twoScenes();
     const chained = await wallSeconds(scheduleRun(doc, ids(doc), { chains: true }), ids(doc));
-    // Page 1, then pages 2-5 and 6-10 as two chains in parallel: the Lanka chain (5 pages after page 1) is the longest,
-    // 155 s with free slots; two chains each overlapping a check with the next image want 4 of the 3 slots, so 160 s.
-    expect(chained).toBe(IMAGE_S + 5 * IMAGE_S + CHECK_S + CHECK_S);
+    // Page 1, then the five-page Lanka chain in parallel with pages 2–5.
+    expect(chained).toBe(6 * (IMAGE_S + CHECK_S));
     expect(chained).toBeLessThan(await wallSeconds(scheduleRun(loadRamayanaCase(), ids(doc), { chains: true }), ids(doc)));
   });
 });

@@ -293,7 +293,7 @@ const FLOORS: ColourFloors = JSON.parse(readFileSync(path.join(path.dirname(file
 
 /**
  * What the colour budget hides before it measures: the art is content, not the interface. Pictures, video, canvases
- * and SVG images; comic art drawn in the DOM (ComicPageSpecimen and anything else marked data-comic-art or data-art);
+ * and SVG images; comic art drawn in the DOM (anything marked data-comic-art or data-art);
  * and any element painted with an inline background image (a cover or a page drawn as a CSS background).
  */
 const ART_HIDDEN_SELECTOR = 'img, picture, video, canvas, svg image, [data-comic-art], [data-art], [style*="background-image"], [style*="url("]';

@@ -1,7 +1,4 @@
-// QA scene `landing-signedin` (the scene contract is in qa/app/index.tsx): the comics host's front page as a
-// signed-in visitor sees it — "Open your comics" on the ink primary (no spark), "Browse the Library", My comics in
-// the header and the footer. The page brings its own <main>. Every handler is a no-op: nothing here navigates,
-// reaches the network or spends.
+// Signed-in Comic Studio landing. Navigation callbacks stay local to the QA harness.
 
 import React from 'react';
 import { ComicsLanding } from '../../../components/comicshost/ComicsLanding';

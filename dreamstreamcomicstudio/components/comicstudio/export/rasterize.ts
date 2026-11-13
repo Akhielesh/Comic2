@@ -79,6 +79,15 @@ export const rasterSize = (naturalW: number, naturalH: number, longEdge?: number
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
 };
 
+/** Plate pixels use the book's trim ratio and honour the same long-edge cap as page images. */
+export const plateRasterSize = (aspect: number, opts: Pick<RasterOptions, 'plateWidth' | 'longEdge' | 'maxEdge'> = {}) => {
+  const width = Math.round(Math.min(MAX_EXPORT_EDGE, Math.max(200, opts.plateWidth ?? opts.longEdge ?? DEFAULT_PLATE_WIDTH)));
+  const height = Math.round(width / aspect);
+  const deviceCap = opts.maxEdge && opts.maxEdge > 0 ? Math.max(200, opts.maxEdge) : MAX_EXPORT_EDGE;
+  const requestedCap = opts.longEdge && opts.longEdge > 0 ? opts.longEdge : MAX_EXPORT_EDGE;
+  return rasterSize(width, height, undefined, Math.min(deviceCap, requestedCap));
+};
+
 /**
  * Canvas font shorthand for a line kind in a language — the face the lettering engine resolves for
  * the classic style (Comic Neue dialogue, Bangers SFX; the script's Noto face for Telugu, Hindi…).
@@ -381,14 +390,7 @@ export async function renderPlateToBlob(
   opts: RasterOptions & { art?: PlateArtImage | null; artUrl?: string } = {}
 ): Promise<Blob> {
   const layout = plateLayout(doc, kind);
-  let width = Math.round(Math.min(MAX_EXPORT_EDGE, Math.max(200, opts.plateWidth ?? opts.longEdge ?? DEFAULT_PLATE_WIDTH)));
-  let height = Math.round((width * layout.height) / layout.width);
-  const plateCap = Math.min(MAX_EXPORT_EDGE, opts.maxEdge && opts.maxEdge > 0 ? Math.max(200, opts.maxEdge) : Infinity);
-  if (Math.max(width, height) > plateCap) {
-    const scale = plateCap / Math.max(width, height);
-    width = Math.max(1, Math.round(width * scale));
-    height = Math.max(1, Math.round(height * scale));
-  }
+  const { width, height } = plateRasterSize(layout.width / layout.height, opts);
   let art: PlateArtImage | null | undefined = opts.art;
   let loaded: LoadedImage | null = null;
   if (art === undefined && layout.art && opts.artUrl) {

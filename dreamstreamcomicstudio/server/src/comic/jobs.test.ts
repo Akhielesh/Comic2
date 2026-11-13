@@ -1622,10 +1622,14 @@ describe('provider rate limits', () => {
     const ctx = testContext(session, { images });
     await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
     expect(session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
-    // Page 5 was still waiting for a slot when page 2 hit the limit: it starts only after everything else ended.
-    const start5 = log.indexOf('start 5');
-    for (const n of [2, 3, 4]) expect(log.lastIndexOf(`end ${n}`)).toBeLessThan(start5);
-    expect(log.indexOf('429 2')).toBeLessThan(start5);
+    // Pages 3 and 5 were waiting for their own predecessors. After the rate limit, neither overlaps another provider call.
+    const rateLimit = log.indexOf('429 2');
+    expect(rateLimit).toBeGreaterThan(-1);
+    for (const n of [3, 5]) {
+      const start = log.indexOf(`start ${n}`);
+      expect(start).toBeGreaterThan(rateLimit);
+      expect(log.slice(start + 1, log.indexOf(`end ${n}`, start))).toEqual([]);
+    }
   });
 
   it('a rate-limited image is re-queued once after Retry-After ("waiting for the provider…") and lands', async () => {

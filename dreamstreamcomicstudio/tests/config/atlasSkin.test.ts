@@ -620,20 +620,13 @@ describe('Atlas skin — wave 9 bridge tokens (blur split, charts, grid dot, spo
     expect(body).not.toMatch(/(?<![\w-])0?\.\d+s\b|\d+ms\b/);
   });
 
-  it('bridge D4: the chat markdown, skeleton and How It Works gradient read tokens (no legacy hex), the gradient takes the heading ink under the skin', () => {
-    const outside = rules.filter((r) => r.parents.length === 0 && /^(?:\.dark )?\.(?:message-body|studio-shimmer|hiw-gradient-text)\b/.test(r.selector));
-    expect(outside.map((r) => r.selector)).toEqual(expect.arrayContaining(['.message-body a', '.message-body pre', '.studio-shimmer', '.hiw-gradient-text']));
+  it('bridge D4: chat markdown and skeletons read theme tokens', () => {
+    const outside = rules.filter((r) => r.parents.length === 0 && /^(?:\.dark )?\.(?:message-body|studio-shimmer)\b/.test(r.selector));
+    expect(outside.map((r) => r.selector)).toEqual(expect.arrayContaining(['.message-body a', '.message-body pre', '.studio-shimmer']));
     for (const r of outside) expect(`${r.selector} { ${r.body} }`).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(\s*\d/i);
     expect(rules.some((r) => r.selector === '.dark .message-body a')).toBe(false);
     expect(rules.find((r) => r.selector === '.message-body a')?.body).toContain('color: var(--ds-info-text)');
     expect(rules.find((r) => r.selector === '.message-body pre')?.body).toContain('border: 1px solid var(--ds-hairline)');
-    const hiw = rules.find((r) => r.selector === '[data-ds-skin="atlas"] .hiw-gradient-text')?.body ?? '';
-    // The heading's own ink, not the theme token: How It Works is a legacy page that stays light in dark, so
-    // --ds-ink painted the two words #fafafa inside the slate-900 heading (1.04:1 where the gradient is white).
-    expect(hiw).toContain('color: inherit');
-    expect(hiw).not.toContain('var(--ds-ink)');
-    expect(hiw).toContain('background-image: none');
-    expect(hiw).toContain('-webkit-text-fill-color: currentColor');
   });
 });
 
