@@ -139,9 +139,11 @@ hairline 60 % of it in both themes — the dark block restates it, because the b
 the light high-contrast one), `--ds-muted` `#404040` / `#d4d4d4`, `--ds-ring` `#000` / `#fff`,
 `--ds-control-border` ink 70 % and its hover the full ink. The colour layer's marks move along their
 own hue so a dot or a thin bar reads as surely as text: light `--ds-hue-2` `#cd3c8e`, `--ds-hue-3`
-`#ba5b03`, `--ds-hue-4` `#008e87`, `--ds-hue-7` `#006a9d`, `--ds-success` `#12873d`, `--ds-warning`
-`#a46a07`; dark `--ds-hue-1` `#5a6dfd`, `--ds-hue-5` `#a45adb`. Their soft tints, solids and status text
-inks are declared on the skin element itself and recompute from the moved colour; the dark base block
+`#ba5b03`, `--ds-hue-4` `#06847f`, `--ds-hue-7` `#006a9d`, `--ds-success` `#12873d`, `--ds-warning`
+`#a46a07`; dark `--ds-hue-1` `#5a6dfd`, `--ds-hue-5` `#a45adb`, the branch's values exactly. Every light mark is
+at least 4.5:1 on the page. The light teal has OKLCH chroma 0.095, just under the 0.10 floor for a hue, because sRGB
+has no more chroma at that lightness and hue; it is the one exemption from the floor, pinned to the gamut's limit.
+Their soft tints, solids and status text inks are declared on the skin element itself and recompute from the moved colour; the dark base block
 outranks the light high-contrast one, so the light moves never reach the dark theme
 (`tests/config/atlasHighContrast.test.ts`). (Atlas's own Settings toggle, `.atlas-high-contrast`, has no
 Comic Studio counterpart.)
@@ -330,9 +332,6 @@ track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a
   the branch mixes 60 % of the hue into the ink.
 - **The dark tag tint base.** Our soft tint mixes the hue into the raised step (`#1a1a1a` in dark), the branch into its
   card (`#111111`); ink and the text steps are measured on ours.
-- **The light teal under increase contrast** is `#008e87`, not the branch's `#06847f`: that one has OKLCH chroma 0.095,
-  under this tree's 0.10 floor for a hue, and no in-gamut teal that dark clears it. Ours is the darkest teal within 2°
-  of the base hue that does (4.02:1 on white; the base teal is 3.47).
 - **Not taken yet:** per-hue glyph colours on a solid (the branch puts dark glyphs on magenta, orange, teal and sky in
   light; we keep one `--ds-on-hue` and icons only there); a named neutral hue and a named "Other" series token, and the
   chart animations (grow-x / grow-y) and forced-colours chart marks, which wait for the charts work; the shell patterns

@@ -145,8 +145,10 @@ step.
   light, never the same grey). Hues 1 to 5 keep their colour, as before the layer. No component change.
   Turning it off or on again takes a rebuild and a redeploy (`docs/infrastructure/ENV_MATRIX.md`).
 - **Increase contrast** (the OS setting, under the skin): the marks that fall short move along their own hue, light
-  magenta, orange, teal, sky, success and warning darker, dark ultramarine and violet lighter; the tints, solids and
-  status inks follow, and every gate above still holds (`atlasHighContrast.test.ts`; values in `atlas-skin.md`).
+  magenta, orange, teal, sky, success and warning darker (each at least 4.5:1 on the page), dark ultramarine and violet
+  lighter; the tints, solids and status inks follow, and every gate above still holds, except that the light teal sits
+  at the most chroma sRGB has for it (0.095, under the 0.10 floor; the one exemption) (`atlasHighContrast.test.ts`;
+  values in `atlas-skin.md`).
 - **A status colour or a ramp step is never a text colour** (`text-[var(--ds-warning)]`, `text-ds-chart-seq-3`): words
   and the icon beside them read the `-text` inks (`statusInkGuard.test.ts`, no allowlist).
 

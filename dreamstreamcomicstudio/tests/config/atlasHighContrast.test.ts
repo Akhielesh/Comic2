@@ -38,16 +38,18 @@ const rules = parseRules(indexCss);
 const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
 
 /**
- * The eight overrides, by theme (the Atlas design branch's own high-contrast block), with one deliberate
- * difference: the light teal. The branch's #06847f has OKLCH chroma 0.095, under this tree's 0.10 floor for a hue
- * (below it a hue reads as grey; paletteChecks.ts), and no in-gamut teal that dark clears it, so this tree takes
- * #008e87: the darkest teal within 2° of the base hue that keeps chroma ≥ 0.10 (4.02:1 on white; the base is 3.47).
+ * The eight overrides, by theme, exactly as the Atlas design branch's own high-contrast block has them. One of them
+ * sits under this tree's chroma floor for a hue (0.10, paletteChecks.ts): the light teal #06847f, OKLCH C 0.095. No
+ * in-gamut teal that dark reaches 0.10 (sRGB runs out of chroma there), and the floor exists so a hue never reads as
+ * grey; under "increase contrast" a firm mark (≥ 4.5:1 on the page, the branch's aim) wins over the last 0.005 of
+ * chroma. So the categorical check below exempts exactly that one slot, and only in this block, and pins it instead
+ * to the most chroma sRGB allows at its lightness and hue (GAMUT_LIMITED). Every other palette keeps the full floor.
  */
-const ATLAS_BRANCH_LIGHT_TEAL = '#06847f';
+const GAMUT_LIMITED_LIGHT_TEAL = '#06847f';
 const LIGHT_OVERRIDES = {
   '--ds-hue-2': '#cd3c8e',
   '--ds-hue-3': '#ba5b03',
-  '--ds-hue-4': '#008e87',
+  '--ds-hue-4': '#06847f',
   '--ds-hue-7': '#006a9d',
   '--ds-success': '#12873d',
   '--ds-warning': '#a46a07'
@@ -142,14 +144,16 @@ describe('Atlas skin under "increase contrast" — every derived token still mee
   for (const mode of MODES) {
     it(`${mode}: the hues as marks pass the categorical gates and are ≥ 3:1 on every chart surface (slot order and chart order)`, () => {
       const surfacesHex = chartSurfaces(mode);
-      const report = checkCategorical(palette(mode), { mode, surfaces: surfacesHex });
-      expect(report.lowContrast, mode).toEqual([]);
-      expect(report.offBand, mode).toEqual([]);
-      expect(report.lowChroma, mode).toEqual([]);
-      expect(report.cvd.state, `${mode} worst ${report.cvd.a}↔${report.cvd.b} ${report.cvd.deltaE.toFixed(1)}`).toBe('pass');
-      expect(report.normal.pass, mode).toBe(true);
-      const ordered = design.CHART_HUE_ORDER.map((slot) => palette(mode)[slot - 1]);
-      expect(checkCategorical(ordered, { mode, surfaces: surfacesHex }).ok, `${mode} chart order`).toBe(true);
+      // The one exemption from the chroma floor: the gamut-limited light teal, pinned on its own below.
+      const exempt = mode === 'light' ? [GAMUT_LIMITED_LIGHT_TEAL] : [];
+      for (const order of [palette(mode), design.CHART_HUE_ORDER.map((slot) => palette(mode)[slot - 1])]) {
+        const report = checkCategorical(order, { mode, surfaces: surfacesHex });
+        expect(report.lowContrast, mode).toEqual([]);
+        expect(report.offBand, mode).toEqual([]);
+        expect(report.lowChroma.map((l) => l.hex), mode).toEqual(exempt);
+        expect(report.cvd.state, `${mode} worst ${report.cvd.a}↔${report.cvd.b} ${report.cvd.deltaE.toFixed(1)}`).toBe('pass');
+        expect(report.normal.pass, mode).toBe(true);
+      }
     });
 
     it(`${mode}: each hue's text step is ≥ 4.5:1 on its own soft tint (mixed from the moved hue) and on every surface`, () => {
@@ -242,12 +246,43 @@ describe('Atlas skin under "increase contrast" — every derived token still mee
     expect(derived).toEqual(expect.arrayContaining(['--ds-hue-2-soft', '--ds-hue-7-solid', '--ds-success-text', '--ds-warning-text', '--ds-wash-hero']));
   });
 
-  it('the light teal differs from the Atlas design branch on purpose: its #06847f fails the chroma floor, ours clears it', () => {
-    expect(oklchOf(ATLAS_BRANCH_LIGHT_TEAL).C).toBeLessThan(0.1);
-    const mutated = palette('light').map((h, i) => (i === 3 ? ATLAS_BRANCH_LIGHT_TEAL : h));
-    const report = checkCategorical(mutated, { mode: 'light', surfaces: chartSurfaces('light') });
-    expect(report.lowChroma.map((l) => l.hex)).toEqual([ATLAS_BRANCH_LIGHT_TEAL]);
-    expect(oklchOf(LIGHT_OVERRIDES['--ds-hue-4']).C).toBeGreaterThanOrEqual(0.1);
+  it('light: every mark the block moves is ≥ 4.5:1 on the page, the Atlas design branch\'s aim for a high-contrast mark', () => {
+    const canvas = more('light', '--ds-canvas');
+    const failing = Object.keys(LIGHT_OVERRIDES)
+      .map((k) => [k, ratio(more('light', k), canvas)] as const)
+      .filter(([, r]) => r < 4.5)
+      .map(([k, r]) => `${k} ${r.toFixed(2)}`);
+    expect(failing).toEqual([]);
+  });
+
+  it('the chroma-floor exemption is exactly the gamut-limited light teal: as much chroma as sRGB allows at its lightness and hue', () => {
+    expect(LIGHT_OVERRIDES['--ds-hue-4']).toBe(GAMUT_LIMITED_LIGHT_TEAL);
+    const { L, C, h } = oklchOf(GAMUT_LIMITED_LIGHT_TEAL);
+    // Under the floor, but only just (the exemption cannot hide a grey).
+    expect(C).toBeLessThan(0.1);
+    expect(C).toBeGreaterThanOrEqual(0.09);
+    // The most chroma an in-gamut colour has at this L and h (bisection on the unclamped OKLab → linear sRGB).
+    const inGamut = (c: number) => {
+      const [A, B] = [c * Math.cos((h * Math.PI) / 180), c * Math.sin((h * Math.PI) / 180)];
+      const [l, m, s] = [L + 0.3963377774 * A + 0.2158037573 * B, L - 0.1055613458 * A - 0.0638541728 * B, L - 0.0894841775 * A - 1.291485548 * B].map((v) => v ** 3);
+      const lin = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
+      return lin.every((v) => v >= -1e-6 && v <= 1 + 1e-6);
+    };
+    let [lo, hi] = [0, 0.4];
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2;
+      if (inGamut(mid)) lo = mid;
+      else hi = mid;
+    }
+    expect(lo, 'the gamut ceiling itself is under the floor here').toBeLessThan(0.1);
+    expect(lo - C, `teal C ${C.toFixed(4)} vs the gamut's ${lo.toFixed(4)}`).toBeLessThanOrEqual(0.003);
+    // No other slot, in either theme or either cascade, is exempt.
+    for (const mode of MODES) {
+      for (const which of [base, more] as const) {
+        const low = SLOTS.map((s) => hexOf(which(mode, `--ds-hue-${s}`))).filter((hex) => oklchOf(hex).C < 0.1);
+        expect(low, `${mode} ${which === base ? 'base' : 'more contrast'}`).toEqual(mode === 'light' && which === more ? [GAMUT_LIMITED_LIGHT_TEAL] : []);
+      }
+    }
   });
 
   it('the gates bite: Atlas base warning (#f59e0b) as a mark is under 3:1 on white, the reason it moves under more contrast', () => {

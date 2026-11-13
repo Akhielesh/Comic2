@@ -1496,8 +1496,9 @@ html:root[data-ds-colour="off"] .ds-art-scope {
    ink. Only under the skin; Atlas's own Settings toggle (.atlas-high-contrast) has no Comic Studio
    counterpart. The colour layer follows the Atlas design branch: the hues and status colours that fall
    short of a firm mark are moved along their own hue (light magenta, orange, teal, sky, success and
-   warning darker; dark ultramarine and violet lighter; the light teal is #008e87, not the branch's #06847f,
-   which falls under this tree's 0.10 chroma floor for a hue). Their soft tints, solids and status text inks are
+   warning darker; dark ultramarine and violet lighter), each mark at least 4.5:1 on the page. The light teal
+   #06847f sits just under the 0.10 chroma floor for a hue, at the most chroma sRGB has at that lightness:
+   the one exemption, pinned in atlasHighContrast.test.ts. Their soft tints, solids and status text inks are
    declared on this same element, so they recompute from the moved colour (atlasHighContrast.test.ts);
    the dark base block outranks the light one here, so the light moves never reach the dark theme. ---- */
 @media (prefers-contrast: more) {
@@ -1510,7 +1511,7 @@ html:root[data-ds-colour="off"] .ds-art-scope {
     --ds-control-border-hover: var(--ds-ink);
     --ds-hue-2: #cd3c8e;
     --ds-hue-3: #ba5b03;
-    --ds-hue-4: #008e87;
+    --ds-hue-4: #06847f;
     --ds-hue-7: #006a9d;
     --ds-success: #12873d;
     --ds-warning: #a46a07;

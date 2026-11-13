@@ -426,7 +426,7 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
       // The colour layer's marks, moved along their own hue (atlasHighContrast.test.ts measures them).
       '--ds-hue-2': '#cd3c8e',
       '--ds-hue-3': '#ba5b03',
-      '--ds-hue-4': '#008e87',
+      '--ds-hue-4': '#06847f',
       '--ds-hue-7': '#006a9d',
       '--ds-success': '#12873d',
       '--ds-warning': '#a46a07'
