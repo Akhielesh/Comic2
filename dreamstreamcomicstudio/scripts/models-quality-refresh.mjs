@@ -21,6 +21,9 @@
 //     key, reading it costs nothing). How its rows map to our models is UNVERIFIED, so this script only saves
 //     the raw payload for the owner to review (--benchmarks-out); it never merges guessed mappings. AA's own
 //     site is never scraped.
+//     A separate owner-reviewed primary-page research update may replace a dated AA board after EVERY
+//     tracked entry is rechecked. Preserve exact variant names and samples; do not import leaderboard
+//     price examples as Studio generation quotes or change untouched boards' dates.
 //
 // Run with tsx (the repo's script runner) so the TypeScript merge rules are shared, not copied. Node 22.18+
 // can also run it directly (type stripping).

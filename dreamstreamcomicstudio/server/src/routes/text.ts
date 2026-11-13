@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireGeminiKey, requireOpenRouterKey } from '../middleware/keys.js';
+import { requireOpenRouterKey } from '../middleware/keys.js';
 import {
   analyzeScript,
   generateStoryOutline,
@@ -23,6 +23,8 @@ import {
   settleReservedOperation
 } from '../services/usageEnforcer.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
+import { providerLabel } from '../../../shared/providers.js';
+import type { PipelineProvider } from '../ai/client.js';
 import { logger } from '../lib/logger.js';
 import { validateExtractWorldBody } from './text.validation.js';
 
@@ -46,7 +48,7 @@ const assertTextModelAccess = async (
   return access.effectiveModel;
 };
 
-type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' | 'nvidia' };
+type TextProvider = { apiKey: string; model: string; provider: PipelineProvider };
 
 /**
  * Every model a /api/text/* pipeline call may be billed for (usage budget). These routes run
@@ -87,10 +89,8 @@ const settleSpentQuietly = async (operation: string, reservationId: string | und
   }
 };
 
-// Text generation routes through OpenRouter or NVIDIA Build (both OpenAI-compatible, via the
-// gateway shim in ai/client.ts) when their key is present, otherwise the legacy Gemini path.
-// An explicit `X-Text-Source` (set when the user picks a model from a given source) wins;
-// otherwise precedence is OpenRouter → NVIDIA → Gemini. Sends 401 when no key is available.
+// The classic pipeline supports OpenRouter, NVIDIA and Gemini. An explicit source
+// is a constraint: do not send its model or spend to a different provider.
 const resolveTextProvider = async (
   req: any,
   res: any,
@@ -128,16 +128,28 @@ const resolveTextProvider = async (
   const geminiKey = req.apiKeys?.geminiKey;
   const geminiPick = async (): Promise<TextProvider> => ({
     apiKey: geminiKey as string,
-    model: await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model'))),
+    model: await assertTextModelAccess(req, resolveRequestedModel(textSource === 'gemini' ? requested || req.header('X-Gemini-Model') : req.header('X-Gemini-Model'))),
     provider: 'gemini'
   });
 
-  // Explicit source selection wins (the user picked a model from this source).
-  if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();
-  if (textSource === 'openrouter' && openRouterKey) return openRouterPick();
-  if (textSource === 'gemini' && geminiKey) return geminiPick();
+  // A selected source is a routing constraint, never permission to use a different
+  // provider's key if this one is missing or disabled.
+  if (textSource) {
+    if (!['openrouter', 'nvidia', 'gemini'].includes(textSource)) {
+      res.status(400).json({ error: { message: 'Classic Studio supports OpenRouter, NVIDIA and Gemini. Choose one of these sources for this project.', code: 'TEXT_SOURCE_UNSUPPORTED' } });
+      return null;
+    }
+    if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();
+    if (textSource === 'openrouter' && openRouterKey) return openRouterPick();
+    if (textSource === 'gemini' && geminiKey) return geminiPick();
+    res.status(401).json({ error: {
+      message: `${providerLabel(textSource)} is selected but has no enabled key. Connect it in Settings → API Configuration or choose another source.`,
+      code: 'TEXT_KEY_MISSING'
+    } });
+    return null;
+  }
 
-  // Fallback precedence.
+  // Preserve the classic default routing when no source was chosen.
   if (openRouterKey) return openRouterPick();
   if (nvidiaKey) return nvidiaPick();
   if (geminiKey) return geminiPick();
@@ -179,7 +191,7 @@ textRouter.post('/analyze-script', async (req, res, next) => {
     let result: Awaited<ReturnType<typeof analyzeScript>>;
     try {
       const creativeDirection = typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined;
-      result = await analyzeScript(apiKey, script, effectiveModel, creativeDirection);
+      result = await analyzeScript(apiKey, script, effectiveModel, creativeDirection, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -239,7 +251,7 @@ textRouter.post('/story-outline', async (req, res, next) => {
 
     let result: Awaited<ReturnType<typeof generateStoryOutline>>;
     try {
-      result = await generateStoryOutline(apiKey, req.body || {}, effectiveModel);
+      result = await generateStoryOutline(apiKey, req.body || {}, effectiveModel, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -298,7 +310,7 @@ textRouter.post('/story-draft', async (req, res, next) => {
 
     let result: Awaited<ReturnType<typeof generateStoryDraft>>;
     try {
-      result = await generateStoryDraft(apiKey, req.body || {}, effectiveModel);
+      result = await generateStoryDraft(apiKey, req.body || {}, effectiveModel, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -361,7 +373,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
 
     let result: Awaited<ReturnType<typeof runStoryToolPrompt>>;
     try {
-      result = await runStoryToolPrompt(apiKey, script, instruction, Array.isArray(history) ? history : [], effectiveModel);
+      result = await runStoryToolPrompt(apiKey, script, instruction, Array.isArray(history) ? history : [], effectiveModel, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -428,7 +440,8 @@ textRouter.post('/extract-world', async (req, res, next) => {
         scenes,
         script,
         effectiveModel,
-        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
+        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined,
+        provider
       );
     } catch (error) {
       await releaseReservedOperation({
@@ -521,7 +534,8 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
         previousPanelContext,
         effectiveModel,
         typeof continuitySummary === 'string' ? continuitySummary : undefined,
-        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
+        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined,
+        provider
       );
     } catch (error) {
       await releaseReservedOperation({
@@ -586,7 +600,7 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
 
     let result: Awaited<ReturnType<typeof continuityAudit>>;
     try {
-      result = await continuityAudit(apiKey, req.body || {}, effectiveModel);
+      result = await continuityAudit(apiKey, req.body || {}, effectiveModel, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -649,7 +663,7 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
 
     let result: Awaited<ReturnType<typeof updateContinuitySummary>>;
     try {
-      result = await updateContinuitySummary(apiKey, currentSummary, scene, panels, effectiveModel);
+      result = await updateContinuitySummary(apiKey, currentSummary, scene, panels, effectiveModel, provider);
     } catch (error) {
       await releaseReservedOperation({
         req,
@@ -693,6 +707,10 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
 // set { jsonMode: true } to force a JSON object response. BYOK via X-OpenRouter-Key.
 textRouter.post('/generate', async (req, res, next) => {
   try {
+    const source = String(req.header('X-Text-Source') || '').trim().toLowerCase();
+    if (source && source !== 'openrouter') {
+      return res.status(400).json({ error: { code: 'TEXT_SOURCE_UNSUPPORTED', message: 'This text endpoint supports OpenRouter. Choose OpenRouter for this request.' } });
+    }
     const apiKey = requireOpenRouterKey(req, res);
     if (!apiKey) return;
     const { prompt, messages, system, model, jsonMode, temperature, maxTokens, projectId } = req.body || {};

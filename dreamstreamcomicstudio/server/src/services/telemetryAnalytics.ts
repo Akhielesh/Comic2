@@ -308,27 +308,52 @@ export const getSessionTimeline = async (sessionId: string) => {
 // the model picker so users don't unknowingly pick a slow (often free/queued) model.
 // Tool-using turns are excluded (tools dominate latency); only models with a few
 // samples are reported. Cached.
-const modelSpeedCache = new TtlCache<Record<string, { p50Ms: number; samples: number }>>(120_000, 4);
+export interface ModelLatencyReport {
+  models: Record<string, { p50Ms: number; samples: number }>;
+  measuredAt: number | null;
+  windowDays: number;
+  sampleLimit: number;
+  /** At least this many events exist; the newest sampleLimit were examined. */
+  capped: boolean;
+  status: 'available' | 'empty' | 'unavailable';
+  measurement: 'chat_turn_latency_without_tools';
+  /** Legacy telemetry cannot reliably split identical model IDs by provider route. */
+  sourceScope: 'pooled';
+}
+const MODEL_SPEED_SAMPLE_LIMIT = 8000;
+const modelSpeedCache = new TtlCache<ModelLatencyReport>(120_000, 4);
 
-export const getModelLatency = (daysInput?: unknown): Promise<Record<string, { p50Ms: number; samples: number }>> => {
+export const getModelLatencyReport = (daysInput?: unknown): Promise<ModelLatencyReport> => {
   const days = clampInt(daysInput, 7, 1, 30);
   return modelSpeedCache.getOrSet(`speed:${days}`, async () => {
-    if (!storageReady()) return {};
+    const report: ModelLatencyReport = {
+      models: {}, measuredAt: null, windowDays: days, sampleLimit: MODEL_SPEED_SAMPLE_LIMIT,
+      capped: false, status: 'unavailable', measurement: 'chat_turn_latency_without_tools', sourceScope: 'pooled'
+    };
+    if (!storageReady()) return report;
     try {
       const admin = getSupabaseAdmin();
-      const { data, error } = await admin
-        .from('telemetry_events')
-        .select('metadata')
-        .eq('event_type', 'chat_turn')
-        .gte('created_at', sinceIso(days))
-        .limit(8000);
-      if (error || !Array.isArray(data)) return {};
+      const data: Array<{ metadata?: Record<string, unknown> }> = [];
+      const since = sinceIso(days);
+      // PostgREST may cap a response below .limit(8000). Page explicitly so the
+      // advertised observation cap reflects the rows actually examined.
+      const pageSize = 500;
+      for (let offset = 0; offset < MODEL_SPEED_SAMPLE_LIMIT; offset += pageSize) {
+        const page = await admin.from('telemetry_events').select('metadata')
+          .eq('event_type', 'chat_turn').gte('created_at', since)
+          .order('created_at', { ascending: false }).order('id', { ascending: false })
+          .range(offset, offset + pageSize - 1);
+        if (page.error || !Array.isArray(page.data)) return report;
+        data.push(...page.data);
+        if (page.data.length < pageSize) break;
+      }
+      report.capped = data.length >= MODEL_SPEED_SAMPLE_LIMIT;
       const byModel = new Map<string, number[]>();
-      for (const row of data as Array<{ metadata?: Record<string, unknown> }>) {
+      for (const row of data) {
         const m = row.metadata || {};
         if (Number(m.toolCount) > 0) continue; // pure model speed only
         const model = typeof m.model === 'string' ? m.model : '';
-        const lat = Number(m.latencyMs);
+        const lat = typeof m.latencyMs === 'number' ? m.latencyMs : NaN;
         if (!model || !Number.isFinite(lat) || lat < 0) continue;
         const arr = byModel.get(model) || [];
         arr.push(lat);
@@ -340,9 +365,13 @@ export const getModelLatency = (daysInput?: unknown): Promise<Record<string, { p
         lats.sort((a, b) => a - b);
         out[model] = { p50Ms: Math.round(lats[Math.floor(lats.length * 0.5)]), samples: lats.length };
       }
-      return out;
+      return { ...report, measuredAt: Date.now(), models: out, status: Object.keys(out).length ? 'available' : 'empty' };
     } catch {
-      return {};
+      return report;
     }
   });
 };
+
+/** Backward-compatible picker/router view of the same cached observations. */
+export const getModelLatency = async (daysInput?: unknown): Promise<ModelLatencyReport['models']> =>
+  (await getModelLatencyReport(daysInput)).models;

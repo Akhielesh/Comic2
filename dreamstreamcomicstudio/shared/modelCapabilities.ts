@@ -137,6 +137,16 @@ const KIND_LABELS: Record<ModelKind, string> = {
 export const productFitForModel = (model: ModelCapabilityInput, product: string): ProductFit => {
   const profile = PRODUCT_MODEL_PROFILES[product];
   if (!profile) return { allowed: true, missingRecommended: [] };
+  // OpenRouter's :batch variants require its asynchronous /batches API. The
+  // interactive studios use synchronous/streamed chat transports, even when a
+  // batch row advertises the same text capabilities as its regular counterpart.
+  if (/:batch$/i.test(model.id)) {
+    return {
+      allowed: false,
+      blockedReason: `${model.id} requires asynchronous batch processing, which this studio does not support.`,
+      missingRecommended: []
+    };
+  }
   const caps = deriveModelCapabilities(model);
   if (!profile.kinds.includes(caps.kind)) {
     return {

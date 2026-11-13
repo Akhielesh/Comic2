@@ -69,8 +69,28 @@ request header (this device's key)  >  account key (user_api_keys, encrypted)  >
 ## The catalog
 
 `GET /api/models/catalog` merges OpenRouter's live public list (the `base`) with every
-direct provider's models — a curated **static seed** (so the page is populated even
-keyless) plus the live `/models` list when a key is present, de-duplicated.
+direct provider's models. A successful authenticated listing supplies the current key's
+IDs, with curated metadata for exact matches; a **static seed** is the fallback when no
+listing is available. Anthropic discovery follows pagination. A listing proves discovery,
+not that a particular generation request or capability will succeed.
+
+Rows distinguish `catalogOrigin` (`live`, `curated`, `cached`) and `catalogCheckedAt`
+(last live observation) from `pricingOrigin` (`provider`, `curated`, `unknown`).
+`pricingKnown: false` means numeric zeros are placeholders, never a free quote. NVIDIA's
+listing does not publish per-call prices. Direct provider seed prices remain curated
+even when their model IDs are found live. Z.AI and MiniMax currently have no listing
+endpoint configured and therefore remain curated.
+
+The durable index is a union of public metadata discovered through different keys;
+one account's smaller listing must not retire another account's models. Cached rows
+retain their individual observation dates. The browser's full-catalog snapshot is not
+overwritten by studio/source/search subsets, and cached responses are marked stale.
+
+`GET /api/models/speed` reports observed successful Chat turn duration, excluding tool
+turns and models with fewer than three samples. It includes `measuredAt`, `windowDays`,
+`sampleLimit`, `capped`, and availability status. It pools routes by model ID; this is
+end-to-end response time, not throughput, model quality, or an availability guarantee.
+Both server and client cache it for two minutes. Missing observations remain missing.
 
 ### Resilience (why OpenRouter once "disappeared")
 

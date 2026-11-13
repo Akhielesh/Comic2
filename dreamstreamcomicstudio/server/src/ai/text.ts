@@ -10,7 +10,7 @@ import {
   ContinuitySummaryResponse,
   ContinuityAuditResponse
 } from '../../../apiTypes.js';
-import { createClient } from './client.js';
+import { createClient, type PipelineProvider } from './client.js';
 import { extractJson, ensureArray, isString } from './json.js';
 import { buildUsage } from './usage.js';
 import { withRetry, withModelTimeout } from './utils.js';
@@ -604,8 +604,8 @@ export const filterExtractedWorldData = (
   return { characters, items, locations, diagnostics };
 };
 
-export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string, creativeDirection?: string): Promise<AnalyzeScriptResponse> => {
-  const ai = createClient(apiKey);
+export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string, creativeDirection?: string, providerId?: PipelineProvider): Promise<AnalyzeScriptResponse> => {
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const segments = segmentScript(script);
   const segmentContext = segments
@@ -707,9 +707,10 @@ ${creativeDirection && creativeDirection.trim() ? `
 export const generateStoryOutline = async (
   apiKey: string,
   inputs: { genre?: string; tone?: string; setting?: string; characters?: string; conflict?: string; ending?: string; length?: string; },
-  modelOverride?: string
+  modelOverride?: string,
+  providerId?: PipelineProvider
 ): Promise<StoryOutlineResponse> => {
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const prompt = `
     You are a story architect for a comic.
@@ -749,9 +750,10 @@ export const generateStoryOutline = async (
 export const generateStoryDraft = async (
   apiKey: string,
   inputs: { outline?: string; genre?: string; tone?: string; setting?: string; characters?: string; length?: string; },
-  modelOverride?: string
+  modelOverride?: string,
+  providerId?: PipelineProvider
 ): Promise<StoryDraftResponse> => {
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const prompt = `
     You are a comic script writer.
@@ -795,9 +797,10 @@ export const runStoryToolPrompt = async (
   script: string,
   instruction: string,
   history: Array<{ role: 'user' | 'model'; text: string }> = [],
-  modelOverride?: string
+  modelOverride?: string,
+  providerId?: PipelineProvider
 ): Promise<StoryToolResponse> => {
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const systemInstruction = `
     You are a story analysis helper for a comic creation app.
@@ -842,7 +845,8 @@ export const extractWorldDetails = async (
   scenes: Scene[],
   script?: string,
   modelOverride?: string,
-  creativeDirection?: string
+  creativeDirection?: string,
+  providerId?: PipelineProvider
 ): Promise<ExtractWorldResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scenes || scenes.length === 0) {
@@ -862,7 +866,7 @@ export const extractWorldDetails = async (
       }
     };
   }
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   // Cap how much raw text per scene we send. Sending every scene's full body in one call is the
   // main reason extraction blows past the request timeout (and racks up cost) on long scripts.
   // Entities are named throughout, so a generous head slice keeps grounding while staying fast.
@@ -1072,14 +1076,15 @@ export const generatePanelBreakdown = async (
   previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>,
   modelOverride?: string,
   continuitySummary?: string,
-  creativeDirection?: string
+  creativeDirection?: string,
+  providerId?: PipelineProvider
 ): Promise<PanelBreakdownResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scene || !scene.synopsis) {
     return { panels: [], prompt: '', responseText: '', model };
   }
 
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   // Only this scene's binding is relevant to its panels; other scenes' bindings were pure
   // bloat re-sent on every call (cross-scene narrative now comes from the continuity
   // summary above). Fall back to all bindings if this scene can't be matched — no regression.
@@ -1203,9 +1208,10 @@ export const continuityAudit = async (
       locationId?: string;
     }>;
   },
-  modelOverride?: string
+  modelOverride?: string,
+  providerId?: PipelineProvider
 ): Promise<ContinuityAuditResponse> => {
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const prompt = `
 You are a comic continuity auditor.
@@ -1296,9 +1302,10 @@ export const updateContinuitySummary = async (
   currentSummary: string | undefined,
   scene: Scene,
   panels: Array<{ description: string; dialogue: string }>,
-  modelOverride?: string
+  modelOverride?: string,
+  providerId?: PipelineProvider
 ): Promise<ContinuitySummaryResponse> => {
-  const ai = createClient(apiKey);
+  const ai = createClient(apiKey, providerId);
   const model = resolveTextModel(modelOverride);
   const prompt = `
 Update the running continuity summary for this comic.

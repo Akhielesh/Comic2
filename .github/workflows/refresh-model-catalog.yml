@@ -21,20 +21,32 @@ permissions:
 jobs:
   refresh-catalog:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: dreamstreamcomicstudio
-    env:
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      # These are Actions secrets, separate from the backend's Cloudflare/D1 config.
+      # Fail before installing dependencies; an empty configuration must not look like
+      # a provider outage or a successful refresh with no new models. Never print values.
+      - name: Check catalog configuration
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          missing=0
+          for name in VITE_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing Actions secret ${name}. Configure it in repository Settings > Secrets and variables > Actions; backend Cloudflare/D1 secrets are not inherited by this job."
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -44,9 +56,15 @@ jobs:
           cache: npm
           cache-dependency-path: dreamstreamcomicstudio/package-lock.json
 
-      # No install scripts: this job holds the Supabase service-role key in its env.
+      # No install scripts. Provider and service-role keys are scoped to the refresh step.
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
       - name: Refresh public model catalog
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: npm run catalog:refresh

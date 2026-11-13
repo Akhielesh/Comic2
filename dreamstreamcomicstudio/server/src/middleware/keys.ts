@@ -43,7 +43,9 @@ declare module 'express-serve-static-core' {
 // NOT in that allow-list is treated as disabled — its key (BYOK *and* platform) is
 // dropped here so no route can use it, accidentally or otherwise.
 const parseAllowedSources = (header?: string): Set<string> | null => {
-  if (typeof header !== 'string' || !header.trim()) return null;
+  // Missing means an older client with no restrictions; an explicitly empty list
+  // means every provider is off. Treating both as absent re-enabled platform keys.
+  if (typeof header !== 'string') return null;
   return new Set(header.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 };
 
@@ -63,8 +65,8 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
       providerKeys[def.id] = { key: null, byok: false };
       continue;
     }
-    const headerKey = req.header(def.header) || null;
-    const key = headerKey || process.env[def.keyEnv] || null;
+    const headerKey = req.header(def.header)?.trim() || null;
+    const key = headerKey || process.env[def.keyEnv]?.trim() || null;
     providerKeys[def.id] = { key, byok: Boolean(headerKey) };
   }
 

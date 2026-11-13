@@ -70,6 +70,16 @@ describe('productFitForModel', () => {
     expect(fit.blockedReason).toMatch(/safety classifier/);
   });
 
+  it('blocks asynchronous batch variants despite otherwise sufficient text capabilities', () => {
+    for (const product of ['chat_studio', 'comic_studio', 'stream_studio']) {
+      const fit = productFitForModel({ ...chatModel, id: `${chatModel.id}:batch` }, product);
+      expect(fit.allowed).toBe(false);
+      expect(fit.blockedReason).toMatch(/asynchronous batch/);
+      expect(productFitForModel(chatModel, product).allowed).toBe(true);
+    }
+    expect(productFitForModel({ ...chatModel, id: 'vendor/batch-instruct' }, 'chat_studio').allowed).toBe(true);
+  });
+
   it('requires tool calling for the stream_studio profile but not Chat Studio', () => {
     const toolless = { ...chatModel, id: 'some/chatty-model', supportedParameters: ['temperature'] };
     expect(productFitForModel(toolless, 'chat_studio').allowed).toBe(true);

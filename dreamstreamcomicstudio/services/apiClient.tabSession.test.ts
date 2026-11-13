@@ -28,7 +28,9 @@ vi.mock('./supabase', () => ({
   isStoredSession: h.isStored
 }));
 
-import { clearCachedAuthToken, get } from './apiClient';
+import { clearCachedAuthToken, get, post } from './apiClient';
+import { addKey, ALL_PROVIDERS, listKeys } from './apiKeys';
+import { setProviderEnabled } from './sourceGovernance';
 
 const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
 const lastAuth = () => ((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].headers as Record<string, string>).Authorization;
@@ -42,6 +44,36 @@ beforeEach(() => {
   h.emit('SIGNED_OUT', null); // forget whatever an earlier test cached
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe('apiClient provider governance', () => {
+  const headers = () => ((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].headers as Record<string, string>);
+
+  it('all sources off sends an empty allow-list and no keys, including an explicit legacy Gemini override', async () => {
+    addKey({ provider: 'openrouter', key: 'local-test-key' });
+    for (const provider of ALL_PROVIDERS) setProviderEnabled(provider, false);
+    await post('/api/test', {}, { apiKey: 'explicit-test-key' });
+    expect(headers()['X-Allowed-Sources']).toBe('');
+    expect(Object.keys(headers()).filter((name) => /-key$/i.test(name))).toEqual([]);
+  });
+
+  it('a late legacy NVIDIA input is attached consistently with key presence', async () => {
+    listKeys();
+    localStorage.setItem('dreamstream_nvidia_key', 'legacy-test-key');
+    await get('/api/test');
+    expect(headers()['X-Nvidia-Key']).toBe('legacy-test-key');
+  });
+
+  it('Sarvam stays opt-in and disabled sources cannot send it', async () => {
+    addKey({ provider: 'sarvam', key: 'sarvam-test-key' });
+    await post('/api/test', {});
+    expect(headers()['X-Sarvam-Key']).toBeUndefined();
+    await post('/api/test', {}, { useSarvamKey: true });
+    expect(headers()['X-Sarvam-Key']).toBe('sarvam-test-key');
+    setProviderEnabled('sarvam', false);
+    await post('/api/test', {}, { useSarvamKey: true });
+    expect(headers()['X-Sarvam-Key']).toBeUndefined();
+  });
+});
 
 describe('apiClient bearer token — follows this tab’s own session', () => {
   it('an event for a session this tab stores is adopted; one another tab announced is not', async () => {

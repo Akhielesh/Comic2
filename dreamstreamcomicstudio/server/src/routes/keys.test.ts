@@ -283,12 +283,27 @@ describe('the signed-in user’s account key (real attachAccountKeys)', () => {
     expect(upstream.map(authOut)).toEqual(['Bearer sk-or-ACCOUNT']);
   });
 
-  it('allowance on and not used up: the platform key is kept (BYOK false) → missing, no call', async () => {
+  it('allowance on: verification still reads only the account key without changing generation payer', async () => {
     accountRow();
     store.allowance = { on: true, usePlatformAllowance: true, exhausted: false };
     const r = await validate('openrouter');
-    expect(r.body).toMatchObject({ provider: 'openrouter', status: 'missing', valid: false });
+    expect(r.body).toMatchObject({ provider: 'openrouter', status: 'valid', valid: true });
+    expect(upstream.map(authOut)).toEqual(['Bearer sk-or-ACCOUNT']);
+  });
+
+  it.each(['', 'gemini'])('an account key cannot bypass source governance (%s)', async (sources) => {
+    accountRow();
+    store.allowance = { on: true, usePlatformAllowance: true, exhausted: false };
+    const r = await validate('openrouter', { 'X-Allowed-Sources': sources });
+    expect(r.body).toMatchObject({ status: 'missing', valid: false });
     expect(upstream).toEqual([]);
+  });
+
+  it('a candidate header is checked instead of the saved account secret', async () => {
+    accountRow();
+    store.allowance = { on: true, usePlatformAllowance: true, exhausted: false };
+    await validate('openrouter', { 'X-OpenRouter-Key': 'sk-or-CANDIDATE' });
+    expect(upstream.map(authOut)).toEqual(['Bearer sk-or-CANDIDATE']);
   });
 });
 

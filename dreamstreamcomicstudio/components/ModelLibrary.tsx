@@ -1,1279 +1,165 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useIsAdmin } from '../hooks/useIsAdmin';
-import { ModelBenchPanel } from './models/ModelBenchPanel';
-import {
-  ArrowLeft,
-  Search,
-  Image as ImageIcon,
-  Type as TypeIcon,
-  Layers,
-  AlertTriangle,
-  Check,
-  Loader2,
-  X,
-  Sparkles,
-  Scale,
-  Wand2,
-  Zap,
-  ThumbsUp,
-  ThumbsDown,
-  ShieldCheck,
-  ExternalLink,
-  MessageSquare,
-  SlidersHorizontal,
-  ArrowUpDown,
-  RotateCcw,
-  Code2,
-  FlaskConical,
-  Gauge
-} from 'lucide-react';
-import {
-  fetchModelCatalog,
-  fetchModelVerification,
-  loadCachedCatalog,
-  costLabel,
-  providerOrigin,
-  sourceLabel,
-  sourceShortLabel,
-  type Band,
-  type CatalogModel,
-  type ModelVerification
-} from '../services/modelCatalog';
-import { isProviderEnabled } from '../services/sourceGovernance';
-import { isTextProvider, PROVIDERS_ORDERED } from '../shared/providers';
-import { ProviderLogo, hasProviderLogo } from './providerLogos';
-import {
-  setSelectedModel,
-  setStageModel,
-  getModelSelection,
-  MODEL_SELECTION_CHANGED,
-  type ModelSlot,
-  type ModelSelection
-} from '../services/modelSelection';
-import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, type CapabilityTone } from '../services/modelCapabilities';
-import { searchModels } from '../services/modelSearch';
-import { buildSmartTeam, TASK_PROFILES, pickBestForDomain, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
-import { recordModelFeedback, latestVote, feedbackSummary, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
-import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type DomainId } from '../services/modelDomains';
-import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
-import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
-import { ModelProviderIcon, ProviderIcon, SourceIcon } from './models/ProviderIcon';
-import { ProviderSections } from './models/ProviderSections';
-import { SectionHeader } from './models/SectionHeader';
-import { DomainLeaderboard } from './models/DomainLeaderboard';
-import { ModelPopularityPanel } from './models/ModelPopularityPanel';
-import { DrsBenchScores } from './models/DrsBenchScores';
-import { ModelUsageTrends } from './models/ModelUsageTrends';
-import { ImageModelRanking } from './models/ImageModelRanking';
-import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
-import { ModelDataSources } from './models/ModelDataSources';
-import { InfoDot } from './common/InfoTooltip';
-import type { GLOSSARY } from '../services/modelGlossary';
-import { describeCost, classBadge } from '../shared/pricing';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, KeyRound, RefreshCw, X } from 'lucide-react';
+import { fetchModelCatalog, loadCachedCatalog, sourceLabel, type CatalogModel, type CatalogResponse, type ModelSource } from '../services/modelCatalog';
+import { getModelSelection, MODEL_SELECTION_CHANGED, setSelectedModel } from '../services/modelSelection';
+import { API_KEYS_CHANGED, getActiveKey, hasAccountKey, hasUsableKey, isOverLimit } from '../services/apiKeys';
+import { isProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
+import { fetchModelSpeedReport, type ModelSpeedReport } from '../services/modelSpeed';
+import { fetchModelShowcase } from '../services/modelShowcase';
+import type { ModelUsageRow } from '../services/modelUsageTrends';
+import type { ModelShowcaseResponse } from '../shared/modelShowcase';
+import { getProviderDef, PROVIDERS_ORDERED } from '../shared/providers';
 import { useAuth } from '../contexts/AuthContext';
-import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
-import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
-import { recommendModels, accuracyElo } from '../services/modelRecommendations';
-import { getModelSize } from '../services/modelParams';
-import { useModelSourceScope } from '../hooks/useModelSourceScope';
-import type { ModelSource } from '../services/modelCatalog';
+import { Button } from './ds/Button';
+import { Badge } from './ds/Badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ds/Tabs';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ds/Dialog';
+import { CANVAS_BG, HEADING, INK, MUTED } from './chat/studioDesign';
+import { LanguageModels } from './models/LanguageModels';
+import { ImageModels } from './models/ImageModels';
+import { PricePerformance } from './models/PricePerformance';
+import { ProviderIcon, SourceIcon } from './models/ProviderIcon';
+import { focusedTextModels, formatContext, formatDate, formatLatency, modelCapabilities, modelKey, modelMaker, modelPrice } from './models/workspaceData';
 
+const ApiConfiguration = lazy(() => import('./ApiConfiguration').then((m) => ({ default: m.ApiConfiguration })));
+const ModelsUsagePanel = lazy(() => import('./models/ModelsUsagePanel').then((m) => ({ default: m.ModelsUsagePanel })));
+
+export interface ModelsWorkspaceData {
+  catalog: CatalogResponse;
+  speed: ModelSpeedReport;
+  showcase: ModelShowcaseResponse;
+  usageRows?: ModelUsageRow[];
+}
 interface ModelLibraryProps {
   onBack: () => void;
-  /** Launch the AI Chat Platform pre-loaded with this model. */
   onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
+  /** Offline gallery/QA uses the same contracts; production always uses the services. */
+  previewData?: ModelsWorkspaceData;
 }
 
-/** A model can be tried in chat when it outputs text (i.e. not a pure image generator). */
-const canChatWith = (model: CatalogModel): boolean => !model.supportsImageOutput;
+export function connectionState(source: ModelSource): { label: string; note: string } {
+  if (!isProviderEnabled(source)) return { label: 'Turned off', note: 'Enable this connection to use its models.' };
+  const key = getActiveKey(source);
+  if (key && isOverLimit(key)) return { label: 'Limit reached', note: 'The active key has reached its local monthly limit.' };
+  if (key?.validation === 'invalid') return { label: 'Needs attention', note: 'The last authentication check failed.' };
+  if (key?.validation === 'valid') return { label: 'Verified', note: 'Authentication checked ' + formatDate(key.validatedAt) + '. Model access may vary.' };
+  if (hasUsableKey(source)) return { label: 'Key saved', note: hasAccountKey(source) && !key ? 'Saved to your account; authentication has not been checked on this device.' : 'Saving a key does not verify model access.' };
+  return { label: getProviderDef(source)?.platformServed ? 'Platform or personal key' : 'Add a key', note: 'Availability depends on your account and the selected model.' };
+}
 
-// Capability/cost facets are fixed; source facets (one per provider) are generated from
-// the catalog at render time, so any provider — OpenRouter, NVIDIA, OpenAI, Anthropic, … —
-// becomes a "Source: X" chip the moment it has models.
-type BaseFilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'editing' | 'reasoning';
-type FilterKey = BaseFilterKey | ModelSource;
-
-const FILTERS: { key: BaseFilterKey; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'free', label: 'Free' },
-  { key: 'image', label: 'Image' },
-  { key: 'text', label: 'Text' },
-  { key: 'refs', label: 'Reference-capable' },
-  { key: 'editing', label: 'Image editing' },
-  { key: 'reasoning', label: 'Reasoning' }
-];
-
-const TONE_CLASS: Record<CapabilityTone, string> = {
-  free: 'bg-green-500 text-white',
-  image: 'bg-brand-blue text-white',
-  text: 'bg-slate-100 text-slate-700',
-  vision: 'bg-brand-yellow text-black',
-  edit: 'bg-fuchsia-600 text-white',
-  reason: 'bg-indigo-600 text-white',
-  json: 'bg-slate-100 text-slate-700',
-  tools: 'bg-slate-100 text-slate-700',
-  context: 'bg-slate-100 text-slate-700'
-};
-
-const BAND_COLOR: Record<Band, string> = {
-  free: 'bg-green-500 text-white',
-  low: 'bg-brand-blue text-white',
-  medium: 'bg-brand-yellow text-black',
-  high: 'bg-brand-red text-white'
-};
-
-const MAX_COMPARE = 5;
-
-const Badge: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${className}`}>{children}</span>
-);
-
-const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 'image' : 'text');
-
-const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
-
-// Plain-language, multi-dimensional cost line for a model. Routes through shared/pricing
-// so client + server use the exact same wording and never collapse to "free/paid".
-const costStatement = (model: CatalogModel): string =>
-  describeCost({
-    modelId: model.id,
-    pricing: model.pricing,
-    supportsImageOutput: model.supportsImageOutput
-  });
-
-const COST_CLASS_COLOR: Record<string, string> = {
-  free_verified: 'bg-green-500 text-white',
-  zero_priced_token_billed: 'bg-amber-500 text-black',
-  per_image_only: 'bg-brand-blue text-white',
-  paid: 'bg-slate-200 text-slate-700'
-};
-const COST_CLASS_LABEL: Record<string, string> = {
-  free_verified: 'Free',
-  zero_priced_token_billed: 'Token-billed (NOT free)',
-  per_image_only: 'Per image',
-  paid: 'Paid'
-};
-// Cost classes that have a glossary explanation (the surprising ones worth a hover).
-const COST_CLASS_GLOSSARY: Record<string, keyof typeof GLOSSARY> = {
-  free_verified: 'free_verified',
-  zero_priced_token_billed: 'token_billed'
-};
-
-// Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
-const FILTER_PREDICATES: Record<Exclude<BaseFilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
-  free: (m) => m.isFree,
-  image: (m) => m.supportsImageOutput,
-  text: (m) => !m.supportsImageOutput,
-  refs: (m) => m.supportsImageInput,
-  editing: (_m, c) => c.imageEditing,
-  reasoning: (_m, c) => c.reasoning
-};
-
-const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>): boolean => {
-  const caps = getCapabilities(model);
-  for (const f of filters) {
-    if (f === 'all') continue;
-    // A source facet (e.g. 'openai') keeps only that provider's models.
-    if (isTextProvider(f)) { if (model.source !== f) return false; continue; }
-    const predicate = FILTER_PREDICATES[f as Exclude<BaseFilterKey, 'all'>];
-    if (predicate && !predicate(model, caps)) return false;
-  }
-
-  // Vendor filters (OR among themselves, ANDs with everything else): keep models whose maker is
-  // one of the selected vendors — so "Anthropic" + "OpenAI" shows both, narrowed by the rest.
-  if (vendors.size > 0 && !vendors.has(getModelVendorId(model))) return false;
-
-  // Domain filters (benchmark-backed): a model must be at least "Capable" (≥55) in each selected
-  // domain. ANDs with everything else, so "Coding" + "Free" finds free models that can actually code.
-  for (const d of domains) {
-    if (domainStrength(model, d) < 55) return false;
-  }
-  return true;
-};
-
-// ── Sorting ──────────────────────────────────────────────────────────────────
-type SortKey = 'relevance' | 'context_desc' | 'context_asc' | 'newest' | 'cheapest' | 'benchmark' | 'name';
-const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'relevance', label: 'Best match' },
-  { key: 'benchmark', label: 'Top benchmark (Arena Elo)' },
-  { key: 'context_desc', label: 'Context: high → low' },
-  { key: 'context_asc', label: 'Context: low → high' },
-  { key: 'newest', label: 'Newest first' },
-  { key: 'cheapest', label: 'Cheapest first' },
-  { key: 'name', label: 'Name (A–Z)' }
-];
-
-const arenaElo = (m: CatalogModel): number => getModelBenchmarks(m.id)?.scores.arena_elo ?? 0;
-// Cheapest yardstick: per-image price for image models, per-output-token for text; free sorts first.
-const priceOf = (m: CatalogModel): number =>
-  m.supportsImageOutput ? (m.pricing.imagePerImage || Number.POSITIVE_INFINITY) : (m.pricing.completionPerToken || Number.POSITIVE_INFINITY);
-
-const sortModels = (list: CatalogModel[], sortBy: SortKey): CatalogModel[] => {
-  if (sortBy === 'relevance') return list;
-  const out = [...list];
-  switch (sortBy) {
-    case 'context_desc': out.sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0)); break;
-    case 'context_asc': out.sort((a, b) => (a.contextLength || 0) - (b.contextLength || 0)); break;
-    case 'newest': out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); break;
-    case 'cheapest': out.sort((a, b) => priceOf(a) - priceOf(b)); break;
-    case 'benchmark': out.sort((a, b) => arenaElo(b) - arenaElo(a)); break;
-    case 'name': out.sort((a, b) => a.name.localeCompare(b.name)); break;
-  }
-  return out;
-};
-
-const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection; onUse: (slot: ModelSlot) => void }> = ({ model, selection, onUse }) => {
-  const [confirming, setConfirming] = useState(false);
-  const slot = slotOf(model);
-  const isSelected = (slot === 'image' ? selection.imageModel : selection.textModel) === model.id;
-
-  // Download-only NVIDIA NIMs are listed in the catalog but 404 on the hosted API —
-  // never let them be selected, or every generation with them fails.
-  if (model.apiCallable === false) {
-    return (
-      <span
-        className="text-[11px] font-bold text-amber-700 flex items-center gap-1"
-        title="Listed in the catalog, but NVIDIA only offers this model as a downloadable NIM — the hosted API returns 404 for it, so it can't be used here."
-      >
-        <AlertTriangle className="w-3.5 h-3.5" /> Not callable via API
-      </span>
-    );
-  }
-
-  if (isSelected) {
-    return <span className="text-[11px] font-bold text-green-700 flex items-center gap-1"><Check className="w-3.5 h-3.5" /> In use ({slot})</span>;
-  }
-  if (confirming) {
-    return (
-      <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        <span className="text-[11px] text-slate-600 whitespace-nowrap">Use for {slot}?</span>
-        <button onClick={() => { onUse(slot); setConfirming(false); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Confirm</button>
-        <button onClick={() => setConfirming(false)} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white">Cancel</button>
-      </div>
-    );
-  }
-  return (
-    <button onClick={(e) => { e.stopPropagation(); setConfirming(true); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white hover:bg-brand-yellow whitespace-nowrap">
-      Use this model
-    </button>
-  );
-};
-
-// 👍/👎 a model to teach Smart auto-pick. Always optional; dislike may ask why (never forced).
-// Shows running counts so feedback feels like it accumulates into something — and the data is kept
-// in an analysis-ready shape (see modelFeedback.exportFeedback) for future cross-session insight.
-const FeedbackButtons: React.FC<{ modelId: string; task?: string; showCounts?: boolean }> = ({ modelId, task, showCounts }) => {
-  const [vote, setVote] = useState<FeedbackVote | null>(() => latestVote(modelId));
-  const [summary, setSummary] = useState(() => feedbackSummary(modelId));
-  const cast = (v: FeedbackVote) => (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const note = v === 'dislike'
-      ? (window.prompt('Optional — what was off about this model? (leave blank to skip)') || undefined)
-      : undefined;
-    recordModelFeedback(modelId, v, { note, task });
-    setVote(v);
-    setSummary(feedbackSummary(modelId));
-  };
-  return (
-    <div className="flex items-center gap-1" title="Optional — teach Smart auto-pick what works for you">
-      <button onClick={cast('like')} className={`flex items-center gap-0.5 p-1 rounded border-2 border-black ${vote === 'like' ? 'bg-green-500 text-white' : 'bg-white hover:bg-green-100'}`} aria-label="Like this model">
-        <ThumbsUp className="w-3 h-3" />{showCounts && summary.likes > 0 && <span className="text-[10px] font-bold">{summary.likes}</span>}
-      </button>
-      <button onClick={cast('dislike')} className={`flex items-center gap-0.5 p-1 rounded border-2 border-black ${vote === 'dislike' ? 'bg-brand-red text-white' : 'bg-white hover:bg-red-100'}`} aria-label="Dislike this model">
-        <ThumbsDown className="w-3 h-3" />{showCounts && summary.dislikes > 0 && <span className="text-[10px] font-bold">{summary.dislikes}</span>}
-      </button>
-    </div>
-  );
-};
-
-const ModelCard: React.FC<{
-  model: CatalogModel;
-  selection: ModelSelection;
-  compared: boolean;
-  onOpen: () => void;
-  onUse: (slot: ModelSlot) => void;
-  onToggleCompare: () => void;
-  onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
-}> = ({ model, selection, compared, onOpen, onUse, onToggleCompare, onStartChat }) => (
-  <div
-    onClick={onOpen}
-    className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
-  >
-    {/* Header: chips WRAP (never overlap the cost badge), the badge never shrinks, and the
-        name clamps to two full-width lines instead of truncating to "NVIDIA: Ne…". */}
-    <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5">
-        <ModelProviderIcon model={model} className="w-[18px] h-[18px] shrink-0" />
-        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
-        <span className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1" title={`Served via ${sourceLabel(providerOrigin(model))}`}>
-          <SourceIcon source={providerOrigin(model)} className="w-3 h-3" />{sourceLabel(providerOrigin(model))}
-        </span>
-        {getModelVendor(model).url && (
-          <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        )}
-      </div>
-      <Badge className={`shrink-0 ${COST_CLASS_COLOR[model.costClass]}`}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
-    </div>
-    <div className="font-bold leading-tight line-clamp-2 -mt-1" title={model.name}>{model.name}</div>
-
-    <div className="flex flex-wrap gap-1">
-      {model.apiCallable === false && (
-        <Badge className="bg-amber-100 text-amber-800 border-amber-400" >Download-only</Badge>
-      )}
-      {(() => {
-        const size = getModelSize(model.id);
-        return size ? <Badge className="bg-slate-800 text-white" >{size.params}</Badge> : null;
-      })()}
-      {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
-    </div>
-
-    {/* What it's actually good at — benchmark-backed domain tags. */}
-    <DomainTags model={model} />
-
-    <p className="text-[11px] text-slate-700 leading-snug" title="Cost varies per axis (input tokens, output tokens, per-image, per-request).">{costStatement(model)}</p>
-
-    {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
-
-    {/* Action row: WRAPS instead of overflowing — on narrow cards (4-col grid, small
-        devices) the two button groups stack as full rows rather than spilling past the
-        card border onto the neighbour. Buttons keep their label on one line. */}
-    <div className="mt-auto flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 pt-2 border-t border-dashed border-slate-200">
-      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-        <UseModelControl model={model} selection={selection} onUse={onUse} />
-        {onStartChat && canChatWith(model) && model.apiCallable !== false && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as ModelSource }); }}
-            className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1 whitespace-nowrap"
-            title="Try this model in Chat Studio"
-          >
-            <MessageSquare className="w-3 h-3" /> Chat
-          </button>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5 ml-auto">
-        <FeedbackButtons modelId={model.id} />
-        <button
-          onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
-          className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 whitespace-nowrap ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
-          title="Add to comparison"
-        >
-          <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
-        </button>
-      </div>
-    </div>
-  </div>
-);
-
-const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
-  <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-    <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-      <div className="sticky top-0 z-10 bg-white rounded-t-lg border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3 shadow-[0_2px_0_0_rgba(0,0,0,0.06)]">
-        <div className="min-w-0 flex items-start gap-2.5">
-          <ModelProviderIcon model={model} className="w-7 h-7 shrink-0 mt-1" />
-          <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1">
-              {getModelVendor(model).label} · <SourceIcon source={providerOrigin(model)} className="w-3 h-3" /> {sourceLabel(providerOrigin(model))}
-            </div>
-            <h2 className="text-xl font-display leading-tight truncate">{model.name}</h2>
-            <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
-          </div>
-        </div>
-        <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0" aria-label="Close"><X className="w-4 h-4" /></button>
-      </div>
-
-      <div className="p-5 space-y-4">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center gap-0.5">
-            <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
-            {COST_CLASS_GLOSSARY[model.costClass] && <InfoDot term={COST_CLASS_GLOSSARY[model.costClass]} />}
-          </span>
-          {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Text→Image</Badge>}
-          {getCapabilities(model).imageInput && !model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Image→Text (vision)</Badge>}
-          {model.supportsImageInput && model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
-          {getCapabilities(model).imageEditing && <Badge className="bg-fuchsia-600 text-white">Image editing</Badge>}
-          {getCapabilities(model).reasoning && <span className="inline-flex items-center gap-0.5"><Badge className="bg-indigo-600 text-white">Reasoning</Badge><InfoDot term="reasoning" /></span>}
-          {model.supportsJsonOutput && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge><InfoDot term="structured_json" /></span>}
-          {typeof model.contextLength === 'number' && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge><InfoDot term="context_length" /></span>}
-          <span className="ml-auto flex items-center gap-2">
-            <FeedbackButtons modelId={model.id} showCounts />
-            {onStartChat && canChatWith(model) && (
-              <button
-                onClick={() => onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as ModelSource })}
-                className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
-              >
-                <MessageSquare className="w-3.5 h-3.5" /> Chat with this model
-              </button>
-            )}
-            <UseModelControl model={model} selection={selection} onUse={onUse} />
-          </span>
-        </div>
-
-        {/* What it's good at + the numbers behind it. */}
-        <DomainTags model={model} limit={6} threshold={45} />
-        <ModelInsightsPanel model={model} />
-
-        {model.editorialNote && (
-          <div className="bg-brand-yellow/30 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
-            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" /><span>{model.editorialNote}</span>
-          </div>
-        )}
-        {model.description && <p className="text-sm text-slate-600">{model.description}</p>}
-
-        <div className="border-2 border-black rounded-lg p-3 space-y-1.5">
-          <div className="text-[10px] uppercase font-bold text-slate-500">Where it's hosted &amp; sourced</div>
-          <p className="text-[12px] text-slate-600">{SOURCE_HOSTING_NOTE[model.source as ModelSource]}</p>
-          <div className="flex flex-wrap gap-2 pt-0.5">
-            {modelLinks(model).map((link) => (
-              <a key={link.url} href={link.url} target="_blank" rel="noreferrer"
-                 className="text-[11px] font-bold text-brand-blue underline flex items-center gap-1">
-                {link.label} <ExternalLink className="w-3 h-3" />
-              </a>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid sm:grid-cols-4 gap-3 text-[11px]">
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{perMillion(model.pricing.completionPerToken)}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{model.pricing.imagePerImage > 0 ? `$${model.pricing.imagePerImage.toFixed(3)}` : '—'}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per request</div><div className="font-mono">{model.pricing.requestFlat > 0 ? `$${model.pricing.requestFlat.toFixed(4)}` : '—'}</div></div>
-        </div>
-        <div className="bg-slate-50 border-2 border-black rounded-lg p-3 text-[12px] text-slate-700 leading-snug">
-          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">Cost (each axis is independent)</div>
-          {costStatement(model)}
-        </div>
-
-        <div>
-          <h3 className="text-xs font-bold uppercase mb-2">Studio features</h3>
-          <div className="grid sm:grid-cols-2 gap-1.5">
-            {FEATURE_LABELS.map(({ feature, label }) => {
-              const sup = featureSupport(getCapabilities(model), feature);
-              return (
-                <div key={feature} className={`text-xs flex items-start gap-1.5 ${sup.supported ? 'text-slate-700' : 'text-slate-400'}`} title={sup.reason || ''}>
-                  {sup.supported ? <Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" /> : <X className="w-3.5 h-3.5 text-slate-300 shrink-0 mt-0.5" />}
-                  <span>{label}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div>
-            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><Check className="w-4 h-4 text-green-600" /> What's possible</h3>
-            <ul className="space-y-1.5">
-              {model.possibilities.length ? model.possibilities.map((item, i) => (
-                <li key={i} className="text-xs text-slate-700 flex gap-1.5"><Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" />{item}</li>
-              )) : <li className="text-xs text-slate-400">—</li>}
-            </ul>
-          </div>
-          <div>
-            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-amber-600" /> Drawbacks</h3>
-            <ul className="space-y-1.5">
-              {model.drawbacks.length ? model.drawbacks.map((item, i) => (
-                <li key={i} className="text-xs text-slate-700 flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />{item}</li>
-              )) : <li className="text-xs text-slate-400">None noted</li>}
-            </ul>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-1.5 pt-2 border-t-2 border-dashed border-slate-200">
-          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1 flex items-center gap-1"><Layers className="w-3 h-3" /> Roles:</span>
-          {model.roles.map((role) => <Badge key={role} className="bg-slate-100 text-slate-700">{role}</Badge>)}
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-// Benchmark order shown in the compare table.
-const COMPARE_BENCH_ORDER: BenchmarkMetricId[] = ['arena_elo', 'mmlu', 'gpqa', 'humaneval', 'swebench', 'math'];
-const benchCell = (m: CatalogModel, metric: BenchmarkMetricId): React.ReactNode => {
-  const v = getModelBenchmarks(m.id)?.scores[metric];
-  return v != null ? <span className="font-mono">{formatScore(metric, v)}</span> : <span className="text-slate-300">—</span>;
-};
-
-type CompareRow = { label: string; info?: keyof typeof GLOSSARY; render: (m: CatalogModel) => React.ReactNode };
-
-const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection; onClose: () => void; onUse: (model: CatalogModel, slot: ModelSlot) => void }> = ({ models, selection, onClose, onUse }) => {
-  const inUse = (m: CatalogModel) => selection.textModel === m.id || selection.imageModel === m.id;
-
-  const sections: { title: string; rows: CompareRow[] }[] = [
-    {
-      title: 'Overview',
-      rows: [
-        { label: 'Cost', render: (m) => <Badge className={BAND_COLOR[m.costBand]}>{costLabel(m)}</Badge> },
-        { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
-        { label: 'Context', info: 'context_length', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
-        { label: 'Best at', render: (m) => { const d = topDomains(m, 3, 55); return d.length ? d.map((x) => DOMAIN_META[x.id].label).join(', ') : <span className="text-slate-300">—</span>; } }
-      ]
-    },
-    {
-      title: 'Benchmarks',
-      rows: COMPARE_BENCH_ORDER.map((metric) => ({
-        label: BENCHMARK_METRICS[metric].label,
-        info: BENCHMARK_METRICS[metric].glossary,
-        render: (m: CatalogModel) => benchCell(m, metric)
-      }))
-    },
-    {
-      title: 'Capabilities',
-      rows: [
-        { label: 'Reference images', render: (m) => (m.supportsImageInput ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
-        { label: 'Image editing', render: (m) => (getCapabilities(m).imageEditing ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
-        { label: 'Reasoning', info: 'reasoning', render: (m) => (getCapabilities(m).reasoning ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
-        { label: 'Structured JSON', info: 'structured_json', render: (m) => (m.supportsJsonOutput ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) }
-      ]
-    },
-    {
-      title: 'Pricing',
-      rows: [
-        { label: 'Input / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.promptPerToken) },
-        { label: 'Output / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.completionPerToken) },
-        { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : <span className="text-slate-300">—</span>) }
-      ]
-    },
-    {
-      title: 'In practice',
-      rows: [
-        { label: 'Best for', render: (m) => (m.possibilities[0] || <span className="text-slate-300">—</span>) },
-        { label: 'Watch out', render: (m) => (m.drawbacks[0] || <span className="text-slate-400">None noted</span>) }
-      ]
-    }
-  ];
-
-  return (
-    <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-5xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 z-10 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-display flex items-center gap-2"><Scale className="w-5 h-5" /> Comparing {models.length} models</h2>
-          <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="p-4 overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr>
-                <th className="text-left p-2 sticky left-0 z-10 bg-white" />
-                {models.map((m) => (
-                  <th key={`${m.source}:${m.id}`} className={`p-2 align-top text-left min-w-[11rem] border-b-2 border-black ${inUse(m) ? 'bg-brand-yellow/30' : ''}`}>
-                    <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(m))}</div>
-                    <div className="font-bold leading-tight">{m.name}</div>
-                    <div className="text-[10px] text-slate-400 font-mono break-all">{m.id}</div>
-                    {inUse(m) && <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold text-green-700"><Check className="w-3 h-3" /> In use</div>}
-                    <div className="mt-1"><UseModelControl model={m} selection={selection} onUse={(slot) => onUse(m, slot)} /></div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sections.map((section) => (
-                <React.Fragment key={section.title}>
-                  <tr>
-                    <td colSpan={models.length + 1} className="sticky left-0 bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 border-y border-slate-200">{section.title}</td>
-                  </tr>
-                  {section.rows.map((row) => (
-                    <tr key={section.title + row.label} className="border-t border-slate-100">
-                      <td className="p-2 font-bold text-slate-600 text-[11px] sticky left-0 bg-white whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1">{row.label}{row.info && <InfoDot term={row.info} />}</span>
-                      </td>
-                      {models.map((m) => <td key={`${m.source}:${m.id}`} className={`p-2 align-top ${inUse(m) ? 'bg-brand-yellow/10' : ''}`}>{row.render(m)}</td>)}
-                    </tr>
-                  ))}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// User-facing trust signal: shows that the catalog (and the Free/paid labels) are
-// reconciled against each source's LIVE API, not guessed. Backed by /api/models/verify.
-const VerifiedStrip: React.FC = () => {
+export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat, previewData }) => {
   const { user } = useAuth();
-  const [data, setData] = useState<ModelVerification | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    // SECURITY: the verify strip exposes per-key connection status + live spend ("$X used").
-    // Only fetch/show it for an authenticated user — never to a logged-out/anonymous session.
-    if (!user) return;
-    let active = true;
-    fetchModelVerification()
-      .then((r) => { if (active) setData(r); })
-      .catch(() => { if (active) setFailed(true); });
-    return () => { active = false; };
-  }, [user]);
-
-  if (!user || failed) return null;
-  if (!data) {
-    return (
-      <div className="mt-4 border-2 border-black rounded-xl bg-slate-50 p-3 text-xs flex items-center gap-2 text-slate-500">
-        <Loader2 className="w-4 h-4 animate-spin" /> Verifying catalog against live sources…
-      </div>
-    );
-  }
-
-  const when = data.catalog.fetchedAt ? new Date(data.catalog.fetchedAt).toLocaleString() : 'just now';
-  const or = data.sources.openrouter;
-  const nvidia = data.sources.nvidia;
-  const credits = or.credits;
-  const key = or.liveKey;
-  const usd = (n: number) => `$${n.toFixed(2)}`;
-  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-  const keyLimit = num(key?.limit);
-  const keyUsage = num(key?.usage) ?? 0;
-  const keyRemaining = num(key?.limit_remaining);
-
-  return (
-    <div className="mt-4 border-2 border-black rounded-xl bg-green-50 p-3 shadow-comic text-xs space-y-2">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="font-bold flex items-center gap-1.5 text-green-800"><ShieldCheck className="w-4 h-4" /> Verified live</span>
-        <span><span className="text-slate-500">Catalog:</span> <b>{data.catalog.total}</b> models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>
-        <span className="text-slate-400 ml-auto">checked {when}</span>
-      </div>
-
-      <div className="grid sm:grid-cols-2 gap-2">
-        {/* OpenRouter — account credits AND the per-key cap are shown separately, since they differ. */}
-        <div className="bg-white border-2 border-black rounded-lg p-2.5">
-          <div className="flex items-center justify-between">
-            <span className="font-bold">OpenRouter</span>
-            <span className={or.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{or.connected ? `connected · ${or.modelCount} models` : 'not connected'}</span>
-          </div>
-          {or.connected && (
-            <div className="mt-1.5 space-y-1 text-[11px]">
-              {credits ? (
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-500 flex items-center gap-1">Account credits <InfoDot content={{ title: 'Account credits', body: 'Your OpenRouter account-wide balance (GET /credits), shared across every key on the account.' }} /></span>
-                  <span className="font-mono font-bold text-green-800">{usd(credits.remaining)} <span className="font-normal text-slate-400">left of {usd(credits.total)}</span></span>
-                </div>
-              ) : null}
-              {key ? (
-                keyLimit != null ? (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-slate-500 flex items-center gap-1">This key’s cap <InfoDot content={{ title: 'Per-key limit', body: 'A spend cap set on THIS specific API key in OpenRouter. It can be higher or lower than your account credits — whichever runs out first stops you.' }} /></span>
-                    <span className="font-mono">{usd(keyUsage)} used{keyRemaining != null ? ` · ${usd(keyRemaining)} left` : ''} <span className="text-slate-400">of {usd(keyLimit)}</span></span>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-slate-500 flex items-center gap-1">This key’s cap <InfoDot content={{ title: 'Per-key limit', body: 'No per-key spend cap is set, so this key draws on your full account credits.' }} /></span>
-                    <span className="font-mono text-slate-400">no cap — uses account credits</span>
-                  </div>
-                )
-              ) : null}
-              {key?.rate_limit && (key.rate_limit.requests != null || key.rate_limit.interval != null) && (
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-500 flex items-center gap-1">Rate limit <InfoDot content={{ title: 'Rate limit', body: 'How many requests this key may make per time window before OpenRouter throttles it.' }} /></span>
-                  <span className="font-mono">{key.rate_limit.requests ?? '—'} req / {key.rate_limit.interval ?? '—'}</span>
-                </div>
-              )}
-              {key?.is_free_tier && <div className="text-amber-600 font-bold">Free-tier key</div>}
-            </div>
-          )}
-        </div>
-
-        {/* NVIDIA */}
-        <div className="bg-white border-2 border-black rounded-lg p-2.5">
-          <div className="flex items-center justify-between">
-            <span className="font-bold">NVIDIA Build</span>
-            <span className={nvidia.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{nvidia.connected ? `connected · ${nvidia.modelCount} models` : 'not connected'}</span>
-          </div>
-          {nvidia.connected && nvidia.note && <div className="mt-1.5 text-[11px] text-slate-500 leading-snug">{nvidia.note}</div>}
-        </div>
-      </div>
-
-      {/* Direct BYOK providers — connection status from the live /verify per-provider map. */}
-      {data.providers && (() => {
-        const extra = PROVIDERS_ORDERED.filter((d) => d.id !== 'openrouter' && d.id !== 'nvidia' && data.providers?.[d.id]);
-        if (!extra.length) return null;
-        return (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-slate-500 font-bold">Direct providers:</span>
-            {extra.map((d) => {
-              const p = data.providers![d.id]!;
-              return (
-                <span
-                  key={d.id}
-                  title={`${d.label}: ${p.connected ? `connected · ${p.modelCount} models` : 'no key — add one in Settings → API Configuration to use these models'}`}
-                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border-2 font-bold ${p.connected ? 'border-black bg-white text-green-800' : 'border-slate-300 bg-slate-50 text-slate-400'}`}
-                >
-                  {hasProviderLogo(d.id) && <ProviderLogo provider={d.id} className="w-3 h-3" style={{ color: p.connected ? d.accent : undefined }} />}
-                  {d.short}
-                  <span className="text-[9px] font-semibold">{p.connected ? '✓' : '+ key'}</span>
-                </span>
-              );
-            })}
-          </div>
-        );
-      })()}
-
-      <div className="text-slate-500">Free/paid, credits and limits are reconciled against each source’s live API — not guessed.</div>
-    </div>
-  );
-};
-
-export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat }) => {
-  // Paint instantly from the last-good catalog (localStorage) while we refresh in the background,
-  // so the page is never a blank spinner — even on a slow/cold backend.
-  const cachedInitial = useMemo(() => loadCachedCatalog(), []);
-  const [models, setModels] = useState<CatalogModel[]>(cachedInitial?.models ?? []);
-  const [loading, setLoading] = useState(!cachedInitial);
-  const [refreshing, setRefreshing] = useState(false);
-  const [degraded, setDegraded] = useState(false);
-  const [degradedMessage, setDegradedMessage] = useState<string | undefined>();
-  const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
-  const [domainFilters, setDomainFilters] = useState<Set<DomainId>>(new Set());
-  const [vendorFilters, setVendorFilters] = useState<Set<string>>(new Set());
-  const [minContextK, setMinContextK] = useState(0); // context-length slider, in thousands of tokens
-  const [sortBy, setSortBy] = useState<SortKey>('relevance');
-  const [showFilters, setShowFilters] = useState(true); // rail visible by default, collapsible everywhere
-  const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<CatalogModel | null>(null);
-  const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
-  const [compareIds, setCompareIds] = useState<string[]>([]);
-  const [showCompare, setShowCompare] = useState(false);
-  const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
-  const [view, setView] = useState<'library' | 'leaderboard' | 'table' | 'bench' | 'benchmarks'>('library');
-  const [groupByProvider, setGroupByProvider] = useState(false);
-  const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
-  const { user } = useAuth();
-  const isAdmin = useIsAdmin();
+  const [catalog, setCatalog] = useState<CatalogResponse | null>(() => previewData?.catalog ?? loadCachedCatalog());
+  const [speed, setSpeed] = useState<ModelSpeedReport | null>(previewData?.speed ?? null);
+  const [showcase, setShowcase] = useState<ModelShowcaseResponse | null>(previewData?.showcase ?? null);
+  const [showcaseUser, setShowcaseUser] = useState(user?.id);
+  const [loading, setLoading] = useState(!previewData);
+  const [imageLoading, setImageLoading] = useState(!previewData);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [keyRevision, setKeyRevision] = useState(0);
+  const [tab, setTab] = useState('images');
+  const [connections, setConnections] = useState(false);
+  const [detail, setDetail] = useState<CatalogModel | null>(null);
+  const [compareKeys, setCompareKeys] = useState<string[]>([]);
+  const [comparing, setComparing] = useState(false);
+  const [selection, setSelection] = useState(() => getModelSelection());
+  const [notice, setNotice] = useState('');
+  const request = useRef(0);
 
   useEffect(() => {
-    const onChange = () => setSelection(getModelSelection());
-    window.addEventListener(MODEL_SELECTION_CHANGED, onChange);
-    return () => window.removeEventListener(MODEL_SELECTION_CHANGED, onChange);
+    const changed = () => setKeyRevision((v) => v + 1);
+    const selected = () => setSelection(getModelSelection());
+    window.addEventListener(API_KEYS_CHANGED, changed);
+    window.addEventListener(SOURCE_GOVERNANCE_CHANGED, changed);
+    window.addEventListener(MODEL_SELECTION_CHANGED, selected);
+    return () => { window.removeEventListener(API_KEYS_CHANGED, changed); window.removeEventListener(SOURCE_GOVERNANCE_CHANGED, changed); window.removeEventListener(MODEL_SELECTION_CHANGED, selected); };
   }, []);
 
-  const [reloadKey, setReloadKey] = useState(0);
-  const retry = () => setReloadKey((k) => k + 1);
-
   useEffect(() => {
-    let active = true;
-    const hadModels = models.length > 0;
-    if (hadModels) setRefreshing(true); else setLoading(true);
-    setError(null);
-    fetchModelCatalog()
-      .then((res) => {
-        if (!active) return;
-        setModels(res.models);
-        setDegraded(res.degraded);
-        setDegradedMessage(res.message);
-      })
-      .catch((e) => {
-        if (!active) return;
-        // Keep showing cached models if we have them; only hard-error when there's nothing to show.
-        if (!hadModels) setError(e?.message || 'Failed to load the model catalog.');
-        else { setDegraded(true); setDegradedMessage('Showing the last cached list — couldn’t reach the live catalog.'); }
-      })
-      .finally(() => { if (active) { setLoading(false); setRefreshing(false); } });
-    return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadKey]);
+    if (previewData) return;
+    const current = ++request.current;
+    const abort = new AbortController();
+    setLoading(true); setCatalogError(null); setImageLoading(true); setImageError(null);
+    void fetchModelCatalog(revision ? { refresh: true } : {}).then((next) => { if (current === request.current) setCatalog(next); })
+      .catch(() => { if (current === request.current) setCatalogError('Catalog refresh failed. Showing the last saved list when available.'); })
+      .finally(() => { if (current === request.current) setLoading(false); });
+    void fetchModelSpeedReport({ refresh: revision > 0 }).then((next) => { if (current === request.current) setSpeed(next); });
+    void fetchModelShowcase(abort.signal).then((next) => { if (current === request.current) { setShowcaseUser(user?.id); setShowcase(next); } })
+      .catch(() => { if (!abort.signal.aborted && current === request.current) setImageError('Model examples could not be loaded.'); })
+      .finally(() => { if (current === request.current) setImageLoading(false); });
+    return () => { request.current++; abort.abort(); };
+  }, [revision, keyRevision, user?.id, previewData]);
+  // Never carry another account's personalized examples into this session.
+  useEffect(() => { if (!previewData) setShowcase(null); }, [user?.id, previewData]);
 
-  // Settings-level source scope: the catalog is cut to the sources the Settings
-  // toggles + connected keys allow, so this page always agrees with Settings and
-  // the pickers (no more "model shows here but can't be used there").
-  const sourceScope = useModelSourceScope();
-  // Browse the FULL catalog of every ENABLED provider (not just connected ones), so users
-  // can discover models from any provider and then choose who serves them. Whether a model
-  // is usable at run time still depends on having a key — surfaced when selecting/chatting.
-  const scopedModels = useMemo(
-    () => models.filter((m) => isProviderEnabled(m.source)),
-    [models, sourceScope]
-  );
-
-  // The providers that actually have models, in registry order — drives the source chips.
-  const sourcesPresent = useMemo(() => {
-    const present = new Set(scopedModels.map((m) => m.source));
-    return PROVIDERS_ORDERED.filter((d) => present.has(d.id));
-  }, [scopedModels]);
-
-  // Drop a source filter chip whose source left the scope (turned off in Settings / no
-  // longer present) so a stale chip can't filter the page to zero results.
+  const models = useMemo(() => (catalog?.models ?? []).filter((model) => isProviderEnabled(model.source)), [catalog, keyRevision]);
+  const comparableKeys = useMemo(() => new Set(focusedTextModels(models).map(modelKey)), [models]);
+  const selectedCompareKeys = compareKeys.filter((key) => comparableKeys.has(key));
+  const compared = models.filter((model) => selectedCompareKeys.includes(modelKey(model)));
   useEffect(() => {
-    setFilters((prev) => {
-      const present = new Set(sourcesPresent.map((d) => d.id as string));
-      let changed = false;
-      const next = new Set(prev);
-      for (const f of prev) {
-        if (isTextProvider(f) && !present.has(f)) { next.delete(f); changed = true; }
-      }
-      return changed ? next : prev;
+    setCompareKeys((keys) => {
+      const remaining = keys.filter((key) => comparableKeys.has(key));
+      return remaining.length === keys.length ? keys : remaining;
     });
-  }, [sourcesPresent]);
-
-  // Base capability facets, plus a "Source: X" chip per provider present (when >1 source).
-  const filterChips: { key: FilterKey; label: string }[] = [
-    ...FILTERS,
-    ...(sourcesPresent.length > 1 ? sourcesPresent.map((d) => ({ key: d.id as FilterKey, label: `Source: ${d.short}` })) : [])
-  ];
-
-  const visible = useMemo(() => {
-    // Ranked search first (typo-tolerant, alias-aware), then chip filters, then sort.
-    // With "Best match" the search ranking IS the order; other sorts override it.
-    let list = searchModels(scopedModels, query).filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters));
-    if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
-    return sortModels(list, sortBy);
-  }, [scopedModels, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
-  const compareModels = useMemo(() => compareIds.map((id) => scopedModels.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, scopedModels]);
-  const vendorOptions = useMemo(() => availableVendors(scopedModels), [scopedModels]);
-  const picks = useMemo(() => recommendModels(scopedModels, 2), [scopedModels]);
-
-  const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
-  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
-
-  const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
-
-  // Smart auto-pick: score every model (within the active source scope) per stage and assign the best team.
-  const applySmartTeam = (mode: SmartMode) => {
-    const team = buildSmartTeam(scopedModels, mode);
-    if (team.text) setSelectedModel('text', team.text.model.id, 'specific', team.text.model.source);
-    if (team.image) setSelectedModel('image', team.image.model.id, 'specific', team.image.model.source);
-    (Object.keys(TASK_PROFILES) as SmartTask[]).forEach((task) => {
-      const profile = TASK_PROFILES[task];
-      const pick = team.perTask[task];
-      if (profile.kind === 'text' && profile.stage && pick) {
-        setStageModel(profile.stage, pick.model.id, pick.model.source);
-      }
-    });
-    setSmartTeam(team);
+  }, [comparableKeys]);
+  const speeds = speed?.models ?? {};
+  const unavailableReason = (model: CatalogModel): string | null => {
+    if (previewData) return 'This read-only preview cannot change your model defaults or start a Chat.';
+    if (model.apiCallable === false) return 'This reference listing is not callable through the serving connection.';
+    if (!isProviderEnabled(model.source)) return 'Enable this connection to use its models.';
+    if (selection.lockedSource && selection.lockedSource !== model.source) return 'Your provider lock is set to ' + sourceLabel(selection.lockedSource) + '.';
+    // Local active keys are explicit BYOK headers. Platform support cannot bypass a
+    // rejected key or its spending limit; change the key before choosing this route.
+    const key = getActiveKey(model.source);
+    if (key && isOverLimit(key)) return 'The active key has reached its local monthly limit.';
+    if (key?.validation === 'invalid') return 'The active key failed its last authentication check. Verify or replace it in Connections.';
+    return getProviderDef(model.source)?.platformServed || hasUsableKey(model.source)
+      ? null : 'Add a personal key for this serving connection to use the model.';
+  };
+  const canUse = (model: CatalogModel) => unavailableReason(model) === null;
+  const toggleCompare = (model: CatalogModel) => setCompareKeys((keys) => {
+    const remaining = keys.filter((key) => comparableKeys.has(key));
+    const key = modelKey(model);
+    return remaining.includes(key) ? remaining.filter((entry) => entry !== key)
+      : comparableKeys.has(key) && remaining.length < 3 ? [...remaining, key] : remaining;
+  });
+  const useModel = (model: CatalogModel) => {
+    if (!canUse(model)) return;
+    setSelectedModel('text', model.id, 'specific', model.source);
+    setNotice(model.name + ' is your text default via ' + sourceLabel(model.source) + '.');
   };
 
-  // Domain-aware single pick: "what's the best model for coding / science / …" across your active sources.
-  const runDomainPick = (domain: DomainId, mode: SmartMode) => setDomainPick({ domain, best: pickBestForDomain(scopedModels, domain, mode), mode });
-
-  const toggleCompare = (id: string) =>
-    setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
-
-  const selectedImage = models.find((m) => m.id === selection.imageModel);
-  const selectedText = models.find((m) => m.id === selection.textModel);
-
-  return (
-    <div className="min-h-screen bg-slate-50 pb-24">
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <button onClick={onBack} className="flex items-center gap-1 text-sm font-bold hover:underline mb-4"><ArrowLeft className="w-4 h-4" /> Back</button>
-
-        <h1 className="text-4xl font-display">Model Library</h1>
-        <p className="text-slate-600 max-w-2xl mt-1">
-          Every model is live from your sources, tagged by what it's actually good at — <span className="font-bold">coding, science, math, reasoning, writing</span> and more — with
-          real benchmark numbers, honest drawbacks and pricing. Hover any term to learn what it means.
-          Pick with <span className="font-bold">Use this model</span>, or compare up to {MAX_COMPARE}.
-        </p>
-
-        {/* Current selection */}
-        <div className="mt-4 flex flex-wrap gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <ImageIcon className="w-3.5 h-3.5" /> Image: <span className="font-bold">{selectedImage?.name || (selection.imageModel || 'Auto')}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Auto')}</span>
-          </span>
-        </div>
-
-        <VerifiedStrip />
-
-        {/* Source scope — the Settings-level decision, restated where the models actually are,
-            so this page always matches the Allowed-sources toggles + connected keys. */}
-        {sourceScope.reason === 'none' ? (
-          <div className="mt-4 border-2 border-black rounded-xl bg-red-100 p-3 text-xs flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>
-              All model sources are turned off in <span className="font-bold">Settings → API Configuration → Allowed sources</span>.
-              Turn a source back on to see its models here.
-            </span>
-          </div>
-        ) : sourceScope.reason === 'connected' ? (
-          <div className="mt-4 border-2 border-black rounded-xl bg-white p-3 text-xs flex flex-wrap items-center gap-2">
-            <ShieldCheck className="w-4 h-4 shrink-0 text-brand-blue" />
-            <span className="flex-1 min-w-[220px]">
-              Browsing every provider. Connected:{' '}
-              <span className="font-bold">{sourceScope.active.map((s) => sourceLabel(s)).join(' + ')}</span>.
-              {sourcesPresent.some((d) => !d.platformServed && !sourceScope.active.includes(d.id)) && (
-                <> Other providers are browsable too — add a key in <span className="font-bold">Settings → API Configuration</span> to use their models.</>
-              )}
-              <> Where the same model exists on more than one provider, you choose the source when selecting it.</>
-            </span>
-          </div>
-        ) : null}
-
-        {/* Signed-out: the catalog is fully browsable; say exactly what sign-in adds instead of
-            silently hiding the live-verification strip and letting auth-gated bits look broken. */}
-        {!user && (
-          <div className="mt-4 border-2 border-black rounded-xl bg-brand-blue/5 p-3 text-xs flex flex-wrap items-center gap-2">
-            <ShieldCheck className="w-4 h-4 shrink-0 text-brand-blue" />
-            <span className="flex-1 min-w-[220px]">
-              You're browsing the full catalog signed out — search, compare and auto-pick all work.
-              <span className="font-bold"> Sign in</span> to chat with models, sync your picks across devices, and see live credits &amp; usage verified against each source.
-            </span>
-          </div>
-        )}
-
-        {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking).
-            Bench (admin-only): the in-app trigger for the all-models live test. */}
-        <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
-          <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
-          <button onClick={() => setView('table')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
-          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Leaderboards</button>
-          <button onClick={() => setView('benchmarks')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'benchmarks' ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Gauge className="w-4 h-4" /> Benchmarks</button>
-          {isAdmin && (
-            <button onClick={() => setView('bench')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'bench' ? 'bg-amber-500 text-black' : 'bg-white hover:bg-slate-100'}`}><FlaskConical className="w-4 h-4" /> Bench</button>
-          )}
-        </div>
-
-        {view === 'bench' && isAdmin ? (
-          <ModelBenchPanel />
-        ) : view === 'benchmarks' ? (
-          /* Public benchmark + usage view — DRS scores from the latest published
-             bench run, plus aggregated monthly model-choice trends. */
-          <div className="mt-2">
-            <DrsBenchScores />
-            <ModelUsageTrends />
-          </div>
-        ) : view === 'leaderboard' ? (
-          <>
-            {/* Live popularity ranking — what the platform's users actually run. Hides itself
-                while the /api/models/popularity backend isn't deployed yet. */}
-            <div className="mt-4"><ModelPopularityPanel /></div>
-            <DomainLeaderboard models={scopedModels} onStartChat={onStartChat} />
-          </>
-        ) : view === 'table' ? (
-          <>
-            <ProviderAggregatorTable models={scopedModels} />
-            <ModelDataSources />
-          </>
-        ) : (
-        <>
-        {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
-        <div className="mt-4 bg-gradient-to-r from-brand-blue/10 to-brand-yellow/10 border-2 border-black rounded-xl p-4">
-          <SectionHeader
-            icon={<Wand2 className="w-5 h-5 text-brand-blue" />}
-            title="Let the app pick"
-            subtitle="Scores every model across all your sources for each stage — capabilities, drawbacks, and your 👍/👎 — and assigns the best team. It keeps improving as you give feedback."
-            right={
-              <>
-                <button onClick={() => applySmartTeam('best')} disabled={loading || scopedModels.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
-                <button onClick={() => applySmartTeam('free')} disabled={loading || scopedModels.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
-              </>
-            }
-          />
-          {smartTeam && (
-            <div className="mt-3 pt-3 border-t border-black/10 text-xs space-y-2">
-              <div className="font-bold uppercase text-slate-500">{smartTeam.mode === 'free' ? 'Best free team applied' : 'Best team applied'}</div>
-              <div className="grid sm:grid-cols-2 gap-2">
-                <div className="bg-white border-2 border-black rounded p-2">
-                  <div className="font-bold flex items-center gap-1"><TypeIcon className="w-3 h-3" /> Text: {smartTeam.text ? smartTeam.text.model.name : 'none eligible'}</div>
-                  {smartTeam.text && <div className="text-slate-500">{smartTeam.text.reasons.join(' · ')}</div>}
-                </div>
-                <div className="bg-white border-2 border-black rounded p-2">
-                  <div className="font-bold flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Image: {smartTeam.image ? smartTeam.image.model.name : 'none eligible'}</div>
-                  {smartTeam.image
-                    ? <div className="text-slate-500">{smartTeam.image.reasons.join(' · ')}</div>
-                    : <div className="text-brand-red">No {smartTeam.mode === 'free' ? 'free ' : ''}image model found in your sources — add an image-capable key.</div>}
-                </div>
-              </div>
-              <details>
-                <summary className="cursor-pointer font-bold text-slate-500">Per-stage picks</summary>
-                <div className="mt-1 grid sm:grid-cols-2 gap-x-4 gap-y-0.5">
-                  {(Object.keys(TASK_PROFILES) as SmartTask[]).map((t) => {
-                    const pick = smartTeam.perTask[t];
-                    return (
-                      <div key={t} className="flex justify-between gap-2">
-                        <span className="text-slate-400">{TASK_PROFILES[t].label}</span>
-                        <span className="font-mono truncate">{pick ? pick.model.name : '—'}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </details>
-            </div>
-          )}
-        </div>
-
-        {/* Domain-aware single pick — "best model for a specific job", across all your sources. */}
-        <div className="mt-4 border-2 border-black rounded-xl p-4 bg-white">
-          <SectionHeader
-            icon={<Sparkles className="w-5 h-5 text-brand-blue" />}
-            title="Best model for…"
-            subtitle="Ranked by real benchmarks in that domain — not a guess. Pick a job and we'll name the strongest model (and the strongest free one)."
-          />
-          <div className="mt-3 flex flex-wrap gap-2">
-            {(['coding', 'science', 'math', 'reasoning', 'writing'] as DomainId[]).map((d) => (
-              <button key={d} onClick={() => runDomainPick(d, 'best')} disabled={loading || scopedModels.length === 0}
-                className={`text-xs font-bold px-3 py-1.5 rounded border-2 border-black disabled:opacity-50 ${domainPick?.domain === d ? `${DOMAIN_META[d].tone}` : 'bg-white hover:bg-brand-yellow/60'}`}>
-                {DOMAIN_META[d].label}
-              </button>
-            ))}
-          </div>
-          {domainPick && (
-            <div className="mt-3 pt-3 border-t border-black/10 text-xs">
-              {domainPick.best ? (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <span className="font-bold uppercase text-slate-500">Best for {DOMAIN_META[domainPick.domain].label}:</span>
-                  <button onClick={() => setSelected(domainPick.best!.model)} className="font-bold underline">{domainPick.best.model.name}</button>
-                  <span className="text-slate-500">{domainPick.best.reasons.join(' · ')}</span>
-                  <button onClick={() => useModel(domainPick.best!.model, slotOf(domainPick.best!.model))} className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Use it</button>
-                  {(() => { const free = pickBestForDomain(scopedModels, domainPick.domain, 'free'); return free && free.model.id !== domainPick.best!.model.id
-                    ? <span className="basis-full text-slate-500">Best <span className="font-bold text-green-700">free</span>: <button onClick={() => setSelected(free.model)} className="font-bold underline">{free.model.name}</button> ({free.strength}/100)</span>
-                    : null; })()}
-                </div>
-              ) : (
-                <span className="text-brand-red">No model with benchmark data for {DOMAIN_META[domainPick.domain].label} in your sources yet.</span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Search · Sort · Filters toggle */}
-        <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models, capabilities, domains…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full focus:outline-none focus:bg-brand-yellow/10" />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-2 bg-white text-sm font-bold cursor-pointer">
-              <ArrowUpDown className="w-4 h-4 text-slate-500" />
-              <span className="sr-only">Sort by</span>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortKey)} className="bg-transparent focus:outline-none cursor-pointer pr-1">
-                {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-              </select>
-            </label>
-            <button
-              onClick={() => setGroupByProvider((v) => !v)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${groupByProvider ? 'bg-black text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
-              title="Group the catalog by provider — Anthropic, then everything in it; Google, then everything in it; …"
-            >
-              <Layers className="w-4 h-4" /> By provider
-            </button>
-            <button
-              onClick={() => setShowFilters((v) => !v)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
-            >
-              <SlidersHorizontal className="w-4 h-4" /> Filters
-              {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-white text-brand-blue text-[10px] font-bold w-4 h-4 flex items-center justify-center border border-black">{activeFilterCount}</span>}
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 xl:flex xl:gap-6 xl:items-start">
-          {/* Filter rail — left sidebar on xl, collapsible panel below the search bar on smaller screens */}
-          <aside className={`${showFilters ? 'block' : 'hidden'} xl:w-72 xl:shrink-0 xl:sticky xl:top-4 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4 mb-4 xl:mb-0`}>
-            <div>
-              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
-              <div className="flex flex-wrap gap-2">
-                {filterChips.map((f) => {
-                  const active = f.key === 'all' ? filters.size === 0 : filters.has(f.key);
-                  const toggle = () => setFilters((prev) => {
-                    if (f.key === 'all') return new Set<FilterKey>();
-                    const next = new Set(prev);
-                    if (next.has(f.key)) next.delete(f.key); else next.add(f.key);
-                    return next;
-                  });
-                  return (
-                    <button key={f.key} onClick={toggle} className={`text-[11px] font-bold uppercase px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {vendorOptions.length > 0 && (
-              <div>
-                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Provider / maker</div>
-                <div className="flex flex-wrap gap-2">
-                  {vendorOptions.map(({ vendor, count }) => {
-                    const active = vendorFilters.has(vendor.id);
-                    const toggle = () => setVendorFilters((prev) => {
-                      const next = new Set(prev);
-                      next.has(vendor.id) ? next.delete(vendor.id) : next.add(vendor.id);
-                      return next;
-                    });
-                    return (
-                      <button
-                        key={vendor.id}
-                        onClick={toggle}
-                        className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors flex items-center gap-1.5 ${active ? vendor.color : 'bg-white hover:bg-slate-100'}`}
-                      >
-                        <ProviderIcon vendorId={vendor.id} className="w-3.5 h-3.5" />
-                        {vendor.label}
-                        <span className={`text-[9px] font-mono rounded-full px-1 ${active ? 'bg-white/25' : 'bg-slate-200 text-slate-600'}`}>{count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
-                Good at (benchmark-backed) <InfoDot content={{ title: 'Domain filters', body: 'Keeps models that are at least "Capable" (benchmark strength ≥ 55/100) in this area. ANDs with the rest — e.g. Coding + Free.' }} />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {FILTERABLE_DOMAINS.map((d) => {
-                  const active = domainFilters.has(d);
-                  const meta = DOMAIN_META[d];
-                  return (
-                    <button
-                      key={d}
-                      onClick={() => setDomainFilters((prev) => { const next = new Set(prev); next.has(d) ? next.delete(d) : next.add(d); return next; })}
-                      className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? meta.tone : 'bg-white hover:bg-slate-100'}`}
-                    >
-                      {meta.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
-                Minimum context window <InfoDot term="context_length" />
-                <span className="ml-auto font-mono text-[11px] font-bold text-slate-700">{minContextK === 0 ? 'Any' : `≥ ${minContextK}K`}</span>
-              </div>
-              <input type="range" min={0} max={1000} step={4} value={minContextK} onChange={(e) => setMinContextK(Number(e.target.value))} className="w-full accent-brand-blue cursor-pointer" />
-              <div className="flex justify-between text-[9px] font-bold text-slate-400"><span>Any</span><span>200K</span><span>500K</span><span>1M+</span></div>
-            </div>
-
-            <div className="flex items-center justify-between pt-2 border-t border-dashed border-slate-200">
-              <span className="text-[11px] font-bold text-slate-500">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
-              <button onClick={resetFilters} disabled={activeFilterCount === 0} className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset filters</button>
-            </div>
-          </aside>
-
-          <div className="flex-1 min-w-0">
-        {degraded && (
-          <div className="mt-4 bg-amber-100 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>Live catalog unavailable{degradedMessage ? ` (${degradedMessage})` : ''}. Add an <code>OpenRouter</code> key (Settings → API Configuration) or set <code>OPENROUTER_API_KEY</code> on the server to load the full, live model list.</span>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="flex items-center justify-center py-24 text-slate-400"><Loader2 className="w-8 h-8 animate-spin" /></div>
-        ) : error ? (
-          <div className="mt-8 bg-red-100 border-2 border-black rounded-lg p-4 text-sm flex flex-col sm:flex-row sm:items-center gap-3">
-            <AlertTriangle className="w-5 h-5 shrink-0" />
-            <span className="flex-1">Couldn’t load the model catalog: {error}. The server may be waking up — try again in a moment.</span>
-            <button onClick={retry} className="self-start font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-brand-yellow flex items-center gap-1">
-              <Loader2 className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Retry
-            </button>
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="mt-8 text-center text-slate-500 py-16">No models match your filters.</div>
-        ) : (
-          <>
-            {activeFilterCount === 0 && !query.trim() && picks.bestValue.length > 0 && (
-              <div className="mt-4 border-2 border-black rounded-xl bg-brand-yellow/15 p-4 shadow-comic">
-                <div className="flex items-center gap-2 mb-2">
-                  <Sparkles className="w-4 h-4" />
-                  <span className="font-display text-lg">Top picks — best accuracy for the price</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {picks.bestValue.map((m, i) => (
-                    <button key={`${m.source}:${m.id}`} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-brand-blue text-white">#{i + 1} value</span>
-                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(m).color}`}>{getModelVendor(m).label}</span>
-                      </div>
-                      <div className="font-bold text-sm leading-tight truncate">{m.name}</div>
-                      <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
-                        <span title="Arena Elo (LMArena)">★ {accuracyElo(m)} Elo</span>
-                        <span>·</span>
-                        <span>{costLabel(m)}</span>
-                      </div>
-                    </button>
-                  ))}
-                  {picks.topImage && (
-                    <button onClick={() => setSelected(picks.topImage!)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-fuchsia-600 text-white">Top image</span>
-                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(picks.topImage).color}`}>{getModelVendor(picks.topImage).label}</span>
-                      </div>
-                      <div className="font-bold text-sm leading-tight truncate">{picks.topImage.name}</div>
-                      <div className="text-[11px] text-slate-600 mt-1">{costLabel(picks.topImage)}{picks.topImage.supportsImageInput ? ' · reference-capable' : ''}</div>
-                    </button>
-                  )}
-                </div>
-                <div className="text-[10px] text-slate-500 mt-2">Ranked by Arena-Elo accuracy per dollar of output. Free models can rate-limit; verify pricing at the source.</div>
-              </div>
-            )}
-            {activeFilterCount === 0 && !query.trim() && (
-              <div className="mt-4"><ImageModelRanking /></div>
-            )}
-            <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
-              {visible.length} models{groupByProvider ? ' · grouped by provider' : ''}
-              {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
-            </div>
-            {groupByProvider ? (
-              <ProviderSections
-                models={visible}
-                renderCard={(model) => (
-                  <ModelCard
-                    model={model}
-                    selection={selection}
-                    compared={compareIds.includes(model.id)}
-                    onOpen={() => setSelected(model)}
-                    onUse={(slot) => useModel(model, slot)}
-                    onToggleCompare={() => toggleCompare(model.id)}
-                    onStartChat={onStartChat}
-                  />
-                )}
-              />
-            ) : (
-            // With the filter rail docked left (xl) the row is ~920px wide — 4 columns make
-            // ~220px cards whose action buttons spill over the border. 3 columns fit; 4 only
-            // when the rail is hidden and the full width is available.
-            <div className={`mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 ${showFilters ? 'xl:grid-cols-3' : 'xl:grid-cols-4'} gap-4`}>
-              {visible.map((model) => (
-                <ModelCard
-                  key={`${model.source}:${model.id}`}
-                  model={model}
-                  selection={selection}
-                  compared={compareIds.includes(model.id)}
-                  onOpen={() => setSelected(model)}
-                  onUse={(slot) => useModel(model, slot)}
-                  onToggleCompare={() => toggleCompare(model.id)}
-                  onStartChat={onStartChat}
-                />
-              ))}
-            </div>
-            )}
-          </>
-        )}
-          </div>
-        </div>
-        </>
-        )}
-      </div>
-
-      {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} onStartChat={onStartChat} />}
-      {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} onClose={() => setShowCompare(false)} onUse={useModel} />}
-
-      {/* Compare tray — shows the actual models picked (as removable chips), not just a count. */}
-      {compareIds.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t-4 border-black shadow-comic">
-          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-3">
-            <div className="text-sm font-bold flex items-center gap-1.5 shrink-0">
-              <Scale className="w-4 h-4" /> Compare <span className="font-normal text-slate-400">{compareIds.length}/{MAX_COMPARE}</span>
-            </div>
-            <div className="flex items-center gap-1.5 flex-1 overflow-x-auto py-0.5">
-              {compareModels.map((m) => (
-                <span key={`${m.source}:${m.id}`} className="flex items-center gap-1 shrink-0 text-[11px] font-bold border-2 border-black rounded-full pl-2 pr-1 py-0.5 bg-brand-yellow/40 max-w-[14rem]">
-                  <span className="truncate">{m.name}</span>
-                  <button onClick={() => toggleCompare(m.id)} className="rounded-full hover:bg-black/10 p-0.5 shrink-0" aria-label={`Remove ${m.name} from comparison`}><X className="w-3 h-3" /></button>
-                </span>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button onClick={() => setCompareIds([])} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Clear</button>
-              <button onClick={() => setShowCompare(true)} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Scale className="w-3 h-3" /> Compare {compareIds.length}</button>
-            </div>
-          </div>
-        </div>
-      )}
+  return <div data-ds-studio="models" className={[CANVAS_BG, INK, 'min-h-full min-w-0'].join(' ')}>
+    <div className="mx-auto max-w-[1440px] px-4 py-5 sm:px-7 sm:py-7 lg:px-10">
+      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0"><Button variant="ghost" size="sm" onClick={onBack} className="mb-3 -ml-2"><ArrowLeft />Back</Button><h1 className={[HEADING, 'text-[length:var(--ds-text-3xl)]'].join(' ')}>Models</h1><p className={['mt-2 text-sm', MUTED].join(' ')}>Compare price, performance, and what you can create.</p></div>
+        <div className="flex flex-wrap gap-2 sm:pt-10"><Button variant="outline" loading={loading || imageLoading} onClick={() => setRevision((v) => v + 1)}><RefreshCw /><span>Refresh</span></Button><Button variant="outline" disabled={Boolean(previewData)} onClick={() => { if (!previewData) setConnections(true); }}><KeyRound />Connections</Button></div>
+      </header>
+      {previewData && <p className={['mb-5 text-xs', MUTED].join(' ')}>Read-only preview. Connections and model defaults are disabled; usage comes only from preview data.</p>}
+      <Tabs value={tab} onValueChange={setTab} className="gap-7">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ds-hairline)] pb-4"><TabsList label="Model comparisons"><TabsTrigger value="images">Image models</TabsTrigger><TabsTrigger value="language">Language models</TabsTrigger><TabsTrigger value="usage">Usage</TabsTrigger></TabsList><p className={['text-xs', MUTED].join(' ')}>{loading ? 'Refreshing catalog…' : 'Catalog checked ' + formatDate(catalog?.fetchedAt)}</p></div>
+        <div role="status" aria-live="polite" className={notice ? 'text-sm' : 'sr-only'}>{notice}</div>
+        <TabsContent value="images"><ImageModels key={user?.id || 'public'} data={previewData || showcaseUser === user?.id ? showcase : null} loading={imageLoading} error={imageError} onRetry={() => setRevision((v) => v + 1)} /></TabsContent>
+        <TabsContent value="language">
+          {(catalogError || catalog?.stale || catalog?.degraded) && <p className={['mb-5 border-l-2 border-[var(--ds-hairline)] pl-3 text-sm', MUTED].join(' ')} role="status">{catalogError || 'Some catalog data is cached or partial. Open a model for its source and last observation.'}</p>}
+          {compared.length > 0 && <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ds-hairline)] pb-4"><div className="flex flex-wrap gap-2">{compared.map((model) => <Button key={modelKey(model)} size="sm" variant="secondary" onClick={() => toggleCompare(model)} aria-label={'Remove ' + model.name + ' from comparison'}>{model.name}<X /></Button>)}</div><Button size="sm" disabled={compared.length < 2} onClick={() => setComparing(true)}>Compare {compared.length} models<ArrowRight /></Button></div>}
+          <LanguageModels models={models} speeds={speeds} loading={loading} selected={selectedCompareKeys} onToggle={toggleCompare} onOpen={setDetail} />
+          <p className={['mt-4 text-xs', MUTED].join(' ')}>{speed?.status === 'unavailable' ? 'Performance observations are currently unavailable.' : 'Performance window: ' + (speed?.windowDays ?? 7) + ' days.' + (speed?.capped ? ' Based on a capped sample of recent responses.' : '')}</p>
+        </TabsContent>
+        <TabsContent value="usage"><Suspense fallback={<p className={MUTED}>Loading usage…</p>}><ModelsUsagePanel revision={revision} previewRows={previewData ? previewData.usageRows ?? [] : undefined} /></Suspense></TabsContent>
+      </Tabs>
     </div>
-  );
+
+    <Dialog open={connections && !previewData} onOpenChange={(open) => setConnections(open && !previewData)}><DialogContent size="lg" className="max-h-[90dvh] max-w-6xl overflow-y-auto"><DialogTitle>Connections</DialogTitle><DialogDescription>Connect a provider once. Each studio uses the models and capabilities it supports.</DialogDescription><div className="my-5 grid gap-x-6 gap-y-3 sm:grid-cols-2">{PROVIDERS_ORDERED.map((provider) => <div key={provider.id} className="flex items-center gap-3 border-b border-[var(--ds-hairline)] py-3"><SourceIcon source={provider.id} className="size-5 shrink-0" /><span className="min-w-0 flex-1 text-sm">{provider.label}</span><span className={['text-xs', MUTED].join(' ')}>{connectionState(provider.id).label}</span></div>)}</div>{!previewData && <Suspense fallback={<p className={MUTED}>Loading key settings…</p>}><ApiConfiguration /></Suspense>}</DialogContent></Dialog>
+
+    <Dialog open={Boolean(detail)} onOpenChange={(open) => { if (!open) setDetail(null); }}><DialogContent size="lg" className="max-h-[90dvh] overflow-y-auto">{detail && <><div className="mb-4 flex items-center gap-3"><ProviderIcon vendorId={modelMaker(detail).id} className="size-7" /><span className={['text-sm', MUTED].join(' ')}>{modelMaker(detail).label}</span></div><DialogTitle>{detail.name}</DialogTitle><DialogDescription>Served via {sourceLabel(detail.source)}</DialogDescription>{detail.description && <p className={['mt-4 text-sm leading-relaxed', MUTED].join(' ')}>{detail.description}</p>}<div className="my-5 flex flex-wrap gap-2">{modelCapabilities(detail).map((capability) => <Badge key={capability} variant="secondary">{capability}</Badge>)}</div><dl className="grid grid-cols-2 gap-x-6 gap-y-5 border-y border-[var(--ds-hairline)] py-5 text-sm">{[
+      ['Input / 1M tokens', modelPrice(detail, 'input')], ['Output / 1M tokens', modelPrice(detail, 'output')], ['Context window', formatContext(detail.contextLength)], ['Typical response time', formatLatency(speeds[detail.id]?.p50Ms)], ['Catalog origin', detail.catalogOrigin || 'Not reported'], ['Pricing source', detail.pricingOrigin || 'Not reported'], ['Model last observed', formatDate(detail.catalogCheckedAt)], ['Authentication', connectionState(detail.source).label]
+    ].map(([label, value]) => <div key={label}><dt className={['text-xs', MUTED].join(' ')}>{label}</dt><dd className="mt-1 [overflow-wrap:anywhere]">{value}</dd></div>)}</dl><p className={['my-5 text-xs leading-relaxed', MUTED].join(' ')}>The text default applies to new Chat selections and supported legacy workflows. Existing conversation pins and Comic Studio’s Director roles keep their own model choices.</p><div className="flex flex-wrap gap-2"><Button disabled={!canUse(detail)} onClick={() => useModel(detail)}>Set text default</Button>{onStartChat && <Button variant="outline" disabled={!canUse(detail)} onClick={() => { if (canUse(detail)) onStartChat(detail); }}>Open in Chat<ArrowRight /></Button>}<Button variant="ghost" disabled={Boolean(previewData)} onClick={() => { if (!previewData) { setDetail(null); setConnections(true); } }}>Manage connection</Button></div>{!canUse(detail) && <p className={['mt-3 text-xs', MUTED].join(' ')}>{unavailableReason(detail)}</p>}</>}</DialogContent></Dialog>
+
+    <Dialog open={comparing} onOpenChange={setComparing}><DialogContent size="lg" className="max-h-[90dvh] max-w-6xl overflow-y-auto"><DialogTitle>Compare language models</DialogTitle><DialogDescription>Listed prices and recorded performance, with unavailable values left unreported.</DialogDescription><div className="mt-6"><PricePerformance models={compared} speeds={speeds} /></div><div className={`mt-6 grid gap-6 ${compared.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>{compared.map((model) => <article key={modelKey(model)} className="min-w-0"><div className="flex items-center gap-2"><ProviderIcon vendorId={modelMaker(model).id} className="size-5" /><h3 className="font-semibold [overflow-wrap:anywhere]">{model.name}</h3></div><p className={['mt-1 text-xs', MUTED].join(' ')}>via {sourceLabel(model.source)}</p><dl className="my-5 space-y-3 text-sm">{[['Input / 1M', modelPrice(model, 'input')], ['Output / 1M', modelPrice(model, 'output')], ['Context', formatContext(model.contextLength)], ['Response observations', String(speeds[model.id]?.samples ?? 'Not recorded')]].map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt className={MUTED}>{label}</dt><dd className="text-right tabular-nums">{value}</dd></div>)}</dl><Button variant="outline" disabled={!canUse(model)} onClick={() => useModel(model)}>Set text default</Button></article>)}</div></DialogContent></Dialog>
+  </div>;
 };
+
+export default ModelLibrary;

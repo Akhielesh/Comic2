@@ -2,7 +2,7 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 650, "brand-blue": 165, "brand-red": 38, "brand-yellow": 181, "font-comic": 71, "font-display": 177, "shadow-comic": 102 },
+  "totals": { "border-black": 578, "brand-blue": 140, "brand-red": 34, "brand-yellow": 161, "font-comic": 71, "font-display": 173, "shadow-comic": 92 },
   "files": {
     "components/AccountSettings.tsx": { "border-black": 32, "brand-blue": 5, "brand-yellow": 3, "font-comic": 2, "font-display": 18, "shadow-comic": 5 },
     "components/AgentStageShell.tsx": { "border-black": 4, "brand-blue": 1, "brand-yellow": 1, "font-comic": 1, "font-display": 1, "shadow-comic": 2 },
@@ -15,7 +15,6 @@
     "components/InviteFriends.tsx": { "border-black": 4, "brand-blue": 3, "brand-yellow": 1, "shadow-comic": 2 },
     "components/LearnHub.tsx": { "border-black": 3, "font-comic": 2, "font-display": 2, "shadow-comic": 1 },
     "components/MessageCard.tsx": { "border-black": 2, "brand-blue": 2, "brand-red": 2, "brand-yellow": 2 },
-    "components/ModelLibrary.tsx": { "border-black": 72, "brand-blue": 25, "brand-red": 4, "brand-yellow": 20, "font-display": 4, "shadow-comic": 10 },
     "components/PanelDialogue.tsx": { "border-black": 7, "brand-blue": 4, "brand-yellow": 1, "font-comic": 4, "font-display": 4 },
     "components/ProjectDashboard.tsx": { "border-black": 25, "brand-blue": 1, "brand-red": 1, "brand-yellow": 10, "font-comic": 5, "font-display": 6, "shadow-comic": 6 },
     "components/PublicProfile.tsx": { "border-black": 3, "font-display": 3, "shadow-comic": 2 },

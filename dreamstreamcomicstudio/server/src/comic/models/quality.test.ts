@@ -34,17 +34,33 @@ const lm = (model_name: string, rank: number, rating: number, category = 'overal
   leaderboard_publish_date: date
 });
 
-describe('the bundled snapshot (2026-10-22 research pull, models.md §1.2)', () => {
-  it('holds the dated, sourced numbers from the spec tables', () => {
+describe('the bundled snapshot (board-specific research dates)', () => {
+  it('refreshes AA text-to-image while retaining each other board’s date and values', () => {
     const nb = qualityEntriesFor('google/gemini-nano-banana-2.1');
-    expect(nb.find((q) => q.board === 'aa_t2i')).toMatchObject({ rank: 4, score: 1176, ci: [1164, 1188], of: 105 });
+    expect(nb.find((q) => q.board === 'aa_t2i')).toMatchObject({ rank: 7, score: 1176, ci: [1164, 1188], of: 113, samples: 6744, name: 'Nano Banana 2.1', asOf: '2026-11-13T22:41:51Z' });
     expect(nb.find((q) => q.board === 'aa_edit')).toMatchObject({ rank: 4, score: 1152 });
     expect(nb.find((q) => q.board === 'lmarena_edit')).toMatchObject({ rank: 5, score: 1426.2, asOf: '2026-10-20', of: 60 });
     expect(nb.find((q) => q.board === 'lmarena_multi_image')).toMatchObject({ rank: 5, score: 1431.7 });
     expect(qualityEntriesFor('google/gemini-3-pro-image').find((q) => q.board === 'lmarena_t2i')).toMatchObject({ rank: 16, score: 1247.9 });
     for (const e of nb) {
       expect(e.source.length).toBeGreaterThan(10);
-      expect(e.asOf).toMatch(/^2026-10-/);
+      expect(e.asOf).toMatch(e.board === 'aa_t2i' ? /^2026-11-13/ : /^2026-10-/);
+    }
+  });
+
+  it('preserves exact benchmark variants and samples for both new 2.6 model IDs', () => {
+    const sunburst = qualityEntriesFor('openai/gpt-image-2.6-sunburst');
+    const flare = qualityEntriesFor('openai/gpt-image-2.6-flare');
+    expect(sunburst).toHaveLength(1);
+    expect(sunburst[0]).toMatchObject({ board: 'aa_t2i', rank: 1, score: 1261, ci: [1247, 1275], samples: 5282, name: 'GPT Image 2.6 Sunburst (max)' });
+    expect(flare[0]).toMatchObject({ board: 'aa_t2i', rank: 3, score: 1226, ci: [1214, 1238], samples: 7169, name: 'GPT Image 2.6 Flare (max)' });
+    const board = bundledQualitySnapshot.boards.aa_t2i!;
+    expect(Object.keys(board.entries)).toHaveLength(11);
+    expect(board.source).toContain('https://artificialanalysis.ai/image/leaderboard/text-to-image');
+    for (const entry of Object.values(board.entries)) {
+      expect(entry.name).toBeTruthy();
+      expect(entry.samples).toBeGreaterThan(0);
+      expect(entry.ci).toHaveLength(2);
     }
   });
 

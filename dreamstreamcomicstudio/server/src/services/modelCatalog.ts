@@ -57,17 +57,20 @@ export type CatalogResult = {
   models: AnnotatedModel[];
   fetchedAt: number | null;
   degraded: boolean;
+  /** True when a last-good snapshot is being revalidated or live refresh failed. */
+  stale: boolean;
   message?: string;
 };
 
 const refresh = async (): Promise<AnnotatedModel[]> => {
-  const provider = getProvider();
+  const provider = getProvider('openrouter');
   // OpenRouter's /models is a PUBLIC list — fetch it ANONYMOUSLY so a rate-limited,
   // throttled or invalid platform key can never starve the catalog (defense-in-depth
   // around the outage). NVIDIA's /models needs auth, so it keeps the platform key.
   const ctx = provider.id === 'openrouter' ? undefined : resolveProviderContext(undefined, provider.id);
   const raw = await provider.listModels(ctx);
-  const models = annotateModels(raw);
+  const checkedAt = Date.now();
+  const models = annotateModels(raw.map((model) => ({ ...model, catalogOrigin: 'live' as const, catalogCheckedAt: checkedAt })));
   // RESILIENCE: OpenRouter's /models is a large public list. A zero/empty result is a
   // transient upstream blip (rate-limit, cold-start, momentary outage), NOT "the catalog
   // is empty now". Caching it would serve an empty catalog for a full TTL AND persisting
@@ -129,13 +132,13 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
 
   // 1. Fresh memory cache.
   if (cache && fresh && !force) {
-    return { models: cache.models, fetchedAt: cache.fetchedAt, degraded: false };
+    return { models: cache.models, fetchedAt: cache.fetchedAt, degraded: false, stale: false };
   }
 
   // 2. Stale memory cache → serve now, revalidate in background.
   if (cache && !force) {
     refreshInBackground();
-    return { models: cache.models, fetchedAt: cache.fetchedAt, degraded: false };
+    return { models: cache.models, fetchedAt: cache.fetchedAt || null, degraded: true, stale: true, message: 'Showing the last saved catalog while checking the provider for updates.' };
   }
 
   // 3. Cold start → hydrate from the durable index and serve immediately, revalidate in background.
@@ -144,20 +147,21 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
     if (persisted.length) {
       cache = { models: persisted, fetchedAt: 0 }; // fetchedAt 0 = treat as stale so it revalidates
       refreshInBackground();
-      return { models: persisted, fetchedAt: null, degraded: false };
+      return { models: persisted, fetchedAt: null, degraded: true, stale: true, message: 'Showing a saved catalog while checking the provider for updates.' };
     }
   }
 
   // 4. Nothing to serve (or a forced refresh): we must await a live fetch.
   try {
     const models = await startRefresh();
-    return { models, fetchedAt: cache?.fetchedAt ?? Date.now(), degraded: false };
+    return { models, fetchedAt: cache?.fetchedAt ?? Date.now(), degraded: false, stale: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load model catalog.';
     return {
       models: cache?.models ?? [],
-      fetchedAt: cache?.fetchedAt ?? null,
+      fetchedAt: cache?.fetchedAt || null,
       degraded: true,
+      stale: true,
       message
     };
   }
@@ -213,11 +217,19 @@ export type CatalogFilters = {
 /** Fetch + annotate models from a specific provider (used to merge BYOK sources like NVIDIA). */
 export const getProviderModels = async (
   providerId: AIProviderId,
-  apiKey?: string | null
+  apiKey?: string | null,
+  options?: { platformFallback?: boolean }
 ): Promise<AnnotatedModel[]> => {
   try {
-    const raw = await getProvider(providerId).listModels(resolveProviderContext(apiKey, providerId));
-    return annotateModels(raw);
+    const ctx = options?.platformFallback === false
+      ? { apiKey: apiKey?.trim() || '', byok: Boolean(apiKey?.trim()) }
+      : resolveProviderContext(apiKey, providerId);
+    const raw = await getProvider(providerId).listModels(providerId === 'openrouter' ? undefined : ctx);
+    const checkedAt = Date.now();
+    return annotateModels(raw.map((model) => {
+      const catalogOrigin = model.catalogOrigin ?? (providerId === 'openrouter' || providerId === 'nvidia' ? 'live' : 'curated');
+      return { ...model, catalogOrigin, ...(catalogOrigin === 'live' ? { catalogCheckedAt: checkedAt } : {}) };
+    }));
   } catch {
     return [];
   }

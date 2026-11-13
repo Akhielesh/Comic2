@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight,
   Power, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw, Gauge, Server, Wallet, BookOpen, Sparkles
@@ -17,13 +17,14 @@ import {
   setKeyValidation,
   usageFraction,
   isOverLimit,
-  getAccountKeyMeta
+  getAccountKeyMeta,
+  API_KEYS_CHANGED
 } from '../services/apiKeys';
 import { getProviderDef, type ProviderId } from '../shared/providers';
 import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import { fetchModelCatalog } from '../services/modelCatalog';
-import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
-import { validateApiKey } from '../services/keyValidation';
+import { isProviderEnabled, setProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
+import { validateApiKey, KEY_CHECK_UNAVAILABLE_COPY, type KeyValidationStatus } from '../services/keyValidation';
 import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpServers';
 import type { McpServerConfig } from '../apiTypes';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
@@ -45,7 +46,7 @@ import {
 } from '../services/usageAllowance';
 import {
   GLASS, HAIRLINE, SHADOW_SOFT, INK, MUTED, HEADING, LABEL, TRANSITION,
-  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, CONTROL_BTN
+  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, CONTROL_BTN, TONE_TEXT, TONE_SURFACE
 } from './chat/studioDesign';
 
 // ── Shared bits ─────────────────────────────────────────────────────────────
@@ -163,6 +164,15 @@ const McpServersPanel: React.FC = () => {
 // awake. Otherwise keys are checked on add and on the explicit "Verify" button.
 const VALIDATION_STALE_MS = 24 * 60 * 60 * 1000;
 
+// Account checks show our own status copy, never an arbitrary response message.
+const ACCOUNT_CHECK_COPY: Record<KeyValidationStatus, string> = {
+  valid: 'Account key authenticated. Access can vary by model.',
+  invalid: 'The provider rejected this account key. Add a replacement key to update your account.',
+  unsupported: 'Saved. This provider does not offer a read-only key check.',
+  missing: 'No enabled account key is available to check.',
+  unavailable: KEY_CHECK_UNAVAILABLE_COPY
+};
+
 // Messages that earlier versions stored as an 'invalid' verdict although no verdict was reached:
 // our own route failed (expired session, rate limit, 5xx, offline) or the provider was
 // unreachable or errored. Tabs still running the old code may keep writing them for a while
@@ -187,7 +197,7 @@ const runValidation = async (k: ManagedApiKey): Promise<string | null> => {
   const r = await validateApiKey(k.provider, k.key);
   if (r.status === 'unavailable') return r.message;
   const state = r.status === 'missing' ? 'invalid' : r.status;
-  setKeyValidation(k.id, state, r.message);
+  setKeyValidation(k.id, state, r.message, k.key);
   return null;
 };
 
@@ -243,14 +253,21 @@ const KeyRow: React.FC<{
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(k.label);
   const [limit, setLimit] = useState(k.limitUsd != null ? String(k.limitUsd) : '');
+  const [replacement, setReplacement] = useState('');
   const [checking, setChecking] = useState(false);
   // A check that could not run this time ("Couldn't check…"). Shown, never stored.
   const [notice, setNotice] = useState<string | null>(null);
+  const validationRun = useRef({ id: 0, key: '' });
 
   const verify = async () => {
-    if (checking) return;
+    if (checking && validationRun.current.key === k.key) return;
+    const id = validationRun.current.id + 1;
+    validationRun.current = { id, key: k.key };
     setChecking(true);
-    setNotice(await runValidation(k));
+    setNotice(null);
+    const result = await runValidation(k);
+    if (validationRun.current.id !== id) return;
+    setNotice(result);
     setChecking(false);
     onChange();
   };
@@ -263,9 +280,12 @@ const KeyRow: React.FC<{
   }, [k.id, k.key]);
 
   const save = () => {
-    updateKey(k.id, { label, limitUsd: limit.trim() ? Number(limit) : null });
+    const changedSecret = Boolean(replacement.trim() && replacement.trim() !== k.key);
+    updateKey(k.id, { label, limitUsd: limit.trim() ? Number(limit) : null, ...(changedSecret ? { key: replacement } : {}) });
     setEditing(false);
-    onChange();
+    setReplacement('');
+    if (changedSecret && k.active) onActiveKeyChange();
+    else onChange();
   };
 
   const activate = () => {
@@ -303,6 +323,12 @@ const KeyRow: React.FC<{
             </div>
           )}
           <div className={`text-[11px] font-mono ${MUTED} mt-0.5`}>{mask(k.key)}</div>
+          {editing && (
+            <label className={`block text-[11px] ${MUTED} mt-2`}>
+              Replace API key (optional)
+              <input type="password" autoComplete="off" value={replacement} onChange={(e) => setReplacement(e.target.value)} placeholder="Leave blank to keep this key" className={`${INPUT} mt-1 font-mono`} />
+            </label>
+          )}
           {!editing && !checking && storedVerdict(k) === 'invalid' && k.validationMessage && (
             <div className="text-[11px] text-red-600 font-medium mt-0.5 flex items-start gap-1">
               <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{k.validationMessage}
@@ -330,7 +356,7 @@ const KeyRow: React.FC<{
           {editing ? (
             <>
               <button onClick={save} title="Save" className={`${CONTROL_BTN} p-1.5`}><Check className="w-3.5 h-3.5" /></button>
-              <button onClick={() => { setEditing(false); setLabel(k.label); setLimit(k.limitUsd != null ? String(k.limitUsd) : ''); }} title="Cancel" className={`${CONTROL_BTN} p-1.5`}><X className="w-3.5 h-3.5" /></button>
+              <button onClick={() => { setEditing(false); setReplacement(''); setLabel(k.label); setLimit(k.limitUsd != null ? String(k.limitUsd) : ''); }} title="Cancel" className={`${CONTROL_BTN} p-1.5`}><X className="w-3.5 h-3.5" /></button>
             </>
           ) : (
             <>
@@ -536,6 +562,9 @@ const ProviderCard: React.FC<{
 }> = ({ provider, keys, count, open, onToggleOpen, onChange }) => {
   const { user } = useAuth();
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'failed' | null>(null);
+  const [accountCheck, setAccountCheck] = useState<string | null>(null);
+  const [checkingAccount, setCheckingAccount] = useState(false);
+  const accountValidationRun = useRef(0);
   const meta = PROVIDER_META[provider];
   const def = getProviderDef(provider);
   const accountMeta = getAccountKeyMeta();
@@ -544,6 +573,13 @@ const ProviderCard: React.FC<{
   const active = providerKeys.find((k) => k.active);
   const hasKey = providerKeys.length > 0 || accountMeta.some((m) => m.provider === provider);
   const overLimit = active ? isOverLimit(active) : false;
+  const accountSuffix = accountMeta.find((entry) => entry.provider === provider)?.suffix;
+
+  useEffect(() => {
+    accountValidationRun.current += 1;
+    setAccountCheck(null);
+    setCheckingAccount(false);
+  }, [user?.id, provider, accountSuffix]);
 
   const syncActiveKey = async () => {
     if (!user) return;
@@ -558,14 +594,16 @@ const ProviderCard: React.FC<{
     void syncActiveKey();
   };
 
-  // Status pill: Off (governance) | No key (greyed) | Limit reached | Connected.
+  // A stored secret is not a verified connection. Keep these states distinct.
   const status: { label: string; cls: string } = !enabled
     ? { label: 'Off', cls: `bg-[var(--ds-well)] ${MUTED}` }
     : overLimit
-      ? { label: 'Limit reached', cls: 'bg-red-500/10 text-red-600' }
-      : hasKey
-        ? { label: 'Connected', cls: 'bg-green-500/10 text-green-600' }
-        : { label: 'No key', cls: `bg-[var(--ds-well)] ${MUTED}` };
+      ? { label: 'Limit reached', cls: `${TONE_SURFACE.danger} ${TONE_TEXT.danger}` }
+      : active && storedVerdict(active) === 'invalid'
+        ? { label: 'Key rejected', cls: `${TONE_SURFACE.danger} ${TONE_TEXT.danger}` }
+        : active && storedVerdict(active) === 'valid'
+          ? { label: 'Verified', cls: `${TONE_SURFACE.success} ${TONE_TEXT.success}` }
+          : { label: hasKey ? 'Key saved' : 'No key', cls: `bg-[var(--ds-well)] ${MUTED}` };
 
   return (
     <div className={`${PANEL} overflow-hidden ${!enabled ? 'opacity-70' : ''}`}>
@@ -596,6 +634,7 @@ const ProviderCard: React.FC<{
         {/* Governance on/off toggle */}
         <button
           role="switch"
+          aria-label={`Enable ${meta.label}`}
           aria-checked={enabled}
           onClick={() => { setProviderEnabled(provider, !enabled); onChange(); }}
           title={enabled ? 'Source is on — turn off to ignore its keys everywhere' : 'Source is off — turn on to use it'}
@@ -622,6 +661,20 @@ const ProviderCard: React.FC<{
             </div>
           )}
           {providerKeys.map((k) => <KeyRow key={k.id} k={k} fundsUrl={def?.fundsUrl} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />)}
+          {!active && accountSuffix && (
+            <div className={`space-y-2 text-xs ${MUTED}`}>
+              <p>Your account has a saved key ending in {accountSuffix}. Each studio shows the models it supports.</p>
+              <button type="button" className={CONTROL_BTN} disabled={checkingAccount || !user || !enabled} onClick={async () => {
+                const id = ++accountValidationRun.current;
+                setCheckingAccount(true);
+                const { status } = await validateApiKey(provider);
+                if (accountValidationRun.current !== id) return;
+                setAccountCheck(ACCOUNT_CHECK_COPY[status] || KEY_CHECK_UNAVAILABLE_COPY);
+                setCheckingAccount(false);
+              }}>{checkingAccount ? 'Checking account key…' : 'Verify account key'}</button>
+              {accountCheck && <p role="status">{accountCheck}</p>}
+            </div>
+          )}
           <AddKeyForm provider={provider} onChange={onChange} onActiveKeyChange={onActiveKeyChange} />
           {syncStatus === 'syncing' && <p role="status" className={`text-xs ${MUTED}`}>Syncing the active key to your account…</p>}
           {syncStatus === 'failed' && (
@@ -647,6 +700,18 @@ export const ApiConfiguration: React.FC = () => {
   });
   const [counts, setCounts] = useState<Record<string, number>>({});
   const refresh = () => { setKeys(listKeys()); setGovVersion((v) => v + 1); };
+
+  useEffect(() => {
+    const update = () => { setKeys(listKeys()); setGovVersion((v) => v + 1); };
+    window.addEventListener(API_KEYS_CHANGED, update);
+    window.addEventListener(SOURCE_GOVERNANCE_CHANGED, update);
+    window.addEventListener('storage', update);
+    return () => {
+      window.removeEventListener(API_KEYS_CHANGED, update);
+      window.removeEventListener(SOURCE_GOVERNANCE_CHANGED, update);
+      window.removeEventListener('storage', update);
+    };
+  }, []);
 
   // Live per-provider model counts, so each provider row shows what it actually offers.
   useEffect(() => {
@@ -679,7 +744,7 @@ export const ApiConfiguration: React.FC = () => {
           set an optional monthly limit, and turn any source on or off. Keys stay on this device (and sync to your account, encrypted).
         </p>
         <div className="flex items-center gap-1.5 shrink-0" aria-label="Configuration summary">
-          <span className={chip(`${connected} connected`, connected > 0 ? 'ok' : 'muted')}>{connected} connected</span>
+          <span className={chip(`${connected} saved`, 'muted')}>{connected} providers with keys</span>
           <span className={chip(`${enabledProviders} on`, 'muted')}>{enabledProviders} on</span>
           <span className={chip(`${validKeys} valid`, validKeys > 0 ? 'ok' : 'muted')}>{validKeys} valid</span>
         </div>

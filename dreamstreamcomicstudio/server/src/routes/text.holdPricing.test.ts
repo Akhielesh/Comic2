@@ -126,6 +126,45 @@ const PIPELINE_ROUTES: [string, Record<string, unknown>][] = [
   ['/continuity-summary', { scene: { id: 1 }, panels: [] }]
 ];
 
+describe('explicit classic text source selection', () => {
+  it.each(PIPELINE_ROUTES)('%s never substitutes the available OpenRouter key for missing NVIDIA', async (path, body) => {
+    const res = await post(path, body, { 'X-Text-Source': 'nvidia' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: { code: 'TEXT_KEY_MISSING' } });
+    expect(meter.reserves).toEqual([]);
+    for (const engine of Object.values(textEngine)) expect(engine).not.toHaveBeenCalled();
+  });
+
+  it.each(PIPELINE_ROUTES)('%s carries the resolved provider through to the engine', async (path, body) => {
+    const res = await post(path, body, { 'x-test-key': 'nvidia', 'X-Text-Source': 'nvidia', 'X-Text-Model': 'publisher/model' });
+    expect(res.status).toBe(200);
+    const called = Object.values(textEngine).filter((engine) => engine.mock.calls.length);
+    expect(called).toHaveLength(1);
+    expect((called[0].mock.calls[0] as unknown[]).at(-1)).toBe('nvidia');
+    expect(meter.reserves[0]).toMatchObject({ provider: 'nvidia', fallbackModel: 'publisher/model' });
+  });
+
+  it('keeps Gemini’s explicitly selected native text model', async () => {
+    const res = await post('/analyze-script', { script: 'Scene 1.' }, { 'x-test-key': 'gemini', 'X-Text-Source': 'gemini', 'X-Text-Model': 'gemini-user-choice' });
+    expect(res.status).toBe(200);
+    expect(textEngine.analyzeScript).toHaveBeenCalledWith('gemini-platform', 'Scene 1.', 'gemini-user-choice', undefined, 'gemini');
+  });
+
+  it('reports unsupported classic sources before spending on another provider', async () => {
+    const res = await post('/analyze-script', { script: 'Scene 1.' }, { 'X-Text-Source': 'openai' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: 'TEXT_SOURCE_UNSUPPORTED' } });
+    expect(meter.reserves).toEqual([]);
+  });
+
+  it('the OpenRouter passthrough refuses a different explicitly selected source', async () => {
+    const res = await post('/generate', { prompt: 'hello' }, { 'X-Text-Source': 'gemini' });
+    expect(res.status).toBe(400);
+    expect(meter.reserves).toEqual([]);
+    expect(openrouter.generateText).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/text pipeline holds price the provider-level retry model', () => {
   it.each(PIPELINE_ROUTES)('OpenRouter key, %s: a :free primary is held together with the paid TEXT_FALLBACK retry', async (path, body) => {
     const res = await post(path, body);
