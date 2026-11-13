@@ -85,6 +85,12 @@ const PRO_ONLY: ProOnly[] = [
  * 2.118.0, so those bytes ship today and are not growth from this release; S2b's own growth is unchanged. The
  * ceilings are therefore re-pinned to the lockfile-exact (CI) measurement plus the same ~2 KB of noise. From here on
  * a ceiling is only ever set from a lockfile-exact build, never from a machine whose packages have drifted.
+ *
+ * R01 (OV-1, the long-word recipes, Button and Badge label spans, MessageText in the ds barrel), measured on a
+ * lockfile-exact production build against the same build of its base (production e974314f, which measures the same as
+ * c8d20a2c: 323,097 B and 328,552 B, equal to CI's): index.html 323,579 B (+482 B: the label spans and recipes, and
+ * ErrorState's toggle slot, which rides in the eager error boundary), live.html 328,552 B (+0 B); index.html's eager
+ * CSS +101 B gzip. Both stay under the D17c ceilings, which are unchanged.
  */
 const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.html': 330_850 };
 

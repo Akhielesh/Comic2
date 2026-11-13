@@ -14,6 +14,7 @@ are not scanned. The scan lives in `tests/config/classLists.ts` (`SCANNED_ROOTS`
 | `overlineGuard.test.ts` | `overline.json` | `hand-rolled-eyebrow`, `LABEL-import`. Comic Studio is skipped: exact pins cover it. |
 | `dialogTitle.test.ts` | `dialogTitle.json` | `unclassified-modal`. Comic Studio is skipped: its classification covers it. |
 | `pulseGuard.test.ts` | `pulse.json` | each raw `animate-pulse` / `animate-ping` / `animate-bounce`, plus `unguarded` (no `motion-safe:` and no `motion-reduce:animate-none` in its class list). `components/ds/**` is skipped; `animate-spin` is exempt. |
+| `overflowGuard.test.ts` | `overflow.json` | `nowrapNoClip` (nowrap with nothing to cut it; recipe files skipped), `breakWords`, `maxHNoOverflow`, `rawErrorText` / `rawErrorSink` (raw error text read or set into state; `components/**` and `App.tsx` minus admin and the error mappers), `dynamicButtonLabel` (an id-like expression in a `<Button>`). |
 
 What each guard reads:
 

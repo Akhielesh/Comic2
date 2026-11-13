@@ -15,7 +15,7 @@
 import React from 'react';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { cn } from '../../lib/utils';
-import { buttonClasses } from './Button';
+import { buttonClasses, labelChildren } from './Button';
 import { DIALOG_DESCRIPTION, DIALOG_FOOTER, DIALOG_HEADER, DIALOG_PANEL, DIALOG_SCRIM, DIALOG_SIZE, DIALOG_TITLE_CLASSES, dialogMotion, type DialogSize } from './Dialog';
 import { NO_OVERLAY, useOpenState, useOverlayLayer, type OverlayState } from './overlayLayer';
 import { useReducedMotion } from './useReducedMotion';
@@ -106,7 +106,7 @@ export interface AlertDialogActionProps extends React.ComponentPropsWithoutRef<t
 
 /** The confirm button: closes the dialog after its onClick (call `event.preventDefault()` there to keep it open). */
 export const AlertDialogAction = /* @__PURE__ */ React.forwardRef<React.ElementRef<typeof AlertDialogPrimitive.Action>, AlertDialogActionProps>(
-  function AlertDialogAction({ className, variant = 'default', ...props }, ref) {
+  function AlertDialogAction({ className, variant = 'default', children, ...props }, ref) {
     return (
       <AlertDialogPrimitive.Action
         ref={ref}
@@ -114,7 +114,9 @@ export const AlertDialogAction = /* @__PURE__ */ React.forwardRef<React.ElementR
         data-variant={variant}
         className={buttonClasses({ variant, className })}
         {...props}
-      />
+      >
+        {labelChildren(children)}
+      </AlertDialogPrimitive.Action>
     );
   }
 );
@@ -123,6 +125,10 @@ export const AlertDialogAction = /* @__PURE__ */ React.forwardRef<React.ElementR
 export const AlertDialogCancel = /* @__PURE__ */ React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Cancel>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>
->(function AlertDialogCancel({ className, ...props }, ref) {
-  return <AlertDialogPrimitive.Cancel ref={ref} data-slot="alert-dialog-cancel" className={buttonClasses({ variant: 'outline', className })} {...props} />;
+>(function AlertDialogCancel({ className, children, ...props }, ref) {
+  return (
+    <AlertDialogPrimitive.Cancel ref={ref} data-slot="alert-dialog-cancel" className={buttonClasses({ variant: 'outline', className })} {...props}>
+      {labelChildren(children)}
+    </AlertDialogPrimitive.Cancel>
+  );
 });

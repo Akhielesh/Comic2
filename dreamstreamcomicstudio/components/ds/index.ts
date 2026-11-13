@@ -6,7 +6,7 @@
 export * from './recipes';
 
 // Controls
-export { Button, buttonClasses, BUTTON_BASE, BUTTON_EXTENSION_VARIANTS, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
+export { Button, buttonClasses, labelChildren, wrapTextRuns, BUTTON_BASE, BUTTON_EXTENSION_VARIANTS, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { IconButton, ICON_BUTTON_SIZE, type IconButtonProps, type IconButtonSize } from './IconButton';
 export { Field, useField, useFieldControl, FIELD_DESCRIPTION, FIELD_ERROR, FIELD_LABEL, type FieldContextValue, type FieldControlProps, type FieldProps } from './Field';
 export { Input, Textarea, INPUT_CLASSES, TEXTAREA_CLASSES, type InputProps, type TextareaProps } from './Input';
@@ -33,6 +33,7 @@ export { MetricCard, METRIC_CARD, METRIC_ICON_TILE, METRIC_VALUE, type MetricCar
 export { EmptyState, EMPTY_FRAME, type EmptyStateProps } from './EmptyState';
 export { LoadingState, type LoadingStateProps } from './LoadingState';
 export { ErrorState, type ErrorStateProps } from './ErrorState';
+export { MessageText, LINE_CLAMP, MESSAGE_TEXT, MESSAGE_TOGGLE, type MessageTextLines, type MessageTextProps } from './MessageText';
 export { StateIconTile, STATE_DESCRIPTION, STATE_TITLE, type StateAction, type StateHeading, type StateVariant } from './stateParts';
 export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from './Skeleton';
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';
@@ -61,7 +62,7 @@ export { useImageReveal, decodeImage, allowFilterEffects, canPlayEntrances, isCo
 export { useReducedMotion, prefersReducedMotion } from './useReducedMotion';
 
 // Content kit (DS-R1). Inspector and FilterSheet stay out of the barrel (they pull in the mobile sheets); import them by path.
-export { ComicCard, COMIC_CARD, COMIC_CARD_PRIMARY, COMIC_CARD_ROW, type ComicCardAction, type ComicCardProps, type ComicCardVariant } from './ComicCard';
+export { ComicCard, COMIC_CARD, COMIC_CARD_HERO, COMIC_CARD_PRIMARY, COMIC_CARD_ROW, type ComicCardAction, type ComicCardProps, type ComicCardVariant } from './ComicCard';
 export { CoverImage, RevealImage, useNearViewport, isPublicationCoverSource, publicationCoverOrigins, revealKeyOf, artBoxStyle, COVER_BOX, COVER_WIDTHS, PUBLICATION_PATH_RE, type CoverImageProps, type CoverSources, type CoverWidth, type RevealImageProps } from './CoverImage';
 export { MediaTile, MEDIA_TILE, MEDIA_TILE_RING_INSIDE, ON_ART_LABEL, type MediaTileProps } from './MediaTile';
 export { CardGrid, CARD_GRID, CARD_GRID_STAGGER_MAX, focusTargetOf, nextGridIndex, type CardGridProps } from './CardGrid';

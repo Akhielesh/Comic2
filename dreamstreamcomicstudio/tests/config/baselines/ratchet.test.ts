@@ -59,7 +59,8 @@ const GUARDS: Record<string, { test: string; never: string[] }> = {
   statusInk: { test: 'tests/config/statusInkGuard.test.ts', never: [PINNED_DIR] },
   overline: { test: 'tests/config/overlineGuard.test.ts', never: [PINNED_DIR] },
   dialogTitle: { test: 'tests/config/dialogTitle.test.ts', never: [PINNED_DIR] },
-  pulse: { test: 'tests/config/pulseGuard.test.ts', never: ['components/ds/**'] }
+  pulse: { test: 'tests/config/pulseGuard.test.ts', never: ['components/ds/**'] },
+  overflow: { test: 'tests/config/overflowGuard.test.ts', never: [] }
 };
 /** Deleted by DS-0 (master plan §0.1): no baseline may list them. */
 const DELETED = ['Header', 'SettingsModal', 'KeyManager', 'ModelSelector', 'DraggablePanel', 'ResizablePanel', 'FluxKeyInput', 'OpenRouterKeyInput'].map(

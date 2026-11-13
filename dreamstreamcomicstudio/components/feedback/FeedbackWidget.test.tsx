@@ -85,4 +85,43 @@ describe('FeedbackWidget', () => {
     expect(submitFeedback).toHaveBeenCalledWith(expect.objectContaining({ sentiment: 'positive', category: 'Chat Studio', comment: 'Love the reader' }));
     expect(screen.getByRole('status')).toHaveTextContent('Thanks — we hear you.');
   });
+
+  it('leaving the page cancels its delayed steps: no timer is left behind after unmount', () => {
+    vi.useFakeTimers();
+    try {
+      const set = vi.spyOn(globalThis, 'setTimeout');
+      const clear = vi.spyOn(globalThis, 'clearTimeout');
+      const { unmount } = render(<FeedbackWidget />);
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      // The close schedules the reset that runs after the 200 ms close animation.
+      const at = set.mock.calls.findIndex((call) => call[1] === 200);
+      expect(at).toBeGreaterThanOrEqual(0);
+      const resetTimer = set.mock.results[at].value;
+      expect(clear).not.toHaveBeenCalledWith(resetTimer);
+      unmount();
+      expect(clear).toHaveBeenCalledWith(resetTimer);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it('a panel that stays on the page is still clean when it is reopened after the close animation', () => {
+    vi.useFakeTimers();
+    try {
+      render(<FeedbackWidget />);
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Happy' }));
+      expect(screen.getByRole('button', { name: 'Happy' })).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback' }));
+      expect(screen.getByRole('button', { name: 'Happy' })).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

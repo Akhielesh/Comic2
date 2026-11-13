@@ -5,9 +5,10 @@
 # 1024×768 and 1440×900 on Chromium: no horizontal overflow, no visible collisions, balloons inside
 # the page, the editor aside inside its dialog, the phone board ≥ 45 % of the height, one <main> —
 # plus the component scenes (breakdown card, refs drawer + upload queue, timeline, procedural art in
-# both themes), the scanner's own self-tests, and the Python playground running on the runtime the
-# build pinned (no request may leave this origin). Known failures are allowlisted per owner package in
-# tests/e2e/allowlist.json (empty for new components by wave 3).
+# both themes), the scanner's own self-tests, the Python playground running on the runtime the
+# build pinned (no request may leave this origin), and the overflow probe (tests/e2e/overflow.spec.ts: long errors,
+# ids and file names injected into every scene at 320 / 360 / 1280; nothing may spill or be cut). Known failures are
+# allowlisted per owner package in tests/e2e/allowlist.json (empty for new components by wave 3).
 #
 # The harness is offline by construction (fixtures are synthetic, sharp-generated; every external
 # request is blocked), so no secrets are needed. The Supabase values below are FAKE placeholders
@@ -20,6 +21,9 @@ on:
   pull_request:
     paths:
       - 'dreamstreamcomicstudio/components/comicstudio/**'
+      - 'dreamstreamcomicstudio/components/ds/**'
+      - 'dreamstreamcomicstudio/components/chat/**'
+      - 'dreamstreamcomicstudio/components/modals/**'
       - 'dreamstreamcomicstudio/components/studio/kit/**'
       - 'dreamstreamcomicstudio/shared/comic/**'
       - 'dreamstreamcomicstudio/index.css'
@@ -82,7 +86,7 @@ jobs:
       - name: Install Chromium system deps (cache hit)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
-      - name: Layout smoke (build + 4 viewports + harness self-tests)
+      - name: Layout smoke (build + viewports + harness self-tests + the overflow probe)
         run: node scripts/layout-smoke.mjs
       - name: Upload report and findings
         if: always()

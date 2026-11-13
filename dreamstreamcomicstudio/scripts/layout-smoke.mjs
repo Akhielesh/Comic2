@@ -7,9 +7,11 @@
 //      5 smoke viewports (360/768/1024/1280/1440: studio, kit, model-picker and app scenes),
 //      smoke-360x740-atlas and smoke-1440x900-dark (the whole smoke under the page-level skin and the OS
 //      dark scheme), and the app-scene matrix (`@app`, devices.ts APP_SCENE_MATRIX: smoke-320x640,
-//      smoke-320x568, smoke-fold5-dual, smoke-852x393 besides the viewports above); and `python-runtime`
+//      smoke-320x568, smoke-fold5-dual, smoke-852x393 besides the viewports above); `python-runtime`
 //      (tests/e2e/python.runtime.spec.ts: the Python playground runs on the runtime this build pinned and
-//      copied to /pyodide/<version>/, and no request leaves this origin);
+//      copied to /pyodide/<version>/, and no request leaves this origin); and the `overflow` project
+//      (tests/e2e/overflow.spec.ts: long strings injected into every scene at 320 light, 360 dark and 1280 light,
+//      ratcheted against tests/e2e/baselines/overflow.json);
 //   3. prints a findings summary (new vs allowlisted, by owner package) and appends it to the GitHub
 //      step summary when running in Actions.
 //
@@ -71,7 +73,7 @@ if (!has('--no-build')) {
 fs.mkdirSync(artifacts, { recursive: true });
 const findingsFile = path.join(artifacts, 'findings.jsonl');
 fs.rmSync(findingsFile, { force: true });
-const projectArgs = projects.length ? projects : has('--full') ? ['*'] : ['smoke-*', 'harness-selftest', 'python-runtime'];
+const projectArgs = projects.length ? projects : has('--full') ? ['*'] : ['smoke-*', 'harness-selftest', 'python-runtime', 'overflow'];
 const pwArgs = ['playwright', 'test', '-c', 'tests/e2e/playwright.config.ts', ...projectArgs.map((p) => `--project=${p}`)];
 if (has('--update-snapshots')) pwArgs.push('--update-snapshots');
 pwArgs.push(...passthrough);

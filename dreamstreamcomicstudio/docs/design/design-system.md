@@ -259,6 +259,59 @@ semibold (`CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, `STATE_TITLE`), as Atla
   label may follow (the label of a disabled control); no wrapper dims the description or the error, which
   must stay 4.5:1 to say why the control is locked.
 
+## Long words (OV-1)
+
+A URL, a model id, a share path or a long compound word must never leave its box or be cut at both ends. One rule
+per job, all in `components/chat/studioDesign.ts` (re-exported from `components/ds/recipes.ts`):
+
+| Recipe | Classes | For |
+| --- | --- | --- |
+| **`WRAP_TEXT`** | `min-w-0 [overflow-wrap:anywhere]` | text that may break inside its box: messages, help, descriptions, a long id in a sentence |
+| **`CLIP_TEXT`** | `min-w-0 truncate` | a one-line label that may end in an ellipsis because it carries no unique information (a Button label, a Badge) |
+| **`TWO_LINE_TEXT`** | `min-w-0 [overflow-wrap:anywhere] line-clamp-2` | a label that carries information (a file, a style, a link): two lines, then an ellipsis; keep a `title` |
+
+- **Never `break-words`.** It breaks a long word but does not lower min-content, so a flex child still cannot
+  shrink. `overflow-wrap:anywhere` only breaks a word that cannot fit on a line by itself; sentences wrap at spaces
+  as before.
+- **Built in.** `STATE_TITLE`, `STATE_DESCRIPTION`, `INLINE_TITLE` (ErrorState, EmptyState, LoadingState and the
+  crash screens), `FIELD_DESCRIPTION`, `SECTION_DESCRIPTION`, `CARD_TITLE` and `CARD_DESCRIPTION` carry `WRAP_TEXT`.
+  `SECTION_BODY` and other containers do not: a container rule lowers the min-content of every row inside it. Text in
+  a body opts in with `WRAP_TEXT`, `TWO_LINE_TEXT` or `MessageText`.
+- **The safety net** (`index.css`, base layer, global): `[role="alert"]`, `[data-slot="error-state"]` and
+  `[data-slot="message"]` get `overflow-wrap: anywhere`, which inherits; `@supports not (overflow-wrap: anywhere)`
+  gives `word-break: break-word` for old Safari. Not `role="status"` (short labels in tight rows) and not
+  `role="alertdialog"` (whole consent dialogs): fix those at the call site. A utility on a descendant (`truncate`)
+  still wins. `tests/config/overflowCss.test.ts` checks the source and the compiled CSS.
+- **Labels inside their edge.** `Button`, `AlertDialogAction` / `AlertDialogCancel` and ComicCard's link action put
+  each run of text children in one `<span data-slot="button-label">` with `CLIP_TEXT` (`labelChildren()`; `{n} pages`
+  stays one span; icons stay direct children; an icon-only button gets none). `BUTTON_BASE` has `max-w-full`, so a
+  button never grows past its row. `Badge` does the same (`data-slot="badge-label"`) and sets a `title` only when the
+  label is actually cut (measured on pointerenter; a caller's own `title` wins). The accessible name is always the
+  full text. Words directly in a Fragment (`<>Use {name}</>`) count as the button's own; words inside another element
+  (a `<b>`) are not wrapped. **A priced control shows its price beside the button, not in its label**: a cut label
+  would hide the amount.
+- **The row rule.** A row that can hold a Button with dynamic or translated text is `flex-wrap`: `max-w-full` caps a
+  `shrink-0` button at its row, not at the space left in it.
+- **No ids in a Button label.** No model names, ids, slugs, URLs, paths or file names: the label span would cut them
+  (`overflowGuard` G6). Say the verb; put the name beside the button.
+- **`MessageText`** (`components/ds/MessageText.tsx`) for a message that may be long: `WRAP_TEXT`,
+  `data-slot="message"`, `lines` 2 / 3 / 4 / 6 (default 3). When the text runs past its lines it is clamped and a
+  **Show more** / **Show less** text button follows the body as its sibling (`aria-expanded`, `aria-controls`, 44 px
+  on touch). A short message is exactly one element. `role` / `aria-live` land on the body only, so a live region
+  never announces the toggle: **never put MessageText inside a live region; pass the role to it.** New words start
+  collapsed ("new" means new words, or a new `resetKey`, not a fresh JSX element), and keyboard focus on the toggle
+  stays through that. No timers; one ResizeObserver while collapsed.
+- **ErrorState** renders a string description in a `<p>` and any other node (a MessageText) in a `<div>`, so a block
+  never lands in a paragraph. With a node description the alert role sits on the title and description, and the
+  MessageText toggle renders just after them (`MessageToggleSlot`), outside the alert: the alert holds only words and
+  toggling never re-announces it. Give that MessageText no role. StatusBanner has no slot yet, so a message that may
+  need Show more goes in an ErrorState, or in a MessageText with its own role outside any banner.
+- **The checks.** `tests/config/overflowGuard.test.ts` ratchets the static risks (one-line labels with nothing to cut
+  them, `break-words`, `max-h-*` with no `overflow-*`, raw error text, ids in Button labels) against
+  `tests/config/baselines/overflow.json`; `tests/e2e/overflow.spec.ts` injects the long strings into every scene and
+  measures what escapes (`docs/design/clean-and-smooth.md`, "The overflow ratchet"). The QA scene
+  `overflow-stress` (`?surface=app&scene=overflow-stress&stress=1`) shows every shared box with the long strings.
+
 ## Primitives (`components/ds`)
 
 Import from the barrel: `import { Button, Field, Input } from '../ds'` (adjust the path). One example
@@ -550,6 +603,7 @@ excluded; `live/**` excluded until DS-11):
 | `statusInkGuard` | raw chromatic text colours (content and data-viz allowlisted, one line of reason each) |
 | `overlineGuard`, `dialogTitle` | hand-rolled eyebrows; untitled or wrongly titled modals |
 | `pulseGuard` (DC-0, C9) | each raw `animate-pulse` / `-ping` / `-bounce`, and any without `motion-safe:` or `motion-reduce:animate-none`; the rubric and its loop are `docs/design/clean-and-smooth.md` |
+| `overflowGuard` (OV-1) | `nowrapNoClip`, `breakWords`, `maxHNoOverflow`, `rawErrorText` / `rawErrorSink`, `dynamicButtonLabel` (§ Long words; a ratchet on `baselines/overflow.json`) |
 | `sparkGuard`, `huePalette` (CL-0) | a spark fill outside its allowlist, beside a price or on a spend control; an unvalidated hue set (§ Colour layer) |
 
 **Ratchet** (the full rules: `tests/config/baselines/README.md`).

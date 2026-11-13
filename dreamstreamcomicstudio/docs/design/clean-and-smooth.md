@@ -270,6 +270,46 @@ UPDATE_BASELINES=reset npx playwright test -c tests/e2e/playwright.config.ts --p
 
 The diff shows every rise, and the PR says why each one is right. The reviewer reads that diff line by line.
 
+### 5.1 The overflow ratchet (OV-1)
+
+"Nothing spills or gets cut" is measured the same way, with a second probe and a second baseline.
+
+- **Where.** `tests/e2e/overflow.spec.ts` with `tests/e2e/helpers/overflowProbe.ts`, Playwright project `overflow`,
+  baseline `tests/e2e/baselines/overflow.json`. It is in `scripts/layout-smoke.mjs`'s default projects, so
+  `layout-smoke.yml` runs it on every pull request that touches `components/comicstudio`, `components/ds`,
+  `components/chat`, `components/modals`, `qa`, `tests/e2e` or `index.css`.
+- **Views.** 320×640 light (the reflow width), 360×740 dark, 1280×800 light, with the page-level Atlas skin.
+- **Scenes.** The declutter scenes, every `qa/app/scenes` page (`overflow-stress` with `stress=1`) and the error states
+  the loop does not open: `studio-error`, `studio-failed-send`, `studio-load-error`, `studio-conflict`,
+  `public-error`, `public-notfound`.
+- **Per scene, in order:**
+  1. **C6 first, untouched:** the clutter probe's truncated labels must not rise above the declutter baseline for the
+     same scene and view (a Button or Badge label span must never cut a label that fits today). Skipped where the URL
+     differs from the loop's (the stress scene, the error states).
+  2. **`popoverEscapes`:** up to 12 visible popover triggers (`aria-haspopup`, or `aria-expanded="false"` with
+     `aria-controls`) are opened one at a time, never one whose name makes, spends or removes something; every newly
+     visible popover, menu, listbox, non-modal dialog or controlled element that leaves the viewport counts; Escape.
+  3. **`textEscapes`, `hOverflow`:** the research's strings are injected (a 300-character error with a URL into every
+     alert, status, live region, error state and message slot; a 60-character model id into every chip, badge, status
+     chip and button label; every alert cloned twice), then every injected text node whose glyphs leave their nearest
+     box by more than 2 px, or are cut by a clipping box with no ellipsis or clamp, counts; and the page's horizontal
+     overflow in px.
+- **The rules** are §5's: a listed `scene@view-theme` may neither rise nor fall; an unlisted one is held to **0** on
+  every metric, so a new screen (a format sheet, a starter, a voice strip) must be clean from its first commit.
+  Generated, never typed; a vanished scene fails until dropped.
+  One allowance: `hOverflow` is a width in pixels, and fonts rasterise a pixel apart between machines (the CI runner
+  read 140 px where the machine that wrote the baseline read 139 px), so a **listed** `hOverflow` may differ by up to
+  2 px either way (`HOVERFLOW_SLACK_PX`). The two counts stay exact, and a zero stays zero.
+- **Lowering.** A package that fixes a call site writes the new numbers in its wave note; the integrator runs
+  `UPDATE_BASELINES=1 npx playwright test -c tests/e2e/playwright.config.ts --project=overflow` once after the merge,
+  and again after every rebase (regenerate, never hand-merge). `UPDATE_BASELINES=reset` is the reviewed exception.
+- **The report.** `<QA_ARTIFACTS>/overflow/overflow-report-<view>-<theme>.json` lists, per scene, each escaping text
+  (its kind, the px and a short selector path), each popover that left the screen (trigger name and box) and the
+  truncated labels.
+- **The static half.** `tests/config/overflowGuard.test.ts` (vitest) ratchets what can be read from the source:
+  `whitespace-nowrap` with nothing to cut it, `break-words`, `max-h-*` with no `overflow-*`, raw error text read or set
+  into state, and ids in a Button label (`tests/config/baselines/overflow.json`; design-system.md "Long words").
+
 ## 6. Today's numbers (S2 baseline, light and dark are equal)
 
 Phone (360×740) / desk (1280×800); the truncated column adds 320×640 (light) first. These are the numbers each

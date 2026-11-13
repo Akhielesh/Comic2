@@ -142,6 +142,9 @@ const config: PlaywrightTestConfig = {
     // The clutter ratchet (declutter DC-0; docs/design/clean-and-smooth.md): the probe self-test and every scene at
     // 320, 360 and 1280 px. The spec sets its own viewports, themes and motion.
     { name: 'declutter', testMatch: /declutter\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
+    // The overflow ratchet (OV-1): the probe self-test and every scene with the long strings injected
+    // at 320 light, 360 dark and 1280 light. In layout-smoke's default projects, so it gates every UI pull request.
+    { name: 'overflow', testMatch: /(^|\/)overflow\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
     // The Python playground's runtime (services/pyodideRuntime.ts): Run starts the real worker, and every request must
     // stay on this origin. One desktop Chromium: the 13.5 MB runtime is loaded once, not once per device.
     { name: 'python-runtime', testMatch: /python\.runtime\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 1280, height: 800 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
