@@ -1,5 +1,5 @@
 // Settled cards in the conversation (PROGRAM3 SETTLE-UI; bug B2: every card in every old Director message stayed live
-// and could still spend). The QA studio's heist-12p conversation, as an admin sees it with SETTLED_CARDS = 'admins':
+// and could still spend). The QA studio's heist-12p conversation, as everyone sees it with SETTLED_CARDS = 'all' (R00):
 // no settled card keeps an enabled control, the cards that must stay live (the open gate, the running renders) keep
 // theirs, and settled rows mount no image.
 
@@ -68,11 +68,15 @@ describe('the heist-12p conversation with settled cards on', () => {
     expect(slot(container, 'cp1')!.textContent).toBe('Closed — a newer plan replaced it');
   });
 
-  it('control: with settled cards off (not an admin in S2) o1 keeps its four tiles and Done, enabled', () => {
+  it('a non-admin sees the same (R00 SF-1, settled cards for everyone): o1 is one line with no control left to tap', () => {
     const doc = makeQaDoc('heist-12p');
     const { container } = render(<ConversationPane studio={makeFakeStudio({ doc, caps: DEFAULT_CAPS })} />);
-    expect(slot(container, 'o1')!.querySelector('[data-settled]')).toBeNull();
-    expect(slot(container, 'o1')!.querySelectorAll(ENABLED_CONTROLS).length).toBeGreaterThanOrEqual(5);
+    expect(DEFAULT_CAPS.admin).not.toBe(true);
+    const o1 = slot(container, 'o1')!;
+    expect(o1.querySelector('[data-settled]')).not.toBeNull();
+    expect(o1.textContent).toBe('Not answered — you moved on');
+    expect(o1.querySelectorAll(ENABLED_CONTROLS)).toHaveLength(0);
+    expect(slot(container, 'cp1')!.textContent).toBe('Closed — a newer plan replaced it');
   });
 
   it('a long chat: every old card is a line; the open gate and the running renders stay live however old', () => {
@@ -180,9 +184,10 @@ describe('the user bubble’s Assign', () => {
     expect(calls.filter((c) => c.path.startsWith('u/x/inbox/') && !c.path.includes('_w480') && !c.width)).toEqual([]);
   });
 
-  it('control: with settled cards off, both bubbles still offer it', () => {
+  it('a non-admin gets the same rule (R00 SF-1): only the latest bubble offers it', () => {
     const doc = makeSampleDoc({ conversation });
     render(<ConversationPane studio={makeFakeStudio({ doc, caps: DEFAULT_CAPS })} />);
-    expect(screen.getAllByRole('button', { name: /Unassigned · Assign/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Unassigned · Assign/ })).toHaveLength(1);
+    expect(screen.getByText('Not filed yet')).toBeInTheDocument();
   });
 });

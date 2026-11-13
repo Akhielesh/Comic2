@@ -58,9 +58,24 @@ describe('resolve_conflict on a settled (passed) card', () => {
     expect(stored.items[0].resolved).toBeUndefined();
   });
 
-  it('with settled cards off for this viewer (not an admin) the answer still applies, as on production', async () => {
-    expect(settledCardsOn(false)).toBe(false);
+  it('is refused for a non-admin too, now that settled cards are on for everyone (R00 SF-1)', async () => {
+    expect(settledCardsOn(false)).toBe(true);
     const session = newSession(passedConflict());
+    const ctx = testContext(session, { caps: NON_ADMIN });
+    const started = await startAction(
+      ctx,
+      { type: 'resolve_conflict', cardId: 'card_cf', itemIds: ['cf_1'], choice: 'theirs' },
+      { confirmed: false, origin: 'user', caps: NON_ADMIN }
+    );
+    expect(started.outcome?.status).toBe('blocked');
+    expect(started.outcome?.message).toBe(SETTLED_TEXT);
+    expect(session.doc.pages[0].panels[1].lines[0].text).toBe('We have to go');
+  });
+
+  it('control: before the chat moves on, a non-admin\'s answer still applies', async () => {
+    const doc = passedConflict();
+    doc.conversation = doc.conversation.filter((m) => m.id !== 'msg_later');
+    const session = newSession(doc);
     const ctx = testContext(session, { caps: NON_ADMIN });
     const started = await startAction(
       ctx,

@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Card, ComicDoc, Gate, Msg } from '../../../shared/comic/doc.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
+import { settledCardsOn } from '../../../shared/comic/settle.js';
 import { conversationForDirector, recordOptionAnswer, runDirectorTurn } from './director.js';
 import { newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 
@@ -106,7 +107,7 @@ describe('conversationForDirector outcomes (SETTLE-CORE #2 (e), amendment A)', (
   });
 });
 
-describe('runDirectorTurn wires SETTLED_CARDS to the viewer (SETTLE-CORE #2: admins first)', () => {
+describe('runDirectorTurn wires SETTLED_CARDS to every viewer (R00 SF-1: admins first in S2, everyone now)', () => {
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   /** One director turn for an admin or not; returns the session and the model call's history as text. */
   const turn = async (admin: boolean, text: string) => {
@@ -119,19 +120,25 @@ describe('runDirectorTurn wires SETTLED_CARDS to the viewer (SETTLE-CORE #2: adm
     return { session, history: JSON.stringify(llm.calls[0].messages) };
   };
 
-  it("an admin's director reads a settled card with its outcome; anyone else reads the old words", async () => {
-    const on = await turn(true, 'next please');
-    expect(on.history).toContain('[asked: Which ink? — options: Noir ink / Bright ink; no option picked]');
-    const off = await turn(false, 'next please');
-    expect(off.history).toContain('[asked: Which ink? — options: Noir ink / Bright ink]');
-    expect(off.history).not.toContain('no option picked');
+  it("every director, an admin's or anyone else's, reads a settled card with its outcome", async () => {
+    for (const admin of [true, false]) {
+      const { history } = await turn(admin, 'next please');
+      expect(history, `admin=${admin}`).toContain('[asked: Which ink? — options: Noir ink / Bright ink; no option picked]');
+    }
   });
 
-  it("an admin's late free-text answer to a passed card keeps the card; anyone else still answers it (today)", async () => {
-    const on = await turn(true, 'Noir ink');
+  it("a non-admin's late free-text answer to a passed card is kept: the old question changes nothing (the owner's ask)", async () => {
     const card = (d: ComicDoc) => d.conversation[1].cards!.find((c) => c.id === 'q') as Extract<Card, { type: 'options' }>;
-    expect(card(on.session.doc).answered).toBeUndefined();
-    const off = await turn(false, 'Noir ink');
-    expect(card(off.session.doc).answered).toEqual(['c1']);
+    for (const admin of [true, false]) {
+      const { session } = await turn(admin, 'Noir ink');
+      expect(card(session.doc).answered, `admin=${admin}`).toBeUndefined();
+    }
+  });
+
+  it("a non-admin's tap on a passed card, named by the client, is kept too (late tap from a stale tab)", () => {
+    const session = passedSession();
+    // The route passes settled: settledCardsOn(caps.admin); for a non-admin that is now true.
+    expect(recordOptionAnswer(session, 'Noir ink', { id: 'q', choiceIds: ['c1'] }, { settled: settledCardsOn(false) })).toBe(false);
+    expect(qOf(session.doc).answered).toBeUndefined();
   });
 });
