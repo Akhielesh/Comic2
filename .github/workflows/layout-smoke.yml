@@ -5,7 +5,8 @@
 # 1024×768 and 1440×900 on Chromium: no horizontal overflow, no visible collisions, balloons inside
 # the page, the editor aside inside its dialog, the phone board ≥ 45 % of the height, one <main> —
 # plus the component scenes (breakdown card, refs drawer + upload queue, timeline, procedural art in
-# both themes) and the scanner's own self-tests. Known failures are allowlisted per owner package in
+# both themes), the scanner's own self-tests, and the Python playground running on the runtime the
+# build pinned (no request may leave this origin). Known failures are allowlisted per owner package in
 # tests/e2e/allowlist.json (empty for new components by wave 3).
 #
 # The harness is offline by construction (fixtures are synthetic, sharp-generated; every external
@@ -27,6 +28,10 @@ on:
       - 'dreamstreamcomicstudio/vite.config.ts'
       - 'dreamstreamcomicstudio/qa/**'
       - 'dreamstreamcomicstudio/tests/e2e/**'
+      # The Python playground's runner and pinned runtime (tests/e2e/python.runtime.spec.ts runs with the smoke).
+      - 'dreamstreamcomicstudio/services/pyRunner*.ts'
+      - 'dreamstreamcomicstudio/services/pyodideRuntime.ts'
+      - 'dreamstreamcomicstudio/components/chat/artifacts/CodePlayground.tsx'
       - 'dreamstreamcomicstudio/scripts/layout-smoke.mjs'
       - 'dreamstreamcomicstudio/package-lock.json'
       - '.github/workflows/layout-smoke.yml'
