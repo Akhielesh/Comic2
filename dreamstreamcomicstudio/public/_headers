@@ -46,6 +46,12 @@
 /theme-boot.js
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
+# The Python runtime (/pyodide/<version>/*, the chat's code playground): NO rule here, on purpose.
+# functions/_middleware.ts (servePyodideRuntime) is the only thing that serves that folder, and it
+# sets Content-Type and Cache-Control itself. Pages applies this file to the index.html it answers a
+# missing file with, so a rule here would label that fallback page "immutable" for a year.
+# tests/edge/pyodideRuntime.test.ts fails on one (and on an exclude for the folder in _routes.json).
+
 # On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
 /models/*
   Cache-Control: public, max-age=31536000, immutable

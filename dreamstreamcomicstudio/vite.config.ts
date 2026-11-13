@@ -1,9 +1,22 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
+import type { IncomingMessage, ServerResponse } from 'http';
 import path from 'path';
 import { defineConfig, loadEnv, searchForWorkspaceRoot, type Plugin, type Rollup } from 'vite';
 import react from '@vitejs/plugin-react';
 import { browserModulesReport } from './scripts/licence-check.mjs';
 import { webNotices } from './scripts/notices.mjs';
+import {
+  PYODIDE_FIRST_BYTES,
+  PYODIDE_RUNTIME_BASE,
+  PYODIDE_RUNTIME_FILES,
+  PYODIDE_RUNTIME_PIN,
+  hasPyodideFirstBytes,
+  isPyodideRuntimePath,
+  pyodideRuntimeFileAt,
+  pyodideRuntimeHeaders,
+  type PyodideRuntimeFileName
+} from './services/pyodideRuntime';
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
 // (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
@@ -59,6 +72,166 @@ export function licenceModules(options: { root?: string; reportFile?: string } =
         for (const id of bundleSources(bundle)) workerSources.add(id);
       }
     })
+  };
+}
+
+/** One pinned runtime file as read from disk: its name, where it came from and its bytes. */
+export interface PinnedPyodideFile {
+  name: PyodideRuntimeFileName;
+  path: string;
+  source: Buffer;
+}
+
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * The pinned Python runtime, read from the installed `pyodide` package and held to
+ * PYODIDE_RUNTIME_PIN (services/pyodideRuntime.ts): the package version, then every file's size,
+ * first bytes and SHA-256. Throws — naming each difference and printing what is installed — when
+ * anything is not the pinned bytes, so a build can never ship a runtime nobody reviewed.
+ */
+export function readPinnedPyodide(options: { root?: string } = {}): PinnedPyodideFile[] {
+  const pin = PYODIDE_RUNTIME_PIN;
+  const dir = path.join(options.root ?? __dirname, 'node_modules', pin.package);
+  const problems: string[] = [];
+  let installed = '';
+  try {
+    installed = String((JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version?: unknown }).version ?? '');
+  } catch {
+    problems.push(`${pin.package} is not installed (${path.join(dir, 'package.json')} could not be read): run npm ci`);
+  }
+  if (installed && installed !== pin.version) problems.push(`installed ${pin.package}@${installed}, pinned ${pin.version}`);
+  const files: PinnedPyodideFile[] = [];
+  const actual: string[] = [];
+  for (const name of PYODIDE_RUNTIME_FILES) {
+    const want = pin.files[name];
+    const file = path.join(dir, name);
+    let source: Buffer;
+    try {
+      source = fs.readFileSync(file);
+    } catch {
+      if (installed) problems.push(`${name}: missing from ${pin.package}@${installed}`);
+      continue;
+    }
+    const got = sha256Hex(source);
+    actual.push(`  ${name}: sha256 ${got}, ${source.length} bytes, starts ${JSON.stringify(source.subarray(0, want.starts.length).toString('latin1'))}`);
+    if (source.length !== want.bytes) problems.push(`${name}: ${source.length} bytes, pinned ${want.bytes}`);
+    if (!hasPyodideFirstBytes(name, source)) problems.push(`${name}: does not start with the pinned first bytes ${JSON.stringify(want.starts)}`);
+    if (want.starts.length > PYODIDE_FIRST_BYTES) problems.push(`${name}: the pinned first bytes are longer than the ${PYODIDE_FIRST_BYTES} a server reads (PYODIDE_FIRST_BYTES)`);
+    if (got !== want.sha256) problems.push(`${name}: sha256 ${got}, pinned ${want.sha256}`);
+    files.push({ name, path: file, source });
+  }
+  if (problems.length) {
+    throw new Error(
+      [
+        'The Python runtime is not the pinned one (services/pyodideRuntime.ts PYODIDE_RUNTIME_PIN):',
+        ...problems.map((p) => `  - ${p}`),
+        ...(actual.length ? [`Installed${installed ? ` (${pin.package}@${installed})` : ''}:`, ...actual] : []),
+        'Nothing was built. If this is a Pyodide update you have reviewed, update the pin (version, sha256, bytes, starts) to the installed values; otherwise reinstall with npm ci.'
+      ].join('\n')
+    );
+  }
+  return files;
+}
+
+const runtimeNotFound = (res: ServerResponse): void => {
+  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  res.end('Not found');
+};
+
+/**
+ * `vite dev` / `vite preview`: the same contract as servePyodideRuntime in functions/_middleware.ts.
+ * Under /pyodide/ only the pinned version's files are answered — with their content type, immutable
+ * caching and no CORS grant — and everything else is a 404 (never the SPA's index.html fallback).
+ */
+export function pyodideRuntimeMiddleware(read: (file: PyodideRuntimeFileName) => Buffer | null) {
+  return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      next();
+      return;
+    }
+    if (!isPyodideRuntimePath(pathname)) {
+      next();
+      return;
+    }
+    const file = pyodideRuntimeFileAt(pathname);
+    if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) return runtimeNotFound(res);
+    const bytes = read(file);
+    if (!bytes || !hasPyodideFirstBytes(file, bytes)) return runtimeNotFound(res);
+    res.writeHead(200, { ...pyodideRuntimeHeaders(file), 'content-length': String(bytes.length) });
+    res.end(req.method === 'HEAD' ? undefined : bytes);
+  };
+}
+
+/**
+ * The browser's Python runtime (Pyodide), served from our own origin and pinned by hash
+ * (services/pyodideRuntime.ts tells the whole story).
+ *   build    copies exactly the pinned files from node_modules/pyodide to <outDir>/pyodide/<version>/
+ *            and stops the build when the installed version or any byte is not the pinned one. Each
+ *            file is emitted with its node_modules path as `originalFileName`, so licenceModules()
+ *            counts `pyodide` as browser code: the licence gate judges it by the browser rules and
+ *            THIRD-PARTY-NOTICES.txt lists it.
+ *   dev      serves the same checked files straight from node_modules (checked on first use; a
+ *            mismatch is logged and answered with a 404, the app itself still starts).
+ *   preview  serves them from the built folder, each held to its pinned SHA-256.
+ */
+export function pyodideRuntime(options: { root?: string } = {}): Plugin {
+  let building = false;
+  let outDir = '';
+  return {
+    name: 'pyodide-runtime',
+    configResolved(config) {
+      building = config.command === 'build';
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    buildStart() {
+      if (!building) return;
+      let files: PinnedPyodideFile[];
+      try {
+        files = readPinnedPyodide(options);
+      } catch (e) {
+        this.error((e as Error).message);
+      }
+      for (const f of files) {
+        this.emitFile({ type: 'asset', fileName: `${PYODIDE_RUNTIME_BASE.slice(1)}${f.name}`, source: f.source, originalFileName: f.path });
+      }
+    },
+    configureServer(server) {
+      let checked: Map<string, Buffer> | false | null = null;
+      server.middlewares.use(
+        pyodideRuntimeMiddleware((file) => {
+          if (checked === null) {
+            try {
+              checked = new Map(readPinnedPyodide(options).map((f) => [f.name, f.source]));
+            } catch (e) {
+              checked = false;
+              server.config.logger.error((e as Error).message);
+            }
+          }
+          return checked ? checked.get(file) ?? null : null;
+        })
+      );
+    },
+    configurePreviewServer(server) {
+      const seen = new Map<string, Buffer | null>();
+      server.middlewares.use(
+        pyodideRuntimeMiddleware((file) => {
+          if (!seen.has(file)) {
+            let bytes: Buffer | null = null;
+            try {
+              bytes = fs.readFileSync(path.join(outDir, PYODIDE_RUNTIME_BASE, file));
+            } catch {
+              bytes = null;
+            }
+            seen.set(file, bytes && sha256Hex(bytes) === PYODIDE_RUNTIME_PIN.files[file].sha256 ? bytes : null);
+          }
+          return seen.get(file) ?? null;
+        })
+      );
+    }
   };
 }
 
@@ -127,7 +300,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR])],
+    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR]), pyodideRuntime()],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
     // count as browser code for the licence gate too.
     worker: { format: 'es', plugins: () => [licence.worker()] },

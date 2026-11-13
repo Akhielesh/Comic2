@@ -17,7 +17,10 @@
 //   history / history-sheets / history-states   Comic History (H5): the panel, its sheets and its first-run states on
 //               the fake HistoryApi (components/comicstudio/history/__scenes__/HistoryScenes.tsx); measure at 360×740
 //               and 1440×900, light and dark, ?skin=atlas
-// Nothing here talks to the network or spends; the upload transport is a local fake.
+//   python      the chat's code playground on a Python exercise (components/chat/artifacts/CodePlayground.tsx):
+//               Run starts the real Pyodide worker, which loads its runtime from this origin's /pyodide/<version>/
+//               (services/pyodideRuntime.ts). tests/e2e/python.runtime.spec.ts runs it and watches every request.
+// Nothing here talks to another origin or spends; the upload transport is a local fake.
 
 import React from 'react';
 import { pageSpecHash, type Card, type ComicDoc, type Msg, type RefAsset, type RefOwner } from '../shared/comic/doc';
@@ -36,9 +39,10 @@ import { BubblePreview } from '../components/comicstudio/library/procedural/Bubb
 import { QA_NOW, qaAsset } from '../components/comicstudio/testing/qaFixtures';
 import { qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
 import { ModelConfirmScene, ModelPickerScene } from './ModelScenes';
+import { CodePlayground } from '../components/chat/artifacts/CodePlayground';
 import { HistoryKitScene, HISTORY_KIT_SCENES, type HistoryKitScene as HistoryKitSceneName } from '../components/comicstudio/history/__scenes__/HistoryScenes';
 
-export const KIT_SCENES = ['breakdown', 'refs', 'refs-drawer', 'timeline', 'art', 'model-picker', 'model-confirm', 'history', 'history-sheets', 'history-states'] as const;
+export const KIT_SCENES = ['breakdown', 'refs', 'refs-drawer', 'timeline', 'art', 'model-picker', 'model-confirm', 'history', 'history-sheets', 'history-states', 'python'] as const;
 export type KitScene = (typeof KIT_SCENES)[number];
 export const isKitScene = (v: unknown): v is KitScene => typeof v === 'string' && (KIT_SCENES as readonly string[]).includes(v);
 
@@ -272,6 +276,15 @@ const ArtScene: React.FC<{ params: QaParams }> = ({ params }) => {
   );
 };
 
+/** What the Python scene runs: the standard library only (nothing is fetched beyond the runtime itself). */
+export const QA_PYTHON_STARTER = ['import json, math, sys', 'print(json.dumps({"sum": sum(range(101)), "root": math.isqrt(1764)}))', 'print("python", sys.version_info.major)'].join('\n');
+
+const PythonScene: React.FC = () => (
+  <Frame title="Code playground — Python (Pyodide from this origin)" testid="kit-python">
+    <CodePlayground data={{ title: 'Add it up', language: 'python', task: 'Print the sum of 0 to 100.', starterCode: QA_PYTHON_STARTER }} />
+  </Frame>
+);
+
 /** The kit surface: one scene per URL, inside a scrolling <main>. */
 export const KitSurface: React.FC<{ params: QaParams; scene: KitScene }> = ({ params, scene }) => (
   <div style={{ height: '100dvh', width: '100%', overflow: 'hidden', background: 'var(--ds-canvas)' }}>
@@ -283,6 +296,7 @@ export const KitSurface: React.FC<{ params: QaParams; scene: KitScene }> = ({ pa
       {scene === 'art' && <ArtScene params={params} />}
       {scene === 'model-picker' && <ModelPickerScene params={params} />}
       {scene === 'model-confirm' && <ModelConfirmScene params={params} />}
+      {scene === 'python' && <PythonScene />}
       {(HISTORY_KIT_SCENES as readonly string[]).includes(scene) && <HistoryKitScene params={params} scene={scene as HistoryKitSceneName} />}
     </main>
   </div>

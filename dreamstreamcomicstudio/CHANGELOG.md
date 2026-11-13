@@ -387,6 +387,12 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Python in chat runs on our own copy of the runtime (2026-11-12):** the code playground's
+  Python engine (Pyodide) used to be downloaded from a public CDN each time. It now comes from
+  DreamStream itself, a fixed version whose every file is checked against a recorded fingerprint
+  when the site is built, so nobody else can change what runs. Python is now 3.14. The first Run
+  still downloads about 6 MB once; the standard library is included, add-on packages such as
+  numpy are not.
 - **Two-step sign-in, "Not you?" and your signed-in devices (2026-10-29, ADR 0006 Phase 0):**
   **Settings → Security** turns on two-step sign-in with any authenticator app. It asks for your
   password again first (with a Forgot password link), gives you 10 one-time recovery codes for a

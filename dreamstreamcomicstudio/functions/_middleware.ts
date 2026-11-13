@@ -28,7 +28,9 @@
  * preview head with canonical /c/<slug> (the anon RPC only answers for public publications,
  * so an id can never reveal an unlisted slug). Everything else passes through untouched.
  *
- * public/_routes.json keeps this function off static assets, so it only runs for page loads.
+ * public/_routes.json keeps this function off static assets, so it only runs for page loads —
+ * and for the one folder of files it serves itself: /pyodide/, the pinned Python runtime (see
+ * "the Python runtime" below).
  * Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
  */
 import { detectAgent } from '../api-proxy/src/agent-gate';
@@ -45,6 +47,14 @@ import {
   toStreamUrl,
 } from '../shared/streamHost';
 import { CSP_REPORT_GROUP, CSP_REPORT_PATH, type CspReportEnv } from './csp-report';
+import {
+  PYODIDE_FIRST_BYTES,
+  hasPyodideFirstBytes,
+  isPyodideRuntimePath,
+  pyodideRuntimeEtag,
+  pyodideRuntimeFileAt,
+  pyodideRuntimeHeaders,
+} from '../services/pyodideRuntime';
 
 /** The Pages asset server (`context.env.ASSETS`). */
 interface AssetFetcher {
@@ -452,6 +462,97 @@ async function serveLiveApp(request: Request, url: URL, env: PagesContext['env']
   });
 }
 
+/* ===================================================================== the Python runtime
+ * The chat's Python playground runs Pyodide in a same-origin worker (services/pyRunner.ts). Its
+ * runtime is served from OUR origin, pinned by hash, instead of a CDN (the owner's rule: no
+ * unpinned third-party script runs in our origin; services/pyodideRuntime.ts has the pin and the
+ * whole story). The build copies exactly the pinned files to /pyodide/<version>/ and stops when a
+ * byte differs; this Function is the only thing that answers under /pyodide/:
+ *   - the pinned version's files, fetched from the asset server and checked by their first bytes
+ *     (a missing file comes back from Pages as the SPA's index.html with status 200 — that must
+ *     never reach a worker as "the runtime", nor be cached for a year);
+ *   - with the content type, immutable caching and validator set HERE, and only those headers:
+ *     the asset server's `Access-Control-Allow-Origin: *` is not passed on, and
+ *     Cross-Origin-Resource-Policy keeps other sites from loading the files at all;
+ *   - anything else under the folder (another version, another file, the folder itself, any
+ *     other method) is a plain 404 or 405 — never index.html.
+ * That is why public/_routes.json must NOT exclude /pyodide/* (Pages would then serve the folder
+ * itself, fallback and all) and public/_headers holds no rule for it (Pages applies that file to
+ * the fallback page too). tests/edge/pyodideRuntime.test.ts keeps all of it that way.
+ */
+
+const runtimeRefusal = (status: 404 | 405, extra: Record<string, string> = {}) =>
+  new Response(status === 404 ? 'Not found' : 'Method not allowed', {
+    status,
+    headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex', ...extra },
+  });
+
+/** Does an If-None-Match header name this validator (weak or strong)? Only a copy WE served can. */
+function matchesEtag(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((v) => v.trim().replace(/^W\//, '') === etag);
+}
+
+/**
+ * The first `want` bytes of `body`, and a stream that still carries the whole body. The body is
+ * teed and only the probe branch is read here (then released), so the file streams through as it
+ * arrives — a 9.6 MB WebAssembly module is never buffered in the Function.
+ */
+async function peekBody(body: ReadableStream<Uint8Array>, want: number): Promise<{ head: Uint8Array; body: ReadableStream<Uint8Array> }> {
+  const [probe, rest] = body.tee();
+  const reader = probe.getReader();
+  const head = new Uint8Array(want);
+  let got = 0;
+  try {
+    while (got < want) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = Math.min(value.length, want - got);
+      head.set(value.subarray(0, take), got);
+      got += take;
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+  return { head: head.subarray(0, got), body: rest };
+}
+
+/** Everything under /pyodide/: a pinned runtime file with our headers, or a refusal. */
+export async function servePyodideRuntime(request: Request, url: URL, env: PagesContext['env'], next: () => Promise<Response>): Promise<Response> {
+  const file = pyodideRuntimeFileAt(url.pathname);
+  if (!file) return runtimeRefusal(404);
+  if (request.method !== 'GET' && request.method !== 'HEAD') return runtimeRefusal(405, { allow: 'GET, HEAD' });
+  const headers = pyodideRuntimeHeaders(file);
+  // The validator is the pinned hash: a copy the browser already holds is confirmed without a download.
+  if (matchesEtag(request.headers.get('if-none-match'), pyodideRuntimeEtag(file))) return new Response(null, { status: 304, headers });
+
+  // Always the whole file, from the asset server: no query, no Range, no conditional headers (a
+  // 206 or 304 would leave nothing to check), and no encoding to undo before the first bytes.
+  let asset: Response;
+  try {
+    const assets = env?.ASSETS;
+    asset = assets
+      ? await assets.fetch(new Request(new URL(url.pathname, url.origin).toString(), { method: 'GET', headers: { 'accept-encoding': 'identity' } }))
+      : await next();
+  } catch {
+    return runtimeRefusal(404);
+  }
+  if (asset.status !== 200 || !asset.body) {
+    void asset.body?.cancel().catch(() => undefined);
+    return runtimeRefusal(404);
+  }
+  const { head, body } = await peekBody(asset.body as ReadableStream<Uint8Array>, PYODIDE_FIRST_BYTES);
+  if (!hasPyodideFirstBytes(file, head)) {
+    void body.cancel().catch(() => undefined);
+    return runtimeRefusal(404);
+  }
+  if (request.method === 'HEAD') {
+    void body.cancel().catch(() => undefined);
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(body, { status: 200, headers });
+}
+
 export interface MiddlewareOptions {
   /** STREAM_HOST_ON — a parameter so tests can run both sides of the switch. */
   streamHostOn: boolean;
@@ -492,6 +593,9 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
         return moved(toStreamUrl(`${url.pathname}${url.search}`), { 'cache-control': 'public, max-age=86400' });
       }
     }
+    // The pinned Python runtime is files, not a page: it never goes to the agent gate or the app,
+    // and only servePyodideRuntime answers under its folder (a pinned file, or a 404).
+    if (isPyodideRuntimePath(url.pathname)) return secured(servePyodideRuntime(request, url, env, next));
     // CSP reports come from every browser, automated ones included: never send them to the gate.
     if (url.pathname === CSP_REPORT_PATH) return secured(next());
     if (isOpenPath(url.pathname)) return secured(next());

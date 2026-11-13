@@ -141,7 +141,10 @@ const config: PlaywrightTestConfig = {
     { name: 'harness-selftest', testMatch: /(harness|app-harness)\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
     // The clutter ratchet (declutter DC-0; docs/design/clean-and-smooth.md): the probe self-test and every scene at
     // 320, 360 and 1280 px. The spec sets its own viewports, themes and motion.
-    { name: 'declutter', testMatch: /declutter\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
+    { name: 'declutter', testMatch: /declutter\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
+    // The Python playground's runtime (services/pyodideRuntime.ts): Run starts the real worker, and every request must
+    // stay on this origin. One desktop Chromium: the 13.5 MB runtime is loaded once, not once per device.
+    { name: 'python-runtime', testMatch: /python\.runtime\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 1280, height: 800 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],
   webServer: process.env.QA_BASE_URL
     ? undefined

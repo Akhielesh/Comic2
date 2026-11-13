@@ -31,7 +31,7 @@ export type QaQuery = Partial<{
   /** 'app' / 'pro': the app-wide surfaces (DS-1b; qa/app/index.tsx, qa/pro/index.tsx). */
   surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit' | 'app' | 'pro';
   /** surface=kit: the component scene (qa/KitScenes.tsx). */
-  kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art' | 'model-picker' | 'model-confirm';
+  kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art' | 'model-picker' | 'model-confirm' | 'python';
   fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty' | 'chat-14';
   tab: string;
   page: number;
