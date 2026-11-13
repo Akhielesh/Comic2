@@ -133,7 +133,7 @@ self-contained learning artifacts, all registered in
 | `generate_quiz` (`registry.ts:614`) | `quiz` — self-grading questions | `quiz` checkpoint steps ("Quiz me on module 2 …" prompt) |
 | `generate_flashcards` (`registry.ts:707`) | `flashcards` — flip deck with persisted known/review | `flashcards` steps for memorization |
 | `sql_exercise` (`registry.ts:737`) | `sql_exercise` — sandboxed SQL playground | `practice` steps for database topics |
-| `code_exercise` (`registry.ts:765`) | `code_exercise` — JS/Python worker playground | `practice` steps for programming topics |
+| `code_exercise` (`registry.ts:765`) | `code_exercise` — JS/Python worker playground (Python runs on Pyodide served from our own origin, pinned by hash: `component-library.md` § Python runtime) | `practice` steps for programming topics |
 
 The glue is `step.prompt` + the compose event: clicking "Do this with AI" drafts e.g.
 "Quiz me on module 2 of Spanish", the user sends it, the model calls `generate_quiz`,
