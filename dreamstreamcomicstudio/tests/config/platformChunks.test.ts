@@ -91,6 +91,10 @@ const PRO_ONLY: ProOnly[] = [
  * c8d20a2c: 323,097 B and 328,552 B, equal to CI's): index.html 323,579 B (+482 B: the label spans and recipes, and
  * ErrorState's toggle slot, which rides in the eager error boundary), live.html 328,552 B (+0 B); index.html's eager
  * CSS +101 B gzip. Both stay under the D17c ceilings, which are unchanged.
+ *
+ * R02 (the colour layer, the landing in colour, whole-word studio switches, the Settings phone layout), measured on a
+ * lockfile-exact production build of the merged head: index.html 323,727 B (+148 B on R01's 323,579 B),
+ * live.html 328,552 B (+0 B). The ceilings are unchanged.
  */
 const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.html': 330_850 };
 
@@ -100,11 +104,14 @@ const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.
  * paint. Every colour, motion, pattern and font rule lands there, and until R02 nothing measured it. The colour,
  * motion and component work together stays within +5 kB gzip of eager CSS (and +2 kB of eager JS). Set from a lockfile-exact
  * production build: CL-6 alone measured index.html 45,171 B and live.html 35,491 B (its base, 25d36fc7: 43,604 B and 35,491 B, so +1,567 B and +0 B: the
- * colour tokens in all four blocks, the off block and the new recipe utilities); the ceiling is that plus
- * 1 kB for zlib and build noise. The R02 integrator re-pins it on the merged R02 head (all four packages) the same
- * way. A rise beyond the noise is a reviewed change, with its reason named here.
+ * colour tokens in all four blocks, the off block and the new recipe utilities). Re-pinned on the merged R02 head
+ * (the colour layer, the landing in colour, whole-word studio switches and the Settings phone layout): index.html
+ * 45,399 B and live.html 35,491 B, so +1,795 B and +0 B on the base; the extra 228 B over the colour layer alone
+ * are the colour-off block's chart greys and the landing, studio and Settings utility classes. The ceiling is the
+ * measured size plus 1 kB for zlib and build noise. A rise beyond the noise is a reviewed change, with its reason
+ * named here.
  */
-export const EAGER_CSS_GZ_CEILING: Record<string, number> = { 'index.html': 46_195, 'live.html': 36_515 };
+export const EAGER_CSS_GZ_CEILING: Record<string, number> = { 'index.html': 46_423, 'live.html': 36_515 };
 
 /** The stylesheets an HTML entry links before first paint. */
 export const eagerStylesheets = (html: string): string[] =>
