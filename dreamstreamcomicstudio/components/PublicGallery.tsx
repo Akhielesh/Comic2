@@ -126,8 +126,9 @@ const plainClick = (event: React.MouseEvent<HTMLAnchorElement>) =>
     !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0;
 // ilike is a structured PostgREST filter; escape SQL LIKE metacharacters so the input is literal.
 const literalLike = (value: string) => value.replace(/[\\%_]/g, '\\$&');
-const schemaMissingLikes = (error: { code?: string; message?: string }) =>
-    (error.code === '42703' || error.code === 'PGRST204') && /likes_count/i.test(error.message ?? '');
+// Only schema failures may fall back to creation-date ordering; network failures stay retryable.
+const isMissingGalleryColumn = (failure: { code?: string }) =>
+    failure.code === '42703' || failure.code === 'PGRST204';
 
 async function hydratePreview(project: PublicProject): Promise<PublicProject> {
     // Never sign or display owner-writable draft images for a v4 publication.
@@ -248,7 +249,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             };
             let result = creatorIds?.length === 0 ? { data: [], error: null } : await cards(effectiveSort.current);
             if (generation !== requestGeneration.current) return;
-            if (result.error && effectiveSort.current === 'likes_count' && schemaMissingLikes(result.error)) {
+            if (result.error && effectiveSort.current === 'likes_count' && isMissingGalleryColumn(result.error)) {
                 effectiveSort.current = 'created_at';
                 result = await cards('created_at');
             }
