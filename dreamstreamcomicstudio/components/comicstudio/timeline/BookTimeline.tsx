@@ -12,7 +12,7 @@
 // the software pages, their undo toast and their editor's title carry no "free" (nothing beside them costs).
 
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronUp, Images } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronUp, GripHorizontal, Images } from 'lucide-react';
 import { newId, renderTargetKey, type ComicDoc, type RenderTarget } from '../../../shared/comic/doc';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { useCostFormat } from '../conversation/cost';
@@ -46,6 +46,8 @@ import { UndoToast, useTimelineEdit } from './UndoToast';
 import { VersionStack } from './VersionStack';
 import { cx, FOCUS_RING, TimelineDialog, useReducedMotion, useStoredFlag } from './ui';
 import { TimelineHistoryLink } from '../history/EntryLinks';
+import { BOOK_THUMB_MIN, useBookPanelSize } from './useBookPanelSize';
+import { useTimelineScroll } from './useTimelineScroll';
 
 /**
  * The summary row's small actions: 28 px on fine pointers, so nothing is clipped by the 36 px row, and a 44 px
@@ -195,6 +197,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const suppressUntil = useRef(0);
   const stripId = useId();
   const hintId = useId();
+  const resizeHintId = useId();
   const sectionRef = useRef<HTMLElement>(null);
   const boardOffers = useBoardOffers(sectionRef);
 
@@ -220,6 +223,8 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const maxPages = Math.min(DOC_LIMITS.pages, studio.caps?.maxPages ?? DOC_LIMITS.pages);
   /** The strip is in the DOM (re-binds the touch listener when it mounts after loading / leaving Read). */
   const stripShown = !!doc && (compact || (open && studio.tab !== 'read'));
+  const panelSize = useBookPanelSize(sectionRef, { enabled: !compact && stripShown, phone: phoneLayout, viewportHeight: ff.height });
+  const rail = useTimelineScroll(scrollerRef, stripShown, reduceMotion);
   const activeKey = (focusKey && items.some((it) => it.key === focusKey) ? focusKey : null) ?? (studio.focusedPageId && items.some((it) => it.key === studio.focusedPageId) ? studio.focusedPageId : items[0]?.key);
 
   // Transient, visible + announced notices (refusals and confirmations).
@@ -274,10 +279,21 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   const focusItem = useCallback((key: string | undefined) => {
     if (!key) return;
     setFocusKey(key);
-    const focus = () => itemEls.current.get(key)?.focus();
+    const focus = () => {
+      const el = itemEls.current.get(key);
+      const scroller = scrollerRef.current;
+      el?.focus({ preventScroll: true });
+      if (!el || !scroller) return;
+      const left = scroller.getBoundingClientRect().left + scroller.clientLeft;
+      const rect = el.getBoundingClientRect();
+      const delta = stripScrollDelta({ left, right: left + scroller.clientWidth }, rect);
+      if (!delta) return;
+      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ left: scroller.scrollLeft + delta, behavior: reduceMotion ? 'auto' : 'smooth' });
+      else scroller.scrollLeft += delta;
+    };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focus);
     else setTimeout(focus, 0);
-  }, []);
+  }, [reduceMotion]);
 
   if (!doc) return null;
   if (!compact && studio.tab === 'read') return null;
@@ -603,6 +619,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
                 hint={full ? `this comic is at its ${maxPages}-page limit` : 'a blank page'}
                 disabled={full}
                 compact={compact}
+                thumbHeight={compact ? undefined : panelSize.height}
                 tabIndex={tabIndex}
                 itemRef={ref}
                 onActivate={() => activateItem(item)}
@@ -619,6 +636,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
                 label={item.ghost.label}
                 hint="made by software"
                 compact={compact}
+                thumbHeight={compact ? undefined : panelSize.height}
                 tabIndex={tabIndex}
                 itemRef={ref}
                 onActivate={() => activateItem(item)}
@@ -638,6 +656,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
               doc={doc}
               urlFor={studio.urlFor}
               compact={compact}
+              thumbHeight={compact ? undefined : panelSize.height}
               selected={studio.focusedPageId === clip.key}
               tabIndex={tabIndex}
               nextPrice={clip.kind === 'page' && clip.page?.panels.length ? `${clip.drawn ? 'Redraw' : 'Draw'} ${pagePrice}` : undefined}
@@ -670,6 +689,8 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
   return (
     <section
       ref={sectionRef}
+      data-book-panel={compact ? 'compact' : 'dock'}
+      data-resizing={panelSize.resizing || undefined}
       aria-label="Book timeline"
       className={cx('relative w-full min-w-0 max-w-full shrink-0 overflow-hidden', !compact && 'border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)]')}
       // The dock sits on the screen's bottom edge on tablets and desktops: keep its controls out of the
@@ -680,7 +701,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
         Enter opens. M opens actions. V shows versions. Alt plus arrow keys move a page. Delete removes it; undo brings it back.
       </p>
       {!compact && (
-        <div className="flex h-9 min-w-0 items-center gap-1.5 px-2 coarse:h-11 sm:px-3">
+        <div className="flex h-9 min-w-0 items-center gap-1 px-2 coarse:h-11 sm:gap-1.5 sm:px-3">
           <button
             type="button"
             aria-expanded={open}
@@ -694,6 +715,35 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           <p className="min-w-0 flex-1 truncate text-[11.5px] tabular-nums text-[var(--ds-muted)]" title={notice || summary} role={notice ? 'status' : undefined}>
             {notice || summary}
           </p>
+          {open && (
+            <>
+              <div
+                role="separator"
+                aria-label="Resize book panel"
+                aria-orientation="horizontal"
+                aria-controls={stripId}
+                aria-valuemin={BOOK_THUMB_MIN}
+                aria-valuemax={panelSize.max}
+                aria-valuenow={panelSize.height}
+                aria-valuetext={`${panelSize.height} pixel thumbnails`}
+                aria-describedby={resizeHintId}
+                tabIndex={0}
+                title="Drag up to enlarge the book panel"
+                onPointerDown={panelSize.onPointerDown}
+                onKeyDown={panelSize.onKeyDown}
+                className={cx('grid h-7 w-9 shrink-0 cursor-row-resize touch-none select-none place-items-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:w-11', FOCUS_RING)}
+              >
+                <GripHorizontal className="h-4 w-4" aria-hidden />
+              </div>
+              <p id={resizeHintId} className="sr-only">Drag up to enlarge. Up and Down arrows resize; Shift changes faster. Home and End choose the limits. Enter resets. Escape cancels a drag.</p>
+              <button type="button" aria-label="Scroll to earlier pages" aria-controls={stripId} disabled={!rail.earlier} onClick={() => rail.scroll(-1)} className={cx(SUMMARY_ACTION, 'disabled:cursor-default disabled:opacity-35')}>
+                <ChevronLeft className="h-4 w-4" aria-hidden />
+              </button>
+              <button type="button" aria-label="Scroll to later pages" aria-controls={stripId} disabled={!rail.later} onClick={() => rail.scroll(1)} className={cx(SUMMARY_ACTION, 'disabled:cursor-default disabled:opacity-35')}>
+                <ChevronRight className="h-4 w-4" aria-hidden />
+              </button>
+            </>
+          )}
           {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off,
               nor while this board already shows its History tab (one home per action). */}
           {!boardOffers.history && <TimelineHistoryLink studio={studio} />}

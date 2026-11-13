@@ -13,6 +13,7 @@ import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { clipThumbWidth } from './TimelineClip';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { OPEN_HISTORY_EVENT, type OpenHistoryRequest } from '../history/openHistory';
+import { BOOK_SIZE_KEY, bookThumbMax } from './useBookPanelSize';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
 
@@ -44,6 +45,103 @@ afterEach(() => {
 });
 
 describe('BookTimeline', () => {
+  it('resizes real thumbnails with the keyboard, persists the size, and never edits the comic', () => {
+    const { studio, unmount } = setup();
+    const handle = screen.getByRole('separator', { name: 'Resize book panel' });
+    expect(handle).toHaveAttribute('aria-orientation', 'horizontal');
+    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    expect(handle).toHaveAttribute('aria-valuenow', '80');
+    expect(document.querySelector('[data-timeline-thumb]')).toHaveStyle({ height: '80px' });
+    expect(localStorage.getItem(`${BOOK_SIZE_KEY}.wide`)).toBe('80');
+    expect(studio.patch).not.toHaveBeenCalled();
+    expect(studio.act).not.toHaveBeenCalled();
+    unmount();
+    setup();
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '80');
+  });
+
+  it('drags upward to enlarge, commits only on release, and Escape or a cancelled pointer restores the starting size', () => {
+    const { studio } = setup();
+    const handle = screen.getByRole('separator');
+    fireEvent.pointerDown(handle, { pointerId: 4, button: 0, isPrimary: true, clientY: 400 });
+    fireEvent.pointerMove(window, { pointerId: 4, clientY: 360 });
+    expect(localStorage.getItem(`${BOOK_SIZE_KEY}.wide`)).toBeNull();
+    fireEvent.pointerUp(window, { pointerId: 4, clientY: 360 });
+    expect(handle).toHaveAttribute('aria-valuenow', '104');
+    expect(localStorage.getItem(`${BOOK_SIZE_KEY}.wide`)).toBe('104');
+    fireEvent.pointerDown(handle, { pointerId: 5, button: 0, isPrimary: true, clientY: 400 });
+    fireEvent.pointerMove(window, { pointerId: 5, clientY: 300 });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(handle).toHaveAttribute('aria-valuenow', '104');
+    fireEvent.pointerDown(handle, { pointerId: 6, button: 0, isPrimary: true, clientY: 400 });
+    fireEvent.pointerCancel(window, { pointerId: 6 });
+    expect(handle).toHaveAttribute('aria-valuenow', '104');
+    expect(studio.patch).not.toHaveBeenCalled();
+  });
+
+  it('clamps at keyboard limits, resets with Enter, and leaves compact editor strips unchanged', () => {
+    const { unmount } = setup();
+    const handle = screen.getByRole('separator');
+    fireEvent.keyDown(handle, { key: 'End' });
+    expect(handle.getAttribute('aria-valuenow')).toBe(handle.getAttribute('aria-valuemax'));
+    fireEvent.keyDown(handle, { key: 'Home' });
+    fireEvent.keyDown(handle, { key: 'ArrowDown', shiftKey: true });
+    expect(handle).toHaveAttribute('aria-valuenow', '48');
+    fireEvent.keyDown(handle, { key: 'Enter' });
+    expect(handle).toHaveAttribute('aria-valuenow', '64');
+    unmount();
+    setup(makeSampleDoc(), {}, { compact: true });
+    expect(screen.queryByRole('separator')).toBeNull();
+    expect(document.querySelector('[data-timeline-thumb]')).toHaveStyle({ height: '52px' });
+  });
+
+  it('keeps separate phone preferences and caps a large saved size when the board is short', () => {
+    localStorage.setItem(`${BOOK_SIZE_KEY}.wide`, '220');
+    localStorage.setItem(`${BOOK_SIZE_KEY}.phone`, '120');
+    localStorage.setItem(DOCK_OPEN_KEY, '1');
+    const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages' });
+    const tree = (w: number, h: number) => <FormFactorProvider value={formFactorFor({ w, h, coarse: true })}><BookTimeline studio={studio} /></FormFactorProvider>;
+    const { rerender } = render(tree(1440, 1000));
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '220');
+    rerender(tree(320, 568));
+    expect(Number(screen.getByRole('separator').getAttribute('aria-valuenow'))).toBeLessThanOrEqual(bookThumbMax(472));
+    rerender(tree(844, 390));
+    expect(Number(screen.getByRole('separator').getAttribute('aria-valuenow'))).toBeLessThanOrEqual(bookThumbMax(294));
+    expect(localStorage.getItem(`${BOOK_SIZE_KEY}.phone`)).toBe('120');
+    rerender(tree(1440, 1000));
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '220');
+  });
+
+  it('scrolls the rail with a vertical wheel and smooth controls without scrolling its parent', () => {
+    setup();
+    const rail = screen.getByRole('listbox').parentElement!;
+    Object.defineProperties(rail, { clientWidth: { value: 300 }, scrollWidth: { value: 900 } });
+    fireEvent.scroll(rail);
+    expect(screen.getByRole('button', { name: 'Scroll to earlier pages' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Scroll to later pages' })).toBeEnabled();
+    fireEvent.wheel(rail, { deltaY: 80, deltaMode: 0 });
+    expect(rail.scrollLeft).toBe(80);
+    expect(rail.parentElement!.scrollTop).toBe(0);
+    const scrollTo = vi.fn();
+    rail.scrollTo = scrollTo;
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to later pages' }));
+    expect(scrollTo).toHaveBeenCalledWith({ left: 320, behavior: 'smooth' });
+    fireEvent.wheel(rail, { deltaY: 80, ctrlKey: true });
+    expect(rail.scrollLeft).toBe(80);
+  });
+
+  it('uses instant step scrolling when reduced motion is requested', () => {
+    render(<FormFactorProvider value={{ ...formFactorFor({ w: 1280, h: 800, coarse: false }), reducedMotion: true }}>
+      <BookTimeline studio={makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages' })} />
+    </FormFactorProvider>);
+    const rail = screen.getByRole('listbox').parentElement!;
+    Object.defineProperties(rail, { clientWidth: { value: 300 }, scrollWidth: { value: 900 } });
+    rail.scrollTo = vi.fn();
+    fireEvent.scroll(rail);
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to later pages' }));
+    expect(rail.scrollTo).toHaveBeenCalledWith({ left: 240, behavior: 'auto' });
+  });
+
   it('shows the book in order: cover, pages, add-page, then the free software-page chips', () => {
     setup();
     const listbox = screen.getByRole('listbox', { name: 'Book timeline' });
