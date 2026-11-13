@@ -14,16 +14,17 @@
 // wrapping grid sized by the panel, never the viewport: this panel also opens inside the narrow recap card.
 
 import React from 'react';
-import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
+import { BookHeart, BookOpen, ChevronDown, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
 import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { nearestAspect, resolveImageJob } from '../../../../shared/comic/models';
+import { nearestAspect, resolveImageJob, type ImageModelSpec } from '../../../../shared/comic/models';
 import { estimateDocJobs, quoteLockOf, unitPrice } from '../../../../shared/comic/plan';
 import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
 import { useCostFormat } from '../cost';
 import { AspectGlyph, Segmented, SectionLabel, cx } from '../ui';
+import { STARTING_FORMATS, startingFormatPatch } from './startingFormats';
 
 export const KIND_OPTIONS: { value: ComicKind; label: string; icon: React.ReactNode }[] = [
   { value: 'comic', label: 'Comic', icon: <BookOpen className="h-3.5 w-3.5" aria-hidden /> },
@@ -236,6 +237,57 @@ export interface FormatPanelProps {
   caps?: StudioCaps;
 }
 
+const StartingFormatPicker: React.FC<{
+  format: Format;
+  pageModel: ImageModelSpec;
+  onApply: (patch: Partial<Format>) => void;
+}> = ({ format, pageModel, onApply }) => {
+  const descriptionId = React.useId();
+  return (
+    <details className="group/start rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]">
+      <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-3 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] [&::-webkit-details-marker]:hidden">
+        Browse starting formats
+        <ChevronDown className="h-4 w-4 shrink-0 text-[var(--ds-muted)] group-open/start:rotate-180" aria-hidden />
+      </summary>
+      <div className="space-y-2 px-3 pb-3">
+        <p className="text-[11px] leading-snug text-[var(--ds-muted)]">Pick an editable starting point for your page plan. Print styles approximate page shapes. Choosing one won’t draw any artwork.</p>
+        <div role="group" aria-label="Starting formats" className="grid grid-cols-[repeat(auto-fit,minmax(min(10rem,100%),1fr))] gap-2">
+          {STARTING_FORMATS.map((preset) => {
+            const shape = nearestAspect(pageModel, preset.pageAspect);
+            const usesFallback = shape !== preset.pageAspect;
+            const unavailable = preset.requiresExactShape && usesFallback;
+            const changes = startingFormatPatch(format, preset, pageModel);
+            const matches = !unavailable && Object.keys(changes).length === 0;
+            const kind = KIND_OPTIONS.find((option) => option.value === preset.kind)?.label;
+            const details = `${kind} · ${shape} · ${pagesWord(preset.pageCount)} · ${preset.panelsPerPage === 'auto' ? 'Auto panels' : `${preset.panelsPerPage} panels per page`}${preset.readingDirection ? ' · RTL' : ''}`;
+            const caption = `${descriptionId}-${preset.id}`;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                aria-label={preset.title}
+                aria-describedby={caption}
+                aria-disabled={unavailable || matches || undefined}
+                onClick={() => { if (!unavailable && !matches) onApply(changes); }}
+                className={cx('min-h-[44px] min-w-0 rounded-lg border px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
+                  matches ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)]',
+                  unavailable ? 'cursor-default opacity-70' : 'hover:bg-[var(--ds-hover)]')}
+              >
+                <span className="block text-[12px] font-semibold leading-snug text-[var(--ds-ink)]">{preset.title}{matches ? ' · Current settings' : ''}</span>
+                <span id={caption} className="block">
+                  <span className="mt-0.5 block text-[11px] leading-snug text-[var(--ds-muted)]">{preset.description}</span>
+                  <span className="mt-1 block text-[10.5px] font-medium leading-snug text-[var(--ds-ink)]">{unavailable ? `Needs a model that supports ${preset.pageAspect}.` : details}</span>
+                  {usesFallback && !unavailable ? <span className="mt-0.5 block text-[10.5px] leading-snug text-[var(--ds-muted)]">{pageModel.nickname} uses {shape} for this format.</span> : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </details>
+  );
+};
+
 export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = false, caps }) => {
   const format = doc.format;
   const cost = useCostFormat({ byok, caps });
@@ -260,6 +312,8 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
   // The model and price the next page really gets: the comic's locked model, else its tier/override — the same
   // numbers as the breakdown card (plan.ts unitPrice).
   const pageModel = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
+  const canUseStartingFormat = doc.planStatus === 'none' && doc.pages.length === 0 && !doc.trash?.length
+    && !doc.cover.render.asset && doc.cover.render.status !== 'queued' && doc.cover.render.status !== 'rendering';
   const drawnAspect = nearestAspect(pageModel, format.pageAspect);
   const perPage = unitPrice(doc, 'page', { byok }).usd;
 
@@ -292,6 +346,8 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
           </span>
         </p>
       ) : null}
+
+      {canUseStartingFormat ? <StartingFormatPicker format={format} pageModel={pageModel} onApply={set} /> : null}
 
       <div>
         <SectionLabel>Kind</SectionLabel>

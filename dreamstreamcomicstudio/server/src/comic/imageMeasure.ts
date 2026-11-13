@@ -18,6 +18,8 @@ import { StudioError } from './types.js';
 export const MAX_INPUT_PIXELS = 50_000_000;
 /** Longest source edge any decode accepts. */
 export const MAX_SOURCE_EDGE = 12_000;
+/** A 4K-square pixel budget per source for region paste-back (two source images plus the composite). */
+export const MAX_REGION_PASTE_PIXELS = 4096 * 4096;
 /** Options for every `sharp(input, …)` call: tolerant of truncated tails, hard pixel cap. */
 export const SHARP_INPUT = { failOn: 'none' as const, limitInputPixels: MAX_INPUT_PIXELS };
 

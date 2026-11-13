@@ -9,7 +9,7 @@ import { ReaderCoverCard } from './ReaderCoverCard';
 describe('ReaderCoverCard Read button', () => {
   it('labels the accent fill with the on-accent ink (never text-white), while loading too', () => {
     for (const loading of [false, true]) {
-      const { unmount } = render(<ReaderCoverCard title="The Saffron Thief" pageCount={3} onRead={vi.fn()} onGuided={vi.fn()} loading={loading} />);
+      const { unmount } = render(<ReaderCoverCard title="The Saffron Thief" pageCount={3} onRead={vi.fn()} loading={loading} />);
       const read = screen.getByRole('button', { name: loading ? /Opening/ : /^Read$/ });
       const classes = read.className.split(/\s+/);
       expect(classes).toContain('bg-[var(--ds-accent)]');

@@ -56,10 +56,12 @@ RUN fc-cache -f /usr/local/share/fonts/dreamstream \
 COPY --from=build /out/server.mjs ./server.mjs
 # Pyodide caches packages it downloads next to itself — the app user must own /app.
 RUN chown -R node:node /app
-# GIT_SHA / BUILD_TIMESTAMP surface in /api/system (set by the deploy workflow).
+# Build args are supplied through Wrangler containers[].image_vars. The file records this
+# image's identity independently of runtime envVars retained by the stable container DO.
 ARG GIT_SHA=unknown
 ARG BUILD_TIMESTAMP=unknown
 ENV GIT_SHA=$GIT_SHA BUILD_TIMESTAMP=$BUILD_TIMESTAMP
+RUN node -e "require('fs').writeFileSync('/app/build-info.json', JSON.stringify({gitSha:process.env.GIT_SHA,buildTimestamp:process.env.BUILD_TIMESTAMP}))"
 EXPOSE 8080
 USER node
 CMD ["node", "server.mjs"]

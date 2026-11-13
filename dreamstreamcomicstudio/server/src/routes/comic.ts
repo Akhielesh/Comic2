@@ -57,6 +57,8 @@ import { logger } from '../lib/logger.js';
 import { getAllowanceStatus } from '../services/platformAllowance.js';
 import { consumeAllowanceNotices } from '../services/usageEnforcer.js';
 import { checkQualityAccess, studioCapsFor, type StudioCapsDeps } from '../comic/access.js';
+import { searchComicResearch } from '../comic/research.js';
+import { translateComicLineWithSarvam } from '../comic/i18n/sarvam.js';
 import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
 import { createStudioContext, signAssetPaths, type OrchestratorContext, type StudioContextDeps } from '../comic/context.js';
 import { notAvailableError } from '../comic/extensions.js';
@@ -1096,6 +1098,39 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
   const intentFor = deps.routeIntent ?? routeIntent;
 
   const sessionFor = async (req: Request): Promise<StudioSession> => getStudioSession(projectIdParam(req), requireUser(req), store());
+
+  router.post('/projects/:id/research', requireActive, owned(async (req, res) => {
+    await sessionFor(req);
+    const query = typeof req.body?.query === 'string' ? req.body.query.replace(/\s+/g, ' ').trim() : '';
+    if (query.length < 2 || query.length > 120) throw new StudioError('BAD_REQUEST', 'Enter a place or topic between 2 and 120 characters.', { status: 400 });
+    try {
+      res.json(await searchComicResearch(query));
+    } catch {
+      throw new StudioError('NOT_AVAILABLE', 'Research is temporarily unavailable. Try again in a moment.', { status: 503 });
+    }
+  }));
+
+  router.post('/projects/:id/sarvam-line', requireActive, owned(async (req, res) => {
+    const session = await sessionFor(req);
+    const key = req.apiKeys?.sarvamByok ? req.apiKeys.sarvamKey : null;
+    if (!key) throw new StudioError('FORBIDDEN', 'Connect a Sarvam AI key in Settings first.', { status: 403 });
+    const lang = typeof req.body?.lang === 'string' ? languageSpec(req.body.lang)?.code : undefined;
+    const lineId = typeof req.body?.lineId === 'string' ? req.body.lineId : '';
+    const line = session.doc.pages.flatMap((page) => page.panels.flatMap((panel) => panel.lines)).find((item) => item.id === lineId);
+    if (!lang || !i18nOf(session.doc).editions[lang] || !line?.text.trim() || line.noTranslate) {
+      throw new StudioError('BAD_REQUEST', 'Pick a translatable dialogue line in an existing edition.', { status: 400 });
+    }
+    if (res.locals.moderationStatus === 'restricted') throw new StudioError('FORBIDDEN', 'Translation providers are unavailable for this account.', { status: 403 });
+    const controller = new AbortController();
+    const disconnect = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', disconnect);
+    try {
+      const text = await translateComicLineWithSarvam(key, line.text, line.lang || session.doc.format.language, lang, controller.signal);
+      if (!controller.signal.aborted) res.set('Cache-Control', 'private, no-store').json({ text });
+    } finally {
+      res.off('close', disconnect);
+    }
+  }));
 
   const keysFor = (req: Request) => {
     const contextDeps = deps.contextDeps?.(req) || {};

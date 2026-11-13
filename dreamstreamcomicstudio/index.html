@@ -77,6 +77,12 @@
     -webkit-font-smoothing: antialiased;
   }
   html.dark #app-splash { background-color: var(--ds-canvas, #0a0a0a); color: var(--ds-ink, #fafafa); }
+  /* The boot script sets Paper before the bundled stylesheet arrives. */
+  html[data-comic-theme="paper"] { --boot-canvas: #fbf8f0; --boot-ink: #29221c; }
+  html.dark[data-comic-theme="paper"] { --boot-canvas: #191612; --boot-ink: #f8efe1; }
+  html[data-comic-theme="paper"] body,
+  html[data-comic-theme="paper"] #app-splash { background-color: var(--ds-canvas, var(--boot-canvas)); }
+  html[data-comic-theme="paper"] #app-splash { color: var(--ds-ink, var(--boot-ink)); }
   #app-splash .spinner {
     width: 28px; height: 28px; border-radius: 9999px;
     border: 3px solid rgba(128,128,128,0.25);

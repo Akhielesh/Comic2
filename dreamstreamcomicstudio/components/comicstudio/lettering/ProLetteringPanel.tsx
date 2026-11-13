@@ -9,13 +9,15 @@ import { AlignCenter, AlignLeft, AlignRight, ArrowDownToLine, ArrowUpToLine, Lin
 import { SCRIPTS } from '../../../shared/comic/languages';
 import { languageSpec } from '../../../shared/comic/languages';
 import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
-import { SFX_EFFECTS, type BorderStyle, type BubbleShape, type LetterStyle, type LetterStylePatch, type ProSfxEffect, type SfxEffect, type TextCase } from '../../../shared/comic/lettering/style';
+import type { BorderStyle, BubbleShape, LetterStyle, LetterStylePatch, TextCase } from '../../../shared/comic/lettering/style';
+import type { DrawnSfxEffect } from '../../../shared/comic/lettering/sfxCatalog';
 import type { Line } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { PatchOptions } from '../types';
 import { ColorField } from './ColorField';
 import { FontPicker } from './FontPicker';
 import { ProShapePicker, ShapePicker, TailPicker } from './ShapePicker';
+import { SfxStylePicker } from './SfxStylePicker';
 import type { NumberCommit, NumberFieldProps } from './NumberField';
 import { useProExtras } from './pro/proExtras';
 import { proFieldsWritable } from '../editor/inspector/proSwitch';
@@ -33,6 +35,7 @@ import {
   lockOps,
   pinKeepingSizeOps,
   resetPositionOps,
+  sfxStyleOps,
   sharedValue,
   speakerMarkFor,
   styleScopeOps,
@@ -78,16 +81,6 @@ const BORDERS: { value: BorderStyle; label: string }[] = [
   { value: 'double', label: 'Double' },
   { value: 'none', label: 'None' }
 ];
-const SFX_LABEL: Record<SfxEffect, string> = { filled_stroke: 'Filled', outlined: 'Outlined', shadow: 'Shadow', skewed: 'Skewed', arched: 'Arched', pop: 'Pop' };
-/** The Pro SFX effects (PE-LETTER draws them; the unions stay separate in S2, collisions B-4). halftone_fill is S3. */
-export const PRO_SFX_LABEL: Record<ProSfxEffect, string> = {
-  extrude3d: '3D extrude',
-  outline_stack: 'Stacked outline',
-  wobble: 'Wobble',
-  shatter: 'Shatter',
-  gradient: 'Gradient',
-  halftone_fill: 'Halftone'
-};
 
 /** A typed field beside a slider (Pro Edit): display range, step and unit; stored × scale = shown. */
 interface NumericSpec {
@@ -213,7 +206,12 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
     apply(styleScopeOps(doc, page, ids, patch, 'selection'), { label, ...(scrubKey ? { coalesce: `style:${page.id}:${ids.join(',')}:${scrubKey}` } : {}) });
   const run = (ops: DocOp[], label: string, opts?: PatchOptions) => ops.length && apply(ops, { label, ...opts });
   const selPlans = plans.filter((p) => ids.includes(p.lineId));
-  const anySfx = lines.some((l) => l.kind === 'sfx');
+  const soundLines = lines.filter((l) => l.kind === 'sfx');
+  const anySfx = soundLines.length > 0;
+  const soundLanguages = soundLines.map((line) => line.lang || doc.format.language);
+  const soundEffect = sharedValue(doc, soundLines, 'sfxEffect');
+  const soundArc = sharedValue(doc, soundLines, 'arc');
+  const pickSoundEffect = (effect: DrawnSfxEffect) => run(sfxStyleOps(doc, page, ids, effect), 'Sound effect style');
   const font = v('font');
   const weights = (font ? FONT_REGISTRY[font]?.weights : [400, 700]) || [400, 700];
   const textStroke = v('textStroke');
@@ -373,22 +371,12 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
             {anySfx && (
               <div className="space-y-2 rounded-xl border border-[var(--ds-hairline)] p-2">
                 <p className={LABEL}>Sound effect</p>
-                <div role="radiogroup" aria-label="Sound effect style" className="grid grid-cols-3 gap-1">
-                  {SFX_EFFECTS.map((e) => (
-                    <button
-                      key={e}
-                      type="button"
-                      role="radio"
-                      aria-checked={v('sfxEffect') === e}
-                      onClick={() => style({ sfxEffect: e, ...(e === 'arched' && !v('arc') ? { arc: 0.4 } : {}) }, 'Sound effect style')}
-                      className={cx(BTN, 'px-1', v('sfxEffect') === e && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
-                    >
-                      {SFX_LABEL[e]}
-                    </button>
-                  ))}
-                </div>
-                {writable && pro && <pro.ProSfxPicker value={pv('sfxEffect') as string | undefined} onPick={(e) => style({ sfxEffect: e as unknown as SfxEffect }, 'Sound effect style')} />}
-                {v('sfxEffect') === 'arched' && <Slider label="Arc" value={v('arc')} min={-1} max={1} step={0.05} onChange={(x) => style({ arc: x }, 'Arc', 'arc')} />}
+                <SfxStylePicker value={soundEffect} languages={soundLanguages} onPick={pickSoundEffect} />
+                {writable && pro && <SfxStylePicker pro value={soundEffect} languages={soundLanguages} onPick={pickSoundEffect} />}
+                {soundEffect === 'arched' && <Slider label="Arc" value={soundArc} min={-1} max={1} step={0.05} onChange={(arc) => {
+                  const soundIds = soundLines.map((line) => line.id);
+                  run(styleScopeOps(doc, page, soundIds, { arc }, 'selection'), 'Arc', { coalesce: `style:${page.id}:${soundIds.join(',')}:arc` });
+                }} />}
                 <div className="flex items-end gap-2">
                   <div className="min-w-0 flex-1">
                     <Slider

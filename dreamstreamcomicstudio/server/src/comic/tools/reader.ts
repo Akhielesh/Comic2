@@ -1,6 +1,6 @@
 // Director tool group "reader" (contract §12.1/§12.2, reader.md §7.5). Owner: P1-READER.
 //
-//   set_reader_options   how the published comic reads: page-turn style, Guided View overview,
+//   set_reader_options   how the published comic reads: page-turn style,
 //                        paper texture, ambient colour, End-card credits, inside-cover dedication  → `reader`
 //   set_chapter          mark (or clear) a chapter start on a page (scrubber marks, End-card list) → `page {chapterTitle}`
 //
@@ -9,8 +9,7 @@
 // book too ("make page 3 the start of chapter 2" while planning), and the director must never be left
 // without a way to do what the user asked; before any plan there is nothing to set.
 // Results are honest sentences that say exactly what changed (or that nothing needed to), so the
-// director always has something visible to tell the user. Guided View is never the default
-// (decisions-final #11); asking for it gets an explanation, not a silent no-op.
+// director always has something visible to tell the user.
 
 import { readerOf, DEFAULT_READER, type ComicDoc, type Page, type ReaderSettings } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
@@ -55,7 +54,6 @@ export const chaptersOf = (doc: ComicDoc): { n: number; title: string }[] =>
 export function describeReader(settings: ReaderSettings): string[] {
   const out: string[] = [];
   if (settings.turn !== DEFAULT_READER.turn) out.push(`${settings.turn} turns`);
-  if (settings.guidedOverview !== DEFAULT_READER.guidedOverview) out.push(`guided overview ${settings.guidedOverview ? 'on' : 'off'}`);
   if (settings.paperTexture !== DEFAULT_READER.paperTexture) out.push(`paper texture ${settings.paperTexture ? 'on' : 'off'}`);
   if (settings.ambient !== DEFAULT_READER.ambient) out.push(`ambient colour ${settings.ambient ? 'on' : 'off'}`);
   if (settings.credits) out.push(`credits ${quote(settings.credits, 40)}`);
@@ -67,8 +65,6 @@ export function describeReader(settings: ReaderSettings): string[] {
 function changeSentence(before: ReaderSettings, after: ReaderSettings): string[] {
   const parts: string[] = [];
   if (before.turn !== after.turn) parts.push(`readers now get ${TURN_WORD[after.turn]}`);
-  if (before.guidedOverview !== after.guidedOverview)
-    parts.push(after.guidedOverview ? 'Guided View shows the whole page before zooming into panels' : 'Guided View goes straight to the first panel');
   if (before.paperTexture !== after.paperTexture) parts.push(`paper texture is ${after.paperTexture ? 'on' : 'off'}`);
   if (before.ambient !== after.ambient) parts.push(`the reading room ${after.ambient ? 'glows with each page’s colours' : 'stays plain dark'}`);
   if (before.credits !== after.credits) parts.push(after.credits ? `the End card credits read ${quote(after.credits, 80)}` : 'the End card credits line is cleared');
@@ -86,12 +82,11 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
   return defineTool(
     'set_reader_options',
     'free',
-    'Choose how the published comic reads: page-turn style (paper curl, slide, or fade), whether Guided View (panel by panel, one tap away for readers) starts with the whole page, paper texture, ambient room colour from the pages, the End-card credits line and an inside-cover dedication. Use when the user talks about the reading experience. Guided View cannot be made the default.',
+    'Choose how the published comic reads: page-turn style (paper curl, slide, or fade), paper texture, ambient room colour from the pages, the End-card credits line and an inside-cover dedication. Use when the user talks about the reading experience.',
     {
       type: 'object',
       properties: {
         turn: { type: 'string', enum: [...READER_TURN_STYLES], description: 'paper = realistic page curl (default), slide = pages slide over each other, fade = crossfade.' },
-        guidedOverview: { type: 'boolean', description: 'Guided View shows the whole page first, then each panel.' },
         paperTexture: { type: 'boolean', description: 'Subtle paper grain and page edges.' },
         ambient: { type: 'boolean', description: 'Tint the dark reading room with the colours of the current page.' },
         credits: { type: 'string', description: `End-card credits line (≤ ${DOC_LIMITS.readerTextChars} characters). An empty string clears it.` },
@@ -101,28 +96,26 @@ function setReaderOptionsTool(ctx: StudioContext): DirectorTool {
     },
     (args) => {
       const doc = ctx.session.doc;
-      const askedGuidedDefault = args.guidedDefault === true || args.guided_default === true;
+      const askedGuided = args.guidedDefault !== undefined || args.guided_default !== undefined || args.guidedOverview !== undefined;
+      const guidedNote = askedGuided ? ' Guided View has been removed. Readers can turn pages or scroll.' : '';
       const raw: Record<string, unknown> = {};
       if (args.turn !== undefined) raw.turn = typeof args.turn === 'string' ? args.turn.trim().toLowerCase() : args.turn;
-      for (const key of ['guidedOverview', 'paperTexture', 'ambient'] as const) {
+      for (const key of ['paperTexture', 'ambient'] as const) {
         if (args[key] !== undefined) raw[key] = bool(args[key]) ?? args[key];
       }
       for (const key of ['credits', 'dedication'] as const) {
         if (args[key] !== undefined) raw[key] = args[key];
       }
       if (!Object.keys(raw).length) {
-        if (askedGuidedDefault) {
-          return 'Guided View is never the default: readers open it with one tap (the panel button in the reader, a double-tap on a panel, or a link with ?guided=1). Nothing was changed. If the user wants guided reading to feel smoother, offer guidedOverview (show the whole page first).';
-        }
+        if (askedGuided) return guidedNote.trim();
         const now = describeReader(readerOf(doc));
-        return `No reader setting was given, so nothing changed. Current reader: ${now.length ? now.join(', ') : 'the defaults (paper page turns, guided overview on, paper texture on, ambient colour on)'}.`;
+        return `No reader setting was given, so nothing changed. Current reader: ${now.length ? now.join(', ') : 'the defaults (paper page turns, paper texture on, ambient colour on)'}.`;
       }
       // Validation errors come back to the model as "Error: …" with what to fix.
       const patch = sanitizeReaderPatch(raw);
       const before = readerOf(doc);
       const after = readerOf(commit(ctx, [{ op: 'reader', patch }], 'Reader settings'));
       const changed = changeSentence(before, after);
-      const guidedNote = askedGuidedDefault ? ' Guided View itself stays one tap away rather than the default.' : '';
       if (!changed.length) return `Those reader settings were already in place — nothing changed.${guidedNote}`;
       return `Done — ${changed.join('; ')}. ${FREE_NOTE}${guidedNote} Readers can still pick their own turn style and layout in the reader.`;
     }
@@ -180,7 +173,7 @@ export const readerToolGroup: ToolGroup = {
   when: (ctx: StudioContext) => ctx.session.doc.pages.length > 0,
   tools: (ctx: StudioContext, _turn: DirectorTurn): DirectorTool[] => [setReaderOptionsTool(ctx), setChapterTool(ctx)],
   promptRules: () =>
-    'READER (free): how the finished comic reads — page-turn style (paper curl / slide / fade), Guided View overview, paper texture, ambient colour, End-card credits and an inside-cover dedication — is set with set_reader_options; chapter marks with set_chapter. Guided View (panel by panel) is never the default: readers open it with one tap. Confirm every change in one visible sentence.',
+    'READER (free): how the finished comic reads — page-turn style (paper curl / slide / fade), paper texture, ambient colour, End-card credits and an inside-cover dedication — is set with set_reader_options; chapter marks with set_chapter. Confirm every change in one visible sentence.',
   summaryLines: (doc: ComicDoc) => {
     const lines: string[] = [];
     const changed = describeReader(readerOf(doc));

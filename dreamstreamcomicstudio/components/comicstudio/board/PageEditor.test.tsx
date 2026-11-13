@@ -209,6 +209,29 @@ describe('PageEditor', () => {
     expect(studio.act).not.toHaveBeenCalled();
   });
 
+  it('marks a circular area in page pixels and sends an ellipse edit', () => {
+    const { studio } = open();
+    fireEvent.click(screen.getByRole('button', { name: 'Circle an object' }));
+    markRegion([40, 300], [200, 480]);
+    const mark = screen.getByTestId('markup-region');
+    expect(mark).toHaveClass('rounded-full');
+    expect(parseFloat(mark.style.width) * 4).toBeCloseTo(parseFloat(mark.style.height) * 6, 1);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'Change the lantern to blue' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply edit/ }));
+    expect(studio.act).toHaveBeenCalledWith(expect.objectContaining({ type: 'edit_page', regionShape: 'ellipse', region: expect.any(Object) }));
+  });
+
+  it('edits the panel shot and camera angle without calling the image model', () => {
+    const { studio } = open();
+    const panel = within(screen.getByRole('region', { name: 'Panel 1' }));
+    fireEvent.click(panel.getByText('Camera'));
+    fireEvent.change(panel.getByLabelText('Shot size'), { target: { value: 'close_up' } });
+    fireEvent.change(panel.getByLabelText('Camera angle'), { target: { value: 'low angle' } });
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'panel', pageId: 'pg_1', id: 'pg_1_p1', patch: { shot: 'close_up' } }]);
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'panel', pageId: 'pg_1', id: 'pg_1_p1', patch: { angle: 'low angle' } }]);
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
   it('does not select or announce a placed object when its save is rejected', async () => {
     const doc = makeSampleDoc();
     doc.refInbox = [{ path: `u/user/p/${doc.id}/ref/sticker.webp`, name: 'Toolbox', source: 'upload', at: 1 }];

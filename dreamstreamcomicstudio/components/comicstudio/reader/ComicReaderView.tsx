@@ -96,6 +96,8 @@ export interface ComicReaderViewProps {
   onPageChange?(n: number): void;
   /** Write ?p= (and keep ?lang=) with history.replaceState as the reader settles (public reader only). */
   syncUrl?: boolean;
+  /** A shared reader can sync the page while keeping its language choice local to the visit. */
+  syncLanguageInUrl?: boolean;
   /** Reader language slot: the picker in the toolbar; the pages show that edition. */
   language?: ReaderLanguageSlot;
   /** End card extras (public reader: author, "Make your own", share link). Without it the book ends on its last page. */
@@ -320,6 +322,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   initialPage,
   onPageChange,
   syncUrl = false,
+  syncLanguageInUrl = true,
   language,
   endCard,
   layout: hostLayout,
@@ -674,9 +677,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         return;
       }
       if (key) writePosition(doc.id, { key, at: Date.now() });
-      if (urlSync && !immersiveOn) urlSync.schedule({ p: n, ...(lang && !sameLanguage(lang, doc.format.language) ? { lang } : {}) });
+      if (urlSync && !immersiveOn) urlSync.schedule({ p: n, ...(syncLanguageInUrl && lang && !sameLanguage(lang, doc.format.language) ? { lang } : {}) });
     },
-    [doc.id, urlSync, immersiveOn, lang, doc.format.language]
+    [doc.id, urlSync, immersiveOn, syncLanguageInUrl, lang, doc.format.language]
   );
   useEffect(() => {
     if (settledN === null) {
@@ -1347,6 +1350,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           allowDownload={allowDownload}
           onDownload={hostDownload}
           syncUrl={syncUrl}
+          syncLanguageInUrl={syncLanguageInUrl}
           onImageError={onImageError}
           onPageChange={(n) => {
             immersivePage.current = n;

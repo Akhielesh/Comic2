@@ -339,7 +339,7 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
   it('on a touch screen what a cover centres sits above the row: the empty-cover marks and the Generating notice', async () => {
     renderDashboard([blankStudioProject, classicProject, generatingProject]);
     const notice = screen.getByText('Generating...').parentElement as HTMLElement;
-    const centred = [screen.getByText('Nothing drawn yet').parentElement as HTMLElement, ...screen.getAllByText('?'), notice];
+    const centred = [screen.getByText('Nothing drawn yet').parentElement as HTMLElement, ...screen.getAllByRole('img', { name: 'No cover yet' }), notice];
     expect(centred).toHaveLength(4);
     for (const el of centred) {
       expect(tokens(el), el.textContent ?? '').toContain(`${TOUCH}pb-16`);

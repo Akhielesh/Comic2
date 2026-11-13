@@ -30,7 +30,7 @@ import {
 } from '../services/platformAllowance.js';
 import { isTextProvider, TEXT_PROVIDER_IDS, type ProviderId } from '../../../shared/providers.js';
 
-export type AccountKeyProvider = ProviderId | 'pixazo' | 'ideogram';
+export type AccountKeyProvider = ProviderId | 'pixazo' | 'ideogram' | 'sarvam';
 
 type AccountKeys = Partial<Record<AccountKeyProvider, string>>;
 
@@ -50,7 +50,7 @@ export const invalidateAccountKeys = (userId: string): void => {
 export const canonicalAccountProvider = (provider: string): AccountKeyProvider | null => {
   const p = provider.trim().toLowerCase();
   if (p === 'flux') return 'pixazo';
-  if (p === 'pixazo' || p === 'ideogram') return p;
+  if (p === 'pixazo' || p === 'ideogram' || p === 'sarvam') return p;
   if (isTextProvider(p)) return p;
   return null;
 };
@@ -81,14 +81,15 @@ const queryAccountKeys = async (userId: string): Promise<AccountKeys> => {
 // How each provider maps onto the req.apiKeys fields attachKeys populates.
 const PROVIDER_FIELDS: {
   provider: AccountKeyProvider;
-  keyField: 'openRouterKey' | 'nvidiaKey' | 'geminiKey' | 'pixazoKey' | 'ideogramKey';
-  byokField: 'openRouterByok' | 'nvidiaByok' | 'geminiByok' | 'pixazoByok' | 'ideogramByok';
+  keyField: 'openRouterKey' | 'nvidiaKey' | 'geminiKey' | 'pixazoKey' | 'ideogramKey' | 'sarvamKey';
+  byokField: 'openRouterByok' | 'nvidiaByok' | 'geminiByok' | 'pixazoByok' | 'ideogramByok' | 'sarvamByok';
 }[] = [
   { provider: 'openrouter', keyField: 'openRouterKey', byokField: 'openRouterByok' },
   { provider: 'nvidia', keyField: 'nvidiaKey', byokField: 'nvidiaByok' },
   { provider: 'gemini', keyField: 'geminiKey', byokField: 'geminiByok' },
   { provider: 'pixazo', keyField: 'pixazoKey', byokField: 'pixazoByok' },
-  { provider: 'ideogram', keyField: 'ideogramKey', byokField: 'ideogramByok' }
+  { provider: 'ideogram', keyField: 'ideogramKey', byokField: 'ideogramByok' },
+  { provider: 'sarvam', keyField: 'sarvamKey', byokField: 'sarvamByok' }
 ];
 
 /**

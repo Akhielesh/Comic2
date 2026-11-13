@@ -2,6 +2,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { createEmptyDoc } from '../../../../shared/comic/doc';
+import { applyOps } from '../../../../shared/comic/ops';
 import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import { makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
 import { FormatPanel, PANEL_OPTIONS, autoPanelsLabel, panelChoiceHint } from './FormatPanel';
@@ -10,6 +12,56 @@ beforeEach(showDollarPrices);
 afterEach(resetUsageStatus);
 
 const group = () => screen.getByRole('radiogroup', { name: 'Panels per page' });
+
+const openStartingFormats = () => {
+  fireEvent.click(screen.getByText('Browse starting formats', { selector: 'summary' }));
+  return within(screen.getByRole('group', { name: 'Starting formats' }));
+};
+
+describe('FormatPanel — starting formats', () => {
+  it('applies a single free patch with visible settings and keeps unrelated creative choices', () => {
+    const doc = createEmptyDoc('new-comic');
+    doc.format = { ...doc.format, language: 'ja', colorMode: 'bw', lettering: 'in_art' };
+    const patch = vi.fn();
+    const { rerender } = render(<FormatPanel doc={doc} patch={patch} />);
+    expect(patch).not.toHaveBeenCalled();
+    const options = openStartingFormats();
+    const manga = options.getByRole('button', { name: 'Right-to-left manga' });
+    expect(manga).toHaveAccessibleDescription(/2:3 · 12 pages · Auto panels · RTL/);
+    fireEvent.click(manga);
+    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'manga', pageCount: 12, readingDirection: 'rtl' } }]);
+    const after = applyOps(doc, patch.mock.calls[0][0]);
+    expect(after.format).toMatchObject({ language: 'ja', colorMode: 'bw', lettering: 'in_art', kind: 'manga' });
+    rerender(<FormatPanel doc={after} patch={patch} />);
+    expect(manga).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(manga);
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the supported strip shape on Pro and prevents a long-scroll choice without the required aspect', () => {
+    const doc = createEmptyDoc('new-comic');
+    doc.settings = { ...doc.settings, quality: 'pro' };
+    const patch = vi.fn();
+    render(<FormatPanel doc={doc} patch={patch} />);
+    const options = openStartingFormats();
+    const long = options.getByRole('button', { name: 'Long-scroll webtoon' });
+    expect(long).toHaveAttribute('aria-disabled', 'true');
+    expect(long).toHaveAccessibleDescription(/supports 1:4/);
+    fireEvent.click(long);
+    expect(patch).not.toHaveBeenCalled();
+    const strip = options.getByRole('button', { name: 'Daily comic strip' });
+    expect(strip).toHaveAccessibleDescription(/21:9 · 1 page · 4 panels per page/);
+    fireEvent.click(strip);
+    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'strip', pageAspect: '21:9', pageCount: 1, panelsPerPage: 4 } }]);
+  });
+
+  it('keeps the manual settings available for an existing comic and does not offer structural presets', () => {
+    const doc = makeSampleDoc();
+    render(<FormatPanel doc={doc} patch={vi.fn()} />);
+    expect(screen.queryByText('Browse starting formats')).not.toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Comic kind' })).toBeInTheDocument();
+  });
+});
 
 describe('FormatPanel — panels per page', () => {
   it('offers Auto (labelled "3–4 big panels") and 2, 3, 4, 5, 6 — 2 included', () => {

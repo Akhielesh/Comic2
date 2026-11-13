@@ -26,6 +26,9 @@ declare module 'express-serve-static-core' {
       ideogramKey?: string | null;
       /** True when the Ideogram key came from the end-user (BYOK), not the platform. */
       ideogramByok?: boolean;
+      /** Sarvam is only used on explicit BYOK translation requests. */
+      sarvamKey?: string | null;
+      sarvamByok?: boolean;
       /**
        * Generic per-provider resolved keys for every direct text provider in the shared
        * registry (openrouter, nvidia, openai, anthropic, gemini, deepseek, zai, minimax,
@@ -76,6 +79,7 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
     : null;
   const ideogramHeaderKey = allow('ideogram') ? (req.header('X-Ideogram-Key') || null) : null;
   const ideogramKey = allow('ideogram') ? (ideogramHeaderKey || process.env.IDEOGRAM_API_KEY || null) : null;
+  const sarvamKey = allow('sarvam') ? req.header('X-Sarvam-Key') || null : null;
 
   const or = providerKeys.openrouter || { key: null, byok: false };
   const nv = providerKeys.nvidia || { key: null, byok: false };
@@ -93,6 +97,8 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
     nvidiaByok: nv.byok,
     ideogramKey,
     ideogramByok: Boolean(ideogramHeaderKey),
+    sarvamKey,
+    sarvamByok: Boolean(sarvamKey),
     providerKeys
   };
   next();

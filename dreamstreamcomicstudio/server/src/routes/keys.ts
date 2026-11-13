@@ -49,7 +49,7 @@ interface ValidationResult {
  * attachAccountKeys. A platform env fallback (BYOK false) is never returned, so with no
  * caller key the answer is `missing` even when the server has a key for that provider.
  */
-export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo' | 'ideogram'): string | null => {
+export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo' | 'ideogram' | 'sarvam'): string | null => {
   const k = req.apiKeys;
   if (!k) return null;
   switch (provider) {
@@ -63,6 +63,8 @@ export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo' | 'id
       return k.pixazoByok ? k.pixazoKey || null : null;
     case 'ideogram':
       return k.ideogramByok ? k.ideogramKey || null : null;
+    case 'sarvam':
+      return k.sarvamByok ? k.sarvamKey || null : null;
     default: {
       const entry = k.providerKeys?.[provider];
       return entry?.byok ? entry.key || null : null;
@@ -260,6 +262,11 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
           ? 'Stored — Ideogram has no validation endpoint, so it can’t be live-checked.'
           : 'No Ideogram key provided.'
       };
+      break;
+    }
+    case 'sarvam': {
+      const key = callerKeyFor(req, 'sarvam');
+      result = key ? { provider, status: 'unsupported', valid: false, message: 'Stored. Use it on a translation to verify it with Sarvam AI.' } : missing(provider);
       break;
     }
     default: {

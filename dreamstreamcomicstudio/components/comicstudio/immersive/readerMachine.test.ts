@@ -1,10 +1,10 @@
 // Reader state machine (reader.md §12 rules): intro skip, turns, bounds bump, riffle queue, reverse
 // mid-turn, drags, reduced motion, a key or button step while zoomed (the page turns and the zoom resets),
-// guided across page boundaries (incl. RTL page order), layout change during a drag, and the Escape cascade.
+// layout change during a drag, and the Escape cascade.
 import { describe, expect, it } from 'vitest';
 import { escapeTarget, initialReaderState, readerReducer, type MachineCtx, type ReaderEvent, type ReaderState } from './readerMachine';
 
-const ctx: MachineCtx = { views: 6, stopsOf: (v) => (v === 0 ? 1 : v === 5 ? 1 : 4) };
+const ctx: MachineCtx = { views: 6 };
 const run = (s: ReaderState, ...events: ReaderEvent[]) => events.reduce((acc, e) => readerReducer(acc, e, ctx), s);
 const start = (over: Partial<ReaderState> = {}) => initialReaderState({ layout: 'single', ...over });
 
@@ -121,45 +121,11 @@ describe('zoomed in (free zoom)', () => {
   });
 });
 
-describe('guided', () => {
-  it('STEP moves panel by panel and turns the page past the last panel', () => {
-    let s = run(start({ view: 1 }), { type: 'GUIDED', on: true });
-    expect(s.guided).toEqual({ on: true, stop: 0, playing: false });
-    s = run(s, { type: 'STEP', delta: 1 }, { type: 'STEP', delta: 1 }, { type: 'STEP', delta: 1 });
-    expect(s.guided.stop).toBe(3);
-    s = run(s, { type: 'STEP', delta: 1 });
-    expect(s.motion).toMatchObject({ kind: 'turn', from: 1, to: 2 });
-    s = run(s, { type: 'TURN_DONE' });
-    expect(s).toMatchObject({ view: 2, guided: { on: true, stop: 0 } });
-  });
-
-  it('going back enters the previous page at its last panel', () => {
-    const s = run(start({ view: 2 }), { type: 'GUIDED', on: true }, { type: 'PANEL', delta: -1 }, { type: 'TURN_DONE' });
-    expect(s).toMatchObject({ view: 1, guided: { stop: 3 } });
-  });
-
-  it('GUIDED at a double-tapped panel; zoom is refused in guided; PLAY toggles', () => {
-    const s = run(start(), { type: 'GUIDED', on: true, at: { view: 3, stop: 2 } });
-    expect(s).toMatchObject({ view: 3, guided: { stop: 2 } });
-    expect(run(s, { type: 'ZOOM', zoom: { s: 2, x: 0, y: 0 } }).zoom).toBeNull();
-    expect(run(s, { type: 'PLAY', on: true }).guided.playing).toBe(true);
-    expect(run(s, { type: 'STOP', stop: 99 }).guided.stop).toBe(3);
-  });
-
-  it('RTL books use the same view order (the stage mirrors the geometry), so guided crosses pages identically', () => {
-    const s = run(start({ view: 1 }), { type: 'GUIDED', on: true }, { type: 'STOP', stop: 3 }, { type: 'PANEL', delta: 1 }, { type: 'TURN_DONE' });
-    expect(s.view).toBe(2);
-  });
-});
-
 describe('escape cascade', () => {
-  it('zoom → guided → exit', () => {
+  it('zoom → exit', () => {
     const zoomed = start({ zoom: { s: 2, x: 0, y: 0 } });
     expect(escapeTarget(zoomed)).toBe('zoom');
     expect(run(zoomed, { type: 'ESCAPE' }).zoom).toBeNull();
-    const guided = run(start({ view: 1 }), { type: 'GUIDED', on: true });
-    expect(escapeTarget(guided)).toBe('guided');
-    expect(run(guided, { type: 'ESCAPE' }).guided.on).toBe(false);
     expect(escapeTarget(start())).toBe('exit');
   });
 

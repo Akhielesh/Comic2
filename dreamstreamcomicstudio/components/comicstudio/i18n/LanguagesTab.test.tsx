@@ -11,11 +11,14 @@ import { registeredCard, registeredTabs } from '../features';
 import { feature, languagesTabVisible } from './index';
 import { LanguagesTab } from './LanguagesTab';
 import { TranslationCard } from './TranslationCard';
+import { clearAllKeys, setAccountKeyMeta } from '../../../services/apiKeys';
+import { post } from '../../../services/apiClient';
 
 vi.mock('../studioApi', async (orig) => {
   const real = await orig<typeof import('../studioApi')>();
   return { ...real, getTranslationQuote: vi.fn() };
 });
+vi.mock('../../../services/apiClient', async (orig) => ({ ...await orig<typeof import('../../../services/apiClient')>(), post: vi.fn() }));
 const api = await import('../studioApi');
 const quoteMock = vi.mocked(api.getTranslationQuote);
 
@@ -45,6 +48,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetUsageStatus();
+  clearAllKeys();
 });
 
 describe('feature registration', () => {
@@ -194,6 +198,26 @@ describe('LanguagesTab', () => {
 });
 
 describe('TranslationReview', () => {
+  it('drafts a missing line on Sarvam BYOK and waits for the author to save', async () => {
+    setAccountKeyMeta([{ provider: 'sarvam', suffix: 'test' }]);
+    const complete = withTelugu();
+    const first = allLines(complete)[0];
+    const doc = applyOps(complete, [{ op: 'translation', lang: 'te', lineId: first.id, patch: null }]);
+    const studio = makeFakeStudio({ doc });
+    vi.mocked(post).mockResolvedValueOnce({ text: 'నమస్తే' });
+    render(<LanguagesTab studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Review/ }));
+    const field = screen.getByRole('textbox', { name: `Telugu translation of: ${first.text} (page 1, panel 2)` });
+    fireEvent.click(within(field.closest('li')!).getByRole('button', { name: 'Draft with Sarvam' }));
+    await waitFor(() => expect(field).toHaveValue('నమస్తే'));
+    expect(post).toHaveBeenCalledWith('/api/comic/projects/proj_1/sarvam-line', { lang: 'te', lineId: first.id }, expect.objectContaining({ useSarvamKey: true }));
+    fireEvent.change(field, { target: { value: 'నమస్కారం' } });
+    fireEvent.blur(field);
+    expect(studio.patch).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'translation', lang: 'te', lineId: first.id, patch: { text: 'నమస్కారం' } }], { label: 'Edit translation' });
+  });
+
   it('source, editable translation in its own language, gloss, fit; Enter saves an edit', () => {
     const doc = withTelugu();
     const studio = makeFakeStudio({ doc });

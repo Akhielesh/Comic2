@@ -1676,6 +1676,7 @@ const validateSpendAction = (doc: ComicDoc, action: GatedSpend): string | null =
       }
       if (page.render.status !== 'ready' || !page.render.asset?.path) throw badRequest(`Page ${page.n} has no image to edit yet — draw it first.`);
       if (!clean(action.instruction, 2000)) throw badRequest('Say what to change on the page.');
+      if ((action.region !== undefined || action.regionShape !== undefined) && !sanitizeBox(action.region)) throw badRequest('Mark a larger area before applying this edit.');
       return null;
     }
     default:
@@ -2215,6 +2216,7 @@ interface ImageJob {
   /** Failure keeps the previous status (edits: the existing page is still good). */
   keepStatusOnFailure?: boolean;
   region?: Box;
+  regionShape?: 'ellipse';
   /** Page id to QC + letter after the image lands. */
   qcPageId?: string;
   /** Implicit request (draw what is missing or out of date): reuse rules R2/R3/R7 apply. */
@@ -2238,6 +2240,8 @@ interface ImageJob {
   finish?: (input: { drawn: string; base: () => Promise<string>; doc: ComicDoc }) => Promise<string | null>;
   /** The model's image can't be stored as it came: no finished image = the job fails honestly (paid, nothing changed). */
   finishRequired?: boolean;
+  /** Preserve untouched pixels after a scoped edit's local composite. */
+  losslessSave?: boolean;
   /** Extra VersionMeta for the new version (fix_panel: the copied cuts, parts, parentPath). */
   extraMeta?: (doc: ComicDoc) => Partial<VersionMeta>;
   /** Page jobs: "Redraw with my layout" — with COMIC_LAYOUT_GUIDE on, the guide is drawn from the page's frames (render_pages.followFrames). */
@@ -2727,8 +2731,7 @@ class RenderRun {
 
   private editJob(p: Page, action: EditPageRun): ImageJob {
     const region = sanitizeBox(action.region);
-    // Ship 2 (pro plan §4.4): with a marked region the edit is pasted back into it (raster.pasteRegion; the default
-    // whenever a region is marked, unless pasteBack is 'page'). The stub keeps today's behaviour: the whole edited image.
+    // A marked edit changes only the selected pixels, unless whole-page output was requested explicitly.
     const pasteBack = region && action.pasteBack !== 'page' ? region : undefined;
     const panelN = Number.isInteger(action.panelN) && p.panels.some((x) => x.n === action.panelN) ? action.panelN : undefined;
     const instruction = clean(action.instruction, 2000);
@@ -2746,12 +2749,19 @@ class RenderRun {
       prev: this.prevOf({ kind: 'page', id: p.id }),
       keepStatusOnFailure: true,
       ...(region ? { region } : {}),
+      ...(region && action.regionShape === 'ellipse' ? { regionShape: 'ellipse' as const } : {}),
       qcPageId: p.id,
       implicit: false,
       note: instruction,
       ...(action.safe ? { safe: true } : {}),
       ...(pasteBack
-        ? { finish: async ({ drawn, base }: { drawn: string; base: () => Promise<string> }) => (await pasteRegion({ base, drawn, region: pasteBack, feather: REGION_FEATHER })).dataUrl }
+        ? {
+            finishRequired: true,
+            losslessSave: true,
+            finish: async ({ drawn, base }: { drawn: string; base: () => Promise<string> }) => (await pasteRegion({
+              base, drawn, region: pasteBack, feather: REGION_FEATHER, ...(action.regionShape === 'ellipse' ? { shape: 'ellipse' as const } : {})
+            })).dataUrl
+          }
         : {})
     };
   }
@@ -3606,7 +3616,7 @@ class RenderRun {
     }
     let saved: AssetRef;
     try {
-      saved = await this.saveImage(toStore, compiled.spec.id);
+      saved = await this.saveImage(toStore, compiled.spec.id, job.losslessSave);
     } catch (err) {
       // Paid but lost: bill it honestly and say so.
       end(false);
@@ -3925,7 +3935,9 @@ class RenderRun {
             const pageAt = job.kind === 'panel' ? attached.findIndex((a) => a.startsWith(`${PAGE_REFERENCE_PATH}:`)) : 0;
             const current = pageAt >= 0 ? references[pageAt]?.dataUrl : undefined;
             if (!current) throw new StudioError('NOT_FOUND', "Couldn't load the page to mark the area.", { status: 404 });
-            regionDataUrl = await this.ctx.assets.outlineRegion(current, job.region);
+            regionDataUrl = job.regionShape
+              ? await this.ctx.assets.outlineRegion(current, job.region, job.regionShape)
+              : await this.ctx.assets.outlineRegion(current, job.region);
           }
           references.push({ label: ref.label, dataUrl: regionDataUrl });
           attached.push(`__region__:${job.region.x},${job.region.y},${job.region.w},${job.region.h}`);
@@ -4093,8 +4105,8 @@ class RenderRun {
     }
   }
 
-  private async saveImage(dataUrl: string, model: string): Promise<AssetRef> {
-    const args = { userId: this.ctx.userId, projectId: this.ctx.projectId, dataUrl, model };
+  private async saveImage(dataUrl: string, model: string, lossless?: boolean): Promise<AssetRef> {
+    const args = { userId: this.ctx.userId, projectId: this.ctx.projectId, dataUrl, model, ...(lossless ? { lossless } : {}) };
     try {
       return await this.ctx.assets.saveGenerated(args);
     } catch (err) {
