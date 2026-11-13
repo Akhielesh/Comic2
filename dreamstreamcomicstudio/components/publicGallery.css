@@ -27,7 +27,6 @@
 .library-heading { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 1.25rem 2rem; padding-bottom: clamp(1.5rem, 3vw, 2.5rem); }
 .library-eyebrow { font-size: .6875rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--ds-muted); }
 .library-heading h1, .library-reader-heading h1 { font-family: var(--ds-font-display); font-size: clamp(2.75rem, 5vw, 4.75rem); font-weight: 600; letter-spacing: -.055em; line-height: 1.08; margin-block: .45rem .75rem; }
-.library-heading > div > p:last-child { color: var(--ds-muted); font-size: clamp(1rem, 1.5vw, 1.125rem); line-height: 1.5; }
 .library-reading-note { display: flex; align-items: center; gap: .5rem; color: var(--ds-muted); font-size: .875rem; padding-bottom: .25rem; }
 .library-reading-note svg { width: 1rem; height: 1rem; flex-shrink: 0; }
 .library-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
@@ -41,7 +40,7 @@
 .library-sample-image[data-story='last-tram'] img { object-position: center; }
 .library-sample-image[data-story='paper-boat'] img { object-position: center 42%; }
 .library-sample-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: clamp(1rem, 2vw, 1.75rem); }
-.library-sample-copy h3 { font-family: var(--ds-font-display); font-size: clamp(1.35rem, 2vw, 1.875rem); line-height: 1.15; font-weight: 600; letter-spacing: -.035em; margin-top: .5rem; }
+.library-sample-copy h3 { font-family: var(--ds-font-display); font-size: clamp(1.35rem, 2vw, 1.875rem); line-height: 1.15; font-weight: 600; letter-spacing: -.035em; }
 .library-sample-note { font-size: .875rem; line-height: 1.5; color: var(--ds-muted); margin-top: .75rem; }
 .library-sample-detail { font-size: .75rem; color: var(--ds-muted); margin-top: .75rem; line-height: 1.5; }
 .library-read-link { display: flex; align-items: center; gap: .5rem; color: var(--ds-accent-text); font-size: .875rem; font-weight: 600; margin-top: 1.25rem; }
@@ -122,7 +121,6 @@
   .library-sample-image { height: auto; min-height: 0; aspect-ratio: 4/3; }
   .library-sample-image[data-story='paper-boat'] img { object-position: center 40%; }
   .library-sample-copy { padding: .875rem; flex: 1; justify-content: flex-start; }
-  .library-sample-copy .library-eyebrow { font-size: .625rem; letter-spacing: .075em; }
   .library-sample-copy h3 { font-size: 1.125rem; }
   .library-sample-detail { font-size: .6875rem; margin-top: .5rem; }
   .library-read-link { margin-top: auto; padding-top: .875rem; font-size: .75rem; gap: .25rem; }

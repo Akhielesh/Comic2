@@ -366,17 +366,17 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 )}
                 <div hidden={!!sample}>
                     <header className="library-heading">
-                        <div><p className="library-eyebrow">The reading room</p><h1 ref={libraryTitle} tabIndex={-1}>Library</h1><p>Small stories. New worlds. Find your next read.</p></div>
+                        <h1 ref={libraryTitle} tabIndex={-1}>Library</h1>
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
                     {showSamples && (
                         <section aria-labelledby="library-samples-title" className="library-samples">
-                            <div className="library-section-heading"><h2 id="library-samples-title">Start with a story</h2><span>From Comic Studio</span></div>
+                            <div className="library-section-heading"><h2 id="library-samples-title">Studio samples</h2><span>From Comic Studio</span></div>
                             <div className="library-sample-grid">
                                 {SAMPLES.map((story) => (
                                     <a key={story.id} href={libraryHref(story.id)} onClick={(event) => navigateSample(event, story.id)} className={cn('library-sample-card', FOCUS_RING)} aria-label={`Read ${story.title}`}>
                                         <div className="library-sample-image" data-story={story.id}><img src={story.image} srcSet={story.id === 'last-tram' ? '/assets/comic-sample/last-tram-page-1-480.webp 480w, /assets/comic-sample/last-tram-page-1-768.webp 768w, /assets/comic-sample/last-tram-page-1-1200.webp 1200w' : undefined} sizes={story.id === 'last-tram' ? '(max-width: 639px) 44vw, 24vw' : undefined} alt="" width={story.id === 'paper-boat' ? 768 : 480} height={story.id === 'paper-boat' ? 1152 : 384} decoding="async" /></div>
-                                        <div className="library-sample-copy"><p className="library-eyebrow">Sample comic</p><h3>{story.title}</h3><p className="library-sample-note">{story.note}</p><p className="library-sample-detail">{story.detail}</p><span className="library-read-link">Read the story <ArrowRight aria-hidden /></span></div>
+                                        <div className="library-sample-copy"><h3>{story.title}</h3><p className="library-sample-note">{story.note}</p><p className="library-sample-detail">{story.detail}</p><span className="library-read-link">Read the story <ArrowRight aria-hidden /></span></div>
                                     </a>
                                 ))}
                             </div>
