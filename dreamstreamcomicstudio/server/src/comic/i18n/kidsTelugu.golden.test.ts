@@ -1,8 +1,8 @@
 // @vitest-environment node
-// Golden scenario golden/scenarios/kids-telugu.json (P1-I18N): the director translates a kids comic
-// into Telugu (writer-class translator + linguist review with gloss), the edition is publishable, the
-// comic is then made natively Telugu for free, and a rerun makes no model call. Scripted model
-// replies only — no network, $0.
+// Golden scenario golden/scenarios/kids-telugu.json (P1-I18N): asked in chat, the director prices a Telugu
+// translation of a kids comic and the studio waits for one Approve; then it is translated (writer-class
+// translator + linguist review with gloss), the edition is publishable, the comic is then made natively
+// Telugu for free, and a rerun makes no model call. Scripted model replies only — no network, $0.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,8 @@ import { resetTranslationCalibration } from './index.js';
 interface Turn {
   say?: string;
   action?: StudioAction;
+  /** The user taps Approve on the open gate card. */
+  approve?: boolean;
   expectTools?: string[];
   director?: Array<{ text?: string; toolCalls?: { name: string; args: unknown }[] }>;
   translator?: Partial<{ json: unknown }>[];
@@ -31,7 +33,10 @@ interface Turn {
     publishable?: string[];
     glosses?: Record<string, string>;
     calls?: { translator?: number; linguist?: number };
+    /** The turn ends on an open Approve card for these languages (nothing has run). */
+    gate?: { reason: string; languages: string[] };
     spendKind?: string;
+    noSpendKind?: string;
     language?: string;
     lineText?: Record<string, string>;
     newSpendUsd?: number;
@@ -77,7 +82,11 @@ describe(`golden: ${scenario.name}`, () => {
       const ctx = testContext(session, { llm });
       const spendBefore = session.doc.spend.totalUsd;
       const before = session.doc.conversation.length;
-      if (turn.action) {
+      if (turn.approve) {
+        const gate = session.doc.gate;
+        expect(gate, `${label}: an open gate to approve`).toMatchObject({ status: 'open' });
+        await (await startAction(ctx, { type: 'approve_gate', gateId: gate!.id }, { confirmed: true, origin: 'user' })).done;
+      } else if (turn.action) {
         await (await startAction(ctx, turn.action, { confirmed: true, origin: 'user' })).done;
       } else {
         if (turn.expectTools?.length) {
@@ -98,7 +107,12 @@ describe(`golden: ${scenario.name}`, () => {
       for (const [id, gloss] of Object.entries(e.glosses || {})) expect(i18nOf(doc).editions.te?.lines[id]?.gloss, label).toBe(gloss);
       if (e.calls?.translator !== undefined) expect(llm.calls.filter((c) => c.role === 'translator'), label).toHaveLength(e.calls.translator);
       if (e.calls?.linguist !== undefined) expect(llm.calls.filter((c) => c.role === 'linguist'), label).toHaveLength(e.calls.linguist);
+      if (e.gate) {
+        expect(doc.gate, label).toMatchObject({ status: 'open', reason: e.gate.reason, action: { type: 'translate', languages: e.gate.languages } });
+        expect(fresh.flatMap((m) => m.cards || []).map((c) => c.type), label).toContain('gate');
+      }
       if (e.spendKind) expect(doc.spend.entries.some((s) => s.kind === e.spendKind), label).toBe(true);
+      if (e.noSpendKind) expect(doc.spend.entries.some((s) => s.kind === e.noSpendKind), label).toBe(false);
       if (e.language) expect(doc.format.language, label).toBe(e.language);
       for (const [id, text] of Object.entries(e.lineText || {})) expect(lineById(doc, id)?.text, label).toBe(text);
       if (e.newSpendUsd !== undefined) expect(doc.spend.totalUsd - spendBefore, label).toBeCloseTo(e.newSpendUsd, 6);

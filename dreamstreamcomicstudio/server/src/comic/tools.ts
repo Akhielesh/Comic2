@@ -108,6 +108,7 @@ import { addRefs } from './refs/index.js';
 import { recentCommitsOf } from './session.js';
 import { LINE_TARGET_SCHEMA, balloonAtPosition, blockedLineIds, commitGuarded, lineIdsOfOp, sanitizeLetteringOps, styleArgsToPatch } from './tools/lettering.js';
 import { MODEL_ASK_RE } from './tools/models.js';
+import { LANGUAGE_HINT_RE } from './tools/languageAsk.js';
 import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
@@ -2243,7 +2244,9 @@ export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
   lettering: new RegExp(String.raw`\b(?:${LETTERING_WORDS})\b|^(?![\s\S]*${PAGE_OBJECT})[\s\S]*\b(?:top|bottom|corners?)\b`, 'i'),
   timeline: /\b(move|swap|switch|insert|add (?:a|one|another) page|delete|remove (?:page|it)|duplicate|copy|versions?|undo|restore|earlier|previous|original|fit|square|book|back cover|title page)\b/i,
   publish: /\b(publish|share|link|unpublish|public|unlisted|readers?|post it|send (?:it|the link)|whats ?app|instagram)\b/i,
-  i18n: /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|portuguese|edition)\b|[\u0900-\u0DFF]/i,
+  // Every registry language by either name, translate / edition / glossary / subtitles / mother tongue, or another
+  // script: the one list in tools/languageAsk.ts, which the language group and the timeline's stand-down read too.
+  i18n: LANGUAGE_HINT_RE,
   refs: /\b(photos?|pictures?|images?|pics?|references?|refs?|selfie)\b/i,
   safety: /\b(rating|pg-?13|pg\b|safe|safety|gore|violent|violence|scary|horror|blood)\b/i,
   library: /\b(presets?|styles?|looks?|library)\b/i,

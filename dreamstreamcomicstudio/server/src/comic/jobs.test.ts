@@ -1847,6 +1847,31 @@ describe('feature spend handlers, caps and adoption', () => {
     expect(plain).toHaveBeenCalledTimes(1);
   });
 
+  it('the translation Approve card names its languages in words, never by code (Hindi and Tamil; Hindi, Tamil and Telugu)', async () => {
+    const run = vi.fn(async () => ({ outcome: { status: 'done' as const, message: 'Translated.' }, done: Promise.resolve() }));
+    const handler: ActionHandler = { type: 'translate', spend: true, estimate: async () => ({ usd: 0.4, imageCount: 0, model: 'translator', lines: [] }), run };
+    const gateFor = async (languages: string[]) => {
+      const doc = plannedDoc();
+      doc.settings.confirm = 'always';
+      const session = newSession(doc);
+      await runFeatureAction(testContext(session), handler, { type: 'translate', languages }, { confirmed: false });
+      return { gate: session.doc.gate!, text: session.doc.conversation.at(-1)!.text };
+    };
+    const two = await gateFor(['hi', 'ta']);
+    expect(two.gate.title).toBe('Translate into Hindi and Tamil?');
+    expect(two.gate.summary).toMatch(/^a translation into Hindi and Tamil · /);
+    const three = await gateFor(['hi', 'ta', 'te']);
+    expect(three.gate.title).toBe('Translate into Hindi, Tamil and Telugu?');
+    expect(three.gate.summary).toMatch(/^a translation into Hindi, Tamil and Telugu · /);
+    const one = await gateFor(['te']);
+    expect(one.gate.title).toBe('Translate into Telugu?');
+    // No language code reaches the card or the message beside it.
+    for (const { gate, text } of [two, three, one]) {
+      for (const shown of [gate.title, gate.summary, text]) expect(shown).not.toMatch(/\b(?:hi|ta|te)\b|\(/);
+    }
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('caps decide quality access when given: a tier the user lacks is blocked with a one-tap fix; allowed tiers run', async () => {
     const doc = plannedDoc();
     doc.settings.quality = 'pro';

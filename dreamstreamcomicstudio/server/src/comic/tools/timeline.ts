@@ -44,6 +44,7 @@ import { MAX_PAID_TEXT_PER_TURN, pushNextSteps, type DirectorTurn } from '../too
 import type { StudioContext } from '../types.js';
 import { runFitRender } from '../actions/timeline.js';
 import { costViewFor, governDollars } from '../costText.js';
+import { isLanguageAsk } from './i18n.js';
 
 // ── Pure helpers (exported for tests and summaries) ──────────────────────────
 
@@ -580,7 +581,10 @@ const hasVersions = (doc: ComicDoc) => versionedTargets(doc).length > 0;
 export const timelineToolGroup: ToolGroup = {
   id: 'timeline',
   priority: 30,
-  when: (ctx) => {
+  when: (ctx, turn) => {
+    // "Add Telugu and Hindi versions", "translate the book into Hindi": a language ask, not a page action. This group
+    // and the language tools cannot both fit in one turn, so it stands down and the director can translate.
+    if (isLanguageAsk(turn?.userText || '')) return false;
     const doc = ctx.session.doc;
     return doc.pages.length > 0 || trashOf(doc).length > 0 || hasVersions(doc);
   },
