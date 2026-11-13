@@ -12,6 +12,7 @@ import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemD
 import { projectHasComicDoc } from '../comic/store.js';
 import { bucketForPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
 import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, showsIn, shownPathsOf } from './publicReaderPaths.js';
+import { BUILD_INFO } from '../buildInfo.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
@@ -19,7 +20,6 @@ const SIGNED_URL_TTL_SECONDS = 60 * 30;
 const PRIVATE_SIGNED_URL_TTL_SECONDS = SIGNED_TTL_SEC.private;
 const STORAGE_PATH_MAX_LENGTH = 512;
 type SignedTransform = { width?: number; height?: number; quality?: number; format?: 'origin' };
-const SERVER_START_TIMESTAMP = new Date().toISOString();
 
 const resolveAppVersion = () => {
   if (process.env.APP_VERSION?.trim()) return process.env.APP_VERSION.trim();
@@ -33,17 +33,7 @@ const resolveAppVersion = () => {
 };
 
 const APP_VERSION = resolveAppVersion();
-// GIT_SHA / BUILD_TIMESTAMP are set by the deploy-api-proxy workflow. The RAILWAY_* / VERCEL_* / CF_PAGES_*
-// fallbacks stay so the same image still reports its build on those hosts.
-const GIT_SHA = process.env.GIT_SHA?.trim()
-  || process.env.RAILWAY_GIT_COMMIT_SHA?.trim()
-  || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
-  || process.env.CF_PAGES_COMMIT_SHA?.trim()
-  || 'unknown';
-const BUILD_TIMESTAMP = process.env.BUILD_TIMESTAMP?.trim()
-  || process.env.RAILWAY_DEPLOYMENT_TIMESTAMP?.trim()
-  || process.env.CF_PAGES_COMMIT_TIMESTAMP?.trim()
-  || SERVER_START_TIMESTAMP;
+const { gitSha: GIT_SHA, buildTimestamp: BUILD_TIMESTAMP } = BUILD_INFO;
 
 const parsePositiveInt = (value: unknown, min: number, max: number): number | undefined => {
   const normalized = typeof value === 'string' ? value : Array.isArray(value) ? value[0] : undefined;
@@ -409,6 +399,7 @@ systemRouter.get('/dashboard', requireAuth, requireAdmin, async (_req, res, next
 });
 
 systemRouter.get('/version', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     appVersion: APP_VERSION,
     gitSha: GIT_SHA,

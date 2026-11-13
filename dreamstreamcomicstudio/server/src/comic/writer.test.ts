@@ -453,6 +453,48 @@ describe('writePagePlan — long plans', () => {
     expect(out.costUsd).toBeCloseTo(0.04);
   });
 
+  it('keeps a shuffled numbered 20-page outline chronological across chunk handoffs', async () => {
+    // Synthetic racing beats: neither a production document nor a paid model response.
+    const beats = [
+      'The crew prepares the car.', 'The driver checks the tyres.', 'The grid forms.', 'The lights go out.',
+      'The car reaches the first corner.', 'Rain starts over the circuit.', 'The driver spots standing water.',
+      'The front wing strikes a kerb.', 'The driver reports the damage.', 'The crew calls for a pit stop.',
+      'The car enters the pit lane.', 'The crew replaces the broken wing.', 'Wet tyres are fitted.',
+      'The repaired car leaves the pits.', 'The driver rejoins behind the leader.', 'The rain eases.',
+      'The driver closes the gap.', 'The driver overtakes at the last corner.', 'The car crosses the finish line.',
+      'The team celebrates after the finish.'
+    ];
+    const doc = baseDoc((d) => { d.format.pageCount = beats.length; });
+    const chronological = beats.map((summary, i) => ({ n: i + 1, summary, turnHook: '', characters: ['Maya Rao'], place: 'Circuit' }));
+    // Exactly the right labels and count, but transport order crosses every five-page chunk boundary.
+    const shuffled = [6, 1, 11, 16, 2, 7, 12, 17, 3, 8, 13, 18, 4, 9, 14, 19, 5, 10, 15, 20].map((n) => chronological[n - 1]);
+    const { llm, calls } = scriptedLlm((req, user) => {
+      if (req.jsonSchema?.name === 'comic_page_outline') return { pages: shuffled, newCast: [] };
+      for (let i = 0; i < beats.length; i += 1) expect(user).toContain(`Page ${i + 1}: ${beats[i]}`);
+      const [, from, to] = /write pages (\d+)–(\d+)/.exec(user)!;
+      return { pages: chronological.slice(Number(from) - 1, Number(to)).map((entry) => rawPage(entry.n, [rawPanel({ action: entry.summary }), rawPanel({ n: 2, action: `The crew watches the result of beat ${entry.n}.` })], { summary: entry.summary })), newCast: [] };
+    });
+    const out = await writePagePlan({ doc, llm });
+    expect(out.pages.map((p) => p.summary)).toEqual(beats);
+    expect(calls).toHaveLength(5); // One outline plus four existing chunks, no repair or extra model calls.
+    expect(calls.slice(1).map((call) => /write pages (\d+–\d+)/.exec(String(call.messages[1].content))?.[1])).toEqual(['1–5', '6–10', '11–15', '16–20']);
+  });
+
+  it.each(['duplicate', 'missing'] as const)('keeps encounter order when outline page labels are %s', async (labels) => {
+    const doc = baseDoc((d) => { d.format.pageCount = 7; });
+    const pages = Array.from({ length: 7 }, (_, i) => ({ n: (i + 1) as number | undefined, summary: `Beat in position ${i + 1}`, turnHook: '', characters: [], place: '' }));
+    pages[0].n = labels === 'duplicate' ? 2 : undefined;
+    const { llm, calls } = scriptedLlm((req, user) => {
+      if (req.jsonSchema?.name === 'comic_page_outline') return { pages, newCast: [] };
+      for (let i = 0; i < pages.length; i += 1) expect(user).toContain(`Page ${i + 1}: Beat in position ${i + 1}`);
+      const [, from, to] = /write pages (\d+)–(\d+)/.exec(user)!;
+      return { pages: Array.from({ length: Number(to) - Number(from) + 1 }, (_, i) => rawPage(Number(from) + i, [rawPanel(), rawPanel({ n: 2, action: 'Maya looks back.' })])), newCast: [] };
+    });
+    const out = await writePagePlan({ doc, llm });
+    expect(out.pages.map((p) => p.n)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(calls).toHaveLength(3);
+  });
+
   it('rewrites many pages in chunks and keeps their ids', async () => {
     const doc = baseDoc((d) => {
       d.format.pageCount = 9;

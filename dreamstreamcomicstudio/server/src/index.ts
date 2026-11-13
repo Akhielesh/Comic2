@@ -1,6 +1,7 @@
 import 'dotenv/config'; // Load env vars before anything else
 import './services/sharpGuard.js'; // process-wide sharp.block on risky libvips loaders, before any module can decode
 import express from 'express';
+import { BUILD_INFO } from './buildInfo.js';
 import cors from 'cors';
 import compression from 'compression';
 
@@ -182,8 +183,9 @@ app.get('/api/health', (_req, res) => {
   const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
   // build: which commit is live (set by deploy-api-proxy.yml; the repo is public), so "is the
   // fix deployed?" is answerable from outside without container logs.
-  const build = String(process.env.GIT_SHA || '').slice(0, 12) || undefined;
-  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: process.env.BUILD_TIMESTAMP } : {}) });
+  const build = BUILD_INFO.gitSha === 'unknown' ? undefined : BUILD_INFO.gitSha.slice(0, 12);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant', ...(build ? { build, builtAt: BUILD_INFO.buildTimestamp } : {}) });
 });
 
 // Public routes
