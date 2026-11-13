@@ -267,8 +267,10 @@ describe('ImageDevelop waits for the art, then develops on the compositor', () =
   // runs for the slow step, cut to what is left of the develop. Under the skin's shorter entrances (develop 240 ms,
   // fast 100, slow 200) the plain sum would end at 300 ms, after the picture has finished developing.
   it.each([
-    ['outside the skin (the index.css defaults)', {}, { develop: 420, delay: 120, sheen: 300 }],
+    ['outside the skin (the fallbacks, pinned to index.css)', {}, { develop: 420, delay: 120, sheen: 300 }],
     ['under the skin (develop 240, fast 100, slow 200)', { '--ds-motion-enter-slow': '240ms', '--ds-motion-fast': '100ms', '--ds-motion-slow': '200ms' }, { develop: 240, delay: 100, sheen: 140 }],
+    // A fast step as long as the develop or longer: the sheen has no time left, and its delay is cut too.
+    ['a fast step longer than the develop (develop 240, fast 300)', { '--ds-motion-enter-slow': '240ms', '--ds-motion-fast': '300ms', '--ds-motion-slow': '200ms' }, { develop: 240, delay: 240, sheen: 0 }],
   ] as const)('the sheen ends with the develop, never after it (%s)', async (_label, tokens, want) => {
     const real = window.getComputedStyle.bind(window);
     vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {

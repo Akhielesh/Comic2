@@ -202,9 +202,10 @@ export const ImageDevelop: React.FC<ImageDevelopProps> = ({
     if (!developing) return;
     const duration = motionMs(box, '--ds-motion-enter-slow', revealTokenFallbacks['--ds-motion-enter-slow']);
     const easing = motionEase(box, '--ds-ease-enter', revealTokenFallbacks['--ds-ease-enter']);
-    // The sheen starts one fast step in and runs for the slow step, cut to what is left of the develop, so it
-    // never sweeps a picture that has already finished developing (the skin's entrances are shorter).
-    const sheenDelay = motionMs(box, '--ds-motion-fast', revealTokenFallbacks['--ds-motion-fast']);
+    // The sheen starts one fast step in (never later than the develop's end) and runs for the slow step, cut to
+    // what is left of the develop, so it never sweeps a picture that has already finished developing (the skin's
+    // entrances are shorter).
+    const sheenDelay = Math.min(motionMs(box, '--ds-motion-fast', revealTokenFallbacks['--ds-motion-fast']), duration);
     const sheenDuration = Math.max(0, Math.min(motionMs(box, '--ds-motion-slow', revealTokenFallbacks['--ds-motion-slow']), duration - sheenDelay));
     const animations = [
       playEntrance(layerRef.current, developKeyframes(), { duration, easing, fill: 'backwards' }),
