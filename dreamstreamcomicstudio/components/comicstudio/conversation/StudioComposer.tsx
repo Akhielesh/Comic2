@@ -73,6 +73,7 @@ import { QueuedMessages } from './QueuedMessages';
 import type { PendingAttachment, SendOptions } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { COMPOSE_EVENT, type ComposeRequest } from './composerBus';
+import type { ComicResearchResult } from '../../../shared/comic/research';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { isPhoneLayout } from '../mobile/formFactor';
 import { useFormFactor } from '../mobile/useFormFactor';
@@ -1128,6 +1129,14 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   // ── External requests (empty state, cards, board, shortcuts) ──────────────
 
+  const addResearch = useCallback((result: ComicResearchResult, file?: File) => {
+    const credit = [result.credit, result.license].filter(Boolean).join(' · ');
+    const context = `${file ? 'Visual reference' : 'Research source'}: ${result.title}${credit ? ` (${credit})` : ''}\n${result.source}${result.description ? `\n${result.description}` : ''}`;
+    setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${context}` : context);
+    if (file) void addFiles([file]);
+    setResearchOpen(false);
+  }, [addFiles]);
+
   useImperativeHandle(
     apiRef,
     () => ({
@@ -1142,6 +1151,11 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     if (inSheet) return; // the docked composer is the bus's one listener
     const onCompose = (e: Event) => {
       const req = ((e as CustomEvent<ComposeRequest>).detail || {}) as ComposeRequest;
+      if (req.research) {
+        // A download finishing after a comic switch must not attach to the new comic.
+        if (req.research.projectId !== doc?.id) return;
+        addResearch(req.research.result, req.research.file);
+      }
       if (typeof req.text === 'string') setText((prev) => (req.append && prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n${req.text}` : req.text!));
       if (req.hint !== undefined) setHint(req.hint || null);
       if (req.openPanel === 'format' || req.openPanel === 'style' || req.openPanel === 'quality') setPanel(req.openPanel);
@@ -1150,7 +1164,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
     };
     window.addEventListener(COMPOSE_EVENT, onCompose);
     return () => window.removeEventListener(COMPOSE_EVENT, onCompose);
-  }, [focusEnd, inSheet]);
+  }, [focusEnd, inSheet, doc?.id, addResearch]);
 
   useEffect(() => {
     if (inSheet) return;
@@ -1357,13 +1371,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           className="w-[min(28rem,calc(100vw-1.5rem))]"
         >
           <Suspense fallback={<p role="status" className="p-2 text-[13px]">Opening research…</p>}>
-            <ResearchPanel key={doc.id} projectId={doc.id} onAdd={(result, file) => {
-              const credit = [result.credit, result.license].filter(Boolean).join(' · ');
-              const context = `${file ? 'Visual reference' : 'Research source'}: ${result.title}${credit ? ` (${credit})` : ''}\n${result.source}${result.description ? `\n${result.description}` : ''}`;
-              setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${context}` : context);
-              if (file) void addFiles([file]);
-              setResearchOpen(false);
-            }} />
+            <ResearchPanel key={doc.id} projectId={doc.id} onAdd={addResearch} />
           </Suspense>
         </AdaptiveSheet>
       )}

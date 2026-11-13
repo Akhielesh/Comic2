@@ -837,6 +837,8 @@ export function summaryOf(card: Card, doc: ComicDoc, settle: CardSettle, cost?: 
       const head = list.length ? `${names(list, 2)} ${list.length === 1 ? 'edition' : 'editions'}` : 'Translation';
       return { text: `${head} · ${ready ? 'ready' : 'not finished'}`, tone: ready ? 'done' : 'plain' };
     }
+    case 'research':
+      return { text: `Research · ${clip(str(card.query), 120)}`, tone: 'plain' };
     case 'publish': {
       // Honest per mode: a declined unpublish leaves the comic published, a declined update keeps the old version.
       const words = PUBLISH_WORDS[card.mode] ?? PUBLISH_WORDS.publish;
