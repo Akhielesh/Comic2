@@ -270,7 +270,12 @@ pinned by `board/PageEditor.flagOff.test.tsx`).
     card projection, the full-state load on open and the save guards), `ComicsHeader` with its routing and lockup
     about +8 KB (App draws it on the comics host's sign-in, Privacy, Terms and Library), `App.tsx` +2 KB, the
     public-page recipes in `studioDesign.ts` +2 KB, and the token `WaitlistForm` −4 KB. All of it already ships on
-    production. The ceiling rose by the measured amount only, 306,000 → 310,950 B;
+    production. The ceiling rose by the measured amount only, 306,000 → 310,950 B. **Lead decision D17c:** those
+    numbers came from a build machine whose installed packages had drifted from the lockfile
+    (`@supabase/supabase-js` 2.95.3 installed, 2.118.0 locked). CI, which installs from the lockfile, measured the
+    same tree at 323,097 B (`index.html`) and 328,552 B (`live.html`): about 14.3 KB more on both entries. Production
+    already ships 2.118.0, so this is not growth from the release. The ceilings are re-pinned to the CI measurement
+    plus the same ~2 KB (325,300 and 330,850 B), and a ceiling is only ever set from a lockfile-exact build;
   - the ComicStudio chunk: 160,381 → 152,941 B gz, **−7.4 KB** (studioDesign moved into the eager chunks);
   - the ComicStudio route beyond the first load: 702,517 → 736,218 B gz, **+33.7 KB**, 62 → 72 files. Of the 82.6 KB of
     new rendered modules on the route, `editor/*` is 13.5 KB, compose 17.1 KB, `panelize/compose` 13.0 KB and settle
