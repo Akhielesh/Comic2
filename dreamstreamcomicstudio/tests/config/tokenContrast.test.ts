@@ -1408,7 +1408,7 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
   });
 });
 
-// ── The colour layer "Ink, Paper & Colour" (CL-6; critique H2-H4) ───────────────────────────────
+// ── The colour layer "Ink, Paper & Colour" (CL-6) ───────────────────────────────
 /**
  * Seven hues with a readable text step, an opaque soft tint and a solid each; the one label colour on a solid; two
  * washes; the studio accent; the comic's tint on a card. Measured in all six contexts like the rest of the layer.
@@ -1484,7 +1484,7 @@ describe('token contrast — the colour layer "Ink, Paper & Colour" (CL-6) in al
     expect(design.hueChip(7)).toBe('bg-[var(--ds-well-strong)] text-[var(--ds-ink)]');
   });
 
-  it('the label on a solid (critique H4): ≥ 4.5:1 where words are allowed (slots 1, 5, 6 in light; all seven in dark), ≥ 3:1 for an icon elsewhere', () => {
+  it('the label on a solid: ≥ 4.5:1 where words are allowed (slots 1, 5, 6 in light; all seven in dark), ≥ 3:1 for an icon elsewhere', () => {
     const all = measureLayer();
     expect(all.filter((p) => p.fg.startsWith('--ds-on-hue') && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`)).toEqual([]);
     expect([...design.HUE_SOLID_TEXT_SLOTS]).toEqual([1, 5, 6]);

@@ -154,8 +154,8 @@ leaf, sky: no ultramarine tile, so the one blue "create" button keeps its meanin
 solid, the status look-alike rule, ink and muted at the peak of each wash, the comic's tint across the clamp box, the
 studio accents), `chartRamps` (one hue, steps ≥ 0.06 L, the nearest step ≥ 2:1, a grey midpoint, equal arms),
 `colourUseGuard` (the rules above, over every app file's syntax tree), `dsColourSwitch` (the switch and the neutral
-block), `platformChunks` (`EAGER_CSS_GZ_CEILING`: every colour rule lands in the first-load stylesheet; Program 6's
-budget is +5 kB gzip of eager CSS in all), and the layout smoke's `@colour` budget (6 % strong colour at most on working
+block), `platformChunks` (`EAGER_CSS_GZ_CEILING`: every colour rule lands in the first-load stylesheet; the
+colour, motion and component work together stays within +5 kB gzip of eager CSS), and the layout smoke's `@colour` budget (6 % strong colour at most on working
 views; the floors in `tests/e2e/baselines/colourFloors.json`, landing 4 %, Library 3 %, empty 2 %, board 1 %, model
 picker 1 %, each `enforce: false` until the package named beside it reaches it). The specimen is
 `components/ds/specimens/ColourSpecimen.tsx` (QA scenes `colour-layer` and `ds-gallery`).

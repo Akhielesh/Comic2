@@ -95,14 +95,14 @@ const PRO_ONLY: ProOnly[] = [
 const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.html': 330_850 };
 
 /**
- * The first-load STYLESHEET ceiling per HTML entry (critique H5, CL-6): the gzip -9 bytes of the stylesheets the page
+ * The first-load STYLESHEET ceiling per HTML entry (CL-6): the gzip -9 bytes of the stylesheets the page
  * links in its <head> (`<link rel="stylesheet" href="/assets/….css">`), which every visitor downloads before first
- * paint. Every colour, motion, pattern and font rule lands there, and until R02 nothing measured it. Program 6's
- * budget for all its waves together is +5 kB gzip of eager CSS (and +2 kB of eager JS). Set from a lockfile-exact
+ * paint. Every colour, motion, pattern and font rule lands there, and until R02 nothing measured it. The colour,
+ * motion and component work together stays within +5 kB gzip of eager CSS (and +2 kB of eager JS). Set from a lockfile-exact
  * production build: CL-6 alone measured index.html 45,171 B and live.html 35,491 B (its base, 25d36fc7: 43,604 B and 35,491 B, so +1,567 B and +0 B: the
  * colour tokens in all four blocks, the off block and the new recipe utilities); the ceiling is that plus
  * 1 kB for zlib and build noise. The R02 integrator re-pins it on the merged R02 head (all four packages) the same
- * way. A rise beyond the noise is a reviewed change with the lead's decision named here.
+ * way. A rise beyond the noise is a reviewed change, with its reason named here.
  */
 export const EAGER_CSS_GZ_CEILING: Record<string, number> = { 'index.html': 46_195, 'live.html': 36_515 };
 

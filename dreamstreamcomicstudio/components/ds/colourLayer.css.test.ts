@@ -138,7 +138,7 @@ describe('the colour layer recipes compile and exist', () => {
     expect(design.HUE_FILL).toEqual(design.HUE_MARK.fill.slice(0, 5));
   });
 
-  it('every var()-derived colour-layer token is restated in all four token blocks, so a nested .dark panel or skin root recomputes it (critique M14)', () => {
+  it('every var()-derived colour-layer token is restated in all four token blocks, so a nested .dark panel or skin root recomputes it', () => {
     const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(parseRules(readFileSync(path.join(APP_ROOT, 'index.css'), 'utf8')));
     const derived = [...ROOT_TOKENS].filter(([k, v]) => /^--ds-(?:hue-\d-(?:soft|solid)|studio(?:-soft)?|art-(?:soft|edge)|wash-\w+)$/.test(k) && /var\(/.test(v)).map(([k]) => k);
     expect(derived.length).toBe(7 + 7 + 2 + 2 + 2);

@@ -1,5 +1,5 @@
 {
-  "comment": "The colour budget of the colour layer \"Ink, Paper & Colour\" (CL-6; critique H8). tests/e2e/layout.smoke.spec.ts @colour measures, on the real screen with every picture hidden, the share of the interface in strong colour (OKLCH chroma above chromaMin). Working views stay at or under ceiling.share. Each floor is the reviewer's minimum for a screen that should feel coloured; an entry with enforce:false is measured and reported (a test annotation) but never fails; flipping enforce to true is the only way a floor turns on, and it is done by the package or integrator named in switchedOnBy, once the screen reaches it.",
+  "comment": "The colour budget of the colour layer \"Ink, Paper & Colour\" (CL-6). tests/e2e/layout.smoke.spec.ts @colour measures, on the real screen with every picture hidden, the share of the interface in strong colour (OKLCH chroma above chromaMin). Working views stay at or under ceiling.share. Each floor is the minimum for a screen that should feel coloured; an entry with enforce:false is measured and reported (a test annotation) but never fails; flipping enforce to true is the only way a floor turns on, and it is done by the package or integrator named in switchedOnBy, once the screen reaches it.",
   "chromaMin": 0.1,
   "ceiling": {
     "share": 0.06,

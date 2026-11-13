@@ -149,7 +149,7 @@ describe('hue palette — mutation proofs (the gates bite)', () => {
   });
 });
 
-// ── CL-6: the chart order (critique H2) and the raised step (critique H3) ────────────────────────
+// ── CL-6: the chart order and the raised step ────────────────────────
 const KINDS: Array<CvdKind | undefined> = [undefined, 'protan', 'deutan', 'tritan'];
 /** The worst ΔE of all pairs of a set, over normal vision and the three simulated dichromacies. */
 function worstAllPairs(hexes: readonly string[]): { deltaE: number; pair: string } {
@@ -166,7 +166,7 @@ function worstAllPairs(hexes: readonly string[]): { deltaE: number; pair: string
 }
 const inChartOrder = (mode: PaletteMode) => CHART_HUE_ORDER.map((slot) => palette(mode)[slot - 1]);
 
-describe('hue palette — charts take the hues in CHART_HUE_ORDER (critique H2)', () => {
+describe('hue palette — charts take the hues in CHART_HUE_ORDER', () => {
   it('the order is ultramarine, magenta, leaf, sky, then orange, teal, violet: every slot once', () => {
     expect([...CHART_HUE_ORDER]).toEqual([1, 2, 6, 7, 3, 4, 5]);
     expect([...CHART_HUE_ORDER].sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
@@ -176,7 +176,7 @@ describe('hue palette — charts take the hues in CHART_HUE_ORDER (critique H2)'
     it(`${mode}: the first four of the chart order are ≥ 8 ΔE apart for ALL pairs, in normal, protan, deutan and tritan vision`, () => {
       const worst = worstAllPairs(inChartOrder(mode).slice(0, 4));
       expect(worst.deltaE, worst.pair).toBeGreaterThanOrEqual(8);
-      // The margins the critique measured: 8.9 light, 9.1 dark.
+      // The measured margins: 8.9 light, 9.1 dark.
       expect(worst.deltaE).toBeGreaterThan(mode === 'light' ? 8.8 : 9);
     });
 
@@ -197,7 +197,7 @@ describe('hue palette — charts take the hues in CHART_HUE_ORDER (critique H2)'
   });
 });
 
-describe('hue palette — the raised step is reported, never a plot surface (critique H3)', () => {
+describe('hue palette — the raised step is reported, never a plot surface', () => {
   /** Each context's raised step, painted over its page. */
   const raisedOf = (mode: PaletteMode) =>
     Object.entries(CASCADES)

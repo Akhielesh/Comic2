@@ -572,7 +572,7 @@ export const HUE_SLOTS = [1, 2, 3, 4, 5, 6, 7] as const;
 export type HueSlot = (typeof HUE_SLOTS)[number];
 export const HUE_NAMES = ['ultramarine', 'magenta', 'orange', 'teal', 'violet', 'leaf', 'sky'] as const;
 /**
- * The order chart series take the hues (critique H2): ultramarine, magenta, leaf, sky, then orange, teal, violet. Under
+ * The order chart series take the hues: ultramarine, magenta, leaf, sky, then orange, teal, violet. Under
  * deuteranopia magenta and teal are 1.1 ΔE apart, so the plain slot order fails; the first four here are the safest
  * four-set (worst all-pairs 8.9 ΔE light, 9.1 dark, over normal, protan, deutan and tritan vision). Five or more
  * series are always labelled. A chart mark may use slot 1: a chart mark is not a spark fill.

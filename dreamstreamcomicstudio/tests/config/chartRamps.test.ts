@@ -3,7 +3,7 @@
  * The chart ramps of the colour layer "Ink, Paper & Colour" (CL-6; docs/design/design-system.md § Colour layer), read
  * from index.css in all four contexts (default and Atlas, light and dark):
  *   - sequential --ds-chart-seq-1…6: one hue, lightness moving one way, every step ≥ 0.06 OKLab L from the next, and
- *     the step nearest the plot surface still ≥ 2:1 on it (critique H3: "every step checked on the plot surfaces");
+ *     the step nearest the plot surface still ≥ 2:1 on it (every step is checked on the plot surfaces);
  *   - diverging --ds-chart-div-1…7: an orange arm, a grey midpoint (chroma < 0.01), an ultramarine arm, the two arms
  *     equal within 0.01 L step for step, and the poles ≥ 20 ΔE apart under protanopia and deuteranopia (≥ 15 under
  *     tritanopia, which is rare: 19.5 in dark).
@@ -107,7 +107,7 @@ describe('chart ramps — diverging: grey midpoint, equal arms, poles apart for 
   }
 });
 
-describe('chart ramps — every step on every plot surface (critique H3)', () => {
+describe('chart ramps — every step on every plot surface', () => {
   it('the steps under 3:1 are exactly these (fills that always carry a value label or the table twin)', () => {
     const under: string[] = [];
     for (const [name, { blocks }] of Object.entries(CONTEXTS)) {

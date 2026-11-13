@@ -11,9 +11,9 @@
  * wherever the tokens are declared. Every other value, or none, leaves the pages untouched. Turning it off (or on
  * again) is a rebuild and a redeploy; no component changes.
  *
- * The brief named the switch "strip data-ds-colour from <html>"; the build MARKS the pages off instead, so a page that
- * forgets an attribute (live.html, the QA harness) still shows the colour the release ships, and the rollback reaches
- * every entry the build writes. The effect is the one the brief asks for.
+ * The build MARKS the pages off rather than stripping an "on" attribute, so a page that carries no attribute
+ * (live.html, the QA harness) still shows the colour the release ships, and the rollback reaches every entry the
+ * build writes.
  */
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

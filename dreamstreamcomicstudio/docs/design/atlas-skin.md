@@ -486,7 +486,7 @@ under this skin: 20 / 18 / 12 % light, 26 / 22 / 16 % dark) and `--ds-wash-empty
 art tint's card defaults `--ds-art-soft` / `--ds-art-edge` (derived inside `.ds-art-scope`). The build switch
 `VITE_DS_COLOUR=off` turns all of them neutral.
 
-**Offered to Atlas** (the owner asked for "the same colours" in Atlas; we never edit Atlas, the Atlas session decides):
+**Offered to Atlas** (the same colours in Atlas; we never edit Atlas, the Atlas session decides):
 `--hue-1…7` with the marks above, `--hue-N-text` and `--hue-N-soft` with the same values and rules (a tag is ink on the
 soft tint; coloured words only on slots 1, 5 and 7; a chart takes the hues in the order 1, 2, 6, 7, 3, 4, 5), and the
 studio accent sky for Atlas itself. Atlas's `--chart-1…5` stay its ink steps.

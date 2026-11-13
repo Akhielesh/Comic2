@@ -22,7 +22,7 @@
 // started at all (recorded from the first frame) and none in effect (with motion on, the entrances finish first).
 // A scene that crashes fails on its own; the scenes after it are still measured.
 //
-// Colour budget (CL-6, critique H8), `@colour`: the share of the interface in strong colour (OKLCH chroma > 0.10)
+// Colour budget (CL-6), `@colour`: the share of the interface in strong colour (OKLCH chroma > 0.10)
 // on the real screen, every picture hidden, read from tests/e2e/baselines/colourFloors.json: working views (the board,
 // the editor, the conversation) stay at or under the 6 % ceiling; each floor (landing 4 %, Library 3 %, empty screens
 // 2 %, board 1 %, model picker 1 %) is measured and reported, and FAILS only when its entry says enforce:true.
@@ -276,7 +276,7 @@ test.describe('pro scenes @smoke @pro', () => {
   }
 });
 
-// ── Colour budget (CL-6, critique H8) ─────────────────────────────────────────
+// ── Colour budget (CL-6) ─────────────────────────────────────────
 
 interface ColourScene {
   id: string;
