@@ -172,8 +172,9 @@ From `ARTIFACT_RENDERERS` (`ChatArtifacts.tsx:42-69`). Density-aware =
 ## Python runtime (the `code_exercise` playground)
 
 `CodePlayground.tsx` runs Python with Pyodide (CPython compiled to WebAssembly) in a Web Worker.
-**The runtime comes from our own origin, pinned by hash. Nothing is loaded from a CDN.** The owner's
-rule is that no unpinned third-party script may run in our origin; until 2026-11-12 the worker did
+**The runtime comes from our own origin, pinned by hash. Nothing is loaded from a CDN.** It is built
+and served the way the private voice model's engine is (`/ort/`, `voice-dictation.md`). The owner's
+rule is that no unpinned third-party script may run in our origin; until 2026-11-13 the worker did
 `importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js')`, so whatever that CDN
 served ran with the page's origin.
 
@@ -182,7 +183,7 @@ served ran with the page's origin.
 | The pin | `services/pyodideRuntime.ts` (`PYODIDE_RUNTIME_PIN`) | The version (314.0.0, Python 3.14) and, for each of the five files the browser loads, its SHA-256, size, content type and first bytes. |
 | Source | `node_modules/pyodide` | The same npm package the backend sandbox uses (`server/src/services/pyodideRunner.ts`), an exact version in `package.json`, locked by `package-lock.json`. Its files are byte-identical to the upstream 314.0.0 release. |
 | Build | `vite.config.ts` `pyodideRuntime()` | Copies exactly the pinned files to `dist/pyodide/<version>/`. **The build stops** if the installed version or any byte differs, and prints what is installed. Also serves the files in `vite dev` and `vite preview`. |
-| Edge | `functions/_middleware.ts` `servePyodideRuntime` | The only thing that answers under `/pyodide/`: a pinned file (first bytes checked, its own `Content-Type`, `immutable` caching, the hash as `ETag`, no CORS grant, `Cross-Origin-Resource-Policy: same-origin`) or a 404. Never the SPA's `index.html`. |
+| Edge | `functions/_middleware.ts` `servePyodideRuntime` | The only thing that answers under `/pyodide/`: a pinned file (first bytes checked, its own `Content-Type`, `immutable` caching, no CORS grant, `Cross-Origin-Resource-Policy: same-origin`) or a 404. Never the SPA's `index.html`. It is the voice engine's own serving code (`serveCheckedRuntimeFile`, shared with `/ort/`; `voice-dictation.md`). |
 | Runner | `services/pyRunner.ts` → `services/pyRunner.worker.ts` | A same-origin **module** worker (Vite builds it to `/assets/pyRunner.worker-<hash>.js`; no `blob:` URL). It imports `/pyodide/<version>/pyodide.mjs` and gives Pyodide every URL explicitly, so nothing falls back to Pyodide's default CDN. |
 | Licence | `scripts/licence-check.mjs`, `dist/THIRD-PARTY-NOTICES.txt` | The copied files count as browser code: the gate judges `pyodide` (MPL-2.0) by the browser rules and the notices list it. |
 

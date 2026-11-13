@@ -12,7 +12,8 @@
  *                      licence gate sees them as browser code and the notices list them
  *   dev / preview      serve the same files under the same contract as the Function
  *   the Pages Function serves only the pinned files (first bytes checked, own headers, no CORS grant) and
- *                      answers everything else under the folder with a 404 — never the SPA's index.html
+ *                      answers everything else under the folder with a 404 — never the SPA's index.html;
+ *                      it is the voice engine's own serving code (/ort/, tests/edge/voiceRuntime.test.ts)
  *   _headers/_routes   hold nothing that would serve or label the folder behind the Function's back (nor _redirects)
  *   the runner         is a same-origin module worker with no other origin in it; the page CSP needs nothing new
  *   the built site     (after `npm run build`; CI builds before it tests) carries exactly the pinned bytes
@@ -30,15 +31,19 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createOnRequest, mainCsp } from '../../functions/_middleware';
 import { buildCsp } from '../../functions/_shared/csp';
 import * as gate from '../../scripts/licence-check.mjs';
+import { ORT_CACHE_CONTROL, ORT_RESOURCE_POLICY, ORT_RUNTIME_PIN, PAGES_FILE_LIMIT_BYTES } from '../../services/dictation/ortRuntime';
 import {
   PYODIDE_FIRST_BYTES,
   PYODIDE_RUNTIME_BASE,
   PYODIDE_RUNTIME_CACHE_CONTROL,
   PYODIDE_RUNTIME_FILES,
   PYODIDE_RUNTIME_PIN,
+  PYODIDE_RUNTIME_RESOURCE_POLICY,
   PYODIDE_RUNTIME_ROOT,
   hasPyodideFirstBytes,
   isPyodideRuntimePath,
+  looksLikePyodideRuntimeFile,
+  pyodideContentType,
   pyodideRuntimeFileAt,
   pyodideRuntimePath,
   type PyodideRuntimeFileName,
@@ -89,7 +94,7 @@ describe('the pin (services/pyodideRuntime.ts)', () => {
       const pin = PIN.files[file];
       expect(pin.sha256, file).toMatch(/^[0-9a-f]{64}$/);
       // Cloudflare Pages refuses a file of 25 MiB or more (the largest here is the 9.6 MB WebAssembly module).
-      expect(pin.bytes, `${file} fits Pages`).toBeLessThan(25 * 1024 * 1024);
+      expect(pin.bytes, `${file} fits Pages`).toBeLessThan(PAGES_FILE_LIMIT_BYTES);
       expect(pin.starts.length, `${file} first bytes`).toBeGreaterThanOrEqual(4);
       expect(pin.starts.length).toBeLessThanOrEqual(PYODIDE_FIRST_BYTES);
       expect([...pin.starts].every((c) => c.charCodeAt(0) < 256), `${file}: one byte per character`).toBe(true);
@@ -174,6 +179,27 @@ describe('paths and first bytes', () => {
       expect(isPyodideRuntimePath(path), path).toBe(false);
     }
     expect(PYODIDE_RUNTIME_ROOT).toBe('/pyodide');
+  });
+
+  it('the byte check answers as soon as it can: no at the first wrong byte, yes at the last pinned one, "more" in between', () => {
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      const { starts } = PIN.files[file];
+      const real = installed(file);
+      expect(looksLikePyodideRuntimeFile(file, new Uint8Array(0)), `${file}: nothing yet`).toBeNull();
+      expect(looksLikePyodideRuntimeFile(file, new Uint8Array(0), true), `${file}: nothing at all`).toBe(false);
+      for (let n = 1; n < starts.length; n++) expect(looksLikePyodideRuntimeFile(file, real.subarray(0, n)), `${file}: ${n} right bytes`).toBeNull();
+      expect(looksLikePyodideRuntimeFile(file, real.subarray(0, starts.length - 1), true), `${file}: ends early`).toBe(false);
+      expect(looksLikePyodideRuntimeFile(file, real.subarray(0, starts.length)), `${file}: all of them`).toBe(true);
+      expect(looksLikePyodideRuntimeFile(file, real.subarray(0, PYODIDE_FIRST_BYTES)), file).toBe(true);
+      // One wrong byte decides at once, wherever it is, without waiting for more.
+      for (const at of [0, starts.length - 1]) {
+        const wrong = new Uint8Array(real.subarray(0, at + 1));
+        wrong[at] ^= 0xff;
+        expect(looksLikePyodideRuntimeFile(file, wrong), `${file}: wrong byte ${at}`).toBe(false);
+      }
+      expect(looksLikePyodideRuntimeFile(file, new TextEncoder().encode('<')), `${file}: a page`).toBe(false);
+      expect(pyodideContentType(file)).toBe(PIN.files[file].type);
+    }
   });
 
   it('the first bytes tell the real file from an HTML page, an empty body, or another file under its name', () => {
@@ -320,183 +346,202 @@ describe('the build stops unless the runtime is the pinned bytes (vite.config.ts
 });
 
 describe('vite dev / vite preview serve the folder under the same contract', () => {
-  const call = (read: (file: PyodideRuntimeFileName) => Buffer | null, url: string, method = 'GET') => {
-    const out = { status: 0, headers: {} as Record<string, string>, body: undefined as Buffer | string | undefined, passed: false };
+  type Reader = (file: PyodideRuntimeFileName) => Buffer | Error | null;
+  interface Answer {
+    status: number;
+    headers: Record<string, string>;
+    body: Buffer | string | undefined;
+    passed: boolean;
+  }
+  /** Run a connect middleware on one request and record what it answered (or that it passed the request on). */
+  const run = (mw: (req: IncomingMessage, res: ServerResponse, next: () => void) => void, url: string, method = 'GET'): Answer => {
+    const out: Answer = { status: 0, headers: {}, body: undefined, passed: false };
     const res = {
-      writeHead: (status: number, headers: Record<string, string>) => {
-        out.status = status;
-        out.headers = headers;
+      set statusCode(v: number) {
+        out.status = v;
+      },
+      setHeader: (name: string, value: string) => {
+        out.headers[name.toLowerCase()] = value;
       },
       end: (body?: Buffer | string) => {
         out.body = body;
       },
     } as unknown as ServerResponse;
-    pyodideRuntimeMiddleware(read)({ url, method } as IncomingMessage, res, () => {
+    mw({ url, method } as IncomingMessage, res, () => {
       out.passed = true;
     });
     return out;
   };
-  const fromPackage = (file: PyodideRuntimeFileName) => installed(file);
+  const call = (read: Reader, url: string, method = 'GET') => run(pyodideRuntimeMiddleware(read), url, method);
+  const fromPackage: Reader = (file) => installed(file);
+  /** The middleware a plugin hook registers, with the plugin resolved for `root` / `outDir`. */
+  const hooked = (hook: 'configureServer' | 'configurePreviewServer', opts: { root: string; outDir: string; pluginRoot?: string }) => {
+    const plugin = pyodideRuntime({ root: opts.pluginRoot ?? APP });
+    const errors: string[] = [];
+    (plugin.configResolved as (c: unknown) => void)({ command: 'serve', root: opts.root, base: '/', build: { outDir: opts.outDir }, logger: { error: (m: string) => errors.push(m) } });
+    let mw: Parameters<typeof run>[0] | null = null;
+    (plugin[hook] as (s: unknown) => void)({ middlewares: { use: (fn: typeof mw) => (mw = fn) } });
+    return { get: (url: string, method = 'GET') => run(mw!, url, method), errors };
+  };
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'pyodide-serve-'));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it('a pinned file: 200, its content type, immutable, the hash as validator, no CORS grant', () => {
+  it('a pinned file: 200, its content type, immutable, our origin only (no CORS grant)', () => {
     for (const file of PYODIDE_RUNTIME_FILES) {
       const res = call(fromPackage, `${pyodideRuntimePath(file)}?t=1`);
       expect(res.status, file).toBe(200);
       expect(res.headers).toEqual({
         'content-type': PIN.files[file].type,
         'cache-control': PYODIDE_RUNTIME_CACHE_CONTROL,
-        etag: `"${PIN.files[file].sha256}"`,
-        'x-content-type-options': 'nosniff',
         'cross-origin-resource-policy': 'same-origin',
+        'x-content-type-options': 'nosniff',
         'content-length': String(PIN.files[file].bytes),
       });
       expect(sha256(res.body as Buffer), file).toBe(PIN.files[file].sha256);
       expect(res.passed).toBe(false);
     }
     const head = call(fromPackage, pyodideRuntimePath('pyodide.asm.wasm'), 'HEAD');
-    expect([head.status, head.body]).toEqual([200, undefined]);
+    expect([head.status, head.body, head.headers['content-length']]).toEqual([200, undefined, String(PIN.files['pyodide.asm.wasm'].bytes)]);
   });
 
   it('anything else under the folder is a 404 here too — never passed on to the SPA fallback', () => {
-    for (const [url, method] of [['/pyodide', 'GET'], ['/pyodide/', 'GET'], [`/pyodide/${VERSION}/pyodide.js`, 'GET'], ['/pyodide/0.26.4/pyodide.mjs', 'GET'], [`/PYODIDE/${VERSION}/pyodide.mjs`, 'GET'], [pyodideRuntimePath('pyodide.mjs'), 'POST']] as const) {
-      const res = call(fromPackage, url, method);
-      expect([res.status, res.headers['content-type'], res.headers['cache-control'], res.body, res.passed], `${method} ${url}`).toEqual([404, 'text/plain; charset=utf-8', 'no-store', 'Not found', false]);
+    for (const url of ['/pyodide', '/pyodide/', `/pyodide/${VERSION}/pyodide.js`, '/pyodide/0.26.4/pyodide.mjs', `/PYODIDE/${VERSION}/pyodide.mjs`, `/pyodide/${VERSION}/numpy.whl`]) {
+      const res = call(fromPackage, url);
+      expect([res.status, res.headers['content-type'], res.headers['cache-control'], res.body, res.passed], url).toEqual([404, 'text/plain; charset=utf-8', 'no-store', 'Not found', false]);
     }
-    // A file that is missing, or is not the real one (the reader found nothing; an HTML page under its name).
+    // A pinned file the folder does not hold.
     expect(call(() => null, pyodideRuntimePath('pyodide.mjs')).status).toBe(404);
-    expect(call(() => Buffer.from(INDEX_HTML), pyodideRuntimePath('pyodide.mjs')).status).toBe(404);
+  });
+
+  it('a file whose bytes are not the pinned ones is never served: a 500 that carries none of them', () => {
+    for (const read of [() => new Error('integrity check failed'), () => Buffer.from(INDEX_HTML), () => Buffer.from('export default 666;')] as Reader[]) {
+      const res = call(read, pyodideRuntimePath('pyodide.mjs'));
+      expect([res.status, res.headers['content-type'], res.headers['cache-control']]).toEqual([500, 'text/plain; charset=utf-8', 'no-store']);
+      expect(String(res.body)).toBe('The Python runtime failed its integrity check and was not served. See the server log.');
+    }
   });
 
   it('every other path goes on to Vite untouched', () => {
-    for (const url of ['/', '/index.html', '/assets/pyRunner.worker-abc.js', '/qa/comic-qa.html?surface=kit&kit=python', '/pyodide.js']) {
+    for (const url of ['/', '/index.html', '/assets/pyRunner.worker-abc.js', '/qa/comic-qa.html?surface=kit&kit=python', '/pyodide.js', `/ort/${VERSION}/pyodide.mjs`]) {
       const res = call(fromPackage, url);
       expect([res.passed, res.status], url).toEqual([true, 0]);
     }
   });
+
+  it('dev serves the files straight from the package, and none of them once one byte is not pinned', () => {
+    const dev = hooked('configureServer', { root: APP, outDir: 'dist' });
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      const res = dev.get(pyodideRuntimePath(file));
+      expect(res.status, file).toBe(200);
+      expect(sha256(res.body as Buffer), file).toBe(PIN.files[file].sha256);
+    }
+    expect(dev.errors).toEqual([]);
+
+    const root = path.join(tmp, 'dev-flip');
+    const dir = path.join(root, 'node_modules/pyodide');
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['package.json', ...PYODIDE_RUNTIME_FILES]) cpSync(path.join(PKG_DIR, f), path.join(dir, f));
+    writeFileSync(path.join(dir, 'pyodide.mjs'), 'export const loadPyodide = () => 666;');
+    const bad = hooked('configureServer', { root, outDir: 'dist', pluginRoot: root });
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      const res = bad.get(pyodideRuntimePath(file));
+      expect(res.status, file).toBe(500);
+      expect(String(res.body), file).not.toContain('666');
+    }
+    // Said once, in the server log, with what to do.
+    expect(bad.errors).toHaveLength(1);
+    expect(bad.errors[0]).toContain('The Python runtime is not the pinned one');
+    expect(bad.get('/pyodide/0.26.4/pyodide.mjs').status, 'an unpinned path is still a 404').toBe(404);
+  });
+
+  it('preview serves the built files, each held to its pinned hash; a missing one is a 404, a changed one a 500', () => {
+    const out = path.join(tmp, 'preview');
+    const folder = path.join(out, 'pyodide', VERSION);
+    mkdirSync(folder, { recursive: true });
+    cpSync(path.join(PKG_DIR, 'pyodide-lock.json'), path.join(folder, 'pyodide-lock.json'));
+    writeFileSync(path.join(folder, 'pyodide.mjs'), 'export default 1;');
+    const preview = hooked('configurePreviewServer', { root: tmp, outDir: 'preview' });
+    const ok = preview.get(pyodideRuntimePath('pyodide-lock.json'));
+    expect([ok.status, ok.headers['content-type'], ok.headers['cache-control'], ok.headers['access-control-allow-origin']]).toEqual([200, PIN.files['pyodide-lock.json'].type, PYODIDE_RUNTIME_CACHE_CONTROL, undefined]);
+    expect(sha256(ok.body as Buffer)).toBe(PIN.files['pyodide-lock.json'].sha256);
+    const tampered = preview.get(pyodideRuntimePath('pyodide.mjs'));
+    expect(tampered.status, 'a file that is not the pinned runtime is never served').toBe(500);
+    expect(String(tampered.body)).not.toContain('export default 1;');
+    expect(preview.errors.join('\n')).toContain('integrity check failed');
+    const missing = preview.get(pyodideRuntimePath('pyodide.asm.wasm'));
+    expect([missing.status, missing.headers['content-type']]).toEqual([404, 'text/plain; charset=utf-8']);
+    expect(preview.get('/pyodide/0.26.4/pyodide.mjs').status).toBe(404);
+    expect(preview.get('/index.html').passed, 'other paths are passed on').toBe(true);
+  });
 });
 
-describe('the Pages Function is the only thing that serves /pyodide/ (functions/_middleware.ts servePyodideRuntime)', () => {
-  /** `bytes` as a stream of `size`-byte chunks. */
-  const streamOf = (bytes: Uint8Array, size: number) => {
-    let at = 0;
-    return new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (at >= bytes.length) return controller.close();
-        controller.enqueue(bytes.subarray(at, Math.min(bytes.length, at + size)));
-        at += size;
-      },
-    });
-  };
-
+describe('production: /pyodide/* goes through the middleware, never the SPA fallback (servePyodideRuntime)', () => {
+  const handler = createOnRequest({ streamHostOn: false });
+  const go = (url: string, next: () => Promise<Response>, init: { ua?: string; headers?: Record<string, string>; method?: string } = {}) =>
+    handler({ request: new Request(url, { method: init.method ?? 'GET', headers: { 'user-agent': init.ua ?? HUMAN, ...(init.headers ?? {}) } }), next, env: {} as never });
+  const fileUrl = (file: PyodideRuntimeFileName, origin = 'https://dreamstreamstudio.ai') => `${origin}${pyodideRuntimePath(file)}`;
+  const REAL = (file: PyodideRuntimeFileName) => new Uint8Array(installed(file));
   /**
-   * The Pages asset server as it behaves: a file it has comes back as a stream with ITS headers (a CORS grant for
-   * every origin, its own caching and validator); a path it does not have comes back as the SPA's index.html, 200.
+   * What the Pages asset server answers for a real file (seen with `wrangler pages dev`): its own content type (the
+   * .mjs as application/javascript), an ETag, revalidate-every-time caching, and the CORS grant it adds to every asset.
    */
-  const assetServer = (files: Record<string, Uint8Array>, chunk = 64 * 1024) =>
-    vi.fn(async (input: Request | string | URL) => {
-      const req = input instanceof Request ? input : new Request(String(input));
-      const bytes = files[new URL(req.url).pathname];
-      const headers = { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=0, must-revalidate', etag: '"pages-etag"' };
-      if (!bytes) return new Response(INDEX_HTML, { status: 200, headers: { ...headers, 'content-type': 'text/html; charset=utf-8' } });
-      return new Response(streamOf(bytes, chunk), { status: 200, headers: { ...headers, 'content-type': 'application/octet-stream' } });
-    });
-
-  const REAL = Object.fromEntries(PYODIDE_RUNTIME_FILES.map((f) => [pyodideRuntimePath(f), new Uint8Array(installed(f))]));
-
-  const setup = (files: Record<string, Uint8Array> = REAL, opts: { chunk?: number; noAssets?: boolean } = {}) => {
-    const handler = createOnRequest({ streamHostOn: true });
-    const next = vi.fn(async () => new Response(INDEX_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }));
-    const assets = assetServer(files, opts.chunk);
-    const go = (url: string, init: { ua?: string; headers?: Record<string, string>; method?: string } = {}) =>
-      handler({
-        request: new Request(url, { method: init.method ?? 'GET', headers: { 'user-agent': init.ua ?? HUMAN, ...(init.headers || {}) } }),
-        next,
-        env: opts.noAssets ? {} : { ASSETS: { fetch: assets } },
-      });
-    return { go, next, assets };
-  };
+  const assetHeaders = (file: string): Record<string, string> => ({
+    'content-type': file.endsWith('.wasm') ? 'application/wasm' : file.endsWith('.mjs') ? 'application/javascript' : file.endsWith('.json') ? 'application/json' : 'application/zip',
+    'cache-control': 'public, max-age=0, must-revalidate',
+    etag: '"a"',
+    'access-control-allow-origin': '*',
+  });
+  const fileFromAssets = (file: PyodideRuntimeFileName, init: { status?: number; headers?: Record<string, string>; body?: string | Uint8Array | null } = {}) =>
+    vi.fn(async () => new Response(init.body === undefined ? REAL(file) : init.body, { status: init.status ?? 200, headers: { ...assetHeaders(file), ...(init.headers ?? {}) } }));
+  /** What the Pages asset server answers for a path with NO file: the SPA's index.html with a 200 (`extra`: what a _headers rule might add). */
+  const spaFallback = (extra: Record<string, string> = {}) =>
+    vi.fn(async () => new Response(INDEX_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=0, must-revalidate', etag: '"index"', 'access-control-allow-origin': '*', ...extra } }));
   const bodyHash = async (res: Response) => sha256(new Uint8Array(await res.arrayBuffer()));
-  const expectRefused = async (res: Response, label: string, status = 404) => {
-    expect(res.status, label).toBe(status);
-    expect(res.headers.get('content-type'), label).toBe('text/plain; charset=utf-8');
-    expect(res.headers.get('cache-control'), label).toBe('no-store');
-    expect(res.headers.get('etag'), label).toBeNull();
-    expect(await res.text(), label).not.toMatch(/<html|<!doctype/i);
+  const expectNotFound = async (res: Response, what: string) => {
+    const body = await res.text();
+    expect({ status: res.status, type: res.headers.get('content-type'), cache: res.headers.get('cache-control'), html: /<!doctype html|<html/i.test(body) }, what).toEqual({
+      status: 404,
+      type: 'text/plain; charset=utf-8',
+      cache: 'no-store',
+      html: false,
+    });
   };
 
-  it('serves each pinned file whole, with its own headers — and none of the asset server’s', async () => {
-    const { go, next, assets } = setup();
+  it('serves each pinned file, whole, with its content type, immutable caching and nosniff', async () => {
     for (const file of PYODIDE_RUNTIME_FILES) {
-      const res = await go(`https://dreamstreamstudio.ai${pyodideRuntimePath(file)}`);
+      const next = fileFromAssets(file);
+      const res = await go(fileUrl(file), next);
+      expect(next).toHaveBeenCalledTimes(1);
       expect(res.status, file).toBe(200);
       expect(res.headers.get('content-type'), file).toBe(PIN.files[file].type);
       expect(res.headers.get('cache-control'), file).toBe('public, max-age=31536000, immutable');
-      expect(res.headers.get('etag'), file).toBe(`"${PIN.files[file].sha256}"`);
       expect(res.headers.get('cross-origin-resource-policy'), file).toBe('same-origin');
       expect(res.headers.get('x-content-type-options'), file).toBe('nosniff');
       expect(res.headers.get('strict-transport-security'), file).toMatch(/max-age=63072000/);
-      // The asset server's `*` grant is gone: another site cannot read the runtime from us.
-      for (const name of ['access-control-allow-origin', 'access-control-allow-credentials', 'access-control-expose-headers']) expect(res.headers.get(name), `${file} ${name}`).toBeNull();
-      // Not a page: no page CSP, no page Permissions-Policy.
+      expect(res.headers.get('etag'), 'the validator is kept').toBe('"a"');
+      // A file, not a page: no page CSP, no page Permissions-Policy.
       for (const name of ['content-security-policy', 'content-security-policy-report-only', 'permissions-policy']) expect(res.headers.get(name), `${file} ${name}`).toBeNull();
-      // Every byte arrives (the body is streamed past the first-bytes check, not rebuilt).
+      // Looking at the first bytes does not eat them: the browser gets the whole file (9.6 MB for the WebAssembly module).
       expect(await bodyHash(res), file).toBe(PIN.files[file].sha256);
     }
-    expect(assets).toHaveBeenCalledTimes(PYODIDE_RUNTIME_FILES.length);
-    expect(next).not.toHaveBeenCalled();
   });
 
-  it('asks the asset server for the whole file only: GET, no query, no Range, no conditional headers', async () => {
-    const { go, assets } = setup();
-    const url = `https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.asm.wasm')}`;
-    const res = await go(`${url}?cache=bust&x=1`, { headers: { range: 'bytes=100-200', 'if-modified-since': 'Wed, 21 Oct 2015 07:28:00 GMT', 'if-none-match': '"something-else"', cookie: 'a=b' } });
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-range')).toBeNull();
-    expect(await bodyHash(res)).toBe(PIN.files['pyodide.asm.wasm'].sha256);
-    const asked = assets.mock.calls[0][0] as Request;
-    expect(asked.url).toBe(url);
-    expect(asked.method).toBe('GET');
-    for (const name of ['range', 'if-modified-since', 'if-none-match', 'cookie', 'user-agent']) expect(asked.headers.get(name), name).toBeNull();
-    expect(asked.headers.get('accept-encoding')).toBe('identity');
-  });
-
-  it('finds the first bytes however the body is chunked (one byte at a time included)', async () => {
-    for (const chunk of [1, 3, 7, 4096]) {
-      const { go } = setup(REAL, { chunk });
-      // The lock file is small enough to stream a byte at a time; its first bytes span eight chunks then.
-      const res = await go(`https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide-lock.json')}`);
-      expect(res.status, `chunk ${chunk}`).toBe(200);
-      expect(await bodyHash(res), `chunk ${chunk}`).toBe(PIN.files['pyodide-lock.json'].sha256);
+  it('goes out to our own origin only: no CORS grant from the asset server is passed on', async () => {
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      const next = fileFromAssets(file, { headers: { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET', 'access-control-expose-headers': 'etag', 'access-control-allow-credentials': 'true' } });
+      const res = await go(fileUrl(file), next, { headers: { origin: 'https://elsewhere.example' } });
+      expect(res.status, file).toBe(200);
+      expect([...res.headers.keys()].filter((k) => k.startsWith('access-control-')), `${file}: no other site may import or fetch the runtime through CORS`).toEqual([]);
+      void res.body?.cancel();
     }
-  }, 30_000);
-
-  it('a missing file is a 404, not the index.html the asset server answers with — and never cacheable', async () => {
-    const { go, next } = setup({});
-    for (const file of PYODIDE_RUNTIME_FILES) await expectRefused(await go(`https://dreamstreamstudio.ai${pyodideRuntimePath(file)}`), file);
-    expect(next).not.toHaveBeenCalled();
+    const revalidated = await go(fileUrl('pyodide.mjs'), fileFromAssets('pyodide.mjs', { status: 304, body: null }), { headers: { 'if-none-match': '"a"' } });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get('access-control-allow-origin')).toBeNull();
+    expect(revalidated.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
   });
 
-  it('a file that is not the pinned one under the pinned name is a 404 (wrong first bytes, an asset-server error, a redirect, an empty body)', async () => {
-    // The WebAssembly module under the loader's name, and the loader under the module's.
-    const swapped = setup({ [pyodideRuntimePath('pyodide.mjs')]: REAL[pyodideRuntimePath('pyodide.asm.wasm')], [pyodideRuntimePath('pyodide.asm.wasm')]: REAL[pyodideRuntimePath('pyodide.mjs')] });
-    await expectRefused(await swapped.go(`https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.mjs')}`), 'wasm as the loader');
-    await expectRefused(await swapped.go(`https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.asm.wasm')}`), 'the loader as wasm');
-    await expectRefused(await setup({ [pyodideRuntimePath('python_stdlib.zip')]: new Uint8Array(0) }).go(`https://dreamstreamstudio.ai${pyodideRuntimePath('python_stdlib.zip')}`), 'empty');
-
-    const handler = createOnRequest({ streamHostOn: true });
-    const answer = (res: () => Response | Promise<Response>) =>
-      handler({ request: new Request(`https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.mjs')}`, { headers: { 'user-agent': HUMAN } }), next: async () => new Response(INDEX_HTML), env: { ASSETS: { fetch: async () => res() } } });
-    await expectRefused(await answer(() => new Response('gone', { status: 404 })), 'asset 404');
-    await expectRefused(await answer(() => new Response('oops', { status: 500 })), 'asset 500');
-    await expectRefused(await answer(() => new Response(null, { status: 308, headers: { location: '/pyodide/x' } })), 'asset redirect');
-    await expectRefused(await answer(() => new Response(null, { status: 304 })), 'asset 304');
-    await expectRefused(await answer(() => new Response(REAL[pyodideRuntimePath('pyodide.mjs')].subarray(100, 200), { status: 206 })), 'asset 206');
-    await expectRefused(await answer(() => Promise.reject(new Error('asset server down'))), 'asset server threw');
-  });
-
-  it('nothing else under the folder is served, and the asset server is not even asked', async () => {
-    const { go, next, assets } = setup();
-    for (const path of [
+  it('only the pinned files reach the asset server: anything else under the folder is a 404 without asking it', async () => {
+    for (const p of [
       '/pyodide',
       '/pyodide/',
       `/pyodide/${VERSION}`,
@@ -504,71 +549,107 @@ describe('the Pages Function is the only thing that serves /pyodide/ (functions/
       `/pyodide/${VERSION}/pyodide.js`,
       `/pyodide/${VERSION}/pyodide.mjs.map`,
       `/pyodide/${VERSION}/index.html`,
-      `/pyodide/${VERSION}/numpy-2.3.0-cp314-cp314-pyodide_2026_0_wasm32.whl`,
+      // One of Pyodide's optional packages (the lock file names them; none is shipped).
+      `/pyodide/${VERSION}/numpy-2.4.3-cp314-cp314-pyemscripten_2026_0_wasm32.whl`,
       `/pyodide/${VERSION}/sub/pyodide.mjs`,
       `/pyodide/${VERSION}/pyodide.mjs/`,
+      // An old tab after a deploy that moved to a new Pyodide, and the CDN's own layout.
       '/pyodide/0.26.4/pyodide.mjs',
       '/pyodide/v0.26.4/full/pyodide.js',
       '/pyodide/latest/pyodide.asm.wasm',
+      `/pyodide/${VERSION}-next/pyodide.mjs`,
+      // Whatever a static server might fold onto the folder.
       `/PYODIDE/${VERSION}/pyodide.mjs`,
       `/Pyodide/${VERSION}/pyodide.mjs`,
       `/%70yodide/${VERSION}/pyodide.mjs`,
       `/pyodide/${VERSION}/pyodide%2Emjs`,
       `//pyodide/${VERSION}/pyodide.mjs`,
     ]) {
-      await expectRefused(await go(`https://dreamstreamstudio.ai${path}`), path);
+      const next = spaFallback();
+      await expectNotFound(await go(`https://dreamstreamstudio.ai${p}`, next), p);
+      expect(next, p).not.toHaveBeenCalled();
     }
-    expect(assets).not.toHaveBeenCalled();
-    expect(next).not.toHaveBeenCalled();
   });
 
-  it('only GET and HEAD: anything else is a 405 that reads nothing; HEAD carries the headers and no body', async () => {
-    const { go, assets } = setup();
-    const url = `https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.mjs')}`;
-    for (const method of ['POST', 'PUT', 'DELETE', 'OPTIONS']) {
-      const res = await go(url, { method });
-      await expectRefused(res, method, 405);
-      expect(res.headers.get('allow'), method).toBe('GET, HEAD');
-      expect(res.headers.get('access-control-allow-origin'), `${method}: no preflight grant`).toBeNull();
+  it("a missing file (the asset server's SPA answer: index.html with a 200) is a plain 404 that nothing keeps", async () => {
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      const next = spaFallback();
+      await expectNotFound(await go(fileUrl(file), next), file);
+      expect(next).toHaveBeenCalledTimes(1);
     }
-    expect(assets).not.toHaveBeenCalled();
-    const head = await go(url, { method: 'HEAD' });
-    expect(head.status).toBe(200);
-    expect(head.headers.get('content-type')).toBe(PIN.files['pyodide.mjs'].type);
-    expect(head.headers.get('etag')).toBe(`"${PIN.files['pyodide.mjs'].sha256}"`);
-    expect(await head.text()).toBe('');
-    // HEAD is checked like GET: a missing file is a 404 for it too.
-    await expectRefused(await setup({}).go(url, { method: 'HEAD' }), 'HEAD of a missing file');
+    // Any other non-file answer too (a redirect, an error).
+    for (const status of [301, 308, 404, 405, 500]) {
+      const r = await go(fileUrl('pyodide.mjs'), async () => new Response(null, { status, headers: status < 400 ? { location: '/' } : {} }));
+      expect(r.status, String(status)).toBe(404);
+    }
   });
 
-  it('a browser that already holds the pinned bytes gets a 304 without the asset server being asked', async () => {
-    const { go, assets } = setup();
-    const url = `https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide.asm.wasm')}`;
-    const etag = `"${PIN.files['pyodide.asm.wasm'].sha256}"`;
-    for (const header of [etag, `W/${etag}`, `"other", ${etag}`]) {
-      const res = await go(url, { headers: { 'if-none-match': header } });
-      expect(res.status, header).toBe(304);
-      expect(res.headers.get('etag'), header).toBe(etag);
-      expect(res.headers.get('cache-control'), header).toBe('public, max-age=31536000, immutable');
-      expect(await res.text()).toBe('');
+  it('index.html is never the runtime, however the asset server labels it; nor is any other file under a pinned name', async () => {
+    for (const file of PYODIDE_RUNTIME_FILES) {
+      // A _headers rule can relabel the fallback page as the very type we would send.
+      await expectNotFound(await go(fileUrl(file), spaFallback({ 'content-type': PIN.files[file].type, 'cache-control': PYODIDE_RUNTIME_CACHE_CONTROL })), `${file} labelled ${PIN.files[file].type}`);
+      await expectNotFound(await go(fileUrl(file), spaFallback({ 'content-type': 'application/octet-stream' })), `${file} labelled application/octet-stream`);
+      await expectNotFound(await go(fileUrl(file), fileFromAssets(file, { body: '' })), `${file}: empty`);
+      await expectNotFound(await go(fileUrl(file), fileFromAssets(file, { body: REAL(file).subarray(0, PIN.files[file].starts.length - 1) })), `${file}: cut short`);
+      // Another pinned file under this one's name.
+      for (const other of PYODIDE_RUNTIME_FILES) {
+        if (other !== file) await expectNotFound(await go(fileUrl(file), fileFromAssets(file, { body: REAL(other).subarray(0, 4096) })), `${other} served as ${file}`);
+      }
     }
-    expect(assets).not.toHaveBeenCalled();
-    // Another file's hash, the asset server's own validator or a bare `*` is not a copy we served: the whole file again.
-    for (const header of [`"${PIN.files['pyodide.mjs'].sha256}"`, '"pages-etag"', '*', PIN.files['pyodide.asm.wasm'].sha256]) expect((await go(url, { headers: { 'if-none-match': header } })).status, header).toBe(200);
-    // And a validator never rescues a path that is not a pinned file.
-    await expectRefused(await go('https://dreamstreamstudio.ai/pyodide/0.26.4/pyodide.asm.wasm', { headers: { 'if-none-match': etag } }), 'unpinned path with our etag');
+    // Stricter than "not a page": a module that is not the pinned loader, JSON that is not the lock file.
+    await expectNotFound(await go(fileUrl('pyodide.mjs'), fileFromAssets('pyodide.mjs', { body: 'export const loadPyodide = () => 666;' })), 'another module as the loader');
+    await expectNotFound(await go(fileUrl('pyodide-lock.json'), fileFromAssets('pyodide-lock.json', { body: '{"error":"gone"}' })), 'other JSON as the lock file');
+    await expectNotFound(await go(fileUrl('pyodide.mjs'), fileFromAssets('pyodide.mjs', { body: `﻿ \n<!doctype html><html></html>` })), 'html after a byte-order mark');
   });
 
-  it('is files, not a page: served to automated browsers and AI agents like /assets/* (no check-in redirect), on every host that serves the app', async () => {
-    const { go, next } = setup();
-    const path = pyodideRuntimePath('pyodide.mjs');
-    for (const ua of ['Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/131.0.0.0 Safari/537.36', 'Mozilla/5.0 (compatible; GPTBot/1.2)']) {
-      const res = await go(`https://dreamstreamstudio.ai${path}`, { ua });
+  it('a file split into tiny network chunks is still recognised and still arrives whole', async () => {
+    for (const file of ['pyodide.mjs', 'pyodide.asm.wasm'] as const) {
+      // One byte at a time for the first kilobyte (the first bytes span many chunks), then the rest.
+      const whole = REAL(file);
+      const dribble = () =>
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            for (const b of whole.subarray(0, 1024)) c.enqueue(new Uint8Array([b]));
+            c.enqueue(whole.subarray(1024));
+            c.close();
+          },
+        });
+      const res = await go(fileUrl(file), async () => new Response(dribble(), { headers: assetHeaders(file) }));
+      expect(res.status, file).toBe(200);
+      expect(await bodyHash(res), file).toBe(PIN.files[file].sha256);
+    }
+  });
+
+  it('answers that carry no readable start of the file (HEAD, a later byte range, a compressed body) pass on the asset server’s word, never as HTML', async () => {
+    const head = await go(fileUrl('pyodide.asm.wasm'), fileFromAssets('pyodide.asm.wasm', { body: null }), { method: 'HEAD' });
+    expect([head.status, head.headers.get('content-type'), head.headers.get('cache-control')]).toEqual([200, 'application/wasm', 'public, max-age=31536000, immutable']);
+    const htmlHead = await go(fileUrl('pyodide.asm.wasm'), async () => new Response(null, { headers: { 'content-type': 'text/html; charset=utf-8' } }), { method: 'HEAD' });
+    expect(htmlHead.status).toBe(404);
+    // A resumed download: bytes from the middle of the real file.
+    const tail = await go(fileUrl('python_stdlib.zip'), fileFromAssets('python_stdlib.zip', { status: 206, body: new Uint8Array([9, 9, 9, 9]), headers: { 'content-range': 'bytes 4-7/8' } }), { headers: { range: 'bytes=4-' } });
+    expect([tail.status, tail.headers.get('content-range'), tail.headers.get('content-type')]).toEqual([206, 'bytes 4-7/8', 'application/zip']);
+    // A range from byte 0 does carry the start, so it is checked like a whole file.
+    const badStart = await go(fileUrl('python_stdlib.zip'), fileFromAssets('python_stdlib.zip', { status: 206, body: '<!DO', headers: { 'content-range': 'bytes 0-3/1024' } }), { headers: { range: 'bytes=0-3' } });
+    expect(badStart.status).toBe(404);
+    const goodStart = await go(fileUrl('python_stdlib.zip'), fileFromAssets('python_stdlib.zip', { status: 206, body: REAL('python_stdlib.zip').subarray(0, 64), headers: { 'content-range': `bytes 0-63/${PIN.files['python_stdlib.zip'].bytes}` } }), { headers: { range: 'bytes=0-63' } });
+    expect(goodStart.status).toBe(206);
+    // Compressed bytes say nothing about the file's own: the status and the label decide, and an HTML label still loses.
+    const gz = await go(fileUrl('pyodide.asm.mjs'), fileFromAssets('pyodide.asm.mjs', { body: new Uint8Array([0x1f, 0x8b, 8, 0]), headers: { 'content-encoding': 'gzip' } }));
+    expect([gz.status, gz.headers.get('content-encoding')]).toEqual([200, 'gzip']);
+    const gzHtml = await go(fileUrl('pyodide.asm.mjs'), async () => new Response(new Uint8Array([0x1f, 0x8b, 8, 0]), { headers: { 'content-type': 'text/html', 'content-encoding': 'gzip' } }));
+    expect(gzHtml.status).toBe(404);
+  });
+
+  it('is files, not a page: an automated browser or an AI agent gets the file like /assets/* (no check-in), and the 404 for anything else', async () => {
+    for (const ua of ['Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36', 'Mozilla/5.0 (compatible; GPTBot/1.2)']) {
+      const res = await go(fileUrl('pyodide.mjs'), fileFromAssets('pyodide.mjs'), { ua });
       expect(res.status, ua).toBe(200);
       expect(res.headers.get('location'), ua).toBeNull();
-      // …and the same client still gets the 404 for anything else there, not the check-in.
-      await expectRefused(await go('https://dreamstreamstudio.ai/pyodide/0.26.4/pyodide.js', { ua }), ua);
+      await expectNotFound(await go('https://dreamstreamstudio.ai/pyodide/0.26.4/pyodide.js', spaFallback(), { ua }), ua);
     }
+  });
+
+  it('every host that serves the app serves it; the hosts that only redirect still only redirect', async () => {
     const hosts: [string, Record<string, string>][] = [
       ['https://dreamstreamstudio.ai', {}],
       ['https://stream.dreamstreamstudio.ai', {}],
@@ -578,37 +659,45 @@ describe('the Pages Function is the only thing that serves /pyodide/ (functions/
       ['http://localhost:8788', {}],
     ];
     for (const [origin, headers] of hosts) {
-      const res = await go(`${origin}${path}`, { headers });
+      const res = await go(fileUrl('pyodide-lock.json', origin), fileFromAssets('pyodide-lock.json'), { headers });
       expect(res.status, origin).toBe(200);
-      expect(await bodyHash(res), origin).toBe(PIN.files['pyodide.mjs'].sha256);
-      await expectRefused(await go(`${origin}/pyodide/${VERSION}/nope.mjs`, { headers }), `${origin} missing`);
+      expect(await bodyHash(res), origin).toBe(PIN.files['pyodide-lock.json'].sha256);
+      const next = spaFallback();
+      await expectNotFound(await go(`${origin}/pyodide/${VERSION}/nope.mjs`, next, { headers }), `${origin} missing`);
+      expect(next).not.toHaveBeenCalled();
     }
     // The stream host serves live.html for every PAGE; a runtime path there is never that page.
-    expect((await go('https://stream.dreamstreamstudio.ai/pyodide/')).status).toBe(404);
-    // The hosts that only redirect still only redirect (one site, one sign-in).
-    const www = await go(`https://www.dreamstreamstudio.ai${path}`);
-    expect([www.status, www.headers.get('location')]).toEqual([301, `https://dreamstreamstudio.ai${path}`]);
+    await expectNotFound(await go('https://stream.dreamstreamstudio.ai/pyodide/', spaFallback()), 'stream host folder');
+    const next = fileFromAssets('pyodide.mjs');
+    const www = await go(fileUrl('pyodide.mjs', 'https://www.dreamstreamstudio.ai'), next);
+    expect([www.status, www.headers.get('location')]).toEqual([301, fileUrl('pyodide.mjs')]);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('without the ASSETS binding it falls back to next(), under the same checks', async () => {
-    const handler = createOnRequest({ streamHostOn: true });
-    const request = () => new Request(`https://dreamstreamstudio.ai${pyodideRuntimePath('pyodide-lock.json')}`, { headers: { 'user-agent': HUMAN } });
-    const real = await handler({ request: request(), next: async () => new Response(REAL[pyodideRuntimePath('pyodide-lock.json')], { headers: { 'access-control-allow-origin': '*' } }), env: {} });
-    expect(real.status).toBe(200);
-    expect(real.headers.get('access-control-allow-origin')).toBeNull();
-    expect(await bodyHash(real)).toBe(PIN.files['pyodide-lock.json'].sha256);
-    await expectRefused(await handler({ request: request(), next: async () => new Response(INDEX_HTML, { headers: { 'content-type': 'text/html' } }), env: {} }), 'next() answered with the app');
+  it('is served by the same code, with the same caching and resource policy, as the voice engine', async () => {
+    expect(PYODIDE_RUNTIME_CACHE_CONTROL).toBe(ORT_CACHE_CONTROL);
+    expect(PYODIDE_RUNTIME_RESOURCE_POLICY).toBe(ORT_RESOURCE_POLICY);
+    const source = app('functions/_middleware.ts');
+    // Both folders end in the one checked passthrough; neither serves a response on its own.
+    expect(source.match(/return serveCheckedRuntimeFile\(next, \{/g)).toHaveLength(2);
+    expect(source).toMatch(/if \(isOrtRuntimePath\(url\.pathname\)\) return secured\(serveOrtRuntime\(url, next\)\);\s*\n\s*\/\/[^\n]*\n\s*if \(isPyodideRuntimePath\(url\.pathname\)\) return secured\(servePyodideRuntime\(url, next\)\);/);
+    // The voice engine still answers (its own suite, tests/edge/voiceRuntime.test.ts, holds the rest).
+    const wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    const ort = await go(`https://dreamstreamstudio.ai/ort/${ORT_RUNTIME_PIN.version}/ort-wasm-simd-threaded.wasm`, async () => new Response(wasm, { headers: { 'content-type': 'application/wasm', 'access-control-allow-origin': '*' } }));
+    expect([ort.status, ort.headers.get('content-type'), ort.headers.get('cache-control'), ort.headers.get('access-control-allow-origin')]).toEqual([200, 'application/wasm', ORT_CACHE_CONTROL, null]);
+    // A Python file name under the voice folder, or the other way round, is neither.
+    await expectNotFound(await go(`https://dreamstreamstudio.ai/ort/${ORT_RUNTIME_PIN.version}/pyodide.asm.wasm`, spaFallback()), 'pyodide file under /ort');
+    await expectNotFound(await go(`https://dreamstreamstudio.ai/pyodide/${VERSION}/ort-wasm-simd-threaded.wasm`, spaFallback()), 'ort file under /pyodide');
   });
 
   it('pages are untouched: the app still gets its page, its headers and its gate', async () => {
-    const { go, next } = setup();
-    const page = await go('https://dreamstreamstudio.ai/');
+    const next = vi.fn(async () => new Response(INDEX_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    const page = await go('https://dreamstreamstudio.ai/', next);
     expect(page.status).toBe(200);
     expect(await page.text()).toBe(INDEX_HTML);
     expect(page.headers.get('content-security-policy-report-only')).toContain("default-src 'self'");
     expect(next).toHaveBeenCalledTimes(1);
-    const agent = await go('https://dreamstreamstudio.ai/', { ua: 'Mozilla/5.0 (compatible; GPTBot/1.2)' });
+    const agent = await go('https://dreamstreamstudio.ai/', next, { ua: 'Mozilla/5.0 (compatible; GPTBot/1.2)' });
     expect(agent.status).toBe(302);
   });
 });
@@ -799,11 +888,12 @@ describe.skipIf(!BUILT)('the built site (dist/)', () => {
       },
     };
     const handler = createOnRequest({ streamHostOn: true });
-    const get = (pathname: string) => handler({ request: new Request(`https://dreamstreamstudio.ai${pathname}`, { headers: { 'user-agent': HUMAN } }), next: () => assets.fetch(`https://dreamstreamstudio.ai${pathname}`), env: { ASSETS: assets } });
+    const get = (pathname: string) => handler({ request: new Request(`https://dreamstreamstudio.ai${pathname}`, { headers: { 'user-agent': HUMAN } }), next: () => assets.fetch(`https://dreamstreamstudio.ai${pathname}`), env: {} as never });
     for (const file of PYODIDE_RUNTIME_FILES) {
       const res = await get(pyodideRuntimePath(file));
       expect(res.status, file).toBe(200);
       expect(res.headers.get('content-type'), file).toBe(PIN.files[file].type);
+      expect(res.headers.get('cache-control'), file).toBe(PYODIDE_RUNTIME_CACHE_CONTROL);
       expect(res.headers.get('access-control-allow-origin'), file).toBeNull();
       expect(sha256(new Uint8Array(await res.arrayBuffer())), file).toBe(PIN.files[file].sha256);
     }

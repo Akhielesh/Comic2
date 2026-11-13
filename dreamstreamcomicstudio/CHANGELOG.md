@@ -387,7 +387,7 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
-- **Python in chat runs on our own copy of the runtime (2026-11-12):** the code playground's
+- **Python in chat runs on our own copy of the runtime (2026-11-13):** the code playground's
   Python engine (Pyodide) used to be downloaded from a public CDN each time. It now comes from
   DreamStream itself, a fixed version whose every file is checked against a recorded fingerprint
   when the site is built, so nobody else can change what runs. Python is now 3.14. The first Run

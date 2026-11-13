@@ -6,12 +6,13 @@
 // from /pyodide/<version>/ — the files `pyodideRuntime()` (vite.config.ts) copied from the `pyodide` npm
 // package after checking each against PYODIDE_RUNTIME_PIN (services/pyodideRuntime.ts). `vite preview`
 // serves them here under the same contract as the Pages Function (functions/_middleware.ts
-// servePyodideRuntime; tests/edge/pyodideRuntime.test.ts covers that one).
+// servePyodideRuntime; tests/edge/pyodideRuntime.test.ts covers that one). The same design as the voice
+// engine's /ort/ folder (studio.dictation.spec.ts).
 //
 //   1. Python really runs, and EVERY request the page and its worker make while it loads and runs is to
 //      this origin: nothing to cdn.jsdelivr.net (where the runtime used to come from) or any other host.
 //   2. What the worker loaded is exactly the pinned files, each with its pinned content type, immutable
-//      caching, the hash as its validator and no CORS grant — and the bytes hash to the pin.
+//      caching and no CORS grant — and the bytes hash to the pin.
 //   3. Anything else under the folder is a 404, never the app's index.html.
 //   4. A package the program asks Pyodide for (numpy) is looked for in this folder only — a 404 here, never a
 //      download from another host: the optional packages are not shipped.
@@ -66,7 +67,7 @@ test.describe('the Python playground loads its runtime from our origin only', ()
       const headers = res!.headers();
       expect(headers['content-type'], file).toBe(pin.type);
       expect(headers['cache-control'], file).toBe(PYODIDE_RUNTIME_CACHE_CONTROL);
-      expect(headers.etag, file).toBe(`"${pin.sha256}"`);
+      expect(headers['cross-origin-resource-policy'], file).toBe('same-origin');
       expect(headers['x-content-type-options'], file).toBe('nosniff');
       expect(headers['access-control-allow-origin'], `${file}: no CORS grant`).toBeUndefined();
     }

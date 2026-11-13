@@ -19,6 +19,9 @@
  *            the SPA's index.html. public/_headers holds no rule for the folder and
  *            public/_routes.json must not exclude it (tests/edge/pyodideRuntime.test.ts).
  *
+ * The same design as the private voice model's engine (services/dictation/ortRuntime.ts, /ort/),
+ * and at the edge the very same code: both folders go through serveCheckedRuntimeFile.
+ *
  * This module is dependency-free on purpose: the worker, the Vite config, the Pages Function and
  * the tests all import it.
  *
@@ -139,34 +142,33 @@ export function pyodideRuntimeFileAt(pathname: string): PyodideRuntimeFileName |
 }
 
 /**
- * Do these bytes begin the way the pinned file does? This is what tells the real file from an
- * HTML fallback page (a static host answers a missing file with index.html and status 200) or
- * from the wrong file under the right name. The full SHA-256 is checked when the site is built.
+ * Do these leading bytes belong to the pinned file? `true` once they match its whole `starts`,
+ * `false` at the first byte that differs, and `null` while they match so far but more are needed
+ * (pass `final` when there are no more: the answer is then yes or no). This is what tells the real
+ * file from an HTML fallback page (a static host answers a missing file with index.html and status
+ * 200) or from another file under the right name. The whole SHA-256 is checked when the site is
+ * built. Same contract as looksLikeOrtRuntimeFile (services/dictation/ortRuntime.ts).
  */
-export function hasPyodideFirstBytes(file: PyodideRuntimeFileName, bytes: Uint8Array): boolean {
+export function looksLikePyodideRuntimeFile(file: PyodideRuntimeFileName, head: Uint8Array, final = false): boolean | null {
   const { starts } = PYODIDE_RUNTIME_PIN.files[file];
-  if (bytes.length < starts.length) return false;
-  for (let i = 0; i < starts.length; i++) if (bytes[i] !== starts.charCodeAt(i)) return false;
-  return true;
+  const n = Math.min(head.length, starts.length);
+  for (let i = 0; i < n; i++) if (head[i] !== starts.charCodeAt(i)) return false;
+  if (head.length >= starts.length) return true;
+  return final ? false : null;
 }
 
-/** The validator the edge sends: the pinned hash, so a cached copy revalidates without a download. */
-export const pyodideRuntimeEtag = (file: PyodideRuntimeFileName): string => `"${PYODIDE_RUNTIME_PIN.files[file].sha256}"`;
+/** The yes-or-no form, for bytes that are all there (a file read from disk). */
+export const hasPyodideFirstBytes = (file: PyodideRuntimeFileName, bytes: Uint8Array): boolean => looksLikePyodideRuntimeFile(file, bytes, true) === true;
 
-/** A year, never revalidated: the path carries the version, the bytes under it never change. */
-export const PYODIDE_RUNTIME_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+/** The Content-Type a pinned file is served with. */
+export const pyodideContentType = (file: PyodideRuntimeFileName): string => PYODIDE_RUNTIME_PIN.files[file].type;
 
 /**
- * The headers every server of a pinned file sends (the Pages Function, `vite dev`,
- * `vite preview`), written from scratch — no Access-Control-Allow-Origin, so the asset server's
- * `*` grant is gone: the files are for our own pages, not a CDN for other sites.
+ * The headers every runtime file is served with: functions/_middleware.ts and the Vite servers set
+ * them, on files they have checked. A year, never revalidated (the path carries the version, the
+ * bytes under it never change), and for our own pages only: no CORS grant is sent, and
+ * Cross-Origin-Resource-Policy stops other sites loading the files without CORS. The same values
+ * as the voice engine's (ORT_CACHE_CONTROL, ORT_RESOURCE_POLICY; a test keeps them equal).
  */
-export function pyodideRuntimeHeaders(file: PyodideRuntimeFileName): Record<string, string> {
-  return {
-    'content-type': PYODIDE_RUNTIME_PIN.files[file].type,
-    'cache-control': PYODIDE_RUNTIME_CACHE_CONTROL,
-    etag: pyodideRuntimeEtag(file),
-    'x-content-type-options': 'nosniff',
-    'cross-origin-resource-policy': 'same-origin',
-  };
-}
+export const PYODIDE_RUNTIME_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+export const PYODIDE_RUNTIME_RESOURCE_POLICY = 'same-origin';

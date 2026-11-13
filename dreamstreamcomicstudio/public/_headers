@@ -46,11 +46,21 @@
 /theme-boot.js
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
-# The Python runtime (/pyodide/<version>/*, the chat's code playground): NO rule here, on purpose.
-# functions/_middleware.ts (servePyodideRuntime) is the only thing that serves that folder, and it
-# sets Content-Type and Cache-Control itself. Pages applies this file to the index.html it answers a
-# missing file with, so a rule here would label that fallback page "immutable" for a year.
-# tests/edge/pyodideRuntime.test.ts fails on one (and on an exclude for the folder in _routes.json).
+# NO RULE FOR /ort HERE, on purpose. The private voice model's engine (the ONNX runtime,
+# services/dictation/ortRuntime.ts) is built into /ort/<onnxruntime-web version>/ by vite.config.ts and
+# served through functions/_middleware.ts (public/_routes.json does not exclude /ort/*), which sets its
+# Content-Type, immutable Cache-Control and Cross-Origin-Resource-Policy itself, on a file it has checked.
+# Pages applies THIS file to whatever its asset server answers for a path, the SPA fallback (index.html,
+# HTTP 200) included, before the Function sees it. A Content-Type rule here once made index.html come
+# back labelled as JavaScript / WebAssembly for a missing engine file, and a Cache-Control rule would
+# mark that page immutable for a year. tests/edge/voiceRuntime.test.ts fails on any rule that matches an
+# /ort path and names Content-Type, Cache-Control or Access-Control-Allow-Origin.
+
+# NO RULE FOR /pyodide HERE either, for the same reason. The chat's Python runtime (Pyodide,
+# services/pyodideRuntime.ts) is built into /pyodide/<version>/ by vite.config.ts and served through
+# functions/_middleware.ts by the same code as /ort (public/_routes.json does not exclude /pyodide/*).
+# tests/edge/pyodideRuntime.test.ts fails on any rule that matches a /pyodide path and names
+# Content-Type, Cache-Control or Access-Control-Allow-Origin.
 
 # On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
 /models/*

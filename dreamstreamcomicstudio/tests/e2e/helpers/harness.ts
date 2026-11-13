@@ -51,6 +51,8 @@ export type QaQuery = Partial<{
   scene: string;
   /** The page-level skin: 'atlas' (html[data-ds-skin], as on the comics host) or 'none' (taken off <html>). */
   skin: 'atlas' | 'none';
+  /** 'route': Hugging Face fetches reach the network, for the spec's own route to answer (qa/ComicQaApp.tsx). */
+  hf: 'route';
 }>;
 
 /** One app scene as the harness publishes it (window.__QA_APP_SCENES__). */
