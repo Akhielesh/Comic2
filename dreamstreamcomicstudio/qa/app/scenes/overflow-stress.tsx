@@ -1,4 +1,4 @@
-// QA scene `overflow-stress` (OV-1; SPEC-overflow §7.3; the scene contract is in qa/app/index.tsx): the shared message,
+// QA scene `overflow-stress` (OV-1; the scene contract is in qa/app/index.tsx): the shared message,
 // chip, badge, button, card and pill components with the text that breaks layouts. By default it is an ordinary page
 // (short copy) that passes every layout smoke check. With `&stress=1` (what tests/e2e/overflow.spec.ts opens) every block
 // gets the three strings from the overflow research: a 300-character error holding a long URL, a 60-character unbroken
@@ -93,14 +93,16 @@ const SharedBlocks: React.FC<{ c: Copy }> = ({ c }) => (
     </Block>
     <Block id="messages" title="Long messages">
       <div className="flex flex-col gap-3">
+        {/* The banner owns its live role, so the MessageText inside it takes none (no live region inside another). */}
         <StatusBanner tone="healthy" title="Short message">
-          <MessageText role="status">Saved a moment ago.</MessageText>
+          <MessageText>Saved a moment ago.</MessageText>
         </StatusBanner>
-        <StatusBanner tone="error" title="Long message">
-          <MessageText role="status" lines={2}>
-            {c.stress ? `${LONG_ERROR} ${LONG_ERROR}` : c.error}
-          </MessageText>
-        </StatusBanner>
+        {/* A long message that may need Show more: ErrorState keeps the toggle outside its alert. */}
+        <ErrorState
+          variant="inline"
+          title="Long message"
+          description={<MessageText lines={2}>{c.stress ? `${LONG_ERROR} ${LONG_ERROR}` : c.error}</MessageText>}
+        />
       </div>
     </Block>
   </>

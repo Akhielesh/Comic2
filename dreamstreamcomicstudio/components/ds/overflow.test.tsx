@@ -1,5 +1,5 @@
 /**
- * Long words stay inside their boxes (SPEC-overflow §3.1, §3.3, §3.4; docs/design/design-system.md "Long words"): the
+ * Long words stay inside their boxes (docs/design/design-system.md "Long words"): the
  * three recipes, the text recipes that carry the long-word rule, the Badge / Button label spans (and every
  * `buttonClasses()` element that uses them), and ErrorState's description element.
  */
@@ -130,6 +130,19 @@ describe('Button: the label inside its edge', () => {
     expect(save.querySelector(':scope > [data-slot="button-label"]')?.textContent).toBe(' Save');
   });
 
+  it('words inside a Fragment get the label span too', () => {
+    render(
+      <Button>
+        <>
+          Use {ID60}
+        </>
+      </Button>
+    );
+    const labels = screen.getByRole('button').querySelectorAll('[data-slot="button-label"]');
+    expect(labels).toHaveLength(1);
+    expect(labels[0].textContent).toBe(`Use ${ID60}`);
+  });
+
   it('labelChildren leaves element-only and empty children as they are', () => {
     const icon = <X />;
     expect(labelChildren(icon)).toBe(icon);
@@ -184,5 +197,31 @@ describe('ErrorState: the description element', () => {
       unmount();
     }
     expect(errors).not.toHaveBeenCalled();
+  });
+
+  it('a MessageText description keeps its Show more outside the alert, so toggling never re-announces it', () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => 120);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 60);
+    for (const variant of ['panel', 'inline'] as const) {
+      const { unmount } = render(<ErrorState variant={variant} title="Couldn't save" description={<MessageText>{`Details: ${ID60}`}</MessageText>} onRetry={() => undefined} />);
+      const alert = screen.getByRole('alert');
+      // The title and the message are announced; the toggle is not in any live region.
+      expect(alert, variant).toHaveTextContent("Couldn't save");
+      expect(alert.querySelector('[data-slot="message"]'), variant).not.toBeNull();
+      const toggle = screen.getByRole('button', { name: 'Show more' });
+      expect(toggle.closest('[role="alert"],[role="status"],[aria-live]'), variant).toBeNull();
+      expect(toggle.closest('[data-slot="error-state"]'), variant).not.toBeNull();
+      // Reading order: the toggle comes right after the message, before Try again.
+      const buttons = screen.getAllByRole('button').map((b) => b.textContent);
+      expect(buttons, variant).toEqual(['Show more', 'Try again']);
+      fireEvent.click(toggle);
+      expect(screen.getByRole('button', { name: 'Show less' }).closest('[role="alert"]'), variant).toBeNull();
+      unmount();
+    }
+  });
+
+  it('a string description keeps the alert role on the error state itself', () => {
+    render(<ErrorState title="Couldn't save" description="Try again in a moment." />);
+    expect(screen.getByRole('alert')).toHaveAttribute('data-slot', 'error-state');
   });
 });

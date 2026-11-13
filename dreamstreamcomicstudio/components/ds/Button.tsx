@@ -75,7 +75,7 @@ export function buttonClasses({ variant = 'default', size = 'default', className
 }
 
 /**
- * A button's label inside its own edge (SPEC-overflow §3.3): every run of consecutive string / number children becomes ONE
+ * A button's label inside its own edge (docs/design/design-system.md "Long words"): every run of consecutive string / number children becomes ONE
  * `<span data-slot="button-label">` with CLIP_TEXT (so `{n} pages` stays one span), and a label too long for the row ends
  * in an ellipsis inside the button instead of pushing past it. Elements (icons) stay direct children, so the `[&>svg]`
  * and `has-[>svg]` sizing still apply; an icon-only button gets no span. The accessible name is unchanged (the cut is
@@ -96,6 +96,18 @@ export function labelChildren(children: React.ReactNode): React.ReactNode {
  * as they are, and children with no visible text come back unchanged (so an icon-only control gets no wrapper).
  * Shared by labelChildren and Badge.
  */
+function flattenFragments(children: React.ReactNode, prefix = ''): Array<Exclude<React.ReactNode, boolean | null | undefined>> {
+  const out: Array<Exclude<React.ReactNode, boolean | null | undefined>> = [];
+  for (const child of React.Children.toArray(children)) {
+    if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.type === React.Fragment) {
+      out.push(...flattenFragments(child.props.children, `${prefix}${String(child.key)}/`));
+    } else if (prefix && React.isValidElement(child)) {
+      out.push(React.cloneElement(child, { key: `${prefix}${String(child.key)}` }));
+    } else out.push(child);
+  }
+  return out;
+}
+
 export function wrapTextRuns(children: React.ReactNode, wrap: (text: string, key: string) => React.ReactNode): React.ReactNode {
   const out: React.ReactNode[] = [];
   let run: Array<string | number> = [];
@@ -109,8 +121,9 @@ export function wrapTextRuns(children: React.ReactNode, wrap: (text: string, key
     } else out.push(text);
     run = [];
   };
-  // toArray keys every element child and drops null / boolean children.
-  for (const child of React.Children.toArray(children)) {
+  // toArray keys every element child and drops null / boolean children; a Fragment's children count as the caller's
+  // own (`<>Use {name}</>`), re-keyed under the Fragment's key so siblings never share one.
+  for (const child of flattenFragments(children)) {
     if (typeof child === 'string' || typeof child === 'number') run.push(child);
     else {
       flush();
