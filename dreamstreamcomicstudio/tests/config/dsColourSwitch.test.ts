@@ -15,7 +15,7 @@
  * forgets an attribute (live.html, the QA harness) still shows the colour the release ships, and the rollback reaches
  * every entry the build writes. The effect is the one the brief asks for.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
@@ -135,6 +135,23 @@ describe('the build switch (vite.config.ts dsColourPlugin)', () => {
     };
     expect(htmlTag(build('off')!.transformIndexHtml!.handler(INDEX_HTML, { path: '/index.html', filename: 'index.html' }))).toContain('data-ds-colour="off"');
     expect(build(undefined)!.transformIndexHtml!.handler(INDEX_HTML, { path: '/index.html', filename: 'index.html' })).toBe(INDEX_HTML);
+  });
+
+  it('is wired into the build through the mode .env file too (a .env.production line, not only the process environment)', () => {
+    // vite.config.ts reads loadEnv(mode, '.') first; a probe mode keeps the real .env files out of it. Git ignores .env.*.
+    const mode = `dscolourprobe${process.pid}`;
+    const file = path.join(process.cwd(), `.env.${mode}`);
+    const before = process.env[DS_COLOUR_VAR];
+    delete process.env[DS_COLOUR_VAR];
+    writeFileSync(file, `${DS_COLOUR_VAR}=off\n`);
+    try {
+      const config = (viteConfig as unknown as (env: { mode: string; command: string }) => { plugins: Array<{ name?: string; transformIndexHtml?: { handler: Handler } }> })({ mode, command: 'build' });
+      const plugin = config.plugins.flat().find((p) => p?.name === 'ds-colour')!;
+      expect(htmlTag(plugin.transformIndexHtml!.handler(INDEX_HTML, { path: '/index.html', filename: 'index.html' }))).toContain('data-ds-colour="off"');
+    } finally {
+      rmSync(file, { force: true });
+      if (before !== undefined) process.env[DS_COLOUR_VAR] = before;
+    }
   });
 });
 
