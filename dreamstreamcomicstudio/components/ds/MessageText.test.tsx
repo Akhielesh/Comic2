@@ -55,8 +55,8 @@ describe('MessageText', () => {
   it('Show more expands; "Show less" stays even when the expanded body no longer overflows', () => {
     overflowing = true;
     render(<MessageText>{LONG}</MessageText>);
+    overflowing = false; // once unclamped, the body is as tall as its text: a measure now would say "fits"
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
-    overflowing = false; // expanded: the body is as tall as its text
     const less = screen.getByRole('button', { name: 'Show less' });
     expect(less).toHaveAttribute('aria-expanded', 'true');
     expect(body().className).not.toMatch(/line-clamp-/);
