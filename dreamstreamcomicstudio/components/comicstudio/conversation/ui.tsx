@@ -17,6 +17,7 @@ import {
   TONE_CHIP,
   TRANSITION
 } from '../../chat/studioDesign';
+import { busyButtonProps } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -49,19 +50,27 @@ export const CardShell: React.FC<{
   </section>
 );
 
-type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; size?: 'sm' | 'md' };
+type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  busy?: boolean;
+  size?: 'sm' | 'md';
+  /** While busy, stay focusable (aria-disabled; clicks and Enter swallowed) instead of disabled — board/ui busyButtonProps. */
+  keepFocusWhileBusy?: boolean;
+};
+
+/** The busy look for a button that keeps focus (aria-disabled instead of disabled). */
+const ARIA_DISABLED = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-45';
 
 // Coarse pointers get real 44 px buttons (mobile.md §2.4); fine pointers keep today's sizes.
 const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5' : 'h-9 px-4 text-[13px] coarse:h-11');
 
-export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, ...rest }) => (
+export const PrimaryButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy, size, className, children, disabled, onClick, onKeyDown, ...rest }) => (
   <button
     type="button"
     {...rest}
-    disabled={disabled || busy}
+    {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50`,
+      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50`,
       sizeCls(size),
       className
     )}
@@ -71,14 +80,14 @@ export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, ch
   </button>
 );
 
-export const GhostButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, ...rest }) => (
+export const GhostButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy, size, className, children, disabled, onClick, onKeyDown, ...rest }) => (
   <button
     type="button"
     {...rest}
-    disabled={disabled || busy}
+    {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] font-medium ${INK} hover:bg-[var(--ds-hover)] ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+      `inline-flex items-center justify-center gap-1.5 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] font-medium ${INK} hover:bg-[var(--ds-hover)] ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
       sizeCls(size),
       className
     )}
@@ -179,11 +188,13 @@ export function Segmented<T extends string | number>({
             title={o.title ?? (typeof o.label === 'string' ? o.label : undefined)}
             onClick={() => onChange(o.value)}
             className={cx(
-              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]`,
+              // Sized to its own label and sharing the spare width (flex-auto), never an equal split that cuts the
+              // longer label while the track still has room (FX-15, as board/ui Segmented).
+              `flex min-w-0 flex-auto items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]`,
               on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
-            {/* Text labels truncate inside their segment instead of running into the neighbour. */}
+            {/* A text label is cut (inside its segment, never into the neighbour) only when the track is squeezed. */}
             {typeof o.label === 'string' || typeof o.label === 'number' ? <span className="min-w-0 truncate">{o.label}</span> : o.label}
           </button>
         );
