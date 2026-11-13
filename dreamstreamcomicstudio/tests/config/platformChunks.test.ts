@@ -77,8 +77,16 @@ const PRO_ONLY: ProOnly[] = [
  * measured amount (306,000 + 4,949, rounded up to 310,950), so it still holds the measured number plus the same ~2 KB
  * for zlib and build noise: nothing grows it unseen. live.html is unchanged (314,239 B measured). A cut lowers the
  * ceiling here; a reviewed rise raises it with the lead's decision named beside it.
+ *
+ * Lead decision D17c (the S2b release): the numbers above were measured on a build machine whose installed packages
+ * had drifted from package-lock.json (@supabase/supabase-js 2.95.3 installed, 2.118.0 locked; the client is in the
+ * eager set). CI installs from the lockfile and measured the same tree at 323,097 B (index.html) and 328,552 B
+ * (live.html): 14,320 B and 14,313 B more, the same amount on both entries. Production's lockfile already pins
+ * 2.118.0, so those bytes ship today and are not growth from this release; S2b's own growth is unchanged. The
+ * ceilings are therefore re-pinned to the lockfile-exact (CI) measurement plus the same ~2 KB of noise. From here on
+ * a ceiling is only ever set from a lockfile-exact build, never from a machine whose packages have drifted.
  */
-const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 310_950, 'live.html': 316_500 };
+const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 325_300, 'live.html': 330_850 };
 
 /** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
 const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;
