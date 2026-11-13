@@ -54,7 +54,6 @@ import {
   studioViewToUrlParam,
   type StudioDeepLinkView
 } from './services/studioDeepLink';
-import { createStudioProject } from './components/comicstudio/studioApi';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
@@ -888,6 +887,8 @@ const App: React.FC = () => {
   // shows inline (offline, expired session, studio storage unavailable…).
   const handleCreateProject = async (name: string, mode: NewComicMode = 'studio'): Promise<void> => {
     if (mode === 'studio') {
+      // The Comic Studio API and document normalization are needed only after explicit creation.
+      const { createStudioProject } = await import('./components/comicstudio/studioApi');
       const { projectId } = await createStudioProject({ title: name.trim() || undefined });
       openComicStudio(projectId);
       // The server created the listing row; pick it up in the background so every way
