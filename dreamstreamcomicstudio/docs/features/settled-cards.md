@@ -166,6 +166,11 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
 - **`answerByRef` returns `'kept'`** for a card whose message is followed by a user message. Nothing is written, and
   the message is handled as ordinary text, so an old tab can no longer reopen a settled question.
   (`recordOptionAnswer` runs before the user message is committed, so the current message does not count.)
+- **`resolve_conflict` is refused on a passed conflict card** (`actions/conflict.ts`, added at the S2b ship review):
+  a card followed by a committed user message is settled "left" (the creator's version stands, and the director was
+  told so), so a late tap from a stale tab or a replayed answer gets "That question has moved on: your version stands.
+  Nothing was changed." and changes nothing (`server/src/comic/actions/conflict.settled.test.ts`). Gate cards were
+  already safe (the single `doc.gate` slot and its id check).
 - **`recordOptionAnswer`'s text match** considers only cards after the last user message (not passed), through
   `settle.matchChoices`. The director's own `normalizeAnswer` and `pickedChoices` are removed.
   `server/src/comic/settle.parity.test.ts` pins that both give the same ids today.
