@@ -6,7 +6,7 @@
 export * from './recipes';
 
 // Controls
-export { Button, buttonClasses, BUTTON_BASE, BUTTON_EXTENSION_VARIANTS, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
+export { Button, buttonClasses, labelChildren, wrapTextRuns, BUTTON_BASE, BUTTON_EXTENSION_VARIANTS, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { IconButton, ICON_BUTTON_SIZE, type IconButtonProps, type IconButtonSize } from './IconButton';
 export { Field, useField, useFieldControl, FIELD_DESCRIPTION, FIELD_ERROR, FIELD_LABEL, type FieldContextValue, type FieldControlProps, type FieldProps } from './Field';
 export { Input, Textarea, INPUT_CLASSES, TEXTAREA_CLASSES, type InputProps, type TextareaProps } from './Input';
@@ -33,6 +33,7 @@ export { MetricCard, METRIC_CARD, METRIC_ICON_TILE, METRIC_VALUE, type MetricCar
 export { EmptyState, EMPTY_FRAME, type EmptyStateProps } from './EmptyState';
 export { LoadingState, type LoadingStateProps } from './LoadingState';
 export { ErrorState, type ErrorStateProps } from './ErrorState';
+export { MessageText, LINE_CLAMP, MESSAGE_TEXT, MESSAGE_TOGGLE, type MessageTextLines, type MessageTextProps } from './MessageText';
 export { StateIconTile, STATE_DESCRIPTION, STATE_TITLE, type StateAction, type StateHeading, type StateVariant } from './stateParts';
 export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from './Skeleton';
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';

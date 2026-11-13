@@ -22,6 +22,15 @@ export interface ErrorStateProps {
   className?: string;
 }
 
+/**
+ * The description: a string (or number) in a `<p>` as always; any other node (a MessageText, a list) in a `<div>` with
+ * the same class, so a block never lands inside a `<p>` (invalid nesting). Nothing renders without one.
+ */
+function Description({ className, children }: { className: string; children: React.ReactNode }) {
+  if (children === null || children === undefined || children === false || children === '') return null;
+  return typeof children === 'string' || typeof children === 'number' ? <p className={className}>{children}</p> : <div className={className}>{children}</div>;
+}
+
 export function ErrorState({ title = 'Something went wrong', description, retryLabel = 'Try again', onRetry, variant = 'panel', as: H = 'h3', className }: ErrorStateProps) {
   if (variant === 'inline') {
     return (
@@ -29,7 +38,7 @@ export function ErrorState({ title = 'Something went wrong', description, retryL
         <AlertCircle aria-hidden="true" className={cn('mt-0.5 size-4 shrink-0', STATUS_INK.error)} />
         <div className="min-w-0 flex-1">
           <H className={INLINE_TITLE}>{title}</H>
-          {description ? <p className={cn(STATE_DESCRIPTION, 'mt-0.5')}>{description}</p> : null}
+          <Description className={cn(STATE_DESCRIPTION, 'mt-0.5')}>{description}</Description>
           {onRetry ? (
             <Button size="sm" variant="outline" className="mt-3" onClick={onRetry}>
               {retryLabel}
@@ -46,7 +55,7 @@ export function ErrorState({ title = 'Something went wrong', description, retryL
       </StateIconTile>
       <div className="max-w-xl space-y-2">
         <H className={STATE_TITLE}>{title}</H>
-        {description ? <p className={STATE_DESCRIPTION}>{description}</p> : null}
+        <Description className={STATE_DESCRIPTION}>{description}</Description>
       </div>
       {onRetry ? (
         <div className="mt-6">
