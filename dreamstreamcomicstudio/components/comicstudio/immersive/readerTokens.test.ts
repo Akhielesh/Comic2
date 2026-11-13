@@ -158,7 +158,7 @@ describe('N1 · the room-side accent and focus colours reach 3:1 on the room and
     expect(ratio(colour(chain, '--ds-accent'), nightRoom(chain))).toBeLessThan(1.1);
   });
 
-  it('Day room (RD-2 renders it): the pair is ink on the light room and its light glass', () => {
+  it('Day room: the pair is ink on the light room and its light glass', () => {
     for (const [ctx, base] of Object.entries(CONTEXTS)) {
       const chain = [DAY, ...base];
       const room = colour(chain, '--ds-reader-room');
@@ -166,6 +166,27 @@ describe('N1 · the room-side accent and focus colours reach 3:1 on the room and
       for (const name of ['--ds-reader-accent', '--ds-reader-hud-focus']) {
         expect(ratio(colour(chain, name), room), `${ctx} day: ${name} on the room`).toBeGreaterThanOrEqual(3);
         expect(ratio(colour(chain, name), glass), `${ctx} day: ${name} on the glass`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it('keeps labels, focus, and progress visible in both room lights, including glass over the artwork', () => {
+    const contexts = Object.values(CONTEXTS);
+    for (const chain of [...contexts, ...contexts.map((base) => [DAY, ...base])]) {
+      const room = colour(chain, '--ds-reader-room');
+      const glass = glassOver(chain, room);
+      const track = colour(chain, '--ds-reader-hud-wash');
+      const accent = colour(chain, '--ds-reader-accent');
+      expect(ratio(accent, over(track, room))).toBeGreaterThanOrEqual(3);
+      expect(ratio(accent, over(colour(chain, '--ds-reader-hud-active'), glass))).toBeGreaterThanOrEqual(3);
+      expect(ratio(colour(chain, '--ds-reader-hud-inverse'), colour(chain, '--ds-reader-hud-ink'))).toBeGreaterThanOrEqual(4.5);
+      for (const surface of ['--ds-reader-glass', '--ds-reader-panel']) {
+        for (const art of ['#ffffff', '#000000']) {
+          const bg = over(colour(chain, surface), resolveColor(art));
+          expect(ratio(colour(chain, '--ds-reader-hud-ink'), bg)).toBeGreaterThanOrEqual(4.5);
+          expect(ratio(colour(chain, '--ds-reader-hud-muted'), bg)).toBeGreaterThanOrEqual(4.5);
+          expect(ratio(colour(chain, '--ds-reader-hud-focus'), bg)).toBeGreaterThanOrEqual(3);
+        }
       }
     }
   });
@@ -190,11 +211,14 @@ describe('N1 · every focus ring and progress fill in the reader files resolves 
       const vars = [...new Set([...ringVars(src), ...fillVars(src)])];
       expect(vars.length, `${file} paints a ring or a fill`).toBeGreaterThan(0);
       for (const v of vars) {
-        for (const [ctx, chain] of Object.entries(CONTEXTS)) {
-          const room = nightRoom(chain);
-          const c = colour(chain, v);
-          const r = Math.min(ratio(c, room), ratio(c, glassOver(chain, room)));
-          if (r < 3) fails.push(`${file} ${v} in ${ctx} = ${r.toFixed(2)}:1`);
+        if (v === '--ds-reader-stage-focus') continue; // The inset ring uses the band tested below.
+        for (const [ctx, base] of Object.entries(CONTEXTS)) {
+          for (const chain of [base, [DAY, ...base]]) {
+            const room = colour(chain, '--ds-reader-room');
+            const c = colour(chain, v);
+            const r = Math.min(ratio(c, room), ratio(c, glassOver(chain, room)));
+            if (r < 3) fails.push(`${file} ${v} in ${ctx} = ${r.toFixed(2)}:1`);
+          }
         }
       }
     }
@@ -213,11 +237,13 @@ describe('N1 · every focus ring and progress fill in the reader files resolves 
         expect(ring, `${file}: an inset ring names its colour`).toBeTruthy();
         expect(offset, `${file}: an inset ring carries a ring-offset band (it lies on the page)`).toBeTruthy();
         expect(/ring-offset-[1-9]/.test(cls), `${file}: the offset band has a width`).toBe(true);
-        for (const [ctx, chain] of Object.entries(CONTEXTS)) {
-          const band = colour(chain, offset!);
-          expect(ratio(colour(chain, ring!), band), `${file} ${ring} beside ${offset} in ${ctx}`).toBeGreaterThanOrEqual(3);
-          expect(ratio(band, WHITE), `${file} ${offset} on white paper in ${ctx}`).toBeGreaterThanOrEqual(3);
-          expect(ratio(band, colour(chain, '--ds-reader-paper-back')), `${file} ${offset} on the reader paper in ${ctx}`).toBeGreaterThanOrEqual(3);
+        for (const [ctx, base] of Object.entries(CONTEXTS)) {
+          for (const chain of [base, [DAY, ...base]]) {
+            const band = colour(chain, offset!);
+            expect(ratio(colour(chain, ring!), band), `${file} ${ring} beside ${offset} in ${ctx}`).toBeGreaterThanOrEqual(3);
+            expect(ratio(band, WHITE), `${file} ${offset} on white paper in ${ctx}`).toBeGreaterThanOrEqual(3);
+            expect(ratio(band, colour(chain, '--ds-reader-paper-back')), `${file} ${offset} on the reader paper in ${ctx}`).toBeGreaterThanOrEqual(3);
+          }
         }
       }
     }

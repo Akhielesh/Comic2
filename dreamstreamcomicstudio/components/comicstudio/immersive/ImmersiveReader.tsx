@@ -434,7 +434,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     markIosFullscreenNoteSeen();
     setToast((prev) => (prev ? `${prev} ${IOS_FULLSCREEN_NOTE}` : IOS_FULLSCREEN_NOTE));
   }, []);
-  const immersive = useImmersive(rootRef, { active: true, onExit: exit, themeColor: themeColorFor(palette), onFullscreenFallback });
+  const immersive = useImmersive(rootRef, { active: true, onExit: exit, themeColor: themeColorFor(palette, prefs.room), onFullscreenFallback });
 
   // Focus: the dialog takes focus and gives it back on close; Tab stays inside.
   useEffect(() => {
@@ -770,11 +770,16 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
   }, [hostDownload, allowDownload, items.length, doc, lang, urlFor]);
 
   // ── Ambient room (two layers crossfade on change) ─────────────────────────
-  const bg = roomBackground(palette);
-  const [bgLayers, setBgLayers] = useState<{ id: number; bg: string }[]>(() => [{ id: 0, bg }]);
+  const bg = roomBackground(palette, prefs.room);
+  const [bgLayers, setBgLayers] = useState(() => [{ id: 0, bg, room: prefs.room }]);
   useEffect(() => {
-    setBgLayers((layers) => (layers[layers.length - 1]?.bg === bg ? layers : [...layers.slice(-1), { id: (layers[layers.length - 1]?.id ?? 0) + 1, bg }]));
-  }, [bg]);
+    setBgLayers((layers) => {
+      const last = layers[layers.length - 1];
+      if (last.bg === bg && last.room === prefs.room && (!reduced || layers.length === 1)) return layers;
+      const next = { id: last.id + 1, bg, room: prefs.room };
+      return reduced || last.room !== prefs.room ? [next] : [last, next];
+    });
+  }, [bg, prefs.room, reduced]);
 
   // ── Slot image options ────────────────────────────────────────────────────
   const img = useMemo(
@@ -883,7 +888,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       data-comic-theme={theme}
       // The reader's own token set (readerDesigns.css): motion, ink on paper, and the room's accent / focus.
       data-reader-root=""
-      className={cx('gesture-root fixed inset-0 overflow-hidden text-white outline-none', Z.reader, fullscreenCursorHidden && 'cursor-none')}
+      data-reader-room={prefs.room}
+      className={cx('gesture-root fixed inset-0 overflow-hidden text-[var(--ds-reader-hud-ink)] outline-none', Z.reader, fullscreenCursorHidden && 'cursor-none')}
       style={{ background: 'var(--ds-reader-room)' }}
       onKeyDown={onKeyDown}
       onPointerMove={(e) => {
@@ -891,12 +897,13 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       }}
     >
       {/* Ambient glow: the newest layer fades in over the previous one. */}
-      {bgLayers.map((l, i) => (
+      {eff.ambient && !low.lowPower && bgLayers.map((l, i) => l.room === prefs.room && (
         <div
           key={l.id}
           aria-hidden
           className="pointer-events-none absolute inset-0"
-          style={{ background: l.bg, opacity: i === bgLayers.length - 1 ? 1 : 0, transition: reduced ? undefined : 'opacity var(--ds-reader-ambient-fade, 900ms) linear' }}
+          style={{ background: l.bg, animation: !reduced && bgLayers.length === 2 && i === 1 ? 'reader-ambient-enter var(--ds-reader-ambient-fade) linear' : undefined }}
+          onAnimationEnd={() => setBgLayers((layers) => layers.length === 2 && layers[1].id === l.id ? [layers[1]] : layers)}
         />
       ))}
       <div
@@ -908,8 +915,8 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           <div className="grid h-full place-items-center p-6 text-center">
             <div className="max-w-sm space-y-3">
               <p className="text-[15px] font-semibold">Nothing to read yet</p>
-              <p className="text-[13px] text-white/70">Pages appear here as soon as they are drawn.</p>
-              <button type="button" onClick={() => immersive.exit()} className="press min-h-11 rounded-full bg-white/15 px-5 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
+              <p className="text-[13px] text-[var(--ds-reader-hud-muted)]">Pages appear here as soon as they are drawn.</p>
+              <button type="button" onClick={() => immersive.exit()} className="press min-h-11 rounded-full bg-[var(--ds-reader-hud-hover)] px-5 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
                 Close
               </button>
             </div>
@@ -999,7 +1006,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       {/* Hairline progress while the HUD is hidden: a full-width bar scaled from the reading edge (transform
           only — never an animated width), in the room's accent (visible on the room in both themes). */}
       {!state.hud && views.length > 1 && (
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-[41] h-[2px] bg-white/10" style={{ marginBottom: 'var(--sa-bottom)' }}>
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-[41] h-[2px] bg-[var(--ds-reader-hud-wash)]" style={{ marginBottom: 'var(--sa-bottom)' }}>
           <div
             data-testid="reader-progress"
             className="h-full w-full bg-[var(--ds-reader-accent)]"
@@ -1046,11 +1053,11 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
 
       {resume && state.phase !== 'intro' && (
         <div className="absolute inset-x-0 top-[calc(var(--sa-top)+68px)] z-[45] flex justify-center px-4" data-no-turn>
-          <div className="flex items-center gap-1 rounded-full bg-black/55 p-1 pl-4 text-[13px] text-white shadow-lg backdrop-blur-md">
+          <div className="flex items-center gap-1 rounded-full bg-[var(--ds-reader-panel)] p-1 pl-4 text-[13px] shadow-lg backdrop-blur-md">
             <button type="button" className="press min-h-11 rounded-full px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]" onClick={() => { dispatch({ type: 'GOTO', view: resume.view }); setResume(null); }}>
               Continue from {resume.label.toLowerCase()}
             </button>
-            <button type="button" aria-label="Start from the beginning" className="press min-h-11 min-w-11 rounded-full px-3 text-white/75 outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]" onClick={() => setResume(null)}>
+            <button type="button" aria-label="Start from the beginning" className="press min-h-11 min-w-11 rounded-full px-3 text-[var(--ds-reader-hud-muted)] outline-none hover:bg-[var(--ds-reader-hud-wash)] focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]" onClick={() => setResume(null)}>
               ✕
             </button>
           </div>
@@ -1080,7 +1087,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
 
       {toast && (
         <div className="pointer-events-none absolute inset-x-0 bottom-[calc(var(--sa-bottom)+76px)] z-[90] flex justify-center px-4">
-          <p role="status" className="max-w-[min(520px,100%)] rounded-full bg-black/75 px-4 py-2 text-center text-[13px] text-white shadow-lg backdrop-blur-md [overflow-wrap:anywhere]">
+          <p role="status" className="max-w-[min(520px,100%)] rounded-full bg-[var(--ds-reader-panel)] px-4 py-2 text-center text-[13px] shadow-lg backdrop-blur-md [overflow-wrap:anywhere]">
             {toast}
           </p>
         </div>
@@ -1092,7 +1099,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           type="button"
           data-no-turn
           onClick={() => toggleGuided(true)}
-          className="press absolute left-1/2 top-[calc(var(--sa-top)+68px)] z-[44] inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] font-medium text-white shadow-lg backdrop-blur-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]"
+          className="press absolute left-1/2 top-[calc(var(--sa-top)+68px)] z-[44] inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-[var(--ds-reader-panel)] px-4 text-[13px] font-medium shadow-lg backdrop-blur-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]"
         >
           <ScanEye className="h-4 w-4" aria-hidden /> Read panel by panel
         </button>

@@ -30,9 +30,11 @@ afterEach(() => {
 describe('prefs', () => {
   it('defaults, round-trip, and validation of stored junk', () => {
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
-    writePrefs({ ...DEFAULT_PREFS, turn: 'slide', sound: true, wpm: 260 });
-    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, wpm: 260 });
-    window.localStorage.setItem(PREFS_KEY, '{"turn":"spin","wpm":999,"paper":"maybe","sound":"yes"}');
+    writePrefs({ ...DEFAULT_PREFS, turn: 'slide', sound: true, wpm: 260, room: 'day' });
+    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, wpm: 260, room: 'day' });
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"slide","sound":true}');
+    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, room: 'night' });
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"spin","wpm":999,"paper":"maybe","sound":"yes","room":"automatic"}');
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
     window.localStorage.setItem(PREFS_KEY, 'not json');
     expect(readPrefs()).toEqual(DEFAULT_PREFS);

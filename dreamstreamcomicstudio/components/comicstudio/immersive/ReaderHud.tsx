@@ -1,15 +1,13 @@
-// Reader HUD (reader.md §2.2): dark glass chips over the room, so contrast never depends on the page's
-// ambient colour. Top: close, title and position, then language, Guided View, layout, settings and full
-// screen. Bottom: the page scrubber (or panel controls in Guided View). Auto-hides; padding follows
-// the safe areas; every control is ≥ 44 px. Focus rings over the room use the room's own focus colour
-// (--ds-reader-hud-focus): the app accent is ink in the Atlas light theme, invisible on the dark room.
+// Reader HUD (reader.md §2.2): glass chips follow the room lighting. Top: close, title and position,
+// then language, Guided View, layout, settings and fullscreen. Bottom: the page scrubber (or panel
+// controls in Guided View). Auto-hides; padding follows safe areas; every control is ≥ 44 px.
 
 import React from 'react';
 import { ChevronLeft, ChevronRight, Columns2, Download, Maximize2, Minimize2, Pause, Play, ScanEye, Settings2, Share2, Square, X } from 'lucide-react';
 import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import type { LayoutPref } from './readerLayout';
 
-export const glass = 'bg-black/45 text-white backdrop-blur-md';
+export const glass = 'bg-[var(--ds-reader-glass)] text-[var(--ds-reader-hud-ink)] backdrop-blur-md';
 
 export const HudButton: React.FC<
   React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean; children: React.ReactNode }
@@ -22,7 +20,7 @@ export const HudButton: React.FC<
     className={[
       'press inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium outline-none transition-colors',
       'focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)] disabled:opacity-40',
-      active ? 'bg-white/25 text-white' : 'text-white/90 hover:bg-white/15',
+      active ? 'bg-[var(--ds-reader-hud-active)]' : 'hover:bg-[var(--ds-reader-hud-hover)]',
       className || ''
     ].join(' ')}
     {...rest}
@@ -97,7 +95,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
           </HudButton>
           <div className="min-w-0 leading-tight">
             <p className="truncate text-[13px] font-semibold">{p.title}</p>
-            <p className="truncate text-[11px] tabular-nums text-white/75" data-testid="reader-hud-counter">
+            <p className="truncate text-[11px] tabular-nums text-[var(--ds-reader-hud-muted)]" data-testid="reader-hud-counter">
               {p.counter}
               {p.chapter ? ` · ${p.chapter}` : ''}
             </p>
@@ -160,7 +158,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
             <HudButton label={p.guided.playing ? 'Pause' : 'Play panel by panel'} active={p.guided.playing} onClick={p.onPlay}>
               {p.guided.playing ? <Pause className="h-5 w-5" aria-hidden /> : <Play className="h-5 w-5" aria-hidden />}
             </HudButton>
-            <span className="min-w-[6.5rem] px-1 text-center text-[12px] tabular-nums text-white/85">{p.guided.label}</span>
+            <span className="min-w-[6.5rem] px-1 text-center text-[12px] tabular-nums text-[var(--ds-reader-hud-muted)]">{p.guided.label}</span>
             <HudButton label={p.rtl ? 'Previous panel' : 'Next panel'} onClick={() => p.onPanel(p.rtl ? -1 : 1)}>
               <ChevronRight className="h-5 w-5" aria-hidden />
             </HudButton>

@@ -863,7 +863,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       // band at the edge, the light ring inside it) reads on white paper and on the room alike.
       className={
         fit === 'width'
-          ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-reader-hud-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-room)]'
+          ? 'absolute inset-0 select-none overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-reader-stage-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--ds-reader-stage-focus-band)]'
           : 'absolute inset-0 select-none overflow-hidden'
       }
       style={{ touchAction: fit === 'width' ? 'pan-y' : 'none', overscrollBehavior: 'contain', cursor: drag.current && !drag.current.peek ? 'grabbing' : undefined }}
