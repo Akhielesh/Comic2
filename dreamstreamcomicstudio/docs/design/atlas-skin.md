@@ -24,12 +24,12 @@ glass except the sticky header's blur; modal scrims dim without blur. 12 px card
 (and chips), 4 px small; 16 px feature cards and a 28 px hero frame. IBM Plex Sans body at 14 px, semibold
 for card, sheet and empty-state titles; Space Grotesk only for display type (page and public titles,
 `.ds-font-display`). Charts are five monochrome steps of the ink. Motion is
-100 / 150 / 200 ms on `cubic-bezier(.2,.8,.2,1)`, panels 220 ms, modals 180 ms, entrances 280 ms on a
-long-tail ease-out and exits a quicker 160 ms, the theme switch one 260 ms cross-fade of the page,
+100 / 150 / 200 ms on `cubic-bezier(.2,.8,.2,1)`, panels 220 ms, modals 180 ms, entrances 200 / 240 ms (a 24 ms
+stagger step) on a long-tail ease-out and exits a quicker 160 ms, the theme switch one 260 ms cross-fade of the page,
 press feedback (scale .98 / .97), tooltips after 300 ms — all off under reduced motion. A crisp 2 px
 ink focus outline offset 2 px on every control; fields with an edge that clears 3:1; inverted-ink
 selection; thin ink-tinted scrollbars; 44 px touch targets; the OS increase-contrast setting
-strengthens hairlines, secondary text and field edges. Dark theme = the same system inverted
+strengthens hairlines, secondary text, field edges and the colour marks. Dark theme = the same system inverted
 (#0a0a0a paper, #fafafa ink). Generic icons are lucide; brand marks only from checked-in SVGs.
 
 ## Scope and mechanism

@@ -148,7 +148,8 @@ step.
   magenta, orange, teal, sky, success and warning darker (each at least 4.5:1 on the page), dark ultramarine and violet
   lighter; the tints, solids and status inks follow, and every gate above still holds, except that the light teal sits
   at the most chroma sRGB has for it (0.095, under the 0.10 floor; the one exemption) (`atlasHighContrast.test.ts`;
-  values in `atlas-skin.md`).
+  values in `atlas-skin.md`). With the off switch, these moves still apply to hues 1 to 5 and to success and warning,
+  which are not new; hues 6 and 7 stay the off switch's ink steps.
 - **A status colour or a ramp step is never a text colour** (`text-[var(--ds-warning)]`, `text-ds-chart-seq-3`): words
   and the icon beside them read the `-text` inks (`statusInkGuard.test.ts`, no allowlist).
 
