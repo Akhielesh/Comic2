@@ -15,6 +15,7 @@ import type { EventMeta } from '../protocol';
 import { downloadIcs, formatCountdown } from '../schedule';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
+import { isImeComposing } from '../ui/hotkeys';
 import { LiveLegalLinks } from '../ui/legalLinks';
 import { StreamStudioLogo } from '../ui/logo';
 import { useOnPageReturn, usePageVisible } from '../ui/pageVisibility';
@@ -219,7 +220,7 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
                   maxLength={24}
                   aria-label="Your name"
                   onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void saveSpot()}
+                  onKeyDown={(e) => e.key === 'Enter' && !isImeComposing(e) && void saveSpot()}
                 />
                 <Btn variant="solid" iconRight="arrowRight" onClick={() => void saveSpot()} disabled={rsvped && upcoming}>
                   {upcoming ? (rsvped ? 'Spot saved' : 'Save my spot') : 'Join now'}

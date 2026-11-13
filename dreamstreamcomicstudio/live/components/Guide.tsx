@@ -438,7 +438,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Keep the private studio link secret', a: 'It contains the host key: anyone with it can control your stream. Share the viewer link instead.' },
       { q: 'Guests on air', a: 'Studio → Invite (or press I) → Share invite. Up to 4 guests join with cam, mic and screen share and hear each other; Grid / Spotlight / Sidebar mix them in. New link cuts off old ones.' },
       { q: 'A guest can’t connect', a: 'Most often a strict network (mobile data, office Wi-Fi) blocking direct video — the studio retries by itself, and switching to Wi-Fi usually fixes it. If the camera is blocked, allow it from the address bar (🔒) and tap Try again.', tags: 'guest connecting stuck linking camera blocked' },
-      { q: 'Hotkeys', a: 'G go live/end · I invite · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
+      { q: 'Hotkeys', a: 'G go live (End stream is a button, never a key) · I invite · Space mic · V camera · R record · B be-right-back · 1–6 scenes · M metrics · / chat.' },
     ],
   },
   {

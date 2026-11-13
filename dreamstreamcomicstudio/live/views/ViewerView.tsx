@@ -16,6 +16,7 @@ import { BrbSlate } from '../components/scenes';
 import { ChatRail, ReactBar } from '../components/rails';
 import { normalizeQuick } from '../emoji';
 import { Icon } from '../ui/icons';
+import { isImeComposing } from '../ui/hotkeys';
 import { LiveLegalLinks } from '../ui/legalLinks';
 import { StreamStudioLogo } from '../ui/logo';
 import {
@@ -444,7 +445,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
                   maxLength={24}
                   autoFocus
                   onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && join()}
+                  onKeyDown={(e) => e.key === 'Enter' && !isImeComposing(e) && join()}
                 />
                 <Btn variant="solid" iconRight="arrowRight" onClick={() => join()}>Join</Btn>
               </div>
@@ -617,7 +618,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
               placeholder="Say something…"
               aria-label="Chat message"
               onKeyDown={(e) => {
-                if (e.key === 'Enter') sendChatFromInput(e.currentTarget);
+                if (e.key === 'Enter' && !isImeComposing(e)) sendChatFromInput(e.currentTarget);
               }}
             />
             <button
@@ -679,7 +680,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
                 placeholder="Say something…"
                 aria-label="Chat message"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') sendChatFromInput(e.currentTarget);
+                  if (e.key === 'Enter' && !isImeComposing(e)) sendChatFromInput(e.currentTarget);
                 }}
               />
               <button
