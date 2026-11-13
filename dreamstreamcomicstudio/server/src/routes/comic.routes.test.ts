@@ -1229,20 +1229,40 @@ describe('message pipeline: screen → intent router → director', () => {
       { id: 'a1', role: 'assistant', text: 'Keep the chase?', at: 2, cards: [yesNo('card_new')] }
     ];
     seed(doc);
-    llm.script.director = [{ text: 'Keeping the market.' }, { text: 'Half the chase, then.' }];
+    llm.script.director = [{ text: 'Keeping the market.' }, { text: 'Noted.' }];
     await stream('proj-1', { kind: 'message', text: 'Yes', card: { id: 'card_old', choiceIds: ['card_old_y'] } });
     const answered = (id: string) =>
       (store.docs.get('proj-1')!.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.id === id) as Extract<Card, { type: 'options' }>).answered;
     // The text alone ("Yes") would have answered the newest card.
     expect(answered('card_old')).toEqual(['card_old_y']);
     expect(answered('card_new')).toBeUndefined();
-    await stream('proj-1', { kind: 'message', text: 'Only the first half', card: { id: 'card_new', custom: 'Only the first half' } });
-    expect(answered('card_new')).toEqual(['Only the first half']);
     // The director's turn did not record a second time (the route already matched the message).
+    expect(vi.mocked(runDirectorTurn).mock.calls.every(([, input]) => input.optionAnswerHandled === true)).toBe(true);
+    // "Yes" moved the chat past card_new, so it is settled (SETTLED_CARDS 'all', R00): a late custom answer changes nothing.
+    await stream('proj-1', { kind: 'message', text: 'Only the first half', card: { id: 'card_new', custom: 'Only the first half' } });
+    expect(answered('card_new')).toBeUndefined();
+  });
+
+  it('a typed custom answer is recorded on the open card the client names', async () => {
+    const doc = plannedDoc();
+    doc.conversation = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        text: 'Keep the chase?',
+        at: 2,
+        cards: [{ type: 'options', id: 'card_new', question: 'Keep it?', choices: [{ id: 'card_new_y', label: 'Yes' }, { id: 'card_new_n', label: 'No' }], allowCustom: true }]
+      }
+    ];
+    seed(doc);
+    llm.script.director = [{ text: 'Half the chase, then.' }];
+    await stream('proj-1', { kind: 'message', text: 'Only the first half', card: { id: 'card_new', custom: 'Only the first half' } });
+    const card = store.docs.get('proj-1')!.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>;
+    expect(card.answered).toEqual(['Only the first half']);
     expect(vi.mocked(runDirectorTurn).mock.calls.every(([, input]) => input.optionAnswerHandled === true)).toBe(true);
   });
 
-  it("SETTLED_CARDS follows the viewer: an admin's tap on a passed card keeps it; anyone else still answers it (SETTLE-CORE #2)", async () => {
+  it("SETTLED_CARDS is on for everyone (R00 SF-1): a late tap on a passed card is kept, an admin's or anyone else's", async () => {
     const passed = (owner: string) => {
       const doc = plannedDoc();
       doc.conversation = [
@@ -1260,7 +1280,7 @@ describe('message pipeline: screen → intent router → director', () => {
     passed('user-1');
     llm.script.director = [{ text: 'Noted.' }];
     await stream('proj-1', { kind: 'message', text: 'Noir ink', card: { id: 'card_ink', choiceIds: ['ink_noir'] } });
-    expect(inkCard().answered).toEqual(['ink_noir']);
+    expect(inkCard().answered).toBeUndefined();
   });
 
   it('the real intent hook makes no LLM call for "show me the pages"', async () => {

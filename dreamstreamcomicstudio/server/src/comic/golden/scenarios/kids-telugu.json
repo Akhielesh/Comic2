@@ -1,6 +1,6 @@
 {
   "name": "kids-telugu",
-  "about": "The owner's ask (2026-10-22): 'truly good translation (Telugu, Hindi…) and readers pick the language'. A kids storybook in English is translated into Telugu by the writer-class translator, EVERY line is reviewed by the linguist with an English gloss, the edition is publishable, the comic is then made natively Telugu for free (swap), and a rerun costs $0 with no model call.",
+  "about": "The owner's ask (2026-10-22): 'truly good translation (Telugu, Hindi…) and readers pick the language'. A kids storybook in English: asked in chat, the studio shows the price and waits for one Approve, however small; then it is translated into Telugu by the writer-class translator, EVERY line is reviewed by the linguist with an English gloss, the edition is publishable, the comic is then made natively Telugu for free (swap), and a rerun costs $0 with no model call.",
   "doc": "lake-planned",
   "runner": "server/src/comic/i18n/kidsTelugu.golden.test.ts",
   "turns": [
@@ -9,8 +9,17 @@
       "expectTools": ["translate_comic", "read_translation", "set_comic_language"],
       "director": [
         { "toolCalls": [{ "name": "translate_comic", "args": { "languages": ["Telugu"] } }] },
-        { "text": "Translating into Telugu now — every line gets a native review; the result arrives as a new message." }
+        { "text": "Telugu is priced and ready. Tap Approve to start; every line gets a native review." }
       ],
+      "expect": {
+        "replyIncludes": "Telugu",
+        "gate": { "reason": "policy", "languages": ["te"] },
+        "calls": { "translator": 0, "linguist": 0 },
+        "noSpendKind": "translate"
+      }
+    },
+    {
+      "approve": true,
       "translator": [
         {
           "json": {
@@ -36,7 +45,6 @@
         }
       ],
       "expect": {
-        "replyIncludes": "Telugu",
         "completionIncludes": "Telugu is translated and reviewed",
         "publishable": ["te"],
         "glosses": { "ln_l3": "Ta-ta, friends!" },

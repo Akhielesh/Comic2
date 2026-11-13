@@ -1,8 +1,10 @@
 // Share sheet model (sharing.md §7.3): pure helpers for links, channel intents, the embed
 // snippet, status copy and in-app-browser detection. No React, no network.
 
+import { stageAllows, type FlagStage } from '../../../shared/comic/capabilities';
 import type { AspectRatio, ComicDoc } from '../../../shared/comic/doc';
-import { buildShareUrl, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
+import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
+import { buildShareUrl, type PublicationMirror, type PublicationOwnerView, type ShareChannel, type ShareLinkOptions } from '../../../shared/comic/publication';
 import { COMICS_ORIGIN } from '../../../services/productHost';
 
 export type IntentChannel = Extract<ShareChannel, 'whatsapp' | 'x' | 'telegram' | 'email' | 'facebook'>;
@@ -58,11 +60,58 @@ export function embedSnippet(url: string, title: string, aspect: AspectRatio | s
   return `<iframe src="${escAttr(src)}" title="${escAttr(title)}" loading="lazy" allow="fullscreen" style="width:100%;max-width:560px;aspect-ratio:${ratio};border:0;border-radius:12px"></iframe>`;
 }
 
-/** "Private" / "Published · Link only" / "Published · In the Library + link" / "Paused". */
-export function statusLine(view: PublicationOwnerView | null | undefined): { label: string; tone: 'muted' | 'public' | 'unlisted' | 'warn' } {
-  if (!view || view.visibility === 'private' || !view.slug) return { label: 'Private — only you can see it', tone: 'muted' };
-  if (view.status === 'suspended') return { label: 'Paused by review — readers see “This link isn’t active”', tone: 'warn' };
-  return view.visibility === 'public' ? { label: 'Published · In the Library + link', tone: 'public' } : { label: 'Published · Link only', tone: 'unlisted' };
+/**
+ * "Private" / "Published · Link only" / "Published · In the Library + link" / "Paused".
+ * The owner view decides. Until it arrives (or when it could not be fetched) the doc's own `publication` mirror
+ * does, as the header's Share button already reads it: a published comic never reads "Private" while it loads.
+ * No view and no mirror is private (the server writes the mirror; absent = private).
+ */
+export function statusLine(
+  view: PublicationOwnerView | null | undefined,
+  mirror?: PublicationMirror | null
+): { label: string; tone: 'muted' | 'public' | 'unlisted' | 'warn' } {
+  const known = view ? (view.visibility === 'private' || !view.slug ? null : { visibility: view.visibility, status: view.status }) : mirror || null;
+  if (!known) return { label: 'Private — only you can see it', tone: 'muted' };
+  if (known.status === 'suspended') return { label: 'Paused by review — readers see “This link isn’t active”', tone: 'warn' };
+  return known.visibility === 'public' ? { label: 'Published · In the Library + link', tone: 'public' } : { label: 'Published · Link only', tone: 'unlisted' };
+}
+
+/**
+ * AH-2 (EDITIONS-ON-LINK): a finished language reaches the live link in one tap ("हिन्दी is ready · Add हिन्दी to
+ * the link"), and a first publish starts with every finished language ticked. The stage: 'off' = the sheet as it
+ * was, 'admins' = admin accounts only (studio.caps.admin), 'all' = everyone. Going to everyone is this one word.
+ */
+export const EDITION_ON_LINK: FlagStage = 'admins';
+/** Whether the stage admits this account. */
+export const editionOnLinkOn = (isAdmin: boolean | undefined, stage: FlagStage = EDITION_ON_LINK): boolean => stageAllows(stage, !!isAdmin);
+
+/** The most languages one publication carries, the original included (the server's MAX_LANGUAGES, publication.ts). */
+export const MAX_LINK_LANGUAGES = 12;
+
+/**
+ * Finished languages the live link does not carry yet, in the owner view's order, as many as the link has room for.
+ * The owner view lists every edition the comic holds (readiness.languages), with whether it can be published; the
+ * original is always on the link.
+ */
+export function readyOffLink(view: PublicationOwnerView | null | undefined, doc: ComicDoc | null | undefined): string[] {
+  if (!view || !doc) return [];
+  const source = doc.format?.language || 'en';
+  const editions = Object.keys(doc.i18n?.editions || {});
+  const onLink = view.languages || [];
+  const has = (list: readonly string[], lang: string) => list.some((l) => sameLanguage(l, lang));
+  return (view.readiness?.languages || [])
+    .filter((l) => l.publishable && !sameLanguage(l.lang, source) && !has(onLink, l.lang) && has(editions, l.lang))
+    .map((l) => l.lang)
+    .slice(0, Math.max(0, MAX_LINK_LANGUAGES - onLink.length));
+}
+
+/** Each language's own name, as its chip names it ("हिन्दी"); a code the app does not know stays as it is. */
+export const languageEndonyms = (langs: readonly string[]): string[] => langs.map((l) => languageSpec(l)?.endonym || l);
+
+/** Languages in words, short enough for a button: "हिन्दी", "हिन्दी and తెలుగు", then a count ("3 languages"). */
+export function languageNames(langs: readonly string[]): string {
+  const names = languageEndonyms(langs);
+  return names.length <= 2 ? names.join(' and ') : `${names.length} languages`;
 }
 
 /**

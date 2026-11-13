@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { describe, expect, it } from 'vitest';
+import { LIVE_FLAG_DEFAULTS, liveCapsFromEnv } from '../../shared/comic/capabilities';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const FILE = 'docs/infrastructure/ENV_MATRIX.md';
@@ -64,5 +65,38 @@ describe(`${FILE} renders every variable inside a table`, () => {
     for (const name of ['ALLOWED_ORIGINS', 'DEVICE_TOKEN_JWK', 'ACT_TOKEN_KEY', 'SECURITY_HOOK_SECRET', 'OPS_KEY', 'APNS_KEY_P8', 'PUSH_IOS_VIA', 'RL_WS', 'CSP_REPORTS']) {
       expect(firstCells.some((c) => c.includes(name)), name).toBe(true);
     }
+  });
+});
+
+/** The backend `vars` of api-proxy/wrangler.jsonc (its comments are whole lines; strings hold "https://"). */
+const wranglerVars = (): Record<string, string> => {
+  const raw = readFileSync(path.join(ROOT, 'api-proxy/wrangler.jsonc'), 'utf8');
+  const json = raw
+    .split('\n')
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join('\n')
+    .replace(/,(\s*[}\]])/g, '$1');
+  return (JSON.parse(json) as { vars: Record<string, string> }).vars;
+};
+
+describe('Comic Studio stages set in production vars (R00)', () => {
+  const vars = wranglerVars();
+
+  it('COMIC_STEER is admins (P5-D3): an admin can steer a running turn, anyone else cannot', () => {
+    expect(LIVE_FLAG_DEFAULTS.steer).toBe('off');
+    expect(vars.COMIC_STEER).toBe('admins');
+    expect(liveCapsFromEnv(vars, true).liveAgent.steer).toBe(true);
+    expect(liveCapsFromEnv(vars, false).liveAgent.steer).toBe(false);
+    // The matrix row says so.
+    const row = text.split('\n').find((l) => l.startsWith('| `COMIC_STEER` |')) ?? '';
+    expect(row).toContain('**production: `admins`**');
+  });
+
+  it('sets no other live-agent stage: the queue, conflicts, dialogue fast path and Pro editor follow their code defaults', () => {
+    for (const name of ['COMIC_LIVE_QUEUE', 'COMIC_CONFLICT_GUARD', 'COMIC_DIALOGUE_FAST', 'COMIC_PRO_EDITOR_V2']) expect(vars[name], name).toBeUndefined();
+    // SF-3: the recorded production value of the Pro editor flag is the code default, admins.
+    expect(LIVE_FLAG_DEFAULTS.proEditorV2).toBe('admins');
+    const row = text.split('\n').find((l) => l.startsWith('| `COMIC_PRO_EDITOR_V2` |')) ?? '';
+    expect(row).toContain('recorded 2026-11-13');
   });
 });

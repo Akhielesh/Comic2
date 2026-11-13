@@ -148,6 +148,19 @@ describe('ComicReaderView', () => {
     expect(screen.getByText('The end.')).toBeInTheDocument();
   });
 
+  it('scroll mode letters a textless cover with its typed title, and adds nothing to a painted one', () => {
+    const overlay = drawnDoc((d) => {
+      d.cover.lettering = 'overlay';
+      d.cover.title = 'The Saffron Thief';
+    });
+    const { unmount } = render(<ComicReaderView doc={overlay} urlFor={fakeUrlFor} initialMode="scroll" />);
+    const cover = screen.getAllByTestId('reader-page').find((el) => el.getAttribute('data-key') === 'cover')!;
+    expect(within(cover).getByTestId('cover-title')).toHaveAccessibleName(/THE SAFFRON THIEF/i);
+    unmount();
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="scroll" />);
+    expect(screen.queryAllByTestId('cover-title')).toHaveLength(0);
+  });
+
   it('webtoons always scroll (no mode switch to offer)', () => {
     render(<ComicReaderView doc={drawnDoc((d) => (d.format.kind = 'webtoon'))} urlFor={fakeUrlFor} initialMode="page" />);
     expect(reader()).toHaveAttribute('data-layout', 'scroll');

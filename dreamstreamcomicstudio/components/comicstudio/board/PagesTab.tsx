@@ -34,6 +34,7 @@ import { VersionStack } from '../timeline/VersionStack';
 import { TimelineDialog } from '../timeline/ui';
 import { bookClips, canAddPage, deleteOps, duplicateOps, insertOps, moveOps, redrawPrice, sortedPages, type ClipVM } from '../timeline/bookModel';
 import { ComicPageView } from './ComicPageView';
+import { CoverTitleLayer } from '../lettering/CoverTitleLayer';
 import { EmptyIllustration, FrameBadge, ImageFrame, THUMB_MAX_W, VersionsButton, frameSources, variantCssWidth } from './ImageFrame';
 import { PageScript } from './PageScript';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
@@ -404,6 +405,7 @@ export const CoverCard: React.FC<{
         alt={`Cover of ${title}`}
         render={render}
         tone="paper"
+        onArt={<CoverTitleLayer doc={doc} aspect={aspect} />}
         safety={{
           rating,
           onRedrawSafer: () => design(true),
@@ -422,7 +424,11 @@ export const CoverCard: React.FC<{
           <div className="flex h-full flex-col items-center justify-center gap-2 border-2 border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] p-4 text-center">
             <p className="line-clamp-3 text-[15px] font-semibold leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{title}</p>
             {doc.cover.tagline && !compact && <p className="line-clamp-2 text-[12px] text-[var(--ds-muted)]">{doc.cover.tagline}</p>}
-            {!compact && <p className="mt-1 text-[11px] text-[var(--ds-muted)]">The cover is drawn with the title lettered in.</p>}
+            {!compact && (
+              <p className="mt-1 text-[11px] text-[var(--ds-muted)]">
+                {doc.cover.lettering === 'overlay' ? 'The title is typed over the art, so you can change it for free.' : 'The cover is drawn with the title lettered in.'}
+              </p>
+            )}
           </div>
         }
         overlay={

@@ -40,6 +40,14 @@ done by the editor, no AI cost"); "Pro" is never "paid".
 | `COMIC_PRO_STICKERS` | `caps.proStickers` | `off` | off \| admins \| all | The Stickers tab (after D6, PE-LICENCE and the credits block) |
 | `COMIC_READER_MOTION` | `caps.readerMotion` | `off` | off \| all (`on` = all) | Readers play the creator's motion |
 
+**Production value of `COMIC_PRO_EDITOR_V2` (recorded 2026-11-13, R00 SF-3).** The lead checked that the D1
+`backend_env` table has no `COMIC_*` row and that `api-proxy/wrangler.jsonc` sets no `COMIC_PRO_EDITOR_V2`, so the code
+default (`'admins'`, `LIVE_FLAG_DEFAULTS.proEditorV2` in `shared/comic/capabilities.ts`) applies, unless a Worker secret
+of that name overrides it; Worker secrets cannot be listed from here, so that last part is unverified. In practice:
+admins get the Pro workspace (Layers, the docked inspector, numeric fields); everyone else gets the S2 editor, whose
+Easy | Pro switch still opens the older Pro lettering panel (every lettering setting for a selected balloon, no Layers).
+It is **not** "off" in production. The studio's Easy | Pro switch words its hint from the same flag (`ModeToggle.tsx`).
+
 `server/src/comic/access.ts` reads them once per request (`proCapsFromEnv`, `shared/comic/capabilities.ts`). The client
 reads only the caps (`asCaps` in `studioApi.ts`, then `proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only for motion and stickers;
 reader motion has no admins stage (readers are not signed in), so a bare `on` (`true`, `1`, `all`, `everyone`) turns it on

@@ -4,18 +4,30 @@ import { editionProgress, i18nOf, lineSourceHash, textSourceHash } from '../../.
 import { applyOps } from '../../../../shared/comic/ops.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
-import { JOB_TIMINGS } from '../jobs.js';
-import { newSession, scriptedLlm, testContext } from '../orchestrator.fakes.js';
-import { createDirectorTurn, type DirectorTurn } from '../tools.js';
+import { LANGUAGES } from '../../../../shared/comic/languages.js';
+import { LAKE_MODEL, makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
+import { runDirectorTurn } from '../director.js';
+import { MAX_TOOLS_PER_TURN } from '../extensions.js';
+import { sixPageDrawnDoc } from '../golden/fixtures.js';
+import { JOB_TIMINGS, startAction } from '../jobs.js';
+import { newSession, opsOf, plannedDoc, scriptedLlm, testContext } from '../orchestrator.fakes.js';
+import { buildTurnToolset, createDirectorTurn, type DirectorTurn } from '../tools.js';
+import { toolGroups } from './index.js';
 import { resetTranslationCalibration } from '../i18n/index.js';
 import { fakeLinguist, fakeTranslator, sixPageKidsDoc, times } from '../i18n/testing.js';
-import { I18N_PROMPT_RULES, i18nToolGroup, languagesSummary } from './i18n.js';
+import { I18N_PROMPT_RULES, i18nPromptRules, i18nToolGroup, isLanguageAsk, languagesSummary } from './i18n.js';
 
 vi.mock('../safety/index.js', async (orig) => {
   const real = await orig<typeof import('../safety/index.js')>();
   return { ...real, prefilterText: vi.fn(real.prefilterText) };
 });
 const safety = await import('../safety/index.js');
+// quoteTranslation passes through; one test makes it throw for a merged two-language quote.
+vi.mock('../i18n/index.js', async (orig) => {
+  const real = await orig<typeof import('../i18n/index.js')>();
+  return { ...real, quoteTranslation: vi.fn(real.quoteTranslation) };
+});
+const i18nIndex = await import('../i18n/index.js');
 
 beforeEach(() => {
   vi.mocked(safety.prefilterText).mockClear();
@@ -70,6 +82,55 @@ describe('i18n tool group', () => {
     expect(languagesSummary(doc)).toBe('Languages: source en; editions te (draft, 92%: 1 stale)');
     expect(languagesSummary(translated())).toBe('Languages: source en; editions te (publishable, 100%)');
   });
+
+  it('language words: every registry language by its English name and by its own name, "versions" and "mother tongue"', () => {
+    const { ctx } = setup();
+    const opens = (userText: string) => i18nToolGroup.when!(ctx, createDirectorTurn({ userText }));
+    expect(opens('in my mother tongue please')).toBe(true);
+    expect(opens('other versions for my cousins')).toBe(true);
+    for (const l of LANGUAGES) {
+      const english = l.english.replace(/\s*\(.*$/, '');
+      expect(opens(`add a ${english} one`), l.english).toBe(true);
+      expect(opens(`one more: ${l.endonym}`), l.endonym).toBe(true);
+    }
+    // In a sentence, any letter case; a longer word that only starts like a language name is not one.
+    expect(opens('y también en español, por favor')).toBe(true);
+    expect(opens('AUF DEUTSCH BITTE')).toBe(true);
+    expect(opens('the hero is a Germanic warrior')).toBe(false);
+    expect(opens('make the hero taller')).toBe(false);
+  });
+
+  it('the rule: translate the languages named, never ask which to "set active", and say truthfully when the user approves', () => {
+    expect(I18N_PROMPT_RULES).toContain('call translate_comic with the languages they named');
+    expect(I18N_PROMPT_RULES).toContain('Never use ask_user to choose languages');
+    expect(I18N_PROMPT_RULES).toMatch(/never offer to "switch" or "set active" a language/);
+    expect(I18N_PROMPT_RULES).toContain("Call set_comic_language only when they ask to change the comic's own language");
+    expect(I18N_PROMPT_RULES).toContain('If they named no language');
+    // ask_user is the tool that shows tappable options: banned for languages already named, used when none were. Its
+    // chip replies name a language, so the next turn opens the language tools (the phase gate reads only that turn).
+    expect(I18N_PROMPT_RULES).toContain('Never use ask_user to choose languages they already named');
+    expect(I18N_PROMPT_RULES).toMatch(/If they named no language, call ask_user once with multi: true and two to five languages[^.]*its reply is "Translate into <language>"/);
+    const { ctx } = setup();
+    expect(i18nToolGroup.when!(ctx, createDirectorTurn({ userText: 'Translate into Telugu' }))).toBe(true);
+    // The old promise was untrue under "big spends only" (a cheap translate started with no card).
+    expect(I18N_PROMPT_RULES).not.toContain('quotes first');
+    expect(I18N_PROMPT_RULES).toContain("the studio shows the price and waits for the user's Approve");
+    // The languages on offer are the real ones, never the comic's own.
+    expect(I18N_PROMPT_RULES).toContain('You can translate into: Hindi, Telugu, Tamil,');
+    expect(I18N_PROMPT_RULES).not.toMatch(/translate into: [^.]*English/);
+    const telugu = sixPageKidsDoc();
+    telugu.format = { ...telugu.format, language: 'te' };
+    expect(i18nPromptRules(telugu)).toMatch(/You can translate into: English, Hindi, Tamil,/);
+    // "Never ask" comics start at once: the rule says so instead of promising an Approve card.
+    const never = sixPageKidsDoc();
+    never.settings = { ...never.settings, confirm: 'never' };
+    expect(i18nPromptRules(never)).toContain('starts at once');
+    // The budget gate runs before the "never ask" setting is read (jobs.ts gateDecision): the rule says so.
+    expect(i18nPromptRules(never)).toContain("starts at once unless it would go over the comic's budget, when the studio asks first");
+    expect(i18nPromptRules(never)).not.toContain("waits for the user's Approve");
+    expect(i18nToolGroup.promptRules!(never)).toBe(i18nPromptRules(never));
+    expect(i18nToolGroup.promptRules!(sixPageKidsDoc())).toBe(I18N_PROMPT_RULES);
+  });
 });
 
 describe('translate_comic', () => {
@@ -80,20 +141,154 @@ describe('translate_comic', () => {
     expect(await tools.translate_comic.execute({ languages: ['te'], pages: [9] })).toBe('Error: There is no page 9. The comic has 6 pages.');
   });
 
-  it('starts a quoted spend under the policy (small → runs) and the director message gets the live card', async () => {
-    const { tools, turn, ctx, session } = setup(sixPageKidsDoc(), 'translate it into తెలుగు', { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
+  it('a translate the user asked for shows the price and waits for Approve, however small; approving runs the named languages', async () => {
+    const doc = sixPageKidsDoc();
+    // The default policy ("big spends only", $0.50): this quote is far below it and used to start with no card.
+    expect(doc.settings).toMatchObject({ confirm: 'big', bigSpendUsd: 0.5 });
+    const { tools, turn, ctx, session } = setup(doc, 'translate this into Hindi and Tamil', { translator: times(8, fakeTranslator().step), linguist: times(4, fakeLinguist()) });
+    const out = await tools.translate_comic.execute({ languages: ['Hindi', 'Tamil'] });
+    expect(turn.outcome).toBe('gated');
+    expect(turn.gated).toBe(true);
+    expect(turn.spentUsd).toBe(0);
+    const gate = session.doc.gate!;
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['hi', 'ta'] } });
+    expect(gate.estimateUsd).toBeGreaterThan(0);
+    expect(gate.estimateUsd).toBeLessThan(doc.settings.bigSpendUsd);
+    expect(turn.cards.map((c) => c.type)).toEqual(['gate']);
+    // Nothing ran and nothing was spent: no model call, no edition, no spend entry.
+    expect(ctx.llmFake.calls).toHaveLength(0);
+    expect(session.doc.spend.entries).toHaveLength(0);
+    expect(i18nOf(session.doc).editions).toEqual({});
+    // The director reads the price, the languages by name, and that it waits.
+    expect(out).toMatch(/^Waiting for the user to approve ~\$0\.\d+ /);
+    expect(out).toContain('That is Hindi and Tamil');
+    expect(out).toContain('nothing is spent until they tap Approve');
+    // One Approve runs exactly those two languages.
+    const approved = await startAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true, origin: 'user' });
+    expect(approved.outcome.status).toBe('started');
+    await approved.done;
+    await ctx.settled();
+    expect(Object.keys(i18nOf(session.doc).editions).sort()).toEqual(['hi', 'ta']);
+    expect(editionProgress(session.doc, 'hi').missing).toBe(0);
+    expect(editionProgress(session.doc, 'ta').missing).toBe(0);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate').map((e) => e.label).sort()).toEqual(['Translate · Hindi', 'Translate · Tamil']);
+  });
+
+  it('"always ask" waits the same way; a comic set to "never ask" still starts at once, as before', async () => {
+    const always = sixPageKidsDoc();
+    always.settings = { ...always.settings, confirm: 'always' };
+    const a = setup(always, 'make it in Telugu too');
+    await a.tools.translate_comic.execute({ languages: ['Telugu'] });
+    expect(a.session.doc.gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['te'] } });
+    expect(a.ctx.llmFake.calls).toHaveLength(0);
+
+    const never = sixPageKidsDoc();
+    never.settings = { ...never.settings, confirm: 'never' };
+    const { tools, turn, ctx, session } = setup(never, 'translate it into తెలుగు', { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
     const out = await tools.translate_comic.execute({ languages: ['తెలుగు'] });
     expect(out).toMatch(/^Translating 12 lines into Telugu \(≈ \$0\.\d+\); 2 lines reused for free\. Every line gets a linguist review\./);
+    expect(session.doc.gate).toBeNull();
     expect(turn.cards.map((c) => c.type)).toEqual(['translation']);
     expect(turn.spentUsd).toBeGreaterThan(0);
     await ctx.settled();
     expect(editionProgress(session.doc, 'te').missing).toBe(0);
   });
 
+  it('a scripted director that calls translate_comic for the languages named ends with the Approve card and no spend', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const call = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Hindi', 'Tamil'] }) };
+    const llm = scriptedLlm({ director: [{ text: '', toolCalls: [call] }, { text: 'Hindi and Tamil are priced. Tap Approve to start.' }] });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'translate this into Hindi and Tamil', attachments: [] });
+    await ctx.settled();
+    // The model was given the tool and the rule, and read the waiting quote.
+    const first = llm.calls[0];
+    expect(first.tools!.map((t) => t.function.name)).toContain('translate_comic');
+    expect(JSON.stringify(first.messages[0])).toContain('Never use ask_user to choose languages');
+    const toolResult = llm.calls[1].messages.find((m) => m.role === 'tool');
+    expect(String(toolResult?.content)).toMatch(/^Waiting for the user to approve .*That is Hindi and Tamil/);
+    // The reply carries the Approve card; nothing was translated or charged for it.
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.role).toBe('assistant');
+    expect(reply.cards!.map((c) => c.type)).toContain('gate');
+    expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['hi', 'ta'] } });
+    expect(llm.calls.filter((c) => c.role !== 'director')).toHaveLength(0);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+    expect(i18nOf(session.doc).editions).toEqual({});
+  });
+
+  it('two translate_comic calls in one turn ("add telugu and hindi versions" sent as [Telugu], then [Hindi]) end on one Approve card for both', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const te = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Telugu'] }) };
+    const hi = { id: 'c2', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Hindi'] }) };
+    const llm = scriptedLlm({ director: [{ text: '', toolCalls: [te, hi] }, { text: 'Telugu and Hindi are priced. Tap Approve.' }] });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'add telugu and hindi versions', attachments: [] });
+    await ctx.settled();
+    const results = llm.calls[1].messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(results.some((c) => c.startsWith('Refused')), results.join('\n')).toBe(false);
+    expect(results[1]).toContain('That is Telugu and Hindi');
+    const gate = session.doc.gate!;
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['te', 'hi'] } });
+    // One card: the first one was closed, never left beside the new one.
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.cards!.filter((c) => c.type === 'gate')).toEqual([expect.objectContaining({ gateId: gate.id })]);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+    // The studio replaced the first card; the user never said "Not now" (settled cards, S2b): no gate is recorded as
+    // declined, and no card is stamped as closed by the user.
+    const ops = opsOf(ctx.events);
+    expect(ops.filter((o) => o.op === 'gate').map((o) => (o as { gate: { status: string } }).gate.status)).not.toContain('declined');
+    expect(JSON.stringify(ops)).not.toMatch(/"by":"user"/);
+    // A late tap on the replaced card (an old tab, a replayed request) is refused and spends nothing.
+    const firstId = ops.map((o) => (o.op === 'gate' ? (o as { gate: { id: string } }).gate.id : '')).find((id) => id && id !== gate.id)!;
+    expect(firstId).toBeTruthy();
+    await expect(startAction(ctx, { type: 'approve_gate', gateId: firstId }, { confirmed: true, origin: 'user' })).rejects.toThrow(/no longer open/);
+    await ctx.settled();
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'open' });
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+    expect(i18nOf(session.doc).editions).toEqual({});
+  });
+
+  it('when the merged two-language quote fails, the first Approve card stays in the reply and its gate stays approvable', async () => {
+    const real = vi.mocked(i18nIndex.quoteTranslation).getMockImplementation()!;
+    vi.mocked(i18nIndex.quoteTranslation).mockImplementation((doc, keys, action) => {
+      if (action.languages.length > 1) throw new Error('quote failed');
+      return real(doc, keys, action);
+    });
+    try {
+      const session = newSession(sixPageKidsDoc());
+      const te = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Telugu'] }) };
+      const hi = { id: 'c2', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Hindi'] }) };
+      const llm = scriptedLlm({ director: [{ text: '', toolCalls: [te, hi] }, { text: 'Telugu is priced. Tap Approve.' }] });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text: 'add telugu and hindi versions', attachments: [] });
+      await ctx.settled();
+      // The Telugu gate is still the open one, and its card is in the reply: never an open gate with no card.
+      const gate = session.doc.gate!;
+      expect(gate).toMatchObject({ status: 'open', action: { type: 'translate', languages: ['te'] } });
+      const reply = session.doc.conversation[session.doc.conversation.length - 1];
+      expect(reply.cards!.filter((c) => c.type === 'gate')).toEqual([expect.objectContaining({ gateId: gate.id })]);
+      expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+      expect(llm.calls.filter((c) => c.role !== 'director')).toHaveLength(0);
+    } finally {
+      vi.mocked(i18nIndex.quoteTranslation).mockImplementation(real);
+    }
+  });
+
+  it('a second call for other pages or options is still refused: only the languages gather on one card', async () => {
+    const { tools, session } = setup(sixPageKidsDoc(), 'translate it into Telugu and Hindi');
+    await tools.translate_comic.execute({ languages: ['Telugu'] });
+    const first = session.doc.gate!.id;
+    expect(await tools.translate_comic.execute({ languages: ['Hindi'], pages: [1] })).toMatch(/^Refused: a spend from this turn is already waiting/);
+    expect(session.doc.gate).toMatchObject({ id: first, status: 'open', action: { languages: ['te'] } });
+  });
+
   it('a proactive offer (no language words) always gates; one approval per turn', async () => {
     const { tools, turn, session, ctx } = setup(sixPageKidsDoc(), 'looks great, what next?');
     const out = await tools.translate_comic.execute({ languages: ['hi'] });
     expect(out).toMatch(/Quoted|Waiting|waiting/);
+    // The card names the languages by code; the director reads their names.
+    expect(out).toContain('That is Hindi: say the languages and the price in one line and stop');
     expect(turn.gated).toBe(true);
     expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'no_intent' });
     expect(ctx.llmFake.calls).toHaveLength(0);
@@ -118,6 +313,91 @@ describe('translate_comic', () => {
     const { tools } = setup(doc, 'translate into Hindi');
     const out = await tools.translate_comic.execute({ languages: ['hi'] });
     expect(out).toMatch(/translated editions need overlay lettering \(owner rule\): redrawing 6 pages without text costs ≈ \$/);
+  });
+});
+
+describe('a language ask keeps its tools (the real registry, as director.ts builds a turn)', () => {
+  /** A drawn, model-locked book whose pages have versions: its timeline group alone fills the rest of the budget. */
+  const lockedLakeDoc = () => makeLakeComic((d) => (d.imageModel = { modelId: LAKE_MODEL, lockedAt: 1, origin: 'first_render' }));
+  const FIXTURES: Record<string, () => ComicDoc> = { plannedDoc: () => plannedDoc(), sixPageDrawnDoc, lockedLakeDoc };
+  const offered = (doc: ComicDoc, userText: string) => {
+    const set = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText }), toolGroups());
+    return { groups: set.groups, names: set.tools.map((t) => t.spec.function.name), rules: set.promptRules.join('\n') };
+  };
+
+  // "version", "book", "switch" and "copy" are timeline words: they used to hand these turns to the page timeline,
+  // and the director was left with no translate tool and no language rule (the owner's "add telugu and hindi versions").
+  const ASKS = ['add telugu and hindi versions', 'translate the book into Hindi', 'switch the comic to Hindi', 'make a Tamil copy', 'Telugu version కూడా add చేయి', 'हिंदी version भी बनाओ'];
+  for (const [fixture, make] of Object.entries(FIXTURES)) {
+    for (const ask of ASKS) {
+      it(`${fixture}: "${ask}" offers translate_comic and the language rule`, () => {
+        const { groups, names, rules } = offered(make(), ask);
+        expect(groups, ask).toContain('i18n');
+        expect(names, ask).toEqual(expect.arrayContaining(['translate_comic', 'set_comic_language', 'read_translation']));
+        expect(rules, ask).toContain('Never use ask_user to choose languages');
+        // The page timeline stood down: its tools and this group's cannot both fit.
+        expect(groups, ask).not.toContain('timeline');
+        expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
+      });
+    }
+  }
+
+  // A page, or a numbered or earlier take, is what these sentences act on: the timeline keeps the turn, as before.
+  const PAGE_TURNS: [string, string][] = [
+    ['restore the previous version of page 2', 'use_version'],
+    ['use version 2 of the Hindi edition', 'use_version'],
+    ['go back to the earlier version in Hindi', 'use_version'],
+    ['delete page 3 of the Hindi version', 'delete_page'],
+    ['duplicate page 1 and translate it into Tamil', 'duplicate_page'],
+    // A language name used as a plain adjective is not an ask; neither is a message that only happens to be typed in another script.
+    ['restore the earlier version with the Chinese dragon', 'use_version'],
+    ['దీన్ని duplicate చేయి', 'duplicate_page'],
+    ['move the second page to the top', 'move_page'],
+    // A page put or dragged, or the book's shape, on an edition: still the timeline's (commit 2 used to take these).
+    ['put page 3 before page 2 in the Hindi version', 'move_page'],
+    ['make the Hindi edition a square book', 'set_book']
+  ];
+  // The same kind of sentence, but the timeline's tools did not fit even before the language stand-down (an older
+  // budget loss in tools.ts): never a language ask, so this group does not make it worse.
+  const PAGE_TURNS_OVER_BUDGET = [
+    'drag page 4 to the front of the Telugu edition',
+    'use the old version of page 2 in Hindi',
+    'go back to the original page 2 from before the Hindi translation'
+  ];
+  for (const [say, tool] of PAGE_TURNS) {
+    it(`lockedLakeDoc: "${say}" keeps ${tool}`, () => {
+      const { groups, names } = offered(lockedLakeDoc(), say);
+      expect(groups, say).toContain('timeline');
+      expect(names, say).toContain(tool);
+    });
+  }
+
+  it('isLanguageAsk: a language named as what the comic should be in, never a page action', () => {
+    for (const ask of ASKS) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const ask of ['make it in Telugu too', 'translate this into Hindi and Tamil', 'हिन्दी में भी चाहिए']) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const [say] of PAGE_TURNS) expect(isLanguageAsk(say), say).toBe(false);
+    for (const say of PAGE_TURNS_OVER_BUDGET) expect(isLanguageAsk(say), say).toBe(false);
+    // Not a page action: "copy page 2 into Hindi" and Hindi subtitles on every page are translations.
+    for (const ask of ['copy page 2 into Hindi', 'add Hindi subtitles to every page']) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const say of ['make the hero taller', 'other versions for my cousins', 'show me other versions of the cover', '']) expect(isLanguageAsk(say), say).toBe(false);
+  });
+
+  it("the owner's words on a drawn book: the director gets the tool, calls it for both languages, and the Approve card waits", async () => {
+    // "Always ask": this test is about the tools reaching the director, whatever the money settings decide.
+    const session = newSession(makeLakeComic((d) => ((d.imageModel = { modelId: LAKE_MODEL, lockedAt: 1, origin: 'first_render' }), (d.settings = { ...d.settings, confirm: 'always' }))));
+    const call = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Telugu', 'Hindi'] }) };
+    const llm = scriptedLlm({ director: [{ text: '', toolCalls: [call] }, { text: 'Telugu and Hindi are priced. Tap Approve to start.' }] });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'add telugu and hindi versions', attachments: [] });
+    await ctx.settled();
+    const first = llm.calls[0];
+    expect(first.tools!.map((t) => t.function.name)).toContain('translate_comic');
+    expect(JSON.stringify(first.messages[0])).toContain('Never use ask_user to choose languages');
+    expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['te', 'hi'] } });
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.cards!.map((c) => c.type)).toContain('gate');
+    expect(llm.calls.filter((c) => c.role !== 'director')).toHaveLength(0);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
   });
 });
 
@@ -238,8 +518,16 @@ describe('prices the director reads are worded for the user', () => {
     expect(await none.read_translation.execute({ language: 'hi' })).toMatch(/^There is no Hindi translation yet\. translate_comic would cost ≈ \$\d/);
   });
 
-  it("the run's own words reach the director in the same currency: started and cached runs never carry dollars", async () => {
-    const { tools, ctx } = setup(sixPageKidsDoc(), 'translate it into తెలుగు', { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }, governed);
+  it("the run's own words reach the director in the same currency: waiting, started and cached runs never carry dollars", async () => {
+    // Default policy: the quote waits for Approve, worded as a share of the usage.
+    const waiting = await setup(sixPageKidsDoc(), 'translate it into తెలుగు', {}, governed).tools.translate_comic.execute({ languages: ['తెలుగు'] });
+    expect(waiting).toMatch(new RegExp(`^Waiting for the user to approve ${usage.source} `));
+    expect(waiting).toContain('That is Telugu');
+    expect(waiting).not.toMatch(/\$/);
+    // "Never ask": the run starts, in the same currency.
+    const never = sixPageKidsDoc();
+    never.settings = { ...never.settings, confirm: 'never' };
+    const { tools, ctx } = setup(never, 'translate it into తెలుగు', { translator: times(4, fakeTranslator().step), linguist: times(2, fakeLinguist()) }, governed);
     const out = await tools.translate_comic.execute({ languages: ['తెలుగు'] });
     expect(out).toMatch(/Telugu/);
     expect(out).not.toMatch(/\$/);

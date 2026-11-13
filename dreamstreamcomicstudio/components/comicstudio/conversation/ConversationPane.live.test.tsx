@@ -102,11 +102,29 @@ describe('a waiting "wait and retry"', () => {
     expect(within(slot).getByRole('button', { name: /Don.t retry/ })).toBeEnabled();
   });
 
-  it('control: with settled cards off, the card is live either way (no settle index)', async () => {
+  it('a non-admin gets the same rule (R00 SF-1): passed and not retrying, the card settles to its line', async () => {
     const { container } = render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation }), caps: DEFAULT_CAPS })} />);
     await flush();
-    expect(slotOf(container, 'out_1').querySelector('[data-settled]')).toBeNull();
-    expect(slotOf(container, 'out_1').querySelector('[data-card-state]')).toBeNull();
+    expect(slotOf(container, 'out_1').querySelector('[data-settled]')).not.toBeNull();
+    expect(within(slotOf(container, 'out_1')).queryByRole('button', { name: /Wait and retry/ })).toBeNull();
+  });
+
+  it('a non-admin’s waiting retry keeps the card live with "Don’t retry", as for an admin', async () => {
+    const { container } = render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation }), caps: DEFAULT_CAPS })} />);
+    await flush();
+    await act(async () => {
+      armRetry(OUTAGE.id, OUTAGE.modelId, OUTAGE.blockedAction!);
+    });
+    await flush();
+    const slot = slotOf(container, 'out_1');
+    expect(slot.querySelector('[data-settled]')).toBeNull();
+    expect(within(slot).getByRole('button', { name: /Don.t retry/ })).toBeEnabled();
+  });
+
+  it('a non-admin sees the heist question "Not answered — you moved on" (R00 SF-1)', async () => {
+    const { container } = render(<ConversationPane studio={makeFakeStudio({ doc: makeQaDoc('heist-12p'), caps: DEFAULT_CAPS })} />);
+    await flush();
+    expect(slotOf(container, 'o1').textContent).toBe('Not answered — you moved on');
   });
 });
 

@@ -1,6 +1,6 @@
 // Reader state machine (reader.md §12 rules): intro skip, turns, bounds bump, riffle queue, reverse
-// mid-turn, drags, reduced motion, guided across page boundaries (incl. RTL page order), layout change
-// during a drag, and the Escape cascade.
+// mid-turn, drags, reduced motion, a key or button step while zoomed (the page turns and the zoom resets),
+// guided across page boundaries (incl. RTL page order), layout change during a drag, and the Escape cascade.
 import { describe, expect, it } from 'vitest';
 import { escapeTarget, initialReaderState, readerReducer, type MachineCtx, type ReaderEvent, type ReaderState } from './readerMachine';
 
@@ -87,6 +87,37 @@ describe('drags', () => {
   it('a layout change during a drag cancels the motion and keeps the page', () => {
     const d = run(start({ view: 3 }), { type: 'DRAG_START', dir: 1, grab: { x: 0, y: 0 } }, { type: 'LAYOUT', layout: 'spread', view: 2 });
     expect(d).toMatchObject({ layout: 'spread', view: 2, motion: { kind: 'idle' } });
+  });
+});
+
+describe('zoomed in (free zoom)', () => {
+  const zoom = { s: 2, x: -120, y: -80 };
+
+  it('a STEP (arrow key, Space, a button) turns the page and the zoom resets', () => {
+    const s = run(start({ view: 1, zoom }), { type: 'STEP', delta: 1 });
+    expect(s.zoom).toBeNull();
+    expect(s.motion).toMatchObject({ kind: 'turn', dir: 1, from: 1, to: 2, source: 'auto' });
+    expect(run(s, { type: 'TURN_DONE' })).toMatchObject({ view: 2, zoom: null, motion: { kind: 'idle' } });
+    // Backward as well.
+    expect(run(start({ view: 2, zoom }), { type: 'STEP', delta: -1 }, { type: 'TURN_DONE' })).toMatchObject({ view: 1, zoom: null, motion: { kind: 'idle' } });
+  });
+
+  it('reduced motion: the STEP lands on the next view at once, unzoomed', () => {
+    expect(run(start({ view: 1, zoom, reduced: true }), { type: 'STEP', delta: 1 })).toMatchObject({ view: 2, zoom: null, motion: { kind: 'idle' }, fade: 1 });
+  });
+
+  it('a second STEP while that turn runs is queued like any other (no stuck state)', () => {
+    const s = run(start({ view: 1, zoom }), { type: 'STEP', delta: 1 }, { type: 'STEP', delta: 1 }, { type: 'TURN_DONE' });
+    expect(s).toMatchObject({ view: 2, zoom: null, motion: { kind: 'turn', from: 2, to: 3, chained: true } });
+  });
+
+  it('a STEP past either end has no page to turn to: it bumps and the zoom stays', () => {
+    expect(run(start({ view: 5, zoom }), { type: 'STEP', delta: 1 })).toMatchObject({ view: 5, zoom, motion: { kind: 'idle' }, bump: { dir: 1, n: 1 } });
+    expect(run(start({ view: 0, zoom }), { type: 'STEP', delta: -1 })).toMatchObject({ view: 0, zoom, motion: { kind: 'idle' }, bump: { dir: -1, n: 1 } });
+  });
+
+  it('a swipe still never turns a zoomed page (one finger pans): DRAG_START is refused and the zoom stays', () => {
+    expect(run(start({ view: 1, zoom }), { type: 'DRAG_START', dir: 1, grab: { x: 400, y: 560 } })).toMatchObject({ view: 1, zoom, motion: { kind: 'idle' } });
   });
 });
 

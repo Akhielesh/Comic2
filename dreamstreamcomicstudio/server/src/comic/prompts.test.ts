@@ -27,6 +27,7 @@ import {
   frameSentence,
   compileCharacterSheet,
   compileCover,
+  withoutTitle,
   compileEdit,
   compilePage,
   compilePlaceSheet,
@@ -1414,6 +1415,39 @@ describe('cover: story page reference and textless covers', () => {
     const inArt = compileCover(withPages()).prompt;
     expect(inArt).toContain('Title lettering at the top: "SAFFRON RUN"');
     expect(inArt).not.toContain('TEXTLESS');
+  });
+
+  it('a textless cover never shows the model the title words, even from a bare brief or a logline that names it', () => {
+    const bare = withPages((d) => {
+      d.cover.lettering = 'overlay';
+      d.brief.title = 'Zorblaxian Moonrise';
+      d.cover.title = 'Zorblaxian Moonrise';
+      d.brief.genre = 'crime';
+      d.brief.logline = '';
+      d.brief.premise = '';
+      d.source.script = '';
+    });
+    const bareJob = compileCover(bare);
+    expect(bareJob.prompt).toContain('a defining moment from a crime story');
+    expect(bareJob.prompt).not.toMatch(/zorblax/i);
+    const named = withPages((d) => {
+      d.brief.title = 'Zorblaxian Moonrise';
+      d.cover.title = 'ZORBLAXIAN MOONRISE';
+      d.brief.logline = 'In "Zorblaxian Moonrise", a cat flies; zorblaxian moonrise ends at dawn.';
+    });
+    const job = compileCover(named, { textless: true });
+    expect(job.prompt).not.toMatch(/zorblax/i);
+    expect(job.prompt).toContain('In this story, a cat flies; this story ends at dawn');
+    // A painted cover keeps today's wording, title and all.
+    expect(compileCover(named).prompt).toContain('In "Zorblaxian Moonrise", a cat flies');
+    const paintedBare = compileCover(withPages((d) => ((d.brief.title = 'Zorblaxian Moonrise'), (d.brief.logline = ''), (d.brief.premise = ''), (d.source.script = ''))));
+    expect(paintedBare.prompt).toContain('called "Zorblaxian Moonrise"');
+  });
+
+  it('withoutTitle keeps a lowercase common word that only matches a capitalised title', () => {
+    expect(withoutTitle('A cat looks at the moon. Moon rises.', ['Moon'])).toBe('A cat looks at the moon. this story rises.');
+    expect(withoutTitle('రామాయణం కథ', ['రామాయణం'])).toBe('this story కథ');
+    expect(withoutTitle('Moonrise', [undefined, ''])).toBe('Moonrise');
   });
 
   it('the calm band follows the overlay title box', () => {

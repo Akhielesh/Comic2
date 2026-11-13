@@ -418,6 +418,15 @@ Art style: {style.spec}. Spell the title exactly; no other text except an option
 issue number.
 ```
 
+A **textless cover** (`cover.lettering === 'overlay'`, or the one-time `render_cover {textless:true}` redraw) asks for
+no text at all and keeps a calm band where the typed title will sit. Its prompt never shows the model the title's
+words: the key-moment fallback says "a defining moment from a {genre} story" without "called …", and a whole-word
+mention of the title in the logline, premise or script excerpt becomes "this story" (`prompts.ts` `keyMoment(doc,
+{ untitled })`, `withoutTitle`). The typed title (`CoverTitleLayer`) is drawn wherever the studio or a reader shows
+the current cover: the board's Cover card, the page, immersive and scroll readers, and the current version in the
+cover's version stack (older versions may be painted, so they stay bare), plus every export. Library, gallery and
+shelf cards still show the stored art only.
+
 ### 6.7 Writer (page-script planner) — system prompt essentials
 "You are a veteran comics writer and editor…" Craft rules: every page ends on a
 turn-hook; establishing shot when a scene changes; vary shot types (no more than 2

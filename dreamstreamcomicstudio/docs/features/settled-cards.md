@@ -184,9 +184,14 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
 
 ## 6. Flags and decisions
 
-- **`SETTLED_CARDS`** (`'off' | 'admins' | 'all'`, a code constant in `settle.ts`) is `'admins'` in S2. The client
-  reads `studio.caps.admin` (`settledCardsOn`), so `capabilities.ts` is untouched. The S2 integration flips it to
-  `'all'` after a week, and `'off'` is the kill switch.
+- **`SETTLED_CARDS`** (`'off' | 'admins' | 'all'`, a code constant in `settle.ts`) is **`'all'` since R00** (the owner
+  asked for old questions to close for every creator, not only admins). It was `'admins'` in S2 and S2b.
+  Every creator now sees an old card as its one line, and the server keeps a late tap or typed answer to a passed card
+  (options: `kept`; conflict: refused with `SETTLED_TEXT`), so an old question changes nothing. `settledCardsOn` reads
+  `studio.caps.admin` only for the `'admins'` stage, so `capabilities.ts` is untouched. **Rollback:** `'off'` is the kill
+  switch (every card live again, as before S2); it is a code constant, so off is one commit and a redeploy, and
+  `'admins'` goes back to the S2b stage. `components/comicstudio/conversation/settledCards.off.test.tsx` pins what
+  `'off'` gives back.
 - **The stamps are written for everyone.** They are data only, and the existing GateCard keeps reading `doc.gate`.
 - **`SETTLE_COURTESY_MATCH = false`** (lead decision D14 at the S2b integration: it stays false; turn it on only after
   the admin week shows misses). settle.md D7 ("Noir ink, please" picks Noir ink: a courtesy suffix only, never a
@@ -223,8 +228,9 @@ applied it after B-TOOL merged (`server/src/comic/director.settle.test.ts`). It 
 
 ### 8.1 Who sees it
 
-- **Settled rows are behind `SETTLED_CARDS`** (`'admins'` in S2): `ConversationPane` builds the settle index only when
-  `settledCardsOn(studio.caps.admin)`. Everyone else sees today's live cards, unchanged.
+- **Settled rows are behind `SETTLED_CARDS`** (`'all'` since R00; `'admins'` in S2 and S2b): `ConversationPane` builds
+  the settle index only when `settledCardsOn(studio.caps.admin)`, which is now true for every viewer. With `'off'` every
+  card is live again (`settledCards.off.test.tsx`).
 - **For everyone** (they change no card, only how the conversation is drawn and when the queue waits):
   - the fresh-only entrance (MO-2, bug B24) and the memoised rows (PF-7a, perf F9);
   - A1's queue no longer waits on a question the creator moved past (§8.6);

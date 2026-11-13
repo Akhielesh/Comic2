@@ -8,13 +8,25 @@
 
 import React from 'react';
 import { Gauge, Sparkles } from 'lucide-react';
-import type { StudioMode } from '../../../shared/comic/capabilities';
+import { proEditorV2On, type StudioMode } from '../../../shared/comic/capabilities';
 import type { StudioController } from '../types';
 import { Segmented } from '../board/ui';
+import { editorViewFor } from '../editor/useProEditor';
+import { readStoredMode } from '../useStudioMode';
 import { headerVariantFor } from './formFactor';
+import { editorLayoutFor } from './editor/editorModel';
 import { useFormFactor } from './useFormFactor';
 
-export const MODE_HINT = 'Easy keeps it simple — you can still ask me to do anything. Pro shows every control.';
+// R00 SF-2: honest about what Pro changes today. The board ignores the mode; Pro's difference lives inside a page.
+// With the Pro editor flag on (COMIC_PRO_EDITOR_V2) that is the Pro workspace: layers and numeric fields. With it off
+// it is the older Pro lettering panel, which has no layers, so the words say only what that panel gives.
+export const MODE_HINT = 'Easy keeps it simple. Pro adds layers and exact numbers inside a page.';
+export const MODE_HINT_LETTERING = 'Easy keeps it simple. Pro shows every lettering setting for a selected balloon.';
+const PRO_TITLE = 'Pro: layers and exact numbers inside a page';
+const PRO_TITLE_LETTERING = 'Pro: every lettering setting for a selected balloon';
+
+/** The hint for this viewer: what Pro really adds with their editor (proEditorV2 on or off). */
+export const modeHintFor = (caps: StudioController['caps'] | undefined): string => (proEditorV2On(caps) ? MODE_HINT : MODE_HINT_LETTERING);
 
 export interface ModeToggleProps {
   studio: Pick<StudioController, 'mode' | 'setMode' | 'caps'>;
@@ -27,7 +39,17 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
   const ff = useFormFactor();
   if (variant === 'header' && headerVariantFor(ff) !== 'regular') return null;
   const proAllowed = studio.caps?.proEditor !== false;
-  const mode: StudioMode = studio.mode === 'pro' && proAllowed ? 'pro' : 'easy';
+  const v2 = proEditorV2On(studio.caps);
+  const hint = modeHintFor(studio.caps);
+  // Show the view the page editor will really open in (R00 SF-2): with the Pro editor on, a phone opens in Easy until
+  // this device has a stored choice (editorViewFor, D7), whatever the plan default says. Elsewhere it is studio.mode.
+  const mode: StudioMode = editorViewFor({
+    flag: v2,
+    canPro: proAllowed,
+    phone: editorLayoutFor(ff).toolbar !== 'top',
+    studioMode: studio.mode,
+    stored: readStoredMode()
+  });
   const options = [
     {
       value: 'easy' as StudioMode,
@@ -41,7 +63,7 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
     },
     {
       value: 'pro' as StudioMode,
-      title: proAllowed ? 'Pro: every control on screen' : 'The Pro editor isn’t available on this plan',
+      title: proAllowed ? (v2 ? PRO_TITLE : PRO_TITLE_LETTERING) : 'The Pro editor isn’t available on this plan',
       disabled: !proAllowed,
       label: (
         <>
@@ -52,19 +74,22 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
     }
   ];
 
+  // A tap always stores the choice, even on the option already shown (R00 SF-2), so this device's pick is kept.
+  const pick = (m: StudioMode) => studio.setMode(m);
+
   if (variant === 'menu') {
     return (
       <div className="min-w-0" data-action="mode">
-        <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} className="w-full" />
-        <p className="mt-1.5 text-[12px] leading-snug text-[var(--ds-muted)]">{MODE_HINT}</p>
+        <Segmented label="Editor view" value={mode} onChange={pick} options={options} className="w-full" />
+        <p className="mt-1.5 text-[12px] leading-snug text-[var(--ds-muted)]">{hint}</p>
       </div>
     );
   }
 
   return (
     // data-action: the one home of the Easy | Pro view switch in a viewport (declutter C2; DC-1 wave note 8).
-    <span title={MODE_HINT} className="inline-flex shrink-0" data-action="mode">
-      <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} size={compact ? 'xs' : 'sm'} />
+    <span title={hint} className="inline-flex shrink-0" data-action="mode">
+      <Segmented label="Editor view" value={mode} onChange={pick} options={options} size={compact ? 'xs' : 'sm'} />
     </span>
   );
 };

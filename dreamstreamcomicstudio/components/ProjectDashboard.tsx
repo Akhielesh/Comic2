@@ -20,6 +20,28 @@ const PROJECT_NAME_MAX = 200;
 
 export const DUPLICATE_UNAVAILABLE_FOR_STUDIO = "Duplicate isn't available for studio comics yet";
 
+/**
+ * A comic card's Read / Open / Info row on a touch screen. With a mouse the row sits centred on a dimmed cover and
+ * shows while the card is hovered, or when the keyboard reaches one of its buttons (`:focus-visible`; a mouse click
+ * focuses a button too and must not hold the row open). A touch screen has no hover, so there the row is always
+ * shown: along the bottom of the cover on a light scrim, each button at least 44 px.
+ *
+ * "A touch screen" is every screen that is not a mouse: the opposite of the app's `can-hover` screen
+ * (tailwind.config.cjs, `(hover: hover) and (pointer: fine)`). That takes in a phone that claims it can hover and a
+ * pen-only screen, which `(hover: none)` or `(pointer: coarse)` alone would each miss. Tailwind cannot build a
+ * variant with a comma in it, so the query is written as `not all and ...`.
+ *
+ * What a cover centres (the empty-cover marks, the Generating notice) moves up by the row's height there
+ * (`CARD_COVER_TOUCH`), so the row never sits on it; on the smallest phones that leaves the notice short of room, so
+ * its progress bar keeps its height (`shrink-0`). On a 320 px phone a button is 72 px wide, so its side padding
+ * drops to 4 px to keep the label inside. The classes are written out in full because Tailwind reads them from this
+ * file.
+ */
+const CARD_ACTIONS_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:top-auto [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-transparent [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-gradient-to-t [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:from-[var(--ds-scrim)] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pt-6 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:opacity-100';
+const CARD_ACTION_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-h-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-w-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:flex-1 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-1';
+const CARD_COVER_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-16';
+const CARD_BAR_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:shrink-0';
+
 /** Creation failures from the studio API carry user-safe messages; anything else gets ours. */
 const friendlyCreateError = (err: unknown): string => {
   const e = (err && typeof err === 'object' ? err : {}) as { kind?: unknown; message?: unknown };
@@ -255,7 +277,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
         <>
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-brand-yellow border-4 border-black rounded-xl flex items-center justify-center shadow-comic transform -rotate-3">
                 <LayoutGrid className="w-8 h-8 text-black" />
@@ -481,12 +503,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         containerClassName="w-full h-full"
                       />
                     ) : isStudio ? (
-                      <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-slate-50 text-slate-400">
+                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-slate-50 text-slate-400 ${CARD_COVER_TOUCH}`}>
                         <MessageSquare className="h-9 w-9" aria-hidden />
                         <span className="text-xs font-bold">Nothing drawn yet</span>
                       </div>
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-brand-blue/10 text-brand-blue/50 font-display text-6xl">?</div>
+                      <div className={`w-full h-full flex items-center justify-center bg-brand-blue/10 text-brand-blue/50 font-display text-6xl ${CARD_COVER_TOUCH}`}>?</div>
                     )}
 
                     {isStudio && (
@@ -500,19 +522,19 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                     )}
 
                     {project.state.generationStatus?.isActive && (
-                      <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white p-4">
+                      <div className={`absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white p-4 ${CARD_COVER_TOUCH}`}>
                         <div className="text-brand-yellow font-display text-2xl animate-pulse mb-2">Generating...</div>
-                        <div className="w-full h-2 bg-white/20 rounded-full mb-2 overflow-hidden">
+                        <div className={`w-full h-2 bg-white/20 rounded-full mb-2 overflow-hidden ${CARD_BAR_TOUCH}`}>
                           <div className="h-full bg-brand-yellow transition-all duration-500" style={{ width: `${project.state.generationStatus.progress}%` }} />
                         </div>
                         <div className="font-mono text-xs text-slate-300">Est: {project.state.generationStatus.estimatedTimeRemaining}</div>
                       </div>
                     )}
 
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity gap-2">
-                      <Button size="sm" onClick={() => onReadProject(project.id)} icon={<BookOpen size={16} />}>Read</Button>
-                      <Button size="sm" variant="secondary" onClick={() => onOpenProject(project.id)} icon={<Edit size={16} />}>{isStudio ? 'Open' : 'Edit'}</Button>
-                      <Button size="sm" variant="outline" onClick={() => setInfoProjectId(project.id)} icon={<Info size={16} />}>Info</Button>
+                    <div className={`absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity gap-2 ${CARD_ACTIONS_TOUCH}`}>
+                      <Button size="sm" className={CARD_ACTION_TOUCH} onClick={() => onReadProject(project.id)} icon={<BookOpen size={16} />}>Read</Button>
+                      <Button size="sm" variant="secondary" className={CARD_ACTION_TOUCH} onClick={() => onOpenProject(project.id)} icon={<Edit size={16} />}>{isStudio ? 'Open' : 'Edit'}</Button>
+                      <Button size="sm" variant="outline" className={CARD_ACTION_TOUCH} onClick={() => setInfoProjectId(project.id)} icon={<Info size={16} />}>Info</Button>
                     </div>
                   </div>
                   <div className="p-5">

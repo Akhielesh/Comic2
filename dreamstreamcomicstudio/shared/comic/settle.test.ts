@@ -73,13 +73,15 @@ const look: OptionsCard = {
 const withConv = (conversation: Msg[], over: Partial<ComicDoc> = {}): ComicDoc => ({ ...createEmptyDoc('p', 'T', 1), conversation, ...over });
 
 describe('flags', () => {
-  it('rolls out to admins first; off is the kill switch; the courtesy match waits for the owner (D7)', () => {
-    expect(SETTLED_CARDS).toBe('admins');
+  it('is on for everyone (R00 SF-1); the admins stage and the off kill switch still work; the courtesy match waits (D7)', () => {
+    expect(SETTLED_CARDS).toBe('all');
     expect(settledCardsOn(true)).toBe(true);
-    expect(settledCardsOn(false)).toBe(false);
-    expect(settledCardsOn(undefined)).toBe(false);
-    expect(settledCardsOn(false, 'all')).toBe(true);
+    expect(settledCardsOn(false)).toBe(true);
+    expect(settledCardsOn(undefined)).toBe(true);
+    expect(settledCardsOn(false, 'admins')).toBe(false);
+    expect(settledCardsOn(true, 'admins')).toBe(true);
     expect(settledCardsOn(true, 'off')).toBe(false);
+    expect(settledCardsOn(false, 'off')).toBe(false);
     expect(SETTLE_COURTESY_MATCH).toBe(false);
   });
 });
