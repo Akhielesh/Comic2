@@ -387,7 +387,7 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
 
   it('the enter / exit vocabulary: long-tail ease-out to arrive, quicker exits', () => {
     expect(ATLAS_LIGHT.get('--ds-ease-enter')).toBe('cubic-bezier(0.16, 1, 0.3, 1)');
-    expect(ATLAS_LIGHT.get('--ds-motion-enter')).toBe('280ms');
+    expect(ATLAS_LIGHT.get('--ds-motion-enter')).toBe('200ms');
     expect(ATLAS_LIGHT.get('--ds-motion-exit')).toBe('160ms');
   });
 
@@ -483,13 +483,20 @@ describe('Atlas skin — DS-1a tokens (z ladder, densities, heading steps, motio
     expect(tapMin).toBe(ROOT_TOKENS.get('--ds-density-touch'));
   });
 
-  it('motion: -enter-quick is an alias of the 280 ms entrance (the existing token keeps its name and value), -enter-slow 420 ms and -stagger 40 ms (Atlas)', () => {
-    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
-      expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
-      expect(block.get('--ds-motion-enter')).toBe('280ms');
-      expect(block.get('--ds-motion-enter-slow')).toBe('420ms');
-      expect(block.get('--ds-motion-stagger')).toBe('40ms');
+  it('motion: -enter-quick is an alias of the entrance; outside the skin 280 / 420 / 40 ms, under it Atlas’s 200 / 240 / 24 ms', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
+    expect([ROOT_TOKENS, ATLAS_LIGHT].map((b) => ['--ds-motion-enter', '--ds-motion-enter-slow', '--ds-motion-stagger'].map((k) => b.get(k)))).toEqual([
+      ['280ms', '420ms', '40ms'],
+      ['200ms', '240ms', '24ms']
+    ]);
+    // Atlas's entrance rule: 150-250 ms for every entrance under the skin.
+    for (const k of ['--ds-motion-enter', '--ds-motion-enter-slow']) {
+      const ms = parseFloat(ATLAS_LIGHT.get(k)!);
+      expect(ms, k).toBeGreaterThanOrEqual(150);
+      expect(ms, k).toBeLessThanOrEqual(250);
     }
+    // Theme-invariant: the dark block restates none of them.
+    for (const k of ['--ds-motion-enter', '--ds-motion-enter-quick', '--ds-motion-enter-slow', '--ds-motion-stagger']) expect(ATLAS_DARK.has(k), k).toBe(false);
   });
 
   it('the danger label: white on the red, ink on the default dark theme’s light red (tokenContrast.test.ts measures both)', () => {

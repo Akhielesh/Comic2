@@ -68,9 +68,11 @@ describe('readerDesigns.css motion tokens = the TS defaults (as the Atlas-skinne
     }
   });
 
-  it('builds on the DS tokens where the spec says (slide = enter-slow, fade = enter, HUD = medium, edges = slow)', () => {
-    expect(NIGHT.get('--ds-reader-turn-slide')).toBe('var(--ds-motion-enter-slow)');
-    expect(NIGHT.get('--ds-reader-turn-fade')).toBe('var(--ds-motion-enter)');
+  it('builds on the DS tokens where the spec says (HUD = medium, edges = slow); the slide and fade turns are the reader’s own', () => {
+    // A page turn is reading, not an entrance: the skin's shorter entrances (200 / 240 ms) must not shorten it, so the
+    // slide (420 ms) and fade (280 ms) turns are spelled here instead of reading --ds-motion-enter-slow / -enter.
+    expect(NIGHT.get('--ds-reader-turn-slide')).toBe('420ms');
+    expect(NIGHT.get('--ds-reader-turn-fade')).toBe('280ms');
     expect(NIGHT.get('--ds-reader-hud-motion')).toBe('var(--ds-motion-medium)');
     expect(NIGHT.get('--ds-reader-edge-motion')).toBe('var(--ds-motion-slow)');
     expect(NIGHT.get('--ds-reader-intro-ease')).toBe('var(--ds-ease-enter)');

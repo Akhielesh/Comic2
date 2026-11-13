@@ -41,7 +41,7 @@ export const NAV_TRIGGER_REST = 'text-[var(--ds-muted)] hover:text-[var(--ds-ink
 /** The menu: the overlay surface on the popover layer, rows highlighted in the overlay-row colour. */
 export const NAV_MENU = `w-64 p-1.5 ${OVERLAY}`;
 /**
- * The menu's entrance: the 280 ms overlay scale-in (styles/ds-motion.css), not the 420 ms page entrance
+ * The menu's entrance: the quick overlay scale-in (styles/ds-motion.css), not the slower page entrance
  * (redesign §2 Motion keeps enter-slow for a new page); still under reduced motion.
  */
 export const NAV_MENU_ENTER = SCALE_IN;

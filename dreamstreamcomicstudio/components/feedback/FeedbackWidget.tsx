@@ -25,7 +25,7 @@ export const FEEDBACK_LAUNCHER = `fixed bottom-[calc(1rem+var(--sa-bottom-eff,0p
 export const SENTIMENT_TILE = `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-[var(--ds-radius-control,0.75rem)] border py-2 transition-colors duration-[var(--ds-motion-fast,120ms)] motion-reduce:transition-none ${DENSITY.coarse}`;
 export const SENTIMENT_TILE_ON = 'border-[var(--ds-ink)] bg-[var(--ds-accent-soft)]';
 export const SENTIMENT_TILE_OFF = 'border-[var(--ds-hairline)] hover:border-[var(--ds-control-border-hover)]';
-/** The panel's entrance: the 280 ms overlay scale-in (styles/ds-motion.css), still under reduced motion. */
+/** The panel's entrance: the quick overlay scale-in (styles/ds-motion.css), still under reduced motion. */
 export const FEEDBACK_PANEL_ENTER = SCALE_IN;
 
 /**
