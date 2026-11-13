@@ -422,7 +422,14 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
       '--ds-muted': '#404040',
       '--ds-ring': '#000000',
       '--ds-control-border': 'color-mix(in srgb, var(--ds-ink) 70%, transparent)',
-      '--ds-control-border-hover': 'var(--ds-ink)'
+      '--ds-control-border-hover': 'var(--ds-ink)',
+      // The colour layer's marks, moved along their own hue (atlasHighContrast.test.ts measures them).
+      '--ds-hue-2': '#cd3c8e',
+      '--ds-hue-3': '#ba5b03',
+      '--ds-hue-4': '#008e87',
+      '--ds-hue-7': '#006a9d',
+      '--ds-success': '#12873d',
+      '--ds-warning': '#a46a07'
     });
     // The dark base block (0,2,0) outranks the light high-contrast block (0,1,0), so the soft
     // hairline is restated for dark (tokenContrast.test.ts measures it strengthening in both themes).
@@ -430,7 +437,9 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
       '--ds-hairline': 'oklch(0.52 0 0)',
       '--ds-hairline-soft': 'color-mix(in srgb, var(--ds-hairline) 60%, transparent)',
       '--ds-muted': '#d4d4d4',
-      '--ds-ring': '#ffffff'
+      '--ds-ring': '#ffffff',
+      '--ds-hue-1': '#5a6dfd',
+      '--ds-hue-5': '#a45adb'
     });
     // Only under the skin: no :root or .dark block in the media query.
     expect(rules.some((r) => r.parents.includes('@media (prefers-contrast: more)') && /^(:root|\.dark)$/.test(r.selector))).toBe(false);
