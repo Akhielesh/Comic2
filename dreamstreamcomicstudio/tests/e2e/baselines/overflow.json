@@ -1,5 +1,5 @@
 {
-  "note": "Overflow ratchet (SPEC-overflow §7.3): per scene@view-theme, the text escapes, page overflow and popover escapes that predate the probe. A scene not listed is held to 0; a listed one may neither rise nor fall. Generated, never typed: UPDATE_BASELINES=1 npx playwright test -c tests/e2e/playwright.config.ts --project=overflow lowers it.",
+  "note": "Overflow ratchet (docs/design/clean-and-smooth.md, \"The overflow ratchet\"): per scene@view-theme, the text escapes, page overflow and popover escapes that predate the probe. A scene not listed is held to 0; a listed one may neither rise nor fall. Generated, never typed: UPDATE_BASELINES=1 npx playwright test -c tests/e2e/playwright.config.ts --project=overflow lowers it.",
   "scenes": {
     "app-auth@desk-light": { "textEscapes": 1 },
     "app-auth@narrow-light": { "textEscapes": 1 },
