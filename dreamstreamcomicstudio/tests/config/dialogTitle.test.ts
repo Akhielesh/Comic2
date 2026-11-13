@@ -58,6 +58,7 @@ const CENTRED: Record<string, 'DIALOG_TITLE' | 'DIALOG_TITLE_FROM_SM'> = {
 };
 /** Modal (or modal-capable) surfaces that are not a centred dialog with a title, and why. */
 const NOT_CENTRED: Record<string, string> = {
+  'components/comicstudio/ComicCreationWorkspace.tsx': 'left navigation drawer with the product brand and project links, not a centred dialog',
   'components/comicstudio/board/PageEditor.tsx': 'the full-screen page editor: its header is a toolbar, not a dialog title',
   'components/comicstudio/immersive/ImmersiveReader.tsx': 'the full-screen reader itself',
   'components/comicstudio/immersive/ReaderSettingsSheet.tsx': 'a non-modal settings sheet in the reader (aria-modal="false")',
