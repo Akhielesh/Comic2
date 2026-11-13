@@ -84,23 +84,31 @@ describe('runDirectorTurn', () => {
     expect(JSON.stringify(llm.calls[1].messages)).toContain('[asked: What tone? — options: Funny / Tense; answered: Funny]');
   });
 
-  it('option answers: free text that matches no choice leaves the card open; a multi-select "A and B" records both', async () => {
-    const session = newSession(createEmptyDoc('q-2'));
-    const llm = scriptedLlm({
-      director: [
-        { text: 'Which pets?', toolCalls: [toolCall('q1', 'ask_user', { question: 'Which pets?', options: [{ label: 'Cats' }, { label: 'Dogs' }, { label: 'Birds' }], multi: true })] },
-        { text: 'Noted.' },
-        { text: 'Both then.' }
-      ]
-    });
-    const ctx = testContext(session, { llm });
-    await runDirectorTurn(ctx, { text: 'pets?', attachments: [] });
-    const asked = session.doc.conversation.at(-1)!;
-    const cardOf = () => session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
-    await runDirectorTurn(ctx, { text: 'Something else entirely', attachments: [] });
-    expect(cardOf().answered).toBeUndefined();
-    await runDirectorTurn(ctx, { text: 'Cats and Birds', attachments: [] });
-    expect(cardOf().answered).toEqual([cardOf().choices[0].id, cardOf().choices[2].id]);
+  it('option answers: free text that matches no choice leaves the card unanswered and moves past it; a multi-select "A and B" records both', async () => {
+    const asking = async () => {
+      const session = newSession(createEmptyDoc('q-2'));
+      const llm = scriptedLlm({
+        director: [
+          { text: 'Which pets?', toolCalls: [toolCall('q1', 'ask_user', { question: 'Which pets?', options: [{ label: 'Cats' }, { label: 'Dogs' }, { label: 'Birds' }], multi: true })] },
+          { text: 'Noted.' },
+          { text: 'Both then.' }
+        ]
+      });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text: 'pets?', attachments: [] });
+      const asked = session.doc.conversation.at(-1)!;
+      const cardOf = () => session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+      return { ctx, cardOf };
+    };
+    const moved = await asking();
+    await runDirectorTurn(moved.ctx, { text: 'Something else entirely', attachments: [] });
+    expect(moved.cardOf().answered).toBeUndefined();
+    // The chat moved past the question, so it is settled for everyone (SETTLED_CARDS 'all', R00): a late match changes nothing.
+    await runDirectorTurn(moved.ctx, { text: 'Cats and Birds', attachments: [] });
+    expect(moved.cardOf().answered).toBeUndefined();
+    const open = await asking();
+    await runDirectorTurn(open.ctx, { text: 'Cats and Birds', attachments: [] });
+    expect(open.cardOf().answered).toEqual([open.cardOf().choices[0].id, open.cardOf().choices[2].id]);
   });
 
   it('option answers named by the card: a typed answer, the right card among same labels, and no guessing past a named card', () => {
