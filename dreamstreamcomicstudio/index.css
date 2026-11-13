@@ -2,6 +2,7 @@
    other statement, so it sits above the Tailwind directives: Vite inlines it here, and the Tailwind
    utilities that follow still win a tie with its classes. */
 @import './styles/ds-motion.css';
+@import './styles/comic-theme.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -238,60 +239,6 @@
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background-image: radial-gradient(rgba(0,0,0,0.55) 1px, transparent 1.4px);
   background-size: 4px 4px; mix-blend-mode: multiply; opacity: 0.16;
-}
-
-/* ---- How It Works page motion ---- */
-@keyframes hiwGradientPan {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-@keyframes hiwFlowDash { to { stroke-dashoffset: -1000; } }
-@keyframes hiwPulseRing {
-  0% { transform: scale(0.85); opacity: 0.7; }
-  70% { transform: scale(1.6); opacity: 0; }
-  100% { transform: scale(1.6); opacity: 0; }
-}
-@keyframes hiwDrift {
-  0% { transform: translate(0,0) scale(1); }
-  50% { transform: translate(20px,-24px) scale(1.08); }
-  100% { transform: translate(0,0) scale(1); }
-}
-@keyframes hiwSheen { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(220%) skewX(-18deg); } }
-@keyframes hiwBounceArrow { 0%,100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
-@keyframes hiwDotTravel { 0% { offset-distance: 0%; } 100% { offset-distance: 100%; } }
-
-/* The How It Works headline accent: the info / danger / warning tokens by default (the old brand blue, red and
-   yellow, now tokens; bridge D4; info is a neutral grey since the colour layer, so the sweep runs grey → red →
-   amber), the heading's own ink under the skin (below), where hue never decorates. */
-.hiw-gradient-text {
-  background-image: linear-gradient(100deg, var(--ds-info), var(--ds-danger), var(--ds-warning), var(--ds-info));
-  background-size: 300% 300%;
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: hiwGradientPan 8s ease infinite;
-}
-/* How It Works stays a light page in dark, so with the kill switch off (no skin) its headline would paint the
-   default DARK stops (#e5e5e5, #f87171, #fbbf24: 1.3 / 2.8 / 1.6:1 on white; the neutral info made the first
-   stop worse than the old blue's 2.5). Pin the light :root values of the three stops on the words, as the
-   legacy-bubble pin below does for its markdown: 7.8 / 4.8 / 3.2:1 on white (tokenContrast.test.ts keeps them
-   equal to :root and ≥ 3:1). Spelled on the root's theme class (the whole document is dark, this page is not);
-   it sets token values only, so the paint rule above still reads tokens (atlasSkin bridge D4). Under the skin the
-   gradient is off and the words take the heading's ink. */
-:root.dark .hiw-gradient-text {
-  --ds-info: #525252;
-  --ds-danger: #dc2626;
-  --ds-warning: #d97706;
-}
-.hiw-flow-dash { stroke-dasharray: 10 14; animation: hiwFlowDash 18s linear infinite; }
-.hiw-pulse-ring { animation: hiwPulseRing 2.4s ease-out infinite; }
-.hiw-drift { animation: hiwDrift 12s ease-in-out infinite; }
-.hiw-sheen { animation: hiwSheen 2.8s ease-in-out infinite; }
-.hiw-bounce { animation: hiwBounceArrow 1.6s ease-in-out infinite; }
-.hiw-reveal { opacity: 0; transform: translateY(30px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
-.hiw-reveal.is-visible { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) {
-  .hiw-gradient-text,.hiw-flow-dash,.hiw-pulse-ring,.hiw-drift,.hiw-sheen,.hiw-bounce { animation: none; }
-  .hiw-reveal { opacity: 1; transform: none; transition: none; }
 }
 
 .message-body {
@@ -1672,16 +1619,6 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 [data-ds-skin="atlas"] .studio-shimmer {
   background-color: var(--ds-skeleton);
   background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%);
-}
-/* The How It Works gradient headline words take the heading's own ink under the skin (bridge D4): plain
-   text, the same colour as the rest of the h1. Not --ds-ink: How It Works is a legacy page whose light
-   surfaces and slate-900 heading do not follow the theme, so in dark the token painted the two words
-   #fafafa inside a #0f172a heading (1.04:1 where the gradient reaches white). */
-[data-ds-skin="atlas"] .hiw-gradient-text {
-  background-image: none;
-  color: inherit;
-  -webkit-text-fill-color: currentColor;
-  animation: none;
 }
 /* Toasts (studioDesign TOAST*): a time-left bar that drains as one compositor animation over
    --ds-toast-duration (set inline per toast), held while the toast carries data-paused (set with its

@@ -111,6 +111,8 @@ export interface PatchOptions {
   coalesce?: string;
   /** Undo toast text ("Undo move balloon"). */
   label?: string;
+  /** Called if the server rejects or cannot confirm the optimistic edit. */
+  onFailed?: (retryable: boolean) => void;
 }
 
 export interface StudioSelection {

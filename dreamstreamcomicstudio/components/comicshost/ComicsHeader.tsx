@@ -1,31 +1,16 @@
-// The comics host's header: the same object as the app and studio headers (AppHeader — the --header-h row,
-// the HEADER_INNER column and gutters, the glass that frosts once the page scrolls under it, the Z.header
-// layer), with Comic Studio's lockup (the ink ComicsMark, "Comic Studio" on one line, a Beta chip). The landing
-// shows its section links (How it works, Looks) and the Library from `lg` up; the sign-in, Privacy, Terms and
-// Library views (signed out) use it with `page="other"`, where the lg nav keeps the Library, so every click off the
-// landing stays in one product. The header owns its ink (AppHeader), so its labels and icons read in both themes
-// whatever page sits under it.
-//
-// One fill per view (Ink & Spark): on the landing the hero carries the one filled call to action, so the header's
-// "Sign in" / "My comics" is outline there; elsewhere it is the page's filled action. On the sign-in page itself the
-// header offers no "Sign in".
-//
-// Below `lg` the links move into a menu: a disclosure under the trigger (aria-expanded / aria-controls), closed
-// by choosing a row, Esc (focus returns to the trigger) or a press outside. It is drawn on the overlay recipe and
-// enters with the shared scale-in (none under reduced motion). Every target is 44 px under a coarse pointer.
-
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowRight, Menu as MenuIcon, X } from 'lucide-react';
+import { ArrowRight, Menu as MenuIcon, Palette, X } from 'lucide-react';
 import type { ComicsHeaderCurrent } from './hostRouting';
 import { cn } from '../../lib/utils';
-import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, OVERLINE, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
+import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
+import { useComicTheme } from '../comicstudio/useComicTheme';
 import { AppHeader, HEADER_INNER } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from './ComicsMark';
 
-export type ComicsSectionId = 'how-it-works' | 'looks';
+export type ComicsSectionId = 'looks';
 
 export interface ComicsHeaderProps {
   signedIn: boolean;
@@ -74,6 +59,9 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   onBrowseGallery,
   onShowSection
 }) => {
+  const { theme, setTheme } = useComicTheme();
+  const nextTheme = theme === 'atlas' ? 'paper' : 'atlas';
+  const themeLabel = nextTheme === 'paper' ? 'Use Paper theme' : 'Use Atlas theme';
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const headerRef = useRef<HTMLElement>(null);
@@ -109,34 +97,23 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const menu: MenuEntry[] = [
     ...(sections
-      ? [
-          { label: 'How it works', run: () => onShowSection!('how-it-works') },
-          { label: 'Looks', run: () => onShowSection!('looks') }
-        ]
+      ? [{ label: 'Looks', run: () => onShowSection!('looks') }]
       : []),
     { label: 'Library', run: onBrowseGallery },
     ...(signedIn ? [] : [{ label: 'Request access', run: onRequestAccess, separated: true }])
   ];
 
   const brand = (
-    <>
-      <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways label="Comic Studio, home" onClick={onGoHome} />
-      <span className={cn(OVERLINE, RADIUS_ROUND, 'hidden border border-[var(--ds-hairline)] px-2 py-0.5 medium:inline-flex')}>Beta</span>
-    </>
+    <BrandLockup mark={<ComicsMark size={28} />} name="Comic" suffix="Studio" suffixAlways label="Comic Studio, home" onClick={onGoHome} />
   );
 
   // From lg: the section links on the landing, and the Library on every page (marked when it is the page).
   const nav = (
     <nav aria-label="Comic Studio" className="hidden items-center gap-7 lg:flex">
       {sections && (
-        <>
-          <button type="button" className={NAV_LINK} onClick={() => onShowSection!('how-it-works')}>
-            How it works
-          </button>
-          <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
-            Looks
-          </button>
-        </>
+        <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
+          Looks
+        </button>
       )}
       <button
         type="button"
@@ -151,17 +128,22 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const actions = (
     <>
+      <IconButton label={themeLabel} variant="ghost" onClick={() => setTheme(nextTheme)}>
+        <Palette />
+      </IconButton>
       {signedIn ? (
-        <Button variant={home ? 'outline' : 'default'} className={RADIUS_ROUND} onClick={onOpenComics}>
+        <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'px-2 medium:px-4')} onClick={onOpenComics}>
           My comics
         </Button>
       ) : (
         <>
-          <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden lg:inline-flex')} onClick={onRequestAccess}>
-            Request access
-          </Button>
+          {!home && (
+            <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden lg:inline-flex')} onClick={onRequestAccess}>
+              Request access
+            </Button>
+          )}
           {onSignInPage ? null : (
-            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group')} onClick={onSignIn}>
+            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group px-2 medium:px-4')} onClick={onSignIn}>
               Sign in
               <ArrowRight aria-hidden className={cn('hidden medium:block', ARROW_NUDGE)} />
             </Button>
@@ -183,7 +165,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   );
 
   return (
-    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions}>
+    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} innerClassName="px-2 medium:px-6">
       <div className={cn(HEADER_INNER, 'pointer-events-none absolute inset-x-0 top-full flex justify-end lg:hidden')}>
         <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'ds-scale-in pointer-events-auto mt-2 w-60 origin-top-right p-1')}>
           <ul className="flex flex-col">

@@ -17,7 +17,11 @@ import type { PlateKind } from '../timeline/plates';
 import { padIndex } from './filenames';
 import { ExportError } from './errors';
 
-export type UrlFor = (asset?: AssetRef | string | null) => string | undefined;
+export type UrlFor = (asset?: AssetRef | string | null, opts?: { width?: number }) => string | undefined;
+
+/** A finished drawing is available, including the previous drawing of a stale page. */
+export const hasFinishedPageArt = (page: Pick<Page, 'render'>): boolean =>
+  (page.render.status === 'ready' || page.render.status === 'stale') && !!page.render.asset?.path && canServeToOwner(page.render.asset);
 
 export interface ExportSlot {
   /** 'cover' | 'title' | page.id | 'end' | 'back_cover' */
@@ -39,6 +43,10 @@ export interface ExportSlot {
 export interface CollectOptions {
   /** Include the enabled book plates (default true). */
   plates?: boolean;
+  /** Include finished page drawings only, without cover or plates. */
+  finishedPagesOnly?: boolean;
+  /** Choose a smaller source for a finished page preview. */
+  pageUrlFor?: (page: Page, asset: AssetRef) => string | undefined;
 }
 
 /** The book's trim aspect (width / height) from `format.pageAspect`. */
@@ -59,6 +67,7 @@ export function collectExportSlots(doc: ComicDoc, urlFor: UrlFor, opts: CollectO
   const picked: Omit<ExportSlot, 'fileBase'>[] = [];
   const skipped: string[] = [];
   for (const s of bookSequence(doc, { audience: 'studio' })) {
+    if (opts.finishedPagesOnly && s.kind !== 'page') continue;
     if (s.kind === 'title' || s.kind === 'end' || s.kind === 'back_cover') {
       if (withPlates) picked.push({ key: s.key, kind: s.kind, label: s.label, plate: s.kind, aspect: trimAspectOf(doc) });
       continue;
@@ -74,7 +83,11 @@ export function collectExportSlots(doc: ComicDoc, urlFor: UrlFor, opts: CollectO
       skipped.push(`${label} (withheld by the safety check)`);
       continue;
     }
-    const url = urlFor(asset);
+    if (opts.finishedPagesOnly && s.page && !hasFinishedPageArt(s.page)) {
+      skipped.push(`${label} (not finished yet)`);
+      continue;
+    }
+    const url = opts.pageUrlFor && s.page ? opts.pageUrlFor(s.page, asset) : urlFor(asset);
     if (!url) {
       skipped.push(`${label} (image link not ready yet)`);
       continue;

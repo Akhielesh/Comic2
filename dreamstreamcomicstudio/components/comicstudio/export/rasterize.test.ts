@@ -127,6 +127,13 @@ describe('canvas renders', () => {
     expect(canvas.width).toBe(1000);
   });
 
+  it('caps every large PNG book plate at 3,840 px when the source art is wider than the book', async () => {
+    for (const plate of ['title', 'end', 'back_cover'] as const) {
+      await renderPlateToBlob(makeBook(), plate, { plateWidth: 3840, longEdge: 3840 });
+    }
+    for (const f of made) expect(f.ctx.canvas).toMatchObject({ width: 2560, height: 3840 });
+  });
+
   it('a back cover whose vignette cannot load keeps its placeholder instead of failing', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
     const blob = await renderPlateToBlob(makeBook(), 'back_cover', { artUrl: 'https://cdn.test/u/proj/cover.png' });

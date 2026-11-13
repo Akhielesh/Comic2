@@ -817,6 +817,9 @@ async function directorTurnBody(
   let extraRounds = 0;
   /** Tool rounds allowed: MAX_TOOL_ROUNDS, plus one per extra round that starts at the limit (so a late note can act). */
   let toolRoundCap = MAX_TOOL_ROUNDS;
+  // Full results stay in the model's transcript. Compare each fresh read to the original bytes so an edit or undo
+  // that changes the page details is always sent in full. No cross-turn or cross-project state.
+  const pageReadResults = new Map<string, string>();
   try {
     let rounds = 0;
     for (;;) {
@@ -898,7 +901,13 @@ async function directorTurnBody(
           turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: output.slice(0, 16_000) });
+        let content = output.slice(0, 16_000);
+        if (call.name === 'read_pages' && content.length > 240 && /^PAGE \d+:/.test(content)) {
+          const earlier = pageReadResults.get(content);
+          if (earlier !== undefined) content = `Unchanged page details. Use the full read_pages result from tool call ${earlier} earlier in this turn.`;
+          else pageReadResults.set(content, call.id);
+        }
+        messages.push({ role: 'tool', tool_call_id: call.id, content });
       }
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       // ask_user ends the turn: the question and its chips are the reply.

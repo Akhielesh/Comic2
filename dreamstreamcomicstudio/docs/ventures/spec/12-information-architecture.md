@@ -38,7 +38,6 @@ DreamStream / Code Studio Autopilot
 │
 ├── (public)
 │   ├── Home (/)                         marketing / sign-in entry
-│   ├── How it works  (?view=how-it-works)
 │   ├── Gallery       (?view=gallery)    public comics/showcase (existing)
 │   ├── Legal         (?view=privacy | terms)
 │   └── Share/Reader  (/share/:token, ?view=read&id=…)   own URLs, no login

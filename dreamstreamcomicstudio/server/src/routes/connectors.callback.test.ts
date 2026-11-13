@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { connectorsPublicRouter } from './connectors.js';
+import { connectorRegistry } from '../connectors/index.js';
+import { consumeOAuthState, saveCredentials, upsertConnection } from '../connectors/store.js';
+import { triggerSync } from '../connectors/sync/trigger.js';
+
+vi.mock('../connectors/store.js', async (original) => ({
+  ...(await original<typeof import('../connectors/store.js')>()),
+  consumeOAuthState: vi.fn(),
+  upsertConnection: vi.fn(),
+  saveCredentials: vi.fn()
+}));
+vi.mock('../connectors/sync/trigger.js', () => ({ triggerSync: vi.fn() }));
+
+beforeEach(() => vi.resetAllMocks());
 
 // The OAuth popup lands on /oauth/callback, whose self-closing HTML must (a) keep its
 // window.opener so it can postMessage the result back, and (b) be allowed to run its own
@@ -70,5 +83,35 @@ describe('OAuth callback popup page', () => {
     const b = await render();
     expect(nonceOf(a)).toBeTruthy();
     expect(nonceOf(a)).not.toBe(nonceOf(b));
+  });
+
+  it('saves granted services and reports missing permission instead of listing declined services as connected', async () => {
+    const gmail = connectorRegistry.get('gmail')!;
+    const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+    vi.mocked(consumeOAuthState).mockResolvedValue({
+      userId: 'user-1',
+      connectorIds: ['gmail', 'google_drive_save'],
+      codeVerifier: 'verifier',
+      redirectUri: 'https://dreamstreamstudio.ai/api/connectors/oauth/callback',
+      scopes
+    });
+    const handle = vi.spyOn(gmail, 'handleCallback').mockResolvedValue({
+      accountIdentifier: 'reader@example.com',
+      grantedScopes: scopes,
+      tokens: { accessToken: 'mock-token' }
+    });
+    vi.mocked(upsertConnection).mockResolvedValue({ id: 'gmail-connection' } as Awaited<ReturnType<typeof upsertConnection>>);
+    vi.mocked(triggerSync).mockRejectedValue(new Error('sync queue unavailable'));
+    try {
+      const res = mockRes();
+      await callbackHandler()({ query: { state: 'test-state', code: 'test-code' } }, res);
+      expect(upsertConnection).toHaveBeenCalledOnce();
+      expect(upsertConnection).toHaveBeenCalledWith(expect.objectContaining({ connectorId: 'gmail' }));
+      expect(saveCredentials).toHaveBeenCalledOnce();
+      expect(res._body).toContain('"connected":"gmail"');
+      expect(res._body).toContain('"error":"missing_permissions"');
+    } finally {
+      handle.mockRestore();
+    }
   });
 });

@@ -58,7 +58,7 @@ import { refInboxOf } from '../../../shared/comic/doc';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { REF_LIMITS } from '../../../shared/comic/refs';
 import { deleteInboxRef } from '../studioApi';
-import { ACCEPT_ATTR, prepareImageFile, quickReject } from '../refs/downscale';
+import { ACCEPT_ATTR, RASTER_ACCEPT_ATTR, isSvgFile, prepareImageFile, quickReject } from '../refs/downscale';
 import { UploadQueue } from '../refs/UploadQueue';
 import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
@@ -240,7 +240,7 @@ const readAs = (file: File, mode: 'dataUrl' | 'text'): Promise<string> =>
   });
 
 /** Anything that claims to be a picture goes to the photo pipeline (which refuses SVG and friends honestly). */
-const isImageFile = (f: File) => f.type.toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
+const isImageFile = (f: File) => isSvgFile(f) || f.type.toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
 const isTextFile = (f: File) => TEXT_TYPES.has(f.type.toLowerCase()) || TEXT_EXT.test(f.name);
 
 const charCount = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k chars` : `${n} chars`);
@@ -1549,7 +1549,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             <input
               ref={cameraInputRef}
               type="file"
-              accept={IMAGE_ACCEPT}
+              accept={RASTER_ACCEPT_ATTR}
               capture="environment"
               hidden
               onChange={(e) => e.target.files && void addFiles(e.target.files)}

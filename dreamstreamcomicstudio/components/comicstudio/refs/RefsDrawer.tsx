@@ -18,7 +18,7 @@ import { SlideOver } from '../conversation/PopSheet';
 import { OVERLINE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { StudioController } from '../types';
-import { ACCEPT_ATTR } from './downscale';
+import { ACCEPT_ATTR, isSvgFile } from './downscale';
 import { RefActions, RefTile } from './RefTile';
 import { LIKENESS_OPTIONS, moveTargets, ownerLabel, ownerTitle, refUsage, sheetHint } from './refsModel';
 import { UploadQueue } from './UploadQueue';
@@ -44,7 +44,7 @@ const PRIMARY = `${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-acce
 const QUIET = `${BTN} border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 
 const imageFiles = (list: FileList | File[] | null | undefined): File[] =>
-  Array.from(list || []).filter((f) => !f.type || f.type.startsWith('image/') || /\.(heic|heif|avif)$/i.test(f.name));
+  Array.from(list || []).filter((f) => isSvgFile(f) || !f.type || f.type.startsWith('image/') || /\.(heic|heif|avif)$/i.test(f.name));
 
 /** Pointer-event reorder (mouse, pen and touch; the handle has touch-action: none). */
 function useDragReorder(onDrop: (from: number, to: number) => void) {

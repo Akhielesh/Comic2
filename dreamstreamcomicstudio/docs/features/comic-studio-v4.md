@@ -84,8 +84,10 @@ Mobile: one column with a `Chat | Board` segmented switch; the composer stays do
    → `plan` card + the Pages board show them. User edits by talking ("make page 2 a
    splash", "Maya should be angrier") or by editing lines directly. **No image spend.**
 6. **Render**: "Render pages" → estimate → gate (per confirm policy) → pages develop
-   live on the board (page 1 first, then the rest in parallel, with page 1 as the
-   continuity anchor). Each page gets a vision QC pass + balloon layout.
+   live on the board. Page 1 establishes the look. The remaining pages draw in parallel pairs where
+   the story continues in the same scene. The second page of each pair can use the first page's finished
+   art. Every continuing page gets the previous page's final scripted beat, even when its art is still
+   drawing. Each page gets a vision QC pass and balloon layout.
 7. **Edit**: open a page → Mark up (drag a box) + instruction, or say "in page 3 panel
    2 make it night". Versions are kept; restore any time. Edit balloons by dragging.
 8. **Cover**, **Read**, **Export** (print-quality PDF via print view, PNG pages ZIP, motion comic video).

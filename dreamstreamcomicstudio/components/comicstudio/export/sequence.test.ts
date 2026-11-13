@@ -20,6 +20,21 @@ describe('collectExportSlots (the one book order for every export)', () => {
     expect(slots.map((s) => s.fileBase)).toEqual(['00-cover', '01-page-01', '02-page-05']);
   });
 
+  it('selects finished GIF pages only, with a page-specific URL and no request for a failed prior take', () => {
+    const doc = makeBook((d) => { d.pages[4].render.status = 'failed'; });
+    const seen: string[] = [];
+    const { slots, skipped } = collectExportSlots(doc, fakeUrlFor, {
+      finishedPagesOnly: true,
+      pageUrlFor: (page, asset) => {
+        seen.push(page.id);
+        return fakeUrlFor(asset);
+      }
+    });
+    expect(seen).toEqual(['pg_1']);
+    expect(slots.map((s) => s.key)).toEqual(['pg_1']);
+    expect(skipped).toContain('Page 5 (not finished yet)');
+  });
+
   it('never fetches a withheld image and says why it is missing', () => {
     const doc = makeBook((d) => {
       d.pages[4].render.asset = { ...d.pages[4].render.asset!, safety: { assessed: 'X', at: 1 } };

@@ -190,12 +190,15 @@ describe('LibraryImage: decode-gated reveal', () => {
     expect(screen.queryByTestId('procedural')).toBeNull();
   });
 
-  it('an error drops back to the fallback alone', async () => {
+  it('an error drops back to bundled art, then procedural art if both fail', async () => {
     renderImage();
     const img = await screen.findByRole('img');
     act(() => {
       fireEvent.error(img);
     });
+    const bundled = document.querySelector('img[src$="/noir-ink-thumb.webp"]')!;
+    expect(bundled).toBeInTheDocument();
+    fireEvent.error(bundled);
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.getByTestId('procedural')).toBeInTheDocument();
   });
@@ -235,7 +238,7 @@ describe('LibraryImage: decode-gated reveal', () => {
     expect(container.querySelector('[data-library-lqip]')).toBeNull();
   });
 
-  it('an error drops the LQIP with the picture: the fallback alone', async () => {
+  it('an error drops the LQIP and uses bundled art', async () => {
     const lqip = 'data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAADwAgCdASoUABQAPu1ur1IppiQiqAgBMB2JaQAAPaaKAAD+zhQgAA==';
     vi.stubGlobal(
       'fetch',
@@ -248,7 +251,7 @@ describe('LibraryImage: decode-gated reveal', () => {
       fireEvent.error(img);
     });
     expect(container.querySelector('[data-library-lqip]')).toBeNull();
-    expect(screen.getByTestId('procedural')).toBeInTheDocument();
+    expect(container.querySelector('img')).toHaveAttribute('src', '/assets/comic-sample/noir-ink-thumb.webp');
   });
 
   it('keeps its five props', () => {

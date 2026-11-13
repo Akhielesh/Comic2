@@ -149,6 +149,59 @@ const legendLabels = (prompt: string): string[] =>
 
 const legendIndexes = (prompt: string): number[] => [...prompt.matchAll(/^Image (\d+) — /gm)].map((m) => Number(m[1]));
 
+describe('page and panel continuity', () => {
+  const race = (): ComicDoc => baseDoc((doc) => {
+    doc.cast = [character('car', 'Number 12', 'lead', { kind: 'vehicle' })];
+    doc.places = [{ id: 'track', name: 'Circuit', look: 'Brick-built track and red-and-white kerbs', refs: [], sheet: emptyRender() }];
+    doc.scenes = [
+      { id: 'race', name: 'Final lap', placeId: 'track', light: 'low golden sunlight' },
+      { id: 'podium', name: 'After the race', placeId: 'track' }
+    ];
+    doc.pages = [
+      page(1, [panel(1, ['car'], { action: 'Number 12 clips the kerb and cracks its left front wing.', placeId: 'track' })], {
+        render: ready('pages/1.png'),
+        continuity: { sceneId: 'race', cast: { car: { marks: ['cracked left front wing'] } }, props: { 'racing tyres': 'slicks' } }
+      }),
+      page(2, [
+        panel(1, ['car'], { action: 'Number 12 enters the last corner.', placeId: 'track', direction: { light: 'low golden sunlight', cast: { car: { pos: 'left', depth: 'fg' } } } }),
+        panel(2, ['car'], { action: 'Number 12 takes the chequered flag.', placeId: 'track' })
+      ], { render: ready('pages/2.png') }),
+      page(3, [panel(1, [], { action: 'The drivers step onto the podium.', placeId: 'track' })], { continuity: { sceneId: 'podium' } })
+    ];
+  });
+
+  it('carries the last beat, persistent vehicle details and authored panel direction into the next page', () => {
+    const doc = race();
+    const job = compilePage(doc, doc.pages[1], { previousPage: doc.pages[0] });
+    expect(job.prompt).toContain('STORY HANDOFF — Page 1 ended with: Number 12 clips the kerb and cracks its left front wing.');
+    expect(job.prompt).toContain('NUMBER 12: marks: cracked left front wing');
+    expect(job.prompt).toContain('racing tyres: slicks');
+    expect(job.prompt).toContain('left, foreground');
+    expect(job.prompt).toContain('Direction: light: low golden sunlight.');
+    expect(job.prompt).toContain('READING SEQUENCE');
+    expect(job.prompt.indexOf('Number 12 enters the last corner')).toBeLessThan(job.prompt.indexOf('Number 12 takes the chequered flag'));
+    expect(job.references).toContainEqual({ label: 'PREVIOUS PAGE', path: 'pages/1.png' });
+  });
+
+  it('treats a named scene change at the same venue as a cut', () => {
+    const doc = race();
+    const job = compilePage(doc, doc.pages[2], { previousPage: doc.pages[1] });
+    expect(job.prompt).not.toContain('STORY HANDOFF');
+    expect(job.prompt).not.toContain('cracked left front wing');
+    expect(job.prompt).toContain('This reference does not establish the current scene');
+  });
+
+  it('keeps the script handoff when previous art is pending or outside the requested rating', () => {
+    const doc = race();
+    for (const safety of [{ pending: true as const, at: 1 }, { assessed: 'PG-13' as const, at: 1 }]) {
+      doc.pages[0].render.asset!.safety = safety;
+      const job = compilePage(doc, doc.pages[1], { previousPage: doc.pages[0], rating: 'PG' });
+      expect(job.references.some((ref) => ref.label === 'PREVIOUS PAGE')).toBe(false);
+      expect(job.prompt).toContain('STORY HANDOFF');
+    }
+  });
+});
+
 /** Six-character page (each character in a different number of panels). */
 const crowdedDoc = (quality: ComicDoc['settings']['quality']) =>
   baseDoc((doc) => {

@@ -24,6 +24,7 @@ import { DEFAULT_LETTERING, sanitizeLetteringStyle, sanitizeLetterStylePatch } f
 import { normalizeI18n } from './i18n.js';
 import { isPublicationMirror } from './publication.js';
 import { hashString, stableStringify } from './hash.js';
+import { pageContextHash } from './continuity.js';
 import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, FX_LIMITS, MOTION_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
 // --- history (versions plan §3.3; H0): type-only, so doc.ts stays the dependency root ---
@@ -755,6 +756,8 @@ export interface PanelParts {
 }
 /** What a page version was drawn from, part by part (one record per page version; parts.ts partsOf). */
 export interface VersionParts {
+  /** Prompt context on newly rendered pages; absent on legacy versions. */
+  context?: string;
   panels?: Record<string, PanelParts>;
   cont?: string;
   places?: Record<string, string>;
@@ -2011,6 +2014,7 @@ export const normalizeVersionParts = (raw: unknown): VersionParts | undefined =>
     if (Object.keys(panels).length) out.panels = panels;
   }
   if (isHex6(raw.cont)) out.cont = raw.cont;
+  if (isHex6(raw.context)) out.context = raw.context;
   for (const k of ['places', 'props'] as const) {
     const src = raw[k];
     if (!isObject(src)) continue;
@@ -3025,7 +3029,10 @@ export const pageSpecHash = (doc: ComicDoc, page: Page): string => hashString(st
 
 /** Pages whose current render no longer matches their spec. */
 export const isPageStale = (doc: ComicDoc, page: Page): boolean =>
-  page.render.status === 'ready' && !!page.render.specHash && page.render.specHash !== pageSpecHash(doc, page);
+  page.render.status === 'ready' && (
+    (!!page.render.specHash && page.render.specHash !== pageSpecHash(doc, page)) ||
+    (!!page.render.parts?.context && page.render.parts.context !== pageContextHash(doc, page))
+  );
 
 /** Leads (else supports) + companions ranked by panel appearances; if none, extras by appearances. ≤ 6.
  *  prompts.ts takes .slice(0, spec.refs.characters); the hash uses this list. */

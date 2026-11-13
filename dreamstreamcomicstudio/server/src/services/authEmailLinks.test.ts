@@ -155,6 +155,7 @@ describe('sign-in handoff links', () => {
       expect(parseMainHandoffPath(ok)).toBe(ok);
     }
     expect(parseMainHandoffPath(undefined)).toBe('/');
+    expect(parseMainHandoffPath('/?view=how-it-works')).toBe('/');
     for (const bad of ['//evil.example', 'https://evil.example', '/?view=chat&x=1', '/?view=nope', '/share/abc', '/\\evil.example', 42]) {
       expect(parseMainHandoffPath(bad)).toBeNull();
     }

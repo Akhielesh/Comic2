@@ -137,11 +137,14 @@ const getAuthToken = async (): Promise<string | undefined> => {
 
 // Build the common request headers (provider keys honoring governance, auth token,
 // model/source selection, free-only, allowed-sources). Shared by post + postStream.
-const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string }): Promise<Record<string, string>> => {
+const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string; expectedAccountId?: string }): Promise<Record<string, string>> => {
   const providerHeaders = providerKeyHeaders();
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
+  if (options?.expectedAccountId && (!token || token !== cachedAccessToken || cachedUserId !== options.expectedAccountId)) {
+    throw new ApiError('The active account changed. Sign in again and retry.', 401);
+  }
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
   const textSource = options?.stage ? getSourceForStage(options.stage) : getSelectedTextSource();
 
@@ -162,7 +165,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   };
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions }): Promise<TRes> => {
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string }): Promise<TRes> => {
   const attempt = async (): Promise<TRes> => {
     const headers = await buildRequestHeaders(options);
     const res = await safeFetch(buildApiUrl(path), {
@@ -208,8 +211,8 @@ export const postStream = async <TReq>(path: string, body: TReq, options?: { sig
 };
 
 /** DELETE that returns parsed JSON. Throws ApiError on non-OK. */
-export const del = async <TRes>(path: string, options?: { signal?: AbortSignal }): Promise<TRes> => {
-  const headers = await buildRequestHeaders();
+export const del = async <TRes>(path: string, options?: { signal?: AbortSignal; expectedAccountId?: string }): Promise<TRes> => {
+  const headers = await buildRequestHeaders(options);
   const res = await safeFetch(buildApiUrl(path), { method: 'DELETE', headers, signal: options?.signal });
   if (!res.ok) throw await parseError(res);
   return res.json() as Promise<TRes>;

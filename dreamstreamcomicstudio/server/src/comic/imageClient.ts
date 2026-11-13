@@ -490,7 +490,7 @@ export const prepareImageRequest = (req: ImageRequest): PreparedImageRequest => 
     throw new StudioError('BAD_REQUEST', 'The image prompt is empty.', { status: 400 });
   }
   const aspect = spec.aspects.includes(req.aspect) ? req.aspect : nearestAspect(spec, req.aspect);
-  const resolution = spec.resolutions.length && spec.resolutions.includes(req.resolution) ? req.resolution : undefined;
+  const resolution = !spec.fixedResolution && spec.resolutions.includes(req.resolution) ? req.resolution : undefined;
   const cap = Math.max(0, spec.refs.total);
   const references = (req.references || []).slice(0, cap);
   references.forEach((ref, i) => {
@@ -743,16 +743,30 @@ export interface ImagesApiPlan {
  */
 export const planImagesApi = (spec: ImageModelSpec, endpoints: OrImageEndpoint[] | null, want: Resolution | undefined, quoteUsd: number | undefined): ImagesApiPlan => {
   const vendorCap = Math.max(0, spec.refs.total);
+  const tokenRates = spec.tokenRateCeilings;
+  if (!endpoints?.length && tokenRates) {
+    return { refuse: 'current provider pricing is unavailable', referenceCap: vendorCap };
+  }
   if (!endpoints?.length) return { ...(want ? { resolution: want } : {}), referenceCap: vendorCap };
   const res: Resolution = want ?? '1K';
   const serving = endpoints.filter((ep) => {
     const served = endpointResolutionsOf(ep);
-    return !want || !served.length || served.includes(want);
+    const qualities = (ep.supported_parameters?.quality as { values?: unknown[] } | undefined)?.values;
+    const servesQuality = !spec.fixedQuality || !Array.isArray(qualities) || qualities.includes(spec.fixedQuality);
+    return servesQuality && (!want || !served.length || served.includes(want));
   });
   const ceiling = typeof quoteUsd === 'number' && Number.isFinite(quoteUsd) && quoteUsd > 0 ? quoteUsd : imagePriceUsd(spec, res);
+  // The cost gate and the price book compare per-image quotes rounded to four decimals.
+  const quotePrecision = Math.round(ceiling * 10000);
   const affordable = serving.filter((ep) => {
+    if (tokenRates && !Object.entries(tokenRates).every(([billable, maxRate]) => {
+      const prices = Array.isArray(ep.pricing) ? ep.pricing.filter((line) => line?.billable === billable) : [];
+      return prices.length > 0 && prices.every(({ unit, cost_usd: rate }) =>
+        unit === 'token' && typeof rate === 'number' && rate >= 0 && rate <= maxRate
+      );
+    })) return false;
     const usd = mapEndpointPricing({ modelId: spec.routes.openrouter || spec.id, endpoints: [ep], spec }).price[res]?.usd;
-    return typeof usd === 'number' && Number.isFinite(usd) && usd <= ceiling + 1e-9;
+    return typeof usd === 'number' && Number.isFinite(usd) && Math.round(usd * 10000) <= quotePrecision;
   });
   const allowed = affordable.filter((ep) => !!endpointRef(ep));
   const only = [...new Set(allowed.map(endpointRef).filter((r): r is string => !!r))];
@@ -872,7 +886,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     // the resolution and cost no more than the quote, and references capped at min(OpenRouter, vendor).
     const pinned = usesImagesApi(req.spec);
     const plan = pinned ? planImagesApi(req.spec, await imageEndpoints(picked.model).catch(() => null), prepared.resolution, req.maxUsd) : null;
-    // No endpoint serves it within the quote: no call at all (never drawn above the quote, never another model).
+    // Refuse before submitting when no endpoint meets the quoted output price and token rate limits.
     if (plan?.refuse) {
       logger.warn('comic_image_images_api_refused', { model: picked.model, resolution: prepared.resolution, reason: plan.refuse });
       throw modelUnavailableError(picked.route, req.spec.nickname, plan.refuse);
@@ -886,6 +900,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
         aspect_ratio: prepared.aspect,
         ...(resolution ? { resolution } : {}),
         n: 1,
+        ...(req.spec.outputTokenEstimate !== undefined ? { output_format: 'png' } : {}),
         ...(references.length ? { input_references: references.map((ref) => ({ type: 'image_url', image_url: { url: ref.dataUrl } })) } : {}),
         ...(pinned && req.spec.fixedQuality ? { quality: req.spec.fixedQuality } : {}),
         ...(pinned ? { provider: { allow_fallbacks: true, ...(plan?.only?.length ? { only: plan.only } : {}) } } : {})

@@ -24,6 +24,8 @@ Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.
 Measured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 31%): panels 2 and 3 side by side, 47% wide each. Row 3 (next 31%): panel 4, full width.
 Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
 
+READING SEQUENCE — draw the panels as successive moments in one story. In a continuous scene, keep identities, screen direction, geography, and object state until the action changes them. Show each action or reaction once; on a cut, establish the new time or place.
+
 PANELS:
 PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).
 Camera: establishing shot (the whole location), eye level. Place: LILY POND.

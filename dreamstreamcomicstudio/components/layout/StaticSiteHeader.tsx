@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio, ExternalLink } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Palette, LayoutGrid, MessageSquare, Cpu, Menu, X, Radio, ExternalLink } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, NAV_ROW, OVERLINE, SEGMENTED_TRACK } from '../chat/studioDesign';
 import { AppHeader, HEADER_INNER } from '../ds/AppHeader';
@@ -93,7 +93,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   // Same products as the desktop nav, flattened for the mobile menu (<1024px).
   const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
     ...(showComic ? [{ heading: 'Comic', items: [
-      { label: 'How It Works', onClick: () => onNavigate('how-it-works') },
       { label: 'Comic Studio', onClick: onEnterStudio },
       { label: 'Library', onClick: onViewComics },
       ...(comicsAppHref ? [{ label: 'Comic Studio app', onClick: openComicsApp }] : []),
@@ -131,7 +130,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           label="Comic"
           icon={<BookOpen size={14} aria-hidden="true" />}
           items={[
-            { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
             { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
             { label: 'Library', description: 'Browse public comics from creators', icon: <LayoutGrid size={16} />, onClick: onViewComics },
             ...(comicsAppHref

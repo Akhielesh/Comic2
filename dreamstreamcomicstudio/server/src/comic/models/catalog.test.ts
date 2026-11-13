@@ -50,7 +50,7 @@ describe('catalog rows from the 17:51Z data (models.md §4.3)', () => {
     expect(nb.fit).toBeUndefined(); // no projectId
   });
 
-  it('Seedream 5 Pro 2K is null with the raw "high_resolution" variant; GPT Image 2.5 (per token, no table) falls back to the dated registry price', async () => {
+  it('leaves Seedream 5 Pro 2K unmapped and calculates GPT Image 2.5 output cost from the live token rate', async () => {
     const { catalog } = setup();
     const rows = await catalog.rows();
     const seed = row(rows, 'seedream-5-pro');
@@ -59,8 +59,8 @@ describe('catalog rows from the 17:51Z data (models.md §4.3)', () => {
     expect(seed.price['2K']!.note).toContain('high_resolution');
     expect(seed.perRefUsd).toBe(0.003);
     const gpt = row(rows, 'gpt-image-2.5');
-    expect(gpt.price['1K']).toMatchObject({ usd: 0.2107, basis: 'registry' });
-    expect(gpt.price['1K']!.note).toContain('from our price list, 2026-10-22');
+    expect(gpt.price['1K']).toMatchObject({ usd: 0.21072, basis: 'vendor_table' });
+    expect(gpt.price['1K']!.note).toContain('7,024 output tokens');
   });
 
   it('acceptance: the lake comic (f8312c86 shape) lists Nano Banana 2.1 Current, Nano Banana Pro pickable at a higher price, GPT 2.5 blocked on 4:5 — blocks last', async () => {

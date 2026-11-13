@@ -10,7 +10,7 @@ REFERENCE IMAGES (in the order attached):
 Image 1 — CHARACTER SHEET: ISHA. Match her face, hairstyle, body type, outfit and colors exactly.
 Image 2 — CHARACTER SHEET: DEV. Match his face, hairstyle, body type, outfit and colors exactly.
 Image 3 — STYLE BOARD. Match its rendering style, line quality and color treatment (not its content).
-Image 4 — PREVIOUS PAGE. Keep lighting, outfits and props continuous with it (not its layout).
+Image 4 — PREVIOUS PAGE. Use the last panel's established designs, geography and lighting where the script continues them. The current page's actions and changes control the story. Ignore the reference page's panel layout and lettering.
 
 CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people. Each keeps the same face, hair, outfit and colors in every panel:
 - ISHA (Image 1): Quick-witted 17-year-old courier with a lantern-shaped pendant; female; hair: two braids tied with orange thread; outfit: teal hooded jacket, cargo shorts; props: brass wrist compass; always visible: small burn scar on her right forearm.
@@ -21,10 +21,15 @@ LOCATIONS:
 - NIGHT BAZAAR: Lantern-strung lanes of flower stalls and spice carts.
 - EAST GATE: Crumbling stone archway over a shuttered depot by a canal.
 
+STORY HANDOFF — Page 1 ended with: Isha moves through the bazaar, beat 5.
+Use that as the starting state for this page, without redrawing that moment. The current panel actions control what happens and changes.
+
 PAGE LAYOUT — 6 panels, read left-to-right, top-to-bottom:
 Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.
 Measured proportions: Row 1 (top 32% of the page): panels 1 and 2 side by side, 47% wide each. Row 2 (next 32%): panel 3, full width. Row 3 (next 27%): panels 4, 5 and 6 side by side, 31% wide each.
 Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
+
+READING SEQUENCE — draw the panels as successive moments in one story. In a continuous scene, keep identities, screen direction, geography, and object state until the action changes them. Show each action or reaction once; on a cut, establish the new time or place.
 
 PANELS:
 PANEL 1 of 6 — box 1 in the layout (row 1, left; 47% wide × 32% tall).

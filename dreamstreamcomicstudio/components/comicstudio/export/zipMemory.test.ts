@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExportSlot } from './sequence';
-import { MIN_ZIP_EDGE, PNG_BYTES_PER_PIXEL, ZIP_BUDGET, oneLanguageZipFits, planZipMemory, zipMemoryBudget, zipReducedNotice, zipTooBigMessage } from './zipMemory';
+import { MIN_ZIP_EDGE, PLATE_BYTES_PER_PIXEL, PNG_BYTES_PER_PIXEL, ZIP_BUDGET, oneLanguageZipFits, planZipMemory, zipMemoryBudget, zipReducedNotice, zipTooBigMessage } from './zipMemory';
 
 const MB = 1024 * 1024;
 
@@ -90,6 +90,12 @@ describe('planZipMemory', () => {
   it('a caller’s long edge is what gets estimated (upscaling counts too)', () => {
     const plan = planZipMemory(book(4, 1000, 1500), 1, { longEdge: 3000, budget: 400 * MB });
     expect(plan.fullEdge).toBe(3000);
+  });
+
+  it('estimates wide art and portrait plates at the same large PNG long-edge cap', () => {
+    const plan = planZipMemory(book(1, 3000, 2000, 1), 1, { longEdge: 3840, plateWidth: 3840, budget: 400 * MB });
+    expect(plan.fullEdge).toBe(3840);
+    expect(plan.fullBytes).toBe(3840 * 2560 * (PNG_BYTES_PER_PIXEL + PLATE_BYTES_PER_PIXEL));
   });
 
   it('art with no recorded size is assumed to be full 2K, never zero', () => {

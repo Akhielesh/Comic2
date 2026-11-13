@@ -116,10 +116,13 @@ describe('Easy', () => {
     expect(listRows()).toHaveLength(2);
   });
 
-  it('the full table never lists removed or retired models (all 9 registry models served)', () => {
+  it('the full table lists GPT Image 2.6 and skips retired models', () => {
     panel({ mode: 'pro', catalog: view(registryCatalogRows()) });
     const listed = listRows().map((r) => r.getAttribute('data-model'));
-    expect([...listed].sort()).toEqual(['gpt-image-2.5', 'gpt-image-2.5-flare', 'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro']);
+    expect([...listed].sort()).toEqual([
+      'gpt-image-2.5', 'gpt-image-2.5-flare', 'gpt-image-2.6-flare', 'gpt-image-2.6-sunburst',
+      'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro'
+    ]);
     expect(screen.queryByText('FLUX.3')).toBeNull();
     // Each gated experimental model says it is not available yet; the pickable ones do not.
     expect(screen.getAllByText('Not available in Comic Studio yet')).toHaveLength(3);
@@ -170,6 +173,14 @@ describe('picking', () => {
     const { onPick } = panel();
     fireEvent.click(within(rowOf('nano-banana-pro')).getByRole('button', { name: 'Nano Banana Pro' }));
     expect(onPick).toHaveBeenCalledWith('nano-banana-pro');
+  });
+
+  it('a paid user can pick GPT Image 2.6 on a supported comic page size', () => {
+    const doc = lakeDoc();
+    doc.format.pageAspect = '2:3';
+    const { onPick } = panel({ doc, mode: 'pro', catalog: view(registryCatalogRows()) });
+    fireEvent.click(within(rowOf('gpt-image-2.6-sunburst')).getByRole('button', { name: /^GPT Image 2\.6 Sunburst/ }));
+    expect(onPick).toHaveBeenCalledWith('gpt-image-2.6-sunburst');
   });
 });
 
@@ -230,12 +241,12 @@ describe('missing live data (§4.6)', () => {
   it('falls back to the registry with its date, no uptime, the registry citations; Try again asks once', () => {
     const refresh = vi.fn();
     panel({ catalog: view(null, { error: 'offline', refresh }) });
-    expect(screen.getByText("Couldn't load live prices or uptime right now, so these come from our price list, 2026-10-22.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load live prices or uptime right now, so these come from our price list, 2026-11-13.")).toBeInTheDocument();
     const nb = rowOf('nano-banana-2.1');
     expect(nb.querySelector('[data-line="price"]')).toHaveTextContent('≈$0.05 per page at 1K · from our price list, 2026-10-22');
     expect(nb.querySelector('[data-line="uptime"]')).toHaveTextContent(/^No uptime data right now$/);
     expect(nb.querySelector('[data-line="leaderboards"]')).toHaveTextContent('Leaderboards: AA Edit #4 · LMArena edit #5 (2026-10-22)');
-    expect(screen.getByText('Prices: from our price list, 2026-10-22')).toBeInTheDocument();
+    expect(screen.getByText('Prices: from our price list, 2026-11-13')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
     expect(refresh).toHaveBeenCalledTimes(1);
   });
@@ -248,6 +259,26 @@ describe('missing live data (§4.6)', () => {
 });
 
 describe('detail (L3) in place', () => {
+  it('shows the fixed GPT Image 2.6 output tier and separately billed inputs', async () => {
+    const rows = registryCatalogRows();
+    const row = rows.find(({ id }) => id === 'gpt-image-2.6-flare')!;
+    const detail: ModelCatalogDetail = {
+      ...row,
+      facts: {
+        factsAsOf: '2026-11-13', priceBasis: 'per_token_table', refs: { total: 16, characters: 4, objects: 12, style: 0 },
+        aspects: ['1:1', '2:3', '3:2'], resolutions: ['1K']
+      },
+      priceHistory: [],
+      qualityHistory: []
+    };
+    __resetModelCatalogForTests({ catalog: catalogFetch as never, detail: async () => detail });
+    panel({ mode: 'pro', catalog: view(rows) });
+    fireEvent.click(screen.getByRole('button', { name: 'Details for GPT Image 2.6 Flare' }));
+    await act(async () => undefined);
+    expect(screen.getByText('Size: fixed 1K tier · PNG')).toBeInTheDocument();
+    expect(screen.getByText('The estimate covers image output. Prompts and reference images are billed separately.')).toBeInTheDocument();
+  });
+
   it('Details opens the model view with sources; Back returns to the list', async () => {
     const detail: ModelCatalogDetail = {
       ...catalogRows()[1],

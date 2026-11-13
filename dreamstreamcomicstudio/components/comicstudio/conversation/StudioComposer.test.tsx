@@ -51,7 +51,7 @@ vi.mock('../refs/downscale', async (importOriginal) => {
 vi.mock('../studioApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('../studioApi')>()), deleteInboxRef: vi.fn(async () => undefined) }));
 
 import { MAX_IMAGES, MAX_MESSAGE_CHARS, StudioComposer, VOICE_AUTOSEND_KEY, buildOutgoing, textToDataUrl } from './StudioComposer';
-import { prepareImageFile } from '../refs/downscale';
+import { prepareImageFile, PrepareError } from '../refs/downscale';
 import { deleteInboxRef } from '../studioApi';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
@@ -418,7 +418,7 @@ describe('StudioComposer — attachments', () => {
     expect(studio.send).toHaveBeenCalledWith('', [{ name: 'maya.png', mimeType: 'image/png', dataUrl: expect.stringMatching(/^data:image\/png/) }]);
   });
 
-  it('refuses honestly: originals over 40 MB, SVGs and unsupported files (the old 10 MB pre-shrink limit is gone)', async () => {
+  it('refuses honestly: originals over 40 MB, unsafe SVGs and unsupported files', async () => {
     const studio = makeFakeStudio();
     render(<StudioComposer studio={studio} />);
     const big = new File(['x'], 'huge.jpg', { type: 'image/jpeg' });
@@ -430,12 +430,29 @@ describe('StudioComposer — attachments', () => {
     expect(within(rows).getByText('huge.jpg').closest('li')).toHaveTextContent(/over 40 MB/);
     // A 15 MB phone photo is fine: it is shrunk in the browser before it uploads.
     expect(await screen.findByAltText('phone.jpg')).toBeInTheDocument();
-    fireEvent.change(fileInput(), { target: { files: [new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' })] } });
+    vi.mocked(prepareImageFile).mockRejectedValueOnce(new PrepareError('svg', 'Use a static SVG or export it as PNG.'));
+    fireEvent.change(fileInput(), { target: { files: [new File(['<svg onload="unsupported()"/>'], 'logo.svg', { type: 'image/svg+xml' })] } });
     expect(await within(screen.getByRole('list', { name: 'Uploads' })).findByText('logo.svg')).toBeInTheDocument();
-    expect(screen.getByText(/Use a JPG, PNG, WebP, GIF or AVIF image/)).toBeInTheDocument();
+    expect(screen.getByText(/Use a static SVG or export it as PNG/)).toBeInTheDocument();
     const zip = new File(['x'], 'archive.zip', { type: 'application/zip' });
     fireEvent.change(fileInput(), { target: { files: [zip] } });
     expect(await screen.findByText(/archive\.zip isn't supported/)).toBeInTheDocument();
+  });
+
+  it('prepares a file selected by its SVG extension and passes only the raster to the inbox and inline fallback', async () => {
+    const studio = makeFakeStudio();
+    render(<StudioComposer studio={studio} />);
+    const vector = new File(['<svg viewBox="0 0 32 32"><rect width="16" height="16"/></svg>'], 'sticker.svg', { type: 'application/octet-stream' });
+    const blob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
+    vi.mocked(prepareImageFile).mockResolvedValueOnce({ blob, mimeType: 'image/png', w: 2048, h: 2048, name: vector.name, bytes: blob.size, sourceBytes: vector.size });
+    expect(fileInput().getAttribute('accept')).toContain('image/svg+xml');
+    fireEvent.change(fileInput(), { target: { files: [vector] } });
+    await screen.findByAltText('sticker.svg');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    expect(prepareImageFile).toHaveBeenCalledWith(vector);
+    expect(studio.uploadRef).toHaveBeenCalledWith(blob, expect.anything(), expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(studio.send).toHaveBeenCalledWith('', [{ name: 'sticker.svg', mimeType: 'image/png', dataUrl: expect.stringMatching(/^data:image\/png/) }]);
   });
 
   it('a removed photo is not sent, and its inbox copy is deleted', async () => {

@@ -1,9 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./account', () => ({ accessToken: vi.fn(async () => 'supabase-jwt') }));
+vi.mock('./account', () => ({
+  accessToken: vi.fn(async () => 'supabase-jwt'),
+  getAccount: vi.fn(() => ({ status: 'member', userId: 'account-1' })),
+}));
 
-import { accessToken } from './account';
+import { accessToken, getAccount } from './account';
 import {
   DRIVE_CHUNK_BYTES,
   DriveError,
@@ -359,6 +362,31 @@ describe('Drive status keeps the backend asleep (ADR 0007 C11)', () => {
     globalThis.fetch = vi.fn(async () => ok()) as unknown as typeof fetch;
     expect(await getDriveStatus()).toMatchObject({ connected: true });
     expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse or publish a previous account’s status when switching accounts mid-request', async () => {
+    let finishOld!: (response: Response) => void;
+    let started!: () => void;
+    const startedOldRequest = new Promise<void>((resolve) => { started = resolve; });
+    globalThis.fetch = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        finishOld = resolve;
+        started();
+      }))
+      .mockResolvedValueOnce(resp(200, { ok: true, configured: true, connected: false }));
+    const old = getDriveStatus();
+    await startedOldRequest;
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    vi.mocked(getAccount).mockReturnValue({ status: 'member', userId: 'account-2' });
+    try {
+      expect(await getDriveStatus()).toMatchObject({ signedIn: true, connected: false });
+      finishOld(ok());
+      expect(await old).toMatchObject({ connected: false });
+      expect(peekDriveStatus()).toMatchObject({ signedIn: true, connected: false });
+    } finally {
+      vi.mocked(getAccount).mockReturnValue({ status: 'member', userId: 'account-1' });
+    }
   });
 
   it('Google refusing the grant mid-upload drops the cached “connected”', async () => {

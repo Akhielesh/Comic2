@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react';
 import { buildApiUrl } from '@/services/clientConfig';
-import { accessToken } from './account';
+import { accessToken, getAccount } from './account';
 
 export const DRIVE_CONNECTOR_ID = 'google_drive_save';
 /** Shown wherever we ask to connect — the whole point of the drive.file scope. */
@@ -164,32 +164,39 @@ export interface DriveStatus {
   error?: DriveErrorCode;
 }
 
-let cache: { at: number; status: DriveStatus } | null = null;
-let inflight: Promise<DriveStatus> | null = null;
-/** Which account the cached status belongs to (null = never asked). */
-let lastAccount: { key: string | undefined } | null = null;
+let cache: { account: string | undefined; at: number; status: DriveStatus } | null = null;
+let inflight: { account: string | undefined; result: Promise<DriveStatus> } | null = null;
+let statusVersion = 0;
 const listeners = new Set<(s: DriveStatus) => void>();
 
-function publish(s: DriveStatus): DriveStatus {
-  cache = { at: Date.now(), status: s };
-  for (const l of listeners) l(s);
-  return s;
-}
-
 /** The last known status, without a network call. */
-export const peekDriveStatus = (): DriveStatus | null => cache?.status ?? null;
+export const peekDriveStatus = (): DriveStatus | null => cache && cache.account === getAccount().userId ? cache.status : null;
 
 /** Forget the cached status (e.g. after sign-out). */
 export function resetDriveStatus(): void {
   cache = null;
+  inflight = null;
+  statusVersion += 1;
 }
 
 /** Fetch the Drive connection status (cached for STATUS_TTL_MS unless `force`). Never throws. */
 export function getDriveStatus(opts: { force?: boolean } = {}): Promise<DriveStatus> {
+  const account = getAccount().userId;
+  const version = statusVersion;
   // A failed check (offline, backend asleep and slow) is shown, but asked again next time.
-  if (!opts.force && cache && !cache.status.error && Date.now() - cache.at < STATUS_TTL_MS) return Promise.resolve(cache.status);
-  if (inflight) return inflight;
-  inflight = (async () => {
+  if (!opts.force && cache && cache.account === account && !cache.status.error && Date.now() - cache.at < STATUS_TTL_MS) {
+    return Promise.resolve(cache.status);
+  }
+  if (inflight && inflight.account === account) return inflight.result;
+  const publish = (status: DriveStatus): DriveStatus => {
+    if (version !== statusVersion || account !== getAccount().userId) {
+      return { signedIn: false, available: true, connected: false, expired: false };
+    }
+    cache = { account, at: Date.now(), status };
+    for (const listener of listeners) listener(status);
+    return status;
+  };
+  const result = (async () => {
     const token = await accessToken().catch(() => null);
     if (!token) return publish({ signedIn: false, available: true, connected: false, expired: false });
     try {
@@ -213,9 +220,10 @@ export function getDriveStatus(opts: { force?: boolean } = {}): Promise<DriveSta
       return publish({ signedIn: true, available: true, connected: false, expired: false, error: e instanceof DriveError ? e.code : 'network' });
     }
   })().finally(() => {
-    inflight = null;
+    if (inflight?.result === result) inflight = null;
   });
-  return inflight;
+  inflight = { account, result };
+  return result;
 }
 
 /**
@@ -223,21 +231,21 @@ export function getDriveStatus(opts: { force?: boolean } = {}): Promise<DriveSta
  * account changes (e.g. the user id); `null` while the account is still loading.
  */
 export function useDriveStatus(accountKey: string | null | undefined): DriveStatus | null {
-  const [s, setS] = useState<DriveStatus | null>(cache?.status ?? null);
+  const [state, setState] = useState(() => ({ account: accountKey, status: peekDriveStatus() }));
   useEffect(() => {
     ensureResultListener();
-    listeners.add(setS);
-    if (accountKey !== null) {
-      // A different account (or sign-in/out) invalidates the cached answer.
-      const force = lastAccount !== null && lastAccount.key !== accountKey;
-      lastAccount = { key: accountKey };
-      void getDriveStatus({ force }).then(setS);
-    }
+    let active = true;
+    const update = (status: DriveStatus) => {
+      if (active && accountKey === getAccount().userId) setState({ account: accountKey, status });
+    };
+    listeners.add(update);
+    if (accountKey !== null) void getDriveStatus().then(update);
     return () => {
-      listeners.delete(setS);
+      active = false;
+      listeners.delete(update);
     };
   }, [accountKey]);
-  return s;
+  return accountKey !== null && state.account === accountKey ? state.status : null;
 }
 
 /* ----------------------------------------------------------------- connect */
@@ -406,6 +414,9 @@ export async function connectDrive(opts: { popup?: Window | null; signal?: Abort
     if (s.connected && !s.expired) return s;
     if (s.connected && s.expired) {
       throw new DriveError('reconnect', 'Google Drive connected without permission to save files. Connect again and leave the Drive box ticked on Google’s screen.');
+    }
+    if (outcome.error === 'missing_permissions') {
+      throw new DriveError('reconnect', 'Google Drive needs permission to save files. Connect again and leave the Drive box ticked on Google’s screen.');
     }
     if (outcome.error) throw new DriveError(/access_denied/i.test(outcome.error) ? 'consent_declined' : 'server', outcome.error === 'no_credentials' ? DRIVE_ERROR_TEXT.unavailable : undefined);
     throw new DriveError('consent_closed');

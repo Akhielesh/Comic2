@@ -1,35 +1,47 @@
-// Best-effort cloud sync of BYOK provider keys. Posts the key to the server, which
-// encrypts it with a server-only secret before storing (replaces the old client-side
-// encryption whose secret shipped in the bundle). Never throws — the local key store
-// (services/apiKeys) remains the source of truth, so a failed sync doesn't break BYOK.
+import { del, post } from './apiClient';
+import { getAccountKeyMeta, getActiveKeyValue, setAccountKeyMeta, type ApiKeyProvider } from './apiKeys';
+import { isLocalOwner } from './localOwner';
 
-import { post, del } from './apiClient';
-import { getActiveKeyValue, type ApiKeyProvider } from './apiKeys';
+export type ProviderMirrorResult = 'synced' | 'failed' | 'skipped';
 
-export const syncByokKeyToServer = async (provider: string, key: string): Promise<void> => {
-  try {
-    await post('/api/account/byok', { provider, key });
-  } catch {
-    /* best-effort mirror — local storage already holds the key */
-  }
-};
-
-export const removeByokKeyFromServer = async (provider: string): Promise<void> => {
-  try {
-    await del(`/api/account/byok/${encodeURIComponent(provider)}`);
-  } catch {
-    /* best-effort */
-  }
-};
+const pending = new Map<string, Promise<ProviderMirrorResult>>();
 
 /**
- * Make the account mirror match the provider's CURRENT active local key: sync it if
- * one exists, remove the mirror if none does. Call after any local key mutation
- * (delete, active-key switch, edit) — before this existed, deleting a key locally
- * left the old secret on the account forever, and the server fallback kept using it.
+ * Mirror the active device key to the account. Serialize writes per account and provider so a
+ * slower activation cannot overwrite a later deletion or activation on the same device.
  */
-export const reconcileProviderMirror = async (provider: ApiKeyProvider): Promise<void> => {
-  const active = getActiveKeyValue(provider);
-  if (active) await syncByokKeyToServer(provider, active);
-  else await removeByokKeyFromServer(provider);
+export const reconcileProviderMirror = (userId: string, provider: ApiKeyProvider): Promise<ProviderMirrorResult> => {
+  const id = `${userId}:${provider}`;
+  const update = async (): Promise<ProviderMirrorResult> => {
+    if (!isLocalOwner(userId)) return 'skipped';
+    const active = getActiveKeyValue(provider);
+    try {
+      if (active) {
+        const result = await post<{ provider: ApiKeyProvider; key: string }, { persisted?: boolean }>(
+          '/api/account/byok',
+          { provider, key: active },
+          { expectedAccountId: userId }
+        );
+        if (result?.persisted !== true) return 'failed';
+      } else {
+        const result = await del<{ ok?: boolean }>(`/api/account/byok/${encodeURIComponent(provider)}`, { expectedAccountId: userId });
+        if (result?.ok !== true) return 'failed';
+      }
+      if (isLocalOwner(userId)) {
+        const metadata = getAccountKeyMeta().filter((entry) => entry.provider !== provider);
+        if (active) metadata.push({ provider, suffix: active.slice(-4) });
+        setAccountKeyMeta(metadata);
+      }
+      return 'synced';
+    } catch {
+      return 'failed';
+    }
+  };
+  const previous = pending.get(id);
+  const next = previous ? previous.then(update) : update();
+  pending.set(id, next);
+  void next.then(() => {
+    if (pending.get(id) === next) pending.delete(id);
+  });
+  return next;
 };

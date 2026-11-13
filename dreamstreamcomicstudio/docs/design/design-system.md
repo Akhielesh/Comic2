@@ -202,8 +202,7 @@ The `var()`-derived ones are restated in every block, so a nested skin recompute
 S2a lead decision: the values ship as CL-0 built them. Where they differ from the design report: the default skin's
 `--ds-info` / `--ds-info-text` are neutral (`#525252` / `#404040` light, `#e5e5e5` dark; the old blue, and the
 report's dark grey, sat too close to the spark); dark `--ds-hue-1` is `#5568fd`, one step lighter than the report's
-`#5265f9`, which was 2.93:1 on the default dark card; only the 4↔5 hue swap keeps every gate (2↔4 fails); and the How
-It Works pin is `:root.dark .hiw-gradient-text` (`atlas-skin.md`).
+`#5265f9`, which was 2.93:1 on the default dark card; only the 4↔5 hue swap keeps every gate (2↔4 fails).
 
 **Recipes** (`components/chat/studioDesign.ts`, re-exported by `components/ds/recipes.ts`): `SPARK_FILL`,
 `SPARK_TEXT`, `SPARK_SOFT_BG`, `SPARK_RING_ON_ART` (a 2 px spark outline with a 2 px gap, selection on art only),
@@ -231,7 +230,7 @@ Atlas's six variants are untouched). Progress takes `tone="making"` (`PROGRESS_M
 | Tags (colour mode, medium, kind) | — | a 6 px dot before the word, in a neutral chip | — | — |
 | Art-adjacent surfaces | — | — | — | placeholder, glow, reader room |
 | Empty-state art | one spot element per drawing | — | — | — |
-| Landing | "Start creating", signed out only (signed in: none); `BENDAY` behind the studio preview's pages | — | — | the procedural looks in `ComicPageSpecimen` (real covers wait for the Discover listing) |
+| Landing | "Start creating", signed out only | — | — | `The Paper Boat` sample pages and six style previews |
 
 When more than one place wants the one spark, page content wins in this order: the My comics header's New comic, then
 the composer Send, then the landing hero. The panel's New comic stays ink.

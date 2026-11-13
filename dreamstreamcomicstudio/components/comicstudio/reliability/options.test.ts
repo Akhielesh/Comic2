@@ -16,6 +16,8 @@ import { blockedWhat, friendlyReason, isRateLimited, notDrawnSentence, outageSen
 const paid = resolveStudioCaps({ planId: 'pro', byok: false, isAdmin: false });
 const byokCaps = resolveStudioCaps({ byok: true, isAdmin: false });
 const PRO = getImageModel('nano-banana-pro')!;
+const FLARE = getImageModel('gpt-image-2.6-flare')!;
+const SUNBURST = getImageModel('gpt-image-2.6-sunburst')!;
 
 const drawnDoc = (): ComicDoc => {
   const doc = makeSampleDoc();
@@ -25,10 +27,11 @@ const drawnDoc = (): ComicDoc => {
 };
 
 describe('registrySwitchOptions', () => {
-  it('offers the same-family model with its real list price × markup and the real redraw count and total', () => {
+  it('prioritizes the same-family model and keeps a priced GPT alternative for supported pages', () => {
     const doc = drawnDoc();
-    const [sw, ...rest] = registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid });
-    expect(rest).toEqual([]);
+    const options = registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid });
+    expect(options.map((o) => o.modelId)).toEqual([PRO.id, FLARE.id]);
+    const [sw, flare] = options;
     expect(sw.modelId).toBe(PRO.id);
     expect(sw.consistency).toBe('same_family');
     expect(sw.usdPerImage).toBeCloseTo(imagePriceUsd(PRO, '2K') * PLATFORM_MARKUP, 4);
@@ -36,6 +39,9 @@ describe('registrySwitchOptions', () => {
     expect(sw.redrawCount).toBe(t.pages.length + 1);
     expect(sw.redrawCount).toBe(4); // 3 drawn pages + cover
     expect(sw.redrawUsd).toBeCloseTo(redrawQuote(doc, PRO.id, 'pages_cover', registryPriceBook(), false).usd!, 4);
+    expect(flare).toMatchObject({ consistency: 'different', redrawCount: 4 });
+    expect(flare.usdPerImage).toBeCloseTo(imagePriceUsd(FLARE, '1K') * PLATFORM_MARKUP, 4);
+    expect(flare.redrawUsd).toBeCloseTo(redrawQuote(doc, FLARE.id, 'pages_cover', registryPriceBook(), false).usd!, 4);
   });
 
   it('a candidate whose redraw has no price is left out (never shown as a $0 "Free" redraw)', () => {
@@ -43,7 +49,7 @@ describe('registrySwitchOptions', () => {
     const list = registryPriceBook();
     const noCoverPrice: PriceBook = { ...list, unit: (id, res, kind, refs) => (kind === 'cover' ? { usd: null, basis: 'not published' } : list.unit(id, res, kind, refs)) };
     expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, prices: noCoverPrice })).toEqual([]);
-    expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, prices: list })).toHaveLength(1);
+    expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, prices: list }).map((o) => o.modelId)).toEqual([PRO.id, FLARE.id]);
   });
 
   it('BYOK prices carry no markup; the free plan gets no switch; a down candidate is never offered', () => {
@@ -51,6 +57,8 @@ describe('registrySwitchOptions', () => {
     expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: byokCaps })[0].usdPerImage).toBeCloseTo(imagePriceUsd(PRO, '2K'), 4);
     expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: DEFAULT_CAPS })).toEqual([]);
     const down = { [PRO.id]: { modelId: PRO.id, state: 'down' as const, routes: [], checkedAt: 1 } };
+    expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, health: down }).map((o) => o.modelId)).toEqual([FLARE.id, SUNBURST.id]);
+    doc.format.pageAspect = '4:5';
     expect(registrySwitchOptions({ doc, blockedModelId: 'nano-banana-2.1', caps: paid, health: down })).toEqual([]);
   });
 });
@@ -86,7 +94,8 @@ describe('bannerOptions', () => {
   });
 
   it('with no card it falls back to registry switches', () => {
-    expect(bannerOptions({ doc: drawnDoc(), modelId: 'nano-banana-2.1', caps: paid }).options.map((o) => o.kind)).toEqual(['switch_model']);
+    const { options } = bannerOptions({ doc: drawnDoc(), modelId: 'nano-banana-2.1', caps: paid });
+    expect(options).toMatchObject([{ kind: 'switch_model', modelId: PRO.id }, { kind: 'switch_model', modelId: FLARE.id }]);
   });
 });
 
@@ -97,6 +106,9 @@ describe('copy', () => {
     expect(
       optionText({ kind: 'switch_model', modelId: 'x', nickname: 'X', usdPerImage: 0.17, consistency: 'different', redrawCount: 1, redrawUsd: 0.2 }, dollars)
     ).toEqual({ label: 'Try X instead', price: '≈ $0.17 per image', detail: 'a different look · redraw 1 drawn image ≈ $0.20 to keep the book consistent' });
+    expect(
+      optionText({ kind: 'switch_model', modelId: FLARE.id, nickname: FLARE.nickname, usdPerImage: 0.07, consistency: 'different', redrawCount: 1, redrawUsd: 0.07 }, dollars)
+    ).toMatchObject({ price: '≈ $0.07 per image · input costs vary' });
   });
 
   it('reasons read as words, what was held back as a phrase, times as ages', () => {

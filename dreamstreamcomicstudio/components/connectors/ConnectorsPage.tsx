@@ -43,6 +43,23 @@ type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string }
 
 const OAUTH_RESULT = 'connector-oauth-result';
 
+function openOAuthPopup(): Window | null {
+  const popup = window.open('', '_blank', 'popup=yes,width=520,height=700');
+  if (!popup) return null;
+  if (popup.document.body) {
+    popup.document.title = 'Connect to Google';
+    popup.document.body.textContent = 'Opening Google…';
+  }
+  return popup;
+}
+
+function openGoogleConsent(popup: Window | null, authorizationUrl: string) {
+  const target = new URL(authorizationUrl);
+  if (target.origin !== 'https://accounts.google.com') throw new Error('Could not open the Google consent page.');
+  if (popup) popup.location.href = target.href;
+  else window.location.assign(target.href);
+}
+
 const humanizeError = (code: string): string => {
   switch (code) {
     case 'access_denied':
@@ -53,6 +70,8 @@ const humanizeError = (code: string): string => {
       return 'this connector is not configured on the server';
     case 'storage_unavailable':
       return 'secure storage is unavailable on the server';
+    case 'missing_permissions':
+      return 'Google didn’t grant all the requested permissions. Review your connections and reconnect the services you want to use.';
     default:
       return code.replace(/_/g, ' ');
   }
@@ -99,9 +118,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     void load();
   }, [load]);
 
-  // Full-page fallback: if a full-page redirect (popup blocked) landed back here with a
-  // result while this view is mounted, surface it and clean the URL. (The popup path is
-  // relayed globally in App.tsx.)
+  // Surface a full-page callback result if a browser blocks the consent popup.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get('connected');
@@ -121,10 +138,11 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   // Listen for the popup's postMessage result.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      // The self-closing callback page posts from the BACKEND origin, so we don't gate on
-      // e.origin here; the payload is non-sensitive (connector ids) and the authoritative
-      // update is the scoped refreshConnections() below.
-      const data = e.data as { type?: string; connected?: string; error?: string };
+      const popup = popupRef.current;
+      if (!popup || e.source !== popup) return;
+      // Google returns to the registered API callback, which can be on another
+      // DreamStream host. Only the window we opened can complete this attempt.
+      const data = e.data as { type?: unknown; connected?: unknown; error?: unknown } | null;
       if (data?.type !== OAUTH_RESULT) return;
       setConnecting(null);
       try {
@@ -133,16 +151,21 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
         /* ignore */
       }
       popupRef.current = null;
-      if (data.error) {
-        pushToast('error', `Couldn't connect: ${humanizeError(data.error)}`);
-        appStatus.report('error', 'Connection failed', { detail: humanizeError(data.error), source: 'connectors' });
-      } else if (data.connected) {
+      if (typeof data.error === 'string' && data.error) {
+        const detail = humanizeError(data.error);
+        pushToast('error', `Couldn't connect: ${detail}`);
+        appStatus.report('error', 'Connection failed', { detail, source: 'connectors' });
+      } else if (typeof data.connected === 'string' && data.connected) {
         pushToast('success', `${data.connected.replace(/_/g, ' ')} connected`);
       }
       void refreshConnections();
     };
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      popupRef.current?.close();
+      popupRef.current = null;
+    };
   }, [pushToast, refreshConnections]);
 
   // Reconcile when the user comes back from the OAuth popup. We deliberately DON'T poll
@@ -156,11 +179,13 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     let graceTimer: number | undefined;
     const reconcile = () => {
       if (document.visibilityState !== 'visible') return;
-      if (!popupRef.current) return; // popup not opened yet (still fetching the consent URL)
+      const popup = popupRef.current;
+      if (!popup) return;
       window.clearTimeout(graceTimer);
       // Give a late postMessage a beat to win the race (it clears `connecting`, which
       // tears this watcher down) before assuming the user just closed the window.
       graceTimer = window.setTimeout(() => {
+        if (popupRef.current !== popup || !popup.closed) return;
         popupRef.current = null;
         void refreshConnections();
         setConnecting(null);
@@ -169,6 +194,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     window.addEventListener('focus', reconcile);
     document.addEventListener('visibilitychange', reconcile);
     const safety = window.setTimeout(() => {
+      popupRef.current?.close();
       popupRef.current = null;
       setConnecting(null);
     }, 3 * 60_000);
@@ -191,54 +217,61 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
 
   const handleConnect = useCallback(
     async (entry: CatalogEntry, apiKey?: string) => {
+      if (connecting) return;
+      let popup: Window | null = null;
       setConnecting(entry.id);
       try {
+        // Reserve the window inside the click; browsers can block window.open after the API request.
+        if (entry.authType === 'user_oauth') {
+          popup = openOAuthPopup();
+          popupRef.current = popup;
+        }
         const result = await connectConnector(entry.id, apiKey ? { apiKey } : {});
         if (result.mode === 'completed') {
+          popup?.close();
+          if (popupRef.current === popup) popupRef.current = null;
           setDialogEntry(null);
           setConnecting(null);
           pushToast('success', `${entry.displayName} connected`);
           await refreshConnections();
           return;
         }
+        openGoogleConsent(popup, result.authorizationUrl);
         setDialogEntry(null);
-        const popup = window.open(result.authorizationUrl, 'connector_oauth', 'width=520,height=700');
-        if (!popup) {
-          window.location.assign(result.authorizationUrl);
-          return;
-        }
-        popupRef.current = popup;
       } catch (err) {
+        popup?.close();
+        if (popupRef.current === popup) popupRef.current = null;
         const msg = (err as Error)?.message || 'Connection failed';
         setConnecting(null);
         pushToast('error', msg);
         appStatus.report('error', `Couldn't connect ${entry.displayName}`, { detail: msg, source: 'connectors' });
       }
     },
-    [pushToast, refreshConnections]
+    [connecting, pushToast, refreshConnections]
   );
 
   // Seamless multi-service Google flow: disconnect any removed services, then (if new
   // services were added) run ONE consent covering the full selection.
   const handleGoogleSubmit = useCallback(
     async (selected: string[], toDisconnect: string[]) => {
+      if (connecting) return;
+      let popup: Window | null = null;
+      const connectedSet = new Set((connections || []).map((c) => c.connectorId));
+      const needConsent = selected.some((id) => !connectedSet.has(id));
       setConnecting('google');
       try {
+        if (needConsent) {
+          popup = openOAuthPopup();
+          popupRef.current = popup;
+        }
         for (const id of toDisconnect) {
           const conns = (connections || []).filter((c) => c.connectorId === id);
           for (const c of conns) await disconnectConnection(c.id);
         }
-        const connectedSet = new Set((connections || []).map((c) => c.connectorId));
-        const needConsent = selected.some((id) => !connectedSet.has(id));
-        if (needConsent && selected.length) {
+        if (needConsent) {
           const { authorizationUrl } = await connectGoogleServices(selected);
+          openGoogleConsent(popup, authorizationUrl);
           setGoogleDialogOpen(false);
-          const popup = window.open(authorizationUrl, 'connector_oauth', 'width=520,height=700');
-          if (!popup) {
-            window.location.assign(authorizationUrl);
-            return;
-          }
-          popupRef.current = popup;
         } else {
           setGoogleDialogOpen(false);
           setConnecting(null);
@@ -246,13 +279,15 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           await refreshConnections();
         }
       } catch (err) {
+        popup?.close();
+        if (popupRef.current === popup) popupRef.current = null;
         const msg = (err as Error)?.message || 'Could not update Google services';
         setConnecting(null);
         pushToast('error', msg);
         appStatus.report('error', "Couldn't update Google services", { detail: msg, source: 'connectors' });
       }
     },
-    [connections, pushToast, refreshConnections]
+    [connecting, connections, pushToast, refreshConnections]
   );
 
   const handleSync = useCallback(
@@ -297,7 +332,9 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   const handleReconnect = useCallback(
     (conn: ConnectionSummary) => {
       const entry = catalog?.find((c) => c.id === conn.connectorId);
-      if (entry) void handleConnect(entry);
+      if (!entry) return;
+      if (entry.authType === 'api_key') setDialogEntry(entry);
+      else void handleConnect(entry);
     },
     [catalog, handleConnect]
   );
@@ -357,7 +394,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           </div>
         )}
 
-        {isLoading ? (
+        {isLoading && loadError ? null : isLoading ? (
           <Group>
             {[0, 1, 2].map((i) => (
               <div key={i} className="flex items-center gap-3 p-4">
@@ -375,7 +412,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
             {hasConnections && (
               <Section
                 title="Your connections"
-                subtitle="Accounts the studio can read on your behalf. Sync, reconnect or disconnect anytime."
+                subtitle="Review permissions, sync data, or reconnect an account."
               >
                 <Group>
                   {connections!.map((conn) => (
@@ -383,7 +420,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
                       key={conn.id}
                       conn={conn}
                       entry={catalog?.find((c) => c.id === conn.connectorId)}
-                      busy={busyConn === conn.id}
+                      busy={busyConn === conn.id || connecting === conn.connectorId}
                       onSync={() => handleSync(conn)}
                       onDisconnect={() => handleDisconnect(conn)}
                       onReconnect={() => handleReconnect(conn)}
@@ -395,7 +432,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
 
             <Section
               title="Add a connection"
-              subtitle="Give the assistant access to your data — read-only, encrypted, revocable."
+              subtitle="Choose which services to connect. You can disconnect them anytime."
             >
               {catalog && catalog.length > 0 ? (
                 <Group>

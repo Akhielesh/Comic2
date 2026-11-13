@@ -33,8 +33,10 @@ export interface ImageModelSpec {
   /** Reference-image caps (Gemini docs table). style=0 means style refs are not a distinct class — send as objects. */
   refs: { total: number; characters: number; objects: number; style: number };
   aspects: AspectRatio[];
-  /** Empty = the transport does not take a resolution parameter (fixed output size). */
+  /** Empty = a legacy fixed-size model with a 1K catalog row. */
   resolutions: Resolution[];
+  /** Fixed-size transport with an explicit catalog tier but no resolution request parameter. */
+  fixedResolution?: Resolution;
   /** In-image lettering quality. */
   text: Quality4;
   /** How well it composes a full multi-panel comic page in one image. */
@@ -56,6 +58,10 @@ export interface ImageModelSpec {
   api?: Partial<Record<ImageRoute, 'chat' | 'images'>>;
   /** Models billed per quality level are pinned to the level the boards measured. */
   fixedQuality?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Image output tokens from the vendor's estimate, used to price token-billed OpenRouter endpoints. */
+  outputTokenEstimate?: number;
+  /** Known USD/token rates. Endpoints must publish rates at or below these limits. */
+  tokenRateCeilings?: { input_image: number; input_text: number; output_image: number };
   /** Vendor charge per reference image sent (USD). Absent = unpublished / UNVERIFIED (never 0 by assumption). */
   perRefUsd?: number;
   /** What `priceUsd` is: a published per-image price, a vendor tokens-per-image table × token price, derived
@@ -69,6 +75,32 @@ export interface ImageModelSpec {
 
 const GEMINI_ASPECTS_FULL: AspectRatio[] = ['1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'];
 const GEMINI_ASPECTS_PRO: AspectRatio[] = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
+const GPT_IMAGE_ASPECTS: AspectRatio[] = ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'];
+
+/** OpenRouter's fixed-size 2.6 transport. The OpenAI calculator estimates 1,756 output tokens
+ * for a high-quality 1024px square, the basis for the 1K tier estimate.
+ * The per-image number is an output estimate; image/text inputs are billed separately.
+ */
+const GPT_IMAGE_26_COMMON = {
+  vendor: 'openai',
+  lifecycle: 'experimental',
+  refs: { total: 16, characters: 4, objects: 12, style: 0 },
+  aspects: GPT_IMAGE_ASPECTS,
+  resolutions: ['1K'],
+  fixedResolution: '1K',
+  text: 'good',
+  pages: 'good',
+  edit: 'good',
+  priceUsd: { '1K': 0.05268 },
+  priceBasis: 'per_token_table',
+  outputTokenEstimate: 1756,
+  tokenRateCeilings: { input_image: 0.000008, input_text: 0.000005, output_image: 0.00003 },
+  fixedQuality: 'high',
+  factsAsOf: '2026-11-13',
+  pickable: true,
+  api: { openrouter: 'images' },
+  timeoutMs: 240_000
+} satisfies Omit<ImageModelSpec, 'id' | 'label' | 'nickname' | 'routes' | 'latencySec' | 'blurb'>;
 
 export const IMAGE_MODELS: ImageModelSpec[] = [
   {
@@ -176,6 +208,27 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     blurb: 'Fastest/cheapest; cannot hold character identity — used only for style swatches.'
   },
   {
+    ...GPT_IMAGE_26_COMMON,
+    id: 'gpt-image-2.6-sunburst',
+    label: 'OpenAI GPT Image 2.6 Sunburst',
+    nickname: 'GPT Image 2.6 Sunburst',
+    routes: { openrouter: 'openai/gpt-image-2.6-sunburst' },
+    edit: 'excellent',
+    gradeSources: { text: 'our judgement', pages: 'our judgement', edit: 'our judgement (OpenAI recommends it for detailed edits)' },
+    latencySec: 24,
+    blurb: 'Detailed compositions and precise raster edits using reference images. Served through OpenRouter.'
+  },
+  {
+    ...GPT_IMAGE_26_COMMON,
+    id: 'gpt-image-2.6-flare',
+    label: 'OpenAI GPT Image 2.6 Flare',
+    nickname: 'GPT Image 2.6 Flare',
+    routes: { openrouter: 'openai/gpt-image-2.6-flare' },
+    gradeSources: { text: 'our judgement', pages: 'our judgement', edit: 'our judgement' },
+    latencySec: 15,
+    blurb: 'Faster raster generation and reference edits for iterating on a panel or page. Served through OpenRouter.'
+  },
+  {
     id: 'gpt-image-2.5',
     label: 'OpenAI GPT Image 2.5 Sunburst',
     nickname: 'GPT Image 2.5',
@@ -184,7 +237,7 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     lifecycle: 'experimental',
     refs: { total: 16, characters: 4, objects: 12, style: 0 },
     // No 4:5 through OpenRouter (models.md §1.1 #5).
-    aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    aspects: GPT_IMAGE_ASPECTS,
     // The transport takes no resolution parameter: output is a fixed size per aspect (1024² / 1024×1536).
     resolutions: [],
     text: 'excellent',
@@ -196,6 +249,7 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     // Basis: OpenAI calculator token factor (max = 96) × $30/M output tokens — a token table, not a published
     // per-image price; reference input is unpriced, so totals are estimates (models.md §1.6 #1, §3.5 ex. 3, §3.6 C).
     priceUsd: { '1K': 0.2107 },
+    outputTokenEstimate: 7024,
     priceBasis: 'per_token_table',
     fixedQuality: 'max',
     factsAsOf: '2026-10-22',
@@ -214,7 +268,7 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     routes: { openrouter: 'openai/gpt-image-2.5-flare' },
     lifecycle: 'experimental',
     refs: { total: 16, characters: 4, objects: 12, style: 0 },
-    aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    aspects: GPT_IMAGE_ASPECTS,
     resolutions: [],
     text: 'excellent',
     pages: 'good',
@@ -222,6 +276,7 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     gradeSources: { text: 'AA text rendering #3 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #2 · LMArena edit #2 (2026-10-22)' },
     // Same basis as Sunburst: OpenAI calculator, output tokens only; reference input unpriced → totals are estimates.
     priceUsd: { '1K': 0.2107 },
+    outputTokenEstimate: 7024,
     priceBasis: 'per_token_table',
     fixedQuality: 'max',
     factsAsOf: '2026-10-22',
@@ -412,6 +467,7 @@ export interface ResolvedImageJob {
 }
 
 export const nearestResolution = (spec: ImageModelSpec, want: Resolution): Resolution => {
+  if (spec.fixedResolution) return spec.fixedResolution;
   if (!spec.resolutions.length) return want;
   if (spec.resolutions.includes(want)) return want;
   const order: Resolution[] = ['512', '1K', '2K', '4K'];

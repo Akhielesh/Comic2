@@ -555,9 +555,6 @@ CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3
 - The 12 colour-layer tokens and the two develop tokens, as DreamStream extensions (above). Their values ship as CL-0
   built them (S2a lead decision). The Atlas session has the names.
 - The default skin's info pair went neutral; Atlas values are untouched.
-- The How It Works pin `:root.dark .hiw-gradient-text` (selector `:root.dark`, because `atlasSkin.test.ts` bridge D4
-  rejects hex literals in rules whose selector starts with `.dark .hiw-gradient-text`; the pin sets token values only,
-  so the paint rule still reads tokens).
 - The reader's `--ds-reader-*` set moved into `readerDesigns.css` (RD-A): reserved reader names, not skin tokens.
 
 ### Wave 9 (bridge) — the S1 token commit (Atlas `0677199b`, design files = `acbdaff7`, 2026-11-05)
@@ -581,9 +578,7 @@ primitives) and DS-1b (the QA harness).
   under, so the header never becomes a fixed descendant's containing block). `--ds-surface-blur` stays
   as an alias of the glass blur.
 - D4: the chat markdown links (`--ds-info-text`, ink on hover), code blocks (well and hairline),
-  `.studio-shimmer` (the skeleton tokens) and `.hiw-gradient-text` (status hues by default, the heading's
-  own ink under the skin: `color: inherit`, since How It Works stays light in dark) read tokens; their
-  hexes are gone.
+  and `.studio-shimmer` (the skeleton tokens) read theme tokens.
 - D5: Atlas on every host. `index.html` ships `data-ds-skin="atlas"` on `<html>`; the build kill switch
   `VITE_DS_SKIN_EVERYWHERE=off` strips it from every HTML entry (`vite.config.ts`, no file-name filter, so
   `live.html` rolls back with it once it carries the attribute). `initTheme()` runs at the app root and
@@ -620,10 +615,6 @@ primitives) and DS-1b (the QA harness).
   review it carried the display face, which Atlas never gave a dialog title (`dialogTitle.test.ts`).
 
 **Known limits.**
-- With the kill switch off, in dark, How It Works stays a light page: `:root.dark .hiw-gradient-text` pins the light
-  info / danger / warning stops (#525252, #dc2626, #d97706: 7.8, 4.8 and 3.2:1 on white; tokenContrast.test.ts).
-  Under the skin the words take the heading's own ink (`color: inherit`). (Since CL-0 this is no longer a known
-  limit; until then the words took the default dark hues, 2.5, 2.8 and 1.6:1 on white.)
 - The legacy Universal Assistant's answer bubble stays white in dark; `index.css` pins the light markdown
   tokens inside it (`.dark .bg-white.border-black .message-body`, link 6.7:1, code 16:1, table header
   13:1). The pin goes with the legacy-kit package, with the form-control rule.
@@ -799,15 +790,15 @@ each needing a component change Comic Studio has no shared primitive for yet:
 
 ## The comics home (Atlas public composition)
 
-The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) takes Atlas's public page
-composition, design values only: a centred hero over the dot grid (`.ds-grid-backdrop`, `.ds-stagger`), the product
-proof (`StudioPreview`, a still replica of the studio: the Director's "Here's what I've got" card beside drawn pages,
-in a `RADIUS_FEATURE` frame with `SHADOW_HERO`), the looks band (six `ComicPageSpecimen` pages: the library's
-procedural art with real lettering), the steps rail and a three-card bento (`.ds-reveal`, `LIFT`), the read-and-share
-section, the `INVERSE_SURFACE` access panel and a three-column footer. Its header is `ComicsHeader` on the app's
-`AppHeader` (`--header-h`, the same object as the studio's header), with the ink `ComicsMark` and a one-line
-"Comic Studio" lockup. One spark: the signed-out hero's "Start creating". The new public tokens
-(`--ds-radius-pill`, `--ds-shadow-hero`, `--ds-text-md|4xl|5xl|7xl`) and recipes are in design-system.md.
+The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) pairs the create and Library
+actions with a two-page sample reader. The six style previews change both sample pages while keeping the reader's place.
+Artwork lives in `public/assets/comic-sample` and uses the same scene and cast across every style. The Comic Studio
+library also uses the bundled thumbnails when a published preview is unavailable. Page turns move the visible spread,
+and style changes fade in the new art. Reduced motion makes both transitions immediate.
+
+`ComicsHeader` uses the shared `AppHeader`. Its appearance control switches between Atlas and Paper, which is also
+available under Settings → Appearance in the editor. The preference is saved in the browser. Both appearances follow
+the current System, Light or Dark setting, and Paper uses warm versions of the shared surface and ink tokens.
 
 The views one click off the landing are in the same language and chrome (`components/comicshost/hostRouting.ts`
 `comicsChromeFor`, unit-tested, is what App.tsx renders). Signed out, sign-in, Privacy, Terms and the Library keep
@@ -832,9 +823,6 @@ on the header's paper in both themes. The page bodies:
   text in a 3xl reading column on `SECTION_CARD`, styled by `LEGAL_PROSE` (the app ships no typography plugin). No
   Back button: the header's lockup goes home.
 
-One fill per view: on the landing the hero holds the one filled control, so the header's "Sign in" / "My comics" is
-`outline` there (the ink fill on the other views). The proof (`StudioPreview`) draws its pages in the Manga look (ink
-and screentone) so the spark stays the only colour in the first view; the colour arrives with the six looks below. The
-legal line's Contact is `mailto:SUPPORT_EMAIL` (`components/legal/contacts.ts`, the routed support mailbox), and on the
-comics host it offers no FAQs (there is no FAQ page there). `comicsHome.guard.test.ts` holds the landing, its header,
-`AppHeader`, `BrandLockup`, `LegalMicroLinks`, these views and `WaitlistForm` to 0 on every design guard.
+The signed-out hero's “Start creating” is the landing's single filled action. The footer links to the Library, privacy,
+terms and the routed support mailbox. `comicsHome.guard.test.ts` checks the landing and its shared components against the
+design-system guards.

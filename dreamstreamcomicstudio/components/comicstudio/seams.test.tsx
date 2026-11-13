@@ -138,7 +138,8 @@ describe('cross-package components render their real UI', () => {
       throw new TypeError('Failed to fetch');
     });
     vi.stubGlobal('fetch', fetchSpy);
-    render(<LibraryImage id="style.noir-ink" fallback={<span>procedural</span>} />);
+    // A preset without bundled art still uses the procedural fallback offline.
+    render(<LibraryImage id="style.poster-art" fallback={<span>procedural</span>} />);
     expect(screen.getByText('procedural')).toBeInTheDocument();
     const { result } = renderHook(() => useComicLibrary());
     await waitFor(() => expect(result.current.status).toBe('unavailable'));

@@ -47,6 +47,8 @@ import {
   type StyleOption
 } from '../../../shared/comic/doc.js';
 import { letteringPresetOf } from '../../../shared/comic/lettering/style.js';
+import { crossesPageScene, resolveContinuity, sceneIndex } from '../../../shared/comic/continuity.js';
+import { DIRECTION_DROP_ORDER, directionPhrases } from '../../../shared/comic/directions.js';
 import {
   nearestAspect,
   resolveImageJob,
@@ -1135,6 +1137,8 @@ export interface PageCompileOptions extends CompileOptions {
   layoutGuide?: boolean;
 }
 
+const adjacentBefore = (doc: ComicDoc, page: Page): Page | undefined => doc.pages.find((candidate) => candidate.n === page.n - 1);
+
 /**
  * Reference images for a page render, ordered exactly as they must be attached:
  * (layout guide, when asked) → characters → locations → style → previous page.
@@ -1143,7 +1147,8 @@ export interface PageCompileOptions extends CompileOptions {
  * ready sheet or photo — extras included — ranked by rankPageCast; overflow and extra props are
  * text-locked only; spare slots add a likeness photo or a second photo next to their character),
  * then the style anchor,
- * then location sheets by how many panels use them, then the previous page for continuity —
+ * then the immediate previous page in a continuing scene, then location sheets by how many panels
+ * use them, then older or different-scene art for style —
  * all within refs.objects and refs.total. Blocked images are never attached.
  */
 export const planPageReferences = (
@@ -1168,6 +1173,28 @@ export const planPageReferences = (
 
   const style = styleReferences(doc, spec, budget, { effectiveRating: effective });
 
+  const previous: PlannedReference[] = [];
+  const previousAsset = previousPage?.render.asset;
+  const previousSafety = safetyStatusOf(previousAsset?.safety, effective);
+  const continues = !!previousPage && previousPage.n === page.n - 1 && !crossesPageScene(sceneIndex(doc), previousPage, page);
+  const addPrevious = () => {
+    if (!previousPage || previousPage.id === page.id || !previousAsset?.path || budget.objects <= 0 || budget.total <= 0) return;
+    if (previousPage.render.status !== 'ready' && previousPage.render.status !== 'stale') return;
+    if (previousSafety !== 'pass' && (previousSafety !== 'unchecked' || opts.safe)) return;
+    previous.push({
+      kind: 'previous_page',
+      slot: 'object',
+      label: 'PREVIOUS PAGE',
+      path: previousAsset.path,
+      instruction: continues
+        ? "Use the last panel's established designs, geography and lighting where the script continues them. The current page's actions and changes control the story. Ignore the reference page's panel layout and lettering."
+        : 'Match the rendering style and recurring designs only. This reference does not establish the current scene, action, prop state, layout, or lettering.'
+    });
+    budget.objects -= 1;
+    budget.total -= 1;
+  };
+  if (continues) addPrevious();
+
   // Locations used on the page, most-used first (ties: first appearance).
   const placeCounts = new Map<string, { count: number; first: number }>();
   page.panels.forEach((panel, i) => {
@@ -1188,20 +1215,7 @@ export const planPageReferences = (
     budget.total -= 1;
   }
 
-  const previous: PlannedReference[] = [];
-  const prevPath =
-    previousPage && previousPage.id !== page.id && (previousPage.render.status === 'ready' || previousPage.render.status === 'stale') && servable(previousPage.render.asset)
-      ? previousPage.render.asset.path
-      : undefined;
-  if (prevPath && budget.objects > 0 && budget.total > 0) {
-    previous.push({
-      kind: 'previous_page',
-      slot: 'object',
-      label: 'PREVIOUS PAGE',
-      path: prevPath,
-      instruction: `Keep lighting, outfits and props continuous with it (not its layout${doc.format.lettering === 'in_art' ? ' or lettering' : ''}).`
-    });
-  }
+  if (!continues) addPrevious();
 
   return [...guide, ...characters, ...places, ...style, ...previous];
 };
@@ -1452,6 +1466,7 @@ interface PanelBlockContext {
   colors: boolean;
   /** COMIC_STORY_FIXES: anchors without mood words, colours with their codes. */
   fixes: boolean;
+  directionDrop: number;
 }
 
 /**
@@ -1506,7 +1521,7 @@ const speaksLine = (doc: ComicDoc, panel: Panel, drawn: ReadonlySet<string>, ctx
  *   Speaks: MEERA — 1 balloon; compose open background … beside her head for it.
  *   Detail: <the rest of the action>; <mood>.
  */
-const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: PanelBlockContext, opts: CompileOptions = {}): string => {
+const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: PanelBlockContext, opts: PageCompileOptions = {}): string => {
   const count = page.panels.length;
   const where = ctx.boxes[i] ? ` (${boxWhere(ctx.boxes, i)})` : '';
   const head = `PANEL ${panel.n} of ${count} — box ${i + 1} in the layout${ctx.guide ? ' guide' : ''}${where}.`;
@@ -1530,19 +1545,26 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
     const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors, storyFixes: ctx.fixes }) : ''].filter(Boolean).join(' — ');
     return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
   };
-  const peopleText = people.map((s) => `${describe(s.id)}${s.word && !solo ? `, ${positionPhrase(s.word)}` : ''}`).join('; ');
+  const direction = directionPhrases(panel, doc, { drop: ctx.directionDrop });
+  const directed = new Map(direction.who.map((who) => [who.castId, who]));
+  const placed = (id: string, fallback = '') => {
+    const who = directed.get(id);
+    return [describe(id), who?.place ? safeText(who.place, opts) : fallback, who?.state && safeText(who.state, opts)].filter(Boolean).join(', ');
+  };
+  const peopleText = people.map((s) => placed(s.id, s.word && !solo ? positionPhrase(s.word) : '')).join('; ');
   const viewerText = viewer
     ? `seen through ${upperName(viewer.name)}'s eyes (do not draw ${upperName(viewer.name)}; at most a hand at the frame edge)`
     : '';
   const whoBody = [peopleText || (viewerText ? '' : 'no characters'), viewerText].filter(Boolean).join('; ');
-  const who = `Who: ${whoBody}.${things.length ? ` Props: ${things.map((s) => describe(s.id)).join('; ')}.` : ''}`;
+  const who = `Who: ${whoBody}.${things.length ? ` Props: ${things.map((s) => placed(s.id)).join('; ')}.` : ''}`;
 
   const drawn = new Set(staged.map((s) => s.id)); // a talking prop listed under Props is drawn too
   const speaks = speaksLine(doc, panel, drawn, ctx);
 
   const detail = detailLine(rest, clean(panel.mood) ? safeText(panel.mood!, opts) : '');
+  const directionText = [direction.camera, ...direction.detail].filter((text): text is string => !!text).map((text) => safeText(text, opts));
 
-  return [head, camera, mustShow, who, speaks, detail].filter(Boolean).join('\n');
+  return [head, camera, mustShow, who, speaks, detail, directionText.length ? `Direction: ${sentence(directionText.join('; '))}` : ''].filter(Boolean).join('\n');
 };
 
 const speakerLabel = (doc: ComicDoc, line: Line): string => {
@@ -1684,10 +1706,44 @@ const castBlocks = (cast: Character[], names: Map<string, string>, index: Map<st
   ];
 };
 
+/** Give the artist the actual last beat even when no adjacent page art exists or fits the model's reference cap. */
+const storySequence = (doc: ComicDoc, page: Page, opts: CompileOptions): string => {
+  const before = adjacentBefore(doc, page);
+  const action = clean(before?.panels.at(-1)?.action);
+  if (!before || !action || crossesPageScene(sceneIndex(doc), before, page)) return '';
+  const lastBeat = sentence(clip(safeText(action, opts), 340));
+  return lastBeat
+    ? `STORY HANDOFF — Page ${before.n} ended with: ${lastBeat}\nUse that as the starting state for this page, without redrawing that moment. The current panel actions control what happens and changes.`
+    : '';
+};
+
+/** Fold the saved continuity ledger into words, using only this page's visible cast. */
+const continuityBlock = (doc: ComicDoc, page: Page, names: ReadonlyMap<string, string>, opts: CompileOptions): string => {
+  const state = resolveContinuity(doc, page);
+  if (!state?.content) return '';
+  const words = (value?: string) => (value ? clip(safeText(value, opts), 120) : '');
+  const named = (label: string, value?: string) => {
+    const text = words(value);
+    return text ? `${label}: ${text}` : '';
+  };
+  const scene = state.sceneFrom === 'ledger' ? state.scene : undefined;
+  const sceneDetails = scene ? [words(scene.name), named('time', scene.time), named('weather', scene.weather), named('light', scene.light), named('palette', scene.palette)].filter(Boolean).join('; ') : '';
+  const cast = Object.entries(state.cast).flatMap(([id, change]) => {
+    const name = names.get(id);
+    if (!name) return [];
+    const details = [named('outfit', change.outfit), named('marks', change.marks?.join(', ')), named('holding', change.holding?.join(', ')), named('position', change.where)].filter(Boolean);
+    return details.length ? [`- ${name}: ${details.join('; ')}`] : [];
+  });
+  const props = Object.entries(state.props).map(([name, prop]) => named(words(name), prop.state)).filter(Boolean);
+  const gone = Object.keys(state.gone).map(words).filter(Boolean);
+  const notes = state.notes.map(words).filter(Boolean).map((note) => `- ${note}`);
+  const lines = [sceneDetails && `- Scene: ${sceneDetails}`, ...cast, ...props.map((prop) => `- ${prop}`), gone.length && `- No longer present: ${gone.join(', ')}`, ...notes].filter(Boolean);
+  return lines.length ? ['CONTINUITY — keep these details wherever the current panel does not change them. Do not add anyone or anything to a panel just because it is listed here.', ...lines].join('\n') : '';
+};
+
 /**
- * Character budget for a page prompt (plan C18: 9,000 with a fixed drop order). Ship 1's only
- * droppable text is the identity anchors restated in each panel's Who line (the CAST block keeps
- * every full look), so a crowded page drops those first and never loses a panel or a rule.
+ * Soft character budget for a page prompt (plan C18). Drop repeated identity anchors first, then
+ * optional per-panel direction details. The current panel action and carried state stay intact.
  */
 export const PAGE_PROMPT_CHAR_BUDGET = 9000;
 
@@ -1729,8 +1785,10 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     ? "Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them)."
     : '';
 
-  const build = (anchors: boolean): string => {
-    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw, fixes };
+  const handoff = storySequence(doc, page, opts);
+  const continuity = continuityBlock(doc, page, names, opts);
+  const build = (anchors: boolean, directionDrop = 0): string => {
+    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw, fixes, directionDrop };
     const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
     return [
       header,
@@ -1739,7 +1797,10 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
       referenceLegend(refs),
       ...castBlocks(cast, names, index, bw, fixes),
       placeBlock,
+      handoff,
+      continuity,
       layoutBlock(doc, page, boxes, guide),
+      page.panels.length > 1 ? 'READING SEQUENCE — draw the panels as successive moments in one story. In a continuous scene, keep identities, screen direction, geography, and object state until the action changes them. Show each action or reaction once; on a cut, establish the new time or place.' : '',
       panelsBlock,
       letteringBlock(doc, page),
       footer
@@ -1747,8 +1808,13 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
       .filter(Boolean)
       .join('\n\n');
   };
-  const full = build(true);
-  const prompt = full.length > PAGE_PROMPT_CHAR_BUDGET ? build(false) : full;
+  let prompt = build(true);
+  if (prompt.length > PAGE_PROMPT_CHAR_BUDGET) prompt = build(false);
+  if (page.panels.some((panel) => panel.direction)) {
+    for (let drop = 1; prompt.length > PAGE_PROMPT_CHAR_BUDGET && drop <= DIRECTION_DROP_ORDER.length; drop += 1) {
+      prompt = build(false, drop);
+    }
+  }
 
   return finishJob(resolved, aspect, prompt, refs);
 };

@@ -2483,7 +2483,7 @@ class RenderRun {
     const pageJobs = pages.map((p) => this.pageJob(p, action));
     const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
     const jobs = [...sheetJobs, ...anchorJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
-    // The run's order (B7's schedule.ts; the stub is today's: page 1 alone, then the rest and the cover after it).
+    // Pages draw in pairs by default, or in full scene chains when enabled.
     const schedule = this.p5.runChains ? scheduleRun(doc, pages.map((p) => p.id), { chains: true }) : scheduleRun(doc, pages.map((p) => p.id));
     const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
     await this.run(jobs, label, async () => {
@@ -2498,8 +2498,12 @@ class RenderRun {
   /** The page jobs (and the cover) in the schedule's order: each starts once its `after` page has landed. */
   private async runScheduled(pageJobs: ImageJob[], coverJob: ImageJob | null, schedule: RunSchedule): Promise<void> {
     const pageKey = (pageId: string | null | undefined) => (pageId ? `page:${pageId}` : null);
+    const jobsByPage = new Map(pageJobs.map((job) => [(job.target as { id: string }).id, job]));
     const items = [
-      ...pageJobs.map((job) => ({ id: renderTargetKey(job.target), after: pageKey(schedule.after[(job.target as { id: string }).id]), job })),
+      ...schedule.order.flatMap((pageId) => {
+        const job = jobsByPage.get(pageId);
+        return job ? [{ id: renderTargetKey(job.target), after: pageKey(schedule.after[pageId]), job }] : [];
+      }),
       ...(coverJob ? [{ id: 'cover', after: pageKey(schedule.coverAfter), job: coverJob }] : [])
     ];
     await runAfter(
@@ -2688,7 +2692,7 @@ class RenderRun {
       compile: (doc, opts) => {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
-        // The page it continues from (B7's schedule.ts; the stub is nearestReadyBefore).
+        // The nearest eligible image is read after the scheduled predecessor has settled.
         return compilePage(doc, page, { previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),

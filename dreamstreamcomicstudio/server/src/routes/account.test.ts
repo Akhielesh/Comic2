@@ -18,6 +18,7 @@ const fake = vi.hoisted(() => ({
   /** The user_settings row the settings read finds (null: none), and a read error. */
   settingsRow: null as { encrypted_data: string; iv: string } | null,
   settingsError: null as { message: string } | null,
+  deleteKeyError: null as { message: string } | null,
 }));
 
 vi.mock('../services/supabase.js', async (importOriginal) => ({
@@ -25,6 +26,14 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
   getSupabaseCapabilityStatus: () => ({ storagePersistenceEnabled: fake.enabled }),
   getSupabaseAdmin: () => ({
     from: (table: string) => ({
+      delete: () => ({
+        eq: (col: string, val: unknown) => ({
+          in: async (field: string, values: string[]) => {
+            fake.writes.push({ table, op: 'delete', row: { [field]: values }, eq: [col, val] });
+            return { error: fake.deleteKeyError };
+          }
+        })
+      }),
       upsert: async (row: Record<string, unknown>, opts: unknown) => {
         fake.writes.push({ table, op: 'upsert', row, opts });
         return { error: fake.ppError };
@@ -81,7 +90,23 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   signedIn = true;
-  Object.assign(fake, { enabled: true, writes: [], meta: [], ppError: null, lpError: null, metaError: null, lpRows: [{ user_id: 'user-1' }], settingsRow: null, settingsError: null });
+  Object.assign(fake, { enabled: true, writes: [], meta: [], ppError: null, lpError: null, metaError: null, lpRows: [{ user_id: 'user-1' }], settingsRow: null, settingsError: null, deleteKeyError: null });
+});
+
+describe('DELETE /api/account/byok/:provider', () => {
+  const remove = (provider: string) => fetch(`${base}/api/account/byok/${provider}`, { method: 'DELETE' });
+
+  it('removes both aliases for the signed-in account and reports a failed write', async () => {
+    fake.deleteKeyError = { message: 'failed in storage' };
+    const failed = await remove('pixazo');
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: { message: 'Could not remove the account key. Try again shortly.' } });
+    expect(fake.writes).toEqual([{ table: 'user_api_keys', op: 'delete', row: { provider: ['pixazo', 'flux'] }, eq: ['user_id', 'user-1'] }]);
+
+    fake.deleteKeyError = null;
+    const retried = await remove('pixazo');
+    expect(await retried.json()).toEqual({ ok: true });
+  });
 });
 
 const patch = (body: unknown) =>

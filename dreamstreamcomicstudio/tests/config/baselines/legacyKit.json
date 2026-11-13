@@ -2,7 +2,7 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 672, "brand-blue": 177, "brand-red": 42, "brand-yellow": 186, "font-comic": 77, "font-display": 191, "shadow-comic": 112 },
+  "totals": { "border-black": 650, "brand-blue": 169, "brand-red": 38, "brand-yellow": 181, "font-comic": 71, "font-display": 179, "shadow-comic": 102 },
   "files": {
     "components/AccountSettings.tsx": { "border-black": 32, "brand-blue": 5, "brand-yellow": 3, "font-comic": 2, "font-display": 18, "shadow-comic": 5 },
     "components/AgentStageShell.tsx": { "border-black": 4, "brand-blue": 1, "brand-yellow": 1, "font-comic": 1, "font-display": 1, "shadow-comic": 2 },
@@ -11,8 +11,7 @@
     "components/ComicGenerator.tsx": { "border-black": 24, "brand-blue": 3, "brand-yellow": 3, "font-comic": 4, "font-display": 6 },
     "components/ComicReader.tsx": { "border-black": 32, "brand-blue": 1, "brand-yellow": 3, "font-comic": 4, "font-display": 5, "shadow-comic": 4 },
     "components/CommentSection.tsx": { "border-black": 2, "font-display": 1 },
-    "components/HomePage.tsx": { "border-black": 30, "brand-blue": 12, "brand-red": 2, "brand-yellow": 28, "font-comic": 15, "font-display": 17, "shadow-comic": 11 },
-    "components/HowItWorks.tsx": { "border-black": 21, "brand-blue": 7, "brand-red": 4, "brand-yellow": 4, "font-comic": 6, "font-display": 12, "shadow-comic": 10 },
+    "components/HomePage.tsx": { "border-black": 29, "brand-blue": 11, "brand-red": 2, "brand-yellow": 27, "font-comic": 15, "font-display": 17, "shadow-comic": 11 },
     "components/InviteFriends.tsx": { "border-black": 4, "brand-blue": 3, "brand-yellow": 1, "shadow-comic": 2 },
     "components/LearnHub.tsx": { "border-black": 3, "font-comic": 2, "font-display": 2, "shadow-comic": 1 },
     "components/MessageCard.tsx": { "border-black": 2, "brand-blue": 2, "brand-red": 2, "brand-yellow": 2 },

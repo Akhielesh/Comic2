@@ -1162,6 +1162,7 @@ function planAtDensity(
       safeMargin,
       existing: page.balloons || [],
       keep,
+      preservePreview: true,
       // The cap letters again only its panels' movable balloons (and, repacking, every unpinned one).
       ...(capPass ? { only: [...stored.keys()].filter((id) => repacks(id)) } : {}),
       ...(wholeWords.length ? { wholeWords } : {}),

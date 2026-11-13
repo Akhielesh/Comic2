@@ -49,6 +49,8 @@ export interface ZipExportOptions extends SlotRenderers {
   signal?: AbortSignal;
   /** Long edge of each PNG (default: the art's own resolution). */
   longEdge?: number;
+  /** Label an explicitly enlarged download without changing the existing export API's filenames. */
+  large?: boolean;
   /** Export this edition of `doc` (localized here; the file name gets "-te"). Default: the doc as given. */
   lang?: string;
   /** Include the book's title / end / back-cover plates (default true). */
@@ -196,7 +198,7 @@ export async function exportPngZip(doc: ComicDoc, urlFor: UrlFor, opts: ZipExpor
   );
   if (!files) throw new ExportError(`Couldn’t export any pages. ${failed[0]?.message || ''}`.trim());
 
-  const fileName = `${stem}-pages.zip`;
+  const fileName = `${stem}-pages${opts.large ? '-large' : ''}.zip`;
   await zipAndDownload(zip, fileName, opts, slots.length);
   const notice = joinNotices(zipReducedNotice(memory, { languages: 1 }), fonts?.notice);
   return { fileName, files, failed, skipped, ...(notice ? { notice } : {}), ...(memory.maxEdge ? { maxEdge: memory.maxEdge } : {}) };

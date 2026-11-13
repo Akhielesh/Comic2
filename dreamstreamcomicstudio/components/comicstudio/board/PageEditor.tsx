@@ -86,6 +86,7 @@ import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
 import { useDialogA11y } from '../../studio/kit/useDialogA11y';
+import { PageObjects } from './PageObjects';
 import { ComicPageView } from './ComicPageView';
 import type { BalloonChangeOptions } from './BalloonLayer';
 import { isSpokenKind, pageAspectOf } from './balloonGeometry';
@@ -728,6 +729,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [mode, setMode] = useState<Mode>('move');
   const [region, setRegion] = useState<Box | null>(null);
   const [instruction, setInstruction] = useState('');
+  const [editIntent, setEditIntent] = useState<'describe' | 'add' | 'replace' | 'remove'>('describe');
   const [panelN, setPanelN] = useState<number | undefined>(undefined);
   const [lettering, setLettering] = useState(true);
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
@@ -1209,12 +1211,16 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     if (pro.pro && railed) settleTool(m === 'markup' ? 'markup' : 'select');
   };
 
-  const canEdit = artOk && !busy && instruction.trim().length > 0;
+  const canEdit = artOk && !busy && instruction.trim().length > 0 && (editIntent === 'describe' || !!region || !!panelN);
   const submitEdit = () => {
     if (!canEdit) return;
-    const action = editActionFor(sourcePage.id, instruction, region, panelN);
+    const editInstruction = editIntent === 'describe'
+      ? instruction
+      : `${{ add: 'Add an object', replace: 'Replace or change an object', remove: 'Remove an object' }[editIntent]} within the selected area. ${instruction.trim()} Preserve the surrounding art and other objects.`;
+    const action = editActionFor(sourcePage.id, editInstruction, region, panelN);
     fire('edit', () => studio.act(action));
     setInstruction('');
+    setEditIntent('describe');
     clearRegion();
     setMode('move');
     if (pro.pro && tool === 'markup') settleTool('select');
@@ -1723,6 +1729,29 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         <SectionTitle id="pe-ai" icon={<WandSparkles className="h-3.5 w-3.5" />}>
           Edit with AI
         </SectionTitle>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <label className="inline-flex items-center gap-1.5 text-[12px] text-[var(--ds-muted)]">
+            Edit type
+            <select
+              className={SELECT_CLS}
+              disabled={!artOk || busy}
+              value={editIntent}
+              onChange={(event) => {
+                const intent = event.target.value as typeof editIntent;
+                setEditIntent(intent);
+                if (intent !== 'describe' && !region && !panelN) changeMode('markup');
+              }}
+            >
+              <option value="describe">Describe a change</option>
+              <option value="add">Add an object</option>
+              <option value="replace">Replace or change an object</option>
+              <option value="remove">Remove an object</option>
+            </select>
+          </label>
+          {editIntent !== 'describe' && !region && !panelN && (
+            <span className="text-[12px] text-[var(--ds-muted)]">Mark an area or choose a panel.</span>
+          )}
+        </div>
         <label htmlFor="pe-instruction" className="sr-only">
           What should change?
         </label>
@@ -1788,10 +1817,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           <span className="min-w-0 truncate font-normal opacity-85">· {cost(editPrice)}</span>
         </PrimaryButton>
         <p className="mt-1.5 text-[11px] leading-snug text-[var(--ds-muted)]">
-          Only what you describe changes; the layout, other panels and characters stay. The previous version is kept below.
+          Mark an area for a local edit. The previous version is kept below.
         </p>
       </section>
-
+      <PageObjects doc={doc} page={sourcePage} studio={studio} region={region} onMark={() => changeMode('markup')} />
     </>
   );
   const actionsSection = (

@@ -305,6 +305,7 @@ export const deleteKey = (id: string) => {
   if (removed?.active) {
     const sibling = remaining.find((k) => k.provider === removed.provider);
     if (sibling) remaining = remaining.map((k) => (k.id === sibling.id ? { ...k, active: true } : k));
+    else remove(LEGACY_KEYS[removed.provider]);
   }
   writeAll(remaining);
 };

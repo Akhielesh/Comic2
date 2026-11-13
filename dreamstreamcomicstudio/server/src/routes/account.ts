@@ -55,11 +55,16 @@ accountRouter.delete('/byok/:provider', async (req, res, next) => {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'User not authenticated' } });
     const provider = canonicalAccountProvider(String(req.params.provider || ''));
     if (!provider) return res.json({ ok: true });
-    if (getSupabaseCapabilityStatus().storagePersistenceEnabled) {
-      const providers = provider === 'pixazo' ? ['pixazo', 'flux'] : [provider];
-      await getSupabaseAdmin().from('user_api_keys').delete().eq('user_id', req.user.id).in('provider', providers);
-      invalidateAccountKeys(req.user.id);
+    if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+      return res.status(503).json({ error: { message: 'Account key storage is unavailable right now.' } });
     }
+    const providers = provider === 'pixazo' ? ['pixazo', 'flux'] : [provider];
+    const { error } = await getSupabaseAdmin().from('user_api_keys').delete().eq('user_id', req.user.id).in('provider', providers);
+    if (error) {
+      logger.warn('byok_delete_failed', { provider, message: error.message });
+      return res.status(503).json({ error: { message: 'Could not remove the account key. Try again shortly.' } });
+    }
+    invalidateAccountKeys(req.user.id);
     res.json({ ok: true });
   } catch (err) {
     next(err);

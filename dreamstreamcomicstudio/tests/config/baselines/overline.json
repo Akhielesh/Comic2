@@ -2,7 +2,7 @@
   "guard": "overline",
   "test": "tests/config/overlineGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/overlineGuard.test.ts lowers it (see README.md).",
-  "totals": { "LABEL-import": 5, "hand-rolled-eyebrow": 298 },
+  "totals": { "LABEL-import": 5, "hand-rolled-eyebrow": 294 },
   "files": {
     "components/AccountSettings.tsx": { "hand-rolled-eyebrow": 8 },
     "components/AgentStageShell.tsx": { "hand-rolled-eyebrow": 1 },
@@ -12,7 +12,6 @@
     "components/ComicGenerator.tsx": { "hand-rolled-eyebrow": 7 },
     "components/ComicReader.tsx": { "hand-rolled-eyebrow": 10 },
     "components/HomePage.tsx": { "hand-rolled-eyebrow": 14 },
-    "components/HowItWorks.tsx": { "hand-rolled-eyebrow": 4 },
     "components/InviteFriends.tsx": { "hand-rolled-eyebrow": 3 },
     "components/MessageCard.tsx": { "hand-rolled-eyebrow": 1 },
     "components/ModelLibrary.tsx": { "hand-rolled-eyebrow": 22 },

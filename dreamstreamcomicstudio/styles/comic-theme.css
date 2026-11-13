@@ -1,0 +1,98 @@
+/* Paper changes Comic Studio's materials while keeping the Atlas type, layout and motion. */
+:is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+[data-comic-theme="paper"] [data-ds-skin="atlas"] {
+  --ds-canvas: #fbf8f0;
+  --ds-sidebar: #f5eee2;
+  --ds-surface: #fffdf7;
+  --ds-surface-soft: #f4ede0;
+  --ds-surface-strong: #fffdf7;
+  --ds-raised: #fffdf7;
+  --ds-ink: #29221c;
+  --ds-muted: #61534a;
+  --ds-hairline: rgb(65 46 29 / 0.16);
+  --ds-hairline-soft: rgb(65 46 29 / 0.1);
+  --ds-well: #f5eee2;
+  --ds-well-strong: #eee5d5;
+  --ds-hover: #f0e6d7;
+  --ds-faint: rgb(41 34 28 / 0.35);
+  --ds-accent: var(--ds-ink);
+  --ds-accent-hover: #4c3c30;
+  --ds-on-accent: var(--ds-canvas);
+  --ds-accent-soft: #efe5d6;
+  --ds-accent-text: var(--ds-accent);
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
+  --ds-active: #ebe0ce;
+  --ds-ring: #806955;
+  --ds-control-border: color-mix(in srgb, var(--ds-ink) 52%, transparent);
+  --ds-control-border-hover: color-mix(in srgb, var(--ds-ink) 65%, transparent);
+  --ds-focus: var(--ds-ink);
+  --ds-overlay-edge: var(--ds-hairline);
+  --ds-overlay-hover: var(--ds-accent-soft);
+  --ds-segment-pill: var(--ds-surface);
+  --ds-segment-track: var(--ds-well-strong);
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);
+  --ds-shadow-hero: 0 24px 60px -28px rgb(76 60 48 / 0.4);
+}
+
+.dark:is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+.dark :is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+.dark[data-comic-theme="paper"] [data-ds-skin="atlas"],
+.dark [data-comic-theme="paper"] [data-ds-skin="atlas"] {
+  --ds-canvas: #191612;
+  --ds-sidebar: #1e1a15;
+  --ds-surface: #211c17;
+  --ds-surface-soft: #2b241d;
+  --ds-surface-strong: #312921;
+  --ds-raised: #312921;
+  --ds-ink: #f8efe1;
+  --ds-muted: #c5b8aa;
+  --ds-hairline: rgb(255 234 212 / 0.18);
+  --ds-hairline-soft: rgb(255 234 212 / 0.11);
+  --ds-well: #1e1a15;
+  --ds-well-strong: #322920;
+  --ds-hover: #392f25;
+  --ds-faint: rgb(248 239 225 / 0.35);
+  --ds-accent: var(--ds-ink);
+  --ds-accent-hover: #e4d3bd;
+  --ds-on-accent: var(--ds-canvas);
+  --ds-accent-soft: #3a2f25;
+  --ds-accent-text: var(--ds-accent);
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
+  --ds-active: #42362a;
+  --ds-ring: #aa957f;
+  --ds-control-border: color-mix(in srgb, var(--ds-ink) 45%, transparent);
+  --ds-control-border-hover: color-mix(in srgb, var(--ds-ink) 60%, transparent);
+  --ds-focus: var(--ds-ink);
+  --ds-overlay-edge: var(--ds-hairline);
+  --ds-overlay-hover: var(--ds-accent-soft);
+  --ds-segment-pill: var(--ds-surface-strong);
+  --ds-segment-track: var(--ds-well);
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);
+  --ds-shadow-hero: 0 0 0 1px rgb(255 234 212 / 0.1), 0 24px 60px -28px rgb(0 0 0 / 0.8);
+}
+
+@media (prefers-contrast: more) {
+  :is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+  [data-comic-theme="paper"] [data-ds-skin="atlas"] {
+    --ds-hairline: rgb(65 46 29 / 0.45);
+    --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
+    --ds-muted: #493a2e;
+    --ds-ring: var(--ds-ink);
+    --ds-control-border: color-mix(in srgb, var(--ds-ink) 75%, transparent);
+    --ds-control-border-hover: var(--ds-ink);
+  }
+
+  .dark:is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+  .dark :is(html, [data-ds-skin], [data-comic-theme])[data-comic-theme="paper"],
+  .dark[data-comic-theme="paper"] [data-ds-skin="atlas"],
+  .dark [data-comic-theme="paper"] [data-ds-skin="atlas"] {
+    --ds-hairline: rgb(255 234 212 / 0.5);
+    --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
+    --ds-muted: #e3d4c4;
+    --ds-ring: var(--ds-ink);
+    --ds-control-border: color-mix(in srgb, var(--ds-ink) 75%, transparent);
+    --ds-control-border-hover: var(--ds-ink);
+  }
+}

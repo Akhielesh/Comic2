@@ -173,7 +173,6 @@ describe('the phone menu toggle', () => {
     const panel = document.getElementById(toggle.getAttribute('aria-controls')!)!;
     const menu = within(panel).getByRole('navigation', { name: 'Menu' });
     expect(within(menu).getAllByRole('button').map((b) => b.textContent)).toEqual([
-      'How It Works',
       'Comic Studio',
       'Library',
       'Open Chat Studio',

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../connectors/store.js', () => ({
   getActiveConnection: vi.fn(),
+  getOwnedConnection: vi.fn(),
   listConnections: vi.fn(),
   deleteConnection: vi.fn(),
   loadCredentials: vi.fn(),
@@ -350,6 +351,43 @@ describe('POST /drive/disconnect', () => {
     const res = await call('post', '/disconnect', mockReq({}));
     expect(res.body).toMatchObject({ ok: true, revoked: true });
     expect(String((global.fetch as any).mock.calls[0][0])).toContain('oauth2.googleapis.com/revoke');
+  });
+});
+
+describe('DELETE /connections/:connectionId', () => {
+  const disconnect = async () => {
+    const layer = (connectorsRouter as unknown as { stack: any[] }).stack.find(
+      (entry) => entry.route?.path === '/connections/:connectionId' && entry.route.methods.delete
+    );
+    const res = mockRes();
+    const next = vi.fn();
+    await layer.route.stack.at(-1).handle({ ...mockReq(undefined), params: { connectionId: 'gmail-1' } }, res, next);
+    expect(next).not.toHaveBeenCalled();
+    return res;
+  };
+
+  it('leaves the shared grant usable by Stream Studio when Gmail is removed', async () => {
+    const gmail = conn({ id: 'gmail-1', connector_id: 'gmail' });
+    vi.mocked(store.getOwnedConnection).mockResolvedValue(gmail);
+    vi.mocked(store.listConnections).mockResolvedValue([gmail, conn()]);
+    global.fetch = vi.fn(async () => gRes(''));
+
+    expect((await disconnect()).body).toEqual({ ok: true });
+    expect(store.deleteConnection).toHaveBeenCalledWith('gmail-1');
+    expect(store.deleteConnection).not.toHaveBeenCalledWith('conn-1');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('revokes the removed Google account grant when the other connection belongs to another Google account', async () => {
+    const gmail = conn({ id: 'gmail-1', connector_id: 'gmail' });
+    vi.mocked(store.getOwnedConnection).mockResolvedValue(gmail);
+    vi.mocked(store.listConnections).mockResolvedValue([gmail, conn({ account_identifier: 'different@example.com' })]);
+    vi.mocked(store.loadCredentials).mockResolvedValue({ tokenType: 'oauth2', accessToken: 'a', refreshToken: 'r', expiresAt: null, scope: null });
+    global.fetch = vi.fn(async () => gRes(''));
+
+    expect((await disconnect()).body).toEqual({ ok: true });
+    expect(store.deleteConnection).toHaveBeenCalledWith('gmail-1');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });
 

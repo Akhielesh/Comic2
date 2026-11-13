@@ -24,8 +24,7 @@ import { APP_ROOT, VARIANT, findHandRolledOverlines, findInLiterals, withoutVari
 const OWNED = [
   'components/comicshost/ComicsLanding.tsx',
   'components/comicshost/ComicsHeader.tsx',
-  'components/comicshost/StudioPreview.tsx',
-  'components/comicshost/ComicPageSpecimen.tsx',
+  'components/comicshost/ComicSampleReader.tsx',
   'components/comicshost/ComicsMark.tsx',
   'components/ds/AppHeader.tsx',
   'components/layout/BrandLockup.tsx',

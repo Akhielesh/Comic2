@@ -62,7 +62,7 @@
  *
  * Reduced motion: ONE block at the end. Entrances and loops do not run, the marquee wraps into rows,
  * shimmer-text is plain muted text, hover lifts and underline draws land without travelling.
- * Never collides with .studio-*, .hiw-*, .animate-*, .press or .ds-gallery-* / .ds-map* (index.css).
+ * Never collides with .studio-*, .animate-*, .press or .ds-gallery-* / .ds-map* (index.css).
  * ============================================================================================ */
 
 @keyframes ds-fade-in {

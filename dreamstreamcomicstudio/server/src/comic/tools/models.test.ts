@@ -260,9 +260,14 @@ describe('the models tool group (registration, phase gate)', () => {
 describe('model names', () => {
   it('resolves what users call models, never guessing an unknown name', () => {
     const id = (s: string) => resolveModelName(s)?.id;
-    expect(id('GPT image')).toBe('gpt-image-2.5');
-    expect(id('use openai')).toBe('gpt-image-2.5');
+    expect(id('GPT image')).toBe('gpt-image-2.6-sunburst');
+    expect(id('use openai')).toBe('gpt-image-2.6-sunburst');
+    expect(id('GPT 2.6')).toBe('gpt-image-2.6-sunburst');
+    expect(id('GPT 2.6 Flare')).toBe('gpt-image-2.6-flare');
+    expect(id('try Flare')).toBe('gpt-image-2.6-flare');
+    expect(id('GPT Image 2.5')).toBe('gpt-image-2.5');
     expect(id('GPT Image 2.5 Flare')).toBe('gpt-image-2.5-flare');
+    expect(id('GPT Image 2.7')).toBeUndefined();
     expect(id('nano banana pro')).toBe('nano-banana-pro');
     expect(id('Gemini 3 Pro Image')).toBe('nano-banana-pro');
     expect(id('Nano Banana 2.1')).toBe('nano-banana-2.1');
@@ -284,9 +289,9 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     // Current: Nano Banana 2.1 at 1K = $0.0336 (Google token table via OpenRouter) + $0.003 QC, own key → ≈ $0.04.
     expect(out).toMatch(/^CURRENT: Nano Banana 2\.1 — locked for this comic \(every page matches\); ≈ \$0\.04 per page at 1K \(OpenRouter list price\); holds 4 characters per image; 1 provider · 97\.7% up \(24 h\); LMArena edit #5 \(2026-10-20\)/);
     expect(out).toContain('Drawn with it: 5 pages, 4 character sheets and the cover.');
-    // GPT Image 2.5: $0.2107 (dated price list) + QC → ≈ $0.21; 4:5 is a block.
-    expect(out).toContain("ASKED FOR: GPT Image 2.5 — NOT POSSIBLE for this comic: Not available in Comic Studio yet; Can't draw 4:5 pages.");
-    expect(out).toContain('≈ $0.21 per page at 1K (price list from 2026-10-22)');
+    // GPT Image 2.6: $0.05268 (dated price list) + QC → ≈ $0.06; 4:5 is a block.
+    expect(out).toContain("ASKED FOR: GPT Image 2.6 Sunburst — NOT POSSIBLE for this comic: Can't draw 4:5 pages.");
+    expect(out).toContain('≈ $0.06 per page at 1K (price list from 2026-11-13)');
     // The fitting option: Nano Banana Pro bills $0.0011 per reference image, and a lake page sends 6 (4 cast sheets, the
     // style board, the previous page — prompts.planPageReferences): $0.1344 + $0.0066 + QC → ≈ $0.14 a page; redraw
     // 5 pages + cover ≈ $0.86, everything ≈ $1.43 (§3.5 example 1 with its reference line, never the r = 0 figure).
@@ -298,7 +303,7 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     // Read-only: nothing committed, the lock is untouched; the advice is kept for the reply.
     expect(ops).toEqual([]);
     expect(ctx.session.doc.imageModel?.modelId).toBe('nano-banana-2.1');
-    expect(modelAdviceOf(turn)?.named?.id).toBe('gpt-image-2.5');
+    expect(modelAdviceOf(turn)?.named?.id).toBe('gpt-image-2.6-sunburst');
   });
 
   it('"make it cheaper": the same model at a lower tier first (light confirm), with the drawn pages\' resolution', async () => {
@@ -404,8 +409,8 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
 
   it('unknown names are an error the model can correct; a catalog outage still answers from the dated price list', async () => {
     setup(lakeLocked(), 'use midjourney', { caps: BYOK_CAPS, keys: BYOK_KEYS });
-    expect(await call('model_options', { model: 'midjourney' })).toMatch(/^Error: No image model called "midjourney"\. Available: Nano Banana 2\.1, Nano Banana Pro\.$/);
-    expect(await call('model_options', { model: 'Imagen' })).toMatch(/^Error: No image model called "Imagen"\. Available: Nano Banana 2\.1, Nano Banana Pro\.$/);
+    expect(await call('model_options', { model: 'midjourney' })).toBe('Error: No image model called "midjourney". Available: Nano Banana 2.1, Nano Banana Pro, GPT Image 2.6 Sunburst, GPT Image 2.6 Flare.');
+    expect(await call('model_options', { model: 'Imagen' })).toBe('Error: No image model called "Imagen". Available: Nano Banana 2.1, Nano Banana Pro, GPT Image 2.6 Sunburst, GPT Image 2.6 Flare.');
     setModelCatalog({ ...fixtureCatalog(), rows: async () => Promise.reject(new Error('catalog down')), priceSources: async () => Promise.reject(new Error('catalog down')) });
     const out = await call('model_options', { want: 'characters' });
     expect(out).toContain('Live catalog data was unavailable');

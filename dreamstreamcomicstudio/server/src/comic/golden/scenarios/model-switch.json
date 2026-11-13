@@ -13,10 +13,10 @@
       ],
       "expect": {
         "toolResultIncludes": {
-          "model_options": ["ASKED FOR: GPT Image 2.5 — NOT POSSIBLE for this comic", "Can't draw 4:5 pages", "≈ $0.21 per page at 1K", "OPTION 1: Nano Banana Pro"],
+          "model_options": ["ASKED FOR: GPT Image 2.6 Sunburst — NOT POSSIBLE for this comic", "Can't draw 4:5 pages", "≈ $0.06 per page at 1K", "OPTION 1: Nano Banana Pro"],
           "suggest_model": ["Nothing changed — the comic stays on Nano Banana 2.1."]
         },
-        "replyIncludes": ["GPT Image 2.5 is ≈ $0.21 a page at 1K (Nano Banana 2.1 is ≈ $0.05)", "can't draw 4:5 pages", "Your comic stays on Nano Banana 2.1", "switching models can affect character consistency", "Want to see the options?"],
+        "replyIncludes": ["GPT Image 2.6 Sunburst is ≈ $0.06 a page at 1K (Nano Banana 2.1 is ≈ $0.05)", "can't draw 4:5 pages", "Your comic stays on Nano Banana 2.1", "switching models can affect character consistency", "Want to see the options?"],
         "nextSteps": [{ "label": "See models", "client": { "type": "open_model_picker" } }],
         "imageModel": "nano-banana-2.1",
         "quality": "standard",

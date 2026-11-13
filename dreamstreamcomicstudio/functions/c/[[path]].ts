@@ -92,7 +92,13 @@ export async function handleShare(request: Request, env: ShareEnv): Promise<Resp
   const params = parseShareParams(url.search);
   // og:image / oEmbed discovery use the host the reader actually used (the comics front door
   // proxies here with X-Forwarded-Host), so previews never point at the Pages origin.
-  const head = renderShareHead(card, { origin: publicOrigin(request, url), lang: params.lang, page: params.page, embed: parsed.embed });
+  const head = renderShareHead(card, {
+    origin: publicOrigin(request, url),
+    lang: params.lang,
+    page: params.page,
+    embed: parsed.embed,
+    guided: params.guided || url.searchParams.get('guided') === 'true'
+  });
   const html = injectHead(await shell(env, request), head);
   const robots = card.visibility === 'public' && !parsed.embed ? 'noai, noimageai' : 'noindex, nofollow, noarchive, noai, noimageai';
   const extra: Record<string, string> = { 'x-robots-tag': robots, vary: 'accept-language' };

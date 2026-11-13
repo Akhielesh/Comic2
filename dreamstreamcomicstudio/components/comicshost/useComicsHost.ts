@@ -16,6 +16,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isComicsHost } from '../../services/productHost';
+import { useComicThemeScope } from '../comicstudio/useComicTheme';
 import { OFF_HOST_VIEWS, comicsChromeFor, offHostUrlForView, shouldBootToDashboard } from './hostRouting';
 
 export interface UseComicsHostOptions {
@@ -56,6 +57,7 @@ const useBeforePaint = typeof window === 'undefined' ? useEffect : useLayoutEffe
 
 export function useComicsHost({ view, setView, signedIn, ready, hostname, navigate }: UseComicsHostOptions): ComicsHostBoot {
   const active = isComicsHost(hostname);
+  useComicThemeScope(active);
   // Read the URL during the FIRST render, before App's URL-sync effect rewrites ?view=/&id=.
   const [bootEligible] = useState(snapshotBoot);
   const bootDecidedRef = useRef(false);

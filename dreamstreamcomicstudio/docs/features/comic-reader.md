@@ -49,10 +49,14 @@ pages with no stand-in; the turn gate for tapped and key turns only, never waiti
 preloads on a fast 4g link; the two-tone fit:width ring. The e2e file `tests/e2e/reader.turns.spec.ts` lives outside
 the immersive folder by a lead grant.
 
+Share links reuse the edge's cover variant when the comic snapshot arrives. Once the cover loads, or
+the reader focuses or points at a reading control, the card warms one small variant for the first
+reading page in the shared image cache. It skips the warmup on Save-Data and 2G connections. Links
+that open directly on an interior page skip the edge's cover preload.
+
 Deferred (carried to later packages):
 
 - Webtoon stand-ins for the next 2 items, then scroll stand-in preloads: RD-B (S3).
-- The share page's cover-card page-1 prefetch (`PublicComicReader.tsx`): RD-5b with DS-R14 (S5).
 - Turning the Day room on (`data-reader-room="day"`, the ReaderHud glass token): RD-2 (S3).
 - A second reader.turns e2e on pages with no variants (the QA flag is ready): RD-B (S3).
 - Keeping the drawn count, the `scaleX` bar and `readerTokens` when the inline reader is reworked, and a per-owner

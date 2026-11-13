@@ -4,11 +4,12 @@
 // panel). It paints instantly from the server-injected boot card, before the comic itself arrives.
 // The room is the same in both themes (like the immersive reader), so its ink is fixed white.
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BookOpen, Rows3, ScanEye, Sparkles } from 'lucide-react';
 import type { ContentRating } from '../../../shared/comic/safety';
 import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../../chat/studioDesign';
 import { RatingBadge } from '../safety/RatingBadge';
+import './readerCoverCard.css';
 
 export interface ReaderCoverCardProps {
   title: string;
@@ -16,6 +17,7 @@ export interface ReaderCoverCardProps {
   /** Public creator name (only when the author chose to show it). */
   creator?: string;
   coverUrl?: string;
+  fallbackCoverUrl?: string;
   /** Cover width / height. */
   aspect?: number;
   pageCount?: number;
@@ -33,6 +35,8 @@ export interface ReaderCoverCardProps {
   /** Footer call to action (hidden in embeds). */
   cta?: { label: string; href: string };
   labels?: { read?: string; guided?: string; readHere?: string; readsRightToLeft?: string };
+  onCoverReady?(): void;
+  onReadingIntent?(): void;
   /** The cover image failed (expired link). */
   onCoverError?(): void;
 }
@@ -55,6 +59,7 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
   logline,
   creator,
   coverUrl,
+  fallbackCoverUrl,
   aspect,
   pageCount,
   kindLabel,
@@ -67,9 +72,18 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
   onReadHere,
   cta,
   labels,
+  onCoverReady,
+  onReadingIntent,
   onCoverError
 }) => {
   const a = aspect && Number.isFinite(aspect) && aspect > 0.2 && aspect < 5 ? aspect : 2 / 3;
+  const coverImage = useRef<HTMLImageElement>(null);
+  const [failedCovers, setFailedCovers] = useState<string[]>([]);
+  const visibleCover = [coverUrl, fallbackCoverUrl].find((url) => url && !failedCovers.includes(url));
+  useEffect(() => {
+    const img = coverImage.current;
+    if (!loading && (!visibleCover || (img?.complete && img.naturalWidth > 0))) onCoverReady?.();
+  }, [loading, onCoverReady, visibleCover]);
   const meta = [
     creator ? `by ${creator}` : null,
     kindLabel || null,
@@ -80,56 +94,82 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
     <section
       data-testid="reader-cover-card"
       aria-label={title}
-      className="relative flex min-h-full w-full flex-col items-center justify-center overflow-hidden px-4 py-6 text-white"
+      className="reader-cover-card relative flex min-h-full w-full flex-col items-center justify-center overflow-hidden px-4 py-6 text-white"
       style={{ background: roomBackground(themeColor) }}
     >
-      <div className="flex w-full max-w-[min(100%,34rem)] flex-col items-center gap-4">
+      <div className="reader-cover-card-content flex w-full max-w-[min(100%,34rem)] flex-col items-center gap-4">
         <div
-          className="relative overflow-hidden rounded-[6px] bg-white/5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+          className="reader-cover-card-art relative overflow-hidden rounded-[6px] bg-white/5 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
           // Fits the room: never taller than ~52% of the viewport, never wider than the column.
           style={{ aspectRatio: String(a), width: `min(100%, calc(52dvh * ${a.toFixed(4)}), 22rem)` }}
         >
-          {coverUrl ? (
-            <img src={coverUrl} alt={`Cover of ${title}`} className="absolute inset-0 h-full w-full object-cover" decoding="async" onError={onCoverError} />
+          {visibleCover ? (
+            <img
+              ref={coverImage}
+              src={visibleCover}
+              alt={`Cover of ${title}`}
+              className="absolute inset-0 h-full w-full object-cover"
+              decoding="async"
+              fetchPriority="high"
+              onLoad={() => !loading && onCoverReady?.()}
+              onError={() => {
+                setFailedCovers((current) => [...current, visibleCover]);
+                onCoverError?.();
+              }}
+            />
           ) : (
-            <div className="studio-shimmer absolute inset-0" role="img" aria-label={loading ? 'Loading cover' : `Cover of ${title}`} />
-          )}
-        </div>
-        <div className="flex w-full min-w-0 flex-col items-center gap-1.5 text-center">
-          <h1 className={`max-w-full text-[22px] font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-[26px] ${FONT_DISPLAY}`}>{title}</h1>
-          {logline && <p className="line-clamp-3 max-w-full text-[14px] leading-snug text-white/75 [overflow-wrap:anywhere]">{logline}</p>}
-          {(meta.length > 0 || rating) && (
-            <div className="flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[12px] text-white/70">
-              {rating && <RatingBadge rating={rating} />}
-              {meta.map((m, i) => (
-                <span key={m} className="inline-flex min-w-0 items-center gap-2">
-                  {i > 0 || rating ? <span aria-hidden>·</span> : null}
-                  <span className="min-w-0 truncate">{m}</span>
-                </span>
-              ))}
+            <div className="absolute inset-0 grid place-items-center text-white/50" role="img" aria-label={loading ? 'Loading cover' : 'Cover unavailable'}>
+              <BookOpen className="size-7" aria-hidden />
             </div>
           )}
         </div>
-        <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
-          <button type="button" onClick={onRead} disabled={loading} aria-busy={loading || undefined} className={`${BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}>
-            <BookOpen className="h-4 w-4" aria-hidden /> {loading ? 'Opening…' : labels?.read || 'Read'}
-          </button>
-          {onGuided && (
-            <button type="button" onClick={onGuided} disabled={loading} className={`${BTN} bg-white/15 text-white hover:bg-white/25`}>
-              <ScanEye className="h-4 w-4" aria-hidden /> {labels?.guided || 'Guided View'}
+        <div className="reader-cover-card-details flex w-full min-w-0 flex-col items-center gap-4">
+          <div className="reader-cover-card-summary flex w-full min-w-0 flex-col items-center gap-1.5 text-center">
+            <h1 className={`max-w-full text-[22px] font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-[26px] ${FONT_DISPLAY}`}>{title}</h1>
+            {logline && <p className="line-clamp-3 max-w-full text-[14px] leading-snug text-white/75 [overflow-wrap:anywhere]">{logline}</p>}
+            {(meta.length > 0 || rating) && (
+              <div className="reader-cover-card-meta flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[12px] text-white/70">
+                {rating && <RatingBadge rating={rating} />}
+                {meta.map((m, i) => (
+                  <span key={m} className="inline-flex min-w-0 items-center gap-2">
+                    {i > 0 || rating ? <span aria-hidden>·</span> : null}
+                    <span className="min-w-0 truncate">{m}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="reader-cover-card-actions flex max-w-full flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={onRead}
+              onFocus={onReadingIntent}
+              onPointerEnter={onReadingIntent}
+              disabled={loading}
+              aria-busy={loading || undefined}
+              className={`${BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}
+            >
+              <BookOpen className="h-4 w-4" aria-hidden /> {loading ? 'Opening…' : labels?.read || 'Read'}
+            </button>
+            {onGuided && (
+              <button type="button" onClick={onGuided} onFocus={onReadingIntent} onPointerEnter={onReadingIntent} disabled={loading} className={`${BTN} bg-white/15 text-white hover:bg-white/25`}>
+                <ScanEye className="h-4 w-4" aria-hidden /> {labels?.guided || 'Guided View'}
+              </button>
+            )}
+          </div>
+          {onReadHere && (
+            <button
+              type="button"
+              onClick={onReadHere}
+              onFocus={onReadingIntent}
+              onPointerEnter={onReadingIntent}
+              disabled={loading}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-[13px] text-white/75 underline-offset-4 outline-none hover:text-white hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] disabled:opacity-50"
+            >
+              <Rows3 className="h-3.5 w-3.5" aria-hidden /> {labels?.readHere || 'Read on this page'}
             </button>
           )}
         </div>
-        {onReadHere && (
-          <button
-            type="button"
-            onClick={onReadHere}
-            disabled={loading}
-            className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-[13px] text-white/75 underline-offset-4 outline-none hover:text-white hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] disabled:opacity-50"
-          >
-            <Rows3 className="h-3.5 w-3.5" aria-hidden /> {labels?.readHere || 'Read on this page'}
-          </button>
-        )}
       </div>
       {cta && (
         <a

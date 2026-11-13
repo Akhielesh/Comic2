@@ -333,12 +333,28 @@ describe('registry data (models.md §2.2)', () => {
     }
   });
 
-  it('pickable = Nano Banana 2.1 and Nano Banana Pro; everything else is hidden but still resolves', () => {
-    expect(pickableImageModels().map((m) => m.id)).toEqual(['nano-banana-2.1', 'nano-banana-pro']);
+  it('offers both Nano Banana models and GPT Image 2.6 while legacy entries still resolve', () => {
+    expect(pickableImageModels().map((m) => m.id)).toEqual(['nano-banana-2.1', 'nano-banana-pro', 'gpt-image-2.6-sunburst', 'gpt-image-2.6-flare']);
     for (const id of ['flux-3', 'seedream-5-pro', 'gpt-image-2.5', 'gpt-image-2.5-flare', 'nano-banana-2', 'nano-banana-lite', 'nano-banana-legacy']) {
       expect(getImageModel(id)?.pickable, id).toBe(false);
     }
     expect(getImageModel('nano-banana-2.1')).toMatchObject({ api: { openrouter: 'chat', gemini: 'chat' }, factsAsOf: '2026-10-22', priceBasis: 'per_token_table' });
+  });
+
+  it('GPT Image 2.6 is priced for its fixed 1K transport even on the Pro tier', () => {
+    for (const variant of ['sunburst', 'flare']) {
+      const id = `gpt-image-2.6-${variant}`;
+      const job = resolveImageJob('edit', 'pro', id);
+      expect(job.resolution).toBe('1K');
+      expect(job.spec).toMatchObject({
+        routes: { openrouter: `openai/${id}` },
+        api: { openrouter: 'images' },
+        refs: { total: 16 },
+        fixedQuality: 'high',
+        priceUsd: { '1K': 0.05268 },
+        tokenRateCeilings: { input_image: 0.000008, input_text: 0.000005, output_image: 0.00003 }
+      });
+    }
   });
 
   it('the Seedream price fix, GPT 2.5 fixedQuality + Images API, Flare added, Pro reference charge', () => {

@@ -129,6 +129,21 @@ describe('/c/<slug> share HTML', () => {
     expect(html).not.toContain('Make comics with an AI director'); // static description replaced
   });
 
+  it.each([
+    ['', null, true],
+    ['?p=0', 2, true],
+    ['?p=2', null, false],
+    ['', 2, false],
+    ['?p=2&guided=1', null, true],
+    ['/embed', null, true],
+    ['/embed?p=2', null, false],
+    ['/embed?p=2&guided=true', null, false]
+  ])('preloads the cover only when it is the first art (%s, author start %s)', async (suffix, startPage, preload) => {
+    const html = await (await handleShare(get(`/c/${SLUG}${suffix}`), env(card({ startPage })))).text();
+    expect(html.includes('<link rel="preload" as="image"')).toBe(preload);
+    expect(html).toContain('id="ds-share-boot"');
+  });
+
   it('#3 unlisted → noindex meta + header, no JSON-LD, no hreflang; public → JSON-LD ComicStory, indexable', async () => {
     const res = await handleShare(get(`/c/${SLUG}`), env(card()));
     const html = await res.text();

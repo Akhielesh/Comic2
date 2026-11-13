@@ -139,6 +139,29 @@ describe('placeBalloons: obstacles, faces and tails', () => {
     expect(Math.hypot(b.tailX! - mouth.x, (b.tailY! - mouth.y) / ASPECT)).toBeLessThan(0.05);
   });
 
+  it('shortens an automatic tail that would cross much of the panel, keeping its aim', () => {
+    const { doc, page } = liveDoc();
+    page.panels = [page.panels[1]];
+    const box = { x: 0.04, y: 0.04, w: 0.92, h: 0.3 };
+    const mouth = { x: 0.52, y: 0.86 };
+    const heads: SpeakerMark[] = [{ panel: 2, characterId: 'ch_baby', head: { x: 0.52, y: 0.82 }, mouth }];
+    const placement = {
+      boxes: [box],
+      heads
+    };
+    const tail = (b: Balloon) => {
+      const size = letteringSizer(doc, page, ASPECT, estimateMeasure)(page.panels[0].lines[0], b.w);
+      const tip = { x: b.tailX!, y: b.tailY! };
+      const exit = tailExitPoint({ x: b.x, y: b.y, w: b.w, h: size.h }, tip);
+      return { tip, exit, length: Math.hypot(tip.x - exit.x, (tip.y - exit.y) / ASPECT) };
+    };
+    expect(tail(placeAll(doc, page, { ...placement, preservePreview: true }).balloons[0]).length).toBeGreaterThan(0.2);
+    const { tip, exit, length } = tail(placeAll(doc, page, placement).balloons[0]);
+    expect(length).toBeLessThanOrEqual(0.161);
+    expect(tip.y).toBeGreaterThan(exit.y);
+    expect(tip.y).toBeLessThan(mouth.y);
+  });
+
   it('a tail never cuts through the speaker’s own face or across another character’s face', () => {
     const { doc, page } = liveDoc();
     const boxes = panelBoxesFor(doc, page);
@@ -495,6 +518,35 @@ const round = (n: number) => Math.round(n * 10000) / 10000;
 /** A text box at `p` (top-left) is read before one at `q`: above its row, or on its row nearer the reading start. */
 const readsBeforePt = (p: { x: number; y: number }, q: { x: number; y: number }, rtl: boolean): boolean =>
   p.y < q.y - ROW_TOLERANCE || (Math.abs(p.y - q.y) < ROW_TOLERANCE && (rtl ? p.x > q.x : p.x < q.x));
+
+describe('placeBalloons: adjacent dialogue follows the reading direction', () => {
+  it.each([false, true])('reads the question before the reply in a wide panel (RTL: %s)', (rtl) => {
+    const { doc, page } = liveDoc();
+    doc.format.readingDirection = rtl ? 'rtl' : 'ltr';
+    const [panel] = page.panels;
+    panel.castIds = rtl ? ['ch_baby', 'ch_duck'] : ['ch_duck', 'ch_baby'];
+    panel.lines = [
+      line('question', 'speech', 'Are we ready to race?', 'ch_baby'),
+      line('reply', 'speech', 'Just wait for the green light!', 'ch_duck')
+    ];
+    page.panels = [panel];
+    const heads: SpeakerMark[] = [
+      { panel: 1, characterId: 'ch_baby', head: { x: rtl ? 0.23 : 0.77, y: 0.28 } },
+      { panel: 1, characterId: 'ch_duck', head: { x: rtl ? 0.77 : 0.23, y: 0.33 } }
+    ];
+    const { balloons, crowded } = placeAll(doc, page, {
+      boxes: [{ x: 0.04, y: 0.04, w: 0.92, h: 0.48 }],
+      heads,
+      plansFor: (_line, w) => ({ h: 0.09, bounds: { x: -0.01, y: -0.01, w: w + 0.02, h: 0.11 } })
+    });
+    const [question, reply] = balloons;
+    const stacked = reply.y >= question.y + 0.09;
+    const inReadingDirection = rtl ? reply.x < question.x : reply.x > question.x;
+    expect(readsBeforePt(question, reply, rtl)).toBe(true);
+    expect(stacked || inReadingDirection, JSON.stringify(balloons)).toBe(true);
+    expect(crowded).toEqual([]);
+  });
+});
 
 /** One full-page panel: a pinned sound effect, a caption with no balloon, then a caption the owner stored (not pinned). */
 const orderDoc = (rtl: boolean, a: Omit<Balloon, 'lineId'>, c: (aBottom: number) => Omit<Balloon, 'lineId'>): { doc: ComicDoc; page: Page; a: Balloon; c: Balloon } => {

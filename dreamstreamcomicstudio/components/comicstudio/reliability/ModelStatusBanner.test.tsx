@@ -118,10 +118,11 @@ describe('ModelStatusBanner', () => {
     const group = screen.getByRole('group', { name: /Ways to continue without Nano Banana 2.1/ });
     const buttons = within(group).getAllByRole('button');
     expect(buttons.length).toBeLessThanOrEqual(3);
-    expect(buttons.map((b) => b.getAttribute('data-option'))).toEqual(['switch_model']);
+    expect(buttons.map((b) => b.getAttribute('data-option'))).toEqual(['switch_model', 'switch_model']);
     const pro = getImageModel(PRO)!;
     const unit = Math.round(imagePriceUsd(pro, '2K') * PLATFORM_MARKUP * 10000) / 10000;
     expect(buttons[0]).toHaveTextContent(`Try Nano Banana Pro instead· ≈ ${formatUsd(unit)} per image`);
+    expect(buttons[1]).toHaveTextContent(/Try GPT Image 2\.6 Flare instead.*input costs vary/);
     const redraw = redrawQuote(doc, PRO, 'pages_cover', registryPriceBook(), false).usd!;
     expect(buttons[0].getAttribute('title')).toContain(`redraw 1 drawn image ≈ ${formatUsd(redraw)}`);
     // Switching opens the picker; it never acts.

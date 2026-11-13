@@ -265,8 +265,8 @@ const reachableRoutes = (spec: ImageModelSpec, keys: StudioKeys): { route: Image
 const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9.]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 const MODEL_ALIASES: [RegExp, string][] = [
-  [/\bflare\b/, 'gpt-image-2.5-flare'],
-  [/\b(?:gpt|openai|chatgpt|dall ?e|sunburst)\b/, 'gpt-image-2.5'],
+  [/\bflare\b/, 'gpt-image-2.6-flare'],
+  [/\b(?:gpt|openai|chatgpt|sunburst)\b/, 'gpt-image-2.6-sunburst'],
   [/\b(?:seedream|bytedance)\b/, 'seedream-5-pro'],
   [/\bflux\b/, 'flux-3'],
   [/\b(?:nano ?banana|gemini|banana)\b.*\bpro\b|\bpro\b.*\b(?:nano ?banana|gemini)\b/, 'nano-banana-pro'],
@@ -288,6 +288,13 @@ export const resolveModelName = (raw: unknown): ImageModelSpec | undefined => {
       const n = normName(name);
       if (n && q.includes(` ${n} `)) return m;
     }
+  }
+  const version = /\b(?:chat)?gpt (?:image )?(\d+(?:\.\d+)?)\b/.exec(q)?.[1];
+  if (version) {
+    const flare = /\bflare\b/.test(q);
+    if (version === '2.5') return getImageModel(flare ? 'gpt-image-2.5-flare' : 'gpt-image-2.5');
+    if (version === '2.6') return getImageModel(flare ? 'gpt-image-2.6-flare' : 'gpt-image-2.6-sunburst');
+    return undefined;
   }
   for (const [re, id] of MODEL_ALIASES) if (re.test(q)) return getImageModel(id);
   return undefined;
@@ -797,13 +804,15 @@ const OUTAGE_KIND_WORDS: Record<OutageOption['kind'], string> = {
   add_key: 'add a key'
 };
 
+const outageInputCostNote = (modelId: string): string => getImageModel(modelId)?.tokenRateCeilings ? ' (input costs vary)' : '';
+
 /** The outage card's options in words, with their real prices (worded for this user). */
 export const outageOptionWords = (options: readonly OutageOption[], c: CostFormatter): string[] =>
   options.slice(0, 4).map((o) => {
     if (o.kind === 'wait_and_retry') return `wait and retry (free${o.etaHint ? `, ${o.etaHint}` : ''})`;
     if (o.kind === 'other_route') return `${o.label} (same model)`;
     if (o.kind === 'add_key') return o.label;
-    return `${o.nickname} ${c.approx(o.usdPerImage)} per image (redraw ${plural(o.redrawCount, 'image')} ≈ ${c(o.redrawUsd).replace(/^≈\s?/, '')}; ${o.consistency === 'same_family' ? 'same family' : 'a different look'})`;
+    return `${o.nickname} ${c.approx(o.usdPerImage)} per image${outageInputCostNote(o.modelId)} (redraw ${plural(o.redrawCount, 'image')} ≈ ${c(o.redrawUsd).replace(/^≈\s?/, '')}; ${o.consistency === 'same_family' ? 'same family' : 'a different look'})`;
   });
 
 /** History line for a model_outage card (no prices: the DOC SUMMARY words those for this user). */
@@ -831,7 +840,7 @@ export function outageReplyLine(card: OutageCard, c: CostFormatter, reason?: str
     else if (o.kind === 'add_key') ways.push(lower1(o.label));
     else if (o.kind === 'switch_model') {
       ways.push(
-        `switch to ${o.nickname} (${c.approx(o.usdPerImage)} per image${o.redrawCount ? `; redrawing ${plural(o.redrawCount, 'image')} to match ≈ ${c(o.redrawUsd).replace(/^≈\s?/, '')}` : ''} — character consistency can be affected)`
+        `switch to ${o.nickname} (${c.approx(o.usdPerImage)} per image${outageInputCostNote(o.modelId)}${o.redrawCount ? `; redrawing ${plural(o.redrawCount, 'image')} to match ≈ ${c(o.redrawUsd).replace(/^≈\s?/, '')}` : ''} — character consistency can be affected)`
       );
     }
   }
