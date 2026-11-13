@@ -94,7 +94,7 @@ describe('the root div', () => {
 
   it('is the positioned full-height page on the canvas, or the legacy light page for a legacy view', () => {
     expect(classes('home', false)).toEqual(expect.arrayContaining(['relative', 'min-h-screen', 'font-sans', ...CANVAS_BG.split(/\s+/)]));
-    expect(classes('dashboard', false)).toContain('bg-slate-50');
+    expect(classes('dashboard', false)).toContain('bg-neutral-50');
     expect(classes('dashboard', false)).not.toEqual(expect.arrayContaining(CANVAS_BG.split(/\s+/)));
   });
 
