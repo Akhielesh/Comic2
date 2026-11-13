@@ -118,7 +118,7 @@ describe('the root div', () => {
     const src = readFileSync(path.join(__dirname, 'App.tsx'), 'utf8');
     const root = src.split('\n').filter((l) => l.includes('data-slot="app-root"'));
     expect(root).toHaveLength(1);
-    expect(root[0]).toContain('className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome)}');
+    expect(root[0]).toContain('className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome || comicsDashboard)}');
     // comicsChrome is hostRouting's rule (unit-tested there), read once for the header, the widgets and the root.
     expect(src).toContain('const chrome = comicsChromeFor(effectiveView, { active: comicsHost.active, signedIn: !!user });');
     expect(src).toContain('const comicsChrome = chrome.owns;');
