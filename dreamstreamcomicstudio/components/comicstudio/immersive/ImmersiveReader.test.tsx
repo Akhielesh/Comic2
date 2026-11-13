@@ -431,6 +431,14 @@ describe('ImmersiveReader', () => {
       await waitFor(() => expect(window.location.search).toContain('p=1'), { timeout: 2000 });
       expect(window.location.search).toContain('lang=hi');
     });
+
+    it('a shared reader can keep the page in the URL while keeping the language private to the visit', async () => {
+      reduce = true;
+      render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} syncUrl syncLanguageInUrl={false} language={slot('hi')} onExit={() => undefined} />);
+      press('ArrowRight');
+      await waitFor(() => expect(window.location.search).toContain('p=1'), { timeout: 2000 });
+      expect(window.location.search).not.toMatch(/lang=/);
+    });
   });
 
   it('nothing drawn yet: an honest empty state', () => {

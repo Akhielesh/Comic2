@@ -31,7 +31,7 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
 import { aspectNumber } from './board/balloonGeometry';
 import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
-import { nextLanguage, readUrlLang, syncLangToUrl, useReaderLanguage } from './i18n/readerLanguage';
+import { nextLanguage, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
 import { connectionHints, pageImageCache } from './immersive/pageImageCache';
@@ -366,7 +366,13 @@ const ReaderShell: React.FC<ShellProps> = ({
   const confirmReadingLanguage = () => {
     if (!chooseBeforeReading) return;
     setLanguageConfirmed(true);
-    syncLangToUrl(source, source);
+    try {
+      const url = new URL(window.location.href);
+      for (const key of ['lang', 'guided', 'panel']) url.searchParams.delete(key);
+      if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
+    } catch {
+      // Reading still works when the host prevents address changes.
+    }
   };
   const startReading = () => {
     if (deepLinked) {
@@ -568,6 +574,7 @@ const ReaderShell: React.FC<ShellProps> = ({
         initialPage={start.page === 0 ? 'cover' : start.page}
         onPageChange={onPageChange}
         syncUrl={mode === 'slug'}
+        syncLanguageInUrl={embed}
         language={L.slot}
         endCard={endCard}
         chrome={embed || compact ? 'auto-hide' : 'docked'}
@@ -666,6 +673,7 @@ const ReaderShell: React.FC<ShellProps> = ({
           // The host's gated download replaces the immersive reader's built-in PDF (onDownload wins).
           onDownload={builtInDownload ? () => download('pdf') : undefined}
           syncUrl={mode === 'slug'}
+          syncLanguageInUrl={embed}
           onImageError={onImageError}
           onPageChange={onPageChange}
           onExit={() => setImmersive(null)}

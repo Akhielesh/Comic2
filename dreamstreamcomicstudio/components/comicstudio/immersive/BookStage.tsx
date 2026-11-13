@@ -9,9 +9,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ReaderItem } from '../reader/readerModel';
-import { decideRelease } from './flipPhysics';
+import { cubicBezier, decideRelease } from './flipPhysics';
 import { bookToLeaf, leafFrame, type Vec } from './flipGeometry';
-import { IDENTITY_CAMERA, type Camera } from './guidedModel';
+import { cameraDuration, IDENTITY_CAMERA, type Camera } from './guidedModel';
 import { durationFor, recordBlankTurn, recordTurnPerf, TurnEngine, type EngineEls, type LeafPart } from './leafEngine';
 import { emptyLeafRefs, PageLeaf, type LeafExtraRefs } from './PageLeaf';
 import { playPageTurn } from './paperSound';
@@ -127,6 +127,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     gateCancel.current = null;
   };
   const [layoutScale, setLayoutScale] = useState(1);
+  const [cameraIdle, setCameraIdle] = useState(true);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const layout = state.layout;
@@ -224,6 +225,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
       settleTimer.current = setTimeout(() => {
         const L = cam.s > 1.05 ? Math.round(cam.s * 1000) / 1000 : 1;
         setLayoutScale(L);
+        setCameraIdle(true);
       }, 120);
     },
     []
@@ -234,24 +236,30 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     camera.setLayoutScale(layoutScale);
   }, [layoutScale, camera]);
 
-  // Free zoom: the machine's zoom (null = reset).
+  // An explicit turn or Escape clears manual zoom. Settle back at fit before moving the leaf.
   useEffect(() => {
-    if (!state.zoom) {
-      // A pointer held down while zoomed was panning. Forget it, so the same drag cannot turn the page once
-      // the zoom is gone (an arrow key, Escape or a double tap mid-pan); its release does nothing.
-      down.current = null;
-      if (camera.current.current.s !== 1 || camera.current.current.tx !== 0 || camera.current.current.ty !== 0) {
-        // A zoom that had not settled yet (a key right after a wheel notch) must not lay the book out at the
-        // old zoom while the camera eases back: a turn may already be running. This move settles it at fit.
-        if (settleTimer.current) clearTimeout(settleTimer.current);
-        camera.move({ to: IDENTITY_CAMERA(size.w, size.h), durationMs: reduced ? 0 : 260, onDone: () => settleCrisp(IDENTITY_CAMERA(size.w, size.h)) });
-      }
+    if (state.zoom || pinch.current) return;
+    down.current = null;
+    const fitCamera = IDENTITY_CAMERA(size.w, size.h);
+    const from = camera.current.current;
+    if (Math.abs(from.s - 1) < 1e-3 && Math.abs(from.tx) < 0.5 && Math.abs(from.ty) < 0.5) {
+      camera.set(fitCamera);
+      if (layoutScale !== 1 || !cameraIdle) settleCrisp(fitCamera);
+      return;
     }
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    setCameraIdle(false);
+    camera.move({
+      to: fitCamera,
+      durationMs: reduced ? 0 : cameraDuration(from, fitCamera, size.w, size.h),
+      easing: cubicBezier(...tokens.current.easeCamera),
+      onDone: () => settleCrisp(fitCamera)
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.zoom]);
+  }, [state.zoom, motion.kind, size.w, size.h, reduced]);
 
   // ── Engine lifecycle ──────────────────────────────────────────────────────
-  const ready = layoutScale === 1;
+  const ready = layoutScale === 1 && cameraIdle;
   useLayoutEffect(() => {
     if (!plan || motion.kind === 'idle') {
       cancelGate();

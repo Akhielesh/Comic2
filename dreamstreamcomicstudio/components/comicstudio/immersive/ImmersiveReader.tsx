@@ -87,6 +87,8 @@ export interface ImmersiveReaderProps {
   onDownload?(): Promise<string | void> | string | void;
   /** Write ?p= / ?lang= with replaceState as the public reader settles. */
   syncUrl?: boolean;
+  /** Keep a local reader's language in the address when writing their position. */
+  syncLanguageInUrl?: boolean;
   /** A page image failed to load or its signed link expired (the host re-signs). */
   onImageError?(): void;
   /** Settled on a page (1-based; 0 = cover). */
@@ -584,9 +586,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     props.onPageChange?.(n);
     if (firstItem !== undefined && items[firstItem]) writePosition(doc.id, { key: items[firstItem].key, at: Date.now() });
     if (props.syncUrl) {
-      // ?lang= only for an edition other than the comic's own language — like the inline reader, the
-      // language switch (syncLangToUrl) and the canonical share links (publish-share-reader-08).
-      const lang = language?.current && !sameLanguage(language.current, doc.format.language) ? language.current : undefined;
+      const lang = props.syncLanguageInUrl !== false && language?.current && !sameLanguage(language.current, doc.format.language) ? language.current : undefined;
       urlSync.schedule({ p: n, lang });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -605,9 +605,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     if (resume && view !== 0) setResume(null);
   }, [view, resume]);
 
-  // Language: keep the page; load the script's fonts. Remembering the choice is the HOST's call, through
-  // its slot's onChange (useReaderLanguage persists only where it should — a share link; never the studio
-  // preview, whose draft editions must not become every share link's default in this browser: T11).
+  // Language: keep the page and load the script's fonts. The host controls where the choice is saved.
   const prevLang = useRef(language?.current);
   useEffect(() => {
     const lang = language?.current;
