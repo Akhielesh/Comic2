@@ -34,10 +34,11 @@ import { getStylePreset } from './stylePresets.js';
 export type SettledCardsStage = 'off' | 'admins' | 'all';
 
 /**
- * Admins first in S2; the S2 integration flips it to 'all' after a week. A code constant, not an env var: the client
- * reads `studio.caps.admin`, so capabilities.ts is untouched.
+ * Everyone (R00: old questions close for every creator, not only admins). Admins
+ * had it first in S2. A code constant, not an env var: 'off' is the kill switch (one commit and a redeploy). The client
+ * reads `studio.caps.admin` only for the 'admins' stage, so capabilities.ts is untouched.
  */
-export const SETTLED_CARDS: SettledCardsStage = 'admins';
+export const SETTLED_CARDS: SettledCardsStage = 'all';
 
 /** Whether settled cards apply for this viewer at a stage. */
 export const settledCardsOn = (admin: boolean | null | undefined, stage: SettledCardsStage = SETTLED_CARDS): boolean =>

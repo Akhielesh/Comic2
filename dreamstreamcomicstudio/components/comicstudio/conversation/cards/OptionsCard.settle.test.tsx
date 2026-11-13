@@ -104,11 +104,13 @@ describe('OptionsCard settles at once', () => {
     expect(slot(container, 'q_look').textContent).toBe('Not answered — you moved on');
   });
 
-  it('with settled cards off (not an admin in S2) the card keeps today’s locked chips', () => {
+  it('a non-admin’s tap settles the card the same way (R00 SF-1, settled cards for everyone)', () => {
     const sent: Array<{ text: string }> = [];
     const { container } = render(<Harness card={look()} admin={false} sent={sent} />);
     fireEvent.click(within(slot(container, 'q_look')).getByRole('button', { name: /Noir ink/ }));
-    expect(slot(container, 'q_look').querySelector('[data-settled]')).toBeNull();
-    expect(within(slot(container, 'q_look')).getByRole('button', { name: /Noir ink/ })).toBeDisabled();
+    const row = slot(container, 'q_look');
+    expect(row.querySelector('[data-settled]')).not.toBeNull();
+    expect(row.textContent).toBe('You picked Noir ink');
+    expect(row.querySelectorAll(CONTROLS)).toHaveLength(0);
   });
 });
