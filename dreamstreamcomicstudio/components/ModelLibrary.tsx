@@ -139,7 +139,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat,
     <div className="mx-auto max-w-[1440px] px-4 py-5 sm:px-7 sm:py-7 lg:px-10">
       <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0"><Button variant="ghost" size="sm" onClick={onBack} className="mb-3 -ml-2"><ArrowLeft />Back</Button><h1 className={[HEADING, 'text-[length:var(--ds-text-3xl)]'].join(' ')}>Models</h1><p className={['mt-2 text-sm', MUTED].join(' ')}>Compare price, performance, and what you can create.</p></div>
-        <div className="flex flex-wrap gap-2 sm:pt-10"><Button variant="outline" loading={loading || imageLoading} onClick={() => setRevision((v) => v + 1)}><RefreshCw /><span>Refresh</span></Button><Button variant="outline" disabled={Boolean(previewData)} onClick={() => { if (!previewData) setConnections(true); }}><KeyRound />Connections</Button></div>
+        <div className="flex min-w-0 max-w-full flex-wrap gap-2 sm:pt-10"><Button variant="outline" loading={loading || imageLoading} onClick={() => setRevision((v) => v + 1)}><RefreshCw /><span>Refresh</span></Button><Button variant="outline" disabled={Boolean(previewData)} onClick={() => { if (!previewData) setConnections(true); }}><KeyRound />Connections</Button></div>
       </header>
       {previewData && <p className={['mb-5 text-xs', MUTED].join(' ')}>Read-only preview. Connections and model defaults are disabled; usage comes only from preview data.</p>}
       <Tabs value={tab} onValueChange={setTab} className="gap-7">
