@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, Baby, BookOpen, Check, Eye, Heart, Search, X } from 'lucide-react';
 import { supabase } from '../services/supabase';
-import { Heart, Eye, Search, BookOpen, User, Star, Baby, Check } from 'lucide-react';
 import { Project } from '../types';
 import { GALLERY_CARD_SELECT, GALLERY_PAGE_SIZE, galleryCardStateOf, getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,29 +11,15 @@ import { isContentRating, type ContentRating } from '../shared/comic/safety';
 import { RatingBadge } from './comicstudio/safety/RatingBadge';
 import { SmartImage } from './common/SmartImage';
 import { cn } from '../lib/utils';
-import {
-    CANVAS_BG,
-    DENSITY,
-    DISPLAY_SECTION,
-    FIELD_EMBEDDED,
-    FIELD_GROUP,
-    FOCUS_RING,
-    LIFT,
-    MUTED,
-    PUBLIC_BODY,
-    RADIUS_CONTROL,
-    RADIUS_PANEL,
-    RADIUS_ROUND
-} from './chat/studioDesign';
-import { HEADER_INNER } from './ds/AppHeader';
+import { FOCUS_RING, RADIUS_CONTROL } from './chat/studioDesign';
 import { Button } from './ds/Button';
-import { CARD_TITLE } from './ds/Card';
-import { EmptyState } from './ds/EmptyState';
 import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
-
-/** The cover grid: two covers a row on a phone, three from md, four from lg. */
-const GRID = 'mt-8 grid grid-cols-2 gap-x-4 gap-y-8 sm:gap-x-6 md:grid-cols-3 lg:grid-cols-4';
+import { useComicTheme } from './comicstudio/useComicTheme';
+import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
+import { ComicSampleReader } from './comicshost/ComicSampleReader';
+import './comicshost/comicsLanding.css';
+import './publicGallery.css';
 
 /** The public bucket that holds published (pub/<key>/…) comic copies. */
 const PUBLIC_COMIC_BUCKET = 'comic-assets';
@@ -97,6 +83,7 @@ interface PublicProject extends Project {
     isLiked?: boolean;
     /** The rating the publish gate assigned (projects.content_rating, server-set). */
     contentRating?: ContentRating;
+    creatorHandle?: string;
 }
 
 const normalizeTimestamp = (value: unknown): number | undefined => {
@@ -115,382 +102,313 @@ const fallbackUsernameFromId = (userId?: string): string => {
     return `user-${userId.slice(0, 8)}`;
 };
 
+type GallerySort = 'trending' | 'recent';
+type SearchKind = 'title' | 'creator';
+type SampleStory = 'paper-boat' | 'last-tram';
+const SAMPLES = [
+    { id: 'last-tram' as const, title: 'The Last Tram', note: 'One last ride through a city after dark.', image: '/assets/comic-sample/last-tram-page-1-480.webp', detail: 'A city story · 2 pages' },
+    { id: 'paper-boat' as const, title: 'The Paper Boat', note: 'A small boat. A big adventure for Mira and Biscuit.', image: SAMPLE_COVER_URL, detail: 'An everyday adventure · 2 pages' }
+];
+const sampleFromLocation = (): SampleStory | null => {
+    const value = new URLSearchParams(window.location.search).get('sample');
+    return value === 'paper-boat' || value === 'last-tram' ? value : null;
+};
+const libraryHref = (sample?: SampleStory) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', 'gallery');
+    url.searchParams.delete('id');
+    if (sample) url.searchParams.set('sample', sample);
+    else url.searchParams.delete('sample');
+    url.hash = '';
+    return `${url.pathname}${url.search}${url.hash}`;
+};
+const plainClick = (event: React.MouseEvent<HTMLAnchorElement>) =>
+    !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0;
+// ilike is a structured PostgREST filter; escape SQL LIKE metacharacters so the input is literal.
+const literalLike = (value: string) => value.replace(/[\\%_]/g, '\\$&');
+const schemaMissingLikes = (error: { code?: string; message?: string }) =>
+    (error.code === '42703' || error.code === 'PGRST204') && /likes_count/i.test(error.message ?? '');
+
+async function hydratePreview(project: PublicProject): Promise<PublicProject> {
+    // Never sign or display owner-writable draft images for a v4 publication.
+    if (isStudioV4Project(project)) return project;
+    const nextProject = structuredClone(project);
+    if (!nextProject.coverImage && nextProject.state.coverImageId) {
+        nextProject.coverImage = await getImageUrl(nextProject.state.coverImageId, { transform: IMAGE_TRANSFORMS.thumb });
+    }
+    if (Array.isArray(nextProject.state.panels)) {
+        const index = nextProject.state.panels.findIndex((panel) => !panel.imageUrl && !!panel.imageId);
+        if (index >= 0) {
+            const panel = nextProject.state.panels[index];
+            const imageUrl = await getImageUrl(panel.imageId!, { transform: IMAGE_TRANSFORMS.thumb });
+            if (imageUrl) nextProject.state.panels[index] = { ...panel, imageUrl };
+        }
+    }
+    if (Array.isArray(nextProject.state.styleVariants)) {
+        const index = nextProject.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
+        if (index >= 0) {
+            const variant = nextProject.state.styleVariants[index];
+            const imageUrl = await getImageUrl(variant.imageId!, { transform: IMAGE_TRANSFORMS.thumb });
+            if (imageUrl) nextProject.state.styleVariants[index] = { ...variant, imageUrl };
+        }
+    }
+    return nextProject;
+}
+
 export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onRequireAuth }) => {
     const { user } = useAuth();
+    const { theme } = useComicTheme();
     const [projects, setProjects] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState<'trending' | 'recent'>('trending');
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [hasMore, setHasMore] = useState(false);
+    const [nextOffset, setNextOffset] = useState(0);
+    const [filter, setFilter] = useState<GallerySort>('trending');
     const [search, setSearch] = useState('');
+    const [query, setQuery] = useState('');
+    const [searchKind, setSearchKind] = useState<SearchKind>('title');
     const [kidsOnly, setKidsOnly] = useState(false);
     const [likeBusy, setLikeBusy] = useState<Record<string, boolean>>({});
+    const [likeError, setLikeError] = useState<string | null>(null);
+    const [sample, setSample] = useState<SampleStory | null>(sampleFromLocation);
+    const requestGeneration = useRef(0);
+    const effectiveSort = useRef<'likes_count' | 'created_at'>('likes_count');
+    const pageBusy = useRef(false);
+    const sampleTitle = useRef<HTMLHeadingElement>(null);
+    const sampleTrigger = useRef<HTMLAnchorElement | null>(null);
+    const newResults = useRef<HTMLLIElement | null>(null);
+    const focusNextPage = useRef(false);
+    const previousLength = useRef(0);
 
     useEffect(() => {
-        fetchComics();
-    }, [filter, user?.id]);
+        const timeout = window.setTimeout(() => setQuery(search.trim()), 300);
+        return () => window.clearTimeout(timeout);
+    }, [search]);
 
-    const hydratePreview = async (project: PublicProject): Promise<PublicProject> => {
-        // Comic Studio (v4) comics show only their public cover URL: nothing to sign (their other
-        // image ids are drafts, which a public card must never reach).
-        if (isStudioV4Project(project)) return project;
-        const nextProject = structuredClone(project);
-        let coverImage = nextProject.coverImage;
+    useEffect(() => {
+        const sync = () => setSample(sampleFromLocation());
+        window.addEventListener('popstate', sync);
+        return () => window.removeEventListener('popstate', sync);
+    }, []);
 
-        if (!coverImage && nextProject.state.coverImageId) {
-            coverImage = await getImageUrl(nextProject.state.coverImageId, { transform: IMAGE_TRANSFORMS.thumb });
-        }
+    useEffect(() => {
+        if (sample) sampleTitle.current?.focus({ preventScroll: true });
+    }, [sample]);
 
-        if (Array.isArray(nextProject.state.panels)) {
-            const index = nextProject.state.panels.findIndex((panel) => !panel.imageUrl && !!panel.imageId);
-            if (index >= 0) {
-                const panel = nextProject.state.panels[index];
-                const previewUrl = panel.imageId
-                    ? await getImageUrl(panel.imageId, { transform: IMAGE_TRANSFORMS.thumb })
-                    : undefined;
-                if (previewUrl) {
-                    nextProject.state.panels[index] = { ...panel, imageUrl: previewUrl };
-                }
-            }
-        }
-
-        if (Array.isArray(nextProject.state.styleVariants)) {
-            const index = nextProject.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
-            if (index >= 0) {
-                const variant = nextProject.state.styleVariants[index];
-                const previewUrl = variant.imageId
-                    ? await getImageUrl(variant.imageId, { transform: IMAGE_TRANSFORMS.thumb })
-                    : undefined;
-                if (previewUrl) {
-                    nextProject.state.styleVariants[index] = { ...variant, imageUrl: previewUrl };
-                }
-            }
-        }
-
-        return {
-            ...nextProject,
-            coverImage
-        };
+    const navigateSample = (event: React.MouseEvent<HTMLAnchorElement>, story: SampleStory | null) => {
+        if (!plainClick(event)) return;
+        event.preventDefault();
+        if (story) sampleTrigger.current = event.currentTarget;
+        window.history.pushState(window.history.state, '', libraryHref(story ?? undefined));
+        setSample(story);
+        if (story) window.scrollTo({ top: 0, behavior: 'instant' });
+        else window.requestAnimationFrame(() => sampleTrigger.current?.focus());
     };
 
-    const fetchComics = async () => {
-        setLoading(true);
+    const fetchPage = useCallback(async (offset: number, generation: number) => {
+        if (generation !== requestGeneration.current || pageBusy.current) return;
+        pageBusy.current = true;
+        setError(null);
+        if (offset === 0) setLoading(true);
+        else setLoadingMore(true);
         try {
-            // Cards only (EGRESS-DB E3): the columns and state keys a card reads, never a comic's whole state,
-            // and a comic held by moderation is never shipped (the row filter below stays as a second check).
-            const cards = (order: 'likes_count' | 'created_at') => supabase
-                .from('projects')
-                .select(GALLERY_CARD_SELECT)
-                .eq('is_public', true)
-                .not('is_forced_private', 'is', true)
-                .order(order, { ascending: false })
-                .range(0, GALLERY_PAGE_SIZE - 1);
-
-            let { data, error } = await cards(filter === 'trending' ? 'likes_count' : 'created_at');
-            if (error && filter === 'trending') {
-                // Schema fallback when likes_count is unavailable
-                const fallback = await cards('created_at');
-                data = fallback.data;
-                error = fallback.error;
+            let creatorIds: string[] | undefined;
+            if (query && searchKind === 'creator') {
+                // Handles are unique. Exact matching keeps creator discovery complete without a
+                // capped partial-profile search silently excluding some creators' comics.
+                const creators = await supabase.from('profiles').select('id').ilike('username', literalLike(query.replace(/^@/, ''))).limit(2);
+                if (creators.error) throw creators.error;
+                creatorIds = (creators.data ?? []).map((profile) => profile.id);
             }
-            if (error) throw error;
-
-            const rows = ((data || []) as unknown as Record<string, unknown>[])
-                .map((row) => (row && typeof row === 'object' ? { ...row, state: galleryCardStateOf(row) } : row))
-                .filter((p: any) =>
-                p &&
-                typeof p.id === 'string' &&
-                typeof p.name === 'string' &&
-                typeof p.created_at === 'string' &&
-                typeof p.updated_at === 'string' &&
-                typeof p.state === 'object' &&
-                // A comic held by moderation is never listed (the server also unlists it; this
-                // covers a row written before that fix reached the database).
-                p.is_forced_private !== true
-            );
-            const userIds = Array.from(
-                new Set(
-                    rows
-                        .map((row: any) => (typeof row.user_id === 'string' ? row.user_id : undefined))
-                        .filter((id: string | undefined): id is string => !!id)
-                )
-            );
-
+            const cards = (order: 'likes_count' | 'created_at') => {
+                let request = supabase.from('projects').select(GALLERY_CARD_SELECT)
+                    .eq('is_public', true).not('is_forced_private', 'is', true);
+                if (query && searchKind === 'title') request = request.ilike('name', `%${literalLike(query)}%`);
+                if (creatorIds) request = request.in('user_id', creatorIds);
+                if (kidsOnly) request = request.in('content_rating', ['G', 'PG']);
+                // A deterministic secondary key prevents equal-score/date rows changing pages.
+                return request.order(order, { ascending: false, nullsFirst: false })
+                    .order('id', { ascending: true }).range(offset, offset + GALLERY_PAGE_SIZE - 1);
+            };
+            let result = creatorIds?.length === 0 ? { data: [], error: null } : await cards(effectiveSort.current);
+            if (generation !== requestGeneration.current) return;
+            if (result.error && effectiveSort.current === 'likes_count' && schemaMissingLikes(result.error)) {
+                effectiveSort.current = 'created_at';
+                result = await cards('created_at');
+            }
+            if (result.error) throw result.error;
+            if (generation !== requestGeneration.current) return;
+            const received = (result.data ?? []) as unknown as Record<string, unknown>[];
+            const rows = received.map((row) => ({ ...row, state: galleryCardStateOf(row) }))
+                .filter((row: any) => row && typeof row.id === 'string' && typeof row.name === 'string'
+                    && typeof row.created_at === 'string' && typeof row.updated_at === 'string'
+                    && row.is_forced_private !== true && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
+            const userIds = Array.from(new Set(rows.flatMap((row: any) => typeof row.user_id === 'string' ? [row.user_id as string] : [])));
             const authorMap = new Map<string, string>();
-            if (userIds.length > 0) {
-                const { data: profiles, error: profileError } = await supabase
-                    .from('profiles')
-                    .select('id, username')
-                    .in('id', userIds);
-                if (profileError) {
-                    console.warn('Failed to load author usernames for public gallery.', profileError);
-                } else {
-                    (profiles || []).forEach((profile: any) => {
-                        if (!profile || typeof profile.id !== 'string') return;
-                        if (typeof profile.username === 'string' && profile.username.trim()) {
-                            authorMap.set(profile.id, profile.username.trim());
-                        }
-                    });
+            if (userIds.length) {
+                const profiles = await supabase.from('profiles').select('id, username').in('id', userIds);
+                if (!profiles.error) for (const profile of profiles.data ?? []) {
+                    if (typeof profile.username === 'string' && profile.username.trim()) authorMap.set(profile.id, profile.username.trim());
                 }
             }
-
-            const mapped = rows.map((row: any): PublicProject => {
-                const createdAt = new Date(row.created_at).getTime();
-                const publishedAt =
-                    normalizeTimestamp(row.published_at)
-                    ?? normalizeTimestamp(row.state?.publishedAt)
-                    ?? createdAt;
-                const likesCount = typeof row.likes_count === 'number'
-                    ? row.likes_count
-                    : (typeof row.likes === 'number' ? row.likes : 0);
-                const viewsCount = typeof row.views_count === 'number'
-                    ? row.views_count
-                    : (typeof row.views === 'number' ? row.views : 0);
-                const contentRating = gateRatingOf(row);
-
-                return {
-                    id: row.id,
-                    name: row.name,
-                    createdAt,
-                    updatedAt: new Date(row.updated_at).getTime(),
-                    publishedAt,
-                    coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
-                    state: row.state as Project['state'],
-                    isPublic: !!row.is_public,
-                    userId: typeof row.user_id === 'string' ? row.user_id : undefined,
-                    authorName: authorMap.get(row.user_id) || fallbackUsernameFromId(row.user_id),
-                    likesCount,
-                    viewsCount,
-                    average_rating: 0,
-                    review_count: 0,
-                    ...(contentRating ? { contentRating } : {})
-                };
-            });
-            const hydrated = await Promise.all(mapped.map((project: PublicProject) => hydratePreview(project)));
-
-            const likeMap = await getProjectLikeMap(hydrated.map((project: PublicProject) => project.id));
-            setProjects(hydrated.map((project: PublicProject) => ({
-                ...project,
-                isLiked: !!likeMap[project.id]
-            })));
-        } catch (e) {
-            console.error('Failed to load gallery', e);
-            setProjects([]);
+            const mapped = rows.map((row: any): PublicProject => ({
+                id: row.id, name: row.name,
+                createdAt: new Date(row.created_at).getTime(), updatedAt: new Date(row.updated_at).getTime(),
+                publishedAt: normalizeTimestamp(row.published_at) ?? normalizeTimestamp(row.state.publishedAt) ?? new Date(row.created_at).getTime(),
+                coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
+                state: row.state, isPublic: !!row.is_public,
+                userId: typeof row.user_id === 'string' ? row.user_id : undefined,
+                authorName: authorMap.get(row.user_id) || fallbackUsernameFromId(row.user_id),
+                creatorHandle: authorMap.get(row.user_id),
+                likesCount: typeof row.likes_count === 'number' ? row.likes_count : 0,
+                viewsCount: typeof row.views_count === 'number' ? row.views_count : 0,
+                contentRating: gateRatingOf(row)
+            }));
+            const [hydrated, likeMap] = await Promise.all([
+                Promise.all(mapped.map(hydratePreview)),
+                user?.id ? getProjectLikeMap(mapped.map((project) => project.id)).catch(() => ({} as Record<string, boolean>)) : Promise.resolve({} as Record<string, boolean>)
+            ]);
+            if (generation !== requestGeneration.current) return;
+            const page = hydrated.map((project) => ({ ...project, isLiked: !!likeMap[project.id] }));
+            setProjects((previous) => offset === 0 ? page : [...previous, ...page.filter((project) => !previous.some((p) => p.id === project.id))]);
+            setHasMore(received.length === GALLERY_PAGE_SIZE);
+            setNextOffset(offset + received.length);
+        } catch {
+            if (generation === requestGeneration.current) setError(offset === 0 ? 'The community Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
         } finally {
-            setLoading(false);
+            if (generation === requestGeneration.current) {
+                pageBusy.current = false;
+                setLoading(false);
+                setLoadingMore(false);
+            }
         }
+    }, [query, searchKind, kidsOnly, user?.id]);
+
+    useEffect(() => {
+        const generation = ++requestGeneration.current;
+        pageBusy.current = false;
+        effectiveSort.current = filter === 'trending' ? 'likes_count' : 'created_at';
+        setProjects([]);
+        setHasMore(false);
+        setNextOffset(0);
+        focusNextPage.current = false;
+        void fetchPage(0, generation);
+        return () => { requestGeneration.current += 1; };
+    }, [filter, fetchPage]);
+
+    useEffect(() => {
+        if (!loadingMore && focusNextPage.current && projects.length > previousLength.current) {
+            newResults.current?.querySelector<HTMLAnchorElement>('a')?.focus();
+            focusNextPage.current = false;
+        }
+    }, [projects, loadingMore]);
+
+    const loadMore = () => {
+        previousLength.current = projects.length;
+        focusNextPage.current = true;
+        void fetchPage(nextOffset, requestGeneration.current);
     };
+    const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
+    const filteredProjects = projects.filter((project) => !kidsOnly || isKidsFriendly(project.contentRating));
+    const isSearching = search.trim() !== query;
+    const showSamples = !query && !search.trim() && !kidsOnly;
 
-    const filteredProjects = projects.filter((project) =>
-        (!kidsOnly || isKidsFriendly(project.contentRating)) &&
-        (project.name.toLowerCase().includes(search.toLowerCase()) ||
-            (project.authorName || '').toLowerCase().includes(search.toLowerCase()))
-    );
-
-    // The like toggle: the optimistic count, then the server's answer (unchanged behaviour; only the markup moved).
     const toggleLike = async (project: PublicProject) => {
-        if (!user || likeBusy[project.id]) return;
-        setLikeBusy((prev) => ({ ...prev, [project.id]: true }));
+        if (!user) { onRequireAuth?.(); return; }
+        if (likeBusy[project.id]) return;
+        setLikeError(null);
+        setLikeBusy((previous) => ({ ...previous, [project.id]: true }));
         const currentLiked = !!project.isLiked;
-        setProjects((prev) => prev.map((p) => {
-            if (p.id !== project.id) return p;
-            return {
-                ...p,
-                isLiked: !currentLiked,
-                likesCount: Math.max(0, (p.likesCount || 0) + (currentLiked ? -1 : 1))
-            };
-        }));
-
+        const originalCount = project.likesCount || 0;
+        setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: !currentLiked, likesCount: Math.max(0, originalCount + (currentLiked ? -1 : 1)) } : p));
         try {
             const result = await toggleProjectLike(project.id, project.userId);
-            setProjects((prev) => prev.map((p) => {
-                if (p.id !== project.id) return p;
-                if (p.isLiked === result.liked) return p;
-                return {
-                    ...p,
-                    isLiked: result.liked,
-                    likesCount: Math.max(0, (p.likesCount || 0) + (result.liked ? 1 : -1))
-                };
-            }));
+            setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: result.liked, likesCount: Math.max(0, originalCount + (result.liked === currentLiked ? 0 : result.liked ? 1 : -1)) } : p));
+        } catch {
+            setProjects((previous) => previous.map((p) => p.id === project.id ? { ...p, isLiked: currentLiked, likesCount: originalCount } : p));
+            setLikeError(`Your like for “${project.name}” could not be saved. Please try again.`);
         } finally {
-            setLikeBusy((prev) => ({ ...prev, [project.id]: false }));
+            setLikeBusy((previous) => ({ ...previous, [project.id]: false }));
         }
     };
 
-    // On the Atlas tokens, as the comics landing above it: the display title, the search / sort / kids filter row,
-    // a calm sign-in note, then a grid of covers with their title, creator and counts under the art (ink only: the
-    // art is the colour). The header's lockup goes home, so the page carries no Back button of its own.
     return (
-        <div className={cn(CANVAS_BG, 'min-h-screen pb-20 font-sans text-[var(--ds-ink)]')}>
-            <div className={cn(HEADER_INNER, 'pt-10 sm:pt-14')}>
-                <div className="flex min-w-0 flex-col gap-6 border-b border-[var(--ds-hairline)] pb-8 lg:flex-row lg:items-end lg:justify-between">
-                    <div className="min-w-0">
-                        <h1 className={cn(DISPLAY_SECTION, 'text-[var(--ds-ink)]')}>Library</h1>
-                        <p className={cn(PUBLIC_BODY, 'mt-3 max-w-xl')}>Browse public comics from creators.</p>
-                    </div>
-
-                    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
-                        <label className={cn(FIELD_GROUP, DENSITY.coarse, 'h-10 min-w-0 px-3 sm:w-72 sm:flex-none')}>
-                            <Search aria-hidden className={cn('size-4 shrink-0', MUTED)} />
-                            <span className="sr-only">Search comics or creators</span>
-                            <input
-                                type="search"
-                                placeholder="Search comics or creators"
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                                className={cn(FIELD_EMBEDDED, 'h-full text-[length:var(--ds-text-base)] text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)]')}
-                            />
-                        </label>
-                        <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2">
-                            <Segmented<'trending' | 'recent'>
-                                // A set width: each half holds its whole word ("Trending" never truncates beside "Recent").
-                                className="w-48 shrink-0"
-                                label="Sort the Library"
-                                value={filter}
-                                onChange={setFilter}
-                                options={[
-                                    { value: 'trending', label: 'Trending' },
-                                    { value: 'recent', label: 'Recent' }
-                                ]}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                aria-pressed={kidsOnly}
-                                onClick={() => setKidsOnly((v) => !v)}
-                                title="Only comics rated G or PG by the publish check"
-                                className="aria-pressed:border-[var(--ds-ink)] aria-pressed:bg-[var(--ds-well)]"
-                            >
-                                {kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)
-                            </Button>
+        <div data-comics-library="" data-comic-theme={theme} className="comics-library">
+            <div className="comics-shell-width library-content">
+                {sample && (
+                    <section aria-labelledby="library-sample-title" className="library-reader">
+                        <a className={cn('library-back', FOCUS_RING)} href={libraryHref()} onClick={(event) => navigateSample(event, null)}><ArrowLeft aria-hidden /> Back to Library</a>
+                        <div className="library-reader-heading">
+                            <p className="library-eyebrow">Studio sample · 2 pages</p>
+                            <h1 id="library-sample-title" ref={sampleTitle} tabIndex={-1}>{SAMPLES.find((story) => story.id === sample)?.title}</h1>
+                            <p>Read at your own pace. Use the arrows or swipe to turn the page.</p>
                         </div>
-                    </div>
-                </div>
-
-                {!user && (
-                    <div className={cn(RADIUS_PANEL, 'mt-6 flex flex-wrap items-center justify-between gap-3 border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-4 py-3')}>
-                        <p className={cn('m-0 text-[length:var(--ds-text-base)] leading-6', MUTED)}>Reading is free — no account needed. Sign in to like, comment and share.</p>
-                        <Button type="button" size="sm" variant="outline" className={RADIUS_ROUND} onClick={onRequireAuth}>
-                            Sign in
-                        </Button>
-                    </div>
+                        <ComicSampleReader key={sample} look={SAMPLE_LOOKS[0]} standalone story={sample} />
+                        <a className={cn('library-back', FOCUS_RING)} href={libraryHref()} onClick={(event) => navigateSample(event, null)}><ArrowLeft aria-hidden /> Find your next read</a>
+                    </section>
                 )}
-
-                {loading ? (
-                    <div role="status" aria-label="Loading the Library" className={GRID}>
-                        {Array.from({ length: 8 }, (_, i) => (
-                            <div key={i} className="min-w-0">
-                                <Skeleton className={cn('aspect-[2/3] w-full', RADIUS_PANEL)} />
-                                <Skeleton shape="text" className="mt-3 w-3/4" />
-                                <Skeleton shape="text" className="mt-2 w-1/2" />
+                <div hidden={!!sample}>
+                    <header className="library-heading">
+                        <div><p className="library-eyebrow">The reading room</p><h1>Library</h1><p>Small stories. New worlds. Find your next read.</p></div>
+                        <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
+                    </header>
+                    {showSamples && (
+                        <section aria-labelledby="library-samples-title" className="library-samples">
+                            <div className="library-section-heading"><h2 id="library-samples-title">Start with a story</h2><span>From Comic Studio</span></div>
+                            <div className="library-sample-grid">
+                                {SAMPLES.map((story) => (
+                                    <a key={story.id} href={libraryHref(story.id)} onClick={(event) => navigateSample(event, story.id)} className={cn('library-sample-card', FOCUS_RING)} aria-label={`Read ${story.title}`}>
+                                        <div className="library-sample-image" data-story={story.id}><img src={story.image} alt="" width={story.id === 'paper-boat' ? 768 : 480} height={story.id === 'paper-boat' ? 1152 : 384} decoding="async" /></div>
+                                        <div className="library-sample-copy"><p className="library-eyebrow">Sample comic</p><h3>{story.title}</h3><p className="library-sample-note">{story.note}</p><p className="library-sample-detail">{story.detail}</p><span className="library-read-link">Read the story <ArrowRight aria-hidden /></span></div>
+                                    </a>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                ) : filteredProjects.length === 0 ? (
-                    <EmptyState
-                        as="h2"
-                        className="mt-8"
-                        icon={<BookOpen aria-hidden />}
-                        title={kidsOnly ? 'No kids-friendly comics yet.' : 'No comics found.'}
-                        description={kidsOnly ? 'Only comics rated G or PG show here. Turn the filter off to see everything.' : 'Be the first to publish one!'}
-                    />
-                ) : (
-                    <ul className={GRID}>
-                        {filteredProjects.map((project) => {
-                            const covers = coverCandidates(project);
-                            // Published v4 comics open their read-only share link (/c/<slug>) as a real
-                            // page load: it serves the boot card, the preview head and its own CSP.
-                            const slug = shareSlugOf(project);
-                            const coverClass = cn('block', RADIUS_PANEL, FOCUS_RING);
-                            const coverArea = (children: React.ReactNode) =>
-                                slug ? (
-                                    <a href={SHARE_PATH(slug)} aria-label={`Read ${project.name}`} className={coverClass}>
-                                        {children}
-                                    </a>
-                                ) : (
-                                    // Classic comics open in-app; the href keeps open-in-new-tab and copy-link working.
-                                    <a
-                                        href={`/?view=read&id=${encodeURIComponent(project.id)}`}
-                                        onClick={(e) => {
-                                            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                                            e.preventDefault();
-                                            onReadComic(project.id);
-                                        }}
-                                        aria-label={`Read ${project.name}`}
-                                        className={coverClass}
-                                    >
-                                        {children}
-                                    </a>
-                                );
-                            const likeLabel = user ? (project.isLiked ? 'Unlike comic' : 'Like comic') : 'Sign in to like comics';
-
-                            return (
-                                <li key={project.id} data-testid="gallery-card" data-share-slug={slug} className="min-w-0">
-                                    {coverArea(
-                                        /* Cover, 2:3 */
-                                        <div className={cn(RADIUS_PANEL, LIFT, 'relative aspect-[2/3] overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
-                                            <SmartImage
-                                                src={covers[0]}
-                                                fallbackSources={covers.slice(1)}
-                                                alt={project.name}
-                                                className="h-full w-full object-cover"
-                                                containerClassName="w-full h-full"
-                                                fallbackIcon={<BookOpen aria-hidden className={cn('size-10', MUTED)} />}
-                                            />
-                                            {project.contentRating && (
-                                                <div className="absolute left-2 top-2">
-                                                    <RatingBadge rating={project.contentRating} onArt />
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    <div className="mt-3 min-w-0">
-                                        <h3 className={cn(CARD_TITLE, 'line-clamp-2 text-[var(--ds-ink)] [overflow-wrap:anywhere]')}>{project.name}</h3>
-                                        <p className={cn('m-0 mt-1 flex min-w-0 items-center gap-1 text-[length:var(--ds-text-sm)] leading-5', MUTED)}>
-                                            <User aria-hidden className="size-3 shrink-0" />
-                                            <span className="truncate">{project.authorName || 'Unknown creator'}</span>
-                                        </p>
-                                        <p className={cn('m-0 text-[length:var(--ds-text-xs)] leading-4', MUTED)}>
-                                            Published {new Date(project.publishedAt || project.createdAt).toLocaleDateString()}
-                                        </p>
-                                        <div className={cn('mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 text-[length:var(--ds-text-sm)] tabular-nums', MUTED)}>
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    void toggleLike(project);
-                                                }}
-                                                aria-pressed={user ? !!project.isLiked : undefined}
-                                                aria-label={`${likeLabel}, ${project.likesCount || 0} likes`}
-                                                title={likeLabel}
-                                                disabled={!user || !!likeBusy[project.id]}
-                                                className={cn(
-                                                    '-ml-1 inline-flex items-center gap-1 px-1 py-1 transition-colors duration-[var(--ds-motion-fast)] hover:text-[var(--ds-ink)] disabled:cursor-not-allowed disabled:opacity-50',
-                                                    RADIUS_CONTROL,
-                                                    DENSITY.coarseSquare,
-                                                    FOCUS_RING,
-                                                    project.isLiked && 'text-[var(--ds-ink)]'
-                                                )}
-                                            >
-                                                <Heart aria-hidden className={cn('size-3.5', project.isLiked && 'fill-current')} /> {project.likesCount || 0}
-                                            </button>
-                                            <span className="inline-flex items-center gap-1">
-                                                <Eye aria-hidden className="size-3.5" />
-                                                <span className="sr-only">Views:</span> {project.viewsCount || 0}
-                                            </span>
-                                            {project.average_rating !== undefined && project.average_rating > 0 && (
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Star aria-hidden className="size-3.5" fill="currentColor" />
-                                                    <span className="sr-only">Average rating:</span>
-                                                    <span className="text-[var(--ds-ink)]">{project.average_rating.toFixed(1)}</span>
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </li>
-                            );
-                        })}
-                    </ul>
-                )}
+                        </section>
+                    )}
+                    <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
+                        <div className="library-section-heading"><h2 id="library-community-title">From the community</h2>{!user && onRequireAuth && <Button type="button" variant="outline" size="sm" onClick={onRequireAuth}>Sign in</Button>}</div>
+                        <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
+                            <label className="library-search-kind"><span className="sr-only">Search by</span><select value={searchKind} onChange={(event) => setSearchKind(event.target.value as SearchKind)}><option value="title">Comic title</option><option value="creator">Creator</option></select></label>
+                            <label className="library-search-field"><Search aria-hidden /><span className="sr-only">{searchKind === 'title' ? 'Search comic titles' : 'Search creator username'}</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder={searchKind === 'title' ? 'Search comic titles' : 'Enter a creator’s exact username'} aria-describedby="library-search-help" /></label>
+                            {search && <button type="button" className={cn('library-clear-search', FOCUS_RING)} aria-label="Clear search" onClick={() => { setSearch(''); setQuery(''); }}><X aria-hidden /></button>}
+                            <Button type="submit" variant="outline" className="library-search-submit">Search</Button>
+                        </form>
+                        <div className="library-toolbar">
+                            <Segmented<GallerySort> className="library-sort" label="Sort the Library" value={filter} onChange={setFilter} options={[{ value: 'trending', label: 'Trending' }, { value: 'recent', label: 'Recent' }]} />
+                            <Button type="button" variant="outline" aria-pressed={kidsOnly} onClick={() => setKidsOnly((value) => !value)} title="Only published comics rated G or PG by the publish check" className="library-kids">{kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)</Button>
+                            {(query || kidsOnly) && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearFilters}>Clear filters</button>}
+                        </div>
+                        <p id="library-search-help" className="library-search-help">{searchKind === 'creator' ? 'Search an exact username, with or without @.' : 'Search titles across the community Library.'}{kidsOnly && ' Only published comics rated G or PG are included.'}</p>
+                        <p className="library-results-count" role="status" aria-live="polite">{loading || isSearching ? 'Finding your next read…' : error && projects.length === 0 ? 'Community comics are temporarily unavailable.' : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}${hasMore ? ' shown · more to discover' : ''}`}</p>
+                        {likeError && <p className="library-inline-error" role="alert">{likeError}</p>}
+                        {loading ? (
+                            <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: 8 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
+                        ) : (
+                            <>
+                                {filteredProjects.length > 0 && <ul className="library-grid">
+                                    {filteredProjects.map((project, index) => {
+                                        const covers = coverCandidates(project);
+                                        const slug = shareSlugOf(project);
+                                        const likeLabel = user ? (project.isLiked ? 'Unlike' : 'Like') : 'Sign in to like';
+                                        return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} className="library-card">
+                                            <a href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={`Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
+                                                <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}<span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span></div>
+                                                <h3>{project.name}</h3>
+                                            </a>
+                                            {project.creatorHandle ? <button type="button" className={cn('library-creator', FOCUS_RING)} onClick={() => { setSearchKind('creator'); setSearch(project.creatorHandle!); setQuery(project.creatorHandle!); }}>by {project.creatorHandle}</button> : <p className="library-creator">by {project.authorName || 'Unknown creator'}</p>}
+                                            <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                                            <div className="library-card-stats"><button type="button" onClick={() => void toggleLike(project)} aria-pressed={user ? !!project.isLiked : undefined} aria-label={`${likeLabel} ${project.name}, ${project.likesCount || 0} likes`} disabled={!!likeBusy[project.id] || (!user && !onRequireAuth)} className={cn('library-like', RADIUS_CONTROL, FOCUS_RING)}><Heart aria-hidden className={project.isLiked ? 'fill-current' : undefined} />{project.likesCount || 0}</button><span><Eye aria-hidden /><span className="sr-only">Views: </span>{project.viewsCount || 0}</span></div>
+                                        </li>;
+                                    })}
+                                </ul>}
+                                {!error && filteredProjects.length === 0 && <div className="library-empty"><BookOpen aria-hidden /><h3>{hasMore ? 'Keep exploring the Library.' : query ? 'No matching comics.' : kidsOnly ? 'No kids-friendly comics yet.' : 'The next story could be yours.'}</h3><p>{hasMore ? 'No readable comics appeared in this batch. Load the next comics below.' : query ? 'Try another title or an exact creator username.' : kidsOnly ? 'Only published comics rated G or PG show here.' : 'Community comics will appear here when creators publish them. In the meantime, enjoy a Studio sample above.'}</p>{(query || kidsOnly) && <Button variant="outline" onClick={clearFilters}>Clear filters</Button>}</div>}
+                                {error && <div role="alert" className="library-load-error"><p>{error}</p><p>{showSamples ? 'Studio samples are still available above.' : 'Check your connection and try again.'}</p><Button variant="outline" onClick={() => void fetchPage(projects.length ? nextOffset : 0, requestGeneration.current)}>Try again</Button></div>}
+                                {hasMore && !error && <div className="library-more"><Button type="button" variant="outline" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading more comics…' : 'Load more comics'}{!loadingMore && <ArrowRight aria-hidden />}</Button><p>Showing {filteredProjects.length} comics. Keep exploring at your own pace.</p></div>}
+                            </>
+                        )}
+                    </section>
+                </div>
             </div>
         </div>
     );

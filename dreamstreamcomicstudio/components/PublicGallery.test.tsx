@@ -2,7 +2,7 @@
 // the public cover; the publish gate's rating shows as a badge; "Kids-friendly (G/PG)" keeps only G and
 // PG comics (an unrated comic is never assumed kids-friendly). Classic comics keep the in-app reader.
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { columnsRead, fakeSupabase, jsonBytes, projectRow } from '../services/projectRows.testkit';
@@ -50,6 +50,7 @@ const row = (id: string, name: string, state: Record<string, unknown>, extra: Re
 });
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/?view=gallery');
   fakeSupabase.reset();
   fakeSupabase.state.tables.profiles = [{ id: 'u1', username: 'mira' }];
   rows.value = [
@@ -106,7 +107,7 @@ describe('PublicGallery', () => {
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Read Night Raid' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Read Old Classic' })).toBeNull();
   });
@@ -132,8 +133,8 @@ describe('PublicGallery', () => {
     expect(evil.querySelector('[aria-label^="Rated"]')).toBeNull();
     expect(screen.getAllByRole('img', { name: /^Rated / }).map((el) => el.getAttribute('aria-label'))).toEqual(['Rated PG']);
     fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
+    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Read Evil' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
   });
 
   it('a v4 listing never shows an owner-written cover (first or fallback), and signs no draft', async () => {
@@ -163,7 +164,7 @@ describe('PublicGallery', () => {
     render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
     await screen.findByRole('link', { name: 'Read Night Raid' });
     fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
-    expect(screen.getByText('No kids-friendly comics yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No kids-friendly comics yet.')).toBeInTheDocument();
   });
 });
 
@@ -183,7 +184,7 @@ describe('PublicGallery reads cards', () => {
     expect(items).not.toContain('state');
     expect(query.columns).not.toMatch(/versions|script/);
     for (const item of items) if (columnsRead(item)[0] === 'state') expect(item).toMatch(/^[A-Za-z]+:state->[A-Za-z]+$/);
-    expect(query.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=likes_count.desc', 'range=0-47']);
+    expect(query.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=likes_count.desc', 'order=id.asc', 'range=0-47']);
     // The rows on the wire are cards: a small fraction of the full rows.
     const shipped = rows.value.map((r) => projectRow(r, query.columns));
     expect(JSON.stringify(shipped)).not.toContain('draft draft');
@@ -196,7 +197,7 @@ describe('PublicGallery reads cards', () => {
     await screen.findByRole('link', { name: 'Read The Lake' });
     const [failed, fallback] = galleryQueries();
     expect(fallback.columns).toBe(failed.columns);
-    expect(fallback.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=created_at.desc', 'range=0-47']);
+    expect(fallback.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=created_at.desc', 'order=id.asc', 'range=0-47']);
   });
 
   it('still drops a held comic the database returned (defence in depth)', async () => {
@@ -247,15 +248,152 @@ describe('PublicGallery on the Atlas tokens', () => {
     const sort = screen.getByRole('radiogroup', { name: 'Sort the Library' });
     expect(screen.getByRole('radio', { name: 'Trending' })).toHaveAttribute('aria-checked', 'true');
     expect(sort).toBeInTheDocument();
-    expect(screen.getByRole('searchbox', { name: 'Search comics or creators' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: 'Search comic titles' })).toBeInTheDocument();
     for (const card of screen.getAllByTestId('gallery-card')) expect(card.tagName).toBe('LI');
-    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['The Lake', 'Night Raid', 'Old Classic']);
+    expect(within(screen.getByRole('region', { name: 'From the community' })).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Old Classic', 'The Lake', 'Night Raid']);
   });
 
   it('says so in the shared empty state when nothing is listed', async () => {
     rows.value = [];
     render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} />);
-    expect(await screen.findByRole('heading', { level: 2, name: 'No comics found.' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveAttribute('data-slot', 'empty-state');
+    expect(await screen.findByRole('heading', { level: 3, name: 'The next story could be yours.' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('0 comics');
+    expect(screen.getByRole('link', { name: 'Read The Paper Boat' })).toBeInTheDocument();
+  });
+});
+
+describe('Library discovery and recovery', () => {
+  const manyRows = (count: number) => Array.from({ length: count }, (_, index) => row(
+    `comic-${String(index).padStart(3, '0')}`, `Story ${String(index).padStart(3, '0')}`,
+    { coverImageUrl: 'https://cdn.test/cover.webp' }, { likes_count: 1 }
+  ));
+  const submitSearch = (value: string) => {
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value } });
+    fireEvent.submit(screen.getByRole('search'));
+  };
+
+  it('searches titles beyond the first page and keeps the wire projection bounded', async () => {
+    rows.value = manyRows(65);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(screen.queryByText('Story 064')).toBeNull();
+    submitSearch('Story 064');
+    expect(await screen.findByText('Story 064')).toBeInTheDocument();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    const searched = fakeSupabase.queriesOn('projects').at(-1)!;
+    expect(searched.filters).toContain('name=ilike.%Story 064%');
+    expect(searched.filters).toContain('range=0-47');
+    expect(searched.columns).not.toMatch(/versions|script/);
+  });
+
+  it('loads the next stable page once, preserves existing cards, and focuses its first comic', async () => {
+    rows.value = manyRows(65).reverse();
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(48);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more comics' }));
+    const next = (await screen.findByText('Story 048')).closest('a');
+    await waitFor(() => expect(next).toHaveFocus());
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(65);
+    expect(screen.getByText('Story 000')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more comics' })).toBeNull();
+    expect(fakeSupabase.queriesOn('projects').at(-1)?.filters).toEqual(expect.arrayContaining(['order=likes_count.desc', 'order=id.asc', 'range=48-95']));
+  });
+
+  it('filters kids-friendly comics across all pages, while retaining the publication gate', async () => {
+    rows.value = [...manyRows(60), row('safe', 'Safe Story', { studioVersion: 4, shareSlug: SLUG }, { content_rating: 'G' }), row('fake-safe', 'Unpublished Rating', {}, { content_rating: 'G' })];
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
+    expect(await screen.findByRole('link', { name: 'Read Safe Story' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Read Unpublished Rating' })).toBeNull();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    expect(fakeSupabase.queriesOn('projects').at(-1)?.filters).toContain('content_rating=in.(G,PG)');
+  });
+
+  it('uses exact creator handles and creator names open that creator’s complete shelf', async () => {
+    rows.value = [...manyRows(50), row('other', 'Someone Else', {}, { user_id: 'u2' })];
+    fakeSupabase.state.tables.profiles.push({ id: 'u2', username: 'mira2' });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    fireEvent.click(screen.getAllByText('by mira')[0]);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Search by' })).toHaveValue('creator'));
+    await screen.findByText('Story 000');
+    expect(screen.queryByText('Someone Else')).toBeNull();
+    expect(fakeSupabase.queriesOn('profiles').some((q) => q.filters.includes('username=ilike.mira'))).toBe(true);
+    submitSearch('@mira2');
+    expect(await screen.findByText('Someone Else')).toBeInTheDocument();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+  });
+
+  it('treats wildcard punctuation as literal text', async () => {
+    rows.value = [row('literal', '100%_done', {}), row('other', '100 percent done', {})];
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByRole('link', { name: 'Read 100%_done' });
+    submitSearch('%_');
+    expect(await screen.findByRole('link', { name: 'Read 100%_done' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Read 100 percent done' })).toBeNull();
+  });
+
+  it('reports a failed first request with retry instead of an empty collection or silent sort fallback', async () => {
+    fakeSupabase.state.failures.push({ when: (q) => q.table === 'projects', error: { code: '503', message: 'Unavailable' } });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('The community Library could not be loaded.');
+    expect(screen.queryByText('The next story could be yours.')).toBeNull();
+    expect(fakeSupabase.queriesOn('projects')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('preserves the first page when loading more fails, then retries the same range', async () => {
+    rows.value = manyRows(65);
+    fakeSupabase.state.failures.push({ when: (q) => q.filters.includes('range=48-95'), error: { code: '503', message: 'Unavailable' } });
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more comics' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your place is saved.');
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(48);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await screen.findByText('Story 064');
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(65);
+    expect(fakeSupabase.queriesOn('projects').slice(-2).every((q) => q.filters.includes('range=48-95'))).toBe(true);
+  });
+
+  it('does not replace a newer search with an older slow result', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fakeSupabase.state.gates.push({ when: (q) => q.filters.includes('name=ilike.%Slow%'), release: gate });
+    rows.value.push(row('slow', 'Slow Story', {}));
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    submitSearch('Slow');
+    await waitFor(() => expect(fakeSupabase.queriesOn('projects').some((q) => q.filters.includes('name=ilike.%Slow%'))).toBe(true));
+    submitSearch('Lake');
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    await act(async () => { release(); await gate; });
+    expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Read Slow Story' })).toBeNull();
+  });
+
+  it('makes each title and cover one native link and preserves modifier-click navigation', async () => {
+    const onReadComic = vi.fn();
+    render(<PublicGallery onReadComic={onReadComic} />);
+    const classic = await screen.findByRole('link', { name: 'Read Old Classic' });
+    expect(classic.querySelector('h3')).toHaveTextContent('Old Classic');
+    fireEvent.click(classic, { ctrlKey: true });
+    expect(onReadComic).not.toHaveBeenCalled();
+    fireEvent.click(classic.querySelector('h3')!);
+    expect(onReadComic).toHaveBeenCalledWith('classic-1');
+  });
+
+  it('distinguishes a search with no matches and clears it without leaving the Library', async () => {
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    submitSearch('Does not exist');
+    expect(await screen.findByRole('heading', { name: 'No matching comics.' })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0]);
+    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox')).toHaveValue('');
   });
 });
