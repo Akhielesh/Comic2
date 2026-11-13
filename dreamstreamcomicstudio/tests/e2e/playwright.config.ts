@@ -142,7 +142,7 @@ const config: PlaywrightTestConfig = {
     // The clutter ratchet (declutter DC-0; docs/design/clean-and-smooth.md): the probe self-test and every scene at
     // 320, 360 and 1280 px. The spec sets its own viewports, themes and motion.
     { name: 'declutter', testMatch: /declutter\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } },
-    // The overflow ratchet (OV-1; SPEC-overflow §7.3): the probe self-test and every scene with the long strings injected
+    // The overflow ratchet (OV-1): the probe self-test and every scene with the long strings injected
     // at 320 light, 360 dark and 1280 light. In layout-smoke's default projects, so it gates every UI pull request.
     { name: 'overflow', testMatch: /(^|\/)overflow\.spec\.ts$/, use: { browserName: 'chromium', ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],

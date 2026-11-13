@@ -1,4 +1,4 @@
-// The overflow probe (OV-1; SPEC-overflow §7.3; docs/design/clean-and-smooth.md "The overflow ratchet"): what "nothing
+// The overflow probe (OV-1; docs/design/clean-and-smooth.md "The overflow ratchet"): what "nothing
 // spills or gets cut" can measure on a rendered page, and the ratchet that keeps every gain.
 //
 //   const r = await measureOverflow(page);            // injects the long strings, then measures
@@ -46,7 +46,7 @@ export const STRESS_ERROR =
 export const POPOVER_SKIP = /send|draw|render|approve|delete|remove|publish|spend|buy|sign out|log out|discard|reset/i;
 export const POPOVER_LIMIT = 12;
 
-/** The probe's views (SPEC-overflow §7.3): the 320 px reflow width light, a phone dark, the desk light. */
+/** The probe's views (docs/design/clean-and-smooth.md "The overflow ratchet"): the 320 px reflow width light, a phone dark, the desk light. */
 export const OVERFLOW_VIEWS = [
   { id: 'narrow', device: 'smoke-320x640', theme: 'light' },
   { id: 'phone', device: 'smoke-360x740', theme: 'dark' },
@@ -55,7 +55,7 @@ export const OVERFLOW_VIEWS = [
 export type OverflowView = (typeof OVERFLOW_VIEWS)[number];
 export const OVERFLOW_SUFFIXES: readonly string[] = OVERFLOW_VIEWS.map((v) => `${v.id}-${v.theme}`);
 
-/** The error and failure states the declutter loop does not open (SPEC-overflow §7.3). */
+/** The error and failure states the declutter loop does not open (docs/design/clean-and-smooth.md "The overflow ratchet"). */
 export const OVERFLOW_EXTRA_SCENES: ReadonlyArray<{ id: string; q: Record<string, string | number | boolean> }> = [
   { id: 'studio-error', q: { surface: 'studio', fixture: 'heist-12p', tab: 'pages', state: 'error' } },
   { id: 'studio-failed-send', q: { surface: 'studio', fixture: 'heist-12p', tab: 'pages', state: 'failed-send' } },
@@ -359,7 +359,7 @@ export function serialiseOverflowBaseline(scenes: Record<string, OverflowCounts>
     return `    ${JSON.stringify(k)}: { ${Object.entries(s).map(([m, n]) => `${JSON.stringify(m)}: ${n}`).join(', ')} }`;
   });
   const note =
-    'Overflow ratchet (SPEC-overflow §7.3): per scene@view-theme, the text escapes, page overflow and popover escapes that predate the probe. ' +
+    'Overflow ratchet (docs/design/clean-and-smooth.md, "The overflow ratchet"): per scene@view-theme, the text escapes, page overflow and popover escapes that predate the probe. ' +
     `A scene not listed is held to 0; a listed one may neither rise nor fall. Generated, never typed: ${SHRINK} lowers it.`;
   return ['{', `  "note": ${JSON.stringify(note)},`, body.length ? `  "scenes": {\n${body.join(',\n')}\n  }` : '  "scenes": {}', '}', ''].join('\n');
 }

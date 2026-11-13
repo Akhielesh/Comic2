@@ -51,7 +51,7 @@ describe('Chip, Badge, StatusChip', () => {
 
   it.each(BADGE_VARIANTS)('Badge %s renders its Atlas variant', (variant) => {
     render(<Badge variant={variant}>{variant}</Badge>);
-    // The text sits in the badge's label span (SPEC-overflow §3.3), so find the badge from it.
+    // The text sits in the badge's label span (docs/design/design-system.md "Long words"), so find the badge from it.
     const badge = screen.getByText(variant).closest('[data-slot="badge"]')!;
     expectClasses(badge, BADGE_BASE, BADGE_VARIANT[variant]);
     expect(badge).toHaveAttribute('data-variant', variant);

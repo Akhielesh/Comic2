@@ -6,7 +6,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Long words in messages (SPEC-overflow §3.2; docs/design/design-system.md "Long words"): an alert's or a message
+/* Long words in messages (docs/design/design-system.md "Long words"): an alert's or a message
    slot's text breaks a long URL or id inside its box instead of leaving it (overflow-wrap inherits). Base layer, so a
    utility on a descendant (`truncate`, `whitespace-nowrap`) still wins; global, outside every [data-ds-skin] scope.
    Alerts and our own slots only: not role="status" (short labels in tight rows) and not role="alertdialog" (whole

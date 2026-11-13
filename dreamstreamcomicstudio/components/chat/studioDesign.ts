@@ -57,7 +57,7 @@ export const RADIUS_CONTROL = 'rounded-[var(--ds-radius-control)]';
 export const RADIUS_PILL = 'rounded-[var(--ds-radius-chip)]';
 
 // ---------------------------------------------------------------------------
-// Long words (SPEC-overflow §3.1; docs/design/design-system.md "Long words")
+// Long words (docs/design/design-system.md "Long words")
 // ---------------------------------------------------------------------------
 
 /** The one long-word rule: a URL, an id or a long compound word may break inside its box instead of leaving it. */

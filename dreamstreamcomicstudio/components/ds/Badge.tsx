@@ -4,7 +4,7 @@
  * success / warning (TONE_CHIP: readable tone ink on its own tint — pair it with a word, never colour
  * alone). 12 px medium, the chip radius, a 1 px edge in every variant (forced-colours mode draws it).
  *
- * Long labels (SPEC-overflow §3.3): string / number runs sit in one CLIP_TEXT span that fills the badge, so a long name
+ * Long labels (docs/design/design-system.md "Long words"): string / number runs sit in one CLIP_TEXT span that fills the badge, so a long name
  * ends in an ellipsis inside the edge instead of being cut at both ends by the centring. A hover `title` appears only
  * when the text is actually cut: on pointerenter the badge compares the span's scrollWidth with its clientWidth and sets
  * or clears the attribute on the element (no state, no timer). A caller's own `title` always wins; screen readers read

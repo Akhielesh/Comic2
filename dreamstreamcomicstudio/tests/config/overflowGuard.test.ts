@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Overflow guard (SPEC-overflow §7.2; docs/design/design-system.md "Long words"): the static half of "nothing spills or
+ * Overflow guard (docs/design/design-system.md "Long words"): the static half of "nothing spills or
  * gets cut". Five rules, counted per file and per rule, RATCHETED against tests/config/baselines/overflow.json (the
  * counts that predate the guard; they only fall: `UPDATE_BASELINES=1 npx vitest run tests/config/overflowGuard.test.ts`).
  *

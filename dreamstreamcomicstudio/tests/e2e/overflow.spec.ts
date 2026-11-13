@@ -1,4 +1,4 @@
-// The overflow probe (OV-1; SPEC-overflow §7.3; docs/design/clean-and-smooth.md "The overflow ratchet"): nothing spills
+// The overflow probe (OV-1; docs/design/clean-and-smooth.md "The overflow ratchet"): nothing spills
 // or gets cut, measured on every scene with the long strings injected.
 //
 //   npx playwright test -c tests/e2e/playwright.config.ts --project=overflow                  self-test + every scene

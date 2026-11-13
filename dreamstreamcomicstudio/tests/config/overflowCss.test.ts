@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * The long-word safety net (SPEC-overflow §3.2; docs/design/design-system.md "Long words"): index.css gives every alert
+ * The long-word safety net (docs/design/design-system.md "Long words"): index.css gives every alert
  * and our own message slots `overflow-wrap: anywhere`, globally, in the base layer, with a `word-break: break-word`
  * fallback for browsers without `anywhere` (Safari < 15.4 is inside Vite's default build target).
  *
