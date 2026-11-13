@@ -790,9 +790,9 @@ describe('Atlas skin — wave 5 base rules (motion, skeletons, toasts, the inver
   const find = (selector: string, parents: string[] = []) =>
     rules.find((r) => r.selector === selector && r.parents.join('|') === parents.join('|'));
 
-  it('reduced motion: hover nudges land without travelling, Tailwind spinners and pings hold still (skin only)', () => {
+  it('reduced motion: hover nudges land without travelling, Tailwind spinners, pings and pulses hold still (skin only)', () => {
     expect(find('[data-ds-skin="atlas"] .transition-transform', [REDUCE])?.body).toBe('transition-duration: 0s !important;');
-    expect(find('[data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce)', [REDUCE])?.body).toBe('animation: none;');
+    expect(find('[data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-pulse, .animate-bounce)', [REDUCE])?.body).toBe('animation: none;');
     // Never outside the skin.
     expect(rules.some((r) => /^\.(transition-transform|animate-spin)$/.test(r.selector) && r.parents.includes(REDUCE))).toBe(false);
   });

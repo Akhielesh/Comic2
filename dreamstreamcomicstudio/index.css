@@ -1639,12 +1639,13 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
 
 /* ---- Wave 5 base rules (Atlas acd9fdfc) ---- */
 /* Reduced motion, extended as Atlas did: hover nudges written as transition-transform land without
-   travelling, and Tailwind's own loops hold still (a spinner's icon and label still say "loading").
+   travelling, and Tailwind's own loops hold still, the pulse included (a spinner's icon and label still
+   say "loading"; a pulsing dot keeps its colour and word).
    Comic Studio has no tailwindcss-animate, so Atlas's animate-in / animate-out rules have nothing to
    match here. */
 @media (prefers-reduced-motion: reduce) {
   [data-ds-skin="atlas"] .transition-transform { transition-duration: 0s !important; }
-  [data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce) { animation: none; }
+  [data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-pulse, .animate-bounce) { animation: none; }
 }
 /* Overlay entrances run on the app's enter curve (Atlas wave 5 moved its Radix overlays off the
    browser's plain `ease`): .animate-scale-in is the popover / sheet / toast pop-in here. Its
