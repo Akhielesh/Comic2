@@ -32,11 +32,12 @@ export const BRAND = {
   appName: 'DreamStream Comics',
   shortName: 'Comics',
   manifest: '/comics.webmanifest',
+  favicon: '/icons/comics-mark.svg',
   appleTouchIcon: '/icons/comics-apple-touch-180.png',
   ogImage: '/icons/comics-og.png',
   ogImageWidth: '1200',
   ogImageHeight: '630',
-  ogImageAlt: 'DreamStream Comic Studio: comic pages with speech balloons on warm paper',
+  ogImageAlt: 'DreamStream Comic Studio: overlapping comic pages on warm paper',
   // The browser chrome around the comics host's pages: the Atlas skin's paper and dark paper (index.css
   // [data-ds-skin="atlas"] --ds-canvas), so the address bar meets a white page, not the old warm paper.
   themeLight: '#ffffff',
@@ -58,6 +59,7 @@ export const brandHeadTags = (cfg: EdgeConfig): string => {
     meta('name', 'application-name', BRAND.appName),
     meta('name', 'apple-mobile-web-app-title', BRAND.shortName),
     `<link rel="canonical" href="${escAttr(url)}">`,
+    `<link rel="icon" type="image/svg+xml" href="${BRAND.favicon}">`,
     meta('property', 'og:site_name', BRAND.siteName),
     meta('property', 'og:type', 'website'),
     meta('property', 'og:title', BRAND.title),
@@ -80,6 +82,7 @@ const REPLACED_SELECTORS = [
   'meta[property^="og:"]',
   'meta[name^="twitter:"]',
   'link[rel="canonical"]',
+  'link[rel="icon"]',
   'meta[name="ds-product"]',
   'meta[name="application-name"]',
   'meta[name="apple-mobile-web-app-title"]'
