@@ -107,6 +107,14 @@ continuity + image history). Publish = `isPublic` flag → readable at
 `/read?id={projectId}` (`ComicReader`), or share-token links via
 `SharedViewer` (`share_tokens`). RLS: owners write, public reads published.
 
+Share-link states (DS-3): before the comic opens, a legacy link shows one calm Atlas state:
+- Opening… (checking the link);
+- Sign in (401 / loginRequired), which comes back to the link;
+- not active, in four forms: turned off or never existed (404), expired (410), not shared with this signed-in account (403), or moved to a Comic Studio link (409);
+- Couldn’t open this comic (anything else), an alert with a reader-pressed Try again and never a timer. The raw server text stays in the console.
+
+Project info shows governed users their usage as shares, never dollars (the totals, the per-artifact list, the generation log and its View JSON). Its ZIP gives them token counts in report/*, artifacts without `cost`, and a project.json without dollar fields (`estimatedCostRange` and any `…Usd`). Admins and no-limit accounts keep the dollar report.
+
 ## Gotchas
 
 - Phase 0 spends images (≤ 1 style anchor + ≤ 10 sheets) before any panel

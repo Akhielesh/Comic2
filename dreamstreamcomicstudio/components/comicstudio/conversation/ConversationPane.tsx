@@ -10,16 +10,25 @@
 // Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): "Up next" sits under the activity
 // line, and the latest reply keeps its chips while the director works on the next message — text chips go to Up
 // next, action chips wait (NextStepChips).
+//
+// Settled cards (PROGRAM3 SETTLE-UI; this file is granted for the settle index and prop wiring only): while
+// SETTLED_CARDS is on for this viewer (shared/comic/settle.ts settledCardsOn: admins first), the pane builds one settle
+// index per doc revision — with this tab's sending message, the outage cards whose "wait and retry" is waiting, and
+// whether the director is working — and hands it to every reply, so a card the chat has moved past renders as one
+// line with no controls. The rows are memoised (PF-7a) over a controller kept while only the drafts change, and the
+// entrance baseline is seeded on the first render of each doc (MO-2: stored messages never rise in again).
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDown } from 'lucide-react';
+import { buildSettleIndex, settledCardsOn } from '../../../shared/comic/settle';
+import { retriesVersion, subscribeRetries, waitingRetries } from '../reliability/retryIntents';
 import type { ComicStudioController } from '../useStudio';
 import { conversationEntries } from '../studioReducer';
 import { ActivityLine } from './ActivityLine';
 import { QueuedMessages } from './QueuedMessages';
 import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
-import { AssistantMessage, DirectorMark, UserBubble } from './MessageItem';
+import { AssistantMessageRow, DirectorMark, PendingMessageRow, UserMessageRow, seedEntrances, useRowStudio } from './MessageItem';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
 import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
@@ -74,6 +83,27 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   const [pinned, setPinned] = useState(true);
 
   const entries = useMemo(() => conversationEntries(doc, drafts), [doc, drafts]);
+  // MO-2: the newest message present on this doc's first render is history; only newer ones rise in.
+  seedEntrances(doc?.id, doc?.conversation);
+  const docKey = doc?.id;
+  // PF-7a: the rows see a controller that keeps its identity while only the streaming drafts change.
+  const rowStudio = useRowStudio(studio);
+  // Settled cards: one index per doc revision, this tab's sending message and the waiting retries (local memory only).
+  const settleOn = settledCardsOn(studio.caps?.admin);
+  const retries = useSyncExternalStore(subscribeRetries, retriesVersion, retriesVersion);
+  const working = !!studio.busy || messageBusy;
+  const settles = useMemo(
+    () => (settleOn && doc ? buildSettleIndex(doc, { pending: pendingMessage, retrying: waitingRetries().map((r) => r.cardId), working }) : undefined),
+    // `retries` is the retry store's version: a waiting intent added or settled rebuilds the index.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settleOn, doc, pendingMessage, working, retries]
+  );
+  const latestUserId = useMemo(() => {
+    if (!settleOn || pendingMessage?.status === 'sending') return undefined;
+    const list = doc?.conversation || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) if (list[i]?.role === 'user') return list[i].id;
+    return undefined;
+  }, [settleOn, doc?.conversation, pendingMessage?.status]);
   // Drafts for replies the server hasn't committed yet render after the pending bubble.
   const committed = useMemo(() => new Set((doc?.conversation || []).map((m) => m.id)), [doc?.conversation]);
   const docEntries = entries.filter((e) => committed.has(e.msg.id));
@@ -189,14 +219,16 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                 {docEntries.map(({ msg, draft }, i) => {
                   const item =
                     msg.role === 'user' ? (
-                      <UserBubble text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} studio={studio} />
+                      <UserMessageRow msg={msg} studio={rowStudio} docKey={docKey} latest={settleOn ? msg.id === latestUserId : undefined} />
                     ) : (
-                      <AssistantMessage
+                      <AssistantMessageRow
                         msg={msg}
                         draft={draft}
                         streaming={!!draft && messageBusy}
                         showSuggestions={(msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage) || msg.id === chipsWhileWorkingId}
-                        studio={studio}
+                        studio={rowStudio}
+                        settles={settles}
+                        docKey={docKey}
                       />
                     );
                   // Older messages skip rendering while offscreen (cheap on long conversations).
@@ -209,7 +241,11 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                   );
                 })}
                 {pendingMessage && (
-                  <UserBubble
+                  <PendingMessageRow
+                    key={pendingMessage.id}
+                    id={pendingMessage.id}
+                    at={pendingMessage.at}
+                    docKey={docKey}
                     text={pendingMessage.text}
                     attachments={pendingMessage.attachments}
                     urlFor={studio.urlFor}
@@ -228,7 +264,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                   />
                 )}
                 {orphanDrafts.map(({ msg, draft }) => (
-                  <AssistantMessage key={msg.id} msg={msg} draft={draft} streaming={messageBusy} studio={studio} />
+                  <AssistantMessageRow key={msg.id} msg={msg} draft={draft} streaming={messageBusy} studio={rowStudio} docKey={docKey} uncommitted />
                 ))}
                 {showThinking && (
                   <div className="flex items-center gap-3">

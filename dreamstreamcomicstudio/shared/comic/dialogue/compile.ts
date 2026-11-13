@@ -15,8 +15,8 @@ import { freshId, takenIds, zOrderEdit } from '../editor/scene.js';
 import { lineOrderOps } from '../editor/readingOrder.js';
 import { setBoxEdit } from '../editor/transform.js';
 import { FONT_REGISTRY } from '../lettering/fonts.js';
-import { NAMED_COLORS, normalizeColor, resolveLetterStyle, sanitizeLetterStylePatch, type LetterStyle, type LetterStylePatch } from '../lettering/style.js';
-import { applyOps, type DocOp } from '../ops.js';
+import { NAMED_COLORS, PRO_STYLE_KEYS, normalizeColor, resolveLetterStyle, sanitizeLetterStylePatch, type LetterStyle, type LetterStylePatch } from '../lettering/style.js';
+import { PRO_EDIT_OPS_PATCHABLE, applyOps, type DocOp } from '../ops.js';
 import { balloonPatchOp, lineGeo, pageGeo, placeLine, tailTip, type PlaceMiss } from './placement.js';
 import { askForResolution, isPronounResolution, lineHits, resolveLineRef, type DialogueContext, type ResolutionAsk } from './resolve.js';
 import { fontFromWords, parseDialogue } from './grammar.js';
@@ -211,8 +211,9 @@ export const describeStyle = (p: LetterStylePatch, scaleBy?: number): string => 
   return parts.join(', ') || 'a new look';
 };
 
-/** Keys a "same style as this one" copy carries (the look, not the line's size or tilt). */
-const LOOK_KEYS: readonly (keyof LetterStyle)[] = ['font', 'weight', 'italic', 'textCase', 'textColor', 'textStroke', 'shadow', 'fill', 'border', 'borderWidth', 'borderStyle', 'shape', 'padding'];
+/** Keys a "same style as this one" copy carries (the look, not the line's size or tilt), the Pro text keys included
+ *  (PE-LETTER; they pass the sanitizer only while PRO_EDIT_OPS_PATCHABLE is on). */
+const LOOK_KEYS: readonly (keyof LetterStyle)[] = ['font', 'weight', 'italic', 'textCase', 'textColor', 'textStroke', 'shadow', 'fill', 'border', 'borderWidth', 'borderStyle', 'shape', 'padding', ...PRO_STYLE_KEYS];
 const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 // ── Per-act compilers ────────────────────────────────────────────────────────
@@ -829,7 +830,7 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
   if (inArt(doc)) return nothing(IN_ART_REFUSAL);
   const extras = intent as unknown as RestyleExtras;
   const scaleBy = typeof extras.scaleBy === 'number' && Number.isFinite(extras.scaleBy) && extras.scaleBy > 0 ? extras.scaleBy : undefined;
-  let style: LetterStylePatch = { ...(sanitizeLetterStylePatch(intent.style) ?? {}) };
+  let style: LetterStylePatch = { ...(sanitizeLetterStylePatch(intent.style, { allowPro: PRO_EDIT_OPS_PATCHABLE }) ?? {}) };
   const scope = extras.asKind ? 'kind' : intent.scope;
   const sizeTip = scaleBy && scaleBy > 1 ? 'Bigger text; say “wider bubble” for the box.' : undefined;
   // "Same style as this one for every caption": the look of exactly one line, minus what that kind already has.
@@ -841,7 +842,7 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
     const now = resolveLetterStyle(doc, { id: '', kind: extras.asKind, text: '' });
     const copy: Record<string, unknown> = {};
     for (const k of LOOK_KEYS) if (!sameValue(from[k], now[k])) copy[k] = from[k];
-    style = { ...(sanitizeLetterStylePatch(copy) ?? {}), ...style };
+    style = { ...(sanitizeLetterStylePatch(copy, { allowPro: PRO_EDIT_OPS_PATCHABLE }) ?? {}), ...style };
     if (!Object.keys(style).length) return alreadySo(`Every ${KIND_NOUN[extras.asKind]} already looks like ${quote(w.line.text, 30)}.`);
   }
   if (extras.unknownFont) return askFont(doc, intent, lines, style, scaleBy, extras.unknownFont);

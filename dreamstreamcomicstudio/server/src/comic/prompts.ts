@@ -45,7 +45,7 @@ import {
   type ShotType,
   type StyleOption
 } from '../../../shared/comic/doc.js';
-import { LETTERING_PRESETS } from '../../../shared/comic/lettering/style.js';
+import { letteringPresetOf } from '../../../shared/comic/lettering/style.js';
 import {
   nearestAspect,
   resolveImageJob,
@@ -1470,7 +1470,7 @@ const letteringBlock = (doc: ComicDoc, page: Page): string => {
   if (!lettered.length) return 'LETTERING: This page is wordless — draw no text, balloons, captions or sound effects anywhere.';
   const kinds = new Set<LineKind>();
   for (const p of lettered) for (const l of p.lines) if (clean(l.text)) kinds.add(l.kind);
-  const preset = LETTERING_PRESETS[letterStyleOf(doc).presetId] || LETTERING_PRESETS.classic;
+  const preset = letteringPresetOf(letterStyleOf(doc).presetId);
   const shapes = (['speech', 'thought', 'whisper', 'shout', 'caption', 'sfx'] as LineKind[])
     .filter((k) => kinds.has(k))
     .map((k) => (k === 'speech' && preset.id !== 'classic' ? NEUTRAL_SPEECH_LOOK : LETTERING_LOOK[k]));

@@ -148,10 +148,33 @@ describe('QueuedMessages', () => {
 
     rerender(
       <FormFactorProvider value={DESKTOP}>
-        <QueuedMessages studio={queueStudio({ queueSendingNow: 'n1' })} />
+        <QueuedMessages studio={queueStudio({ queueSendingNow: 'n1', cancelling: true })} />
       </FormFactorProvider>
     );
     expect(screen.getByRole('button', { name: /Stopping, then sending/ })).toBeDisabled();
+  });
+
+  it('a steer refused NOT_RUNNING, BUSY or LIMIT goes next without a Stop: the button never says "Stopping"', () => {
+    // useStudio.sendNow put the note first (queue_express) and did not stop the director (no cancel in flight).
+    const { rerender } = renderAt(queueStudio({ queueSteers: true, queueSendingNow: 'n1', cancelling: false }));
+    const waiting = screen.getByRole('button', { name: 'Goes next, after this step' });
+    expect(waiting).toBeDisabled();
+    expect(screen.queryByText(/Stopping/)).toBeNull();
+    // The step ended on its own: the note is on its way.
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <QueuedMessages studio={queueStudio({ queueSteers: true, queueSendingNow: 'n1', messageBusy: false, turnLocked: false })} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('button', { name: 'Sending next…' })).toBeDisabled();
+  });
+
+  it('Send now during a plan_pages run says the note goes once the plan is in, never "Sending next…"', () => {
+    // The turn is locked by plan_pages (no director message in flight): Send now neither steers nor stops; the note
+    // waits first in line until the plan lands, which can take a while.
+    renderAt(queueStudio({ queueSendingNow: 'n1', messageBusy: false, turnLocked: true }));
+    expect(screen.getByRole('button', { name: 'Goes once the plan is in' })).toBeDisabled();
+    expect(screen.queryByText(/Sending next|Stopping/)).toBeNull();
   });
 
   it("Send now's tooltip says what it will really do: steer, stop first, wait for the plan, or send", () => {

@@ -281,6 +281,29 @@ describe('ComicsLanding', () => {
     for (const art of container.querySelectorAll('[data-comic-art]')) expect(art.closest('[aria-hidden]')).not.toBeNull();
   });
 
+  it('the first view has one filled action: the hero; the header’s Sign in / My comics is the outline button, never a fill (C1)', () => {
+    for (const signedIn of [false, true]) {
+      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const header = screen.getByRole('banner');
+      const entry = within(header).getByRole('button', { name: signedIn ? 'My comics' : 'Sign in' });
+      expect(entry).toHaveAttribute('data-variant', 'outline');
+      // Nothing in the header is a filled button on the landing (the ink primary or the spark).
+      const fills = [...header.querySelectorAll('[data-slot="button"]')].filter((b) => ['default', 'create'].includes(b.getAttribute('data-variant') || ''));
+      expect(fills.map((b) => b.textContent?.trim())).toEqual([]);
+      // The hero carries the one fill: the spark signed out, the ink primary signed in.
+      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', signedIn ? 'default' : 'create');
+      unmount();
+    }
+  });
+
+  it('the feature spots are drawn in one ink: no terracotta anywhere beside the hero spark (DS-3 #5)', () => {
+    const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
+    const spots = [...container.querySelectorAll('#how-it-works ul > li > span[aria-hidden]')];
+    expect(spots).toHaveLength(3);
+    for (const spot of spots) expect(spot.className).toContain('bg-[var(--ds-ink)]');
+    expect(container.innerHTML.toLowerCase()).not.toMatch(/#d97757|#c2643f|#c2603f/);
+  });
+
   it('one spark: signed out exactly one create fill (the hero), signed in none; never hard white', () => {
     for (const signedIn of [false, true]) {
       const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);

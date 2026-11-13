@@ -6,11 +6,20 @@
 // outlines, same draw order — after the exact faces have loaded (fonts.ts). Images are fetched with
 // CORS and no credentials (signed or public URLs allow it) so the canvas stays exportable; a
 // cache-busted <img crossOrigin> load is the fallback.
+//
+// A page that composes (shown in its panel frames, or carrying overlays; shared/comic/panelize/compose.ts) is drawn from
+// the page node tree (compose/pageNodes.ts → compose/composeCanvas.ts) — the tree the board and the print document draw
+// — then lettered on top. Every other page takes exactly the old path (compose/legacyGolden.test.tsx). Its effect
+// drawings are loaded first (ensureFxDrawings); its other pictures load a few at a time, overlays at the size they are
+// drawn, and the all-languages ZIP keeps them for every language of the page (RasterOptions.pictures).
 
 import type { ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
 import { letteringAspect, planLettering, type Measure } from '../../../shared/comic/lettering/layout';
 import { fontString, resolveLetteringFont } from '../../../shared/comic/lettering/fonts';
 import { dirOf } from '../../../shared/comic/languages';
+import { composePage, pageComposes, type ComposePiece } from '../../../shared/comic/panelize/compose';
+import { drawComposeScene, type ComposeImage } from '../compose/composeCanvas';
+import { composeScene, ensureFxDrawings, fxDrawingsPending } from '../compose/pageNodes';
 import { plateLayout, type PlateKind } from '../timeline/plates';
 import { drawLetteringOnPage, drawSvgNodes, type LayerFactory, type PathFactory } from './canvasDraw';
 import { coverTitleNodes } from './coverTitle';
@@ -46,6 +55,17 @@ export interface RasterOptions {
   /** Tests / special canvases. */
   makePath?: PathFactory;
   createLayer?: LayerFactory;
+  /**
+   * A storage path's URL, for the other pictures a composed page shows (another take or an image in a frame, an image
+   * overlay). The PDF and the ZIP pass their `urlFor`. Without it such a page cannot be exported (a calm error). An
+   * image overlay is asked with `widthPx`, the width in px the whole picture is drawn at on the canvas (a variant pick).
+   */
+  urlForPath?: (path: string, widthPx?: number) => string | undefined;
+  /**
+   * A composed page's other pictures, by URL, kept across calls: the all-languages ZIP draws a page once per language
+   * and loads them once. Pictures loaded here are added to it and NOT released; the caller releases them.
+   */
+  pictures?: Map<string, LoadedImage>;
 }
 
 /** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE, nor above `maxEdge`). */
@@ -114,9 +134,16 @@ export const loadExportImage = async (url: string, signal?: AbortSignal): Promis
       if (res.status === 400 || res.status === 403) throw new ExportError('The image link expired. Refresh the page and try again.');
       if (!res.ok) throw new ExportError(`The image couldn’t be downloaded (HTTP ${res.status}).`);
       const blob = await res.blob();
+      // Library stickers are SVG files: createImageBitmap does not decode SVG everywhere, an <img> does.
+      const svg = /svg/i.test(blob.type || '') || /\.svg(?:[?#]|$)/i.test(url);
       if (typeof createImageBitmap === 'function') {
-        const bitmap = await createImageBitmap(blob);
-        return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close?.() };
+        let bitmap: ImageBitmap | null = null;
+        if (!svg) bitmap = await createImageBitmap(blob);
+        else bitmap = await createImageBitmap(blob).catch(() => null);
+        if (bitmap) {
+          const b = bitmap;
+          return { source: b, width: b.width, height: b.height, release: () => b.close?.() };
+        }
       }
       const objectUrl = URL.createObjectURL(blob);
       try {
@@ -217,9 +244,124 @@ export async function letterCover(ctx: CanvasRenderingContext2D, doc: ComicDoc, 
   ctx.restore();
 }
 
-/** A page's art with its overlay lettering. */
+// ── Composed pages (frames, overlays) ───────────────────────────────────────────────────────────────────────────
+
+/** Long edge of a composed page when no picture tells its resolution. */
+const COMPOSED_FALLBACK_WIDTH = DEFAULT_PLATE_WIDTH;
+const PICTURE_FAILED = 'A picture on this page couldn’t be loaded for export — its link may have expired. Refresh the page and try again.';
+/** A picture's link is still being signed (no URL yet): nothing to reload, it arrives on its own. */
+const pictureNotReady = (n: number) => `A picture on page ${n} isn’t ready to export yet. Try again in a moment.`;
+/** At most this many of a page's pictures load at once. */
+export const PICTURE_LOADS = 3;
+
+type Raster = Pick<LoadedImage, 'source' | 'width' | 'height'>;
+
+/**
+ * Load these pictures into `into`, PICTURE_LOADS at a time. A picture already in `cache` is reused; one loaded here goes
+ * into `cache` when there is one (its owner releases it), else into `owned` (released by the caller). The first failure
+ * stops new loads, waits for those in flight, and throws a calm error.
+ */
+const loadPictures = async (urls: readonly string[], into: Map<string, ComposeImage>, owned: LoadedImage[], cache: Map<string, LoadedImage> | undefined, signal?: AbortSignal): Promise<void> => {
+  const queue: string[] = [];
+  for (const url of urls) {
+    if (into.has(url) || queue.includes(url)) continue;
+    const kept = cache?.get(url);
+    if (kept) into.set(url, kept);
+    else queue.push(url);
+  }
+  let next = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed && next < queue.length) {
+      const url = queue[next++];
+      try {
+        const image = await loadExportImage(url, signal);
+        if (cache) cache.set(url, image);
+        else owned.push(image);
+        into.set(url, image);
+      } catch {
+        failed = true;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PICTURE_LOADS, queue.length) }, worker));
+  if (failed) throw new ExportError(signal?.aborted ? CANCELLED : PICTURE_FAILED);
+};
+
+/**
+ * A page that composes, flattened: page mode draws the drawing whole (as before) and the overlays over it; panels
+ * mode draws the paper and the frames at the book's aspect (the drawing's width sets the resolution, else the widest
+ * picture the frames show), then the overlays; then the lettering. `raster` is the page's drawing, by URL and (when
+ * already loaded) as an image. The effect drawings load first: a page is never exported with its effects missing.
+ */
+async function rasterizeComposedPage(doc: ComicDoc, page: Page, raster: { url?: string; image?: Raster }, opts: RasterOptions, lang?: string): Promise<Blob> {
+  await ensureFxDrawings(page);
+  if (fxDrawingsPending(page)) throw new ExportError(`The effects on page ${page.n} couldn’t be drawn yet. Try again in a moment.`);
+  const composition = composePage(doc, page);
+  const aspect = composition.aspect > 0 ? composition.aspect : 2 / 3;
+  const drawingPath = page.render?.asset?.path;
+  const shown = composition.pieces.filter((p): p is ComposePiece & { path: string } => !p.empty && !!p.src && !!p.path);
+  const showsDrawing = (p: ComposePiece) => p.raster || p.path === drawingPath;
+  const needsDrawing = composition.mode === 'page' || shown.some(showsDrawing);
+  const images = new Map<string, ComposeImage>();
+  const owned: LoadedImage[] = [];
+  try {
+    let drawing: Raster | undefined = raster.image;
+    if (needsDrawing && !drawing) {
+      if (!raster.url) throw new ExportError(`Page ${page.n} has no image to export.`);
+      const own = await loadExportImage(raster.url, opts.signal);
+      owned.push(own);
+      drawing = own;
+    }
+    if (needsDrawing && drawing && raster.url) images.set(raster.url, drawing);
+    let width: number;
+    let height: number;
+    if (composition.mode === 'page') {
+      ({ width, height } = rasterSize(drawing!.width, drawing!.height, opts.longEdge, opts.maxEdge));
+    } else {
+      // The frames are laid out on the book's aspect; the drawing's width sets the resolution, else the widest picture
+      // the frames show (loaded first, at full size, as the frames ask for them).
+      let base = needsDrawing ? drawing!.width : 0;
+      if (!base) {
+        const frameUrls = shown.filter((p) => !showsDrawing(p)).map((p) => opts.urlForPath?.(p.path));
+        if (frameUrls.some((u) => !u)) throw new ExportError(pictureNotReady(page.n));
+        await loadPictures(frameUrls as string[], images, owned, opts.pictures, opts.signal);
+        base = Math.max(0, ...(frameUrls as string[]).map((u) => images.get(u)?.width ?? 0));
+      }
+      ({ width, height } = rasterSize(base || COMPOSED_FALLBACK_WIDTH, (base || COMPOSED_FALLBACK_WIDTH) / aspect, opts.longEdge, opts.maxEdge));
+    }
+    // Overlay pictures are asked for at the size they are drawn on this canvas.
+    const scene = composeScene(doc, page, { composition, resolve: { rasterUrl: raster.url, urlForPath: opts.urlForPath, widthPx: width } });
+    if (scene.missing.length) throw new ExportError(pictureNotReady(page.n));
+    await loadPictures(scene.urls, images, owned, opts.pictures, opts.signal);
+    const { canvas, ctx } = makeCanvas(width, height, lang);
+    if (scene.mode === 'page') ctx.drawImage(drawing!.source, 0, 0, width, height);
+    drawComposeScene(ctx, scene, width, height, { images, makePath: opts.makePath, createLayer: opts.createLayer });
+    await letterPage(ctx, doc, page, width, height, opts);
+    if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+    return await encode(canvas, opts.mime, opts.quality);
+  } catch (err) {
+    if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+    throw err;
+  } finally {
+    owned.forEach((l) => l.release());
+  }
+}
+
+/**
+ * A composed page's picture URLs from an export's `urlFor` (RasterOptions.urlForPath): an overlay's width goes along as
+ * `{ width }`, which the studio's urlFor turns into a variant pick (other urlFors ignore it).
+ */
+export const pathUrlFor =
+  (urlFor: (asset: string) => string | undefined) =>
+  (path: string, widthPx?: number): string | undefined =>
+    widthPx && widthPx > 0 ? (urlFor as (asset: string, o?: { width?: number }) => string | undefined)(path, { width: widthPx }) : urlFor(path);
+
+/** A page's art with its overlay lettering (composed when it has frames or overlays). */
 export const renderPageToBlob = (doc: ComicDoc, page: Page, imageUrl: string, opts: RasterOptions = {}): Promise<Blob> =>
-  withImage(imageUrl, opts.signal, (image) => rasterizeImage(image, opts, (ctx, w, h) => letterPage(ctx, doc, page, w, h, opts), doc.format.language));
+  pageComposes(page)
+    ? rasterizeComposedPage(doc, page, { url: imageUrl }, opts, doc.format.language)
+    : withImage(imageUrl, opts.signal, (image) => rasterizeImage(image, opts, (ctx, w, h) => letterPage(ctx, doc, page, w, h, opts), doc.format.language));
 
 /** The cover art; a textless cover gets its overlay title (localized doc ⇒ that language's title). */
 export const renderCoverToBlob = (doc: ComicDoc, imageUrl: string, opts: RasterOptions = {}): Promise<Blob> =>
@@ -281,6 +423,7 @@ export async function renderSlotToBlob(
   const lang = doc.format.language;
   // The slot may come from another language's copy of the book: letter THIS doc's page.
   const page = slot.page ? (doc.pages.find((p) => p.id === slot.page!.id) ?? slot.page) : undefined;
+  if (slot.kind !== 'cover' && page && pageComposes(page)) return rasterizeComposedPage(doc, page, { url: slot.url, image: opts.image }, opts, lang);
   const letter: Letter | undefined =
     slot.kind === 'cover'
       ? (ctx, w, h) => letterCover(ctx, doc, w, h, opts)

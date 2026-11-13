@@ -269,13 +269,20 @@ Container in 2026-10 (`adminak/` in `Akhielesh/Akhielesh`); the site Worker fall
   client for Auth + owner-scoped tables only.
 - **Auth:** `requireAuth` validates Bearer JWT; `optionalAuth` fails open. Username login via
   DB triggers (`resolve_email_from_username`).
-- **Schema:** 40 idempotent `server/sql/*.sql` files, applied **manually** (no runner).
+- **Schema:** 65 idempotent `server/sql/*.sql` files, applied **manually** (no runner).
   Several tables predate their SQL files (`user_settings`, `projects`, `profiles`,
   `studio_runs`, `user_api_keys`) — reconcile against live, don't assume a blank slate.
 - **Storage:** single `comic-assets` bucket via **service-role only** (`imageStorage.ts`).
   The backend uses **Supabase Storage** for assets, **not R2** (R2 is live-worker only).
 - **RLS:** every table has RLS on, in three tiers — owner-scoped (client-direct OK),
   public-read, and service-role-only (`revoke all from anon, authenticated`).
+- **Settings › Contact (CONTACT-1):** the browser never writes `public.contact_messages`
+  (service-role-only, `server/sql/contact_messages.sql`). Routes on the backend container:
+  `POST /api/contact` (signed in; 5 an hour and 20 a day per user, counted in the router on the shared
+  rate-limit store, in memory while `REDIS_URL` is unset), `GET /api/admin/contact-messages` and
+  `POST /api/admin/contact-messages/:id/handled` (admin; Settings › Admin › Analytics › Contact). Until
+  the SQL is applied a send answers 503 and the admin tab says messages are not stored yet. Sending
+  wakes the container like any other `/api/*` call; nothing polls these routes.
 
 ---
 
@@ -427,5 +434,6 @@ no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 | 2026-10-22 | **Code Studio retired** (ADR 0005): `dreamstream-studio` Worker (Container `Sandbox`, `standard-3`, `*.dreamstreamstudio.ai/*`) removed from the repo with its deploy workflow and `STUDIO_WORKER_URL`; owner deletes the deployed Worker + route + `STUDIO_HMAC_SECRET`. Ventures set admin-only with no tick loop (`VENTURES_ENABLED`/`VENTURES_PILOT_INLINE` = `false`). Workers Paid stays (backend container). |
 | 2026-10-29 | **Stream host flip blocker resolved** (§2a, ADR 0006 WS-5): apex page `/stream-alerts-bridge` (own enforced CSP, framable by the stream host only; its script excluded from Pages Functions in `_routes.json`), Stream Studio CSP `frame-src` gains that one URL, rooms drop the replaced `/live` subscription (`sub.was`, same account only). No new paid resources. |
 | 2026-10-29 | **ADR 0006 Phase 0 inventory** (WS-8): Pages security headers + `functions/csp-report.ts` and the optional `CSP_REPORTS` Analytics Engine binding; the live Worker's Phase 0 secrets and rate-limit bindings; the email Worker's `/security` route and the Supabase access-token hook → `pg_net` flow; the live Worker's signal counts in `stream_usage`; DO class list corrected (5, not 3). Operations: `live-security-runbook.md`; owner steps: `phase0-owner-checklist.md`. No new paid resources. |
+| 2026-11-12 | **Settings › Contact goes through the backend** (CONTACT-1, with the S2b release): `POST /api/contact` (signed in, 5/hour and 20/day per user), `GET /api/admin/contact-messages`, `POST /api/admin/contact-messages/:id/handled` (admin); new service-role-only table `public.contact_messages` (`server/sql/contact_messages.sql`, apply before the server deploy). No env var, no new Worker, no timer. |
 | 2026-11-12 | **Voice engine self-hosted on Pages**: the private voice model's ONNX runtime is built into `dist/ort/<onnxruntime-web version>/` (4 files, 36.6 MB; the largest 23.6 MB, under the 25 MiB file limit) and served through the Pages middleware (`functions/_middleware.ts`), which now runs for `/ort/*` as well as page loads; `cdn.jsdelivr.net` is no longer contacted for it. The bytes are pinned by SHA-256 in `services/dictation/ortRuntime.ts`; `public/_headers` holds no `/ort` rule on purpose. The model weights still come from Hugging Face, now at a fixed commit per size. No new paid resources (Pages static assets; bandwidth is not metered). |
 | 2026-11-13 | **Python runtime self-hosted on Pages** (owner's rule: no unpinned third-party script in our origin). The chat playground's Pyodide no longer comes from `cdn.jsdelivr.net`: `vite.config.ts` `pyodideRuntime()` copies the five pinned files from `node_modules/pyodide` (now an exact version, 314.0.0, shared with the backend) to `dist/pyodide/314.0.0/` and fails the build on a version or hash mismatch; the Pages middleware serves that folder with the voice engine's own code (`servePyodideRuntime` → `serveCheckedRuntimeFile`); the runner is a same-origin module worker (`services/pyRunner.worker.ts`). The browser moves from Pyodide 0.26.4 (Python 3.12) to 314.0.0 (Python 3.14). Pages serves 13.5 MB more static files. No new paid resources. |

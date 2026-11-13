@@ -264,3 +264,13 @@ describe('helpers', () => {
     expect(breakdownCardFor(single, { gateId: 'g1' }).gateId).toBe('g1');
   });
 });
+
+describe('plan counts on the book card (SETTLE-CORE #3, B-10)', () => {
+  it('breakdownCardFor stamps counts for the pages it shows, so a settled card keeps "3 pages · N panels"', () => {
+    const doc = plannedDoc();
+    const panels = doc.pages.reduce((n, p) => n + p.panels.length, 0);
+    expect(doc.pages).toHaveLength(3);
+    expect(breakdownCardFor(doc, { view: 'plan' })).toMatchObject({ counts: { pages: 3, panels } });
+    expect(breakdownCardFor(doc, { pageIds: ['pg_2'] })).toMatchObject({ counts: { pages: 1, panels: doc.pages[1].panels.length } });
+  });
+});

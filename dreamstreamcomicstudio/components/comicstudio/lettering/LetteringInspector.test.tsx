@@ -197,6 +197,31 @@ describe('selection and snapping', () => {
     expect(setStudioSelection).toHaveBeenLastCalledWith(null);
   });
 
+  it('an empty balloon selection keeps an overlay or panel selection on this page; closing still clears it (PE-SHELL (m))', () => {
+    const setStudioSelection = vi.fn();
+    const overlays = { pageId: 'pg_1', lineIds: [], layerIds: ['ly_1'], surface: 'page_editor' as const };
+    const { result, rerender, unmount } = renderHook((p: { sel: Parameters<typeof useLetteringSelection>[0]['studioSelection'] }) => useLetteringSelection({ pageId: 'pg_1', setStudioSelection, studioSelection: p.sel }), {
+      initialProps: { sel: overlays }
+    });
+    // Mounting with no balloon selected leaves the Layers part's selection alone.
+    expect(setStudioSelection).not.toHaveBeenCalled();
+    act(() => result.current.select('l1'));
+    expect(setStudioSelection).toHaveBeenLastCalledWith({ pageId: 'pg_1', lineIds: ['l1'], surface: 'page_editor' });
+    setStudioSelection.mockClear();
+    rerender({ sel: { pageId: 'pg_1', lineIds: [], panelIds: ['pn_1'], surface: 'page_editor' } });
+    act(() => result.current.clear());
+    expect(setStudioSelection).not.toHaveBeenCalled();
+    // Overlays on another page do not count: the empty selection clears as before.
+    rerender({ sel: { ...overlays, pageId: 'pg_2' } });
+    act(() => result.current.select('l2'));
+    act(() => result.current.clear());
+    expect(setStudioSelection).toHaveBeenLastCalledWith(null);
+    setStudioSelection.mockClear();
+    rerender({ sel: overlays });
+    unmount();
+    expect(setStudioSelection).toHaveBeenLastCalledWith(null);
+  });
+
   it('snaps an outline edge or centre to the nearest guide within the threshold', () => {
     const targets = snapTargets({ panels: [{ x: 0.02, y: 0.02, w: 0.5, h: 0.4 }], others: [{ x: 0.6, y: 0.1, w: 0.2, h: 0.1 }], safe: { x: 0.03, y: 0.02, w: 0.94, h: 0.96 } });
     const s = computeSnap({ x: 0.596, y: 0.3, w: 0.2, h: 0.1 }, targets, { x: 0.01, y: 0.01 });
@@ -254,8 +279,9 @@ describe('previews and the cover title', () => {
     expect(plan.tagline!.fontSize).toBeLessThan(plan.title!.fontSize);
   });
 
-  it('a Telugu overlay cover loads the Telugu script face it is drawn in (not only the Latin title face)', () => {
-    vi.stubGlobal('FontFace', class {});
+  it('a Telugu overlay cover loads the Telugu script face it is drawn in (not only the Latin title face)', async () => {
+    const families: string[] = [];
+    vi.stubGlobal('FontFace', class { constructor(family: string) { families.push(family); } load() { return Promise.resolve(this); } });
     Object.defineProperty(document, 'fonts', { value: { load: vi.fn(async () => []), check: () => true, forEach: () => undefined, add: vi.fn(), addEventListener: vi.fn() }, configurable: true });
     try {
       const te = makeSampleDoc((d) => {
@@ -265,8 +291,9 @@ describe('previews and the cover title', () => {
       render(<CoverTitleLayer doc={te} aspect={ASPECT} />);
       const plan = planCoverTitle(te, ASPECT, estimateMeasure);
       expect(plan.title!.style.font).toBe('noto-sans-telugu');
-      const hrefs = [...document.head.querySelectorAll<HTMLLinkElement>('link[data-ds-lettering-fonts]')].map((l) => l.href);
-      expect(hrefs.some((h) => h.includes('Noto+Sans+Telugu'))).toBe(true);
+      // Self-hosted (PE-FONTS): the Telugu slices are registered from our origin; no stylesheet is added.
+      await vi.waitFor(() => expect(families).toContain('Noto Sans Telugu'));
+      expect(document.head.querySelector('link[href*="googleapis"]')).toBeNull();
     } finally {
       document.head.querySelectorAll('link[data-ds-lettering-fonts]').forEach((l) => l.remove());
       delete (document as unknown as { fonts?: unknown }).fonts;

@@ -41,6 +41,7 @@ import {
   type RenderTarget
 } from '../../../shared/comic/doc.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
+import { gateClosedFor, gateStampOps } from '../../../shared/comic/settle.js';
 import { logger } from '../lib/logger.js';
 import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
 import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioErrorCode, type StudioEventListener, type StudioSessionApi } from './types.js';
@@ -330,6 +331,8 @@ export const recoveryOps = (doc: ComicDoc, opts: { now: number; allInFlight: boo
   }
   if (doc.gate && doc.gate.status === 'open' && opts.now - (doc.gate.createdAt || 0) > GATE_EXPIRY_MS) {
     ops.push({ op: 'gate', gate: { ...doc.gate, status: 'declined' } });
+    // Settled cards: the card says the approval lapsed ("Closed after a day"), never the creator's "Not now".
+    ops.push(...gateStampOps(doc, doc.gate.id, gateClosedFor(doc.gate, 'expired', 'system', opts.now)));
   }
   try {
     ops.push(...legacySpecHashOps(doc));

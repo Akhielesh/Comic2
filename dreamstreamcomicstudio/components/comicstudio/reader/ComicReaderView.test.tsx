@@ -556,6 +556,17 @@ describe('ComicReaderView on devices', () => {
     expect(screen.getByRole('button', { name: 'Full screen' })).toBeInTheDocument();
   });
 
+  it('both full-screen entries carry data-action="read", the one full-screen home in the view (declutter C2; DC-1 #4)', () => {
+    size(1280, 800);
+    const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" immersiveEntry />);
+    expect(screen.getByRole('button', { name: 'Full screen' })).toHaveAttribute('data-action', 'read');
+    expect(document.querySelectorAll('[data-action="read"]')).toHaveLength(1);
+    unmount();
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.getByRole('button', { name: 'Full screen' })).toHaveAttribute('data-action', 'read');
+    expect(document.querySelectorAll('[data-action="read"]')).toHaveLength(1);
+  });
+
   it('compact height: one toolbar row — segment labels go icon-only (still named) and the row never wraps', () => {
     size(734, 343);
     render(

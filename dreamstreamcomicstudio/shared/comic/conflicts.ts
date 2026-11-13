@@ -12,7 +12,9 @@
 // - `panel:<id>`    a panel's art direction (shot, action, cast, size, frame…);
 // - `order:<id>`    the order of the lines inside a panel (a line inserted at an index, a move into it);
 // - `letter:<scope>` the comic-wide lettering: `letter:preset`, `letter:base`, `letter:kind:<kind>`,
-//   `letter:speaker:<characterId>`, `letter:margin`, `letter:auto`.
+//   `letter:speaker:<characterId>`, `letter:margin`, `letter:auto`;
+// - `motion:<pageId>:<id>` one motion clip on a page (its upsert or delete);
+// - `page_motion:<pageId>` a page's camera moves and hold (page_motion never touches the clips).
 // A reset is a WILDCARD: `letter:*` (the whole lettering back to default) collides with every `letter:` key, and
 // `letter:kind:*` (a preset switch that drops the kind overrides) with every `letter:kind:` key. An op this module
 // does not know (a newer op, a render, a message) changes no tracked entity: [].
@@ -21,10 +23,19 @@ import type { DocOp } from './ops.js';
 
 /**
  * One entity an op changes: a line's words / kind / speaker (`line:`), its balloon box (`balloon:`), its own style
- * (`lstyle:`), a panel (`panel:`), a panel's line order (`order:`), or a comic-wide lettering scope (`letter:base`,
- * `letter:kind:shout`, `letter:speaker:<id>`).
+ * (`lstyle:`), a panel (`panel:`), a panel's line order (`order:`), a comic-wide lettering scope (`letter:base`,
+ * `letter:kind:shout`, `letter:speaker:<id>`), a page's motion clip (`motion:<pageId>:<id>`) or its camera and hold
+ * (`page_motion:<pageId>`).
  */
-export type EntityKey = `line:${string}` | `balloon:${string}` | `lstyle:${string}` | `panel:${string}` | `order:${string}` | `letter:${string}`;
+export type EntityKey =
+  | `line:${string}`
+  | `balloon:${string}`
+  | `lstyle:${string}`
+  | `panel:${string}`
+  | `order:${string}`
+  | `letter:${string}`
+  | `motion:${string}`
+  | `page_motion:${string}`;
 
 /** Line fields that are the line's own lettering style, not its words. */
 const STYLE_FIELDS: ReadonlySet<string> = new Set(['style', 'styleId']);
@@ -68,6 +79,7 @@ const letterKeys = (patch: unknown, out: EntityKey[]): void => {
  * - `line_style`: each named line's style. `balloon`: that balloon; `balloons`: every balloon in the new list.
  * - `panel`, `panel_add`, `panel_remove`, `page_panels`, `pages`: the panels (and every line inside a snapshot).
  * - `letter_style`: the lettering scopes it touches (see the header for the reset wildcards).
+ * - `motion`: that clip of that page (an upsert or a delete); `page_motion`: that page's camera moves and hold.
  */
 export function entityKeys(op: DocOp): EntityKey[] {
   const out: EntityKey[] = [];
@@ -121,6 +133,12 @@ export function entityKeys(op: DocOp): EntityKey[] {
       break;
     case 'letter_style':
       letterKeys(o.patch, out);
+      break;
+    case 'motion':
+      if (str(o.pageId) && str(o.id)) out.push(`motion:${o.pageId}:${o.id}`);
+      break;
+    case 'page_motion':
+      if (str(o.pageId)) out.push(`page_motion:${o.pageId}`);
       break;
     default:
       break;

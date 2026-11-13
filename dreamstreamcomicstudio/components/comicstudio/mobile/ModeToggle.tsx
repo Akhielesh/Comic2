@@ -54,7 +54,7 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
 
   if (variant === 'menu') {
     return (
-      <div className="min-w-0">
+      <div className="min-w-0" data-action="mode">
         <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} className="w-full" />
         <p className="mt-1.5 text-[12px] leading-snug text-[var(--ds-muted)]">{MODE_HINT}</p>
       </div>
@@ -62,7 +62,8 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
   }
 
   return (
-    <span title={MODE_HINT} className="inline-flex shrink-0">
+    // data-action: the one home of the Easy | Pro view switch in a viewport (declutter C2; DC-1 wave note 8).
+    <span title={MODE_HINT} className="inline-flex shrink-0" data-action="mode">
       <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} size={compact ? 'xs' : 'sm'} />
     </span>
   );

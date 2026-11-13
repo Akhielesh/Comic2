@@ -16,14 +16,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = path.resolve(__dirname, '..');
 const APP = path.resolve(ROOT, '../../..');
 
-const ALLOWLIST: Record<string, { line: string; reason: string }[]> = {
-  'components/comicstudio/conversation/MessageItem.tsx': [
-    {
-      line: "const attachmentSrc = (a: AssetRef | PendingAttachment, urlFor: UserBubbleProps['urlFor']) => (isPending(a) ? a.dataUrl : urlFor(a));",
-      reason: 'a user photo in the bubble (64 px); SETTLE-UI owns MessageItem in S2 and takes tileSources by wave note'
-    }
-  ]
-};
+const ALLOWLIST: Record<string, { line: string; reason: string }[]> = {};
 
 const sources = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {

@@ -5,6 +5,7 @@
 // PATCH_SCREENS run over the whole batch. An op that is patchable but has no sanitizer is
 // rejected (400), so nothing reaches the doc unvalidated.
 
+import { PRO_EDIT_OPS_PATCHABLE } from '../../../../shared/comic/ops.js';
 import { createKeyedRegistry, type OpSanitizer, type PatchScreen } from '../extensions.js';
 import { I18N_SANITIZERS } from './i18n.js';
 import { LETTERING_SANITIZERS } from './lettering.js';
@@ -16,6 +17,8 @@ import { TIMELINE_SANITIZERS } from './timeline.js';
 // --- Ship 2 (K2b; pro plan §5.3): panels as objects and consistency data (PRO_PAGE_OPS_PATCHABLE is on with them) ---
 import { CONSISTENCY_SANITIZERS } from './consistency.js';
 import { PANELS_SANITIZERS } from './panels.js';
+// --- Pro Edit (master plan §2.3; PE-SERVER): page motion, registered only while PRO_EDIT_OPS_PATCHABLE is on ---
+import { MOTION_SANITIZERS, motionPatchScreen } from './motion.js';
 
 /** Ops whose client patches jobs.ts sanitizes itself (P1-JOBS extends their new fields there). */
 export const CORE_PATCH_OPS: ReadonlySet<string> = new Set([
@@ -37,7 +40,10 @@ const registry = createKeyedRegistry<OpSanitizer>({
     READER_SANITIZERS,
     MODELS_SANITIZERS,
     PANELS_SANITIZERS,
-    CONSISTENCY_SANITIZERS
+    CONSISTENCY_SANITIZERS,
+    // Every registered op must be client-patchable (extensions.test.ts), so the motion ops join with the switch: the S2
+    // integration's flip of PRO_EDIT_OPS_PATCHABLE (shared/comic/ops.ts) registers them and their batch screen at once.
+    ...(PRO_EDIT_OPS_PATCHABLE ? [MOTION_SANITIZERS] : [])
   ]
 });
 
@@ -47,7 +53,8 @@ export const OP_SANITIZERS: Record<string, OpSanitizer> = registry.table;
 /** The sanitizer for a feature op, or undefined (core and unknown ops). Prototype-safe. */
 export const opSanitizerFor = (op: string): OpSanitizer | undefined => registry.get(op);
 
-/** Whole-batch screens, in order, after the per-op sanitizers. */
+/** Whole-batch screens, in order, after the per-op sanitizers. The motion budgets screen (sanitize/motion.ts) runs only
+ *  while the motion ops are client-patchable: no batch can carry one otherwise. */
 export function patchScreens(): PatchScreen[] {
-  return [safetyPatchScreen];
+  return PRO_EDIT_OPS_PATCHABLE ? [safetyPatchScreen, motionPatchScreen] : [safetyPatchScreen];
 }

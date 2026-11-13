@@ -1,4 +1,5 @@
-// Static layout guard for the whole Comic Studio UI (visualqa §6, cheap; jsdom can't measure).
+// Static layout guard for the whole app UI, components/** (visualqa §6, cheap; jsdom can't measure; DS-3 widened it
+// from components/comicstudio, where an arbitrary breakpoint outside the studio passed unnoticed).
 //
 // 1. `flex`/`inline-flex` + `truncate` on ONE element never shows an ellipsis: text runs inside
 //    a flex container are anonymous flex items, so `text-overflow` doesn't apply (the CastCard
@@ -13,11 +14,21 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const ROOT = join(__dirname, '..', '..'); // components/comicstudio
-const REPO = join(ROOT, '..', '..');
+const ROOT = join(__dirname, '..', '..', '..'); // components
+const REPO = join(ROOT, '..');
 
-/** path (relative to components/comicstudio) + a substring of the offending class string → owner. */
-const ALLOW: { file: string; includes: string; owner: string }[] = [];
+/** path (relative to components/) + a substring of the offending class string → owner. */
+const ALLOW: { file: string; includes: string; owner: string }[] = [
+  // Found when DS-3 widened the walk to components/** (S2b integration); each predates it. Put `truncate` on an inner
+  // `min-w-0` text span, then drop the entry.
+  { file: 'ModelSelectionPanel.tsx', includes: 'truncate flex items-center gap-1.5', owner: 'model selection (legacy wizard)' },
+  { file: 'chat/ChatModelPicker.tsx', includes: 'font-semibold leading-tight truncate flex items-center gap-1.5', owner: 'chat studio' },
+  { file: 'chat/IconsBrowser.tsx', includes: 'flex items-center gap-0.5 truncate text-[9.5px]', owner: 'chat studio' },
+  { file: 'chat/artifacts/CalendarAgenda.tsx', includes: 'flex items-center gap-1 truncate text-[9px]', owner: 'chat artifacts' },
+  { file: 'chat/artifacts/PlacesResults.tsx', includes: 'flex items-center gap-1 truncate text-[11px]', owner: 'chat artifacts' },
+  { file: 'ds/MediaTile.tsx', includes: 'pointer-events-none inline-flex max-w-full items-center truncate', owner: 'components/ds (DS-R1 ON_ART_LABEL; next owner)' },
+  { file: 'studio/comic/streamCards.tsx', includes: 'flex items-center gap-2 truncate', owner: 'code studio comic cards' }
+];
 
 const DISPLAY_FLEX = /^(?:[\w-]+:)*!?(?:inline-)?flex$/;
 const TRUNCATE = /^(?:[\w-]+:)*!?truncate$/;
@@ -67,13 +78,15 @@ export const lintSource = (file: string, src: string): LayoutLintHit[] => {
   return hits;
 };
 
-describe('layout lint (components/comicstudio/**/*.tsx)', () => {
+describe('layout lint (components/**/*.tsx)', () => {
   it('the rules catch the anti-patterns and spare the fixes', () => {
     expect(lintSource('x.tsx', `<span className="flex items-center gap-1 truncate text-[11px]">`)).toHaveLength(1);
     expect(lintSource('x.tsx', `cx('inline-flex truncate', a)`)[0]?.rule).toBe('flex-truncate');
     expect(lintSource('x.tsx', `<span className="min-w-0 flex-1 truncate">`)).toEqual([]);
     expect(lintSource('x.tsx', `<span className="flex min-w-0"><span className="min-w-0 truncate">`)).toEqual([]);
-    expect(lintSource('x.tsx', `<p className="hidden min-[420px]:inline">`)[0]?.rule).toBe('arbitrary-screen');
+    // Built in pieces: Tailwind scans test files too (content: components/**), and the whole literal here made every
+    // build warn that the min-*/max-* variants are not supported.
+    expect(lintSource('x.tsx', `<p className="hidden ${['min-', '[420px]:inline'].join('')}">`)[0]?.rule).toBe('arbitrary-screen');
     expect(lintSource('x.tsx', `<p className="min-w-[4rem] max-w-[16rem]">`)).toEqual([]);
     expect(lintSource('x.tsx', `// a "flex truncate" note in a comment`)).toEqual([]);
   });

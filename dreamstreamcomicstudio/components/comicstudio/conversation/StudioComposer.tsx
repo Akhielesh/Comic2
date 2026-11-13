@@ -50,8 +50,10 @@
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
-import { TIER_PRESETS } from '../../../shared/comic/models';
+import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Lock, Palette, Plus, Sparkles, Square, Users, X } from 'lucide-react';
+import { composerIsQualityHome } from '../qualityHome';
+import { TIER_PRESETS, getImageModel, resolveImageJob } from '../../../shared/comic/models';
+import { deriveLock } from '../../../shared/comic/modelLock';
 import { refInboxOf } from '../../../shared/comic/doc';
 import type { AttachmentTarget } from '../../../shared/comic/events';
 import { REF_LIMITS } from '../../../shared/comic/refs';
@@ -426,6 +428,9 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   // Narrow: shorter placeholder; the quality chip lives in the header / ⋯ menu.
   const [rootSizeRef, rootSize] = useElementSize<HTMLDivElement>();
   const roomy = rootSize.width === 0 ? !phone : rootSize.width >= ROOMY_PX;
+  // From 1024 px the header has no quality chip: this composer's chip is quality's one on-screen home (DC-1 #3, D10),
+  // so it never hides, even in a composer narrower than ROOMY_PX (a compact "{Tier}" + lock there).
+  const qualityHome = !inSheet && composerIsQualityHome(phone, ff.width);
   // On touch, or when the voice toggle has stepped aside, + opens the attach sheet (camera, toggle).
   const attachSheet = coarse || !roomy;
   // The chip row scrolls sideways when the column is narrow — fade the clipped edge so it reads as "more".
@@ -1175,7 +1180,17 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   const format = doc?.format;
   const styleName = doc?.style.status !== 'empty' ? doc?.style.name : undefined;
-  const tierLabel = TIER_PRESETS[doc?.settings.quality || 'standard']?.label || 'Standard';
+  const tier = doc?.settings.quality || 'standard';
+  const tierLabel = TIER_PRESETS[tier]?.label || 'Standard';
+  // models.md §4.1 L0 (DC-1 wave note 3, lead D10): from 1024 the header has no quality chip, so this chip is quality's
+  // on-screen home. When roomy it reads "{Tier} · {Model}", with the lock glyph once the comic is locked: the same
+  // words as the header chip below 1024 and the ⋯ Quality row (ComicStudio). A tier and a model, never a price; no spark.
+  const lock = doc ? deriveLock(doc) : undefined;
+  const chipModel = !doc
+    ? undefined
+    : lock
+      ? (getImageModel(lock.modelId)?.nickname ?? lock.modelId)
+      : resolveImageJob('page', tier, doc.settings.imageModelOverride).spec.nickname;
   // Short windows put the box beside its controls: a placeholder that fits one line there.
   const placeholder =
     hint ||
@@ -1199,12 +1214,14 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
 
   // The chip's accessible name is its visible text with a spoken prefix ("Format: 2:3 · 6p"), so
   // voice-control users can say what they see; the title keeps the longer description.
-  const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string, spoken?: string) => (
+  // `action`: the chip's data-action id when it is one home of an action with a control elsewhere (declutter C2).
+  const chip = (id: ComposerPanel, label: React.ReactNode, title: string, extra?: string, spoken?: string, action?: string) => (
     <button
       type="button"
       aria-haspopup="dialog"
       aria-expanded={panel === id}
       title={title}
+      data-action={action}
       disabled={!ready}
       onClick={() => setPanel((p) => (p === id ? null : id))}
       className={cx(
@@ -1609,6 +1626,21 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
               aria-label="Comic options"
             >
               {chip(
+                'quality',
+                <>
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                  {/* The lock leads the words, so a narrow chip never cuts it off (DC-1 #3). */}
+                  {lock && <Lock className="h-3 w-3 shrink-0" aria-hidden data-testid="composer-quality-lock" />}
+                  <span className="whitespace-nowrap">{roomy && chipModel ? `${tierLabel} · ${chipModel}` : tierLabel}</span>
+                  {lock && <span className="sr-only">, locked for this comic</span>}
+                </>,
+                // Not roomy: the model name lives in the title and the sheet (a tier and a model, never a price).
+                roomy || !chipModel ? 'Quality and price per page' : `Quality and price per page · ${tierLabel} · ${chipModel}${lock ? ', locked for this comic' : ''}`,
+                roomy || qualityHome || panel === 'quality' ? undefined : 'hidden',
+                'Quality',
+                'quality'
+              )}
+              {chip(
                 'format',
                 <>
                   <AspectGlyph aspect={format?.pageAspect || '2:3'} size={13} />
@@ -1631,16 +1663,6 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 'Art style',
                 undefined,
                 'Art style'
-              )}
-              {chip(
-                'quality',
-                <>
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                  {tierLabel}
-                </>,
-                'Quality and price per page',
-                roomy || panel === 'quality' ? undefined : 'hidden',
-                'Quality'
               )}
             </div>
 

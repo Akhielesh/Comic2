@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
+import { parseRules, tokenBlocks, type Rule } from './cssTokens';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -47,9 +48,13 @@ describe('public/app.webmanifest', () => {
     expect(manifest.start_url).not.toBe(live.start_url);
   });
 
-  it('theme colour matches the light theme-color meta and the --ds-canvas paper', () => {
-    expect(head).toContain(`<meta name="theme-color" content="${manifest.theme_color}" media="(prefers-color-scheme: light)"`);
-    expect(read('index.css')).toMatch(new RegExp(`--ds-canvas:\\s*${manifest.theme_color}`, 'i'));
+  it('theme colour matches both theme-color metas and the Atlas skin\'s --ds-canvas paper, light and dark (D8)', () => {
+    // The skin ships on every host (index.html <html data-ds-skin="atlas">), so the browser chrome is the Atlas paper,
+    // not the default skin's :root #FAF9F5 / #262624 (which read as a warm band above the dark Atlas page).
+    const { ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(parseRules(read('index.css')));
+    expect(manifest.theme_color.toLowerCase()).toBe(ATLAS_LIGHT.get('--ds-canvas'));
+    expect(head).toContain(`<meta name="theme-color" content="${ATLAS_LIGHT.get('--ds-canvas')}" media="(prefers-color-scheme: light)"`);
+    expect(head).toContain(`<meta name="theme-color" content="${ATLAS_DARK.get('--ds-canvas')}" media="(prefers-color-scheme: dark)"`);
   });
 
   it('lists 192, 512 and maskable icons that exist at their declared sizes', async () => {
@@ -91,6 +96,14 @@ describe('index.html head', () => {
     expect(meta.height).toBe(180);
   });
 
+  it('says who sets theme-color at runtime truthfully (no landing page sets a brand blue)', () => {
+    expect(head).not.toMatch(/brand blue/i);
+    for (const file of ['components/comicstudio/mobile/useThemeColor.ts', 'components/comicstudio/immersive/useImmersive.ts']) {
+      expect(head, file).toContain(file.replace('components/', ''));
+      expect(read(file), file).toContain('theme-color');
+    }
+  });
+
   it('has exactly two theme-color metas (light + dark) and no unconditioned one', () => {
     const metas: string[] = [...(head.match(/<meta name="theme-color"[^>]*>/g) ?? [])];
     expect(metas).toHaveLength(2);
@@ -114,6 +127,76 @@ describe('index.html head', () => {
     const vp = indexHtml.match(/<meta name="viewport" content="([^"]+)"/)?.[1] ?? '';
     expect(vp).toContain('viewport-fit=cover');
     expect(vp).not.toMatch(/maximum-scale|user-scalable\s*=\s*no/);
+  });
+});
+
+describe('index.html first paint on the skin\'s paper and ink (DS-2, CL-3)', () => {
+  // The inline <style> runs before index.css loads, so every colour there falls back to a literal: those
+  // literals must be the Atlas skin's own paper and ink (index.css), never the old blue splash or comic yellow.
+  const style = indexHtml.slice(indexHtml.indexOf('<style>') + '<style>'.length, indexHtml.indexOf('</style>'));
+  const rules = parseRules(style);
+  const { ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(parseRules(read('index.css')));
+  const ruleFor = (selector: string): Rule => {
+    const found = rules.filter((r) => r.selector === selector && r.parents.length === 0);
+    expect(found, selector).toHaveLength(1);
+    return found[0];
+  };
+  /** The literal a `prop: var(--token, <literal>)` declaration falls back to. */
+  const fallback = (selector: string, prop: string, token: string): string => {
+    const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*var\\(${token},\\s*([^)]+)\\)`).exec(ruleFor(selector).body);
+    expect(m, `${selector} { ${prop}: var(${token}, …) }`).toBeTruthy();
+    return m![1].trim().toLowerCase();
+  };
+
+  it('has no #3B82F6, #60A5FA or #FACC15 anywhere (the old blue splash, its dots and the comic yellow)', () => {
+    for (const hex of ['#3b82f6', '#60a5fa', '#facc15']) expect(indexHtml.toLowerCase()).not.toContain(hex);
+    expect(indexHtml).not.toMatch(/radial-gradient/);
+  });
+
+  it('the skin token blocks name the paper and ink the fallbacks must equal', () => {
+    expect(ATLAS_LIGHT.get('--ds-canvas')).toBe('#ffffff');
+    expect(ATLAS_LIGHT.get('--ds-ink')).toBe('#0a0a0a');
+    expect(ATLAS_DARK.get('--ds-canvas')).toBe('#0a0a0a');
+    expect(ATLAS_DARK.get('--ds-ink')).toBe('#fafafa');
+  });
+
+  it('the body sits on the paper (light) and the dark paper (html.dark), with the skin values as fallbacks', () => {
+    expect(fallback('body', 'background-color', '--ds-canvas')).toBe(ATLAS_LIGHT.get('--ds-canvas'));
+    expect(fallback('html.dark body', 'background-color', '--ds-canvas')).toBe(ATLAS_DARK.get('--ds-canvas'));
+    // The text stays the light ink in both themes: the legacy-kit pages keep light surfaces in dark (D5).
+    expect(ruleFor('body').body).toMatch(new RegExp(`color:\\s*${ATLAS_LIGHT.get('--ds-ink')}\\s*(;|$)`));
+    expect(ruleFor('body').body).not.toMatch(/background-image/);
+  });
+
+  it('the splash is paper and ink in both themes, with the skin values as fallbacks', () => {
+    expect(fallback('#app-splash', 'background-color', '--ds-canvas')).toBe(ATLAS_LIGHT.get('--ds-canvas'));
+    expect(fallback('#app-splash', 'color', '--ds-ink')).toBe(ATLAS_LIGHT.get('--ds-ink'));
+    expect(fallback('html.dark #app-splash', 'background-color', '--ds-canvas')).toBe(ATLAS_DARK.get('--ds-canvas'));
+    expect(fallback('html.dark #app-splash', 'color', '--ds-ink')).toBe(ATLAS_DARK.get('--ds-ink'));
+    // The Reload button is the ink primary on the paper (light) and the paper primary on ink (dark).
+    expect(fallback('#app-splash .slow button', 'background', '--ds-accent')).toBe(ATLAS_LIGHT.get('--ds-accent'));
+    expect(fallback('#app-splash .slow button', 'color', '--ds-on-accent')).toBe(ATLAS_LIGHT.get('--ds-on-accent'));
+    expect(fallback('html.dark #app-splash .slow button', 'background', '--ds-accent')).toBe(ATLAS_DARK.get('--ds-accent'));
+    expect(fallback('html.dark #app-splash .slow button', 'color', '--ds-on-accent')).toBe(ATLAS_DARK.get('--ds-on-accent'));
+    // The spinner is the ink itself (currentColor) on a faint ring of it, and holds still under reduced motion.
+    expect(ruleFor('#app-splash .spinner').body).toMatch(/border-top-color:\s*currentColor/);
+    expect(rules.some((r) => r.selector === '#app-splash .spinner' && r.parents[0] === '@media (prefers-reduced-motion: reduce)' && /animation:\s*none/.test(r.body))).toBe(true);
+  });
+
+  it('every radius read keeps a var() fallback, and the Reload is 44 px under a coarse pointer', () => {
+    for (const m of style.matchAll(/var\((--ds-(?:radius|motion|ease)[\w-]*)\s*([,)])/g)) expect(m[2], m[1]).toBe(',');
+    expect(rules.some((r) => r.selector === '#app-splash .slow button' && r.parents[0] === '@media (pointer: coarse)' && /min-height:\s*44px/.test(r.body))).toBe(true);
+  });
+
+  it('the body carries no legacy class, and the splash keeps the watchdog hooks', () => {
+    const body = /<body([^>]*)>/.exec(indexHtml)![1];
+    expect(body).not.toMatch(/brand-|slate-|selection:/);
+    const doc = indexHtml.slice(indexHtml.indexOf('<body'));
+    expect(doc).toContain('<div id="app-splash" role="status">');
+    expect(doc).toContain('<div class="slow">');
+    expect(doc).toContain('<button type="button" id="app-splash-reload">Reload</button>');
+    // Still exactly one inline script (its hash is in the CSP: tests/edge/securityHeaders.test.ts).
+    expect(indexHtml.match(/<script>/g)).toHaveLength(1);
   });
 });
 

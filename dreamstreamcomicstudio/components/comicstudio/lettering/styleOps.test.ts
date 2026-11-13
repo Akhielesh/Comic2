@@ -196,6 +196,20 @@ describe('arrange', () => {
     expect(p.outOfSafeArea).toBe(false);
   });
 
+  it('fix safe area judges a turned balloon by its turned outline, so one press brings it inside (PE-LETTER #23)', () => {
+    const { doc, page } = ctx((d) => {
+      d.pages[0].balloons[0] = { lineId: 'pg_1_l1', x: 0.7, y: 0.03, w: 0.25, pinned: true, rot: 40 };
+    });
+    const plans = planLettering(doc, page, ASPECT, estimateMeasure);
+    expect(plans.find((x) => x.lineId === 'pg_1_l1')!.outOfSafeArea).toBe(true);
+    const resolved = resolvePlacements(doc, page, ASPECT, estimateMeasure).balloons;
+    const ops = fixSafeAreaOps(doc, page, plans, H, resolved);
+    expect(ops.map((o) => (o as { lineId: string }).lineId)).toContain('pg_1_l1');
+    const after = applyOps(doc, ops);
+    const p = planLettering(after, after.pages[0], ASPECT, estimateMeasure).find((x) => x.lineId === 'pg_1_l1')!;
+    expect(p.outOfSafeArea).toBe(false);
+  });
+
   it('tidy re-places only unpinned balloons (free) and is empty when nothing moves', () => {
     const { doc, page } = ctx();
     const ops = tidyOps(doc, page, ASPECT, estimateMeasure);

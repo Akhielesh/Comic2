@@ -23,9 +23,9 @@ import { applyOps, CLIENT_PATCHABLE_OPS, isKnownDocOp, type DocOp } from '../../
 // --- history (versions plan §11; H0) ---
 import { opActor } from '../../shared/comic/history/touched';
 import type { VersionRow } from '../../shared/comic/history/types';
-import type { AttachmentTarget, OpsOrigin, StudioEvent, StudioFocus } from '../../shared/comic/events';
+import { STEER_LIMITS, type AttachmentTarget, type OpsOrigin, type StudioEvent, type StudioFocus } from '../../shared/comic/events';
 import { getRender, renderTargetKey, type AssetRef, type ComicDoc, type Msg, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
-import type { ActivityItem, BoardTab, PendingAttachment } from './types';
+import type { ActivityItem, BoardTab, PendingAttachment, StudioPresence } from './types';
 // --- live agent: the visible message queue (agent-editor plan §3 A1) ---
 import { add as addNote, edit as editNote, move as moveNote, moveTo as moveNoteTo, remove as removeNote, requeue, type QueuedNote, type QueueEventHold } from './messageQueue';
 
@@ -159,6 +159,77 @@ export const EMPTY_QUEUE: QueueState = Object.freeze({ notes: [], held: null, bu
 /** The queue slice (absent on a fresh state = empty). */
 export const queueOf = (state: Pick<StudioState, 'queue'>): QueueState => state.queue ?? EMPTY_QUEUE;
 
+/**
+ * Presence (agent-editor plan §3 A2 "Presence", A4): one live activity line whose `start` named where the director works
+ * (`activity.where`). The page editor outlines those balloons ("Director is editing this balloon") and the activity line
+ * names the place in words.
+ */
+export interface PresenceEntry {
+  /** The activity line it came from: that line's `end` clears it. */
+  activityId: string;
+  /**
+   * The open streams that delivered its start and have not finished. Every open stream receives every session event, so
+   * one start can arrive more than once; the entry goes once none of them can still report the end (`done`, `error`,
+   * the stream closing).
+   */
+  streamIds: string[];
+  /** What the controller exposes (StudioController.presence); the same object while the entry lives. */
+  presence: StudioPresence;
+}
+
+/** Live presence entries kept (oldest dropped). The newest is the one the studio shows. */
+export const MAX_PRESENCE = 8;
+/** Ids longer than this are not ours (page and line ids are short `pg_…` / `ln_…` strings): dropped. */
+const MAX_PRESENCE_ID_CHARS = 120;
+
+const presenceId = (v: unknown): string | undefined => (typeof v === 'string' && v && v.length <= MAX_PRESENCE_ID_CHARS ? v : undefined);
+
+/**
+ * The place an `activity` event names, bounded: its page id and at most STEER_LIMITS.whereLines distinct line ids, or
+ * null when it names nothing usable (no `where`, an empty one, or the wrong shapes). Pure; never throws.
+ */
+export const presenceWhere = (where: unknown): Pick<StudioPresence, 'pageId' | 'lineIds'> | null => {
+  if (!where || typeof where !== 'object') return null;
+  const w = where as { pageId?: unknown; lineIds?: unknown };
+  const pageId = presenceId(w.pageId);
+  const lineIds: string[] = [];
+  if (Array.isArray(w.lineIds)) {
+    // Bounded work whatever arrives: a few times the cap, then stop.
+    for (const raw of w.lineIds.slice(0, STEER_LIMITS.whereLines * 4)) {
+      const id = presenceId(raw);
+      if (id && !lineIds.includes(id)) lineIds.push(id);
+      if (lineIds.length >= STEER_LIMITS.whereLines) break;
+    }
+  }
+  return pageId || lineIds.length ? { ...(pageId ? { pageId } : {}), lineIds } : null;
+};
+
+/** Where the director is working right now (the newest live entry), or null. The same object while it lives. */
+export const presenceOf = (state: Pick<StudioState, 'presence'>): StudioPresence | null => {
+  const list = state.presence;
+  return list && list.length ? list[list.length - 1].presence : null;
+};
+
+/**
+ * Where the director is working, in words: "page 2 · 1 balloon", "page 2", "3 balloons". The page comes from the
+ * presence's page id, else from the page that holds its first known balloon (a page the doc does not have yet is left
+ * out rather than guessed). Null when there is nothing to say. Pure: the activity line (conversation/ActivityLine.tsx)
+ * and the editor's outline and Layers badge (board/) share it.
+ */
+export const presencePlace = (doc: Pick<ComicDoc, 'pages'> | null | undefined, presence: Pick<StudioPresence, 'pageId' | 'lineIds'> | null | undefined): string | null => {
+  if (!presence) return null;
+  const lineIds = Array.isArray(presence.lineIds) ? presence.lineIds : [];
+  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
+  let page = presence.pageId ? pages.find((p) => p.id === presence.pageId) : undefined;
+  if (!page && lineIds.length) {
+    const ids = new Set(lineIds);
+    page = pages.find((p) => p.panels?.some((panel) => panel.lines?.some((line) => ids.has(line.id))));
+  }
+  const n = lineIds.length;
+  const parts = [page && typeof page.n === 'number' ? `page ${page.n}` : null, n ? `${n} ${n === 1 ? 'balloon' : 'balloons'}` : null].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
+};
+
 export interface OptimisticPatch {
   id: string;
   ops: DocOp[];
@@ -221,6 +292,9 @@ export interface StudioState {
   lastHistoryVersion?: VersionRow;
   // --- live agent (plan §3 A1; optional so an older state shape stays valid; absent = empty) ---
   queue?: QueueState;
+  // --- live agent: presence (plan §3 A2/A4; optional; absent = nobody is anywhere) ---
+  /** Live activity lines that named where they work, oldest first (presenceOf reads the newest). */
+  presence?: PresenceEntry[];
 }
 
 export const initialStudioState = (): StudioState => ({
@@ -517,6 +591,50 @@ const upsertActivity = (activity: ActivityItem[], event: Extract<StudioEvent, { 
   return next;
 };
 
+// ── Presence (plan §3 A2 "Presence", A4) ─────────────────────────────────────
+
+/** The state with this presence list (unchanged state when the list did not change). */
+const withPresence = (state: StudioState, next: PresenceEntry[] | undefined): StudioState =>
+  next === state.presence ? state : { ...state, presence: next };
+
+/**
+ * An activity event's effect on presence: a `start` that names a place adds an entry (the same start arriving on
+ * another open stream only adds that stream); that activity's `end` removes it, whichever stream delivers it. Events
+ * without a usable `where` change nothing.
+ */
+const presenceOnActivity = (entries: PresenceEntry[] | undefined, streamId: string, event: Extract<StudioEvent, { type: 'activity' }>, now: number): PresenceEntry[] | undefined => {
+  const list = entries ?? [];
+  const idx = list.findIndex((e) => e.activityId === event.id);
+  if (event.phase === 'end') return idx === -1 ? entries : list.filter((_, i) => i !== idx);
+  if (event.phase !== 'start') return entries;
+  if (idx !== -1) {
+    const entry = list[idx];
+    if (entry.streamIds.includes(streamId)) return entries;
+    const next = list.slice();
+    next[idx] = { ...entry, streamIds: [...entry.streamIds, streamId] };
+    return next;
+  }
+  const where = presenceWhere(event.where);
+  if (!where) return entries;
+  const label = typeof event.label === 'string' ? event.label.trim() : '';
+  const entry: PresenceEntry = { activityId: event.id, streamIds: [streamId], presence: { ...where, label: label || 'Working', at: now } };
+  return [...list, entry].slice(-MAX_PRESENCE);
+};
+
+/**
+ * A stream finished (`done`, `error`, or it closed): it can no longer report an end, so it lets go of every entry it
+ * delivered. An entry another open stream also delivered stays until that one finishes or the end arrives.
+ */
+const presenceWithoutStream = (entries: PresenceEntry[] | undefined, streamId: string): PresenceEntry[] | undefined => {
+  if (!entries?.length || !entries.some((e) => e.streamIds.includes(streamId))) return entries;
+  const next: PresenceEntry[] = [];
+  for (const e of entries) {
+    if (!e.streamIds.includes(streamId)) next.push(e);
+    else if (e.streamIds.length > 1) next.push({ ...e, streamIds: e.streamIds.filter((id) => id !== streamId) });
+  }
+  return next;
+};
+
 const landedText = (msg: Msg | undefined) => (msg?.text || '').trim();
 
 const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: 'ops' }>, now: number, streamId?: string): StudioState => {
@@ -615,19 +733,30 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return { ...state, drafts: { ...state.drafts, [event.msgId]: (state.drafts[event.msgId] || '') + event.text } };
     }
     case 'activity':
-      return event.id ? { ...state, activity: upsertActivity(state.activity, event, now) } : state;
+      return event.id
+        ? withPresence(
+            { ...state, activity: upsertActivity(state.activity, event, now) },
+            // While Stop winds down a start names no place (the server has not seen the cancel yet): presence stays
+            // cleared, as the activity line says nothing about a place then. An end still removes its entry.
+            state.cancelling && event.phase === 'start' ? state.presence : presenceOnActivity(state.presence, streamId, event, now)
+          )
+        : state;
     case 'urls':
       return { ...state, urls: mergeUrls(state.urls, event.urls, now) };
     case 'error': {
       const message = (event.message || '').trim() || 'Something went wrong in the studio.';
       const stream = state.streams[streamId];
       const code = typeof event.code === 'string' && event.code ? event.code : null;
-      return {
-        ...state,
-        error: message,
-        errorCode: code,
-        streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message, ...(code ? { erroredCode: code } : {}) } } : state.streams
-      };
+      return withPresence(
+        {
+          ...state,
+          error: message,
+          errorCode: code,
+          streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message, ...(code ? { erroredCode: code } : {}) } } : state.streams
+        },
+        // The request failed: whatever it was doing there, it is no longer doing it.
+        presenceWithoutStream(state.presence, streamId)
+      );
     }
     // --- history: a moment was saved; an open History panel reads it. A restore or a switch rewrote the book, so the
     //     doc also resyncs once idle (other moments change nothing in the doc: no GET per request). ---
@@ -638,12 +767,15 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
       return { ...state, lastHistoryVersion: version, syncDue: state.syncDue || rewrote };
     }
     case 'done':
-      return {
-        ...state,
-        behindRev: typeof event.rev === 'number' ? Math.max(state.behindRev, event.rev) : state.behindRev,
-        lastSpentUsd: typeof event.spentUsd === 'number' && Number.isFinite(event.spentUsd) ? event.spentUsd : state.lastSpentUsd,
-        lastSavedUsd: typeof event.savedUsd === 'number' && Number.isFinite(event.savedUsd) && event.savedUsd > 0 ? event.savedUsd : null
-      };
+      return withPresence(
+        {
+          ...state,
+          behindRev: typeof event.rev === 'number' ? Math.max(state.behindRev, event.rev) : state.behindRev,
+          lastSpentUsd: typeof event.spentUsd === 'number' && Number.isFinite(event.spentUsd) ? event.spentUsd : state.lastSpentUsd,
+          lastSavedUsd: typeof event.savedUsd === 'number' && Number.isFinite(event.savedUsd) && event.savedUsd > 0 ? event.savedUsd : null
+        },
+        presenceWithoutStream(state.presence, streamId)
+      );
     default:
       return state;
   }
@@ -709,6 +841,9 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
     }
   }
 
+  // Presence ends with the stream that brought it (all of it once the studio is idle), like the activity lines.
+  const presence = anyLeft ? presenceWithoutStream(state.presence, action.streamId) : state.presence?.length ? [] : state.presence;
+
   return {
     ...state,
     streams,
@@ -716,6 +851,7 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
     errorCode: error ? errorCode : null,
     pendingMessage,
     ...(queue !== state.queue ? { queue } : {}),
+    ...(presence !== state.presence ? { presence } : {}),
     drafts,
     activity,
     // A stream that broke (not cancelled by us) may have missed ops: resync once idle.
@@ -827,7 +963,8 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       return undoInbox.length === state.undoInbox.length ? state : { ...state, undoInbox };
     }
     case 'cancel_start':
-      return { ...state, cancelling: true };
+      // Stop: the director is no longer editing anything (its streams may take a moment to close).
+      return { ...state, cancelling: true, ...(state.presence?.length ? { presence: [] } : {}) };
     case 'cancel_end':
       return { ...state, cancelling: false };
     default:

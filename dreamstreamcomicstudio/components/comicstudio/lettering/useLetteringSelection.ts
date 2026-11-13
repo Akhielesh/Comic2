@@ -19,6 +19,10 @@ export interface LetteringSelection {
   cycle(order: readonly string[], dir: 1 | -1): string | null;
 }
 
+/** The selection holds overlays or panels on this page (an empty balloon selection must not wipe it). */
+export const holdsOverlaysOn = (sel: StudioSelection | null | undefined, pageId: string): boolean =>
+  !!sel && sel.pageId === pageId && ((sel.layerIds?.length ?? 0) > 0 || (sel.panelIds?.length ?? 0) > 0);
+
 /** Pure reducer step for `select` (tested). */
 export const nextSelection = (current: readonly string[], id: string | null, additive = false): string[] => {
   if (id === null) return [];
@@ -37,6 +41,11 @@ export function useLetteringSelection(opts: {
    * plan §3 A3) asked to see. Ids not on the page are dropped.
    */
   initial?: readonly string[];
+  /**
+   * The studio's current selection (PE-SHELL (m)). While it holds overlays or panels on this page (the Layers part
+   * selects them with no balloon), an empty balloon selection does not clear it; closing the editor still does.
+   */
+  studioSelection?: StudioSelection | null;
 }): LetteringSelection {
   const { pageId, validIds, setStudioSelection, panelOf } = opts;
   const [ids, setIds] = useState<string[]>(() => [...new Set(opts.initial ?? [])].filter((id) => !validIds || validIds.includes(id)));
@@ -57,11 +66,14 @@ export function useLetteringSelection(opts: {
   sync.current = setStudioSelection;
   const panelOfRef = useRef(panelOf);
   panelOfRef.current = panelOf;
+  const studioSelRef = useRef(opts.studioSelection);
+  studioSelRef.current = opts.studioSelection;
   useEffect(() => {
     const set = sync.current;
     if (!set) return;
-    if (!ids.length) set(null);
-    else {
+    if (!ids.length) {
+      if (!holdsOverlaysOn(studioSelRef.current, pageId)) set(null);
+    } else {
       const panels = new Set(ids.map((id) => panelOfRef.current?.(id)).filter((n): n is number => typeof n === 'number'));
       set({ pageId, lineIds: ids, surface: 'page_editor', ...(panels.size === 1 ? { panelN: [...panels][0] } : {}) });
     }

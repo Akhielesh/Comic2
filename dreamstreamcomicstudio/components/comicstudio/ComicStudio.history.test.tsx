@@ -17,7 +17,8 @@ import { HISTORY_ON, historySetup, overflowProblems, settle, type Mounted } from
 import { resetBackStack } from './mobile/backStack';
 import { resetUsageStatus, showDollarPrices, showUsagePrices } from './conversation/testing/fixtures';
 
-const HINT = 'Look back and restore — free';
+// Declutter C5 (DC-1): no price word on a free navigation row (nothing beside it costs).
+const HINT = 'Look back and restore';
 
 const mountShell = (opts: { width: number; height?: number; caps: StudioCaps; coarse?: boolean }): Mounted & ReturnType<typeof render> => {
   const m = historySetup({ width: opts.width, height: opts.height ?? 740, caps: opts.caps, coarse: opts.coarse });
@@ -63,6 +64,7 @@ describe('the ⋯ menu carries History on narrow phone headers', () => {
     const row = within(menu).getByRole('menuitem', { name: /History/ });
     expect(row).toHaveTextContent('History');
     expect(row).toHaveTextContent(HINT);
+    expect(row.textContent).not.toMatch(/\bfree\b/i);
     // Placed after Read the comic, before Settings.
     const names = within(menu)
       .getAllByRole('menuitem')

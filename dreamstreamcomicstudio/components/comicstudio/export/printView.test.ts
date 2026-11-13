@@ -5,6 +5,7 @@ import { FONT_REGISTRY } from '../../../shared/comic/lettering/fonts';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeBook } from './__fixtures__/books';
 import { localizedFor } from './sequence';
+import { preloadFontFiles, resetFontLoaderForTests } from '../lettering/fontLoader';
 import { PrintError, buildPrintHtml, collectPrintSheets, decoratePrintDocument, escapeHtml, fitBox, openPrintView, printPageSize } from './printView';
 
 const withCover = (mutate?: (d: ComicDoc) => void) =>
@@ -91,13 +92,21 @@ describe('buildPrintHtml', () => {
     expect(dom.querySelectorAll('[data-testid="balloon"]')).toHaveLength(0);
   });
 
-  it('prints an edition: html lang, its lettering, the script face from Google CSS, the overlay cover title', () => {
+  it('prints an edition: html lang, its lettering, its self-hosted script face, the overlay cover title', async () => {
     const te = localizedFor(makeBook(undefined, { overlayCover: true }), 'te');
+    await preloadFontFiles([languageSpec('te')!.fonts.dialogue]);
     const html = buildPrintHtml(te, collectPrintSheets(te, fakeUrlFor).sheets, { origin: ORIGIN, urlFor: fakeUrlFor });
     const dom = parse(html);
     expect(dom.documentElement.getAttribute('lang')).toBe('te');
     const family = FONT_REGISTRY[languageSpec('te')!.fonts.dialogue].family;
-    expect(html).toContain(`fonts.googleapis.com/css2?family=${family.replace(/ /g, '+')}`);
+    expect(html).toContain(`@font-face{font-family:"${family}"`);
+    expect(html).toMatch(/src:url\("https:\/\/[^"]*noto-sans-telugu-telugu-700-normal/);
+    expect(html).not.toMatch(/googleapis|gstatic/);
+    // Only the weights lettering uses (400, 700, 800, 900) of a script face, not all six it ships.
+    const weightsOf = (fam: string) => new Set([...html.matchAll(new RegExp(`font-family:"${fam}";font-style:normal;font-weight:(\\d+);`, 'g'))].map((m) => Number(m[1])));
+    expect([...weightsOf(family)].sort()).toEqual([400, 700, 800, 900]);
+    // A Latin face still declares every weight it ships.
+    expect(weightsOf('DSL Comic Neue')).toEqual(new Set(FONT_REGISTRY['comic-neue'].weights));
     expect(dom.querySelector('.sheet[data-label="Page 1"] svg')!.textContent).toContain('పాత దిల్లీ');
     const coverSvg = dom.querySelector('.sheet[data-label="Cover"] svg.cover-title')!;
     expect(coverSvg.textContent).toContain('కుంకుమపువ్వు దొంగ');
@@ -157,6 +166,26 @@ describe('openPrintView', () => {
     const win = fakeWindow();
     await openPrintView(makeBook(), fakeUrlFor, { win, timeoutMs: 5, lang: 'te' });
     expect(win.document.documentElement.getAttribute('lang')).toBe('te');
+  });
+
+  it("loads the edition's lazy face tables itself, so the print CSS declares its script face (PE-FONTS #2)", async () => {
+    // Nothing preloads here: the face tables of script and Pro faces are lazy, and fontFaceCss lists only tables that
+    // have arrived, so without openPrintView's own preload the print window would drop the edition's @font-face rules.
+    resetFontLoaderForTests();
+    const win = fakeWindow();
+    const writes: string[] = [];
+    const write = win.document.write.bind(win.document);
+    win.document.write = (...parts: string[]) => {
+      writes.push(parts.join(''));
+      write(...parts);
+    };
+    await openPrintView(makeBook(), fakeUrlFor, { win, timeoutMs: 5, lang: 'te' });
+    const html = writes.find((w) => w.includes('class="sheet')) ?? writes[writes.length - 1];
+    const family = FONT_REGISTRY[languageSpec('te')!.fonts.dialogue].family;
+    expect(family).toBe('Noto Sans Telugu');
+    expect(html).toContain(`@font-face{font-family:"${family}"`);
+    const weights = new Set([...html.matchAll(new RegExp(`font-family:"${family}";font-style:normal;font-weight:(\\d+);`, 'g'))].map((m) => Number(m[1])));
+    expect([...weights].sort()).toEqual([400, 700, 800, 900]);
   });
 
   it('explains a blocked pop-up', async () => {

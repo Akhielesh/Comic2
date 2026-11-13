@@ -96,6 +96,17 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
   const photos = note.inboxPaths?.length ?? 0;
   const meta = [focus, photos ? `${photos} ${photos === 1 ? 'photo' : 'photos'}` : null].filter(Boolean).join(' · ');
   const stopping = studio.queueSendingNow === note.id;
+  // What the button says while this note waits to go first. The director stops for it only when Stop is really under
+  // way (steering off, or a steer that fell back to D2); a steer refused NOT_RUNNING / BUSY / LIMIT keeps it working
+  // and the note simply goes when this step ends — never "Stopping" while nothing stops. A plan_pages run is never
+  // stopped: the note goes once the plan is in (as the tooltip says), which can take a while — not "Sending next…".
+  const waitingWords = studio.messageBusy
+    ? studio.cancelling
+      ? 'Stopping, then sending…'
+      : 'Goes next, after this step'
+    : studio.turnLocked
+      ? 'Goes once the plan is in'
+      : 'Sending next…';
   // Up next would refuse it (it must still fit one message once drained): the editor stays open and says so.
   const tooLong = draft.trim().length > QUEUE_NOTE_MAX_CHARS;
 
@@ -203,7 +214,7 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
               className={cn(OUTLINE_BTN, 'mr-auto')}
             >
               {sending || stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
-              {stopping ? (studio.messageBusy ? 'Stopping, then sending…' : 'Sending next…') : 'Send now'}
+              {stopping ? waitingWords : 'Send now'}
             </button>
           )}
           <button type="button" onClick={() => setEditing(true)} aria-label={`Edit note ${n}`} title="Edit" className={ICON_BTN}>

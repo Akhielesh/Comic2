@@ -8,6 +8,7 @@ import { Pipette } from 'lucide-react';
 import { normalizeColor, type Color } from '../../../shared/comic/lettering/style';
 import { paintOf } from './svgMarkup';
 import { cx } from '../board/ui';
+import { useProExtras } from './pro/proExtras';
 
 export interface ColorFieldProps {
   label: string;
@@ -23,6 +24,9 @@ export interface ColorFieldProps {
   allowAuto?: boolean;
   /** Easy view: swatches + transparent only (custom colour behind "More"). */
   simple?: boolean;
+  /** Pro Edit: a typed opacity (0–100 %, the colour's alpha byte) beside the slider (the lazily loaded Pro extras'
+   *  NumberField; the read-out shows until it is there). */
+  numeric?: boolean;
   className?: string;
 }
 
@@ -47,8 +51,9 @@ const CHECKER: React.CSSProperties = {
   backgroundPosition: '0 0,0 4px,4px -4px,-4px 0'
 };
 
-export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, swatches = [], allowAlpha, allowNone, allowAuto, simple, className }) => {
+export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, swatches = [], allowAlpha, allowNone, allowAuto, simple, numeric, className }) => {
   const id = useId();
+  const pro = useProExtras(!!numeric);
   const paint = paintOf(value);
   const hex = paint?.color ?? '#ffffff';
   const alpha = paint?.opacity ?? 1;
@@ -181,7 +186,24 @@ export const ColorField: React.FC<ColorFieldProps> = ({ label, value, onChange, 
             onChange={(e) => onChange(withAlpha(hex, Number(e.target.value) / 100), { scrub: true })}
             className="min-w-0 flex-1 accent-[var(--ds-accent)]"
           />
-          <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">{Math.round(alpha * 100)}%</span>
+          {pro ? (
+            <pro.NumberField
+              label={`${label} opacity`}
+              hideLabel
+              steppers={false}
+              className="w-16 shrink-0"
+              value={alpha}
+              scale={100}
+              min={0}
+              max={100}
+              step={5}
+              unit="%"
+              testId={`opacity-${label}`}
+              onCommit={(a, how) => onChange(withAlpha(hex, a), how.via === 'step' ? { scrub: true } : undefined)}
+            />
+          ) : (
+            <span className="w-9 shrink-0 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">{Math.round(alpha * 100)}%</span>
+          )}
         </div>
       )}
     </fieldset>

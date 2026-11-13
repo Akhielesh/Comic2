@@ -39,6 +39,7 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-z-editor` | `70` | same | the full-screen page editor |
 | `--ds-z-reader` | `80` | same | the full-screen reader |
 | `--ds-z-scrim`, `--ds-z-sheet` | `85`, `86` | same | a sheet's scrim and the sheet (the ladder `mobile/sheets` already documents) |
+| `--ds-z-dialog` | `88` | same | a modal dialog (`Z.dialog`, DS-1c): above every sheet, below the menus and popovers it opens |
 | `--ds-z-popover` | `90` | same | menus, popovers, selects |
 | `--ds-z-toast` | `95` | same | toasts |
 | `--ds-z-tooltip` | `100` | same | tooltips |
@@ -330,9 +331,94 @@ each.
 **Sheets** — `import { AdaptiveSheet, BottomSheet, SideSheet } from '../ds/sheet'`: the mobile sheets,
 re-exported where they live (`components/comicstudio/mobile/sheets`), layered at `Z.scrim` / `Z.sheet`.
 
-**Not yet:** Dialog, AlertDialog, Menu, Popover, Tooltip and the Toast host (DS-1c, after the overlay
-library decision D6); the AppHeader / NavRail / TabBar wrappers (DS-2); the creative editor kit
-(Program 2, promoted to `components/ds/creative` in DS-10).
+**Overlays** (DS-1c) are Radix (lead decision D6: `@radix-ui/react-{dialog,alert-dialog,dropdown-menu,popover,tooltip}`,
+MIT). Radix supplies the focus trap, roving focus, typeahead, dismissal (Esc, a press outside), the portal and the ARIA;
+the primitives add the recipes. All portal to `<body>`. Nothing enters with motion under reduced motion (the hook drops
+`ds-fade-in` / `ds-scale-in`, and `styles/ds-motion.css` stops them too); there is no exit animation, so a closing
+overlay leaves at once. Each root (`Dialog`, `AlertDialog`, `Menu`, `Popover`, `Tooltip`) takes `open` + `onOpenChange`
+or `defaultOpen`, as Radix's does.
+
+**The top layer** (`components/ds/overlayLayer.ts`). On phones the overlays open from sheets, and an open overlay is the top
+layer of the app: it is drawn above the sheets (the dialog scrim is on `Z.dialog`, 88, above `Z.sheet`); Esc closes the
+newest overlay and nothing beneath it (a caller's `onEscapeKeyDown` with `preventDefault()` keeps it open, and the sheet
+too); and while a Dialog, AlertDialog, Menu or Popover is open the sheet that opened it stands down, so a press on a menu
+row, an answer or a popover control never reads as a press outside the sheet, and Tab inside a dialog stays in the dialog.
+The back gesture (`backStack.ts`) closes a Dialog or AlertDialog before the sheet or editor under it. The Dialog is always
+modal (a non-modal panel is a Popover). A finger opens a Menu on its tap, never on touch-down, so a scroll that starts on
+a ⋯ trigger does not open it.
+
+```tsx
+<Dialog>
+  <DialogTrigger asChild><Button variant="outline">Comic details</Button></DialogTrigger>
+  <DialogContent size="default">        {/* sm 384 | default 512 | lg 672 px; SCRIM on the dialog layer, the OVERLAY panel, a Close button */}
+    <DialogHeader><DialogTitle>Comic details</DialogTitle><DialogDescription>Shown on the cover.</DialogDescription></DialogHeader>
+    …
+    <DialogFooter><DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose><Button onClick={save}>Save</Button></DialogFooter>
+  </DialogContent>
+</Dialog>                                {/* focus trapped; Esc, the scrim or Close; focus back to the trigger; DIALOG_TITLE */}
+
+<AlertDialog>                           {/* the confirm step (replaces window.confirm as surfaces move) */}
+  <AlertDialogTrigger asChild><Button variant="outline">Delete page 3</Button></AlertDialogTrigger>
+  <AlertDialogContent>                  {/* focus starts on Cancel; a press on the scrim does not close it; Esc cancels */}
+    <AlertDialogHeader><AlertDialogTitle>Delete page 3?</AlertDialogTitle><AlertDialogDescription>It stays in Assets › Deleted.</AlertDialogDescription></AlertDialogHeader>
+    <AlertDialogFooter><AlertDialogCancel>Keep it</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={remove}>Delete page</AlertDialogAction></AlertDialogFooter>
+  </AlertDialogContent>                 {/* destructive = DANGER_FILL; the words say what happens, never "OK" */}
+</AlertDialog>
+
+<Menu>
+  <MenuTrigger asChild><IconButton label="Page actions" title={null}><MoreHorizontal /></IconButton></MenuTrigger>
+  <MenuContent>                         {/* OVERLAY on Z.popover; ↑ ↓ Home End, typeahead, Esc back to the trigger; 44 px rows on touch */}
+    <MenuLabel>Page 3</MenuLabel>
+    <MenuItem onSelect={rename}>Rename<MenuShortcut>F2</MenuShortcut></MenuItem>
+    <MenuCheckboxItem checked={grid} onCheckedChange={setGrid}>Show the grid</MenuCheckboxItem>
+    <MenuRadioGroup value={view} onValueChange={setView}><MenuRadioItem value="page">One page</MenuRadioItem>…</MenuRadioGroup>
+    <MenuSub><MenuSubTrigger>Move to</MenuSubTrigger><MenuSubContent>…</MenuSubContent></MenuSub>
+    <MenuSeparator /><MenuItem variant="destructive" onSelect={remove}>Delete page</MenuItem>
+  </MenuContent>
+</Menu>
+
+<Popover>                               {/* non-modal; focus in on open and back on close; opens on a press only */}
+  <PopoverTrigger asChild><Button variant="outline">Filters</Button></PopoverTrigger>
+  <PopoverContent aria-label="Filters">…</PopoverContent>
+</Popover>
+
+<TooltipProvider>                       {/* around a toolbar or a lazy surface: one skip delay for the tooltips inside */}
+  <Tooltip>
+    <TooltipTrigger asChild><IconButton label="Undo" title={null}><Undo2 /></IconButton></TooltipTrigger>
+    <TooltipContent>Undo · Ctrl+Z</TooltipContent>
+  </Tooltip>                            {/* INVERSE_SURFACE on Z.tooltip: hover 300 ms, focus at once, a long press on touch */}
+</TooltipProvider>
+```
+
+A tooltip repeats or adds to a name, never replaces one: its trigger keeps its own label (an IconButton's `label`, with
+`title={null}` so the native title does not double it). On touch it never depends on hover: a long press (500 ms) shows
+it for 1.5 s after the finger lifts, and that press does not press the control; a plain tap is a plain tap.
+
+**The one toast slot.** `toast({ title, message?, tone?, action?, duration?, onDismiss?, onLost? })` shows an app
+toast in `<ToastHost />` (mounted once at the App root; a second mounted host renders nothing) and returns
+`{ id, dismiss() }`. Every toast in the app shares one slot: a newer toast replaces the shown one and tells it
+(`onLost`), so toasts never stack. Component toasts take the same slot with `claimToast(onLost)` and read it with
+`useToastSlot(id)` (the timeline's `claimUndoToast` is `claimToast`; History's restore toast claims it too). The host sits
+above the phone tab bar and the safe area (`--tabbar-h` + `--sa-bottom-eff` + 12 px) on `Z.toast`, centred, at most
+420 px wide. The card is Atlas's TOAST recipe: the status hue only on its edge, its icon and its time-left bar; a title
+of two lines at most and a message of three; one action, which also dismisses it. The clock (`TOAST_DURATION_MS`, 8 s;
+`duration: 0` stays until dismissed) holds while the toast is hovered or focused (`data-paused`); Esc and Dismiss close
+it; `tone: 'error'` is an alert of its own (announced at once), everything else is read politely from the host's status
+region, which stays in the page while idle (live regions never nest). `ToastCard` shows a static card (a scene, a doc).
+No timer runs while no toast is shown.
+
+**Bundle cost.** Together the overlays weigh about 45 KB gz (Menu about 34 KB with floating-ui, Dialog about 17.5 KB,
+Tooltip 22 KB, Popover 26 KB, sharing the popper and the overlay layer, which brings the sheets' stack and the back stack,
+about 1.7 KB of it). An unused overlay costs next to nothing, also through this barrel: their top-level `forwardRef` /
+`createContext` calls are marked pure, so importing an unrelated primitive through such a barrel drops every overlay and
+all of Radix (`components/ds/overlays.hygiene.test.ts` bundles both cases and caps what is left at 1.5 KB gz). The Toast
+host uses no Radix (about 2.3 KB gz). A `TooltipProvider` costs about 3.8 KB gz: mount it inside the lazy surface whose
+toolbar shares a skip delay, not at the App root (a Tooltip outside any provider brings its own). Keep the Radix overlays out
+of the first-load chunk (master plan §1.6 risk 6: `components/ds` adds at most 25 KB gz there): use them from surfaces that
+load lazily.
+
+The shell primitives (AppHeader, TabBar, NavRail) landed with DS-2 ("Shell (DS-2)" below). **Not yet:** the creative
+editor kit (Program 2, promoted to `components/ds/creative` in DS-10).
 
 ### Deliberate deviations from Atlas
 
@@ -353,6 +439,20 @@ library decision D6); the AppHeader / NavRail / TabBar wrappers (DS-2); the crea
   library in this wave); the keyboard on Slider is handled in the component so every browser steps alike.
 - Progress grows by width (so it fills from the reading start right-to-left too) on `--ds-motion-enter-slow`
   (Atlas: a 500 ms translate).
+- Dialog and AlertDialog panels take OVERLAY's panel radius (12 px under the skin) rather than Atlas's 16 px
+  `rounded-2xl`, so every overlay shares one shape; their header is left-aligned at every width (Atlas centres it on
+  phones) and leaves room for the close button. The scrim centres the panel as a grid, not with a translate.
+- Overlays enter but do not animate out (this app has no `animate-out` keyframes); the Toast host keeps TOAST_EXIT.
+- The dialog scrim sits on its own step, `Z.dialog` (`--ds-z-dialog`, 88), above the sheets (Atlas has no sheets): a
+  confirm opened from a phone sheet is never under it, and a menu or popover it opens (90) stays above it.
+- A Menu opens on a finger's tap, not on touch-down (Radix toggles on any primary pointer-down).
+- The Toast host is one slot, bottom-centre above the tab bar (redesign plan §2), not Atlas's stack at the top right
+  under the header.
+- Tooltips wait 300 ms (Atlas's `--tooltip-delay`; its ui-generated Provider passes 0) and show on a long press on touch.
+- The Toast host ports GlobalNotificationBar onto the TOAST recipes instead of Radix Toast: one slot needs no queue or
+  swipe machinery (`@radix-ui/react-toast` is pinned by PE-FONTS and not imported; lead decision D19 at the S2b
+  integration keeps it pinned for now, so the lockfile does not churn mid-integration, and the next dependency pass drops
+  it).
 
 ### Motion classes and hooks (wave 9)
 
@@ -378,6 +478,63 @@ The hooks and primitives that go with them (Atlas `hooks/` and `components/effec
 | `usePresence`, `useReducedMotion` | the mount-for-exit helper and the live OS motion setting |
 | `useImageReveal(key, { enabled })` (MO-1) | art never animates before it arrives. Phases: `loading`, then `decoding` (`img.decode()` pending), then `revealed`, or `error`. A cached picture reveals in the same frame (`fromCache`, no entrance); a box with no `<img>` reveals at once, flagged `empty` (no entrance); a stuck decode reveals 1 s after load. Entrances use `playEntrance`: Web Animations, opacity and transform only, on the compositor, timed by `motionMs` / `motionEase` on the `--ds-motion-*` tokens. No entrance animates a filter; `allowFilterEffects` is the gate for any future filter (none on coarse pointers, low power — Save-Data, or ≤ 4 cores with ≤ 2 GB — or art wider than 640 px). Reduced motion means a decode-gated swap with no entrance. The `<img>` is looked up when the element or the key changes, so key the component by its picture |
 - The switch's off track is ink at 18 % over the page (Atlas's `--switch-background`, #d4d4d4 / #3a3a3a).
+
+### Content kit (DS-R1)
+
+The content kit is the shared vocabulary for the library, Discover, the media bin and the studio layout. No screen uses it
+yet (DS-R4 onward); its scene is `qa/app/scenes/ds-content.tsx`, and `components/ds/content.test.tsx`,
+`layout.test.ts`, `models.test.tsx`, `storage.test.ts` and `useOnline.test.ts` pin it. Inspector and FilterSheet stay
+out of the barrel (they pull in the mobile sheets, like `./sheet`); import them by path.
+
+**21 components:** ComicCard, CoverImage (and RevealImage), MediaTile, CardGrid, Shelf, SearchField, FilterChips,
+SelectionBar, Lightbox, InlineMeta, Row, NavTrack, Sidebar, StatusBanner, StatusPill, SplitPane, SourceBadge,
+PresetTile, PresetGrid, Inspector, FilterSheet. **6 models:** `layoutFor` (layout.ts), the storage key registry
+(storage.ts), `announce` (announce.ts), `useOnline` / `useConnectivity`, `useSelection` and `useScrollRestore`.
+
+The rules:
+- One primary control inside the card's h3, with Read and Open outside it. A selected card's spark ring is drawn inside
+  the art (`MediaTile ring="inside"`, an overlay over the picture), since a container that clips the tile would cut an
+  outside ring. The spark appears only as `SPARK_RING_ON_ART`: a ring, never a fill.
+- The row variant is 72 px (`library.listRowPx`) with a 48×64 cover and a one-line title.
+- CoverImage: a reserved box; artColor via `ART_PLACEHOLDER` / `--ds-art`; lazy unless `priority`; w480 / w1080;
+  it resolves once in view; publication cards take `pub/` paths only, with handed-in URLs only from known origins
+  (storage, same origin, `coverOrigins`); a decode-gated reveal keyed per picture (`useImageReveal`).
+- CardGrid: an explicit-column list (`role="list"`) with arrow keys only in selection mode, where only the first 12
+  items of a first page rise in (`CARD_GRID_STAGGER_MAX`). `.ds-stagger` likewise animates only its first 12 children.
+- Shelf: hidden when empty, arrows on fine pointers, a polite error row.
+- `layoutFor` is the single source for chrome, nav, the Director (tabletop: the place gets the top segment), columns and
+  the inspector.
+- SplitPane: per-pane ranges, saved when a drag ends.
+- `useScrollRestore` waits for content and never overwrites the position while waiting.
+- The storage key registry names every stored key; `useOnline` follows the browser and the appStatus network signal,
+  with a 30 s "unreachable" hold that the next request to get any answer ends (`services/apiClient.ts` safeFetch calls
+  `markReachable()`); it never polls. One polite announcer for the whole app.
+- Amounts arrive formatted, and the kit never prints a currency.
+- The edge fades (`.ds-fade-edge-x/-y`) and every entrance stop under reduced motion in the one reduced-motion block.
+
+### Shell (DS-2)
+
+- **AppHeader** (`components/ds/AppHeader.tsx`): the `STICKY_HEADER` + `HEADER_GLASS` layer, `data-scrolled` from
+  `useScrolledPast(4)` (one read per frame). Brand · nav · actions on `HEADER_GRID` (min-h `--header-h`).
+  `AppHeaderSkeleton` paints the same header, `HEADER_INNER` and `HEADER_GRID` with Skeletons. Props: brand, nav,
+  actions, banner, children, scrolled, innerClassName. The site header (`components/layout/StaticSiteHeader.tsx`) is an
+  AppHeader.
+- **TabBar<Id extends string>** (`components/ds/TabBar.tsx`): flex-1 min-w-0 items at `--ds-density-touch`;
+  badge/badgeLabel; dot accent | amber | pulse (LiveDot); aria-disabled items say why in a role=status bubble for
+  `TAB_HINT_MS` on `Z.tooltip`; `navItemName` gives the item's spoken name. The bar is `--tabbar-h` + `--sa-bottom-eff`,
+  max 560 px centred, hidden under `html.kb-open`.
+- **NavRail<Id>** (`components/ds/NavRail.tsx`): `--rail-w` + `--sa-left`, optional leading Back `{label, onBack}`.
+- These are not wrappers over `mobile/shell/*`: the studio's `MobileTabBar` stays until v2 (it takes `navItemName`).
+- NotificationBell's panel is pinned to the viewport below sm (inset-x-4, its top `var(--bell-top)` = the bell's bottom
+  + 8 px, measured on open and on resize). From sm it hangs from the bell. It stops 1rem above the screen's bottom.
+- NavDropdown opens on hover for pointerType `'mouse'` only; touch and pen open it by tap. Both triggers are disclosures
+  (no aria-haspopup).
+- Overlays enter with `ds-scale-in` (280 ms) and the tab hint with `ds-fade-in`, never the 420 ms `ds-rise-in`.
+- **UserAvatar** (`components/UserAvatar.tsx`, DS-2 #6 at the S2b integration) is on the Atlas tokens: a hairline ring
+  on `--ds-well`, the initial in `MUTED`, the signed-in dot on `--ds-success`. An avatar with `onClick` (CommentSection)
+  is a real, named button.
+- The browser chrome colour and the first paint follow the Atlas paper (lead decision D8; `docs/design/atlas-skin.md`
+  changelog, S2b). The shell's Contact link is `CONTACT_HREF` = `mailto:${SUPPORT_EMAIL}` (lead decision D9).
 
 ## Guards and the ratchet (DS-0 owns the code)
 
@@ -439,7 +596,15 @@ no duplicate id, axe, and on phones the `<main>` keeps ≥ 45 % of the height.
 (`qa/app/index.tsx`, DS-1b) discovers scenes by glob and the layout smoke runs each at 320–1440 px, light
 and dark, with and without the Atlas skin: no overflow, no coarse target under 44 px, no legacy class, axe.
 The gallery shows every primitive in every variant and state in the page theme and, while the page is
-light, again in a dark panel. A new primitive is not done until the gallery shows it
+light, again in a dark panel. The overlays have their own scene, `qa/app/scenes/ds-overlays.tsx` (DS-1c): a trigger for
+each (they start closed, so an open modal never hides the page from the smoke), the Toast host and a static card in
+every status. The content kit has its own scene too, `qa/app/scenes/ds-content.tsx` (DS-R1). DS-3 (S2): the comics landing, the
+sign-in card, the tester invite, Project info and its image gallery, and the legacy share link's state views compose the
+DS primitives and recipes; their guard baselines are 0; QA scenes landing, auth, auth-signin, auth-access, shared. The
+sign-in card's "Request access" renders `WaitlistForm` with `variant="atlas"` (S2b verify): the DS Field, Input and
+Textarea, `FILTER_CHIP` toggles (44 px under a coarse pointer) and the default Button, with the card's status callouts;
+the legacy `light` / `dark` looks stay for the home page. The app
+shell has the `shell` scene (DS-2). A new primitive is not done until the gallery shows it
 (`components/ds/gallery.test.tsx` checks every primitive is there).
 
 Clutter ratchet: `--project=declutter` (tests/e2e/declutter.spec.ts, baseline tests/e2e/baselines/declutter.json; 320,

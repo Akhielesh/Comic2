@@ -81,6 +81,33 @@ describe('registration', () => {
   });
 });
 
+describe('page tiles draw the frames a page is shown in (PE-COMPOSE wave note 4)', () => {
+  /** The x of every panel rect the n-th page tile draws (the cover is tile 0). */
+  const tileRectXs = (n: number): string[] => {
+    const tiles = within(screen.getByRole('list', { name: /Pages in this book/ })).getAllByRole('button');
+    return [...tiles[n].querySelectorAll('svg g > rect:first-child')].map((r) => r.getAttribute('x') ?? '');
+  };
+
+  it('an undrawn page planned on frames shows its frames; a page without them keeps its summary boxes', () => {
+    const undrawn = (): ComicDoc => {
+      const d = makeSampleDoc();
+      d.pages[0] = { ...d.pages[0], render: emptyRender() };
+      return d;
+    };
+    renderCard(bd(), makeFakeStudio({ doc: undrawn() }));
+    const before = tileRectXs(1);
+    expect(before.length).toBeGreaterThan(0);
+    cleanup();
+    const framed = undrawn();
+    const page = framed.pages[0];
+    framed.pages[0] = { ...page, panels: page.panels.map((p, i) => ({ ...p, frame: { ...(p.frame || {}), box: { x: 0.0123 + i / 100, y: 0.05, w: 0.3, h: 0.3 } } })) };
+    renderCard(bd(), makeFakeStudio({ doc: framed }));
+    const after = tileRectXs(1);
+    expect(after).toEqual(page.panels.map((_, i) => String(0.0123 + i / 100)));
+    expect(before).not.toEqual(after);
+  });
+});
+
 describe('filmstrip', () => {
   it('cover first, then every page; each name starts with the visible words, then cost, status and panels', () => {
     const studio = makeFakeStudio();

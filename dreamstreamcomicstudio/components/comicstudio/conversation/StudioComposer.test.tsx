@@ -55,6 +55,7 @@ import { prepareImageFile } from '../refs/downscale';
 import { deleteInboxRef } from '../studioApi';
 import { composeInStudio } from './composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
+import { TIER_PRESETS, getImageModel, resolveImageJob } from '../../../shared/comic/models';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { labelInName } from '../mobile/testing/labelInName';
 import { enterAction, selectionLabel, sendArgs } from './StudioComposer';
@@ -142,6 +143,33 @@ describe('StudioComposer — option chips', () => {
     expect(within(panel).getByRole('radio', { name: /Draft/ })).toHaveTextContent('$0.05/page');
     fireEvent.click(within(panel).getByRole('radio', { name: /Pro/ }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'settings', patch: { quality: 'pro' } }]);
+  });
+
+  // DC-1 wave note 3 (lead D10): from 1024 the composer chip is quality's on-screen home (the header has none there).
+  it('the quality chip is one home of the quality action and reads "{Tier} · {Model}" when roomy, never a price', () => {
+    const studio = makeFakeStudio();
+    render(<StudioComposer studio={studio} />);
+    const chip = screen.getByRole('button', { name: /^Quality:/ });
+    expect(chip).toHaveAttribute('data-action', 'quality');
+    const doc = studio.doc!;
+    const model = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec.nickname;
+    expect(chip).toHaveTextContent(`${TIER_PRESETS[doc.settings.quality]!.label} · ${model}`);
+    expect(chip.textContent).not.toMatch(/[$¢]/);
+    expect(within(chip).queryByTestId('composer-quality-lock')).toBeNull();
+    // The other chips carry no action id.
+    expect(screen.getByRole('button', { name: /^Format/ })).not.toHaveAttribute('data-action');
+  });
+
+  it('a locked comic shows the locked model, the lock glyph and the words ", locked for this comic"', () => {
+    const doc = makeSampleDoc();
+    // Lock to the Pro tier's model (the registry names it; no model id spelled out here).
+    const locked = resolveImageJob('page', 'pro').spec;
+    doc.imageModel = { modelId: locked.id, lockedAt: 1, origin: 'user_change' };
+    render(<StudioComposer studio={makeFakeStudio({ doc })} />);
+    const chip = screen.getByRole('button', { name: /^Quality:/ });
+    expect(chip).toHaveTextContent(`· ${getImageModel(locked.id)!.nickname}`);
+    expect(within(chip).getByTestId('composer-quality-lock')).toBeInTheDocument();
+    expect(chip).toHaveAccessibleName(expect.stringContaining(', locked for this comic'));
   });
 
   it('Style panel: a preset drafts the style; exploring directions runs the spend action', () => {
@@ -503,6 +531,51 @@ const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioContr
       <StudioComposer studio={studio} {...props} />
     </FormFactorProvider>
   );
+
+describe('StudioComposer — the quality chip is quality’s home from 1024 px (DC-1 #3, D10; s2b review)', () => {
+  const lockedDoc = () => {
+    const doc = makeSampleDoc();
+    doc.imageModel = { modelId: resolveImageJob('page', 'pro').spec.id, lockedAt: 1, origin: 'user_change' };
+    return doc;
+  };
+  /** A composer narrower than ROOMY_PX (400): jsdom measures 0, so the width is faked for the size hook. */
+  const narrow = () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 320, bottom: 120, width: 320, height: 120, toJSON: () => ({}) } as DOMRect);
+    return spy;
+  };
+
+  it('leads the chip row, so the row’s scroller can never clip it, and the lock leads its words', () => {
+    renderAt(DESKTOP, makeFakeStudio({ doc: lockedDoc() }));
+    const chips = within(screen.getByRole('toolbar', { name: 'Comic options' })).getAllByRole('button');
+    expect(chips[0]).toHaveAttribute('data-action', 'quality');
+    const chip = chips[0];
+    const lock = within(chip).getByTestId('composer-quality-lock');
+    const words = within(chip).getByText(/·|Standard|Pro|Draft/);
+    expect(lock.compareDocumentPosition(words) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('at 1024 px and up it never hides, even in a composer narrower than 400 px: a compact "{Tier}" and the lock', () => {
+    const spy = narrow();
+    try {
+      for (const w of [1024, 1280]) {
+        const { unmount } = renderAt(formFactorFor({ w, h: 800, coarse: false }), makeFakeStudio({ doc: lockedDoc() }));
+        const chip = document.querySelector<HTMLElement>('[data-action="quality"]')!;
+        expect(chip.className.split(/\s+/), `${w} px`).not.toContain('hidden');
+        expect(within(chip).getByTestId('composer-quality-lock')).toBeInTheDocument();
+        // Compact: the tier only; the model is in the title (a tier and a model, never a price).
+        expect(chip.textContent).not.toContain('·');
+        expect(chip.getAttribute('title')).toMatch(/·/);
+        expect(chip.getAttribute('title')).not.toMatch(/[$¢]/);
+        unmount();
+      }
+      // Below 1024 the header has the chip, so a narrow composer still steps aside.
+      renderAt(formFactorFor({ w: 900, h: 800, coarse: false }), makeFakeStudio({ doc: lockedDoc() }));
+      expect(document.querySelector<HTMLElement>('[data-action="quality"]')!.className.split(/\s+/)).toContain('hidden');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
 
 describe('StudioComposer — option chips say what they show (composer-chip-names, WCAG 2.5.3)', () => {
   it('each chip’s accessible name contains its visible text', () => {

@@ -29,8 +29,11 @@ import {
   type RenderTarget
 } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
+import { parseDialogue, resolveLineRef, whichLineChoices } from '../../../shared/comic/dialogue/index.js';
+import type { LineRef } from '../../../shared/comic/dialogue/types.js';
 import { LANGUAGES } from '../../../shared/comic/languages.js';
-import { LETTERING_PRESETS, type LetteringPresetId } from '../../../shared/comic/lettering/style.js';
+import { LETTERING_PRESETS, PRO_LETTERING_PRESETS, type LetteringPresetId, type ProLetteringPresetId } from '../../../shared/comic/lettering/style.js';
+import { PRO_EDIT_OPS_PATCHABLE } from '../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { formatUsd, type ImageJobKind } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, estimateDocJobs, pageTargets } from '../../../shared/comic/plan.js';
@@ -272,7 +275,9 @@ export function recapLine(doc: ComicDoc): string {
  * decision, and never to override silently.
  */
 export type ContradictionGap = 'contradiction_pages' | 'contradiction_style' | 'contradiction_pinned' | 'contradiction_note';
-export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent' | ContradictionGap;
+/** A dialogue request that matches several lines (plan §3 A3.2, Track B): dialogue_edit asks "Which line?". */
+export type DialogueGap = 'dialogue_target';
+export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent' | ContradictionGap | DialogueGap;
 
 /** What the OPEN QUESTIONS line may consider beyond the four classic gaps. */
 export interface GapOptions {
@@ -391,12 +396,46 @@ const presetAsk = (alias: string): RegExp[] => {
   ];
 };
 const PRESET_ASKS = (Object.keys(PRESET_ALIASES) as LetteringPresetId[]).map((id) => ({ id, res: PRESET_ALIASES[id].flatMap(presetAsk) }));
+/**
+ * The words for the 16 Pro looks (PE-LETTER #5), deduped against PRESET_ALIASES. Consulted only while
+ * PRO_EDIT_OPS_PATCHABLE is on, and before the base looks then, because a few are more specific phrases of a base word
+ * ("action manga" over "manga").
+ */
+const PRO_PRESET_ALIASES: Record<ProLetteringPresetId, string[]> = {
+  shonen: ['shonen', 'shounen', 'action manga', 'battle manga'],
+  horror: ['horror', 'scary', 'creepy', 'spooky'],
+  romance: ['romance', 'romantic', 'love story'],
+  kids: ['kids bright', 'bright', 'playful'],
+  sci_fi: ['sci-fi', 'sci fi', 'scifi', 'science fiction', 'space'],
+  western: ['western', 'cowboy', 'wild west'],
+  villain: ['villain', 'evil', 'dark balloons'],
+  robot: ['robot', 'robotic', 'radio', 'broadcast', 'android'],
+  narrator_box: ['narrator box', 'narrator', 'narration boxes', 'typewriter captions'],
+  newspaper: ['newspaper', 'newspaper strip', 'black and white'],
+  retro_caption: ['retro caption', 'golden age captions', 'yellow captions'],
+  flashback: ['flashback', 'memory', 'sepia'],
+  superhero: ['superhero', 'super hero', 'hero'],
+  fantasy: ['fantasy', 'fairy tale', 'medieval'],
+  comedy: ['comedy', 'funny', 'gag strip'],
+  zine: ['zine', 'indie zine', 'photocopied', 'punk']
+};
+const PRO_PRESET_ASKS = (Object.keys(PRO_PRESET_ALIASES) as ProLetteringPresetId[]).map((id) => ({
+  // A Pro id travels as a LetteringPresetId at runtime (lettering/style.ts); the sanitizers accept it only with allowPro.
+  id: id as unknown as LetteringPresetId,
+  res: PRO_PRESET_ALIASES[id].flatMap(presetAsk)
+}));
 const MINIMAL_ASK_RE = /\bminimal(?:ist)?\s+(?:preset|lettering (?:style|preset))\b|\b(?:preset|lettering (?:style|preset))\s*(?::|to|is)?\s*(?:the\s+)?minimal(?:ist)?\b/i;
 
 /** The lettering preset a sentence asks to switch to ("use the manga lettering", "switch the fonts to noir"), or undefined. */
 export function requestedLetteringPreset(text: string): LetteringPresetId | undefined {
   const t = clean(text);
   if (!t) return undefined;
+  if (PRO_EDIT_OPS_PATCHABLE) {
+    for (const { id, res } of PRO_PRESET_ASKS) {
+      if (!Object.prototype.hasOwnProperty.call(PRO_LETTERING_PRESETS, id)) continue;
+      if (res.some((re) => re.test(t))) return id;
+    }
+  }
   for (const { id, res } of PRESET_ASKS) {
     if (!Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, id)) continue;
     if (res.some((re) => re.test(t))) return id;
@@ -596,10 +635,62 @@ export function contradictionsOf(doc: ComicDoc, userText: string, focus?: Studio
   return out;
 }
 
+// ── The dialogue_target gap (plan §3 A3.2; B-RESOLVE wave note 5, built in wave 2 B-TOOL) ──
+
+/** The dialogue_target gap: the lines a dialogue request could mean, and the director-facing words. */
+export interface DialogueTargetGap {
+  gap: DialogueGap;
+  text: string;
+  /** The "Which line?" choices the resolver would offer (≤ 5, each with its balloon picture). */
+  choices: ReturnType<typeof whichLineChoices>;
+}
+
+/** Longer messages are scripts or stories, never one dialogue edit (and the grammar's cost stays bounded). */
+const DIALOGUE_GAP_MAX_CHARS = 600;
+
+/**
+ * A request about dialogue that matches 2–5 lines ("make Maya's line a whisper" when Maya has three): the same
+ * deterministic grammar and resolver dialogue_edit uses (shared/comic/dialogue), so the gap and the tool agree. Only a
+ * sentence the grammar reads as a dialogue edit counts, and only when its target resolves to "which" (several
+ * candidates); one match, none, "tap the balloon" (> 5) or a plural ("all", "these") never asks. Free; no model call.
+ */
+export function dialogueTargetGap(doc: ComicDoc, userText: string, focus?: StudioFocus): DialogueTargetGap | undefined {
+  const text = clean(userText);
+  if (!text || text.length > DIALOGUE_GAP_MAX_CHARS || !doc.pages?.length) return undefined;
+  let intents: ReturnType<typeof parseDialogue>['intents'];
+  try {
+    intents = parseDialogue(text, { selected: !!focus?.lineIds?.length }).intents;
+  } catch {
+    return undefined;
+  }
+  const ctx = {
+    ...(focus?.lineIds?.length ? { lineIds: focus.lineIds } : {}),
+    ...(focus?.pageId ? { pageId: focus.pageId } : {}),
+    ...(typeof focus?.panelN === 'number' ? { panelN: focus.panelN } : {})
+  };
+  for (const intent of intents) {
+    if (intent.act === 'add') continue;
+    const ref: LineRef | undefined = intent.act === 'swap' ? intent.a : (intent as { target?: LineRef }).target;
+    if (!ref) continue;
+    const res = resolveLineRef(doc, ref, ctx);
+    if (res.status !== 'which') continue;
+    const choices = whichLineChoices(doc, res.candidates);
+    if (choices.length < 2) continue;
+    return {
+      gap: 'dialogue_target',
+      choices,
+      text: `the request could mean ${choices.length} lines (${choices.map((c) => c.label).join('; ')}) — call dialogue_edit with the user's words and let it ask "Which line?" (it shows each balloon); never change all of them unless the user said all / every / both.`
+    };
+  }
+  return undefined;
+}
+
 /** Open questions, highest priority first (only the first is surfaced per turn). Contradictions lead when enabled. */
 export function materialGaps(doc: ComicDoc, userText: string, opts: GapOptions = {}): MaterialGap[] {
   const text = clean(userText);
   const gaps: MaterialGap[] = opts.contradictions ? contradictionsOf(doc, userText, opts.focus).map((c) => c.gap) : [];
+  // Behind the same flag as the contradictions (COMIC_CONFLICT_GUARD): the plan's A3.2 list carries it with them.
+  if (opts.contradictions && dialogueTargetGap(doc, userText, opts.focus)) gaps.push('dialogue_target');
   const lastUser = [...doc.conversation].reverse().find((m) => m.role === 'user');
   const attached = lastUser?.attachments?.map((a) => a.path) || [];
   if (attached.length) {
@@ -620,7 +711,7 @@ export function materialGaps(doc: ComicDoc, userText: string, opts: GapOptions =
   return gaps;
 }
 
-const GAP_TEXT: Record<Exclude<MaterialGap, ContradictionGap>, string> = {
+const GAP_TEXT: Record<Exclude<MaterialGap, ContradictionGap | DialogueGap>, string> = {
   attachments_purpose: 'the user attached images without saying what they are — ask who/what they show (a character, the style to follow, or a place) unless it is obvious.',
   vague_group: 'the user mentioned a vague group (e.g. "other animals") — pick 2–3 that fit, cast them (kind, count), name them in your reply; do not ask open-ended.',
   page_count: 'no page count yet — propose one (default first) in an ask_user, or pick a sensible one and say so.',
@@ -635,9 +726,11 @@ export const openQuestionsLine = (doc: ComicDoc, userText: string, opts: GapOpti
   if (opts.contradictions) {
     const first = contradictionsOf(doc, userText, opts.focus)[0];
     if (first) return `OPEN QUESTIONS: ${first.text}`;
+    const which = dialogueTargetGap(doc, userText, opts.focus);
+    if (which) return `OPEN QUESTIONS: ${which.text}`;
   }
   const first = materialGaps(doc, userText)[0];
-  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first as Exclude<MaterialGap, ContradictionGap>]}` : '';
+  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first as Exclude<MaterialGap, ContradictionGap | DialogueGap>]}` : '';
 };
 
 // ── Run outcomes (honest replies about renders this turn started) ────────────

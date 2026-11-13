@@ -105,7 +105,12 @@ describe('set_lettering_style', () => {
 
   it('honest errors: unknown font / speaker / preset; a font without the comic’s script is called out', async () => {
     const { call } = setup((d) => (d.format = { ...d.format, language: 'te' }));
-    expect(await call('set_lettering_style', { style: { font: 'wingdings' } })).toMatch(/^Error: I don't have a font called "wingdings". Choose one of: Comic Neue/);
+    // Exactly the 13 Latin faces: the script faces (self-hosted since PE-FONTS, like the Latin ones) are never offered.
+    expect(await call('set_lettering_style', { style: { font: 'wingdings' } })).toBe(
+      'Error: I don\'t have a font called "wingdings". Choose one of: Comic Neue (comic-neue), Bangers (bangers), Patrick Hand (patrick-hand), ' +
+        'Kalam (kalam), Shantell Sans (shantell-sans), Andika (andika), Atkinson Hyperlegible (atkinson), Luckiest Guy (luckiest-guy), ' +
+        'Permanent Marker (permanent-marker), Special Elite (special-elite), Ultra (ultra), Dela Gothic One (dela-gothic-one), Noto Sans (noto-sans).'
+    );
     expect(await call('set_lettering_style', { speaker: 'Zed', style: { bold: true } })).toMatch(/^Error: scope "speaker" needs a cast member's name \(Maya, Arjun\)/);
     expect(await call('set_lettering_style', { preset: 'vaporwave' })).toMatch(/^Error: Unknown lettering preset/);
     expect(await call('set_lettering_style', { style: { text_color: 'blurple' } })).toMatch(/isn't a text colour I can use/);

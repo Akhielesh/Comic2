@@ -15,7 +15,10 @@ interface LegalMicroLinksProps {
 /** The legal line's links: muted, ink on hover, a 44 × 44 target under a coarse pointer (short words like "FAQs" too), the ink focus ring. */
 export const LEGAL_LINK = `inline-flex items-center justify-center rounded-[var(--ds-radius-sm)] text-[var(--ds-muted)] transition-colors duration-[var(--ds-motion-fast)] hover:text-[var(--ds-ink)] motion-reduce:transition-none ${DENSITY.coarseSquare}`;
 
-/** The legal line's and the comics landing's Contact: the routed support mailbox (components/legal/contacts.ts). */
+/**
+ * The legal line's and the comics landing's Contact: the routed support mailbox (components/legal/contacts.ts), the one
+ * support address every DreamStream surface uses (lead decision D9; tests/config/supportEmail.test.ts).
+ */
 export const CONTACT_HREF = `mailto:${SUPPORT_EMAIL}`;
 
 /** The quiet legal line under a page (Atlas GlobalFooter's small print): on the page, a hairline above. */

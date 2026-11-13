@@ -102,7 +102,7 @@ export interface MotionClip {
   ease?: EaseId;
   /** Preset parameters: numbers, booleans, short words (written ≤ MOTION_LIMITS.paramsPerClip, a write bound). */
   params?: Record<string, MotionParamValue>;
-  /** Extra plays, 0..MOTION_LIMITS.repeatMax. */
+  /** Extra plays of an emphasis, 0..repeatMax; an entrance or exit plays once (repeat is ignored). */
   repeat?: number;
   /** Pro keyframes (≤ MOTION_LIMITS.keysPerClip), sorted by `t`. */
   keys?: MotionKey[];

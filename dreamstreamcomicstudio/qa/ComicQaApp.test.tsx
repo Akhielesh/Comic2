@@ -282,6 +282,26 @@ describe('?surface=app', () => {
     expect(document.querySelector('[data-qa-app-problem="./scenes/broken.tsx"]')).not.toBeNull();
   });
 
+  it('the look is on <html> before the scene mounts, so no control starts a transition when it lands (SETTLE-UI #6)', () => {
+    resetLook();
+    const seen: Array<{ skin: string | null; dark: boolean }> = [];
+    const LookProbe: React.FC = () => {
+      // A child's layout effect runs before its parent's: this is the earliest the scene can read its styles.
+      React.useLayoutEffect(() => {
+        seen.push({ skin: document.documentElement.getAttribute('data-ds-skin'), dark: document.documentElement.classList.contains('dark') });
+      }, []);
+      return <main aria-label="Look probe" />;
+    };
+    const index = collectAppScenes({ './scenes/probe.tsx': { default: { id: 'probe', title: 'Probe', Scene: LookProbe } } });
+    const { unmount } = render(<QaAppSurface scene="probe" theme="dark" skin="atlas" index={index} />);
+    expect(seen).toEqual([{ skin: 'atlas', dark: true }]);
+    expect(document.querySelector('[data-qa-app-scene="probe"]')).not.toBeNull();
+    unmount();
+    // Unmounting restores the page's own look.
+    expect(document.documentElement.hasAttribute('data-ds-skin')).toBe(false);
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+  });
+
   it('a scene typed against the contract type-checks as a glob module', () => {
     const scene: QaAppScene = { id: 'typed', title: 'Typed', Scene: () => <main /> };
     expect(collectAppScenes({ './scenes/typed.tsx': { default: scene } }).scenes).toHaveLength(1);
@@ -292,16 +312,29 @@ describe('?surface=pro (Program 2 placeholder) and the Comic Studio surfaces', (
   beforeEach(resetLook);
   afterEach(resetLook);
 
-  it('mounts the Pro Edit placeholder, named and ready, with no scenes registered yet', async () => {
+  it('mounts the Pro Edit index, named and ready: PE-SHELL’s scenes, and an unknown scene named calmly', async () => {
     render(<ComicQaApp params={parseQaHarnessParams('?surface=pro&scene=layers')} />);
     await act(async () => {
       await settle();
     });
-    expect(QA_PRO_SCENES).toEqual([]);
-    const main = document.querySelector('main[data-qa-pro="placeholder"]');
+    // PE-SHELL's five, then the scenes the later Pro packages asked for (added at the S2b integration after PE-INSPECT).
+    expect(QA_PRO_SCENES).toEqual([
+      'shell-easy',
+      'shell-pro',
+      'shell-pro-selected',
+      'shell-pro-parts',
+      'shell-flag-off',
+      'pro-inspector-docked',
+      'pro-inspector-empty',
+      'pro-layers',
+      'compose-panels',
+      'compose-panels-reader',
+      'pro-looks'
+    ]);
+    const main = document.querySelector('main[data-qa-pro="index"]');
     expect(main).not.toBeNull();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Pro Edit scenes');
-    expect(main?.textContent).toMatch(/No Pro Edit scene named "layers" yet/);
+    expect(main?.textContent).toContain('No Pro Edit scene named “layers”');
     // The placeholder is told the surface it runs on (Pro scenes may branch on params.surface).
     expect(main?.getAttribute('data-qa-surface')).toBe('pro');
     await waitFor(() => expect(document.documentElement.hasAttribute('data-qa-ready')).toBe(true));

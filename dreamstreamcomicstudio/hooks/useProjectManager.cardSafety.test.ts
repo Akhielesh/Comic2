@@ -23,6 +23,8 @@ vi.mock('../services/generationManager', () => ({ startBackgroundGeneration: vi.
 
 const { useProjectManager, STATE_LOAD_FAILED, STATE_NOT_OPENED_SAVE, PROJECT_NOTICE_ID, OPEN_RETRY_DELAYS_MS } = await import('./useProjectManager');
 const { isCardOnly, isCardState } = await import('../services/db');
+const { getImageUrl } = await import('../services/db');
+const { ProjectStateLoadError, resolveProjectOpen } = await import('../services/projectOpen');
 
 const VERSIONS = [{ id: 'v1', name: 'Old', createdAt: 1, state: { script: 'an older draft' } }];
 const TAGS = { 'user-1/p1.png': { imageId: 'user-1/p1.png', tag: 'PANEL-0007', category: 'PANEL', createdAt: 1 } };
@@ -284,6 +286,69 @@ describe('a kept full comic takes the row columns the server writes', () => {
     expect(listed(hook).isPublic).toBe(true);
     await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
     expect(upserts()[1].is_public).toBe(true);
+  });
+});
+
+describe('App after a failed open (resolveProjectOpen on the real hook): it stays on the library with the error', () => {
+  /** The open as App runs it (handleOpenProject / navigateToReader). */
+  const openAsApp = (hook: Hook) => resolveProjectOpen(() => hook.result.current.hydrateProjectAssets('c1'), () => listed(hook));
+
+  it('the full state did not load: nothing is opened, the error is on screen, the card stays, nothing is saved', async () => {
+    const hook = await mount();
+    failStateLoads(ALL_ATTEMPTS);
+    let opened: Awaited<ReturnType<typeof openAsApp>> | undefined;
+    await act(async () => {
+      opened = await openAsApp(hook);
+    });
+    // No project is handed to the app, so it has nothing to open: it stays where it was (the library).
+    expect(opened).toEqual({ outcome: 'stayed' });
+    expect(notice()).toHaveTextContent(STATE_LOAD_FAILED);
+    expect(notice()!.firstElementChild!.getAttribute('role')).toBe('alert');
+    expect(isCardState(listed(hook).state)).toBe(true);
+    expect(upserts()).toHaveLength(0);
+  }, 10_000);
+
+  it('the hook rejects that open with ProjectStateLoadError (the comic, the cause, the words on screen)', async () => {
+    const hook = await mount();
+    failStateLoads(ALL_ATTEMPTS);
+    let thrown: unknown;
+    await act(async () => {
+      thrown = await hook.result.current.hydrateProjectAssets('c1').then(() => undefined, (error: unknown) => error);
+    });
+    expect(thrown).toBeInstanceOf(ProjectStateLoadError);
+    expect((thrown as InstanceType<typeof ProjectStateLoadError>).projectId).toBe('c1');
+    expect((thrown as InstanceType<typeof ProjectStateLoadError>).message).toBe(STATE_LOAD_FAILED);
+    expect((thrown as InstanceType<typeof ProjectStateLoadError>).cause).toMatchObject({ code: '57014' });
+  }, 10_000);
+
+  it('opening it again retries: once the state loads, the whole comic opens', async () => {
+    const hook = await mount();
+    failStateLoads(ALL_ATTEMPTS);
+    await act(async () => {
+      await openAsApp(hook);
+    });
+    let opened: Awaited<ReturnType<typeof openAsApp>> | undefined;
+    await act(async () => {
+      opened = await openAsApp(hook);
+    });
+    expect(opened!.outcome).toBe('opened');
+    const project = (opened as { project: Project }).project;
+    expect(isCardState(project.state)).toBe(false);
+    expect((project.state as any).versions).toEqual(VERSIONS);
+  }, 10_000);
+
+  it('only the image signing failed: the comic is whole, so it still opens (best-effort), with no "could not load" error', async () => {
+    const hook = await mount();
+    vi.mocked(getImageUrl).mockRejectedValueOnce(new Error('sign failed'));
+    let opened: Awaited<ReturnType<typeof openAsApp>> | undefined;
+    await act(async () => {
+      opened = await openAsApp(hook);
+    });
+    expect(opened!.outcome).toBe('opened-best-effort');
+    // What the workspace then shows is the full comic the hook holds, never the card.
+    expect(isCardState(listed(hook).state)).toBe(false);
+    expect((listed(hook).state as any).versions).toEqual(VERSIONS);
+    expect(notice()).toBeNull();
   });
 });
 

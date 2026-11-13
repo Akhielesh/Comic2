@@ -9,6 +9,7 @@ import { PROVIDERS_ORDERED } from '../shared/providers';
 import { withRetry, type RetryOptions } from './retry';
 import { isRetryableError } from './apiErrors';
 import { appStatus } from './appStatus';
+import { markReachable } from '../components/ds/useOnline';
 
 let cachedAccessToken: string | undefined;
 /** The account `cachedAccessToken` belongs to. */
@@ -100,7 +101,10 @@ const parseError = async (res: Response) => {
  */
 const safeFetch = async (url: string, init: RequestInit): Promise<Response> => {
   try {
-    return await fetch(url, init);
+    const res = await fetch(url, init);
+    // Any answer, whatever its status, proves the server is reachable: end useOnline's "unreachable" hold now (DS-R1).
+    markReachable();
+    return res;
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
     if ((err as Error)?.name === 'AbortError') throw err;

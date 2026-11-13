@@ -58,6 +58,9 @@ const state = {
 
 const project: Project = { id: 'project-1', name: 'Maya and the Door', createdAt: 1, updatedAt: 2, state };
 
+// The sizes' status, the value beside its "Status" term (DS-3 lays the size facts out as a term list).
+const sizeStatus = () => screen.getByText('Status', { selector: 'dt' }).nextElementSibling as HTMLElement;
+
 const openModal = async () => {
   render(<ProjectInfoModal project={project} onClose={vi.fn()} onUpdateProject={vi.fn()} />);
   const update = screen.getByRole('button', { name: /Update Sizes/ });
@@ -90,7 +93,7 @@ describe('ProjectInfoModal on the on-demand PDF loader', () => {
 
   it('the automatic refresh runs once, 1.2 s after opening: it sizes the ZIP and fetches no PDF tools', async () => {
     await openModal();
-    const status = screen.getByText(/^Status:/);
+    const status = sizeStatus();
     expect(within(status).getByText('Stale')).toBeInTheDocument();
     await waitFor(() => expect(within(status).getByText('Latest')).toBeInTheDocument(), { timeout: 6000 });
     expect(isLegacyPdfReadyMock).toHaveBeenCalledWith('jspdf');
@@ -106,10 +109,10 @@ describe('ProjectInfoModal on the on-demand PDF loader', () => {
     try {
       await openModal();
       await waitFor(() => expect(loadJsPdfMock).toHaveBeenCalledTimes(1), { timeout: 6000 });
-      await waitFor(() => expect(within(screen.getByText(/^Status:/)).getByText('Updating')).toBeInTheDocument());
+      await waitFor(() => expect(within(sizeStatus()).getByText('Updating')).toBeInTheDocument());
       failLoad(new LegacyPdfLoadError('network', 'jspdf'));
       // The refresh failed and the sizes are stale again: the same snapshot never refreshes twice.
-      await waitFor(() => expect(within(screen.getByText(/^Status:/)).getByText('Stale')).toBeInTheDocument());
+      await waitFor(() => expect(within(sizeStatus()).getByText('Stale')).toBeInTheDocument());
       await new Promise((r) => setTimeout(r, 1500));
       expect(loadJsPdfMock).toHaveBeenCalledTimes(1);
     } finally {

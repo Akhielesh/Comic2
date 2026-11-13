@@ -209,6 +209,11 @@ export class QaHarness {
     return this.page.evaluate(() => ({ scenes: window.__QA_APP_SCENES__ || [], problems: window.__QA_APP_SCENE_PROBLEMS__ || [] }));
   }
 
+  /** surface=pro: the Pro Edit scenes the surface publishes while mounted (window.__QA_PRO_SCENES__, qa/pro/index.tsx). */
+  async proScenes(): Promise<AppSceneEntry[]> {
+    return this.page.evaluate(() => (window as Window & { __QA_PRO_SCENES__?: AppSceneEntry[] }).__QA_PRO_SCENES__ || []);
+  }
+
   /**
    * The page's widths. On an `isMobile` project Chromium widens the layout viewport to fit content that overflows
    * it (up to 4× the device width), so `innerWidth` grows WITH the overflow and the scanner's `overflow` check

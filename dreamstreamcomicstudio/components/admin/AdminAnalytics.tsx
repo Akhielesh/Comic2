@@ -9,6 +9,7 @@ import {
   type TelemetryEventRow,
   type FeedbackRow
 } from '../../services/adminAnalytics';
+import { ContactMessages } from './ContactMessages';
 
 const fmt = (iso?: string | null) => {
   if (!iso) return '—';
@@ -48,7 +49,7 @@ const Chips: React.FC<{ title: string; data: Record<string, number> }> = ({ titl
   );
 };
 
-type Tab = 'overview' | 'events' | 'feedback';
+type Tab = 'overview' | 'events' | 'feedback' | 'contact';
 
 export const AdminAnalytics: React.FC = () => {
   const [days, setDays] = useState(7);
@@ -106,8 +107,8 @@ export const AdminAnalytics: React.FC = () => {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {(['overview', 'events', 'feedback'] as Tab[]).map((t) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {(['overview', 'events', 'feedback', 'contact'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -115,25 +116,28 @@ export const AdminAnalytics: React.FC = () => {
             >{t}</button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white">
-            <option value={1}>Last 24h</option>
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-          <button onClick={() => void loadOverview()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
-          </button>
-        </div>
+        {/* The day range, Refresh and telemetry banners belong to the analytics tabs; Contact has its own Refresh. */}
+        {tab !== 'contact' && (
+          <div className="flex items-center gap-2">
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white">
+              <option value={1}>Last 24h</option>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+            <button onClick={() => void loadOverview()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
+            </button>
+          </div>
+        )}
       </div>
 
-      {overview && !overview.storageEnabled && (
+      {tab !== 'contact' && overview && !overview.storageEnabled && (
         <div className="border-2 border-amber-400 bg-amber-50 text-amber-800 rounded-lg px-3 py-2 text-xs font-bold flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" /> Persistence is off — apply server/sql/telemetry_feedback.sql and set SUPABASE_SERVICE_ROLE_KEY. Showing empty data.
         </div>
       )}
-      {error && <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{error}</div>}
+      {tab !== 'contact' && error && <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{error}</div>}
 
       {tab === 'overview' && overview && (
         <div className="space-y-4">
@@ -262,6 +266,8 @@ export const AdminAnalytics: React.FC = () => {
           </div>
         </div>
       )}
+
+      {tab === 'contact' && <ContactMessages />}
 
       {tab === 'feedback' && (
         <div className="space-y-2">

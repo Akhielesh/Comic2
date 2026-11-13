@@ -335,6 +335,12 @@ const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
         }
       ];
       if (prev.auto === undefined) restore.push({ op: 'letter_style', patch: { auto: null } });
+      // Saved named styles (PE-LETTER): the reset keeps them, so only the entries this op touched are put back as they
+      // were (null deletes one the op added).
+      const named = op.patch && typeof op.patch === 'object' ? op.patch.named : undefined;
+      if (named && typeof named === 'object') {
+        restore.push({ op: 'letter_style', patch: { named: Object.fromEntries(Object.keys(named).map((id) => [id, prev.named?.[id] ?? null])) } });
+      }
       return restore;
     }
     case 'balloon':

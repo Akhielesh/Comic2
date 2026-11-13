@@ -1,12 +1,14 @@
 // P2-PLATFORM: the legacy Review & Export step never shows governed users dollars.
 // Governed → shares of their usage ("≈1.2% of your usage"); admins / own key → the dollar report.
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import JSZip from 'jszip';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppStep, type ComicPanel, type ComicState, type Project } from '../../types';
 import type { AllowanceStatus } from '../../services/usageAllowance';
 
+const dbExport = vi.hoisted(() => ({ exportProject: vi.fn() }));
 vi.mock('../../services/db', () => ({
-  exportProject: vi.fn(),
+  exportProject: dbExport.exportProject,
   getImageUrl: vi.fn(async () => undefined),
   getImageDataUrl: vi.fn(async (id: string) => `data:image/png;base64,${id}`),
   loadArtifactsForProject: vi.fn(async () => []),
@@ -30,6 +32,9 @@ const allowance = vi.hoisted(() => ({ status: null as AllowanceStatus | null }))
 vi.mock('../usage/useUsageAllowance', () => ({
   useUsageAllowance: () => allowance.status
 }));
+
+const download = vi.hoisted(() => ({ downloadBlob: vi.fn() }));
+vi.mock('../../services/download', () => download);
 
 vi.mock('../../services/geminiService', () => ({ runContinuityAudit: vi.fn() }));
 vi.mock('../../services/generationManager', () => ({ regenerateSinglePanel: vi.fn() }));
@@ -190,5 +195,47 @@ describe('ReviewExport spend display', () => {
     renderStep();
     await waitFor(() => expect(screen.getAllByText(/% of your usage$/).length).toBeGreaterThanOrEqual(1));
     expect(screen.queryByText(DOLLAR_TEXT)).toBeNull();
+  });
+});
+
+// DS-3 #14: the legacy step's project ZIP follows Project info's rule. A governed user's project.json leaves out
+// every dollar figure the state carries (estimatedCostRange and any …Usd key, at any depth); admins keep the row.
+describe('ReviewExport project ZIP: project.json', () => {
+  const projectRow = () => ({
+    id: 'project-1',
+    name: 'Maya and the Door',
+    state: {
+      storyPlanning: { approved: true, estimatedCostRange: { low: 0.4, high: 0.9 } },
+      agentSettings: { autoPageCount: true, budgetCapUsd: 5 },
+      studioPages: [{ id: 'pg1', variants: [{ path: 'pages/pg1/a.png', costUsd: 0.04 }] }]
+    }
+  });
+  beforeEach(() => {
+    billing.report = null;
+    download.downloadBlob.mockClear();
+    dbExport.exportProject.mockResolvedValue({ project: projectRow(), images: {}, artifacts: [], report: null });
+  });
+  const projectJsonOf = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'ZIP' }));
+    await waitFor(() => expect(download.downloadBlob).toHaveBeenCalledTimes(1));
+    const zip = await act(async () => JSZip.loadAsync(download.downloadBlob.mock.calls[0][0] as Blob));
+    return zip.file('project.json')!.async('string');
+  };
+
+  it('a governed user gets the whole project without its dollar fields', async () => {
+    allowance.status = status(true);
+    renderStep();
+    const json = await projectJsonOf();
+    expect(json).not.toMatch(/Usd|"currency"|estimatedCostRange/);
+    const row = JSON.parse(json);
+    expect(row.state.storyPlanning).toEqual({ approved: true });
+    expect(row.state.agentSettings).toEqual({ autoPageCount: true });
+    expect(row.state.studioPages).toEqual([{ id: 'pg1', variants: [{ path: 'pages/pg1/a.png' }] }]);
+  });
+
+  it('an admin gets the row unchanged', async () => {
+    allowance.status = status(false);
+    renderStep();
+    expect(JSON.parse(await projectJsonOf())).toEqual(projectRow());
   });
 });

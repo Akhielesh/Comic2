@@ -295,6 +295,22 @@ describe('CompactHeaderMenu', () => {
     expect(onSettings).toHaveBeenCalled();
   });
 
+  it('a row with an action id carries it as data-action; rows without one carry none (declutter C2; DC-1 wave note 9)', () => {
+    render(
+      <CompactHeaderMenu
+        open
+        onClose={vi.fn()}
+        anchorRef={{ current: document.body }}
+        rows={[
+          { id: 'read', label: 'Read the comic', icon: null, action: 'read', onSelect: vi.fn() },
+          { id: 'settings', label: 'Settings', icon: null, onSelect: vi.fn() }
+        ]}
+      />
+    );
+    expect(screen.getByRole('menuitem', { name: 'Read the comic' })).toHaveAttribute('data-action', 'read');
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).not.toHaveAttribute('data-action');
+  });
+
   it('arrow keys move between enabled items (wrapping), Home/End jump — the menu keyboard contract', () => {
     render(
       <CompactHeaderMenu

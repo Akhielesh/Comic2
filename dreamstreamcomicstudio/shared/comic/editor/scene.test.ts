@@ -95,6 +95,34 @@ describe('transforms', () => {
   });
 });
 
+describe('rotate a linked chain (PE-LETTER wave note 24)', () => {
+  const chained = (headExtra: Record<string, unknown> = {}) => {
+    const { page } = fixture();
+    const p: Page = {
+      ...page,
+      balloons: [
+        { lineId: 'l1', x: 0.1, y: 0.1, w: 0.25, pinned: true, rot: 15, ...headExtra },
+        { lineId: 'l2', x: 0.5, y: 0.55, w: 0.3, pinned: true, linkTo: 'l1' }
+      ]
+    };
+    return { doc: withPages(baseDoc(), [p]), page: p };
+  };
+
+  it('a turn on a linked member writes its chain head, the rot the layout draws for the whole chain', () => {
+    const { doc, page } = chained();
+    const r = rotateEdit(doc, page, { kind: 'balloon', id: 'l2' }, 30) as EditOk;
+    expect(r.ok).toBe(true);
+    expect(r.ops).toEqual([{ op: 'balloon', pageId: 'pg_a', lineId: 'l1', patch: { rot: 30, pinned: true } }]);
+    // The head's own turn reads as nothing to change from the member too.
+    expect(rotateEdit(doc, page, { kind: 'balloon', id: 'l2' }, 15).ok).toBe(false);
+  });
+
+  it('a locked head refuses the member’s turn', () => {
+    const { doc, page } = chained({ locked: true });
+    expect(rotateEdit(doc, page, { kind: 'balloon', id: 'l2' }, 30)).toEqual({ ok: false, reason: 'This balloon is locked. Unlock it to change it.' });
+  });
+});
+
 describe('align and distribute', () => {
   it('aligns and spaces boxes', () => {
     const boxes = [

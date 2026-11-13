@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { castNoun, createEmptyDoc, emptyRender, pageSpecHash, type AssetRef } from '../../../shared/comic/doc.js';
+import { castNoun, createEmptyDoc, emptyRender, isPageStale, pageSpecHash, type AssetRef, type ComicDoc, type Page } from '../../../shared/comic/doc.js';
+import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS, imageRouteFor, startAction } from './jobs.js';
 import { estimateJobs, formatUsd, resolveImageJob } from '../../../shared/comic/models.js';
@@ -782,7 +783,7 @@ describe('lettering edits keep ids, pins and translations', () => {
     expect(page.render.specHash).toBe(pageSpecHash(ctx.session.doc, page));
   });
 
-  it('new lines get new ids at the right position; changed kinds replace; style and position apply', async () => {
+  it('new lines get new ids at the right position; the same speaker keeps the line (and its pin); style and position apply', async () => {
     setup(lakeWithText());
     await call('edit_panel_text', {
       page: 1,
@@ -794,7 +795,11 @@ describe('lettering edits keep ids, pins and translations', () => {
     });
     const panel = ctx.session.doc.pages[0].panels[2];
     expect(panel.lines.map((l) => l.kind)).toEqual(['caption', 'speech']);
-    expect(panel.lines[1].id).not.toBe('ln_l3'); // position 2 had no old line → new id
+    expect(panel.lines[0].id).not.toBe('ln_l3'); // the caption is a new line → a new id
+    // The Baby's line is still the Baby's line (plan §3 B3: an id follows its speaker, not its index): it keeps its id,
+    // so its pinned balloon and its translation (now stale) survive the rewrite.
+    expect(panel.lines[1].id).toBe('ln_l3');
+    expect(panel.lines[1].text).toBe('Bye-bye, friends!');
     // Parsed by the lettering engine (same words as restyle_balloons): "larger" = ×1.2 of the line's current size.
     expect(panel.lines[1].style).toMatchObject({ textColor: expect.stringMatching(/^#/), sizeScale: 1.2, shape: 'cloud' });
     const caption = ctx.session.doc.pages[0].balloons.find((b) => b.lineId === panel.lines[0].id);
@@ -802,7 +807,10 @@ describe('lettering edits keep ids, pins and translations', () => {
     expect(caption!.x).toBeGreaterThanOrEqual(0);
     expect(caption!.y).toBeGreaterThanOrEqual(0);
     expect(caption!.x + caption!.w).toBeLessThanOrEqual(1);
-    // The old line was deleted (its balloon and translation go with it).
+    expect(ctx.session.doc.pages[0].balloons.find((b) => b.lineId === 'ln_l3')).toMatchObject({ pinned: true });
+    expect(ctx.session.doc.i18n!.editions.hi.lines.ln_l3).toBeDefined();
+    // A line nobody keeps is deleted (its balloon and translation go with it).
+    await call('edit_panel_text', { page: 1, panel: 3, lines: [{ kind: 'caption', text: 'Sunset at the lake.' }] });
     expect(ctx.session.doc.pages[0].balloons.some((b) => b.lineId === 'ln_l3')).toBe(false);
   });
 
@@ -857,5 +865,205 @@ describe('per-turn tool trimming tuned on the golden set', () => {
     expect(lettering.tools.map((t) => t.spec.function.name)).toContain('set_lettering_style');
     expect(GROUP_HINTS.refs!.test('these photos are Maya')).toBe(true);
     expect(GROUP_HINTS.i18n!.test('make it in Telugu')).toBe(true);
+  });
+});
+
+describe('wave 2 B-TOOL: line targets, read_pages ids, ids that follow the line (agent-editor plan §3 B3)', () => {
+  it('set_line {target: {line_ids}} changes exactly that line; a target naming several lines is refused with their ids', async () => {
+    expect(await call('set_line', { target: { line_ids: ['ln_2_2'] }, kind: 'thought' })).toMatch(/^Updated page 2 panel 2 line 1 \(now thought\)\./);
+    expect(ctx.session.doc.pages[1].panels[1].lines[0]).toMatchObject({ id: 'ln_2_2', kind: 'thought', speakerId: 'c_maya' });
+    expect(ctx.session.doc.pages[0].panels[1].lines[0].kind).toBe('speech');
+    // Maya speaks on pages 1 and 2: set_line names both and points at dialogue_edit (a fresh session: no page was touched
+    // lately, so the resolver widens to the whole comic; right after the edit above it would read page 2 first).
+    setup();
+    const many = await call('set_line', { target: { speaker: 'Maya' }, text: 'x' });
+    expect(many).toMatch(/^Error: That matches 2 lines: \[ln_1_2\] page 1 panel 2 .*\[ln_2_2\] page 2 panel 2/);
+    expect(await call('set_line', { target: { selected: true }, text: 'x' })).toMatch(/^Error: Nothing is selected/);
+    // The selection works as a target.
+    setup(plannedDoc(), [], { focus: { pageId: 'pg_3', lineIds: ['ln_3_2'] } });
+    expect(await call('set_line', { target: { selected: true }, text: 'Over here!' })).toMatch(/^Updated page 3 panel 2 line 1\./);
+    expect(ctx.session.doc.pages[2].panels[1].lines[0].text).toBe('Over here!');
+  });
+
+  it('read_pages prints every line with its [id], and what the creator set on its balloon: spot, pin or lock, tail, own style', async () => {
+    const doc = plannedDoc();
+    doc.pages[1].balloons = [{ lineId: 'ln_2_2', x: 0.05, y: 0.36, w: 0.2, pinned: true, locked: true, tailX: 0.4, tailY: 0.7 }];
+    doc.pages[1].panels[1].lines[0].style = { textColor: '#e63946', shape: 'cloud' };
+    setup(doc);
+    const out = await call('read_pages', { pages: [1, 2] });
+    expect(out).toContain('1. [ln_1_2] speech MAYA: "Line on page 1"');
+    const line2 = out.split('\n').find((l) => l.includes('[ln_2_2]'))!;
+    expect(line2).toMatch(/^ {4}1\. \[ln_2_2\] speech MAYA: "Line on page 2" · (top|left|center|top-left)[a-z-]* · locked · tail → set by hand · own style: /);
+    // A balloon nobody placed prints no balloon facts.
+    expect(out.split('\n').find((l) => l.includes('[ln_1_2]'))).toBe('    1. [ln_1_2] speech MAYA: "Line on page 1"');
+  });
+
+  it('edit_panel_text keeps the ids on a text match while reordering (one line_move each, one undo step)', async () => {
+    const doc = plannedDoc();
+    doc.pages[1].panels[1].lines = [
+      { id: 'ln_a', kind: 'speech', speakerId: 'c_maya', text: 'Where is it?' },
+      { id: 'ln_b', kind: 'speech', speakerId: 'c_arjun', text: 'Right here.' }
+    ];
+    doc.pages[1].balloons = [{ lineId: 'ln_a', x: 0.1, y: 0.4, w: 0.25, pinned: true }];
+    setup(doc);
+    const rev = ctx.session.doc.rev;
+    const out = await call('edit_panel_text', {
+      page: 2,
+      panel: 2,
+      lines: [
+        { kind: 'speech', speaker: 'Arjun', text: 'Right here.' },
+        { kind: 'speech', speaker: 'Maya', text: 'Where is it?' }
+      ]
+    });
+    expect(out).toMatch(/^Page 2 panel 2 now has 2 lines \(2 kept in place, 1 moved to the new order\)\./);
+    expect(ctx.session.doc.pages[1].panels[1].lines.map((l) => l.id)).toEqual(['ln_b', 'ln_a']);
+    // Maya's pinned balloon stayed hers, and the reorder is one director step.
+    expect(ctx.session.doc.pages[1].balloons).toEqual([{ lineId: 'ln_a', x: 0.1, y: 0.4, w: 0.25, pinned: true }]);
+    expect(ctx.session.doc.rev).toBe(rev + 1);
+    const ops = ctx.events.filter((e) => e.type === 'ops').at(-1);
+    expect(ops && ops.type === 'ops' ? ops.ops.map((o) => o.op) : []).toEqual(['line_move']);
+  });
+
+  it('edit_panel_text {target} finds the panel from a line (no page / panel numbers needed)', async () => {
+    expect(await call('edit_panel_text', { target: { text_contains: 'page 3' }, lines: [{ kind: 'caption', text: 'Later.' }] })).toMatch(/^Page 3 panel 2 now has 1 line\./);
+    expect(ctx.session.doc.pages[2].panels[1].lines.map((l) => l.text)).toEqual(['Later.']);
+  });
+});
+
+describe('the conflict guard holds what depends on a held line (B-TOOL review: no stale page, no orphan balloon, no false claim)', () => {
+  const GUARD_ON: StudioCaps = { ...DEFAULT_CAPS, liveAgent: { queue: false, steer: false, conflicts: true } };
+  const MINE = { op: 'line' as const, pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: 'Mine!' } };
+  /** Page 1 drawn and current: a cast change on it would make it stale (and a redraw PAID). */
+  const drawn = (doc: ComicDoc = plannedDoc()): ComicDoc => {
+    const p = doc.pages[0];
+    p.render = { ...p.render, status: 'ready', specHash: pageSpecHash(doc, p), asset: { path: 'p1.png' } } as Page['render'];
+    return doc;
+  };
+  const guarded = (doc: ComicDoc) => {
+    ctx = testContext(newSession(doc), { caps: GUARD_ON });
+    turn = createDirectorTurn({ userText: 'x', startRev: ctx.session.doc.rev });
+    tools = new Map(buildDirectorTools(ctx, turn).map((t) => [t.spec.function.name, t]));
+  };
+  const page1 = () => ctx.session.doc.pages[0];
+  const noOrphans = () => {
+    const ids = new Set(page1().panels.flatMap((p) => p.lines.map((l) => l.id)));
+    return page1().balloons.every((b) => ids.has(b.lineId));
+  };
+
+  it('set_line: a held speaker change adds nobody to the panel, the page stays current, and the result is only the conflict', async () => {
+    guarded(drawn());
+    ctx.session.commit([MINE], { origin: 'user' });
+    const out = await call('set_line', { target: { line_ids: ['ln_1_2'] }, speaker: 'Arjun', text: 'Theirs' });
+    expect(out).toMatch(/^Conflict: you changed page 1 · panel 2 · line 1/);
+    expect(out).not.toMatch(/Updated|Arjun/);
+    expect(page1().panels[1]).toMatchObject({ castIds: ['c_maya'], lines: [{ id: 'ln_1_2', text: 'Mine!', speakerId: 'c_maya' }] });
+    expect(isPageStale(ctx.session.doc, page1())).toBe(false);
+    // "Use the director's" brings the cast change along with the line, and the card says so.
+    expect(turn.conflicts).toHaveLength(1);
+    expect(turn.conflicts![0].proposed.map((op) => op.op)).toEqual(['line', 'panel']);
+    expect(turn.conflicts![0].theirs).toContain("Add Arjun to the panel's cast");
+  });
+
+  it('set_line with nothing in the way adds the new speaker to the panel in the same undo step, as before', async () => {
+    guarded(plannedDoc());
+    const rev = ctx.session.doc.rev;
+    expect(await call('set_line', { target: { line_ids: ['ln_1_2'] }, speaker: 'Arjun' })).toMatch(/^Updated page 1 panel 2 line 1\./);
+    expect(page1().panels[1].castIds).toEqual(['c_maya', 'c_arjun']);
+    expect(ctx.session.doc.rev).toBe(rev + 1);
+  });
+
+  it('edit_panel_text: a new line waits with the line it replaces (no second line, no cast change, no claim)', async () => {
+    guarded(drawn());
+    ctx.session.commit([MINE], { origin: 'user' });
+    const out = await call('edit_panel_text', { page: 1, panel: 2, lines: [{ kind: 'speech', speaker: 'Arjun', text: 'Hello', position: 'top-left' }] });
+    expect(out).toMatch(/^Conflict: you changed page 1 · panel 2 · line 1/);
+    expect(out).not.toMatch(/now has|Added the speaker/);
+    expect(page1().panels[1].lines.map((l) => [l.id, l.text])).toEqual([['ln_1_2', 'Mine!']]);
+    expect(page1().panels[1].castIds).toEqual(['c_maya']);
+    expect(page1().balloons).toEqual([]);
+    expect(isPageStale(ctx.session.doc, page1())).toBe(false);
+    // One card item carries the whole replacement, and its words say all of it.
+    expect(turn.conflicts).toHaveLength(1);
+    const item = turn.conflicts![0];
+    expect(item.proposed.map((op) => op.op)).toEqual(['line', 'line', 'balloon', 'panel']);
+    expect(item.theirs).toMatch(/^Remove this line\. Add “Hello”\. Add Arjun to the panel's cast\.$/);
+  });
+
+  it('edit_panel_text after the creator reordered the panel: the new line, its balloon, the cast and the reorder all wait', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].panels[1].lines.push({ id: 'ln_x', kind: 'caption', text: 'Later.' });
+    guarded(drawn(doc));
+    ctx.session.commit([{ op: 'line_move', pageId: 'pg_1', id: 'ln_x', toPanelId: 'pn_1_2', index: 0 }], { origin: 'user' });
+    const out = await call('edit_panel_text', {
+      page: 1,
+      panel: 2,
+      lines: [
+        { kind: 'speech', speaker: 'Maya', text: 'Line on page 1' },
+        { kind: 'caption', text: 'Later.' },
+        { kind: 'speech', speaker: 'Arjun', text: 'New!', position: 'bottom' }
+      ]
+    });
+    expect(out).toMatch(/^Conflict: you changed page 1 · panel 2/);
+    expect(out).not.toMatch(/now has|moved to the new order/);
+    expect(page1().panels[1].lines.map((l) => l.id)).toEqual(['ln_x', 'ln_1_2']);
+    expect(page1().panels[1].castIds).toEqual(['c_maya']);
+    expect(noOrphans()).toBe(true);
+    expect(isPageStale(ctx.session.doc, page1())).toBe(false);
+  });
+
+  it('edit_panel_text that partly applies says what committed: the other line changes, the held one waits', async () => {
+    const doc = plannedDoc();
+    doc.pages[1].panels[1].lines = [
+      { id: 'ln_a', kind: 'speech', speakerId: 'c_maya', text: 'Where is it?' },
+      { id: 'ln_b', kind: 'speech', speakerId: 'c_arjun', text: 'Right here.' }
+    ];
+    guarded(doc);
+    ctx.session.commit([{ op: 'line', pageId: 'pg_2', panelId: 'pn_2_2', id: 'ln_b', patch: { text: 'Mine.' } }], { origin: 'user' });
+    const out = await call('edit_panel_text', {
+      page: 2,
+      panel: 2,
+      lines: [
+        { kind: 'speech', speaker: 'Maya', text: 'Where is it now?' },
+        { kind: 'speech', speaker: 'Arjun', text: 'Over here.' }
+      ]
+    });
+    expect(out).toMatch(/^Page 2 panel 2 now has 2 lines \(2 kept in place\)\..* Conflict: you changed page 2 · panel 2 · line 2/);
+    expect(ctx.session.doc.pages[1].panels[1].lines.map((l) => l.text)).toEqual(['Where is it now?', 'Mine.']);
+  });
+
+  it('edit_panel_text whose reorder waits counts the lines the panel really has, not the ones it asked for', async () => {
+    const doc = plannedDoc();
+    doc.pages[1].panels[1].lines = [
+      { id: 'ln_a', kind: 'speech', speakerId: 'c_maya', text: 'Where is it?' },
+      { id: 'ln_b', kind: 'speech', speakerId: 'c_arjun', text: 'Right here.' }
+    ];
+    guarded(doc);
+    ctx.session.commit([{ op: 'line', pageId: 'pg_2', panelId: 'pn_2_2', id: 'ln_b', patch: { text: 'Mine.' } }], { origin: 'user' });
+    // Arjun first, then Maya, then a new caption: the move of Arjun's (held) line and the new line are one structure.
+    const out = await call('edit_panel_text', {
+      page: 2,
+      panel: 2,
+      lines: [
+        { kind: 'speech', speaker: 'Arjun', text: 'Over here.' },
+        { kind: 'speech', speaker: 'Maya', text: 'Where is it now?' },
+        { kind: 'caption', text: 'Later.' }
+      ]
+    });
+    expect(out).toMatch(/^Page 2 panel 2 now has 2 lines \(2 kept in place\)\. /);
+    expect(out).not.toMatch(/moved to the new order/);
+    expect(ctx.session.doc.pages[1].panels[1].lines.map((l) => [l.id, l.text])).toEqual([
+      ['ln_a', 'Where is it now?'],
+      ['ln_b', 'Mine.']
+    ]);
+    // The new caption and the reorder wait on the card with Arjun's line ("Use the director's" applies them together).
+    expect(turn.conflicts).toHaveLength(1);
+    expect(turn.conflicts![0].proposed.map((op) => op.op).sort()).toEqual(['line', 'line', 'line_move']);
+    expect(turn.conflicts![0].theirs).toMatch(/^“Over here\.”, .* Add “Later\.”\.$/);
+  });
+
+  it('set_line refuses a plural target itself: {speaker, all} names two lines', async () => {
+    const rev = ctx.session.doc.rev;
+    expect(await call('set_line', { target: { speaker: 'Maya', all: true }, text: 'x' })).toMatch(/^Error: set_line changes ONE line and that names 2: \[ln_1_2\].*\[ln_2_2\]/);
+    expect(ctx.session.doc.rev).toBe(rev);
   });
 });

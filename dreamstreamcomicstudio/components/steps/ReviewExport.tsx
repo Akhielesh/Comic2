@@ -27,7 +27,7 @@ import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { getComicCost } from '../../services/billing';
 import { costContextFromAllowance } from '../../services/costDisplay';
 import { useUsageAllowance } from '../usage/useUsageAllowance';
-import { aiUsageForExport, artifactsForExport, comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, type ComicCostResponse } from './comicCostDisplay';
+import { aiUsageForExport, artifactsForExport, comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, projectForExport, type ComicCostResponse } from './comicCostDisplay';
 import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
 import { transitionAgentRun } from '../../services/comicAgentRun';
 import { AgentStageShell } from '../AgentStageShell';
@@ -534,7 +534,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       const zip = new JSZip();
       const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_');
 
-      zip.file('project.json', JSON.stringify(exportData.project, null, 2));
+      zip.file('project.json', JSON.stringify(projectForExport(exportData.project, costCtx), null, 2));
 
       const imagesFolder = zip.folder('images');
       const imageFileMap: Record<string, string> = {};
