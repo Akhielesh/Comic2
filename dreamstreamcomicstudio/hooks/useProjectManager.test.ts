@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import React from 'react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppStep, ComicState } from '../types';
 import { fakeSupabase } from '../services/projectRows.testkit';
@@ -11,6 +12,10 @@ vi.mock('../services/db', async (importOriginal) => ({
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-1' }, loading: false }) }));
 vi.mock('../services/generationManager', () => ({ startBackgroundGeneration: vi.fn(), cancelGeneration: vi.fn() }));
+vi.mock('../services/pageStudio', () => ({ analyzeStyle: vi.fn(), analyzeLayout: vi.fn(), generatePage: vi.fn(), editPage: vi.fn(), composePagePrompt: vi.fn(), LAYOUT_PRESETS: [] }));
+vi.mock('../services/apiClient', () => ({ ApiError: class extends Error {} }));
+
+const { PageStudio } = await import('../components/pagestudio/PageStudio');
 
 const { migrateComicStateForFlow, useProjectManager, STATE_LOAD_FAILED_SAVE } = await import('./useProjectManager');
 const { isCardOnly } = await import('../services/db');
@@ -295,6 +300,52 @@ describe('useProjectManager with library cards', () => {
     await waitFor(() => expect(upserts()).toHaveLength(2), { timeout: 2000 });
     expect((upserts()[1].state as Record<string, any>).pageStudio.style).toEqual(STYLE);
     expect((upserts()[1].state as Record<string, any>).versions).toEqual(VERSIONS);
+  });
+
+  it.each(['stored-original', 'url-only-original'])('PageStudio resets the selected snapshot to its %s across save and reopen', async (variant) => {
+    const baseId = variant === 'stored-original' ? 'user-1/original.png' : undefined;
+    const baseUrl = 'data:image/png;base64,b3JpZ2luYWw=';
+    const page = {
+      id: 'page_selected', prompt: 'Original page prompt', imageId: 'user-1/selected-edit.png',
+      ...(baseId ? { baseImageId: baseId } : { baseImageUrl: baseUrl }), createdAt: 1,
+      edits: [
+        { id: 'edit_selected', imageId: 'user-1/selected-edit.png', instruction: 'Selected historical edit', createdAt: 2 },
+        { id: 'edit_later', imageId: 'user-1/later-edit.png', instruction: 'Later alternative', createdAt: 3 }
+      ]
+    };
+    const pageStudio = { brief: 'A page', style: { source: 'text' }, layout: { source: 'auto' }, aspectRatio: '3:4', resolution: '2K', stage: 'edit', activePageId: page.id,
+      pages: [page, { ...page, id: 'other_page', imageId: 'user-1/other.png' }] };
+    const snapshot = { id: 'saved_selection', state: { ...classicState, pipelineMode: 'pagestudio', pageStudio } };
+    // Restoring a historical selection must honor imageId, not the last edit in its history.
+    fakeSupabase.state.tables.projects = [row('pages-1', { ...JSON.parse(JSON.stringify(snapshot.state)), versions: [snapshot] })];
+    const hook = await mount();
+    let opened: Awaited<ReturnType<typeof hook.result.current.hydrateProjectAssets>>;
+    await act(async () => { opened = await hook.result.current.hydrateProjectAssets('pages-1'); });
+    const view = render(React.createElement(PageStudio, {
+      project: opened!, onUpdate: (updater) => hook.result.current.updateProject('pages-1', updater), onBack: vi.fn()
+    }));
+    expect(screen.getByAltText('generated page')).toHaveAttribute('src', 'https://signed.test/user-1/selected-edit.png');
+    fireEvent.click(screen.getByTitle('Revert to the original generated page'));
+    await waitFor(() => expect((upserts().at(-1)?.state as Record<string, any>)?.pageStudio?.pages[0]?.edits).toEqual([]), { timeout: 2000 });
+    const saved = upserts().at(-1)!.state as Record<string, any>;
+    expect(saved.pageStudio.pages[0].imageId).toBe(baseId);
+    expect(saved.pageStudio.pages[0].edits).toEqual([]);
+    expect(saved.pageStudio.pages[0].imageUrl).toBe(baseId ? undefined : baseUrl);
+    expect(saved.pageStudio.pages[1].imageId).toBe('user-1/other.png');
+    expect(saved.versions).toEqual([snapshot]);
+    expect(saved.script).toBe(classicState.script);
+    view.unmount();
+    hook.unmount();
+    // Fresh hook: load the persisted row and resolve its stored image ID through the real opener.
+    fakeSupabase.state.tables.projects = [row('pages-1', JSON.parse(JSON.stringify(saved)))];
+    const reopened = await mount();
+    await act(async () => { opened = await reopened.result.current.hydrateProjectAssets('pages-1'); });
+    render(React.createElement(PageStudio, { project: opened!, onUpdate: vi.fn(), onBack: vi.fn() }));
+    expect(screen.getByAltText('generated page')).toHaveAttribute('src', baseId ? `https://signed.test/${baseId}` : baseUrl);
+    expect(screen.queryByTitle('Revert to the original generated page')).not.toBeInTheDocument();
+    const model = await import('../services/pageStudio');
+    expect(model.generatePage).not.toHaveBeenCalled();
+    expect(model.editPage).not.toHaveBeenCalled();
   });
 
   it('duplicate loads the full state first and copies it', async () => {
