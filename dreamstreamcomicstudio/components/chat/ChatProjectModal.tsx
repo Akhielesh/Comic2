@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { X, Check } from 'lucide-react';
-import { ModalPortal } from '../modals/ModalPortal';
+import { Check } from 'lucide-react';
+import { Dialog, DialogContent, DialogTitle } from '../ds/Dialog';
+import { Button } from '../ds/Button';
+import { useKeyboardInset } from '../comicstudio/mobile/useKeyboardInset';
 import {
   PROJECT_ICONS, PROJECT_COLORS, iconByName, colorByKey,
   DEFAULT_PROJECT_ICON, DEFAULT_PROJECT_COLOR
@@ -15,6 +17,9 @@ interface ChatProjectModalProps {
 }
 
 export const ChatProjectModal: React.FC<ChatProjectModalProps> = ({ project, onSave, onClose }) => {
+  useKeyboardInset();
+  // This controlled dialog has several sidebar openers, rather than a DialogTrigger.
+  const [opener] = useState(() => typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const [name, setName] = useState(project?.name || '');
   const [icon, setIcon] = useState(project?.icon || DEFAULT_PROJECT_ICON);
   const [color, setColor] = useState(project?.color || DEFAULT_PROJECT_COLOR);
@@ -28,101 +33,88 @@ export const ChatProjectModal: React.FC<ChatProjectModalProps> = ({ project, onS
   };
 
   return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-        <div
-          className="w-full max-w-md overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-ink)] shadow-[0_24px_60px_-12px_rgba(0,0,0,0.35)] backdrop-blur"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between border-b border-[var(--ds-hairline-soft)] px-5 py-4">
-            <h2 className="text-base font-semibold">{project ? 'Edit project' : 'New project'}</h2>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="rounded-lg p-1.5 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
-            >
-              <X className="h-4 w-4" />
-            </button>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent
+        aria-describedby={undefined}
+        className="flex max-w-md flex-col gap-0 overflow-hidden p-0"
+        scrimClassName="bottom-auto h-[var(--app-h,100dvh)]"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (opener?.isConnected) opener.focus();
+        }}
+      >
+        <header className="shrink-0 border-b border-[var(--ds-hairline-soft)] px-5 py-4 pr-14">
+          <DialogTitle className="text-base">{project ? 'Edit project' : 'New project'}</DialogTitle>
+        </header>
+        <div className="min-h-0 space-y-5 overflow-y-auto overscroll-contain p-5">
+          {/* Preview + name */}
+          <div className="flex items-center gap-3">
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${swatch.dot}`}>
+              <HeaderIcon className="h-5 w-5" />
+            </div>
+            <input
+              autoFocus
+              aria-label="Project name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) save(); }}
+              placeholder="Project name"
+              className="min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-base font-medium text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none focus:border-[var(--ds-accent)] sm:text-sm"
+            />
           </div>
 
-          <div className="space-y-5 p-5">
-            {/* Preview + name */}
-            <div className="flex items-center gap-3">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${swatch.dot}`}>
-                <HeaderIcon className="h-5 w-5" />
-              </div>
-              <input
-                autoFocus
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
-                placeholder="Project name"
-                className="min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-base font-medium text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none focus:border-[var(--ds-accent)] sm:text-sm"
-              />
-            </div>
-
-            {/* Icon picker */}
-            <div>
-              <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ds-muted)]">Icon</div>
-              <div className="grid grid-cols-7 gap-1.5">
-                {PROJECT_ICONS.map(({ name: iconName, Icon }) => (
-                  <button
-                    key={iconName}
-                    onClick={() => setIcon(iconName)}
-                    aria-pressed={icon === iconName}
-                    title={iconName}
-                    className={`flex aspect-square items-center justify-center rounded-lg border transition-colors ${
-                      icon === iconName
-                        ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-accent)]'
-                        : 'border-[var(--ds-hairline-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Color picker */}
-            <div>
-              <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ds-muted)]">Color</div>
-              <div className="flex flex-wrap gap-2.5 px-1 py-0.5">
-                {PROJECT_COLORS.map((c) => (
-                  <button
-                    key={c.key}
-                    onClick={() => setColor(c.key)}
-                    aria-pressed={color === c.key}
-                    title={c.key}
-                    className={`flex h-7 w-7 items-center justify-center rounded-full transition-transform ${c.dot} ${
-                      color === c.key
-                        ? 'outline outline-2 outline-offset-2 outline-[var(--ds-accent)]'
-                        : 'hover:scale-110'
-                    }`}
-                  >
-                    {color === c.key && <Check className="h-3.5 w-3.5 text-white" />}
-                  </button>
-                ))}
-              </div>
+          {/* Icon picker */}
+          <div>
+            <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ds-muted)]">Icon</div>
+            <div role="group" aria-label="Project icon" className="grid grid-cols-[repeat(auto-fit,minmax(44px,1fr))] gap-1.5">
+              {PROJECT_ICONS.map(({ name: iconName, Icon }) => (
+                <button
+                  key={iconName}
+                  onClick={() => setIcon(iconName)}
+                  aria-pressed={icon === iconName}
+                  title={iconName}
+                  aria-label={iconName}
+                  className={`flex min-h-11 items-center justify-center rounded-lg border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ds-focus)] ${
+                    icon === iconName
+                      ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
+                      : 'border-[var(--ds-hairline-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              ))}
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-5 py-3.5">
-            <button
-              onClick={onClose}
-              className="rounded-lg border border-[var(--ds-hairline)] px-4 py-2 text-sm font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={save}
-              disabled={!name.trim()}
-              className="rounded-lg bg-[var(--ds-accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-40"
-            >
-              {project ? 'Save' : 'Create'}
-            </button>
+          {/* Color picker */}
+          <div>
+            <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ds-muted)]">Color</div>
+            <div role="group" aria-label="Project color" className="flex flex-wrap gap-2 px-1 py-0.5">
+              {PROJECT_COLORS.map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setColor(c.key)}
+                  aria-pressed={color === c.key}
+                  title={c.key}
+                  aria-label={c.key}
+                  className={`flex h-11 w-11 items-center justify-center rounded-full transition-transform focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--ds-focus)] ${c.dot} ${
+                    color === c.key
+                      ? 'outline outline-2 outline-offset-2 outline-[var(--ds-accent)]'
+                      : 'hover:scale-110'
+                  }`}
+                >
+                  {color === c.key && <Check className="h-3.5 w-3.5 text-white" />}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-    </ModalPortal>
+
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-5 py-3.5">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={!name.trim()}>{project ? 'Save' : 'Create'}</Button>
+        </footer>
+      </DialogContent>
+    </Dialog>
   );
 };

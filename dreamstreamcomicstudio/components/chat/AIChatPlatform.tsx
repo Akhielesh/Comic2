@@ -570,13 +570,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // Lock body scroll while any overlay (mobile sidebar drawer, modals, mobile/fullscreen
-  // side panel) is open — otherwise iOS lets the page behind keep scrolling ("scroll
+  // Lock body scroll for the custom overlays (drawer, settings, model picker and side
+  // panel). The shared project Dialog owns its own scroll lock. This prevents scrolling — otherwise iOS lets the page behind keep scrolling ("scroll
   // bleed") and the drawer feels glitchy.
   const overlayOpen =
     (sidebarOpen && !isDesktop) ||
     showModelPicker ||
-    Boolean(projectModal) ||
     Boolean(settingsTab) ||
     Boolean(panel && (!isDesktop || panelFullscreen));
   useEffect(() => {
