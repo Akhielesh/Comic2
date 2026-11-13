@@ -16,6 +16,8 @@
 /dreamstreamcomicstudio/package-lock.json              @Akhielesh
 /dreamstreamcomicstudio/*/package-lock.json            @Akhielesh
 /dreamstreamcomicstudio/scripts/licence-policy.json        @Akhielesh
+# The browser's Python runtime: the pinned version and file hashes (the build ships only these bytes).
+/dreamstreamcomicstudio/services/pyodideRuntime.ts     @Akhielesh
 /dreamstreamcomicstudio/packages/platform-render/src/vendor/        @Akhielesh
 /dreamstreamcomicstudio/docs/platform/        @Akhielesh
 

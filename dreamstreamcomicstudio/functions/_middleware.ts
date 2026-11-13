@@ -34,8 +34,11 @@
  * cache in F11). Only the pinned version's folder is ever asked of the asset server, and what it answers is checked
  * by its first bytes, not by its label.
  *
- * public/_routes.json keeps this function off every other static asset, so it runs for page loads and the voice
- * engine. Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
+ * The chat's Python runtime, `/pyodide/<version>/<file>` (Pyodide; services/pyodideRuntime.ts), is served the same
+ * way, by the same code: only the pinned version's files, checked by their first bytes, a 404 for anything else.
+ *
+ * public/_routes.json keeps this function off every other static asset, so it runs for page loads, the voice
+ * engine and the Python runtime. Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
  */
 import { detectAgent } from '../api-proxy/src/agent-gate';
 import { injectHead, PROXIED_HOSTS, publicOrigin, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
@@ -60,8 +63,16 @@ import {
   looksLikeOrtRuntimeFile,
   ortContentType,
   parseOrtRuntimePath,
-  type OrtRuntimeFile,
 } from '../services/dictation/ortRuntime';
+import {
+  PYODIDE_FIRST_BYTES,
+  PYODIDE_RUNTIME_CACHE_CONTROL,
+  PYODIDE_RUNTIME_RESOURCE_POLICY,
+  isPyodideRuntimePath,
+  looksLikePyodideRuntimeFile,
+  pyodideContentType,
+  pyodideRuntimeFileAt,
+} from '../services/pyodideRuntime';
 
 /** The Pages asset server (`context.env.ASSETS`). */
 interface AssetFetcher {
@@ -469,7 +480,7 @@ async function serveLiveApp(request: Request, url: URL, env: PagesContext['env']
   });
 }
 
-/** The answer for anything under /ort/ that is not one of the voice engine's files: plain text, never kept. */
+/** The answer for anything under /ort/ or /pyodide/ that is not one of the pinned runtime files: plain text, never kept. */
 const runtimeNotFound = (): Response =>
   new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -485,13 +496,27 @@ function carriesFileStart(res: Response): boolean {
   return res.status === 206 && /^bytes\s+0-/i.test(res.headers.get('content-range') || '');
 }
 
+/** One pinned runtime file, as the Function serves it (the voice engine's and the Python runtime's alike). */
+interface CheckedRuntimeFile {
+  /**
+   * Do these leading bytes belong to the file? `null`: more bytes are needed; `final` says there are no more, and
+   * the answer is then yes or no (looksLikeOrtRuntimeFile, looksLikePyodideRuntimeFile).
+   */
+  looksLike: (head: Uint8Array, final: boolean) => boolean | null;
+  /** How many leading bytes `looksLike` needs at most. */
+  sniffBytes: number;
+  contentType: string;
+  cacheControl: string;
+  resourcePolicy: string;
+}
+
 /**
- * Is this body the named engine file, judged by its first bytes (looksLikeOrtRuntimeFile)? The bytes are read from
- * a clone, which is then cancelled, so `res.body` stays whole and keeps streaming natively (no copy of a 24 MB file
+ * Is this body the runtime file, judged by its first bytes (`file.looksLike`)? The bytes are read from a clone,
+ * which is then cancelled, so `res.body` stays whole and keeps streaming natively (no copy of a 24 MB file
  * through this Function). The cancel is not awaited: a clone is one branch of a tee, and by the Streams standard a
  * branch's cancel only settles once the other branch (the body being served) is cancelled too.
  */
-async function startsLikeRuntimeFile(file: OrtRuntimeFile, res: Response): Promise<boolean> {
+async function startsLikeRuntimeFile(file: Pick<CheckedRuntimeFile, 'looksLike' | 'sniffBytes'>, res: Response): Promise<boolean> {
   const reader = res.clone().body?.getReader();
   if (!reader) return false;
   let head = new Uint8Array(0);
@@ -499,12 +524,12 @@ async function startsLikeRuntimeFile(file: OrtRuntimeFile, res: Response): Promi
     for (;;) {
       const { done, value } = await reader.read();
       if (value?.length) {
-        const joined = new Uint8Array(Math.min(head.length + value.length, ORT_SNIFF_BYTES));
+        const joined = new Uint8Array(Math.min(head.length + value.length, file.sniffBytes));
         joined.set(head);
         joined.set(value.subarray(0, joined.length - head.length), head.length);
         head = joined;
       }
-      const verdict = looksLikeOrtRuntimeFile(file, head, done);
+      const verdict = file.looksLike(head, done);
       if (verdict !== null) return verdict;
     }
   } catch {
@@ -512,6 +537,33 @@ async function startsLikeRuntimeFile(file: OrtRuntimeFile, res: Response): Promi
   } finally {
     void reader.cancel().catch(() => undefined);
   }
+}
+
+/**
+ * The asset server's answer for a pinned runtime path, passed on only when it IS the file, with the runtime's
+ * headers set here. The one place both runtime folders are served from (serveOrtRuntime, servePyodideRuntime):
+ *
+ *  - Pages answers a missing file with the SPA's index.html and a 200, which the browser would keep as the runtime
+ *    for a year (the F11 failure). So the answer must be a file status, must not be labelled HTML, and, whenever it
+ *    carries the start of the file, must start like the file. The label alone is not trusted (a _headers rule can
+ *    rewrite it). Anything else is a 404.
+ *  - The file goes out to our own origin only: the asset server's `Access-Control-Allow-Origin: *` (it adds one to
+ *    every asset) is dropped, since CORP does not stop a CORS request from another site.
+ */
+async function serveCheckedRuntimeFile(next: () => Promise<Response>, file: CheckedRuntimeFile): Promise<Response> {
+  const res = await next();
+  const type = res.headers.get('content-type') || '';
+  const isFile = RUNTIME_FILE_STATUSES.has(res.status) && !/^\s*text\/html\b/i.test(type) && (!carriesFileStart(res) || (await startsLikeRuntimeFile(file, res)));
+  if (!isFile) {
+    void res.body?.cancel().catch(() => undefined);
+    return runtimeNotFound();
+  }
+  const headers = new Headers(res.headers);
+  for (const name of [...headers.keys()]) if (name.toLowerCase().startsWith('access-control-')) headers.delete(name);
+  if (res.status !== 304) headers.set('content-type', file.contentType);
+  headers.set('cache-control', file.cacheControl);
+  headers.set('cross-origin-resource-policy', file.resourcePolicy);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 /**
@@ -528,23 +580,44 @@ async function startsLikeRuntimeFile(file: OrtRuntimeFile, res: Response): Promi
  *    not begin with `<`. The label alone is not trusted (a _headers rule can rewrite it). Anything else is a 404.
  *  - The file goes out to our own origin only: the asset server's `Access-Control-Allow-Origin: *` (it adds one to
  *    every asset) is dropped, since CORP does not stop a CORS request from another site.
+ * The checking and the headers are serveCheckedRuntimeFile's, shared with the Python runtime below.
  */
 export async function serveOrtRuntime(url: URL, next: () => Promise<Response>): Promise<Response> {
   const hit = parseOrtRuntimePath(url.pathname);
   if (!hit || hit.version !== ORT_RUNTIME_PIN.version) return runtimeNotFound();
-  const res = await next();
-  const type = res.headers.get('content-type') || '';
-  const isFile = RUNTIME_FILE_STATUSES.has(res.status) && !/^\s*text\/html\b/i.test(type) && (!carriesFileStart(res) || (await startsLikeRuntimeFile(hit.file, res)));
-  if (!isFile) {
-    void res.body?.cancel().catch(() => undefined);
-    return runtimeNotFound();
-  }
-  const headers = new Headers(res.headers);
-  for (const name of [...headers.keys()]) if (name.toLowerCase().startsWith('access-control-')) headers.delete(name);
-  if (res.status !== 304) headers.set('content-type', ortContentType(hit.file));
-  headers.set('cache-control', ORT_CACHE_CONTROL);
-  headers.set('cross-origin-resource-policy', ORT_RESOURCE_POLICY);
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  return serveCheckedRuntimeFile(next, {
+    looksLike: (head, final) => looksLikeOrtRuntimeFile(hit.file, head, final),
+    sniffBytes: ORT_SNIFF_BYTES,
+    contentType: ortContentType(hit.file),
+    cacheControl: ORT_CACHE_CONTROL,
+    resourcePolicy: ORT_RESOURCE_POLICY,
+  });
+}
+
+/**
+ * `/pyodide/<version>/<file>`, the chat's Python runtime (Pyodide; services/pyodideRuntime.ts): served exactly as
+ * the voice engine is, by the same code. The owner's rule is that no unpinned third-party script runs in our origin;
+ * the playground used to import this runtime from a CDN inside a same-origin worker.
+ *
+ *  - Only the files of the pinned version (PYODIDE_RUNTIME_PIN) are asked of the asset server. Any other path under
+ *    /pyodide/ is a 404 without asking it: another version, a file this build does not ship (one of Pyodide's
+ *    optional packages, say), the folder itself.
+ *  - What the asset server answers must start with the pinned file's own first bytes (stricter than "not a page":
+ *    each file's opening bytes are recorded next to its SHA-256, which the build checks in full).
+ *  - Its content type, immutable caching and Cross-Origin-Resource-Policy are set here, and no CORS grant is passed
+ *    on. public/_headers must set none of them for /pyodide, and public/_routes.json must not exclude the folder
+ *    (tests/edge/pyodideRuntime.test.ts).
+ */
+export async function servePyodideRuntime(url: URL, next: () => Promise<Response>): Promise<Response> {
+  const file = pyodideRuntimeFileAt(url.pathname);
+  if (!file) return runtimeNotFound();
+  return serveCheckedRuntimeFile(next, {
+    looksLike: (head, final) => looksLikePyodideRuntimeFile(file, head, final),
+    sniffBytes: PYODIDE_FIRST_BYTES,
+    contentType: pyodideContentType(file),
+    cacheControl: PYODIDE_RUNTIME_CACHE_CONTROL,
+    resourcePolicy: PYODIDE_RUNTIME_RESOURCE_POLICY,
+  });
 }
 
 export interface MiddlewareOptions {
@@ -578,6 +651,8 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
     // The voice engine is a file for every client, automated browsers included (never the agent gate), and a
     // missing one is a 404, never the SPA's page.
     if (isOrtRuntimePath(url.pathname)) return secured(serveOrtRuntime(url, next));
+    // The chat's Python runtime, the same way: a pinned file for every client, or a 404.
+    if (isPyodideRuntimePath(url.pathname)) return secured(servePyodideRuntime(url, next));
 
     const onStreamHost = isStreamHost(host);
     if (isPage && isLegacyLivePath(url.pathname)) {

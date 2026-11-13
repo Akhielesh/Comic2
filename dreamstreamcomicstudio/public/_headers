@@ -56,6 +56,12 @@
 # mark that page immutable for a year. tests/edge/voiceRuntime.test.ts fails on any rule that matches an
 # /ort path and names Content-Type, Cache-Control or Access-Control-Allow-Origin.
 
+# NO RULE FOR /pyodide HERE either, for the same reason. The chat's Python runtime (Pyodide,
+# services/pyodideRuntime.ts) is built into /pyodide/<version>/ by vite.config.ts and served through
+# functions/_middleware.ts by the same code as /ort (public/_routes.json does not exclude /pyodide/*).
+# tests/edge/pyodideRuntime.test.ts fails on any rule that matches a /pyodide path and names
+# Content-Type, Cache-Control or Access-Control-Allow-Origin.
+
 # On-device AI models (baby-monitor sound model). Versioned file names → cache forever.
 /models/*
   Cache-Control: public, max-age=31536000, immutable
