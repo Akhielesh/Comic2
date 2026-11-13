@@ -1,9 +1,24 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
+import { createRequire } from 'module';
 import path from 'path';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { defineConfig, loadEnv, searchForWorkspaceRoot, type Plugin, type Rollup } from 'vite';
 import react from '@vitejs/plugin-react';
 import { browserModulesReport } from './scripts/licence-check.mjs';
 import { webNotices } from './scripts/notices.mjs';
+import {
+  ORT_CACHE_CONTROL,
+  ORT_RESOURCE_POLICY,
+  ORT_RUNTIME_DIR,
+  ORT_RUNTIME_FILES,
+  ORT_RUNTIME_PIN,
+  ORT_VERSION_RE,
+  PAGES_FILE_LIMIT_BYTES,
+  isOrtRuntimePath,
+  ortContentType,
+  parseOrtRuntimePath
+} from './services/dictation/ortRuntime';
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
 // (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
@@ -104,6 +119,165 @@ export function dsSkinEverywherePlugin(value: string | undefined): Plugin {
   };
 }
 
+/** The onnxruntime-web that @huggingface/transformers itself imports: its dist folder, version, and the version it pins. */
+export interface OrtRuntimeSource {
+  /** `<package>/dist`, where the ort-wasm-* files live. */
+  dir: string;
+  version: string;
+  /** transformers.js's own `dependencies['onnxruntime-web']` (an exact pin). */
+  pinned: string;
+}
+
+/**
+ * Resolve onnxruntime-web the way transformers.js does: from transformers.js's own folder, so a nested copy
+ * (`@huggingface/transformers/node_modules/onnxruntime-web`, what the lockfile installs while the app depends on
+ * another version for the sound model) wins over the top-level one. Throws if either package is missing.
+ */
+export function resolveOrtRuntime(root: string = __dirname): OrtRuntimeSource {
+  const fromApp = createRequire(path.join(root, 'package.json'));
+  const transformersEntry = fromApp.resolve('@huggingface/transformers');
+  const ortEntry = createRequire(transformersEntry).resolve('onnxruntime-web/webgpu');
+  const dir = path.dirname(ortEntry);
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8')) as { name?: string; version?: string; dependencies?: Record<string, string> };
+  const ortPkg = read(path.join(dir, '..', 'package.json'));
+  const transformersPkg = read(path.join(path.dirname(transformersEntry), '..', 'package.json'));
+  if (ortPkg.name !== 'onnxruntime-web' || !ortPkg.version) throw new Error(`ortRuntime: ${dir} is not onnxruntime-web's dist folder`);
+  return { dir, version: ortPkg.version, pinned: transformersPkg.dependencies?.['onnxruntime-web'] ?? '' };
+}
+
+/** The build-time constant whisperEngine.ts reads (vite-env.d.ts declares it). */
+export const ORT_VERSION_DEFINE = '__ORT_WEB_VERSION__';
+
+/**
+ * The bytes of one runtime file, only when they are the pinned ones (ORT_RUNTIME_PIN.sha256): the SHA-256 of what is
+ * on disk must equal the hash reviewed in source. Throws otherwise, naming both hashes.
+ */
+export function readPinnedOrtFile(dir: string, name: (typeof ORT_RUNTIME_FILES)[number]): Buffer {
+  const src = path.join(dir, name);
+  if (!fs.existsSync(src)) throw new Error(`ortRuntime: ${src} is missing`);
+  const bytes = fs.readFileSync(src);
+  const got = createHash('sha256').update(bytes).digest('hex');
+  const want = ORT_RUNTIME_PIN.sha256[name];
+  if (got !== want) {
+    throw new Error(
+      `ortRuntime: integrity check failed for ${src}: sha256 ${got}, but onnxruntime-web ${ORT_RUNTIME_PIN.version} published ${want} ` +
+        '(services/dictation/ortRuntime.ts ORT_RUNTIME_PIN). Reinstall node_modules with `npm ci`; never edit the pin to match a file you did not review.'
+    );
+  }
+  return bytes;
+}
+
+/**
+ * The private voice model's ONNX runtime, served from our own site (services/dictation/ortRuntime.ts).
+ *
+ *  - Defines `__ORT_WEB_VERSION__` as the version of the onnxruntime-web transformers.js resolves, so the path the
+ *    page asks for and the folder the build writes can never drift.
+ *  - Build: copies exactly ORT_RUNTIME_FILES from that package into `<outDir>/ort/<version>/` (never into git),
+ *    and stops the build if the installed version is not the one pinned in source and by transformers.js, if a file
+ *    is missing or is 25 MiB or more (the Pages per-file limit), or if a file's SHA-256 is not the pinned one. All
+ *    four are checked before any is emitted, so a build that fails the check ships none of them.
+ *  - Dev and preview: answer `/ort/*` themselves, as functions/_middleware.ts does in production: the four files
+ *    with their content types and immutable caching, a plain 404 for anything else (never the SPA's index.html),
+ *    and a 500 for a file whose bytes are not the pinned ones (it is never served).
+ */
+export function ortRuntime(options: { root?: string } = {}): Plugin {
+  const source = resolveOrtRuntime(options.root ?? __dirname);
+  const { dir, version } = source;
+  let base = '/';
+  let outDir = path.resolve(options.root ?? __dirname, 'dist');
+  let report: (msg: string) => void = (msg) => console.error(msg);
+
+  const plain = (res: ServerResponse, status: number, body: string) => {
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(body);
+  };
+  /** One integrity check per file and change (path, size, mtime): the result, or the error to show. */
+  const checked = new Map<string, { stamp: string; error: string | null }>();
+  const integrityError = (folder: string, name: (typeof ORT_RUNTIME_FILES)[number]): string | null => {
+    const file = path.join(folder, name);
+    const stat = fs.statSync(file);
+    const stamp = `${stat.size}:${stat.mtimeMs}`;
+    const known = checked.get(file);
+    if (known && known.stamp === stamp) return known.error;
+    let error: string | null = null;
+    try {
+      readPinnedOrtFile(folder, name);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    checked.set(file, { stamp, error });
+    return error;
+  };
+  /** Connect middleware for `/ort/*`, reading the files from `folder()`. */
+  const serve = (folder: () => string) => (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    let pathname = (req.url ?? '').split('?')[0];
+    if (base !== '/' && pathname.startsWith(base)) pathname = `/${pathname.slice(base.length)}`;
+    if (!isOrtRuntimePath(pathname)) return next();
+    const hit = parseOrtRuntimePath(pathname);
+    const file = hit && hit.version === version ? path.join(folder(), hit.file) : null;
+    if (!hit || !file || !fs.existsSync(file)) return plain(res, 404, 'Not found');
+    const bad = integrityError(folder(), hit.file);
+    if (bad) {
+      report(bad);
+      return plain(res, 500, 'The voice engine failed its integrity check and was not served. See the server log.');
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', ortContentType(hit.file));
+    res.setHeader('Cache-Control', ORT_CACHE_CONTROL);
+    res.setHeader('Cross-Origin-Resource-Policy', ORT_RESOURCE_POLICY);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Length', String(fs.statSync(file).size));
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(file).pipe(res);
+  };
+
+  return {
+    name: 'ort-runtime',
+    config: () => ({ define: { [ORT_VERSION_DEFINE]: JSON.stringify(version) } }),
+    configResolved(config) {
+      base = config.base || '/';
+      outDir = path.resolve(config.root, config.build.outDir);
+      if (config.logger) report = (msg) => config.logger.error(msg);
+    },
+    buildStart() {
+      if (!ORT_VERSION_RE.test(version)) this.error(`ortRuntime: onnxruntime-web version "${version}" cannot be a path segment`);
+      if (source.pinned !== version) {
+        this.error(`ortRuntime: @huggingface/transformers pins onnxruntime-web ${source.pinned || '(none)'} but resolves ${version} (${dir}); reinstall node_modules`);
+      }
+      if (version !== ORT_RUNTIME_PIN.version) {
+        this.error(
+          `ortRuntime: transformers.js resolves onnxruntime-web ${version}, but the engine pinned in services/dictation/ortRuntime.ts is ${ORT_RUNTIME_PIN.version}. ` +
+            'A new engine needs its version and its four SHA-256 hashes reviewed there, in the same commit as the dependency change.'
+        );
+      }
+    },
+    generateBundle() {
+      // Every file is read and checked before the first is emitted: a failed check ships nothing.
+      const files: { name: string; src: string; bytes: Buffer }[] = [];
+      for (const name of ORT_RUNTIME_FILES) {
+        const src = path.join(dir, name);
+        let bytes: Buffer;
+        try {
+          bytes = readPinnedOrtFile(dir, name);
+        } catch (e) {
+          return this.error((e as Error).message);
+        }
+        if (bytes.length >= PAGES_FILE_LIMIT_BYTES) return this.error(`ortRuntime: ${name} is ${bytes.length} bytes, over the Cloudflare Pages limit of ${PAGES_FILE_LIMIT_BYTES}`);
+        files.push({ name, src, bytes });
+      }
+      for (const f of files) this.emitFile({ type: 'asset', fileName: `${ORT_RUNTIME_DIR}/${version}/${f.name}`, originalFileName: f.src, source: f.bytes });
+    },
+    configureServer(server) {
+      server.middlewares.use(serve(() => dir));
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(serve(() => path.join(outDir, ORT_RUNTIME_DIR, version)));
+    }
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const licence = licenceModules();
@@ -127,7 +301,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR])],
+    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR]), ortRuntime()],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
     // count as browser code for the licence gate too.
     worker: { format: 'es', plugins: () => [licence.worker()] },
