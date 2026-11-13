@@ -26,6 +26,9 @@
 //                                  qa/app/scenes — qa/app/index.tsx holds the scene contract; no scene = the index)
 //   /qa/comic-qa.html?surface=pro[&scene=<id>]
 //                                 (the Pro Edit scenes: a placeholder in qa/pro/index.tsx until Program 2 fills it)
+//   /qa/comic-qa.html?surface=model-library
+//                                 (the actual signed-out catalog, on synthetic data; three bounded product checks
+//                                  in products.responsive.spec.ts, outside the full app-scene matrix)
 //
 // Contract with the specs (tests/e2e):
 //   html[data-qa-ready]   set once the surface mounted and fonts loaded (every surface)
@@ -55,13 +58,14 @@ import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
 import { QaAppSurface, type QaAppSkin } from './app/index';
 import { QaProSurface } from './pro/index';
+import { ModelLibraryScene, modelLibraryResponse } from './ModelLibraryScene';
 
 const FULL: React.CSSProperties = { height: '100dvh', width: '100%', overflow: 'hidden' };
 
 // ── Surfaces and parameters ──────────────────────────────────────────────────
 
 /** Every surface the harness mounts: Comic Studio's (qaController QA_SURFACES) and the app-wide ones (DS-1b). */
-export const QA_HARNESS_SURFACES = [...QA_SURFACES, 'app', 'pro'] as const;
+export const QA_HARNESS_SURFACES = [...QA_SURFACES, 'app', 'pro', 'model-library'] as const;
 export type QaHarnessSurface = (typeof QA_HARNESS_SURFACES)[number];
 
 /** The harness URL: the Comic Studio params, plus the app-wide surfaces with `scene=` and `skin=` (DS-1b). */
@@ -82,14 +86,14 @@ export const parseQaHarnessParams = (search: string, env: { webdriver?: boolean 
   const skin = q.get('skin');
   return {
     ...base,
-    surface: surface === 'app' || surface === 'pro' ? surface : base.surface,
+    surface: surface === 'app' || surface === 'pro' || surface === 'model-library' ? surface : base.surface,
     scene: scene || null,
     skin: skin === 'atlas' || skin === 'none' ? skin : null
   };
 };
 
 /** A Comic Studio surface (everything qaController knows), as opposed to the app-wide ones. */
-const isStudioParams = (p: QaHarnessParams): p is QaParams => p.surface !== 'app' && p.surface !== 'pro';
+const isStudioParams = (p: QaHarnessParams): p is QaParams => p.surface !== 'app' && p.surface !== 'pro' && p.surface !== 'model-library';
 
 // ── Network shim ─────────────────────────────────────────────────────────────
 
@@ -108,7 +112,7 @@ const publicPayload = (params: Omit<QaParams, 'surface'>) => {
 /** Hugging Face and its file CDNs (huggingface.co, hf.co and their subdomains), where the voice model's weights live. */
 const isHuggingFaceHost = (host: string) => ['huggingface.co', 'hf.co'].some((h) => host === h || host.endsWith(`.${h}`));
 
-const installNetworkShim = (params: Omit<QaParams, 'surface'>) => {
+const installNetworkShim = (params: QaHarnessParams) => {
   const realFetch = window.fetch.bind(window);
   // ?hf=route: the spec answers Hugging Face itself (route.fulfill), so its requests must reach the network layer.
   const routeHuggingFace = new URLSearchParams(window.location.search).get('hf') === 'route';
@@ -123,6 +127,10 @@ const installNetworkShim = (params: Omit<QaParams, 'surface'>) => {
     const sameOrigin = url.origin === window.location.origin;
     if (url.pathname.startsWith('/api/')) {
       recordQaOp('net', { method: init?.method || 'GET', path: url.pathname });
+      if (params.surface === 'model-library' && (init?.method || 'GET').toUpperCase() === 'GET') {
+        const response = modelLibraryResponse(url.pathname);
+        if (response !== undefined) return json(200, response);
+      }
       const pub = /^\/api\/comic\/public\/(s\/)?([^/]+)$/.exec(url.pathname);
       if (pub && (init?.method || 'GET').toUpperCase() === 'GET') {
         if (params.publicResult === 'slow') return new Promise<Response>(() => undefined);
@@ -266,6 +274,7 @@ const StudioSurface: React.FC<{ params: QaParams }> = ({ params }) => {
 const Surface: React.FC<{ params: QaHarnessParams }> = ({ params }) => {
   if (isStudioParams(params)) return <StudioSurface params={params} />;
   if (params.surface === 'app') return <QaAppSurface scene={params.scene ?? null} theme={params.theme} skin={params.skin ?? null} />;
+  if (params.surface === 'model-library') return <ModelLibraryScene />;
   return <QaProSurface params={{ ...params, surface: 'pro' }} scene={params.scene ?? null} />;
 };
 

@@ -73,7 +73,7 @@ if (!has('--no-build')) {
 fs.mkdirSync(artifacts, { recursive: true });
 const findingsFile = path.join(artifacts, 'findings.jsonl');
 fs.rmSync(findingsFile, { force: true });
-const projectArgs = projects.length ? projects : has('--full') ? ['*'] : ['smoke-*', 'harness-selftest', 'python-runtime', 'overflow'];
+const projectArgs = projects.length ? projects : has('--full') ? ['*'] : ['smoke-*', 'harness-selftest', 'python-runtime', 'overflow', 'shared-responsive'];
 const pwArgs = ['playwright', 'test', '-c', 'tests/e2e/playwright.config.ts', ...projectArgs.map((p) => `--project=${p}`)];
 if (has('--update-snapshots')) pwArgs.push('--update-snapshots');
 pwArgs.push(...passthrough);

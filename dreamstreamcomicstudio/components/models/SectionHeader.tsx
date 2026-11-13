@@ -30,6 +30,6 @@ export const SectionHeader: React.FC<{
       </div>
       {subtitle && <p className="text-xs text-slate-600 mt-0.5 max-w-2xl">{subtitle}</p>}
     </div>
-    {right && <div className="flex items-center gap-2 shrink-0">{right}</div>}
+    {right && <div className="flex w-full max-w-full flex-wrap items-center gap-2 sm:w-auto">{right}</div>}
   </div>
 );
