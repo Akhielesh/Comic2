@@ -262,7 +262,16 @@ describe('detail (L3) in place', () => {
   it('shows the fixed GPT Image 2.6 output tier and separately billed inputs', async () => {
     const rows = registryCatalogRows();
     const row = rows.find(({ id }) => id === 'gpt-image-2.6-flare')!;
-    __resetModelCatalogForTests({ catalog: catalogFetch as never, detail: async () => ({ ...row, priceHistory: [], qualityHistory: [] }) });
+    const detail: ModelCatalogDetail = {
+      ...row,
+      facts: {
+        factsAsOf: '2026-11-13', priceBasis: 'per_token_table', refs: { total: 16, characters: 4, objects: 12, style: 0 },
+        aspects: ['1:1', '2:3', '3:2'], resolutions: ['1K']
+      },
+      priceHistory: [],
+      qualityHistory: []
+    };
+    __resetModelCatalogForTests({ catalog: catalogFetch as never, detail: async () => detail });
     panel({ mode: 'pro', catalog: view(rows) });
     fireEvent.click(screen.getByRole('button', { name: 'Details for GPT Image 2.6 Flare' }));
     await act(async () => undefined);

@@ -213,6 +213,7 @@ describe('PageEditor', () => {
     const doc = makeSampleDoc();
     doc.refInbox = [{ path: `u/user/p/${doc.id}/ref/sticker.webp`, name: 'Toolbox', source: 'upload', at: 1 }];
     const { studio } = open('pg_1', doc);
+    vi.mocked(studio.setSelection).mockClear();
     vi.mocked(studio.patch).mockImplementation(async (_ops, opts) => opts?.onFailed?.(true));
     fireEvent.click(screen.getByRole('button', { name: 'Place image' }));
     await waitFor(() => {
