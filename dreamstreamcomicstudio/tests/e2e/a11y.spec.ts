@@ -16,8 +16,9 @@ import { openSettings } from './helpers/scenes';
 // MADE-UP local session: a fake token that exists only in this headless browser. Every request is answered here:
 // Supabase reads get one made-up profile row, /api/* gets 503 (no backend), anything else off this origin is
 // refused. Nothing leaves the machine and nothing is paid.
-// 24 characters: an everyday address. (A field cannot wrap, so a much longer one is still cut at phone widths.)
-const SETTINGS_EMAIL = 'reader.one@settings.test';
+// 40 characters: longer than most everyday addresses. The email is read-only text that wraps, so it is shown whole
+// at every width, 320 px included (a disabled <input> could not wrap and cut a 30-character address on phones).
+const SETTINGS_EMAIL = 'alexandra.reader-thompson@settings.test';
 const SETTINGS_USER = {
   id: '00000000-0000-4000-8000-0000000000f6',
   aud: 'authenticated',
@@ -129,7 +130,9 @@ test.describe('accessibility', () => {
 
     // Fields are named by their own labels (Username and Phone used to be named by their hints, Email, Date of birth
     // and the invite link had no name at all).
-    await expect(page.getByLabel('Email', { exact: true })).toHaveValue(SETTINGS_EMAIL);
+    const emailField = page.getByRole('textbox', { name: 'Email', exact: true });
+    await expect(emailField).toHaveText(SETTINGS_EMAIL);
+    await expect(emailField).toHaveAttribute('aria-readonly', 'true');
     await expect(page.getByLabel(/^Username/)).toHaveValue('settings_reader');
     await expect(page.getByLabel(/^Phone Number$/)).toHaveAttribute('type', 'tel');
     await expect(page.getByLabel(/^Date of Birth/)).toHaveValue('1990-01-01');
@@ -147,10 +150,15 @@ test.describe('accessibility', () => {
       .analyze();
     expect(names.violations.flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(' ')}`)), 'unnamed controls on Settings').toEqual([]);
 
-    // The email is not cut from 360 px up (85 px of it was hidden at 390 when the fields sat beside the photo).
+    // The whole email is shown at every width, 320 px included: nothing scrolls inside the field and the field sits
+    // inside the viewport (85 px of a 24-character address was hidden at 390 when the fields sat beside the photo).
     const vp = page.viewportSize() || device.viewport;
-    const email = await page.getByLabel('Email', { exact: true }).evaluate((el: HTMLInputElement) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-    if (vp.width >= 360) expect(email.scroll, `the email field shows the whole address at ${vp.width} px (${JSON.stringify(email)})`).toBeLessThanOrEqual(email.client + 1);
+    const email = await emailField.evaluate((el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      return { scroll: el.scrollWidth, client: el.clientWidth, left: r.left, right: r.right };
+    });
+    expect(email.scroll, `the email field shows the whole address at ${vp.width} px (${JSON.stringify(email)})`).toBeLessThanOrEqual(email.client + 1);
+    expect(email.left >= 0 && email.right <= vp.width + 1, `the email field is inside the ${vp.width} px viewport (${JSON.stringify(email)})`).toBe(true);
 
     // Below md the section list is one row of chips, so the Profile heading is on the first screen of a phone (it
     // started at y = 695 at 390x844 under the 600 px list), and a deep link scrolls its chip into view.
