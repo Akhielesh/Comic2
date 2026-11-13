@@ -81,16 +81,18 @@ test.describe('overflow probe self-test @selftest', () => {
     expect(r.escapes.some((e) => e.kind === 'label' && e.issue.startsWith('cut-x'))).toBe(true);
   });
 
-  test('a popover that opens past the right edge is counted; one inside the screen is not', async ({ page }) => {
+  test('a popover that opens past the right edge is counted; one inside the screen, or an in-flow disclosure that grows, is not', async ({ page }) => {
     await page.setContent(
       html(`<button aria-haspopup="menu" aria-expanded="false" onclick="document.getElementById('m1').hidden=false">More</button>
         <div id="m1" role="menu" hidden style="position:fixed;left:300px;top:40px;width:200px;height:60px;background:#eee">x</div>
         <button aria-haspopup="menu" aria-expanded="false" onclick="document.getElementById('m2').hidden=false">Fine</button>
         <div id="m2" role="menu" hidden style="position:fixed;left:10px;top:140px;width:200px;height:60px;background:#eee">y</div>
-        <button aria-haspopup="menu" onclick="document.body.dataset.pressed='1'">Delete page</button>`)
+        <button aria-haspopup="menu" onclick="document.body.dataset.pressed='1'">Delete page</button>
+        <button aria-expanded="false" aria-controls="d1" onclick="document.getElementById('d1').style.height='900px'">Show more</button>
+        <p id="d1" style="height:20px;margin:0">an in-flow disclosure that grows past the fold</p>`)
     );
     const r = await measurePopovers(page);
-    expect(r.tried).toEqual(['More', 'Fine']);
+    expect(r.tried).toEqual(['More', 'Fine', 'Show more']);
     expect(r.count).toBe(1);
     expect(r.escapes[0]).toMatch(/^More → div\[role=menu\]/);
     expect(await page.evaluate(() => document.body.dataset.pressed)).toBeUndefined();

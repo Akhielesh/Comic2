@@ -21,7 +21,6 @@
     "board-pages@phone-dark": { "textEscapes": 2 },
     "editor-easy@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
     "editor-pro@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
-    "kit-breakdown@desk-light": { "popoverEscapes": 1 },
     "public@narrow-light": { "textEscapes": 1 },
     "public@phone-dark": { "textEscapes": 1 },
     "studio-busy@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },

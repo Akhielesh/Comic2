@@ -36,7 +36,7 @@ export type OverflowMetric = (typeof OVERFLOW_METRICS)[number];
 export type OverflowCounts = Partial<Record<OverflowMetric, number>>;
 
 /** The research's three strings (p4 research-overflow): a long error with a URL, a model id and a file name. */
-export const STRESS_ID = 'google/gemini-3-pro-image-preview-experimental-20261101-a1b2c3';
+export const STRESS_ID = 'studio/reference-sheet-preview-experimental-20261101-a1b2c3';
 export const STRESS_ERROR =
   "We couldn't finish that because the image service answered with an unexpected error. Details: https://api.example-provider.dev/v1/images/generations/very-long-path-segment?model=" +
   STRESS_ID +
@@ -255,8 +255,10 @@ function popoverBoxes(args: { mark: boolean; controls: string | null }): Array<{
   const SEL = '[data-slot="popover-content"],[role="menu"],[role="listbox"],[role="dialog"]:not([aria-modal="true"])';
   const els = new Set(Array.from(document.querySelectorAll(SEL)));
   if (args.controls) {
+    // The controlled element counts only when it floats: an in-flow disclosure (MessageText's Show more, an accordion)
+    // grows the page, which scrolls to it; it never leaves the screen the way a popover can.
     const c = document.getElementById(args.controls);
-    if (c) els.add(c);
+    if (c && /^(fixed|absolute)$/.test(getComputedStyle(c).position)) els.add(c);
   }
   const out: Array<{ sig: string; l: number; t: number; r: number; b: number; fresh: boolean }> = [];
   for (const el of els) {
