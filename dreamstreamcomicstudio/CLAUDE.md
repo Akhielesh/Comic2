@@ -206,6 +206,11 @@ Cloudflare account are *not* DreamStream.)
   loads packages on demand via `loadPackagesFromImports` — never re-add eager preloading
   (WASM memory never shrinks, so it permanently pins ~500MB). Node heap is capped in both
   Dockerfiles (`NODE_OPTIONS=--max-old-space-size=512`).
+- **`pyodide` is one exact version for the backend AND the browser.** The chat's Python
+  playground loads the same package's files from our own origin (`/pyodide/<version>/`), pinned by
+  SHA-256 in `services/pyodideRuntime.ts`; `npm run build` stops if the installed version or any
+  byte differs. Never load it (or any script) from a CDN. To update: follow the steps at the top
+  of that file (`docs/features/component-library.md` § Python runtime).
 - **Keep it sleepable:** nothing may call `/api/*` on a timer (an uptime ping every few
   minutes keeps the container awake 24/7). Background timers (`providerUsage` flusher,
   `modelCatalog` refresh) are `.unref()`'d and send no network when idle — keep them that way.

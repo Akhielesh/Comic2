@@ -108,7 +108,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
             <div className="bg-[var(--ds-well)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ds-muted)] border-b border-[var(--ds-hairline-soft)] flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5" /> Console
             </div>
-            <div className="bg-slate-900 max-h-72 overflow-y-auto p-2.5 font-mono text-[12px] leading-relaxed">
+            <div role="log" aria-label="Console output" className="bg-slate-900 max-h-72 overflow-y-auto p-2.5 font-mono text-[12px] leading-relaxed">
               {result.logs.length === 0 && !result.error && <div className="text-slate-500 italic">No output.</div>}
               {result.logs.map((l, i) => (
                 <div key={i} className={`whitespace-pre-wrap break-words ${levelColor[l.level] || 'text-slate-100'}`}>{l.text}</div>
