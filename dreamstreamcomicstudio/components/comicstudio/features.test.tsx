@@ -137,6 +137,7 @@ describe('features registry', () => {
   it("the built-in card types are exactly the ones CardRenderer draws itself (A3's conflict card included)", () => {
     expect([...BUILTIN_CARD_TYPES].sort()).toEqual([...CARD_TYPES].sort());
     expect(BUILTIN_CARD_TYPES.has('conflict')).toBe(true);
+    expect(BUILTIN_CARD_TYPES.has('research')).toBe(true);
   });
 
   it('W-M seams: models, insights and reliability are registered last (lowest precedence) with their real registrations', () => {
