@@ -287,15 +287,24 @@ const WASH_CLASS = WASH_HERO.split(/\s+/)[0];
 const LAYER_CLASS = /--ds-(?:hue-\d|on-hue|wash-|studio|art-|chart-(?:seq|div))/;
 
 describe('ComicsLanding in colour', () => {
-  it('the hero carries the hero wash, once: behind the headline and the drawn pages, nowhere else on the page', () => {
+  it('the hero carries the hero wash, once: full bleed behind the headline and the calls to action, nowhere else on the page', () => {
     const { container } = render(<ComicsLanding signedIn={false} {...handlers()} />);
     const hero = screen.getByTestId('comics-hero');
-    expect(hasAll(hero, WASH_HERO), 'the hero section takes WASH_HERO').toBe(true);
+    const wash = screen.getByTestId('comics-hero-wash');
+    expect(hasAll(wash, WASH_HERO), 'the hero wash layer takes WASH_HERO').toBe(true);
     expect(hero).toBe(screen.getByRole('heading', { level: 1 }).closest('section'));
-    expect(within(hero).getByTestId('comics-proof'), 'the drawn pages sit on the wash').toBeInTheDocument();
+    expect(hero.contains(wash), 'the wash is part of the hero').toBe(true);
+    // Sized to the words, not the whole section: the headline and both calls to action sit on it, and the opaque
+    // drawn pages do not (on the section the proof hid the orange and stretched the other two into edge bands).
+    expect(wash).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(wash).toContainElement(screen.getByTestId('comics-hero-cta'));
+    expect(wash).toContainElement(within(hero).getByRole('button', { name: 'Request access' }));
+    expect(wash).not.toContainElement(screen.getByTestId('comics-proof'));
+    // Full bleed: the wash is the section's own child, not inside the centred column.
+    expect(wash.parentElement).toBe(hero);
     const washed = [...container.querySelectorAll('[class]')].filter((el) => /--ds-wash-/.test(el.getAttribute('class')!));
-    expect(washed).toEqual([hero]);
-    expect(classes(hero)).toContain(WASH_CLASS);
+    expect(washed).toEqual([wash]);
+    expect(classes(wash)).toContain(WASH_CLASS);
     expect(container.innerHTML).not.toMatch(/--ds-wash-empty/);
   });
 
@@ -310,9 +319,13 @@ describe('ComicsLanding in colour', () => {
       expect(tile).toHaveAttribute('aria-hidden');
       expect(tile.textContent, 'an icon, no words (white on magenta and sky is under 4.5:1)').toBe('');
       expect(tile.querySelectorAll('svg')).toHaveLength(1);
-      // Each tile leads its own card, under that card's title.
-      expect(tile.closest('li')!.querySelector('h3')).not.toBeNull();
+      // Each tile leads its own card, above the card's title.
+      const h3 = tile.closest('li')!.querySelector('h3')!;
+      expect(h3).not.toBeNull();
+      expect(tile.compareDocumentPosition(h3) & Node.DOCUMENT_POSITION_FOLLOWING, 'the tile comes before the title').toBeTruthy();
     });
+    // The fourth card promises only what the Reader tab gives everyone: print, a PDF, the pages as images in one ZIP.
+    expect(screen.getByRole('heading', { level: 3, name: 'Print it or keep it' }).closest('li')!.textContent).toMatch(/print it, save a PDF, or download the pages as images in one ZIP/);
     // No ultramarine tile: the one blue on the page is the "Start creating" spark.
     for (const tile of tiles) expect(tile.getAttribute('class')).not.toMatch(/--ds-hue-1-|--ds-spark/);
   });
@@ -338,16 +351,30 @@ describe('ComicsLanding in colour', () => {
     expect(value(dark, '--ds-on-hue')).toBe('#0a0a0a');
   });
 
-  it('exactly one spark fill signed out (the "Start creating" call to action), none signed in', () => {
+  it('exactly one spark fill signed out (the "Start creating" call to action), none signed in; ultramarine nowhere else', () => {
     const spark = SPARK_FILL.split(/\s+/)[0];
+    // The whole spark family: the spark's own tokens and every hue-1 step (mark, text, soft tint, solid).
+    const SPARK_FAMILY = /--ds-spark|--ds-hue-1(?:-|\))/;
     const sparkFills = (root: HTMLElement) =>
-      [...root.querySelectorAll('[class]')].filter((el) => classes(el).includes(spark) || /--ds-hue-1-solid/.test(el.getAttribute('class')!));
+      [...root.querySelectorAll('[class]')].filter((el) => classes(el).includes(spark) || SPARK_FAMILY.test(el.getAttribute('class')!));
     const out = render(<ComicsLanding signedIn={false} {...handlers()} />);
     const fills = sparkFills(out.container);
     expect(fills).toEqual([screen.getByTestId('comics-hero-cta')]);
     out.unmount();
     const signedIn = render(<ComicsLanding signedIn {...handlers()} />);
     expect(sparkFills(signedIn.container)).toEqual([]);
+  });
+
+  it('no hue as text: every word on the landing stays ink or muted, signed out and signed in', () => {
+    for (const signedIn of [false, true]) {
+      const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const hueText = [...container.querySelectorAll('[class]')].filter((el) => /text-\[(?:color:)?var\(--ds-hue-\d/.test(el.getAttribute('class')!));
+      expect(
+        hueText.map((el) => `${el.tagName} ${el.textContent!.slice(0, 40)}`),
+        `signedIn=${signedIn}`
+      ).toEqual([]);
+      unmount();
+    }
   });
 
   it('nothing coloured on or beside a price: no price or spend control on the page, and no control reads a colour token', () => {
