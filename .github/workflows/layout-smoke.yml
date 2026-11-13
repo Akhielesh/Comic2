@@ -51,7 +51,9 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The suite has grown to about 290 browser tests and takes 19 to 21 minutes on a hosted runner; at 20 the job
+    # was cut off mid-run with every finished test green. 35 leaves room for the scenes still to come.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: dreamstreamcomicstudio
