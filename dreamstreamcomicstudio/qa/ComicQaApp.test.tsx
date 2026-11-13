@@ -102,7 +102,8 @@ const fakeScene = (id: unknown, extra: Partial<Record<'title' | 'Scene', unknown
 
 describe('harness params: the app-wide surfaces on top of the Comic Studio ones', () => {
   it('parses surface=app|pro with scene and skin; every Comic Studio surface parses exactly as parseQaParams', () => {
-    expect(QA_HARNESS_SURFACES).toEqual([...QA_SURFACES, 'app', 'pro']);
+    expect(QA_HARNESS_SURFACES).toEqual([...QA_SURFACES, 'app', 'pro', 'model-library']);
+    expect(parseQaHarnessParams('?surface=model-library')).toMatchObject({ surface: 'model-library' });
     expect(parseQaHarnessParams('?surface=app&scene=recipes&theme=dark&skin=atlas')).toMatchObject({ surface: 'app', scene: 'recipes', theme: 'dark', skin: 'atlas' });
     expect(parseQaHarnessParams('?surface=app&skin=none')).toMatchObject({ surface: 'app', scene: null, theme: 'light', skin: 'none' });
     expect(parseQaHarnessParams('?surface=pro&scene=layers')).toMatchObject({ surface: 'pro', scene: 'layers', skin: null });
@@ -120,7 +121,7 @@ describe('harness params: the app-wide surfaces on top of the Comic Studio ones'
 
 describe('boot state (what boot() puts on <html> and window per URL)', () => {
   it('window.__qa describes a comic fixture: set for the Comic Studio surfaces, never for the app-wide ones', () => {
-    for (const search of ['?surface=app', '?surface=app&scene=recipes&theme=dark', '?surface=pro&scene=layers&fixture=stress']) {
+    for (const search of ['?surface=app', '?surface=app&scene=recipes&theme=dark', '?surface=pro&scene=layers&fixture=stress', '?surface=model-library']) {
       expect(qaBootState(parseQaHarnessParams(search)).qa, search).toBeUndefined();
     }
     const studio = qaBootState(parseQaHarnessParams('?surface=studio&fixture=heist-12p'));

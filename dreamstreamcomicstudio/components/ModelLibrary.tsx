@@ -123,6 +123,8 @@ const BAND_COLOR: Record<Band, string> = {
 };
 
 const MAX_COMPARE = 5;
+const VIEW_BUTTON = 'flex min-h-11 min-w-0 items-center justify-center gap-1.5 px-2 py-2 text-sm font-bold sm:shrink-0 sm:px-4';
+const VIEW_ICON = 'hidden h-4 w-4 shrink-0 sm:block';
 
 const Badge: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
   <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${className}`}>{children}</span>
@@ -915,13 +917,13 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking).
             Bench (admin-only): the in-app trigger for the all-models live test. */}
-        <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
-          <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
-          <button onClick={() => setView('table')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
-          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Leaderboards</button>
-          <button onClick={() => setView('benchmarks')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'benchmarks' ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Gauge className="w-4 h-4" /> Benchmarks</button>
+        <div role="group" aria-label="Model library views" className="mt-4 grid max-w-full grid-cols-2 gap-px overflow-hidden rounded-xl border-2 border-black bg-black sm:inline-flex sm:flex-wrap">
+          <button aria-pressed={view === 'library'} onClick={() => setView('library')} className={`${VIEW_BUTTON} ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
+          <button aria-pressed={view === 'table'} onClick={() => setView('table')} className={`${VIEW_BUTTON} ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className={VIEW_ICON} /> Providers table</button>
+          <button aria-pressed={view === 'leaderboard'} onClick={() => setView('leaderboard')} className={`${VIEW_BUTTON} ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className={VIEW_ICON} /> Leaderboards</button>
+          <button aria-pressed={view === 'benchmarks'} onClick={() => setView('benchmarks')} className={`${VIEW_BUTTON} ${view === 'benchmarks' ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Gauge className={VIEW_ICON} /> Benchmarks</button>
           {isAdmin && (
-            <button onClick={() => setView('bench')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'bench' ? 'bg-amber-500 text-black' : 'bg-white hover:bg-slate-100'}`}><FlaskConical className="w-4 h-4" /> Bench</button>
+            <button aria-pressed={view === 'bench'} onClick={() => setView('bench')} className={`${VIEW_BUTTON} ${view === 'bench' ? 'bg-amber-500 text-black' : 'bg-white hover:bg-slate-100'}`}><FlaskConical className={VIEW_ICON} /> Bench</button>
           )}
         </div>
 
@@ -1029,12 +1031,12 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         </div>
 
         {/* Search · Sort · Filters toggle */}
-        <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="relative flex-1">
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="relative min-w-0 flex-1 sm:min-w-48">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models, capabilities, domains…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full focus:outline-none focus:bg-brand-yellow/10" />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             <label className="flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-2 bg-white text-sm font-bold cursor-pointer">
               <ArrowUpDown className="w-4 h-4 text-slate-500" />
               <span className="sr-only">Sort by</span>
