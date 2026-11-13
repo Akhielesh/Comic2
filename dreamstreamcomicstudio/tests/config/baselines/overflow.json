@@ -95,7 +95,6 @@
     "components/comicstudio/refs/RefStrip.tsx": { "rawErrorSink": 1 },
     "components/comicstudio/refs/RefsDrawer.tsx": { "rawErrorSink": 2 },
     "components/comicstudio/refs/useRefUpload.ts": { "rawErrorText": 5 },
-    "components/comicstudio/reliability/OptionButtons.tsx": { "nowrapNoClip": 1 },
     "components/comicstudio/safety/RatingBadge.tsx": { "nowrapNoClip": 1 },
     "components/comicstudio/safety/RatingPicker.tsx": { "breakWords": 2 },
     "components/comicstudio/safety/ReportDialog.tsx": { "breakWords": 2, "rawErrorText": 2 },
