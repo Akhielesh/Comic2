@@ -213,7 +213,7 @@ export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(
 /**
  * The root div's classes. A gated view (product_access) shows the product gate, which is on the DS, so it
  * always sits on the canvas, even for a legacy-paper view such as the dashboard. The comics host's own views
- * (`comicsChrome`: the landing and, signed out, sign-in, Privacy, Terms and the Library; hostRouting.ts
+ * (`comicsChrome`: the landing, sign-in, Privacy, Terms and the Library; hostRouting.ts
  * comicsChromeFor) sit on the canvas too and the root owns their ink, so nothing under it inherits the body's
  * (the light theme's ink in both themes, index.html).
  */
@@ -244,6 +244,8 @@ const App: React.FC = () => {
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
+  const [newComicRequested, setNewComicRequested] = useState(false);
+  const consumeNewComicRequest = useCallback(() => setNewComicRequested(false), []);
 
   // Simple routing state. A /c/<slug> share link is decided before the first paint (no flash of the
   // home page under the reader's boot card).
@@ -398,6 +400,7 @@ const App: React.FC = () => {
   const hasWarnedDobProfileCheckRef = useRef(false);
 
   const handleBackToHome = () => {
+    setNewComicRequested(false);
     setCurrentView('home');
     setActiveProjectId(null);
     clearReaderUrlParams();
@@ -782,6 +785,7 @@ const App: React.FC = () => {
   };
 
   const handleNavigate = (view: string, id?: string) => {
+    setNewComicRequested(false);
     if (view === 'reader' && id) {
       void navigateToReader(id, currentView);
       return;
@@ -830,6 +834,24 @@ const App: React.FC = () => {
         window.history.pushState({}, '', url);
       } catch { /* history unavailable; navigation still works via state */ }
     }
+  };
+
+  const handleBrowseComicsLibrary = () => {
+    // The header's Library destination closes a bundled sample too, even when the app view is unchanged.
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('sample')) {
+      url.searchParams.delete('sample');
+      url.searchParams.set('view', 'gallery');
+      window.history.pushState({}, '', url);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+    if (currentView !== 'gallery') handleNavigate('gallery');
+  };
+
+  const handleStartCreating = () => {
+    // Route through the existing auth/product gate. Opening the form does not create a project.
+    handleNavigate('dashboard');
+    setNewComicRequested(true);
   };
 
   const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
@@ -1117,8 +1139,7 @@ const App: React.FC = () => {
           }
           return header;
         })()}
-        {/* The comics host keeps the landing's header on the views a visitor reaches from it (sign-in, Privacy,
-            Terms, the signed-out Library): one product from the first click. The landing renders its own. */}
+        {/* The public Comic Studio journey keeps its header before and after sign-in. The landing renders its own. */}
         {chrome.header && (
           <ComicsHeader
             signedIn={!!user}
@@ -1128,7 +1149,8 @@ const App: React.FC = () => {
             onSignIn={() => goToAuth('signin')}
             onRequestAccess={() => goToAuth('request-access')}
             onOpenComics={() => handleNavigate('dashboard')}
-            onBrowseGallery={() => handleNavigate('gallery')}
+            onOpenAccount={() => openSettings('profile')}
+            onBrowseGallery={handleBrowseComicsLibrary}
           />
         )}
 
@@ -1147,7 +1169,9 @@ const App: React.FC = () => {
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('request-access')}
               onOpenComics={() => handleNavigate('dashboard')}
-              onBrowseGallery={() => handleNavigate('gallery')}
+              onStartCreating={handleStartCreating}
+              onOpenAccount={() => openSettings('profile')}
+              onBrowseGallery={handleBrowseComicsLibrary}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
             />
@@ -1233,6 +1257,8 @@ const App: React.FC = () => {
           {effectiveView === 'dashboard' && (
             <ProjectDashboard
               projects={projects}
+              openNewComic={newComicRequested}
+              onNewComicOpened={consumeNewComicRequest}
               onCreateProject={handleCreateProject}
               onOpenProject={handleOpenProject}
               onDeleteProject={deleteProject}

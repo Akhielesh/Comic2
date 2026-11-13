@@ -234,6 +234,28 @@ describe('ProjectDashboard — new comic', () => {
     fireEvent.change(screen.getByLabelText('Comic Title'), { target: { value: title } });
   };
 
+  it('opens a requested creation form once and waits for explicit submission before creating a draft', async () => {
+    const onCreateProject = vi.fn().mockResolvedValue(undefined);
+    const onNewComicOpened = vi.fn();
+    const { props, rerender } = renderDashboard([], { openNewComic: true, onNewComicOpened, onCreateProject });
+    expect(screen.getByLabelText('Comic Title')).toHaveFocus();
+    expect(onNewComicOpened).toHaveBeenCalledOnce();
+    expect(onCreateProject).not.toHaveBeenCalled();
+
+    rerender(<ProjectDashboard {...props} openNewComic={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Comic Title')).toBeNull();
+    rerender(<ProjectDashboard {...props} openNewComic={false} projects={[classicProject()]} />);
+    expect(screen.queryByLabelText('Comic Title')).toBeNull();
+    expect(onCreateProject).not.toHaveBeenCalled();
+
+    rerender(<ProjectDashboard {...props} openNewComic projects={[classicProject()]} />);
+    expect(onNewComicOpened).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByLabelText('Comic Title'), { target: { value: 'Last light' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Create' })));
+    expect(onCreateProject).toHaveBeenCalledExactlyOnceWith('Last light', 'studio');
+  });
+
   it('creates a studio comic by default', async () => {
     const onCreateProject = vi.fn().mockResolvedValue(undefined);
     renderDashboard([classicProject()], { onCreateProject });

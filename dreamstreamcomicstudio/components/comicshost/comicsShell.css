@@ -1,0 +1,116 @@
+/* The public Comic Studio journey shares one column and one primary action palette. */
+.comics-shell-width {
+  width: calc(100% - 2 * clamp(20px, 4vw, 64px));
+  max-width: 1460px;
+  margin-inline: auto;
+  padding-inline: 0;
+}
+
+.comics-primary-action {
+  --ds-accent-fill: #0a0a0a;
+  --ds-accent-fill-hover: #2f2f2f;
+  --ds-on-accent: #fff;
+}
+
+.dark .comics-primary-action {
+  --ds-accent-fill: #fafafa;
+  --ds-accent-fill-hover: #d6d6d6;
+  --ds-on-accent: #0a0a0a;
+}
+
+[data-comic-theme='paper'] .comics-primary-action {
+  --ds-accent-fill: #2946c7;
+  --ds-accent-fill-hover: #2038a5;
+  --ds-on-accent: #fff;
+}
+
+.dark[data-comic-theme='paper'] .comics-primary-action,
+.dark [data-comic-theme='paper'] .comics-primary-action {
+  --ds-accent-fill: #9db0ff;
+  --ds-accent-fill-hover: #bac7ff;
+  --ds-on-accent: #191612;
+}
+
+.comics-header {
+  --header-h: 64px;
+}
+
+.comics-header [data-slot='app-header-grid'] {
+  column-gap: clamp(8px, 2.5vw, 40px);
+}
+
+.comics-header [data-region='nav'] {
+  justify-content: flex-start;
+}
+
+.comics-header button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.comics-header-entry {
+  padding-inline: 14px;
+}
+
+.comics-header-menu {
+  max-width: 100%;
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.comics-header-theme,
+.comics-header-my-comics {
+  display: none;
+}
+
+@media (min-width: 600px) {
+  .comics-header-theme,
+  .comics-header-my-comics {
+    display: inline-flex;
+  }
+
+  .comics-header-menu-theme {
+    display: none;
+  }
+}
+
+@media (max-width: 599px) {
+  .comics-header [data-slot='app-header-grid'] {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .comics-header [data-region='nav'] {
+    display: none;
+  }
+
+  .comics-header [data-region='actions'] {
+    grid-column: 2;
+    gap: 4px;
+  }
+
+  .comics-header-entry {
+    padding-inline: 10px;
+  }
+}
+
+/* A short landscape viewport should give its height to the comic, not a pinned header. */
+@media (max-height: 479px) {
+  .comics-header {
+    position: relative;
+    --header-h: 56px;
+  }
+}
+
+@media (forced-colors: active) {
+  .comics-primary-action[data-slot='button'] {
+    background-color: ButtonFace;
+    color: ButtonText;
+    border-color: ButtonText;
+  }
+
+  .comics-primary-action[data-slot='button']:hover {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}

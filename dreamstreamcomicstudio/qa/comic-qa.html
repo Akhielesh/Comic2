@@ -13,8 +13,9 @@
          never into the production dist/. Mounts the real studio, editor and readers on synthetic
          fixtures with an in-memory controller; it makes no network calls. -->
     <style>
-      /* Mirrors the production body background: every studio surface must paint its own canvas. */
-      body { margin: 0; background-color: #3B82F6; }
+      /* A neutral startup canvas while the QA modules load; scenes still paint their own surface. */
+      body { margin: 0; background-color: #FAF9F5; }
+      @media (prefers-color-scheme: dark) { body { background-color: #262624; } }
     </style>
   </head>
   <body class="antialiased">
