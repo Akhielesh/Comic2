@@ -14,7 +14,9 @@ import { Segmented } from '../board/ui';
 import { headerVariantFor } from './formFactor';
 import { useFormFactor } from './useFormFactor';
 
-export const MODE_HINT = 'Easy keeps it simple — you can still ask me to do anything. Pro shows every control.';
+// R00 SF-2: honest about what Pro changes today. The board ignores the mode; Pro's difference lives inside a page
+// (the editor: layers and numeric fields). Anything else is still one ask to the director in either mode.
+export const MODE_HINT = 'Easy keeps it simple. Pro adds layers and exact numbers inside a page.';
 
 export interface ModeToggleProps {
   studio: Pick<StudioController, 'mode' | 'setMode' | 'caps'>;
@@ -41,7 +43,7 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
     },
     {
       value: 'pro' as StudioMode,
-      title: proAllowed ? 'Pro: every control on screen' : 'The Pro editor isn’t available on this plan',
+      title: proAllowed ? 'Pro: layers and exact numbers inside a page' : 'The Pro editor isn’t available on this plan',
       disabled: !proAllowed,
       label: (
         <>
@@ -52,10 +54,15 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
     }
   ];
 
+  // A tap always stores the choice, even on the option already shown (R00 SF-2). With no stored choice the switch shows
+  // the plan default (Pro for admins) while a phone's editor opens in Easy until this device has a choice
+  // (useProEditor editorViewFor, D7); skipping the "same" tap left Pro looking selected and doing nothing.
+  const pick = (m: StudioMode) => studio.setMode(m);
+
   if (variant === 'menu') {
     return (
       <div className="min-w-0" data-action="mode">
-        <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} className="w-full" />
+        <Segmented label="Editor view" value={mode} onChange={pick} options={options} className="w-full" />
         <p className="mt-1.5 text-[12px] leading-snug text-[var(--ds-muted)]">{MODE_HINT}</p>
       </div>
     );
@@ -64,7 +71,7 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ studio, compact = false,
   return (
     // data-action: the one home of the Easy | Pro view switch in a viewport (declutter C2; DC-1 wave note 8).
     <span title={MODE_HINT} className="inline-flex shrink-0" data-action="mode">
-      <Segmented label="Editor view" value={mode} onChange={(m) => m !== mode && studio.setMode(m)} options={options} size={compact ? 'xs' : 'sm'} />
+      <Segmented label="Editor view" value={mode} onChange={pick} options={options} size={compact ? 'xs' : 'sm'} />
     </span>
   );
 };

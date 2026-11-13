@@ -11,6 +11,9 @@ import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetF
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
 import { ModeToggle, MODE_HINT } from './ModeToggle';
+import { MODE_STORAGE_KEY, readStoredMode, useStudioMode } from '../useStudioMode';
+import { editorViewFor } from '../editor/useProEditor';
+import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { SAVINGS_COPY, SavingsBreakdown, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
 import { claimToast, resetToastsForTests, ToastHost } from '../../ds/Toast';
 import { FormFactorProvider, formFactorFor } from './useFormFactor';
@@ -503,6 +506,49 @@ describe('ModeToggle (decisions-final #1: a view, never a permission)', () => {
       </FormFactorProvider>
     );
     expect(menu.querySelectorAll('[data-action="mode"]')).toHaveLength(1);
+  });
+
+  describe('the phone ⋯ switch stores the tap (R00 SF-2: "the easy and pro toggle seems to be doing nothing")', () => {
+    /** The real view hook behind the switch, as useStudio wires it. */
+    const Live: React.FC<{ caps: StudioCaps }> = ({ caps }) => {
+      const { mode, setMode } = useStudioMode(caps);
+      return (
+        <FormFactorProvider value={PHONE}>
+          <ModeToggle studio={{ mode, setMode, caps }} variant="menu" />
+          <output data-testid="editor-view">{editorViewFor({ flag: true, canPro: true, phone: true, studioMode: mode, stored: readStoredMode() })}</output>
+        </FormFactorProvider>
+      );
+    };
+    const PRO_DEFAULT: StudioCaps = { ...DEFAULT_CAPS, admin: true, defaultMode: 'pro', proEditor: true };
+    beforeEach(() => window.localStorage.removeItem(MODE_STORAGE_KEY));
+    afterEach(() => window.localStorage.removeItem(MODE_STORAGE_KEY));
+
+    it('no stored choice, default Pro: Pro shows selected while the phone editor opens in Easy; tapping Pro stores it and the editor follows', () => {
+      render(<Live caps={PRO_DEFAULT} />);
+      expect(screen.getByRole('radio', { name: 'Pro' })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('editor-view')).toHaveTextContent('easy');
+      fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
+      expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('pro');
+      expect(screen.getByTestId('editor-view')).toHaveTextContent('pro');
+    });
+
+    it('tapping the option already shown in the header stores it too', () => {
+      const studio = makeFakeStudio({ mode: 'easy' });
+      render(
+        <FormFactorProvider value={DESKTOP}>
+          <ModeToggle studio={studio} />
+        </FormFactorProvider>
+      );
+      fireEvent.click(screen.getByRole('radio', { name: 'Easy' }));
+      expect(studio.setMode).toHaveBeenCalledWith('easy');
+    });
+
+    it('the hint says what Pro adds today, and no longer promises every control', () => {
+      render(<Live caps={PRO_DEFAULT} />);
+      expect(screen.getByText('Easy keeps it simple. Pro adds layers and exact numbers inside a page.')).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/every control/i);
+      expect(screen.getByRole('radio', { name: 'Pro' }).getAttribute('title')).not.toMatch(/every control/i);
+    });
   });
 
   it('Pro is shown as unavailable (never hidden) when the capability is off', () => {
