@@ -85,25 +85,51 @@ const sameScope = (a: TranslateAction, b: TranslateAction) =>
 /**
  * A second translate_comic call in the turn that already opened an Approve card for the languages the user asked for
  * ("add telugu and hindi versions" sent as [Telugu], then [Hindi]): drop that card and quote both languages on one new
- * card (which replaces the old gate), instead of refusing the second call and silently dropping its language. Undefined: nothing to merge.
+ * card (which replaces the old gate), instead of refusing the second call and silently dropping its language. Undefined:
+ * nothing to merge. `restore` puts the first card back when the merged call does not open its own gate (it threw, or
+ * was refused), so the first gate is never left open with no card the user can tap.
  */
-async function mergeIntoAskedGate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<TranslateAction | undefined> {
+async function mergeIntoAskedGate(
+  ctx: StudioContext,
+  turn: DirectorTurn,
+  action: TranslateAction
+): Promise<{ action: TranslateAction; first: readonly string[]; restore: () => void } | undefined> {
   const mine = askedGates.get(turn);
   const open = ctx.session.doc.gate;
   if (!mine || !open || open.id !== mine.gateId || open.status !== 'open' || !sameScope(mine.action, action)) return undefined;
   // The new card takes the one gate slot and the studio stamps the old one 'replaced' by the system (jobs.ts
   // commitGate). Never decline_gate here: that is the creator's own "Not now", and the settled card and the director
   // would both read that the user turned the translation down.
-  const card = turn.cards.findIndex((c) => c.type === 'gate' && c.gateId === open.id);
-  if (card >= 0) turn.cards.splice(card, 1);
+  const at = turn.cards.findIndex((c) => c.type === 'gate' && c.gateId === open.id);
+  const card = at >= 0 ? turn.cards.splice(at, 1)[0] : undefined;
   askedGates.delete(turn);
   turn.gated = false;
-  return { ...action, languages: [...new Set([...mine.action.languages, ...action.languages])] };
+  const restore = () => {
+    if (card) turn.cards.splice(Math.min(at, turn.cards.length), 0, card);
+    askedGates.set(turn, mine);
+    turn.gated = true;
+  };
+  return { action: { ...action, languages: [...new Set([...mine.action.languages, ...action.languages])] }, first: mine.action.languages, restore };
 }
 
 /** Start a quoted translate spend from the director: it waits for the user's Approve unless the comic is set to "never ask"; $0 runs straight away. */
 async function startTranslate(ctx: StudioContext, turn: DirectorTurn, asked: TranslateAction): Promise<string> {
-  const action = (turn.gated && (await mergeIntoAskedGate(ctx, turn, asked))) || asked;
+  const merged = turn.gated ? await mergeIntoAskedGate(ctx, turn, asked) : undefined;
+  if (!merged) return quoteAndStartTranslate(ctx, turn, asked);
+  let message: string;
+  try {
+    message = await quoteAndStartTranslate(ctx, turn, merged.action);
+  } catch (err) {
+    merged.restore();
+    throw err;
+  }
+  if (turn.outcome === 'gated') return message;
+  // The merged call opened no gate of its own: the first card stays, so the language that was already priced can still be approved.
+  merged.restore();
+  return `${message} The earlier Approve card for ${listOf(merged.first.map(englishName))} is still open.`;
+}
+
+async function quoteAndStartTranslate(ctx: StudioContext, turn: DirectorTurn, action: TranslateAction): Promise<string> {
   const doc = ctx.session.doc;
   const quote = quoteTranslation(doc, ctx.keys, action);
   // caps and origin are explicit on every action this tool starts (RunActionOptions may require them).
@@ -142,7 +168,7 @@ async function startTranslate(ctx: StudioContext, turn: DirectorTurn, asked: Tra
       if (userAsked) askedGates.set(turn, { gateId: outcome.gate.id, action });
     }
     void ctx.track(started.done);
-    // The Approve card names the languages by code: the director gets their names, and what the wait means.
+    // The Approve card names the languages in words; the director gets the same names, and what the wait means.
     message =
       outcome.status === 'gated'
         ? `${outcome.message} That is ${listOf(action.languages.map(englishName))}: say the languages and the price in one line and stop; nothing is spent until they tap Approve.`

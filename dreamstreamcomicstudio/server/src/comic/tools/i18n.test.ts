@@ -22,6 +22,12 @@ vi.mock('../safety/index.js', async (orig) => {
   return { ...real, prefilterText: vi.fn(real.prefilterText) };
 });
 const safety = await import('../safety/index.js');
+// quoteTranslation passes through; one test makes it throw for a merged two-language quote.
+vi.mock('../i18n/index.js', async (orig) => {
+  const real = await orig<typeof import('../i18n/index.js')>();
+  return { ...real, quoteTranslation: vi.fn(real.quoteTranslation) };
+});
+const i18nIndex = await import('../i18n/index.js');
 
 beforeEach(() => {
   vi.mocked(safety.prefilterText).mockClear();
@@ -241,6 +247,32 @@ describe('translate_comic', () => {
     expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'open' });
     expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
     expect(i18nOf(session.doc).editions).toEqual({});
+  });
+
+  it('when the merged two-language quote fails, the first Approve card stays in the reply and its gate stays approvable', async () => {
+    const real = vi.mocked(i18nIndex.quoteTranslation).getMockImplementation()!;
+    vi.mocked(i18nIndex.quoteTranslation).mockImplementation((doc, keys, action) => {
+      if (action.languages.length > 1) throw new Error('quote failed');
+      return real(doc, keys, action);
+    });
+    try {
+      const session = newSession(sixPageKidsDoc());
+      const te = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Telugu'] }) };
+      const hi = { id: 'c2', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Hindi'] }) };
+      const llm = scriptedLlm({ director: [{ text: '', toolCalls: [te, hi] }, { text: 'Telugu is priced. Tap Approve.' }] });
+      const ctx = testContext(session, { llm });
+      await runDirectorTurn(ctx, { text: 'add telugu and hindi versions', attachments: [] });
+      await ctx.settled();
+      // The Telugu gate is still the open one, and its card is in the reply: never an open gate with no card.
+      const gate = session.doc.gate!;
+      expect(gate).toMatchObject({ status: 'open', action: { type: 'translate', languages: ['te'] } });
+      const reply = session.doc.conversation[session.doc.conversation.length - 1];
+      expect(reply.cards!.filter((c) => c.type === 'gate')).toEqual([expect.objectContaining({ gateId: gate.id })]);
+      expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
+      expect(llm.calls.filter((c) => c.role !== 'director')).toHaveLength(0);
+    } finally {
+      vi.mocked(i18nIndex.quoteTranslation).mockImplementation(real);
+    }
   });
 
   it('a second call for other pages or options is still refused: only the languages gather on one card', async () => {
