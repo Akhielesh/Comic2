@@ -56,7 +56,6 @@ import {
   studioViewToUrlParam,
   type StudioDeepLinkView
 } from './services/studioDeepLink';
-import { createStudioProject } from './components/comicstudio/studioApi';
 import { clearOtherComicIdeaDrafts } from './components/comicstudio/comicIdeaDraft';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
@@ -901,6 +900,9 @@ const App: React.FC = () => {
   const handleCreateProject = async (name: string, mode: NewComicMode = 'studio', initialIdea?: string): Promise<void> => {
     if (mode === 'studio') {
       const accountId = user?.id;
+      // The Comic Studio API and document normalization are needed only after explicit creation.
+      const { createStudioProject } = await import('./components/comicstudio/studioApi');
+      if (!accountId || accountRef.current !== accountId) return;
       const { projectId } = await createStudioProject({ title: name.trim() || undefined });
       // An in-flight request from a previous account must not open its project for the next account.
       if (!accountId || accountRef.current !== accountId) return;
