@@ -32,6 +32,7 @@ import {
   type AssetRef,
   type Box,
   type Character,
+  type CharacterLook,
   type ComicDoc,
   type ComicKind,
   type Line,
@@ -67,6 +68,7 @@ import {
   type ParsedLayout
 } from '../../../shared/comic/pageGeometry.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
+import { withoutMood } from '../../../shared/comic/world/lookLint.js';
 import {
   ALWAYS_ART_AVOID,
   CONTENT_RATINGS,
@@ -103,6 +105,13 @@ export interface CompileOptions {
    * 'PG-13' for a kids comic still draws at PG.
    */
   rating?: ContentRating;
+  /**
+   * P5-TRUTH items 1–7 (COMIC_STORY_FIXES; the job runner sets it per request through p5Flags): a card's mood words
+   * stay out of its anchors and CAST lines, colour names carry their hex and know the colours an Indian epic needs,
+   * sheets show the book palette as accents only, the legend keeps base colours and the header fits the style's
+   * medium. Absent = today's prompts, byte for byte.
+   */
+  storyFixes?: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -265,7 +274,24 @@ const NAMED_COLORS: [string, number, number, number][] = [
   ['indigo', 63, 55, 201], ['purple', 106, 76, 147], ['lavender', 205, 180, 219], ['deep purple', 27, 27, 47]
 ];
 
-const hexToName = (value: string): string => {
+/**
+ * P5-TRUTH (COMIC_STORY_FIXES): the colours an Indian epic needs, which the table above has no word for (#FF9933 read
+ * as "coral", #0055A5 as "teal"). Only read with the flag, so today's prompts keep today's words.
+ */
+const EPIC_COLORS: [string, number, number, number][] = [
+  ['saffron', 255, 153, 51], ['gold', 255, 215, 0], ['royal blue', 0, 85, 165], ['vermilion', 227, 66, 52],
+  ['maroon', 128, 0, 0], ['peacock blue', 0, 95, 115], ['indigo', 75, 0, 130], ['turmeric', 232, 163, 23]
+];
+const FIXED_COLORS = [...NAMED_COLORS.filter(([name]) => name !== 'indigo'), ...EPIC_COLORS];
+
+/** "#f93" → "#FF9933"; undefined for anything that is not a 3- or 6-digit hex. */
+const hexOf = (value: string): string | undefined => {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(clean(value));
+  if (!m) return undefined;
+  return `#${(m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1]).toUpperCase()}`;
+};
+
+const hexToName = (value: string, fixes = false): string => {
   const raw = clean(value);
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw);
   if (!m) return raw;
@@ -273,9 +299,10 @@ const hexToName = (value: string): string => {
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);
-  let best = NAMED_COLORS[0];
+  const table = fixes ? FIXED_COLORS : NAMED_COLORS;
+  let best = table[0];
   let bestD = Infinity;
-  for (const named of NAMED_COLORS) {
+  for (const named of table) {
     // Weighted RGB distance (cheap perceptual approximation).
     const d = 2 * (named[1] - r) ** 2 + 4 * (named[2] - g) ** 2 + 3 * (named[3] - b) ** 2;
     if (d < bestD) {
@@ -286,11 +313,22 @@ const hexToName = (value: string): string => {
   return best[0];
 };
 
-/** "crimson, golden yellow and deep navy" from hex or named palette entries (deduped). */
-export const paletteWords = (palette?: string[]): string => {
+/** With COMIC_STORY_FIXES: "saffron (#FF9933)" for a hex entry (the exact code reaches the model), a name as written. */
+const colourWord = (entry: string, fixes: boolean): string => {
+  if (!fixes) return hexToName(entry);
+  const hex = hexOf(entry);
+  return hex ? `${hexToName(hex, true)} (${hex})` : clean(entry);
+};
+
+/**
+ * "crimson, golden yellow and deep navy" from hex or named palette entries (deduped). With COMIC_STORY_FIXES each hex
+ * keeps its code after its name ("saffron (#FF9933) and royal blue (#0055A5)") and two codes that share a name both stay.
+ */
+export const paletteWords = (palette?: string[], opts: { storyFixes?: boolean } = {}): string => {
+  const fixes = opts.storyFixes === true;
   const names: string[] = [];
   for (const entry of palette || []) {
-    const name = hexToName(entry);
+    const name = colourWord(entry, fixes);
     if (name && !names.includes(name)) names.push(name);
   }
   return joinList(names.slice(0, 6));
@@ -398,12 +436,12 @@ export const resolveStyle = (doc: ComicDoc, rating?: ContentRating): ResolvedSty
 };
 
 /** "full color" / "black and white with grey tones only" / "limited palette: …". */
-export const colorSentence = (doc: ComicDoc): string => {
+export const colorSentence = (doc: ComicDoc, opts: { storyFixes?: boolean } = {}): string => {
   switch (doc.format.colorMode) {
     case 'bw':
       return 'black and white with grey tones only';
     case 'limited': {
-      const words = paletteWords(resolveStyle(doc).palette);
+      const words = paletteWords(resolveStyle(doc).palette, opts);
       return `limited palette: ${words || 'two or three flat ink colors plus black and paper white'}`;
     }
     default:
@@ -411,16 +449,62 @@ export const colorSentence = (doc: ComicDoc): string => {
   }
 };
 
+/** How a style's pages are made, read from its words ($0): what the page header and the Linework line may claim. */
+export type StyleMedium = 'drawn' | 'painted' | 'rendered' | 'photographed';
+
+// "photorealism" is not a medium (it is in most avoid lists), and "rendered"/"rendering" are common words for ink and
+// paint, so neither is read.
+const PHOTOGRAPHED = /\b(?:photo(?:graph(?:ed|y|s)?|s)?|diorama|tilt-shift|macro lens|stop-motion|claymation|miniature set)\b/i;
+const RENDERED = /\b(?:3d|3-d|cgi|octane|unreal engine|blender)\b/i;
+const PAINTED = /\b(?:painted|painterly|watercolou?rs?|gouache|oil paint(?:ing)?|acrylics?|digital painting)\b/i;
+
+/**
+ * The medium of the doc's resolved style: a photographed toy diorama is 'photographed', a CGI look 'rendered', a
+ * watercolour 'painted', anything else 'drawn' (today's header). Spec words only; the avoid list never counts.
+ */
+export const mediumOf = (style: Pick<ResolvedStyle, 'spec'>): StyleMedium => {
+  const spec = style.spec || '';
+  if (PHOTOGRAPHED.test(spec)) return 'photographed';
+  if (RENDERED.test(spec)) return 'rendered';
+  if (PAINTED.test(spec)) return 'painted';
+  return 'drawn';
+};
+
+/** The page header's craft sentence for a medium (drawn = today's words). */
+const craftSentence = (medium: StyleMedium, bw: boolean): string => {
+  switch (medium) {
+    case 'photographed':
+      return 'It must look like a professionally photographed published page: a lit miniature set shot through a real lens, not a drawing.';
+    case 'rendered':
+      return 'It must look like a professionally rendered 3D published page.';
+    case 'painted':
+      return 'It must look like a professionally painted published page.';
+    default:
+      return `It must look like a professionally drawn and ${bw ? 'inked' : 'colored'} published page.`;
+  }
+};
+
+/** The words before a sheet's palette (COMIC_STORY_FIXES): the book colours are accents, never the subject's own. */
+const ACCENT_PREFIX = {
+  character: 'Book accent colours (backgrounds and effects only; never recolour this character)',
+  place: "Book accent colours (light and effects only; never recolour this place's own materials)"
+} as const;
+
 /** The ART STYLE paragraph body (spec + palette + linework + avoid list incl. rating negatives). */
-const styleParagraph = (doc: ComicDoc, opts: { avoid?: boolean; rating?: ContentRating } = {}): string => {
+const styleParagraph = (
+  doc: ComicDoc,
+  opts: { avoid?: boolean; rating?: ContentRating; storyFixes?: boolean; accents?: keyof typeof ACCENT_PREFIX } = {}
+): string => {
   const style = resolveStyle(doc, opts.rating);
+  const fixes = opts.storyFixes === true;
   const parts = [style.spec];
   // Palette is stated once: in the color sentence for limited mode, never for b/w.
   if (doc.format.colorMode === 'color') {
-    const words = paletteWords(style.palette);
-    if (words) parts.push(`Palette: ${words}.`);
+    const words = paletteWords(style.palette, { storyFixes: fixes });
+    if (words) parts.push(fixes && opts.accents ? `${ACCENT_PREFIX[opts.accents]}: ${words}.` : `Palette: ${words}.`);
   }
-  if (style.linework) parts.push(`Linework: ${stripEnd(style.linework)}.`);
+  // A photographed medium has no linework to match (COMIC_STORY_FIXES).
+  if (style.linework && !(fixes && mediumOf(style) === 'photographed')) parts.push(`Linework: ${stripEnd(style.linework)}.`);
   if (opts.avoid !== false && style.avoid.length) parts.push(`Never: ${style.avoid.map(stripEnd).join(', ')}.`);
   return parts.join(' ');
 };
@@ -586,11 +670,23 @@ const identityPhrase = (age?: string, gender?: string, summary = ''): string => 
 };
 
 /**
+ * COMIC_STORY_FIXES: the look as the image prompt states it — the face, eyes and summary without their mood words
+ * ("serene calm smile" is a beat, not an identity; each panel's mood comes from the plan). Compile time only: the stored
+ * look is part of every page's spec hash and is never rewritten.
+ */
+const moodlessLook = (look?: CharacterLook): CharacterLook => {
+  const base = look || { summary: '' };
+  const out: CharacterLook = { ...base, summary: withoutMood(base.summary) };
+  for (const k of ['face', 'eyes'] as const) if (typeof base[k] === 'string') out[k] = withoutMood(base[k]);
+  return out;
+};
+
+/**
  * Full visual lock for one character, stated once: the summary plus every non-empty look
  * field the summary doesn't already contain, with distinguishing marks last.
  */
-export const describeLook = (c: Character, opts: { colors?: boolean } = {}): string => {
-  const look = c.look || { summary: '' };
+export const describeLook = (c: Character, opts: { colors?: boolean; storyFixes?: boolean } = {}): string => {
+  const look = opts.storyFixes ? moodlessLook(c.look) : c.look || { summary: '' };
   const summary = stripEnd(clean(look.summary));
   const seen = summary.toLowerCase();
   const parts: string[] = summary ? [summary] : [];
@@ -614,7 +710,7 @@ export const describeLook = (c: Character, opts: { colors?: boolean } = {}): str
   add('eyes', look.eyes);
   add('skin', look.skin);
   add('outfit', look.outfit);
-  if (opts.colors !== false) add('colors', look.palette);
+  if (opts.colors !== false) add('colors', opts.storyFixes ? paletteText(look.palette, true) : look.palette);
   add('props', look.props);
   add('markings (never change)', look.markings);
   add('always visible', look.marks);
@@ -670,10 +766,10 @@ const anchorPiece = (value?: string): string => {
 };
 
 /** Palette entries in words ("#e63946, cream" → "red, cream"). */
-const paletteText = (value?: string): string =>
+const paletteText = (value?: string, fixes = false): string =>
   clean(value)
     .split(/\s*,\s*/)
-    .map((entry) => hexToName(entry))
+    .map((entry) => (fixes ? colourWord(entry, true) : hexToName(entry)))
     .filter(Boolean)
     .join(', ');
 
@@ -685,12 +781,12 @@ const paletteText = (value?: string): string =>
  * '' when the look is empty. The full look is still stated once, in the CAST block. `colors: false`
  * (black-and-white pages) leaves the palette out, exactly as describeLook does for the CAST block.
  */
-export const identityAnchor = (c: Character, opts: { colors?: boolean } = {}): string => {
-  const look = c.look || { summary: '' };
+export const identityAnchor = (c: Character, opts: { colors?: boolean; storyFixes?: boolean } = {}): string => {
+  const look = opts.storyFixes ? moodlessLook(c.look) : c.look || { summary: '' };
   const fields =
     castKindOf(c) === 'person'
       ? [look.hair, look.outfit, look.marks, look.markings, look.props, look.face]
-      : [look.summary, look.markings, look.marks, opts.colors === false ? '' : paletteText(look.palette), look.props];
+      : [look.summary, look.markings, look.marks, opts.colors === false ? '' : paletteText(look.palette, opts.storyFixes === true), look.props];
   const pieces: string[] = [];
   let used = 0;
   for (const field of fields) {
@@ -840,7 +936,15 @@ const styleDetail = (ref: RefAsset): string => {
 };
 
 /** Legend instruction for a character's model sheet (people unchanged; non-humans and groups by kind). */
-const sheetInstruction = (c: Character): string => {
+/** COMIC_STORY_FIXES: the page's own light may brighten or darken a sheet's colours, never change them. */
+const BASE_COLOURS_LINE = "Match its design and base colours; this page's light changes brightness, never hue.";
+
+const sheetInstruction = (c: Character, fixes = false): string => {
+  const base = sheetInstructionToday(c);
+  return fixes ? `${base} ${BASE_COLOURS_LINE}` : base;
+};
+
+const sheetInstructionToday = (c: Character): string => {
   const pos = possessive(c);
   const n = groupSize(c);
   const group = n > 1 ? ` It shows one member of the group of ${n}: draw all ${n} to this exact design.` : '';
@@ -861,7 +965,7 @@ const sheetInstruction = (c: Character): string => {
 };
 
 /** Pass 1 for one character: the ready sheet, else the best-ranked author photo for this job. */
-const characterReference = (c: Character, ctx: RefContext = {}, purpose: 'page' | 'cover' = 'page'): PlannedReference | undefined => {
+const characterReference = (c: Character, ctx: RefContext = {}, purpose: 'page' | 'cover' = 'page', fixes = false): PlannedReference | undefined => {
   const sheet = usableAsset(c.sheet);
   if (sheet) {
     return {
@@ -869,7 +973,7 @@ const characterReference = (c: Character, ctx: RefContext = {}, purpose: 'page' 
       slot: 'character',
       label: `CHARACTER SHEET: ${upperName(c.name)}`,
       path: sheet,
-      instruction: sheetInstruction(c),
+      instruction: sheetInstruction(c, fixes),
       characterId: c.id
     };
   }
@@ -913,7 +1017,8 @@ const castReferences = (
   spec: ImageModelSpec,
   budget: { total: number },
   purpose: 'page' | 'cover',
-  ctxFor: (c: Character) => RefContext
+  ctxFor: (c: Character) => RefContext,
+  fixes = false
 ): PlannedReference[] => {
   let slots = Math.min(Math.max(0, spec.refs.characters), budget.total);
   const groups: { c: Character; refs: PlannedReference[] }[] = [];
@@ -923,7 +1028,7 @@ const castReferences = (
     // with a ready, servable sheet or photo (the f8312c86 protagonist is an extra in 20 of 20 panels).
     // The page's rank order (rankPageCast) decides who fits the model's character slots.
     if (c.tier === 'extra' && purpose === 'page' && isProp(c)) continue;
-    const ref = characterReference(c, ctxFor(c), purpose);
+    const ref = characterReference(c, ctxFor(c), purpose, fixes);
     if (!ref) continue;
     groups.push({ c, refs: [ref] });
     slots -= 1;
@@ -1059,7 +1164,7 @@ export const planPageReferences = (
   }
   const effective = artRatingFor(doc, opts);
   const shotsOf = (id: string) => page.panels.filter((p) => p.castIds.includes(id)).map((p) => p.shot);
-  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }));
+  const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }), opts.storyFixes === true);
 
   const style = styleReferences(doc, spec, budget, { effectiveRating: effective });
 
@@ -1345,6 +1450,8 @@ interface PanelBlockContext {
   anchors: boolean;
   /** Colour page: anchors may name palette colours (a black-and-white page states none, like its CAST block). */
   colors: boolean;
+  /** COMIC_STORY_FIXES: anchors without mood words, colours with their codes. */
+  fixes: boolean;
 }
 
 /**
@@ -1420,7 +1527,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const solo = people.length === 1 && things.length > 0;
   const describe = (id: string): string => {
     const c = doc.cast.find((x) => x.id === id)!;
-    const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors }) : ''].filter(Boolean).join(' — ');
+    const inner = [imageWords(ctx.index.get(`c:${id}`)), ctx.anchors ? identityAnchor(c, { colors: ctx.colors, storyFixes: ctx.fixes }) : ''].filter(Boolean).join(' — ');
     return `${ctx.names.get(id)}${inner ? ` (${inner})` : ''}`;
   };
   const peopleText = people.map((s) => `${describe(s.id)}${s.word && !solo ? `, ${positionPhrase(s.word)}` : ''}`).join('; ');
@@ -1558,9 +1665,9 @@ const indexReferences = (refs: PlannedReference[]): Map<string, number[]> => {
  * "DUCKLINGS ×3"; recurring props in their own list; anyone without an attached image is
  * text-locked "(no reference — follow this description exactly)".
  */
-const castBlocks = (cast: Character[], names: Map<string, string>, index: Map<string, number[]>, bw: boolean): string[] => {
+const castBlocks = (cast: Character[], names: Map<string, string>, index: Map<string, number[]>, bw: boolean, fixes = false): string[] => {
   const line = (c: Character) =>
-    `- ${names.get(c.id)} ${imageTag(index.get(`c:${c.id}`)) || '(no reference — follow this description exactly)'}: ${describeLook(c, { colors: !bw })}`;
+    `- ${names.get(c.id)} ${imageTag(index.get(`c:${c.id}`)) || '(no reference — follow this description exactly)'}: ${describeLook(c, { colors: !bw, ...(fixes ? { storyFixes: true } : {}) })}`;
   const beings = cast.filter((c) => !isProp(c));
   const props = cast.filter(isProp);
   const nonHuman = beings.some((c) => castKindOf(c) !== 'person');
@@ -1600,9 +1707,12 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
   const names = new Map(cast.map((c) => [c.id, castLabel(c)]));
   const props = new Set(cast.filter(isProp).map((c) => c.id));
   const bw = doc.format.colorMode === 'bw';
+  const fixes = opts.storyFixes === true;
+  // COMIC_STORY_FIXES: the craft sentence fits the style's medium (a photographed toy diorama is not "drawn and colored").
+  const craft = fixes ? craftSentence(mediumOf(resolveStyle(doc, rating)), bw) : `It must look like a professionally drawn and ${bw ? 'inked' : 'colored'} published page.`;
   const header =
     `Create one finished comic page as a single image: ${withArticle(KIND_TEXT[doc.format.kind] || 'comic book')} page, ` +
-    `${colorSentence(doc)}. It must look like a professionally drawn and ${bw ? 'inked' : 'colored'} published page.\n` +
+    `${colorSentence(doc, { storyFixes: fixes })}. ${craft}\n` +
     frameSentence(aspect, 'page');
 
   const placeIds = [...new Set(page.panels.map((p) => p.placeId).filter((id): id is string => !!id))];
@@ -1620,14 +1730,14 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
     : '';
 
   const build = (anchors: boolean): string => {
-    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw };
+    const ctx: PanelBlockContext = { names, props, index, boxes, guide, anchors, colors: !bw, fixes };
     const panelsBlock = ['PANELS:', ...page.panels.map((panel, i) => panelBlock(doc, page, panel, i, ctx, opts))].join('\n');
     return [
       header,
-      `ART STYLE — apply identically in every panel:\n${styleParagraph(doc, { rating })}`,
+      `ART STYLE — apply identically in every panel:\n${styleParagraph(doc, { rating, storyFixes: fixes })}`,
       contentParagraph(doc, opts),
       referenceLegend(refs),
-      ...castBlocks(cast, names, index, bw),
+      ...castBlocks(cast, names, index, bw, fixes),
       placeBlock,
       layoutBlock(doc, page, boxes, guide),
       panelsBlock,
@@ -1653,7 +1763,9 @@ export const compileCharacterSheet = (doc: ComicDoc, character: Character, opts:
   const { spec } = resolved;
   const aspect = nearestAspect(spec, '3:2');
   const name = upperName(character.name);
-  const look = character.look || { summary: '' };
+  const fixes = opts.storyFixes === true;
+  // COMIC_STORY_FIXES: the sheet draws its own three expressions, so a mood held in the face or eyes stays out.
+  const look = fixes ? moodlessLook(character.look) : character.look || { summary: '' };
   const bw = doc.format.colorMode === 'bw';
   const rating = artRatingFor(doc, opts);
   const kind = castKindOf(character);
@@ -1708,7 +1820,7 @@ export const compileCharacterSheet = (doc: ComicDoc, character: Character, opts:
     field('Eyes', look.eyes),
     field('Skin', look.skin),
     field('Outfit', look.outfit),
-    bw ? '' : field('Colors', look.palette),
+    bw ? '' : field('Colors', fixes ? paletteText(look.palette, true) : look.palette),
     field('Props', look.props),
     field('Markings (must never change)', look.markings),
     field('Distinguishing marks (must always show)', look.marks)
@@ -1732,7 +1844,7 @@ export const compileCharacterSheet = (doc: ComicDoc, character: Character, opts:
     group,
     description || `No description given — design one clear, memorable look for ${name} that fits the story (${clean(doc.brief.genre) || 'comic'}).`,
     personality,
-    `Art style: ${styleParagraph(doc, { avoid: true, rating })}`,
+    `Art style: ${styleParagraph(doc, { avoid: true, rating, ...(fixes ? { storyFixes: true, accents: 'character' as const } : {}) })}`,
     contentParagraph(doc, opts),
     combine,
     referenceLegend(refs)
@@ -1778,7 +1890,7 @@ export const compilePlaceSheet = (doc: ComicDoc, place: Place, opts: CompileOpti
       'showing its key props and textures. Same time of day and lighting in all three views, clean separations between them' +
       `${doc.format.colorMode === 'bw' ? ', black and white with grey tones only' : ''}.`,
     sentence(place.look) || `A location that fits the story${setting ? ` (${setting})` : ''}.`,
-    `Art style: ${styleParagraph(doc, { rating })}`,
+    `Art style: ${styleParagraph(doc, { rating, ...(opts.storyFixes ? { storyFixes: true, accents: 'place' as const } : {}) })}`,
     contentParagraph(doc, opts),
     referenceLegend(refs)
   ]
@@ -2030,7 +2142,8 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
   const budget = { total: Math.max(0, spec.refs.total), objects: Math.max(0, spec.refs.objects) };
   // contract §4.12: prompts take .slice(0, refs.characters); a model without character slots still names up to 4.
   const featured = coverCastOf(doc).slice(0, spec.refs.characters > 0 ? spec.refs.characters : 4);
-  const characters = castReferences(featured, spec, budget, 'cover', () => ({ effectiveRating: rating }));
+  const fixes = opts.storyFixes === true;
+  const characters = castReferences(featured, spec, budget, 'cover', () => ({ effectiveRating: rating }), fixes);
   const style = styleReferences(doc, spec, budget, { effectiveRating: rating });
   const refs = [...characters, ...style, ...storyPageReference(doc, budget, rating)];
   const index = indexReferences(refs);
@@ -2047,11 +2160,11 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
     return `${castLabel(c)}${tag ? ` ${tag}` : ''}`;
   });
   const featuring = names.length ? `, featuring ${joinList(names)}` : '';
-  const castLines = featured.map((c) => `- ${castLabel(c)}: ${describeLook(c, { colors: !bw })}`);
+  const castLines = featured.map((c) => `- ${castLabel(c)}: ${describeLook(c, { colors: !bw, ...(fixes ? { storyFixes: true } : {}) })}`);
   const groups = featured.some((c) => groupSize(c) > 1);
   const band = coverTitleBand(doc);
 
-  const opening = `${COVER_TEXT[doc.format.kind] || COVER_TEXT.comic}, published-quality, ${colorSentence(doc)}. `;
+  const opening = `${COVER_TEXT[doc.format.kind] || COVER_TEXT.comic}, published-quality, ${colorSentence(doc, { storyFixes: fixes })}. `;
   const titleLine = textless
     ? `${opening}TEXTLESS COVER: the title is added later as editable text, so keep the ${band.side} ${band.pct}% of the image calm and uncluttered ` +
       `(sky, wall, soft shadow or gradient) with faces and the key action ${band.side === 'top' ? 'below' : 'above'} it.`
@@ -2064,7 +2177,7 @@ export const compileCover = (doc: ComicDoc, opts: CompileOptions & { textless?: 
     castLines.length
       ? [`CAST — keep each identity exact and distinct${groups ? ' (a group "×N" is exactly N look-alike members)' : ''}:`, ...castLines].join('\n')
       : '',
-    `Art style: ${styleParagraph(doc, { rating })}`,
+    `Art style: ${styleParagraph(doc, { rating, storyFixes: fixes })}`,
     contentParagraph(doc, opts),
     textless
       ? 'No text anywhere: no title, no lettering, no logos, no signatures, no issue number.'

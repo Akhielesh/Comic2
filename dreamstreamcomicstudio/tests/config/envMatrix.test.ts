@@ -61,6 +61,20 @@ describe(`${FILE} renders every variable inside a table`, () => {
     }
   });
 
+  it('maps every Program 5 server flag, each in exactly one row (R01: P5-TRUTH, P5-QC)', () => {
+    // The names come from p5Flags.ts, so a renamed or new flag fails here until the map follows.
+    const flags = readFileSync(path.join(ROOT, 'server/src/comic/p5Flags.ts'), 'utf8');
+    const block = flags.slice(flags.indexOf('export const P5_FLAG_ENV'), flags.indexOf('} as const'));
+    const read = [...block.matchAll(/:\s*'([A-Z0-9_]+)'/g)].map((m) => m[1]);
+    expect(read.sort()).toEqual(['COMIC_QC_V2', 'COMIC_RUN_CHAINS', 'COMIC_STORY_FIXES']);
+    for (const name of read) {
+      const rows = firstCells.filter((c) => c.split(/[\s/→,`]+/).includes(name));
+      expect(rows, name).toHaveLength(1);
+    }
+    // CARD_LINT_STAGE is a code constant, and the map says so (off means a redeploy).
+    expect(firstCells.some((c) => c.includes('not an env var') && c.includes('CARD_LINT_STAGE'))).toBe(true);
+  });
+
   it('keeps the live Worker’s Phase 0 variables in the map', () => {
     for (const name of ['ALLOWED_ORIGINS', 'DEVICE_TOKEN_JWK', 'ACT_TOKEN_KEY', 'SECURITY_HOOK_SECRET', 'OPS_KEY', 'APNS_KEY_P8', 'PUSH_IOS_VIA', 'RL_WS', 'CSP_REPORTS']) {
       expect(firstCells.some((c) => c.includes(name)), name).toBe(true);
@@ -90,6 +104,16 @@ describe('Comic Studio stages set in production vars (R00)', () => {
     // The matrix row says so.
     const row = text.split('\n').find((l) => l.startsWith('| `COMIC_STEER` |')) ?? '';
     expect(row).toContain('**production: `admins`**');
+  });
+
+  it('the truer-pages fixes are admins first: story fixes and the longer page check are set, scene chains are not', () => {
+    expect(vars.COMIC_STORY_FIXES).toBe('admins');
+    expect(vars.COMIC_QC_V2).toBe('admins');
+    expect(vars.COMIC_RUN_CHAINS).toBeUndefined();
+    const rowOf = (name: string) => text.split('\n').find((l) => l.startsWith(`| \`${name}\` |`)) ?? '';
+    for (const name of ['COMIC_STORY_FIXES', 'COMIC_QC_V2']) expect(rowOf(name), name).toContain('**production: `admins`**');
+    expect(rowOf('COMIC_RUN_CHAINS')).toContain('| unset (`off`) |');
+    expect(rowOf('COMIC_RUN_CHAINS')).not.toContain('**production:');
   });
 
   it('sets no other live-agent stage: the queue, conflicts, dialogue fast path and Pro editor follow their code defaults', () => {

@@ -131,6 +131,33 @@ test.describe('app harness probes', () => {
     expect(starts).toHaveLength(3);
   });
 
+  test('recordMotionStarts: a transition between two equal values is not motion; one whose ends differ still is', async ({ page }, testInfo) => {
+    const qa = harness(page, testInfo);
+    await qa.recordMotionStarts();
+    // The page counts every transitionrun itself, so this test knows the equal-ends transition really started.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __rawRuns?: string[] };
+      w.__rawRuns = [];
+      document.addEventListener('transitionrun', (e) => w.__rawRuns!.push((e as TransitionEvent).propertyName), true);
+    });
+    await serve(
+      page,
+      `<main><div id="all" class="all">inherits the scrollbar colour</div><div id="fade" style="transition:opacity 150ms">fade</div></main>
+       <script>
+         requestAnimationFrame(() => requestAnimationFrame(() => {
+           // Any custom property set on the root resolves the inherited colour again, to the same colour.
+           document.documentElement.style.setProperty('--inset', '24px');
+           document.getElementById('fade').style.opacity = '0.5';
+         }));
+       </script>`,
+      `<style>:root{--ink:#111111} body{scrollbar-color:color-mix(in srgb, var(--ink) 22%, transparent) transparent} .all{transition:all 150ms}</style>`
+    );
+    await page.waitForTimeout(600);
+    const raw = await page.evaluate(() => (window as unknown as { __rawRuns?: string[] }).__rawRuns ?? []);
+    expect(raw, 'the fixture really starts an equal-ends scrollbar-color transition').toContain('scrollbar-color');
+    expect(await qa.motionStarts()).toEqual(['transition opacity on div']);
+  });
+
   test('duplicateIds: an id carried twice is reported once', async ({ page }, testInfo) => {
     const qa = harness(page, testInfo);
     await page.setContent(html(`<main aria-labelledby="t"><h1 id="t">Title</h1><label for="t">Title</label><input id="t"><input id="u"><p id="v"></p><p id="v"></p></main>`));

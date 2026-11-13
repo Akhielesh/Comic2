@@ -231,8 +231,8 @@ export class QaHarness {
 
   /**
    * Record every motion START in each document from the next navigation on (an init script, so it sees the first
-   * frame): CSS animations that run for longer than 0 s (`animationstart`), CSS transitions (`transitionrun`) and
-   * `Element.animate()` calls with a duration. Under reduced motion the smoke expects none, so an entrance that
+   * frame): CSS animations that run for longer than 0 s (`animationstart`), CSS transitions whose two ends differ
+   * (`transitionrun`) and `Element.animate()` calls with a duration. Under reduced motion the smoke expects none, so an entrance that
    * ignores the preference fails even when it has ended by the time the page is measured. Call before open().
    */
   async recordMotionStarts(): Promise<void> {
@@ -269,7 +269,35 @@ export class QaHarness {
         },
         true
       );
-      document.addEventListener('transitionrun', (e) => push(`transition ${(e as TransitionEvent).propertyName} on ${label(e.target, (e as TransitionEvent).pseudoElement)}`), true);
+      // A transition between two equal values moves nothing, like a 0 s animation. The browser starts one on every element
+      // with `transition: all` when an inherited value that depends on a custom property is resolved again to the same
+      // colour: the Atlas skin's scrollbar-color is color-mix(var(--ds-ink) …), and any custom property set on <html>
+      // after the first paint (the safe-area insets, the app height) re-resolves it. Only two ends that differ are motion.
+      const sameEnds = (el: Element, prop: string) => {
+        try {
+          const key = prop.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
+          for (const a of el.getAnimations()) {
+            if ((a as CSSTransition).transitionProperty !== prop) continue;
+            const frames = (a.effect as KeyframeEffect | null)?.getKeyframes() ?? [];
+            if (frames.length < 2) return false;
+            const from = frames[0][key];
+            const to = frames[frames.length - 1][key];
+            return from !== undefined && from === to;
+          }
+        } catch {
+          // An engine without getKeyframes(): keep the entry.
+        }
+        return false;
+      };
+      document.addEventListener(
+        'transitionrun',
+        (e) => {
+          const t = e as TransitionEvent;
+          if (!t.pseudoElement && t.target instanceof Element && sameEnds(t.target, t.propertyName)) return;
+          push(`transition ${t.propertyName} on ${label(t.target, t.pseudoElement)}`);
+        },
+        true
+      );
       const animate = Element.prototype.animate;
       Element.prototype.animate = function (this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
         const d = typeof options === 'number' ? options : Number(options?.duration ?? 0) || 0;

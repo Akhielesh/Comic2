@@ -21,7 +21,7 @@ import type { DocOp, SpendAction, StudioAction } from '../../../shared/comic/ops
 import { LOW_QC_SCORE } from '../../../shared/comic/plan.js';
 import { PLATFORM_CEILING, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { upperName } from './prompts.js';
-import { TEXT_RULES_ISSUE, beatProblems, panelSpeakerIds, qcOffPanelSpeakerIds, type MissingSpeaker, type QcPanelChecks } from './vision.js';
+import { TEXT_RULES_ISSUE, beatProblems, panelSpeakerIds, qcOffPanelSpeakerIds, type MissingSpeaker, type QcPanelChecks, type QcSideFlip, type QcV2Checks } from './vision.js';
 
 /** C14: a page check scoring below this raises a notice even with no structured problem (provisional; one constant). */
 export const QC_NOTICE_SCORE = 0.75;
@@ -97,6 +97,25 @@ const currentMissingSpeakers = (qc: QcPanelChecks, page: Page): MissingSpeaker[]
   return out;
 };
 
+/** P5-QC side flips that still hold on the page as it is now: the panel exists and still lists the character. A flip
+ *  against the software's own default staging (`from: 'staging'`) is not something the author asked for: it stays in
+ *  the check's issue list and never raises a notice or a paid chip. */
+const currentSideFlips = (qc: QcV2Checks, page: Page): QcSideFlip[] => {
+  const raw = Array.isArray(qc.sides) ? qc.sides : [];
+  const sideOk = (v: unknown) => v === 'left' || v === 'right';
+  return raw.filter(
+    (f) =>
+      isObject(f) &&
+      Number.isInteger(f.panel) &&
+      typeof f.castId === 'string' &&
+      sideOk(f.drawn) &&
+      sideOk(f.script) &&
+      f.drawn !== f.script &&
+      f.from !== 'staging' &&
+      !!page.panels.find((p) => p.n === f.panel)?.castIds.includes(f.castId)
+  );
+};
+
 const identityProblems = (qc: QcReport, page: Page): IdentityProblem[] => {
   const findings = (qc as { findings?: unknown }).findings;
   if (!Array.isArray(findings)) return [];
@@ -157,9 +176,13 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
   const beats = countOff ? { permutation: false, swapped: [], undrawn: [] } : beatProblems(storedBeats(checks), planned);
   const speakers = currentMissingSpeakers(checks, page);
   const identity = opts.identityNotices ? identityProblems(qc, page) : [];
+  // P5-QC (v2 reports only): characters on the wrong side, and one term drawn in two scripts across the book.
+  const v2 = qc as QcReport & QcV2Checks;
+  const sides = currentSideFlips(v2, page);
+  const scriptNote = typeof v2.inscriptionNote === 'string' && v2.inscriptionNote.trim() ? clip(v2.inscriptionNote, 200) : '';
   const low = score !== undefined && score < QC_NOTICE_SCORE;
-  const structured = countOff || beats.swapped.length > 0 || beats.undrawn.length > 0 || speakers.length > 0 || identity.length > 0;
-  if (!structured && !low) return null;
+  const structured = countOff || beats.swapped.length > 0 || beats.undrawn.length > 0 || speakers.length > 0 || identity.length > 0 || sides.length > 0;
+  if (!structured && !low && !scriptNote) return null;
 
   const sentences: string[] = [];
   if (countOff) sentences.push(`it has ${plural(drawn, 'drawn panel')}; the plan has ${planned}`);
@@ -180,6 +203,8 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
     );
   }
   if (identity.length) sentences.push(named(identity, (f) => `${f.characterId ? nameOf(f.characterId) : 'a character'} looks different from their sheet in panel ${f.panel}`));
+  if (sides.length) sentences.push(named(sides, (f) => `${nameOf(f.castId)} is on the ${f.drawn} in panel ${f.panel}; the script has them on the ${f.script}`));
+  if (scriptNote) sentences.push(scriptNote.replace(/[.\s]+$/, ''));
   if (!sentences.length) {
     const issues = (Array.isArray(qc.issues) ? qc.issues : []).filter((i): i is string => typeof i === 'string' && !!i.trim()).slice(0, 2);
     sentences.push(issues.length ? issues.map((i) => i.trim().replace(/[.\s]+$/, '')).join('; ') : 'the page check scored it low');
@@ -189,8 +214,11 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
   const unmeasured = checks.boxesFrom === 'estimate' && !drawn;
   // Above the comic's rating (but servable to its owner): every redraw is a safer take.
   const safer = safetyStatusOf(opts.safety, opts.rating ?? PLATFORM_CEILING) === 'over_rating';
-  const fixes = fixesFor(page, { speakers, undrawn: beats.undrawn, countOff, unmeasured, structured, low, safer }, opts, nameOf);
+  const fixes = fixesFor(page, { speakers, undrawn: beats.undrawn, countOff, unmeasured, structured, low, safer, sides }, opts, nameOf);
   const freeFixes = fixes.filter((f) => f.free);
+  // The book note on scripts alone ($0): a plain line about the book, never a nudge toward a paid redraw.
+  const noteOnly = !!scriptNote && !structured && !low;
+  if (noteOnly) return { tone: 'info', text: `Page ${page.n}: ${scriptNote.replace(/[.\s]+$/, '')}.`, fixes: freeFixes };
   const lead = score !== undefined && score < LOW_QC_SCORE ? `Page ${page.n} may need another pass` : `Check panels on page ${page.n}`;
   const text = [
     `${lead}: ${sentences.join('; ')}.`,
@@ -205,7 +233,7 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
 /** Fix chips: free first, then paid by price (cheapest first), at most MAX_NOTICE_FIXES. */
 function fixesFor(
   page: Page,
-  found: { speakers: MissingSpeaker[]; undrawn: number[]; countOff: boolean; unmeasured: boolean; structured: boolean; low: boolean; safer: boolean },
+  found: { speakers: MissingSpeaker[]; undrawn: number[]; countOff: boolean; unmeasured: boolean; structured: boolean; low: boolean; safer: boolean; sides?: QcSideFlip[] },
   opts: QcNoticeOptions,
   nameOf: (castId?: string) => string
 ): QcNoticeFix[] {
@@ -248,6 +276,18 @@ function fixesFor(
       pageId: page.id,
       panelN: n,
       instruction: `In panel ${n} only, redraw the art to show: ${/[.!?…]$/.test(action) ? action : `${action}.`} Keep everything else on the page exactly as it is.`,
+      ...safe
+    });
+  }
+
+  // A character on the wrong side (P5-QC): redraw that panel with them where the script puts them.
+  for (const f of (found.sides || []).slice(0, 1)) {
+    const name = nameOf(f.castId);
+    offerPaid(`Redraw panel ${f.panel} with ${name} on the ${f.script}`, {
+      type: 'edit_page',
+      pageId: page.id,
+      panelN: f.panel,
+      instruction: `In panel ${f.panel} only, place ${name} on the ${f.script} side of the panel, as the script says. Keep everything else on the page exactly as it is.`,
       ...safe
     });
   }

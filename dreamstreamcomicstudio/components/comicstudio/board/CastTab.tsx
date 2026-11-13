@@ -21,9 +21,11 @@
 // page's spec hash read exactly as if it had never been set.
 
 import React, { useId, useState } from 'react';
-import { Bot, Box, Car, ChevronDown, ChevronUp, Ghost, MapPin, PawPrint, Plus, Sparkles, ToyBrick, Trash2, User, Users } from 'lucide-react';
+import { Bot, Box, Car, ChevronDown, ChevronUp, Ghost, MapPin, PawPrint, Plus, Sparkles, ToyBrick, Trash2, TriangleAlert, User, Users } from 'lucide-react';
 import { CAST_KINDS, castKindOf, castNoun, isCompanion, newId, type CastKind, type Character, type CharacterLook, type ComicDoc, type Place } from '../../../shared/comic/doc';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety';
+import { cardLintOn, lintLook, type LookFinding } from '../../../shared/comic/world/lookLint';
+import { TONE_CHIP, WRAP_TEXT } from '../../chat/studioDesign';
 import type { StudioController } from '../types';
 import { RefStrip } from '../refs/RefStrip';
 import { sheetHint } from '../refs/refsModel';
@@ -209,6 +211,28 @@ export const CastKindLine: React.FC<{ character: Character }> = ({ character: c 
 
 const photoPhrase = (n: number) => (n ? `, and ${n === 1 ? 'their reference photo goes' : `their ${n} reference photos go`} with them` : '');
 
+/**
+ * The free card check (P5-TRUTH item 7, shared/comic/world/lookLint.ts): where a card contradicts itself (summary skin
+ * against the Skin field), says when a fixed look changes ("after the blessing") or holds a passing mood in the face. A
+ * warning only: nothing is changed, blocked or spent. Shown while CARD_LINT_STAGE lets this viewer see it.
+ */
+export const CardCheck: React.FC<{ findings: LookFinding[]; name: string }> = ({ findings, name }) =>
+  findings.length ? (
+    <div role="note" aria-label={`Card check for ${name}`} data-testid="card-check" className={`min-w-0 rounded-xl border px-2.5 py-1.5 ${TONE_CHIP.warning}`}>
+      <p className="flex items-center gap-1.5 text-[11.5px] font-semibold leading-snug">
+        <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        Card check
+      </p>
+      <ul className="mt-0.5 space-y-0.5">
+        {findings.map((f) => (
+          <li key={`${f.rule}:${f.field}`} data-rule={f.rule} className={`${WRAP_TEXT} text-[12px] leading-snug text-[var(--ds-ink)]`}>
+            {f.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  ) : null;
+
 export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; character: Character; byok: boolean; cost?: CostFormat; rating?: ContentRating }> = ({
   studio,
   doc,
@@ -246,6 +270,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
   const olderPhotos = !!hint?.changed;
   const priceId = `price-sheet-${c.id}`;
   const lookFields = LOOK_FIELDS.filter((f) => !f.nonHuman || kind !== 'person' || !!c.look[f.key]);
+  const findings = cardLintOn(studio.caps?.admin) ? lintLook(c) : [];
 
   return (
     <Surface as="article" aria-label={c.name} data-testid="character-card" data-kind={kind} className="flex min-w-0 flex-col gap-2.5 p-3">
@@ -315,6 +340,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
         placeholder="One dense visual sentence an artist could draw from"
         onCommit={(v) => setLook('summary', v)}
       />
+      <CardCheck findings={findings} name={c.name} />
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}

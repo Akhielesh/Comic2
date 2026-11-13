@@ -96,3 +96,19 @@ describe('planAnchors (ship1) === prompts.ts planPageReferences', () => {
     });
   }
 });
+
+describe('the Ramayana case with the style key on: no picture twice (P5-TRUTH item 9)', () => {
+  it('page 2 attaches unique paths, page 1 once as the previous page', async () => {
+    const { loadRamayanaCase, pageByN } = await import('./golden/promptChecks.js');
+    const doc = loadRamayanaCase();
+    // Any registered model with room for a style slot and a previous page.
+    const spec = IMAGE_MODELS.find((m) => m.refs.objects >= 2 && m.refs.total >= 4)!;
+    const page2 = pageByN(doc, 2);
+    const plan = planAnchors(doc, page2, spec, null, { kinds: { styleKey: true } });
+    const paths = plan.attached.map((a) => a.path).filter(Boolean);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(new Set(paths).size).toBe(paths.length);
+    const page1 = pageByN(doc, 1).render.asset!.path;
+    expect(plan.attached.filter((a) => a.path === page1).map((a) => a.role)).toEqual(['previous']);
+  });
+});

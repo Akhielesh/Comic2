@@ -146,6 +146,7 @@ import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { PRO_QUALITY_USAGE_MESSAGE } from './access.js';
+import { p5FlagOn, p5FlagsFor, type P5Flags } from './p5Flags.js';
 import { withHistoryAction } from './history/recorder.js';
 import { gateClosedFor, gateStampOps, withPlanCounts, type GateClosedStatus } from '../../../shared/comic/settle.js';
 import { actionHandlerFor } from './actions/index.js';
@@ -187,7 +188,7 @@ import {
   type StudioKeys,
   type StudioSessionApi
 } from './types.js';
-import { analyzePageRender, placeStoredBalloons } from './vision.js';
+import { analyzePageRender, lastTrustedMarks, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
 import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelName } from './sanitize/models.js';
 import { LINE_STYLE_MAX_BYTES, lineStyleIdOf } from './sanitize/lettering.js';
@@ -2124,6 +2125,8 @@ interface CompileOpts {
   rating?: ContentRating;
   /** Ship 2: compile without the `__board__` reference (it could not be made; prepare() recompiles once). */
   board?: false;
+  /** P5-TRUTH (COMIC_STORY_FIXES for this user): the compilers' truth fixes. */
+  storyFixes?: boolean;
 }
 
 // ── Generated references (pro plan §4.4; prepare() makes them, never stored) ──
@@ -2380,6 +2383,8 @@ class RenderRun {
   private turnWaiters: (() => void)[] = [];
   /** Prices in this user's terms (governed users read usage, never dollars). */
   private readonly cost: CostFormatter;
+  /** Program 5 flags for this request (P5-TRUTH: story fixes in every compile, scene chains in the run). */
+  private readonly p5: P5Flags;
 
   constructor(
     private readonly ctx: StudioContext,
@@ -2399,13 +2404,19 @@ class RenderRun {
     this.slots = slotsFor(ctx.session);
     this.inflight = inflightFor(ctx.session);
     this.cost = costOf(ctx);
+    this.p5 = p5FlagsFor(ctx.caps?.admin === true);
     this.signal.addEventListener('abort', this.onAbort, { once: true });
   }
 
   /** Compile options for every compiler: the safe take and the account's rating ceiling (the compiler takes the minimum). */
   private compileOpts(opts: CompileOpts): CompileOpts {
     const rating = this.ctx.caps?.ratingCeiling ?? this.ctx.rating;
-    return { ...(opts.safe ? { safe: true } : {}), ...(rating ? { rating } : {}), ...(opts.board === false ? { board: false as const } : {}) };
+    return {
+      ...(opts.safe ? { safe: true } : {}),
+      ...(rating ? { rating } : {}),
+      ...(opts.board === false ? { board: false as const } : {}),
+      ...(this.p5.storyFixes ? { storyFixes: true } : {})
+    };
   }
 
   /** Waiters for a serial turn give up on cancel (removed when the run ends: no listener build-up per session). */
@@ -2473,7 +2484,7 @@ class RenderRun {
     const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
     const jobs = [...sheetJobs, ...anchorJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
     // The run's order (B7's schedule.ts; the stub is today's: page 1 alone, then the rest and the cover after it).
-    const schedule = scheduleRun(doc, pages.map((p) => p.id));
+    const schedule = this.p5.runChains ? scheduleRun(doc, pages.map((p) => p.id), { chains: true }) : scheduleRun(doc, pages.map((p) => p.id));
     const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
     await this.run(jobs, label, async () => {
       this.ensureStyle();
@@ -2678,7 +2689,7 @@ class RenderRun {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
         // The page it continues from (B7's schedule.ts; the stub is nearestReadyBefore).
-        return compilePage(doc, page, { previousPage: previousPageFor(doc, page), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
+        return compilePage(doc, page, { previousPage: previousPageFor(doc, page, { chains: this.p5.runChains }), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
       qcPageId: p.id,
@@ -3980,7 +3991,7 @@ class RenderRun {
     const specHash = derived ? base?.specHash : specHashFor(docAtCompile, job.target);
     // Continuity by PATH, never by label (a cast member or place named "Previous Page" can't spoof it).
     const page = job.kind === 'page' && job.target.kind === 'page' ? findPage(docAtCompile, job.target.id) : undefined;
-    const previousPage = page ? previousPageFor(docAtCompile, page) : undefined;
+    const previousPage = page ? previousPageFor(docAtCompile, page, { chains: this.p5.runChains }) : undefined;
     const previousPath = previousPage?.render.asset?.path;
     const continuityPath = previousPath && attached.includes(previousPath) ? previousPath : undefined;
     // The compiler's own list of USER refs, filtered to what was really attached. An empty list is recorded
@@ -4318,13 +4329,16 @@ export async function letterPage(
       // Ship 2 (B3): the software reference board rides the same check call ({ board } once contactSheet.ts builds it).
       // Only `board` is taken, and before the fixed keys: a helper can never swap the billed LLM, the image or the signal.
       const extras = await checkExtras(ctx, doc, page, signal);
+      // P5-QC (COMIC_QC_V2): acting, gaze, sides, inscriptions; an edit with collapsed heads keeps its parent's marks.
+      const qcV2 = p5FlagOn('qcV2', ctx.caps?.admin === true) ? { qcV2: { previousMarks: lastTrustedMarks(page) } } : {};
       const analysis = await analyzePageRender({
         ...extras,
         doc,
         page,
         dataUrl,
         llm: billedLlm(ctx, { stage: 'qc', operation: 'comic.text.vision', tracker }),
-        signal
+        signal,
+        ...qcV2
       });
       visionRan = true;
       // Ship 2 (B3): readings → findings with fix offers and score caps ($0, pure; the stub keeps the report as it is).
@@ -4564,6 +4578,7 @@ export async function planPages(
       ...(revising ? { pageIds } : {}),
       // The account-clamped rating: a kids comic (or a young account) is never written above its ceiling.
       rating: ctx.rating ?? effectiveRating(ctx.session.doc, ctx.caps?.ratingCeiling).rating,
+      ...(p5FlagOn('storyFixes', ctx.caps?.admin === true) ? { storyFixes: true } : {}),
       signal
     });
     end(true);

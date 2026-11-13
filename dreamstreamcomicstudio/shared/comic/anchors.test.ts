@@ -17,7 +17,7 @@ import {
 } from './anchors';
 import type { ComicDoc, ImageModelLock, Page, RefAsset } from './doc';
 import { CONSISTENCY_LIMITS } from './limits';
-import { getImageModel, type ImageModelSpec } from './models';
+import { getImageModel, IMAGE_MODELS, type ImageModelSpec } from './models';
 import { partsOf } from './parts';
 
 const ALL: AnchorKinds = { places: true, props: true, styleKey: true, sheetV2: true };
@@ -265,9 +265,11 @@ describe('planAnchors — places, previous page, style key, reserved slot', () =
   });
 
   it('styleKey: with no board the style key page is the style anchor; a board always wins', () => {
+    // Page 3 is drawn too, so page 4's previous page is page 3 (page 1 as both would ride once: see "attached once").
     const doc = harbourComic((d) => {
       d.style = { ...d.style, board: undefined };
       d.pages[0].render = readyRender('u/o/h/p1.webp');
+      d.pages[2].render = readyRender('u/o/h/p3.webp');
     });
     const plan = planAnchors(doc, page(doc, 4), NB21, undefined, { kinds: { styleKey: true } });
     expect(plan.attached.find((a) => a.role === 'style_key')).toMatchObject({ key: 'stylekey:pg_1', slot: 'object', source: 'page', name: 'PAGE 1' });
@@ -397,5 +399,57 @@ describe('partsStale / staleReasons', () => {
     const doc = drawnWithParts();
     const old = { parts: { ...doc.pages[0].render.parts!, cont: '000000' } };
     expect(staleReasons(doc, doc.pages[0], old).map((r) => r.part)).toEqual(['continuity']);
+  });
+});
+
+describe('one picture is attached once (P5-TRUTH item 9)', () => {
+  it('page 2 with the style key on: page 1 is both the style key and the previous page, and rides once, as the previous page', () => {
+    const doc = harbourComic((d) => {
+      d.style = { ...d.style, board: undefined, refs: [photo('u/o/h/style.jpg', { label: 'color' })] };
+      d.pages[0].render = readyRender('u/o/h/p1.webp');
+      d.pages[2].render = readyRender('u/o/h/p3.webp');
+    });
+    const plan = planAnchors(doc, page(doc, 2), NB21, undefined, { kinds: { styleKey: true } });
+    const paths = plan.attached.map((a) => a.path).filter(Boolean);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(plan.attached.filter((a) => a.path === 'u/o/h/p1.webp')).toEqual([expect.objectContaining({ role: 'previous', key: 'prev:pg_1' })]);
+    // The style slot falls back to the user's style reference instead of standing empty.
+    expect(plan.attached.find((a) => a.role === 'style')).toMatchObject({ source: 'style_ref', path: 'u/o/h/style.jpg' });
+    // Page 4 (its previous page is page 3) still gets page 1 as its style key.
+    expect(planAnchors(doc, page(doc, 4), NB21, undefined, { kinds: { styleKey: true } }).attached.find((a) => a.role === 'style_key')).toMatchObject({ key: 'stylekey:pg_1' });
+  });
+});
+
+describe('one picture is attached once — but never dropped (P5-TRUTH item 9, tight slots)', () => {
+  it('maxRefs 3: when the previous page has no slot left, page 1 still rides as the style key', () => {
+    const doc = harbourComic((d) => {
+      d.style = { ...d.style, board: undefined, refs: [photo('u/o/h/style.jpg', { label: 'color' })] };
+      d.pages[0].render = readyRender('u/o/h/p1.webp');
+      d.consistency = { ...(d.consistency ?? {}), maxRefs: 3 };
+    });
+    const plan = planAnchors(doc, page(doc, 2), NB21, undefined, { kinds: { styleKey: true } });
+    const p1 = plan.attached.filter((a) => a.path === 'u/o/h/p1.webp');
+    expect(p1).toHaveLength(1);
+    expect(p1[0]).toMatchObject({ role: 'style_key', key: 'stylekey:pg_1' });
+  });
+
+  it('one object slot (legacy lock): the style reference never pushes page 1 out; page 1 keeps the slot as the style key', () => {
+    const doc = harbourComic((d) => {
+      d.style = { ...d.style, board: undefined, refs: [photo('u/o/h/style.jpg', { label: 'color' })] };
+      d.pages[0].render = readyRender('u/o/h/p1.webp');
+    });
+    const oneObject = IMAGE_MODELS.find((m) => m.refs.objects === 1 && m.refs.total >= 3)!;
+    const plan = planAnchors(doc, page(doc, 2), NB21, lock(oneObject.id), { kinds: { styleKey: true } });
+    expect(plan.attached.filter((a) => a.path === 'u/o/h/p1.webp')).toEqual([expect.objectContaining({ role: 'style_key', slot: 'object' })]);
+  });
+
+  it('with room for both, page 1 still rides once, as the previous page', () => {
+    const doc = harbourComic((d) => {
+      d.style = { ...d.style, board: undefined, refs: [photo('u/o/h/style.jpg', { label: 'color' })] };
+      d.pages[0].render = readyRender('u/o/h/p1.webp');
+      d.consistency = { ...(d.consistency ?? {}), maxRefs: 5 };
+    });
+    const plan = planAnchors(doc, page(doc, 2), NB21, undefined, { kinds: { styleKey: true } });
+    expect(plan.attached.filter((a) => a.path === 'u/o/h/p1.webp')).toEqual([expect.objectContaining({ role: 'previous' })]);
   });
 });

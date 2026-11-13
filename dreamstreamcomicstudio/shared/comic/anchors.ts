@@ -431,40 +431,6 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
   };
   if (!anchors) extraPhotos(); // ship1: right after pass 1, exactly as today
 
-  // 3. Style: the board, else (styleKey) the style key page, else the best user style reference.
-  const style: PlannedAnchor[] = [];
-  const board = servable(doc.style.board) ? doc.style.board.path : undefined;
-  const keyPage = anchors && kinds.styleKey && !board ? styleKeyPageFor(doc, page, opts.assumeDrawn) : undefined;
-  const keyAnchor = (slot: AnchorSlot): PlannedAnchor => ({
-    key: anchorKeys.styleKey(keyPage!.page.id),
-    role: 'style_key',
-    slot,
-    source: 'page',
-    ...(keyPage!.pending ? { pending: true as const } : { path: keyPage!.page.render.asset!.path }),
-    id: keyPage!.page.id,
-    name: `PAGE ${keyPage!.page.n}`
-  });
-  const styleRef = (ref: RefAsset, n: number, slot: AnchorSlot): PlannedAnchor => ({ key: `${anchorKeys.style}:${n}`, role: 'style', slot, source: 'style_ref', path: ref.path, name: `STYLE REFERENCE ${n}` });
-  if (caps.style > 0) {
-    const max = Math.min(caps.style, ANCHOR_CAPS.styleClassMax, budget.total);
-    if (board && style.length < max) style.push({ key: anchorKeys.style, role: 'style', slot: 'style', source: 'board', path: board, name: 'STYLE BOARD' });
-    else if (keyPage && style.length < max) style.push(keyAnchor('style'));
-    for (const ref of pickRefs(doc.style.refs, ANCHOR_CAPS.styleUserRefs, 'style', { effectiveRating: rating })) {
-      if (style.length >= max) break;
-      style.push(styleRef(ref, style.filter((s) => s.source === 'style_ref').length + 1, 'style'));
-    }
-    budget.total -= style.length;
-  } else if (budget.objects > 0 && budget.total > 0) {
-    if (board) style.push({ key: anchorKeys.style, role: 'style', slot: 'object', source: 'board', path: board, name: 'STYLE BOARD' });
-    else if (keyPage) style.push(keyAnchor('object'));
-    else {
-      const best = pickRefs(doc.style.refs, 1, 'style', { effectiveRating: rating })[0];
-      if (best) style.push(styleRef(best, 1, 'object'));
-    }
-    budget.objects -= style.length;
-    budget.total -= style.length;
-  }
-
   // The previous page (same scene with ledger scenes; else the nearest earlier drawn page).
   const previous: PlannedAnchor[] = [];
   const prev =
@@ -480,6 +446,56 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
     !!prev &&
     prev.page.id !== page.id &&
     (prev.pending || ((prev.page.render.status === 'ready' || prev.page.render.status === 'stale') && servable(prev.page.render.asset)));
+
+  // 3. Style: the board, else (styleKey) the style key page, else the best user style reference.
+  const style: PlannedAnchor[] = [];
+  const board = servable(doc.style.board) ? doc.style.board.path : undefined;
+  // One picture is never attached twice (P5-TRUTH item 9): when the style key page is also this page's previous page, it
+  // rides once, as the previous page (that role carries the continuity instruction); the style slot falls back to a
+  // user style reference. Only when the previous page really gets a slot: if the budget left after the style block
+  // cannot hold it, page 1 keeps riding as the style key, exactly as before, so it is never dropped.
+  const keyCandidate = anchors && kinds.styleKey && !board ? styleKeyPageFor(doc, page, opts.assumeDrawn) : undefined;
+  const keyAnchor = (kp: NonNullable<typeof keyCandidate>, slot: AnchorSlot): PlannedAnchor => ({
+    key: anchorKeys.styleKey(kp.page.id),
+    role: 'style_key',
+    slot,
+    source: 'page',
+    ...(kp.pending ? { pending: true as const } : { path: kp.page.render.asset!.path }),
+    id: kp.page.id,
+    name: `PAGE ${kp.page.n}`
+  });
+  const styleRef = (ref: RefAsset, n: number, slot: AnchorSlot): PlannedAnchor => ({ key: `${anchorKeys.style}:${n}`, role: 'style', slot, source: 'style_ref', path: ref.path, name: `STYLE REFERENCE ${n}` });
+  /** The style block for a given style key page, without spending budget: the anchors and the object slots they take. */
+  const planStyle = (keyPage: typeof keyCandidate): { out: PlannedAnchor[]; objects: number } => {
+    const out: PlannedAnchor[] = [];
+    if (caps.style > 0) {
+      const max = Math.min(caps.style, ANCHOR_CAPS.styleClassMax, budget.total);
+      if (board && out.length < max) out.push({ key: anchorKeys.style, role: 'style', slot: 'style', source: 'board', path: board, name: 'STYLE BOARD' });
+      else if (keyPage && out.length < max) out.push(keyAnchor(keyPage, 'style'));
+      for (const ref of pickRefs(doc.style.refs, ANCHOR_CAPS.styleUserRefs, 'style', { effectiveRating: rating })) {
+        if (out.length >= max) break;
+        out.push(styleRef(ref, out.filter((s) => s.source === 'style_ref').length + 1, 'style'));
+      }
+      return { out, objects: 0 };
+    }
+    if (budget.objects > 0 && budget.total > 0) {
+      if (board) out.push({ key: anchorKeys.style, role: 'style', slot: 'object', source: 'board', path: board, name: 'STYLE BOARD' });
+      else if (keyPage) out.push(keyAnchor(keyPage, 'object'));
+      else {
+        const best = pickRefs(doc.style.refs, 1, 'style', { effectiveRating: rating })[0];
+        if (best) out.push(styleRef(best, 1, 'object'));
+      }
+    }
+    return { out, objects: out.length };
+  };
+  const shared = !!keyCandidate && prevUsable && prev!.page.id === keyCandidate.page.id;
+  let planned = planStyle(shared ? undefined : keyCandidate);
+  // The previous page is attached right after the style block (anchors mode): it needs one object slot and one total.
+  if (shared && !(budget.objects - planned.objects > 0 && budget.total - planned.out.length > 0)) planned = planStyle(keyCandidate);
+  style.push(...planned.out);
+  budget.objects -= planned.objects;
+  budget.total -= planned.out.length;
+
   const attachPrevious = () => {
     if (!prev || !prevUsable) return;
     const key = anchorKeys.previous(prev.page.id);

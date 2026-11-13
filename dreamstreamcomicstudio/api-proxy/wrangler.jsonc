@@ -81,7 +81,12 @@
     "RATE_LIMIT_SYSTEM_MAX_REQUESTS": "240",
     // Comic Studio rollout stages (off | admins | all; docs/infrastructure/ENV_MATRIX.md). Steering: an admin's
     // "Send now" goes into the running director turn (about half a cent a note). Back to "off" = this line + deploy.
-    "COMIC_STEER": "admins"
+    "COMIC_STEER": "admins",
+    // Truer comic pages, admins first: no fixed smile and exact colour names in what a page is told to draw
+    // (COMIC_STORY_FIXES), and the longer page check, about a tenth of a cent a page (COMIC_QC_V2). Scene chains
+    // (COMIC_RUN_CHAINS) stay unset. Back to "off" = these lines + deploy.
+    "COMIC_STORY_FIXES": "admins",
+    "COMIC_QC_V2": "admins"
   },
 
   "d1_databases": [
