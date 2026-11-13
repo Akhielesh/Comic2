@@ -58,7 +58,7 @@ describe('CastCard extras', () => {
     expect(screen.getByText('Extra · Described in text')).toBeInTheDocument();
     const line = screen.getByText(/Sheet ready · used on pages$/);
     expect(line.parentElement!.querySelector('svg.lucide-check')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /^Cat.*Sheet ready · used on pages\. Open the cast$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Cat.*Sheet ready · used on pages\. Open character details$/ })).toBeInTheDocument();
   });
 
   it('the character name is marked as user content; the status words are not (DC-0 #5a)', () => {
