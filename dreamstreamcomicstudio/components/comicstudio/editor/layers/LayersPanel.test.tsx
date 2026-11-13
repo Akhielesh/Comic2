@@ -11,6 +11,8 @@ import { LETTERING_ON_TOP_NOTE } from '../../../../shared/comic/pro/types';
 import { resolvePlacements } from '../../lettering/useLetterPlans';
 import type { PartPanelProps } from '../inspector/types';
 import { LayersPanel, DIRECTOR_EDITING, EMPTY_PANEL_DROP_HINT, EMPTY_PANEL_HINT } from './LayersPanel';
+import { applyOps } from '../../../../shared/comic/ops';
+import { inverseOps } from '../../../../shared/comic/undo';
 import { clearViewHidden, viewHidden } from './viewHidden';
 import * as layersPart from './index';
 import * as inspectorPart from '../inspector/index';
@@ -179,6 +181,67 @@ describe('LayersPanel', () => {
     fireEvent.click(within(row('ly_moon')).getByRole('button', { name: 'Lock Moon' }));
     expect(selectLayers).toHaveBeenCalledTimes(3);
     expect(set).not.toHaveBeenCalled();
+  });
+
+  it('arranges a selected overlay through reversible existing layer ops, without moving lettering', () => {
+    const selectLayers = vi.fn();
+    const { apply, doc, page } = mount([], { selectLayers, studio: { selection: { pageId: 'pg_1', lineIds: [], layerIds: ['ly_star'] } } as never }, (d) => {
+      d.pages[0].layers = [star('ly_star', 'Star'), { ...star('ly_moon', 'Moon'), z: 4 }];
+    });
+    const arrange = screen.getByRole('region', { name: 'Arrange Star' });
+    fireEvent.click(within(arrange).getByRole('button', { name: 'Bring forward' }));
+    expect(apply).toHaveBeenCalledTimes(1);
+    const [ops, opts] = apply.mock.calls[0];
+    expect(opts.label).toBe('Bring forward: Star');
+    const changed = applyOps(doc, ops);
+    expect(changed.pages[0].layers!.find((layer) => layer.id === 'ly_star')!.z).toBe(5);
+    expect(changed.pages[0].balloons).toEqual(page.balloons);
+    expect(applyOps(changed, inverseOps(doc, ops), doc.updatedAt)).toEqual(doc);
+    expect(selectLayers).not.toHaveBeenCalled();
+    expect(screen.getByTestId('layers-live').textContent).toBe('Star: bring forward');
+    for (const button of within(arrange).getAllByRole('button')) expect(button.className).toContain('coarse:min-h-11');
+  });
+
+  it('overlay keyboard stacking stays within its panel and supports front/back shortcuts', () => {
+    const { row, apply } = mount([], { selectLayers: vi.fn() }, (d) => {
+      d.pages[0].layers = [
+        { ...star('ly_star', 'Star'), clip: 'pg_1_p1', z: 0 },
+        { ...star('ly_moon', 'Moon'), clip: 'pg_1_p1', z: 4 },
+        { ...star('ly_elsewhere', 'Elsewhere'), clip: 'pg_1_p2', z: 80 },
+        { ...star('ly_page', 'Page overlay'), z: 90 }
+      ];
+    });
+    fireEvent.keyDown(row('ly_star'), { key: 'ArrowUp', altKey: true });
+    expect(apply.mock.calls[0][0]).toEqual([{ op: 'layer', pageId: 'pg_1', id: 'ly_star', patch: { z: 5 } }]);
+    fireEvent.keyDown(row('ly_star'), { key: 'ArrowUp', altKey: true, shiftKey: true });
+    expect(apply.mock.calls[1][1].label).toBe('Bring to front: Star');
+    expect(apply.mock.calls[1][0][0].patch.z).toBe(5);
+    fireEvent.keyDown(row('ly_moon'), { key: 'ArrowDown', altKey: true, shiftKey: true });
+    expect(apply.mock.calls[2][1].label).toBe('Send to back: Moon');
+    expect(apply.mock.calls[2][0][0].patch.z).toBe(-1);
+  });
+
+  it('locked overlays refuse both pointer and keyboard stacking, while view visibility remains usable', () => {
+    const { row, apply } = mount([], { selectLayers: vi.fn(), studio: { selection: { pageId: 'pg_1', lineIds: [], layerIds: ['ly_star'] } } as never }, (d) => {
+      d.pages[0].layers = [{ ...star('ly_star', 'Star'), locked: true }, star('ly_moon', 'Moon')];
+    });
+    const arrange = screen.getByRole('region', { name: 'Arrange Star' });
+    for (const button of within(arrange).getAllByRole('button')) expect(button).toHaveProperty('disabled', true);
+    fireEvent.keyDown(row('ly_star'), { key: 'ArrowUp', altKey: true });
+    expect(screen.getByTestId('layers-live').textContent).toMatch(/locked/);
+    fireEvent.click(within(row('ly_star')).getByRole('button', { name: 'Hide Star in this view' }));
+    expect(viewHidden('pg_1').has('ly_star')).toBe(true);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('translated editions cannot restack overlays', () => {
+    const { row, apply } = mount([], { editionLang: 'hi', selectLayers: vi.fn(), studio: { selection: { pageId: 'pg_1', lineIds: [], layerIds: ['ly_star'] } } as never }, (d) => {
+      d.pages[0].layers = [star('ly_star', 'Star')];
+    });
+    const arrange = screen.getByRole('region', { name: 'Arrange Star' });
+    for (const button of within(arrange).getAllByRole('button')) expect(button).toHaveProperty('disabled', true);
+    fireEvent.keyDown(row('ly_star'), { key: 'ArrowUp', altKey: true });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('without selectLayers (an older shell) overlay rows stay plain rows', () => {

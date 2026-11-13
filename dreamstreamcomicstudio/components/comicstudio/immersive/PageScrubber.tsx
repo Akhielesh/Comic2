@@ -57,7 +57,7 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
     <div className={`pointer-events-auto relative w-[min(640px,100%)] rounded-full px-4 py-0 shadow-[0_8px_30px_rgba(0,0,0,0.35)] ${glass}`} data-no-turn data-testid="page-scrubber">
       {preview !== null && (
         <div
-          className="pointer-events-none absolute bottom-[calc(100%+10px)] w-[112px] -translate-x-1/2 rounded-xl bg-black/70 p-1.5 text-center text-[11px] text-white shadow-lg backdrop-blur-md"
+          className="pointer-events-none absolute bottom-[calc(100%+10px)] w-[112px] -translate-x-1/2 rounded-xl bg-[var(--ds-reader-panel)] p-1.5 text-center text-[11px] shadow-lg backdrop-blur-md"
           style={{ left: `clamp(60px, ${pos(preview)}%, calc(100% - 60px))` }}
           aria-hidden
         >
@@ -65,12 +65,12 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
             {thumb ? <img src={thumb} alt="" className="h-full w-full object-contain" draggable={false} /> : <span className="text-[22px] font-semibold text-[var(--ds-reader-ink-soft)]">{labelOf(preview).replace(/^Pages? /, '')}</span>}
           </div>
           <p className="truncate font-medium">{labelOf(preview)}</p>
-          {chapter && <p className="truncate text-white/75">{chapter}</p>}
+          {chapter && <p className="truncate text-[var(--ds-reader-hud-muted)]">{chapter}</p>}
         </div>
       )}
       <div className="relative h-11">
         {/* Ticks: one per view; chapter starts are taller and labelled on hover. */}
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/20" aria-hidden>
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-[var(--ds-reader-hud-active)]" aria-hidden>
           {/* The fill: full width, scaled from the reading edge (transform only), in the room's accent. */}
           <div
             data-testid="scrubber-fill"
@@ -80,10 +80,10 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
         </div>
         {views.length <= 80 &&
           views.map((_, i) => (
-            <span key={i} aria-hidden className="pointer-events-none absolute top-1/2 h-1.5 w-px -translate-y-1/2 bg-white/35" style={{ left: `${pos(i)}%` }} />
+            <span key={i} aria-hidden className="pointer-events-none absolute top-1/2 h-1.5 w-px -translate-y-1/2 bg-[var(--ds-reader-hud-muted)] opacity-50" style={{ left: `${pos(i)}%` }} />
           ))}
         {chapters.map((c) => (
-          <span key={`ch-${c.view}`} aria-hidden title={c.title} className="pointer-events-none absolute top-1/2 h-4 w-[2px] -translate-y-1/2 rounded bg-white/80" style={{ left: `${pos(c.view)}%` }} />
+          <span key={`ch-${c.view}`} aria-hidden title={c.title} className="pointer-events-none absolute top-1/2 h-4 w-[2px] -translate-y-1/2 rounded bg-[var(--ds-reader-hud-muted)]" style={{ left: `${pos(c.view)}%` }} />
         ))}
         <input
           type="range"
@@ -123,7 +123,7 @@ export const PageScrubber: React.FC<PageScrubberProps> = ({ views, items, view, 
         {/* The visible thumb. */}
         <span
           aria-hidden
-          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.45)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-reader-hud-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-black"
+          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--ds-reader-hud-ink)] shadow-[0_2px_8px_rgba(0,0,0,0.45)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ds-reader-hud-focus)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--ds-reader-hud-inverse)]"
           style={{ left: `${pos(shown)}%` }}
         />
       </div>

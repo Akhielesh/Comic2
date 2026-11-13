@@ -3,7 +3,7 @@
 // "Panel 1 of 3" announced, deep links (?p=3 and an undrawn page), the Escape cascade, the transcript
 // with aria-hidden lettering, settings, and closing.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import type { ComicDoc } from '../../../shared/comic/doc';
@@ -203,6 +203,30 @@ describe('ImmersiveReader', () => {
     expect(screen.queryByRole('dialog', { name: 'Reader settings' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches room light on mobile and remembers it when the reader reopens', () => {
+    reduce = true;
+    const props = { doc: drawnDoc(), urlFor: fakeUrlFor, intro: false, initialPage: 1, onExit: () => undefined };
+    const { unmount } = render(<ImmersiveReader {...props} />);
+    const position = counter();
+    expect(root()).toHaveAttribute('data-reader-room', 'night');
+    const settings = screen.getByRole('button', { name: 'Reader settings' });
+    fireEvent.click(settings);
+    const roomLight = within(screen.getByRole('group', { name: 'Room light' }));
+    expect(roomLight.getByRole('radio', { name: 'Night' })).toBeChecked();
+    fireEvent.click(roomLight.getByRole('radio', { name: 'Day' }));
+    expect(roomLight.getByRole('radio', { name: 'Day' })).toBeChecked();
+    expect(root()).toHaveAttribute('data-reader-room', 'day');
+    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute('content', '#ebe8e2');
+    expect(counter()).toBe(position);
+    unmount();
+    render(<ImmersiveReader {...props} />);
+    expect(root()).toHaveAttribute('data-reader-room', 'day');
+    fireEvent.click(screen.getByRole('button', { name: 'Reader settings' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Night' }));
+    expect(root()).toHaveAttribute('data-reader-room', 'night');
+    expect(counter()).toBe(position);
   });
 
   it('downloads only when allowed', () => {

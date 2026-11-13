@@ -4,12 +4,9 @@
    and `readerTokens.test.ts` pins them to the values below (resolved against the Atlas skin the reader root
    carries: --ds-motion-medium 150 ms, --ds-motion-slow 200 ms).
 
-   Colours here are CONTENT tokens (the room, its paper, its ink): the room does not follow the app theme
-   (`--ds-reader-room` stays the dark room in both themes until a Day room is chosen), so the controls that
-   sit over it never use the app accent. --ds-accent is #0a0a0a in the Atlas light theme, 1.02:1 on the
-   #0e0d0c room (WCAG 1.4.11 / 2.4.7, reader.md V2 N1): the hairline progress, the scrubber fill and every
-   focus ring over the room use --ds-reader-accent / --ds-reader-hud-focus instead. Controls on the PAPER
-   (the End card) keep --ds-reader-focus (index.css). */
+   The reading room and its glass, controls, and paper have their own colour tokens. The reader's
+   Day/Night preference applies to the room and its controls. The page and its End card keep their paper
+   and ink colours. */
 
 [data-reader-root] {
   /* ── Motion ─────────────────────────────────────────────────────────── */
@@ -48,17 +45,36 @@
   --ds-reader-edge: #ebe4d6;
   --ds-reader-edge-line: #cdc3b0;
 
-  /* ── Night room (today; the default) ────────────────────────────────── */
-  --ds-reader-glass: rgba(0, 0, 0, 0.45);                /* the HUD glass (ReaderHud `glass`) */
-  --ds-reader-accent: #fafafa;                           /* progress fills: 18:1 on the room */
-  --ds-reader-hud-focus: #fafafa;                        /* focus rings over the room and its glass */
+  /* ── Room and controls ─────────────────────────────────────────────── */
+  --ds-reader-glass: rgba(0, 0, 0, 0.76);
+  --ds-reader-panel: rgba(0, 0, 0, 0.75);
+  --ds-reader-accent: #fafafa;
+  --ds-reader-hud-focus: #fafafa;
+  --ds-reader-hud-ink: #ffffff;
+  --ds-reader-hud-muted: #cfcac3;
+  --ds-reader-hud-inverse: #0e0d0c;
+  --ds-reader-hud-wash: rgba(255, 255, 255, 0.10);
+  --ds-reader-hud-hover: rgba(255, 255, 255, 0.15);
+  --ds-reader-hud-active: rgba(255, 255, 255, 0.25);
+  --ds-reader-stage-focus: #fafafa;
+  --ds-reader-stage-focus-band: #0e0d0c;
 }
 
-/* Day room (reader.md §4.2; RD-2 renders it and sets the attribute). Defined here so the pair is
-   contrast-tested from the start: ink on a light room, never the app accent. */
 [data-reader-root][data-reader-room="day"] {
   --ds-reader-room: #ebe8e2;
-  --ds-reader-glass: rgba(255, 255, 255, 0.74);
+  --ds-reader-glass: rgba(255, 255, 255, 0.84);
+  --ds-reader-panel: rgba(255, 255, 255, 0.90);
   --ds-reader-accent: #3b3026;
   --ds-reader-hud-focus: #3b3026;
+  --ds-reader-hud-ink: #3b3026;
+  --ds-reader-hud-muted: #594a3b;
+  --ds-reader-hud-inverse: #ffffff;
+  --ds-reader-hud-wash: rgba(59, 48, 38, 0.10);
+  --ds-reader-hud-hover: rgba(59, 48, 38, 0.15);
+  --ds-reader-hud-active: rgba(59, 48, 38, 0.25);
+}
+
+@keyframes reader-ambient-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

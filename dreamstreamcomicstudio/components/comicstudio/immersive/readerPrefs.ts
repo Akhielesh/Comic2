@@ -12,6 +12,7 @@ export const introKey = (docId: string) => `comicstudio.reader.intro.${docId}`;
 export const LOW_POWER_KEY = 'comicstudio.reader.lowpower';
 
 export type Tri = 'auto' | 'on' | 'off';
+export type RoomLight = 'night' | 'day';
 export type TurnPref = 'auto' | ReaderSettings['turn'];
 export const WPM_OPTIONS = [170, 210, 260] as const;
 export type Wpm = (typeof WPM_OPTIONS)[number];
@@ -23,6 +24,7 @@ export interface ReaderPrefs {
   sound: boolean;
   paper: Tri;
   ambient: Tri;
+  room: RoomLight;
   guidedOverview: Tri;
   /** Guided autoplay reading speed (Slow / Normal / Fast). */
   wpm: Wpm;
@@ -39,6 +41,7 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   sound: false,
   paper: 'auto',
   ambient: 'auto',
+  room: 'night',
   guidedOverview: 'auto',
   wpm: 210,
   fancyTurns: 'auto',
@@ -84,6 +87,7 @@ export const sanitizePrefs = (raw: unknown): ReaderPrefs => {
     sound: r.sound === true,
     paper: tri(r.paper),
     ambient: tri(r.ambient),
+    room: r.room === 'day' ? 'day' : 'night',
     guidedOverview: tri(r.guidedOverview),
     wpm: (WPM_OPTIONS as readonly unknown[]).includes(r.wpm) ? (r.wpm as Wpm) : 210,
     fancyTurns: tri(r.fancyTurns),

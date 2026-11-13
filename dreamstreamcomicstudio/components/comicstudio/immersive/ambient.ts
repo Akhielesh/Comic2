@@ -1,7 +1,8 @@
 // Ambient room colour (reader.md §6.2). $0: a 32×32 downscale of the page the reader already loaded,
 // a 4-bit-per-channel histogram, and a weight that favours saturated mid-tones so paper white and ink
-// black never win. The room glows faintly with the page's colours; HUD chips stay dark glass, so
-// contrast never depends on the tint.
+// black never win. The room glows faintly with the page's colours; the HUD has its own glass and ink.
+
+import type { RoomLight } from './readerPrefs';
 
 export interface RGB {
   r: number;
@@ -143,17 +144,20 @@ export const averagePalette = (ps: (Palette | null | undefined)[]): Palette | nu
 const rgbA = (c: RGB, a: number) => `rgba(${c.r},${c.g},${c.b},${a})`;
 
 /** The room background layers for a palette (falls back to the plain room colour). */
-export const roomBackground = (p: Palette | null | undefined): string => {
-  if (!p || p.neutral) return 'radial-gradient(120% 90% at 50% 42%, rgba(255,240,220,0.05), transparent 70%), var(--ds-reader-room)';
-  return `radial-gradient(120% 90% at 50% 42%, ${rgbA(p.dominant, 0.26)}, transparent 70%), radial-gradient(70% 55% at 85% 95%, ${rgbA(p.accent, 0.16)}, transparent 70%), var(--ds-reader-room)`;
+export const roomBackground = (p: Palette | null | undefined, room: RoomLight = 'night'): string => {
+  if (!p || p.neutral) return room === 'day' ? 'var(--ds-reader-room)' : 'radial-gradient(120% 90% at 50% 42%, rgba(255,240,220,0.05), transparent 70%), var(--ds-reader-room)';
+  const [dominantAlpha, accentAlpha] = room === 'day' ? [0.10, 0.06] : [0.26, 0.16];
+  return `radial-gradient(120% 90% at 50% 42%, ${rgbA(p.dominant, dominantAlpha)}, transparent 70%), radial-gradient(70% 55% at 85% 95%, ${rgbA(p.accent, accentAlpha)}, transparent 70%), var(--ds-reader-room)`;
 };
 
 /** A colour for `<meta name="theme-color">` while the reader is open (the room, faintly tinted). */
-export const themeColorFor = (p: Palette | null | undefined): string => {
-  if (!p || p.neutral) return '#0e0d0c';
-  const mix = (c: number, base: number) => Math.round(base + (c - base) * 0.12);
+export const themeColorFor = (p: Palette | null | undefined, room: RoomLight = 'night'): string => {
+  const [r, g, b] = room === 'day' ? [235, 232, 226] : [14, 13, 12];
   const hex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex(mix(p.dominant.r, 14))}${hex(mix(p.dominant.g, 13))}${hex(mix(p.dominant.b, 12))}`;
+  if (!p || p.neutral) return `#${hex(r)}${hex(g)}${hex(b)}`;
+  const weight = room === 'day' ? 0.06 : 0.12;
+  const mix = (base: number, tint: number) => Math.round(base + (tint - base) * weight);
+  return `#${hex(mix(r, p.dominant.r))}${hex(mix(g, p.dominant.g))}${hex(mix(b, p.dominant.b))}`;
 };
 
 /**

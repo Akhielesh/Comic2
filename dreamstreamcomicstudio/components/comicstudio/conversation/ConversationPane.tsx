@@ -33,9 +33,38 @@ import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
 import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
 import { subscribeKeyboardInset } from '../mobile/useKeyboardInset';
+import type { ActivityItem } from '../types';
 import { cx } from './ui';
 
 const NEAR_BOTTOM_PX = 96;
+const MAX_VISIBLE_STEPS = 5;
+
+function DirectorProgress({ activity }: { activity: ActivityItem[] }) {
+  const steps = activity.filter((step) => step.label.trim()).slice(-MAX_VISIBLE_STEPS);
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <DirectorMark />
+      <div className="min-w-0">
+        <AgentThinking label="Thinking…" />
+        {steps.length > 0 && (
+          <details className="text-[12px] text-[var(--ds-muted)]">
+            <summary className="w-fit cursor-pointer rounded-md py-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-focus)] coarse:min-h-[44px] coarse:py-3">
+              Director activity
+            </summary>
+            <ul aria-label="Recent Director steps" className="mb-1 space-y-1 border-s border-[var(--ds-hairline)] ps-3">
+              {steps.map((step) => (
+                <li key={step.id} className="[overflow-wrap:anywhere]">
+                  <span className="text-[var(--ds-ink)]">{step.label}</span>{' '}
+                  <span>· {step.phase === 'start' ? 'In progress' : step.ok === false ? 'Couldn’t finish' : 'Done'}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface ConversationPaneProps {
   studio: ComicStudioController;
@@ -266,12 +295,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                 {orphanDrafts.map(({ msg, draft }) => (
                   <AssistantMessageRow key={msg.id} msg={msg} draft={draft} streaming={messageBusy} studio={rowStudio} docKey={docKey} uncommitted />
                 ))}
-                {showThinking && (
-                  <div className="flex items-center gap-3">
-                    <DirectorMark />
-                    <AgentThinking label="Thinking…" />
-                  </div>
-                )}
+                {showThinking && <DirectorProgress activity={studio.activity} />}
               </>
             )}
           </div>

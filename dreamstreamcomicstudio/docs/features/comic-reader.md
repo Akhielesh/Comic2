@@ -54,10 +54,12 @@ the reader focuses or points at a reading control, the card warms one small vari
 reading page in the shared image cache. It skips the warmup on Save-Data and 2G connections. Links
 that open directly on an interior page skip the edge's cover preload.
 
+Reader settings offer Night and Day room light. The choice stays on the device and only changes
+the room around the artwork. Reduced-motion and low-power settings still apply in either room.
+
 Deferred (carried to later packages):
 
 - Webtoon stand-ins for the next 2 items, then scroll stand-in preloads: RD-B (S3).
-- Turning the Day room on (`data-reader-room="day"`, the ReaderHud glass token): RD-2 (S3).
 - A second reader.turns e2e on pages with no variants (the QA flag is ready): RD-B (S3).
 - Keeping the drawn count, the `scaleX` bar and `readerTokens` when the inline reader is reworked, and a per-owner
   `pageImageCache.retain(owner, paths)`: PE-READER-MOTION / DS-6 (S4).

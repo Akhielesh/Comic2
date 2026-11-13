@@ -18,6 +18,7 @@ const INDEX_HTML = `<!DOCTYPE html><html lang="en"><head>
 <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
 <link rel="manifest" href="/app.webmanifest" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
+<link rel="icon" href="/suite-icon.svg" />
 <meta property="og:title" content="Old suite title" />
 <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
 </head><body><div id="root"></div></body></html>`;
@@ -191,6 +192,8 @@ describe('Pages proxy', () => {
     expect(body).toContain(`<meta name="description" content="${BRAND.description}">`);
     expect(body).toContain('<link rel="manifest" href="/comics.webmanifest">');
     expect(body).toContain('<link rel="apple-touch-icon" href="/icons/comics-apple-touch-180.png">');
+    expect(body).toContain('<link rel="icon" type="image/svg+xml" href="/icons/comics-mark.svg">');
+    expect(body).not.toContain('/suite-icon.svg');
     expect(body).toContain('<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">');
     expect(body).toContain('<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">');
     expect(body).toContain('<meta name="ds-product" content="comics">');

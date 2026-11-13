@@ -69,5 +69,9 @@ describe('room', () => {
     expect(roomBackground(red)).toMatch(/radial-gradient\(120% 90% at 50% 42%, rgba\(\d+,\d+,\d+,0\.26\)/);
     expect(themeColorFor(null)).toBe('#0e0d0c');
     expect(themeColorFor(red)).toMatch(/^#[0-9a-f]{6}$/);
+    expect(roomBackground(null, 'day')).toBe('var(--ds-reader-room)');
+    expect(roomBackground(red, 'day')).toMatch(/radial-gradient\(120% 90% at 50% 42%, rgba\(\d+,\d+,\d+,0\.1\)/);
+    expect(themeColorFor(null, 'day')).toBe('#ebe8e2');
+    expect(themeColorFor(red, 'day')).not.toBe(themeColorFor(red, 'night'));
   });
 });

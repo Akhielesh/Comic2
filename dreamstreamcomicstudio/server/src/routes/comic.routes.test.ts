@@ -614,12 +614,16 @@ describe('POST /projects/:id/stream', () => {
 
 describe('legacy import', () => {
   it('maps a classic project into the doc with a welcome message', async () => {
-    store.legacy.set('old-1', {
+    const original = {
       userId: 'user-1',
       name: 'Old Comic',
       state: {
         script: 'Maya meets Arjun at the market.',
         overview: 'A market caper.',
+        creativeDirection: '  Stay close to Maya’s point of view.  ',
+        continuitySummary: 'Maya wears a red scarf throughout the market chase.',
+        storyPlanning: { approved: true, approvedPageCount: 12 },
+        panels: [{ id: 'classic-panel', imageId: 'u/user-1/p/old-1/img/market.webp' }],
         stylePrompt: 'Bold inks and flat colors',
         styleCategory: 'Pop',
         styleAspectRatio: '3:4',
@@ -637,11 +641,20 @@ describe('legacy import', () => {
         ],
         locations: [{ id: 'l', name: 'Market', description: 'Busy lanes', structured: { lighting: 'noon sun' }, referenceImageIds: [] }]
       }
-    });
+    };
+    const originalSnapshot = structuredClone(original);
+    store.legacy.set('old-1', original);
     const res = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-1' } });
     expect(res.status).toBe(201);
     const { doc } = await res.json();
-    expect(doc.brief).toMatchObject({ title: 'Old Comic', logline: 'A market caper.' });
+    expect(doc.brief).toMatchObject({
+      title: 'Old Comic',
+      logline: 'A market caper.',
+      notes: [
+        'Original creative direction: Stay close to Maya’s point of view.',
+        'Continuity from the classic edition: Maya wears a red scarf throughout the market chase.'
+      ]
+    });
     expect(doc.source.script).toBe('Maya meets Arjun at the market.');
     expect(doc.cast.map((c: { name: string; tier: string }) => [c.name, c.tier])).toEqual([
       ['Maya', 'lead'],
@@ -654,11 +667,26 @@ describe('legacy import', () => {
     expect(JSON.stringify(doc)).not.toContain('stolen.webp');
     expect(doc.places[0]).toMatchObject({ name: 'Market', look: 'Busy lanes. noon sun' });
     expect(doc.style).toMatchObject({ status: 'drafted', name: 'Pop', spec: 'Bold inks and flat colors' });
-    expect(doc.format.pageAspect).toBe('3:4');
+    expect(doc.format).toMatchObject({ pageAspect: '3:4', pageCount: 12 });
+    expect(doc.pages).toEqual([]);
+    expect(importedId).not.toBe('old-1');
+    expect(store.legacy.get('old-1')).toEqual(originalSnapshot);
     expect(doc.conversation).toHaveLength(1);
     expect(doc.conversation[0].text).toContain('the script (6 words), 2 characters (MAYA, ARJUN), 1 location and your style');
 
     expect((await api('/api/comic/projects', { user: 'intruder', body: { importFromProjectId: 'old-1' } })).status).toBe(404);
+  });
+
+  it.each([
+    [{ pageCount: 8, storyPlanning: { approved: true, approvedPageCount: 12 } }, 8],
+    [{ pageCount: '8', storyPlanning: { approved: true, approvedPageCount: 12 } }, 12],
+    [{ storyPlanning: { approved: false, approvedPageCount: 12 } }, undefined],
+    [{ storyPlanning: { approved: true, approvedPageCount: 41 } }, undefined],
+    [{ pageCount: 2.5 }, undefined]
+  ])('only carries valid, explicitly chosen page counts (%j)', (state, pageCount) => {
+    const { ops } = legacyImportOps({ name: 'Classic', state }, 'u');
+    const format = ops.find((op) => op.op === 'format');
+    expect(format?.patch.pageCount).toBe(pageCount);
   });
 
   it('legacyImportOps ignores junk safely', () => {

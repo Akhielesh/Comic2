@@ -703,6 +703,31 @@ describe('StudioComposer — attach sheet and inbox uploads', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('attaches a saved image by path without uploading or deleting its inbox copy', () => {
+    const path = 'u/1/ref/inbox/toolbox.webp';
+    const doc = makeSampleDoc({ refInbox: [{ path, name: 'Toolbox', source: 'upload', at: 1 }] });
+    const uploadRef = vi.fn();
+    const studio = makeFakeStudio({ doc, uploadRef });
+    renderAt(DESKTOP, studio);
+    const chooseSaved = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add images or a script' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Saved images/ }));
+    };
+    chooseSaved();
+    fireEvent.click(screen.getByRole('button', { name: 'Toolbox' }));
+    expect(screen.getByAltText('Toolbox')).toBeInTheDocument();
+    chooseSaved();
+    expect(screen.getByRole('button', { name: /Toolbox · Added/ })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Toolbox' }));
+    chooseSaved();
+    fireEvent.click(screen.getByRole('button', { name: 'Toolbox' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(uploadRef).not.toHaveBeenCalled();
+    expect(deleteInboxRef).not.toHaveBeenCalled();
+    expect(studio.send).toHaveBeenCalledWith('', { attachments: [], inboxPaths: [path] });
+  });
+
   it('photos upload to the inbox with a progress ring; Send waits for them, then they travel by path', async () => {
     let finish: (v: unknown) => void = () => undefined;
     let progress: ((f: number) => void) | undefined;

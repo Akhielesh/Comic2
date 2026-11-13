@@ -20,7 +20,7 @@ export const ReaderShortcuts: React.FC<{ open: boolean; onClose(): void }> = ({ 
         aria-modal="true"
         aria-label="Keyboard shortcuts"
         data-testid="reader-shortcuts"
-        className="max-h-full w-[min(440px,100%)] overflow-y-auto rounded-3xl bg-black/75 p-4 text-white shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+        className="max-h-full w-[min(440px,100%)] overflow-y-auto rounded-3xl bg-[var(--ds-reader-panel)] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2 flex items-center justify-between">
@@ -29,15 +29,15 @@ export const ReaderShortcuts: React.FC<{ open: boolean; onClose(): void }> = ({ 
             <X className="h-5 w-5" aria-hidden />
           </HudButton>
         </div>
-        <dl className="divide-y divide-white/10">
+        <dl className="divide-y divide-[var(--ds-reader-hud-wash)]">
           {SHORTCUTS.map((s) => (
             <div key={s.keys} className="flex items-baseline justify-between gap-4 py-2">
-              <dt className="shrink-0 font-mono text-[12px] text-white/90">{s.keys}</dt>
-              <dd className="text-right text-[12px] text-white/70">{s.action}</dd>
+              <dt className="shrink-0 font-mono text-[12px]">{s.keys}</dt>
+              <dd className="text-right text-[12px] text-[var(--ds-reader-hud-muted)]">{s.action}</dd>
             </div>
           ))}
         </dl>
-        <p className="mt-2 text-[11px] text-white/55">On touch screens: swipe or tap the edges to turn, tap the middle for controls, double-tap a panel for Guided View, pinch to zoom.</p>
+        <p className="mt-2 text-[11px] text-[var(--ds-reader-hud-muted)]">On touch screens: swipe or tap the edges to turn, tap the middle for controls, double-tap a panel for Guided View, pinch to zoom.</p>
       </div>
     </div>
   );
