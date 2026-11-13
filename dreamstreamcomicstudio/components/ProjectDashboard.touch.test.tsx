@@ -254,6 +254,18 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     }
   });
 
+  it('on a touch screen the scrim behind the row is the theme scrim token, not a raw colour', async () => {
+    const rows = renderRows();
+    for (const { name, row } of rows) {
+      const from = tokens(row).filter((t) => t.startsWith(`${TOUCH}from-`));
+      expect(from, name).toEqual([`${TOUCH}from-[var(--ds-scrim)]`]);
+    }
+    const root = await compile(tokens(rows[0].row));
+    const built = ruleFor(root, `${TOUCH}from-[var(--ds-scrim)]`);
+    expect(built.touchOnly).toBe(true);
+    expect(built.decls['--tw-gradient-from']).toContain('var(--ds-scrim)');
+  });
+
   it('on a touch screen each button is a target of at least 44 px', () => {
     for (const { buttons } of renderRows()) {
       expect(buttons).toHaveLength(3);
@@ -306,7 +318,9 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     };
 
     // Measured in Chromium with the app's fonts: at 320 px a cover is 248 px wide, and the widest label
-    // (icon 16 + gap 8 + "Open") is 54.4 px.
+    // (icon 16 + gap 8 + "Open") is 54.4 px. These two numbers come from the offline probe on the real app bundle
+    // (AH-5's app3 probe, after p5/pb-scripts/nav-app.cjs), which is the source of truth: this test proves the
+    // arithmetic, not the layout. Re-measure them if the page padding, the card border or the Button font changes.
     const COVER = 248;
     const WIDEST_LABEL = 54.4;
     const rowPadding = px(touchPadding(row).decls['padding-left']);

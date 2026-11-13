@@ -37,7 +37,7 @@ export const DUPLICATE_UNAVAILABLE_FOR_STUDIO = "Duplicate isn't available for s
  * drops to 4 px to keep the label inside. The classes are written out in full because Tailwind reads them from this
  * file.
  */
-const CARD_ACTIONS_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:top-auto [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-transparent [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-gradient-to-t [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:from-black/60 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pt-6 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:opacity-100';
+const CARD_ACTIONS_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:top-auto [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-transparent [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-gradient-to-t [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:from-[var(--ds-scrim)] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pt-6 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:opacity-100';
 const CARD_ACTION_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-h-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-w-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:flex-1 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-1';
 const CARD_COVER_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-16';
 const CARD_BAR_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:shrink-0';
