@@ -509,7 +509,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         <span className="text-xs font-bold">Nothing drawn yet</span>
                       </div>
                     ) : (
-                      <div className={`w-full h-full flex items-center justify-center bg-neutral-100 text-neutral-500 ${CARD_COVER_TOUCH}`}><BookOpen className="size-9" aria-hidden /></div>
+                      <div className={`w-full h-full flex items-center justify-center bg-neutral-100 text-neutral-500 ${CARD_COVER_TOUCH}`} role="img" aria-label="No cover yet"><BookOpen className="size-9" aria-hidden /></div>
                     )}
 
                     {isStudio && (
