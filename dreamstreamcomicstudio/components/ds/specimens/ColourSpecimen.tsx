@@ -3,8 +3,8 @@
  * hues with their tag chip, text step and solid tile; the order charts take them in; the sequential and diverging
  * ramps; the two washes; the studio accents; and a comic's own tint on a card. Every piece is a studioDesign recipe, so
  * the specimen shows exactly what screens get, and VITE_DS_COLOUR=off turns it neutral like everything else. Shown by
- * the QA scenes `colour-layer` and `ds-gallery`; the live Gallery entry "Colour" is a demo file the P6-B integrator
- * adds once the Studio Gallery exists. Sample words only: no price, no spend control, no network.
+ * the QA scenes `colour-layer` and `ds-gallery`; a live Gallery entry "Colour" can follow once the
+ * Studio Gallery exists. Sample words only: no price, no spend control, no network.
  */
 import React from 'react';
 import { BookOpen, Image as ImageIcon, LayoutGrid, Languages, Palette, Shapes, Users } from 'lucide-react';

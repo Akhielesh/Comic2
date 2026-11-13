@@ -47,7 +47,7 @@ describe('MediaBin', () => {
     expect(groups).toContain('MAYA references');
     expect(groups).toContain('Chat uploads');
     expect(groups).toContain('Deleted page 4');
-    // 2 of 300: the counter is noise this far from the cap (6B PU-2); the Archived filter still counts them.
+    // 2 of 300: the counter is noise this far from the cap; the Archived filter still counts them.
     expect(screen.queryByText(/^Archive \d+\/300$/)).toBeNull();
     expect(screen.getByRole('radio', { name: /Archived\s*2/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: /Deleted/ }));
@@ -195,7 +195,7 @@ describe('MediaBin', () => {
     expect(document.querySelector('footer')).toBeNull();
   });
 
-  it('shows the archive counter and its rule from 80 % full (6B PU-2), and not one version before', () => {
+  it('shows the archive counter and its rule from 80 % full, and not one version before', () => {
     const withArchive = (n: number) => {
       const d = richDoc();
       d.archive = Array.from({ length: n }, (_, i) => ({ ...A(`old-${i}`, i + 1), targetKey: 'page:pg_1', label: 'Page 1', archivedAt: i + 1 }));

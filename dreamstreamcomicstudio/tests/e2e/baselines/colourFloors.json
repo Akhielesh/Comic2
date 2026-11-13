@@ -10,7 +10,7 @@
     ]
   },
   "floors": [
-    { "id": "landing", "floor": 0.04, "enforce": false, "open": { "surface": "app", "scene": "landing" }, "switchedOnBy": "the R02 integrator if CL-10 reaches it, else AS-6 (real art in the hero)" },
+    { "id": "landing", "floor": 0.04, "enforce": false, "open": { "surface": "app", "scene": "landing" }, "switchedOnBy": "the change that brings real art or a stronger colour into the landing hero, once the screen reaches the floor" },
     { "id": "library", "floor": 0.03, "enforce": false, "open": { "surface": "app", "scene": "ds-content" }, "switchedOnBy": "CL-8 (each comic's own tint on its card; the P6-D integrator)" },
     { "id": "empty", "floor": 0.02, "enforce": false, "open": { "surface": "studio", "fixture": "empty" }, "switchedOnBy": "CP-4 (pictures and a wash on empty screens)" },
     { "id": "board", "floor": 0.01, "enforce": false, "open": { "surface": "studio", "fixture": "stress", "tab": "pages" }, "board": true, "switchedOnBy": "CL-9 (the part you are in keeps its colour; the P6-D integrator)" },

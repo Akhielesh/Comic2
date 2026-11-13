@@ -1,4 +1,4 @@
-// 6B fold FL-1 (narrowed for R02): the studio button kits gain an opt-in `keepFocusWhileBusy`. While busy such a
+// Enter on Approve keeps focus: the studio button kits gain an opt-in `keepFocusWhileBusy`. While busy such a
 // button stays focusable (aria-disabled, not disabled), swallows clicks and Enter (preventDefault, so a submit
 // button never submits) and keeps keyboard focus. Without the prop a busy button is disabled exactly as before.
 import React from 'react';

@@ -137,7 +137,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
   if (!doc) return null;
   const examples = library.status === 'ready' ? [...library.byKind('cover_example'), ...library.byKind('genre_example')].slice(0, 12) : [];
   const archive = archiveUsage(doc);
-  // The archive line earns its place only near the cap (6B PU-2): "Archive 0/300" on every visit was noise.
+  // The archive line earns its place only near the cap: "Archive 0/300" on every visit was noise.
   const archiveNearFull = archive.cap > 0 && archive.used >= archive.cap * ARCHIVE_LINE_FROM;
   const spentOnImages = all.reduce((n, it) => n + (typeof it.costUsd === 'number' ? it.costUsd : 0), 0);
 

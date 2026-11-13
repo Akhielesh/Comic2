@@ -1,6 +1,6 @@
-// FX-6 (Program 6, P6-A; sweep finding F2): every Settings field is found by its visible label, the photo upload
-// is a real button a keyboard can reach, and no field shows a made-up person or an example.com address as a hint
-// (PU-3). Before FX-6, Chromium's accessibility tree gave Email, Date of birth and the invite link no name at all,
+// FX-6: every Settings field is found by its visible label, the photo upload is a real button a keyboard can reach,
+// and no field shows a made-up person or an example.com address as a hint. Before FX-6, Chromium's accessibility
+// tree gave Email, Date of birth and the invite link no name at all,
 // named Username and Phone by their placeholders ("Super_hero", "+1 555 123 4567"), and the photo upload was a
 // <label> around a display:none input that no keyboard could reach. The phone layout (the profile row stacks, the
 // section list is one row of chips) is measured in Chromium by tests/e2e/a11y.spec.ts.
@@ -145,7 +145,7 @@ describe('Settings › Contact and Security: labels are tied to their fields (FX
   });
 });
 
-describe('Settings hints show no made-up people (6B fold PU-3)', () => {
+describe('Settings hints show no made-up people', () => {
   const MADE_UP = /@|example\.(com|org|net)|super[ _]?hero|\bjohn\b|\bjane\b|\bdoe\b|friend/i;
   for (const file of ['components/AccountSettings.tsx', 'components/InviteFriends.tsx']) {
     it(`no placeholder in ${file} holds a made-up person or an example.com address`, () => {

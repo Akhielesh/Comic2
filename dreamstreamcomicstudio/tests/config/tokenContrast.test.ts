@@ -1415,7 +1415,7 @@ describe('token contrast — the colour layer "Ink & Spark" in all six contexts'
  */
 const COLOUR_TEXT = {
   light: ['#4455c2', '#aa3176', '#a04c00', '#01706c', '#8244b0', '#4a6c00', '#00699b'],
-  // Slots 1, 2 and 5 are 4 % lighter than the review's #97adff / #f492c1 / #cc9ef5: on a hovered row over the default
+  // Slots 1, 2 and 5 are 4 % lighter than the first proposal's #97adff / #f492c1 / #cc9ef5: on a hovered row over the default
   // dark raised step those measured 4.40 to 4.42:1.
   dark: ['#9bb0ff', '#f496c3', '#f99f66', '#48c7c0', '#cea2f5', '#9bc466', '#54c1fb']
 } as const;

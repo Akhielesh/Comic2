@@ -54,7 +54,7 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; right?: React.R
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   busy?: boolean;
   size?: 'xs' | 'sm' | 'md';
-  /** While busy, stay focusable instead of disabled (6B FL-1) — see board/busyButton. */
+  /** While busy, stay focusable instead of disabled — see board/busyButton. */
   keepFocusWhileBusy?: boolean;
 };
 

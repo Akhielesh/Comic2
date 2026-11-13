@@ -49,7 +49,7 @@ const DC0_10: ReadonlyArray<[string, string]> = [
 /**
  * FX-15's two flag-independent kit changes, mapped back the same way: a board-kit Segmented segment sizes to its label
  * (flex-auto, was flex-1: "Com…" / "Sup…" were cut), and the kit buttons carry the aria-disabled look used by
- * `keepFocusWhileBusy` (6B FL-1). Only these exact token runs are mapped; any other change still fails.
+ * `keepFocusWhileBusy`. Only these exact token runs are mapped; any other change still fails.
  */
 const FX15: ReadonlyArray<[string, string]> = [
   ['flex min-w-0 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-[10px]', 'flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px]'],

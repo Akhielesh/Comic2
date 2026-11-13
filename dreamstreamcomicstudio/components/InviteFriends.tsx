@@ -94,7 +94,7 @@ export const InviteFriends: React.FC = () => {
             {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
           </button>
         </div>
-        {/* A disabled Copy says why (6B fold PU-3): the link is still loading, or it could not be loaded. */}
+        {/* A disabled Copy says why: the link is still loading, or it could not be loaded. */}
         {!ref && (
           <div id={copyWhyId} className="mt-1 text-xs text-slate-500">
             {loading ? 'No link to copy yet: it is still loading.' : 'No link to copy: your invite link could not be loaded.'}

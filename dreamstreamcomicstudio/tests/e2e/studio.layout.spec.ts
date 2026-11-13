@@ -159,7 +159,7 @@ test.describe('studio layout', () => {
     await qa.check('board', 'gate-open');
   });
 
-  test('FX-15 / 6B FL-1: Enter on Approve keeps focus there; a second Enter sends nothing', async ({ qa, page }) => {
+  test('FX-15: Enter on Approve keeps focus there; a second Enter sends nothing', async ({ qa, page }) => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
     await qa.toBoard();
     const approve = page.locator('[data-gate-banner] button', { hasText: /^Approve$/ }).first();

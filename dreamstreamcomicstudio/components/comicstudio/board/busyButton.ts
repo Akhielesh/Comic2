@@ -6,7 +6,7 @@ import type React from 'react';
 export type BusyButtonInput = {
   busy?: boolean;
   /**
-   * While `busy`, keep the button focusable instead of disabling it (6B FL-1): it reads aria-disabled, swallows
+   * While `busy`, keep the button focusable instead of disabling it: it reads aria-disabled, swallows
    * clicks and Enter (preventDefault, so a submit button never submits), and keeps keyboard focus, as
    * components/ds/Button's `loading` does. A disabled button drops focus to <body> in the browser, so a keyboard
    * user who pressed Enter on Approve lost their place. Opt-in: without it, busy still means disabled.
