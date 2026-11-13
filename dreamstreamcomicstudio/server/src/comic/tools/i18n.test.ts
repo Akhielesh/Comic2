@@ -5,12 +5,17 @@ import { applyOps } from '../../../../shared/comic/ops.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { LANGUAGES } from '../../../../shared/comic/languages.js';
+import { LAKE_MODEL, makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
+import { runDirectorTurn } from '../director.js';
+import { MAX_TOOLS_PER_TURN } from '../extensions.js';
+import { sixPageDrawnDoc } from '../golden/fixtures.js';
 import { JOB_TIMINGS } from '../jobs.js';
-import { newSession, scriptedLlm, testContext } from '../orchestrator.fakes.js';
-import { createDirectorTurn, type DirectorTurn } from '../tools.js';
+import { newSession, plannedDoc, scriptedLlm, testContext } from '../orchestrator.fakes.js';
+import { buildTurnToolset, createDirectorTurn, type DirectorTurn } from '../tools.js';
+import { toolGroups } from './index.js';
 import { resetTranslationCalibration } from '../i18n/index.js';
 import { fakeLinguist, fakeTranslator, sixPageKidsDoc, times } from '../i18n/testing.js';
-import { I18N_PROMPT_RULES, i18nPromptRules, i18nToolGroup, languagesSummary } from './i18n.js';
+import { I18N_PROMPT_RULES, i18nPromptRules, i18nToolGroup, isLanguageAsk, languagesSummary } from './i18n.js';
 
 vi.mock('../safety/index.js', async (orig) => {
   const real = await orig<typeof import('../safety/index.js')>();
@@ -165,6 +170,91 @@ describe('translate_comic', () => {
     const { tools } = setup(doc, 'translate into Hindi');
     const out = await tools.translate_comic.execute({ languages: ['hi'] });
     expect(out).toMatch(/translated editions need overlay lettering \(owner rule\): redrawing 6 pages without text costs ≈ \$/);
+  });
+});
+
+describe('a language ask keeps its tools (the real registry, as director.ts builds a turn)', () => {
+  /** A drawn, model-locked book whose pages have versions: its timeline group alone fills the rest of the budget. */
+  const lockedLakeDoc = () => makeLakeComic((d) => (d.imageModel = { modelId: LAKE_MODEL, lockedAt: 1, origin: 'first_render' }));
+  const FIXTURES: Record<string, () => ComicDoc> = { plannedDoc: () => plannedDoc(), sixPageDrawnDoc, lockedLakeDoc };
+  const offered = (doc: ComicDoc, userText: string) => {
+    const set = buildTurnToolset(testContext(newSession(doc)), createDirectorTurn({ userText }), toolGroups());
+    return { groups: set.groups, names: set.tools.map((t) => t.spec.function.name), rules: set.promptRules.join('\n') };
+  };
+
+  // "version", "book", "switch" and "copy" are timeline words: they used to hand these turns to the page timeline,
+  // and the director was left with no translate tool and no language rule (the owner's "add telugu and hindi versions").
+  const ASKS = ['add telugu and hindi versions', 'translate the book into Hindi', 'switch the comic to Hindi', 'make a Tamil copy', 'Telugu version కూడా add చేయి', 'हिंदी version भी बनाओ'];
+  for (const [fixture, make] of Object.entries(FIXTURES)) {
+    for (const ask of ASKS) {
+      it(`${fixture}: "${ask}" offers translate_comic and the language rule`, () => {
+        const { groups, names, rules } = offered(make(), ask);
+        expect(groups, ask).toContain('i18n');
+        expect(names, ask).toEqual(expect.arrayContaining(['translate_comic', 'set_comic_language', 'read_translation']));
+        expect(rules, ask).toContain('Never use ask_user to choose languages');
+        // The page timeline stood down: its tools and this group's cannot both fit.
+        expect(groups, ask).not.toContain('timeline');
+        expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
+      });
+    }
+  }
+
+  // A page, or a numbered or earlier take, is what these sentences act on: the timeline keeps the turn, as before.
+  const PAGE_TURNS: [string, string][] = [
+    ['restore the previous version of page 2', 'use_version'],
+    ['use version 2 of the Hindi edition', 'use_version'],
+    ['go back to the earlier version in Hindi', 'use_version'],
+    ['delete page 3 of the Hindi version', 'delete_page'],
+    ['duplicate page 1 and translate it into Tamil', 'duplicate_page'],
+    // A language name used as a plain adjective is not an ask; neither is a message that only happens to be typed in another script.
+    ['restore the earlier version with the Chinese dragon', 'use_version'],
+    ['దీన్ని duplicate చేయి', 'duplicate_page'],
+    ['move the second page to the top', 'move_page'],
+    // A page put or dragged, or the book's shape, on an edition: still the timeline's (commit 2 used to take these).
+    ['put page 3 before page 2 in the Hindi version', 'move_page'],
+    ['make the Hindi edition a square book', 'set_book']
+  ];
+  // The same kind of sentence, but the timeline's tools did not fit even before the language stand-down (an older
+  // budget loss in tools.ts): never a language ask, so this group does not make it worse.
+  const PAGE_TURNS_OVER_BUDGET = [
+    'drag page 4 to the front of the Telugu edition',
+    'use the old version of page 2 in Hindi',
+    'go back to the original page 2 from before the Hindi translation'
+  ];
+  for (const [say, tool] of PAGE_TURNS) {
+    it(`lockedLakeDoc: "${say}" keeps ${tool}`, () => {
+      const { groups, names } = offered(lockedLakeDoc(), say);
+      expect(groups, say).toContain('timeline');
+      expect(names, say).toContain(tool);
+    });
+  }
+
+  it('isLanguageAsk: a language named as what the comic should be in, never a page action', () => {
+    for (const ask of ASKS) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const ask of ['make it in Telugu too', 'translate this into Hindi and Tamil', 'हिन्दी में भी चाहिए']) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const [say] of PAGE_TURNS) expect(isLanguageAsk(say), say).toBe(false);
+    for (const say of PAGE_TURNS_OVER_BUDGET) expect(isLanguageAsk(say), say).toBe(false);
+    // Not a page action: "copy page 2 into Hindi" and Hindi subtitles on every page are translations.
+    for (const ask of ['copy page 2 into Hindi', 'add Hindi subtitles to every page']) expect(isLanguageAsk(ask), ask).toBe(true);
+    for (const say of ['make the hero taller', 'other versions for my cousins', 'show me other versions of the cover', '']) expect(isLanguageAsk(say), say).toBe(false);
+  });
+
+  it("the owner's words on a drawn book: the director gets the tool, calls it for both languages, and the Approve card waits", async () => {
+    // "Always ask": this test is about the tools reaching the director, whatever the money settings decide.
+    const session = newSession(makeLakeComic((d) => ((d.imageModel = { modelId: LAKE_MODEL, lockedAt: 1, origin: 'first_render' }), (d.settings = { ...d.settings, confirm: 'always' }))));
+    const call = { id: 'c1', name: 'translate_comic', arguments: JSON.stringify({ languages: ['Telugu', 'Hindi'] }) };
+    const llm = scriptedLlm({ director: [{ text: '', toolCalls: [call] }, { text: 'Telugu and Hindi are priced. Tap Approve to start.' }] });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'add telugu and hindi versions', attachments: [] });
+    await ctx.settled();
+    const first = llm.calls[0];
+    expect(first.tools!.map((t) => t.function.name)).toContain('translate_comic');
+    expect(JSON.stringify(first.messages[0])).toContain('Never use ask_user to choose languages');
+    expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'policy', action: { type: 'translate', languages: ['te', 'hi'] } });
+    const reply = session.doc.conversation[session.doc.conversation.length - 1];
+    expect(reply.cards!.map((c) => c.type)).toContain('gate');
+    expect(llm.calls.filter((c) => c.role !== 'director')).toHaveLength(0);
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'translate')).toHaveLength(0);
   });
 });
 
