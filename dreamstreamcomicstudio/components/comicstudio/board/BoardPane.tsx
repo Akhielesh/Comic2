@@ -97,7 +97,26 @@ export const GateBanner: React.FC<{
   const { busyKey, fire } = useClickGuard(4000);
   const [details, setDetails] = useState(false);
   const cost = useCostFormat(studio.caps);
-  if (!gate || gate.status !== 'open') return null;
+  const open = !!gate && gate.status === 'open';
+  // When the gate the user answered closes, the banner (and the Approve that held focus) unmounts and the browser
+  // drops focus to <body>. If focus was inside the banner and nothing else took it, move it to the board's tab
+  // panel, so a keyboard user carries on from the board instead of from the top of the page (FX-15, 6B FL-1).
+  const focusInside = useRef(false);
+  useEffect(() => {
+    if (open || !focusInside.current) return;
+    focusInside.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    document.getElementById('board-panel')?.focus({ preventScroll: true });
+  }, [open]);
+  if (!gate || !open) return null;
+  const onFocusIn = () => {
+    focusInside.current = true;
+  };
+  const onFocusOut = (e: React.FocusEvent) => {
+    // Focus moved to a real element outside the banner: the user went elsewhere, so leave their focus alone.
+    if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) focusInside.current = false;
+  };
   const price = cost.quote(gate.estimateUsd);
   // People read the model's nickname ("Nano Banana 2.1"), not a long raw id (visualqa P0-1 / P1-6).
   const modelName = getImageModel((gate.model || '').trim())?.nickname || gate.model;
@@ -123,6 +142,8 @@ export const GateBanner: React.FC<{
         role="region"
         aria-label="Waiting for your approval"
         data-gate-banner="compact"
+        onFocus={onFocusIn}
+        onBlur={onFocusOut}
         className={cx('mx-2 shrink-0 border border-[var(--ds-hairline)] px-2.5 text-[var(--ds-ink)]', RADIUS_PANEL, ACCENT_SOFT_BG, dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -140,7 +161,11 @@ export const GateBanner: React.FC<{
             )}
           >
             <span className={cx('font-semibold', details ? WRAP_TEXT : CLIP_TEXT)}>{gate.title}</span>
-            <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[45%] shrink-0 truncate')}>· {price}</span>
+            <span className={cx('tabular-nums text-[var(--ds-muted)]', details ? WRAP_TEXT : 'min-w-0 max-w-[45%] shrink-0 truncate')}>
+              {/* Closed, the price shares the title's line ("Title · price"). Opened, it may wrap onto its own line, so it
+                  drops the separator rather than start a line with a dangling "·"; the gap still parts the two. */}
+              {details ? price : `· ${price}`}
+            </span>
             <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform motion-reduce:transition-none', details && 'mt-0.5 rotate-180')} aria-hidden />
             <span className="sr-only">{details ? 'Hide details' : 'Show details'}</span>
           </button>
@@ -161,6 +186,8 @@ export const GateBanner: React.FC<{
       role="region"
       aria-label="Waiting for your approval"
       data-gate-banner="full"
+      onFocus={onFocusIn}
+      onBlur={onFocusOut}
       className={cx('mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border border-[var(--ds-hairline)] px-3 py-2.5 sm:mx-4', RADIUS_PANEL, ACCENT_SOFT_BG)}
     >
       <div className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">

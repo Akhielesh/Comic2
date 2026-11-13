@@ -11,7 +11,7 @@ import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { resetBackStack } from '../mobile/backStack';
 
 const TITLE = 'Draw the remaining 5 pages in the painted style, with the new rooftop chase';
-const gated = () =>
+const gated = (status: 'open' | 'approved' | 'declined' = 'open') =>
   makeSampleDoc((d) => {
     d.gate = {
       id: 'gate_7',
@@ -22,17 +22,17 @@ const gated = () =>
       imageCount: 5,
       model: 'Nano Banana 2.1',
       createdAt: SAMPLE_NOW,
-      status: 'open',
+      status,
       reason: 'budget'
     };
   });
 
-const atWidth = (w: number, studio: ReturnType<typeof makeStudio>) =>
-  render(
-    <FormFactorProvider value={formFactorFor({ w, h: 780, coarse: true })}>
-      <BoardPane studio={studio} />
-    </FormFactorProvider>
-  );
+const atWidthEl = (w: number, studio: ReturnType<typeof makeStudio>) => (
+  <FormFactorProvider value={formFactorFor({ w, h: 780, coarse: true })}>
+    <BoardPane studio={studio} />
+  </FormFactorProvider>
+);
+const atWidth = (w: number, studio: ReturnType<typeof makeStudio>) => render(atWidthEl(w, studio));
 
 const cls = (el: Element) => (el.getAttribute('class') || '').split(/\s+/);
 /** Text that is cut to one line (an ellipsis) instead of shown whole. */
@@ -65,10 +65,13 @@ describe.each([360, 390])('the approval strip at %i px', (w) => {
     expect(cls(price)).toContain('[overflow-wrap:anywhere]');
     expect(title.closest('button')).toHaveAttribute('data-gate-summary', 'open');
     expect(cls(title.closest('button')!)).toContain('flex-wrap');
+    // The price may wrap onto its own line when open, so it never starts with a dangling "·".
+    expect(price.textContent).toBe('≈ $1.31');
     expect(banner).toHaveTextContent('5 images on Nano Banana 2.1 · over your budget cap');
     // And a second tap closes it back to one line.
     fireEvent.click(within(banner).getByRole('button', { name: /Hide details/ }));
     expect(isCut(title)).toBe(true);
+    expect(price.textContent).toBe('· ≈ $1.31');
   });
 
   it('a governed user: the opened strip shows usage words and never "$" or "¢"', () => {
@@ -79,8 +82,9 @@ describe.each([360, 390])('the approval strip at %i px', (w) => {
     expect(banner).toHaveTextContent(/of your usage/);
     expect(banner.textContent).not.toMatch(/[$¢]/);
     expect(banner.innerHTML).not.toMatch(/[$¢]/); // not even in a title attribute
-    const usage = within(banner).getByText(/· .*of your usage/);
+    const usage = within(banner).getByText(/of your usage/);
     expect(isCut(usage)).toBe(false);
+    expect(usage.textContent).not.toMatch(/^·/);
   });
 });
 
@@ -113,6 +117,41 @@ describe('Approve keeps focus while it is sent (6B FL-1)', () => {
     });
     expect(document.activeElement).toBe(approve);
     expect(studio.act).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('when the approved gate closes, focus lands on the board, not <body>', () => {
+  it.each([390, 1280])('at %i px: Approve, the gate closes, focus is on the board tab panel', (w) => {
+    const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
+    const view = atWidth(w, studio);
+    const approve = within(screen.getByRole('region', { name: 'Waiting for your approval' })).getByRole('button', { name: 'Approve' });
+    approve.focus();
+    fireEvent.click(approve);
+    expect(studio.act).toHaveBeenCalledWith({ type: 'approve_gate', gateId: 'gate_7' });
+    // The server answers: the gate is approved, the banner and its Approve unmount.
+    view.rerender(atWidthEl(w, { ...studio, doc: gated('approved') }));
+    expect(screen.queryByRole('region', { name: 'Waiting for your approval' })).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.id).toBe('board-panel');
+  });
+
+  it('focus the user moved elsewhere stays where they put it', () => {
+    const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
+    const view = atWidth(1280, studio);
+    const approve = within(screen.getByRole('region', { name: 'Waiting for your approval' })).getByRole('button', { name: 'Approve' });
+    approve.focus();
+    const tab = screen.getAllByRole('tab')[0];
+    tab.focus();
+    view.rerender(atWidthEl(1280, { ...studio, doc: gated('approved') }));
+    expect(document.activeElement).toBe(tab);
+  });
+
+  it('a gate that closes while focus was never in it does not take focus', () => {
+    const studio = makeStudio(gated(), { caps: { ...DEFAULT_CAPS, byok: true } });
+    const view = atWidth(1280, studio);
+    (document.activeElement as HTMLElement | null)?.blur();
+    view.rerender(atWidthEl(1280, { ...studio, doc: gated('declined') }));
+    expect(document.activeElement).toBe(document.body);
   });
 });
 
