@@ -22,10 +22,18 @@
 // started at all (recorded from the first frame) and none in effect (with motion on, the entrances finish first).
 // A scene that crashes fails on its own; the scenes after it are still measured.
 //
+// Colour budget (CL-6, critique H8), `@colour`: the share of the interface in strong colour (OKLCH chroma > 0.10)
+// on the real screen, every picture hidden, read from tests/e2e/baselines/colourFloors.json: working views (the board,
+// the editor, the conversation) stay at or under the 6 % ceiling; each floor (landing 4 %, Library 3 %, empty screens
+// 2 %, board 1 %, model picker 1 %) is measured and reported, and FAILS only when its entry says enforce:true.
+//
 // Pro Edit scenes (PE-SHELL (c)), `@pro`: every scene in qa/pro, discovered at RUNTIME the same way
 // (`?surface=pro` publishes window.__QA_PRO_SCENES__), measured with the app scenes' assertions.
 
-import { test, expect, type QaHarness } from './helpers/harness';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test, expect, type QaHarness, type QaQuery } from './helpers/harness';
 import type { ComicDevice } from './devices';
 import type { CheckId } from './helpers/allowlist';
 import { markConversationScroller, openComposerOptions, openMoreMenu, openQuality, openSettings, openSpend, closeTopLayer, scrollEditorTools } from './helpers/scenes';
@@ -263,6 +271,104 @@ test.describe('pro scenes @smoke @pro', () => {
             await checkAppPage(qa, device, id, theme, 'pro');
           })
         );
+      }
+    });
+  }
+});
+
+// ── Colour budget (CL-6, critique H8) ─────────────────────────────────────────
+
+interface ColourScene {
+  id: string;
+  open: QaQuery;
+  /** Measure the board pane (the phone shows the conversation first). */
+  board?: boolean;
+}
+interface ColourFloors {
+  chromaMin: number;
+  ceiling: { share: number; scenes: ColourScene[] };
+  floors: Array<ColourScene & { floor: number; enforce: boolean; switchedOnBy: string }>;
+}
+const FLOORS: ColourFloors = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'baselines/colourFloors.json'), 'utf8'));
+
+/**
+ * The strong-colour share of the viewport: pictures, video, canvases and SVG images hidden (the art is content, not
+ * the interface), one screenshot, then every second pixel's OKLCH chroma in the page itself (no image library).
+ */
+async function strongColourShare(qa: QaHarness, chromaMin: number): Promise<number> {
+  const page = qa.page;
+  const style = await page.addStyleTag({ content: 'img, picture, video, canvas, svg image { visibility: hidden !important; }' });
+  await qa.settle(150);
+  const shot = (await page.screenshot()).toString('base64');
+  await style.evaluate((el) => el.remove());
+  return page.evaluate(
+    async ({ b64, min }) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const ctx = c.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height);
+      const lin = (v: number) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+      };
+      let strong = 0;
+      let total = 0;
+      for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x += 2) {
+          const i = (y * width + x) * 4;
+          const [r, g, b] = [lin(data[i]), lin(data[i + 1]), lin(data[i + 2])];
+          const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+          const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+          const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+          const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+          const B = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+          total += 1;
+          if (Math.hypot(A, B) > min) strong += 1;
+        }
+      }
+      return total ? strong / total : 0;
+    },
+    { b64: shot, min: chromaMin }
+  );
+}
+
+const openColourScene = async (qa: QaHarness, scene: ColourScene, theme: 'light' | 'dark'): Promise<void> => {
+  await qa.open({ ...scene.open, theme }, { settle: 600 });
+  if (scene.board) await qa.toBoard();
+};
+const pct = (x: number) => `${(x * 100).toFixed(2)} %`;
+
+test.describe('colour budget @smoke @colour', () => {
+  test('the floors file is well formed: five floors, each with its switch-on owner; the ceiling is 6 %', () => {
+    expect(FLOORS.ceiling.share).toBe(0.06);
+    expect(FLOORS.chromaMin).toBe(0.1);
+    expect(FLOORS.floors.map((f) => [f.id, f.floor])).toEqual([['landing', 0.04], ['library', 0.03], ['empty', 0.02], ['board', 0.01], ['model-picker', 0.01]]);
+    for (const f of FLOORS.floors) expect(f.switchedOnBy.length, f.id).toBeGreaterThan(5);
+  });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`working views stay at or under the ${FLOORS.ceiling.share * 100} % ceiling (${theme})`, async ({ qa }) => {
+      test.setTimeout(30_000 + 20_000 * FLOORS.ceiling.scenes.length);
+      for (const scene of FLOORS.ceiling.scenes) {
+        await openColourScene(qa, scene, theme);
+        const share = await strongColourShare(qa, FLOORS.chromaMin);
+        qa.testInfo.annotations.push({ type: 'colour-share', description: `${scene.id} (${theme}): ${pct(share)}` });
+        expect.soft(share, `${scene.id} (${theme}) strong colour ${pct(share)} > ceiling ${pct(FLOORS.ceiling.share)}`).toBeLessThanOrEqual(FLOORS.ceiling.share);
+      }
+    });
+
+    test(`the colour floors are measured; an enforced floor fails under its share (${theme})`, async ({ qa }) => {
+      test.setTimeout(30_000 + 20_000 * FLOORS.floors.length);
+      for (const floor of FLOORS.floors) {
+        await openColourScene(qa, floor, theme);
+        const share = await strongColourShare(qa, FLOORS.chromaMin);
+        qa.testInfo.annotations.push({ type: 'colour-floor', description: `${floor.id} (${theme}): ${pct(share)} against ${pct(floor.floor)}${floor.enforce ? ' (enforced)' : ' (reported)'}` });
+        if (floor.enforce) expect.soft(share, `${floor.id} (${theme}) strong colour ${pct(share)} < floor ${pct(floor.floor)}`).toBeGreaterThanOrEqual(floor.floor);
       }
     });
   }
