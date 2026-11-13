@@ -603,6 +603,36 @@ describe('ShareSheet: once the server has answered, its answer wins (AH-1 review
     expect(screen.getByRole('status')).toHaveTextContent('Checking your comic…');
   });
 
+  it('Try again on a published comic that fails again puts the focus back on the new Try again (never <body>)', async () => {
+    // Offline: every check fails. The "Checking your comic…" line that held the focus unmounts when the alert comes back.
+    const refreshPublication = vi.fn(() => Promise.reject(new Error('offline')));
+    const doc = makeSampleDoc();
+    doc.publication = { visibility: 'unlisted' as const, status: 'live' as const, slug: SLUG, publishedRev: 4, publishedAt: 1, languages: ['en'] };
+    render(<ShareSheet studio={makeFakeStudio({ doc, publication: null, refreshPublication })} open onClose={vi.fn()} />);
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    retry.focus();
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(refreshPublication).toHaveBeenCalledTimes(2);
+    const again = await screen.findByRole('button', { name: 'Try again' });
+    expect(document.activeElement).toBe(again);
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  });
+
+  it('Try again on a private comic that fails again keeps the focus in the dialog too', async () => {
+    const refreshPublication = vi.fn(() => Promise.reject(new Error('offline')));
+    render(<ShareSheet studio={makeFakeStudio({ publication: null, refreshPublication })} open onClose={vi.fn()} />);
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    retry.focus();
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it('Try again inside the publish panel keeps the focus in the dialog too', async () => {
     let fail = true;
     const refreshPublication = vi.fn(() => (fail ? Promise.reject(new Error('offline')) : new Promise<void>(() => undefined)));

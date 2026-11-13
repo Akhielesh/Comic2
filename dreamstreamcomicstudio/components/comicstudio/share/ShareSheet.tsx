@@ -150,10 +150,27 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   }, [open]);
 
   // After Try again: the "Checking your comic…" line if the sheet shows one, else the sheet itself (never <body>).
+  // When the check fails again, that line unmounts too: the new alert's Try again takes the focus back, so a keyboard
+  // or screen-reader user offline can press it again without hunting for it. (A fast failure can land in the same
+  // render as the retry, so 'error' is handled whether or not 'loading' was ever drawn.)
+  const retryFocusPending = useRef(false);
   useEffect(() => {
-    if (!refocusAfterCheck.current || check !== 'loading') return;
-    refocusAfterCheck.current = false;
-    (panelRef.current?.querySelector<HTMLElement>('[data-check-status]') ?? panelRef.current)?.focus();
+    const panel = panelRef.current;
+    if (!panel) return;
+    if (refocusAfterCheck.current && check === 'loading') {
+      refocusAfterCheck.current = false;
+      retryFocusPending.current = true;
+      (panel.querySelector<HTMLElement>('[data-check-status]') ?? panel).focus();
+      return;
+    }
+    if ((refocusAfterCheck.current || retryFocusPending.current) && check !== 'loading') {
+      refocusAfterCheck.current = false;
+      retryFocusPending.current = false;
+      const retry = check === 'error' ? panel.querySelector<HTMLElement>('[role="alert"] button') : null;
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      if (retry) retry.focus();
+      else if (!active || !panel.contains(active)) panel.focus();
+    }
   }, [check]);
 
   // Focus management, Esc, scroll lock.
