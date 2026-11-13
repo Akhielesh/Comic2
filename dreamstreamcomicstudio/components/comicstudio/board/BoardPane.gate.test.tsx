@@ -115,3 +115,15 @@ describe('Approve keeps focus while it is sent (6B FL-1)', () => {
     expect(studio.act).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('board tab counts (FX-15)', () => {
+  it('read at the 11 px chrome step (--ds-text-xs), never the old 10 px', () => {
+    render(<BoardPane studio={makeStudio(makeSampleDoc())} />);
+    const badges = screen.getAllByRole('tab').map((t) => t.querySelector(':scope > span.tabular-nums')).filter(Boolean) as HTMLElement[];
+    expect(badges.length).toBeGreaterThan(0);
+    for (const b of badges) {
+      expect(cls(b)).toContain('text-[length:var(--ds-text-xs)]');
+      expect(cls(b)).not.toContain('text-[10px]');
+    }
+  });
+});

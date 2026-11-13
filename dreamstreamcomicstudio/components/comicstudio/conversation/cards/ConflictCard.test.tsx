@@ -30,6 +30,18 @@ const setup = (data: ConflictCardData, caps: StudioCaps = ON, over: Record<strin
 };
 
 describe('ConflictCard', () => {
+  it('FX-15: the two versions split by the card\'s own width (12rem a tile), never by the window, and a label can wrap', () => {
+    setup(card([item('cf_1')]));
+    const grid = document.querySelector('[data-conflict-versions]')!;
+    const cls = grid.getAttribute('class')!.split(/\s+/);
+    expect(cls).toContain('grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]');
+    // The old rule split at the WINDOW's sm breakpoint: a 768 px tablet chat column got two tiles too narrow for
+    // "THE DIRECTOR'S" (one unbreakable word), and the label ran 3 px out of its tile.
+    expect(cls.some((c) => /^sm:grid-cols-/.test(c))).toBe(false);
+    const label = screen.getByText('The director\'s');
+    expect(label.getAttribute('class')).toContain('[overflow-wrap:anywhere]');
+  });
+
   it('shows both versions and answers with resolve_conflict: Keep mine, Use the director’s', async () => {
     const { studio } = setup(card([item('cf_1')]));
     expect(screen.getByText('We both changed page 2 · panel 2 · line 1.')).toBeTruthy();
