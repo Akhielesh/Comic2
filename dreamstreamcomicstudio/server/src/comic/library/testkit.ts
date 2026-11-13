@@ -11,11 +11,26 @@ import type { LibraryDeps, LibraryStorage } from './runner.js';
 
 export const TEST_KEYS: StudioKeys = { openrouter: { key: 'sk-or-test', byok: false } };
 
-/** A noisy (never blank) PNG data URL; `mean` sets the luminance (0–255). */
+/** How far each half of the kit image sits from `mean` (0–255 steps): the part of its contrast that is not noise. */
+export const KIT_IMAGE_SPLIT = 30;
+
+/**
+ * A noisy, never blank PNG data URL; `mean` sets the luminance (0–255).
+ *
+ * Noise alone is not enough to be "never blank": the library encodes to lossy WebP and measures a 64×64 downscale,
+ * which average fine noise away. Measured over 600 draws, noise-only images came out at a luma deviation of 0.0209
+ * (lowest 0.0202) against the blank threshold of 0.02, so about one draw in ten thousand counted as blank, went back
+ * for another attempt, and failed whichever runner test drew it. So the left half is darkened and the right half
+ * lightened by KIT_IMAGE_SPLIT: a coarse step that survives the encode and the downscale, and keeps the mean.
+ */
 export async function pngDataUrl(w: number, h: number, mean = 150): Promise<string> {
-  const buf = await sharp({ create: { width: w, height: h, channels: 3, background: { r: mean, g: mean, b: mean }, noise: { type: 'gaussian', mean, sigma: 40 } } })
-    .png()
-    .toBuffer();
+  const split = Math.max(0, Math.min(KIT_IMAGE_SPLIT, mean, 255 - mean));
+  const half = Math.floor(w / 2);
+  const tint = (width: number, v: number, alpha: number, left: number) => ({ input: { create: { width, height: h, channels: 4 as const, background: { r: v, g: v, b: v, alpha } } }, left, top: 0 });
+  const noise = sharp({ create: { width: w, height: h, channels: 3, background: { r: mean, g: mean, b: mean }, noise: { type: 'gaussian', mean, sigma: 40 } } });
+  // Black at alpha a takes a value v to v(1 - a); white at alpha b takes it to v + (255 - v)b. Both move the mean by `split`.
+  const img = split > 0 && half > 0 ? noise.composite([tint(half, 0, split / mean, 0), tint(w - half, 255, split / (255 - mean), half)]) : noise;
+  const buf = await img.png().toBuffer();
   return `data:image/png;base64,${buf.toString('base64')}`;
 }
 
