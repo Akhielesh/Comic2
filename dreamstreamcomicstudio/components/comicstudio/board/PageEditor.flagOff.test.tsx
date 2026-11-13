@@ -46,7 +46,16 @@ const DC0_10: ReadonlyArray<[string, string]> = [
   ['h-12 min-w-[44px] flex-auto px-0.5', 'h-12 min-w-[44px] flex-1 px-1'],
   ['min-w-0 flex-auto gap-0.5', 'min-w-0 flex-[2] gap-0.5']
 ];
-const asBase = (html: string): string => DC0_10.reduce((h, [now, base]) => h.split(now).join(base), html);
+/**
+ * FX-15's two flag-independent kit changes, mapped back the same way: a board-kit Segmented segment sizes to its label
+ * (flex-auto, was flex-1: "Com…" / "Sup…" were cut), and the kit buttons carry the aria-disabled look used by
+ * `keepFocusWhileBusy` (6B FL-1). Only these exact token runs are mapped; any other change still fails.
+ */
+const FX15: ReadonlyArray<[string, string]> = [
+  ['flex min-w-0 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-[10px]', 'flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-[10px]'],
+  [' aria-disabled:cursor-not-allowed aria-disabled:opacity-45', '']
+];
+const asBase = (html: string): string => [...DC0_10, ...FX15].reduce((h, [now, base]) => h.split(now).join(base), html);
 
 /** The flag explicitly off (the server sends false to every non-admin, and DEFAULT_CAPS leaves it unset). */
 const FLAG_OFF = { ...DEFAULT_CAPS, proEditorV2: false };

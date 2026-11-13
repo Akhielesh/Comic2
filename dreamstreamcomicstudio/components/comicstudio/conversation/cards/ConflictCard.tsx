@@ -10,7 +10,7 @@ import { Check, Eye, GitCompareArrows } from 'lucide-react';
 import { conflictGuardOn } from '../../../../shared/comic/capabilities';
 import type { ConflictCard as ConflictCardData, ConflictItem } from '../../../../shared/comic/doc';
 import { cn } from '../../../../lib/utils';
-import { FOCUS_RING, MUTED, OVERLINE, RADIUS_CONTROL, STATUS_CHIP, STATUS_CHIP_TONE, TONE_CHIP } from '../../../chat/studioDesign';
+import { FOCUS_RING, MUTED, OVERLINE, RADIUS_CONTROL, STATUS_CHIP, STATUS_CHIP_TONE, TONE_CHIP, WRAP_TEXT } from '../../../chat/studioDesign';
 import type { ComicStudioController } from '../../useStudio';
 import { CardShell, GhostButton, PrimaryButton } from '../ui';
 import { useAction } from './useAction';
@@ -35,7 +35,7 @@ export const BUSY_NOTE = 'You can answer once the director finishes this step.';
 
 const Version: React.FC<{ who: string; text: string; tone?: 'mine' | 'theirs' }> = ({ who, text, tone }) => (
   <div className={cn(RADIUS_CONTROL, 'min-w-0 border border-[var(--ds-hairline)] px-3 py-2', tone === 'mine' ? 'bg-[var(--ds-surface-soft)]' : 'bg-[var(--ds-well)]')}>
-    <span className={cn(OVERLINE, 'block')}>{who}</span>
+    <span className={cn(OVERLINE, 'block', WRAP_TEXT)}>{who}</span>
     <p className="mt-0.5 text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{text || '—'}</p>
   </div>
 );
@@ -75,7 +75,10 @@ export const ConflictCard: React.FC<{ card: ConflictCardData; studio: Studio }> 
         {items.map((it) => (
           <li key={it.id} className="min-w-0 space-y-2" aria-label={it.where.label}>
             {items.length > 1 && <p className={cn(OVERLINE, '[overflow-wrap:anywhere]')}>{it.where.label}</p>}
-            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+            {/* Side by side only when each tile has room for its label (12rem; "THE DIRECTOR'S" is one unbreakable
+                word): the old sm:grid-cols-2 went by the WINDOW, so a 768 px tablet's chat column split into two
+                tiles too narrow for it and the label ran 3 px out of its tile (FX-15). */}
+            <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-2" data-conflict-versions>
               <Version who="Yours" text={it.mine} tone="mine" />
               <Version who="The director's" text={it.theirs} tone="theirs" />
             </div>
