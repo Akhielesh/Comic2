@@ -14,8 +14,6 @@ export const LOW_POWER_KEY = 'comicstudio.reader.lowpower';
 export type Tri = 'auto' | 'on' | 'off';
 export type RoomLight = 'night' | 'day';
 export type TurnPref = 'auto' | ReaderSettings['turn'];
-export const WPM_OPTIONS = [170, 210, 260] as const;
-export type Wpm = (typeof WPM_OPTIONS)[number];
 
 export interface ReaderPrefs {
   /** 'auto' follows the creator's choice (doc.reader.turn). */
@@ -25,15 +23,10 @@ export interface ReaderPrefs {
   paper: Tri;
   ambient: Tri;
   room: RoomLight;
-  guidedOverview: Tri;
-  /** Guided autoplay reading speed (Slow / Normal / Fast). */
-  wpm: Wpm;
   /** Fancy page turns on low-end devices ('auto' = measured). */
   fancyTurns: Tri;
   /** In-reader "Reduce motion" (adds to the OS setting, never overrides it). */
   reduceMotion: boolean;
-  /** Guided View reveals balloons one by one. */
-  balloonPop: boolean;
 }
 
 export const DEFAULT_PREFS: ReaderPrefs = {
@@ -42,11 +35,8 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   paper: 'auto',
   ambient: 'auto',
   room: 'night',
-  guidedOverview: 'auto',
-  wpm: 210,
   fancyTurns: 'auto',
-  reduceMotion: false,
-  balloonPop: false
+  reduceMotion: false
 };
 
 const store = (kind: 'local' | 'session'): Storage | null => {
@@ -88,11 +78,8 @@ export const sanitizePrefs = (raw: unknown): ReaderPrefs => {
     paper: tri(r.paper),
     ambient: tri(r.ambient),
     room: r.room === 'day' ? 'day' : 'night',
-    guidedOverview: tri(r.guidedOverview),
-    wpm: (WPM_OPTIONS as readonly unknown[]).includes(r.wpm) ? (r.wpm as Wpm) : 210,
     fancyTurns: tri(r.fancyTurns),
-    reduceMotion: r.reduceMotion === true,
-    balloonPop: r.balloonPop === true
+    reduceMotion: r.reduceMotion === true
   };
 };
 
@@ -121,8 +108,6 @@ export const writeReaderLang = (lang: string): void => write('local', LANG_KEY, 
 export interface ReadingPosition {
   /** Reader item key ('cover' or a page id). */
   key: string;
-  /** Guided stop, when reading panel by panel. */
-  panel?: number;
   at: number;
 }
 
@@ -134,7 +119,7 @@ export const readPosition = (docId: string): ReadingPosition | null => {
   try {
     const p = JSON.parse(raw) as Partial<ReadingPosition>;
     if (typeof p.key !== 'string' || !p.key || typeof p.at !== 'number') return null;
-    return { key: p.key, at: p.at, ...(typeof p.panel === 'number' && p.panel >= 0 ? { panel: Math.round(p.panel) } : {}) };
+    return { key: p.key, at: p.at };
   } catch {
     return null;
   }
@@ -163,7 +148,6 @@ export interface EffectiveReader {
   turn: ReaderSettings['turn'];
   paper: boolean;
   ambient: boolean;
-  guidedOverview: boolean;
 }
 
 /** Creator settings (doc.reader) overridden locally by the viewer's prefs; paper is off for webtoon/strip. */
@@ -173,7 +157,6 @@ export const effectiveReader = (settings: ReaderSettings | undefined, prefs: Rea
   return {
     turn: prefs.turn === 'auto' ? s.turn : prefs.turn,
     paper: kind === 'webtoon' || kind === 'strip' ? false : pick(prefs.paper, s.paperTexture),
-    ambient: pick(prefs.ambient, s.ambient),
-    guidedOverview: pick(prefs.guidedOverview, s.guidedOverview)
+    ambient: pick(prefs.ambient, s.ambient)
   };
 };

@@ -183,6 +183,18 @@ describe('index.html first paint on the skin\'s paper and ink (DS-2, CL-3)', () 
     expect(rules.some((r) => r.selector === '#app-splash .spinner' && r.parents[0] === '@media (prefers-reduced-motion: reduce)' && /animation:\s*none/.test(r.body))).toBe(true);
   });
 
+  it('Paper keeps its canvas and ink before the stylesheet has arrived', () => {
+    const theme = read('styles/comic-theme.css');
+    for (const [selector, cssBlock] of [
+      ['html[data-comic-theme="paper"]', theme.slice(0, theme.indexOf('\n.dark:is'))],
+      ['html.dark[data-comic-theme="paper"]', theme.slice(theme.indexOf('\n.dark:is'), theme.indexOf('@media'))]
+    ]) {
+      const values = ruleFor(selector).body;
+      expect(values).toContain(`--boot-canvas: ${/--ds-canvas:\s*(#[\da-f]+)/i.exec(cssBlock)?.[1]}`);
+      expect(values).toContain(`--boot-ink: ${/--ds-ink:\s*(#[\da-f]+)/i.exec(cssBlock)?.[1]}`);
+    }
+  });
+
   it('every radius read keeps a var() fallback, and the Reload is 44 px under a coarse pointer', () => {
     for (const m of style.matchAll(/var\((--ds-(?:radius|motion|ease)[\w-]*)\s*([,)])/g)) expect(m[2], m[1]).toBe(',');
     expect(rules.some((r) => r.selector === '#app-splash .slow button' && r.parents[0] === '@media (pointer: coarse)' && /min-height:\s*44px/.test(r.body))).toBe(true);

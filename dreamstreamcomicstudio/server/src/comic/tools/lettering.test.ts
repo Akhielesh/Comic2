@@ -58,6 +58,14 @@ describe('lettering tool group', () => {
 });
 
 describe('set_lettering_style', () => {
+  it('applies a catalog effect at the sound kind only and honors an explicit arc', async () => {
+    const { ctx, call } = setup();
+    await call('set_lettering_style', { style: { sfx_effect: 'arched', arc: -0.65 } });
+    expect(ctx.session.doc.letterStyle?.base).toBeUndefined();
+    expect(ctx.session.doc.letterStyle?.kinds?.sfx).toEqual({ sfxEffect: 'arched', arc: -0.65 });
+    noSpend(ctx);
+  });
+
   it('switches the preset (free) and says what changed', async () => {
     const { ctx, call } = setup(undefined, { userText: 'use a kids storybook lettering' });
     const res = await call('set_lettering_style', { preset: 'storybook' });
@@ -122,6 +130,50 @@ describe('set_lettering_style', () => {
     const { ctx, call } = setup((d) => (d.format = { ...d.format, lettering: 'in_art' }));
     expect(await call('set_lettering_style', { preset: 'manga' })).toMatch(/painted into the artwork/);
     expect(opsOf(ctx.events)).toHaveLength(0);
+  });
+});
+
+describe('sound-effect catalog in the Director', () => {
+  const withSounds = (d: ComicDoc) => {
+    d.pages[0].panels[0].lines.push({ id: 'ln_test_pow', kind: 'sfx', text: 'POW!' }, { id: 'ln_test_whoosh', kind: 'sfx', text: 'WHOOSH!', style: { arc: -0.65 } });
+  };
+
+  it('adds the shared default only where needed and preserves the creator’s existing arc', async () => {
+    const { ctx, call } = setup(withSounds);
+    const res = await call('restyle_balloons', { target: { page: 1 }, style: { sfx_effect: 'arched' } });
+    expect(res).toMatch(/Restyled 2 balloons.*Arched sound effects/);
+    const page = ctx.session.doc.pages[0];
+    expect(page.panels[0].lines.find((l) => l.id === 'ln_test_pow')?.style).toMatchObject({ sfxEffect: 'arched', arc: 0.4 });
+    expect(page.panels[0].lines.find((l) => l.id === 'ln_test_whoosh')?.style).toMatchObject({ sfxEffect: 'arched', arc: -0.65 });
+    expect(page.panels.flatMap((p) => p.lines).filter((l) => l.kind !== 'sfx').every((l) => !l.style)).toBe(true);
+    const plan = planLettering(ctx.session.doc, page, letteringAspect(ctx.session.doc, page), estimateMeasure).find((p) => p.lineId === 'ln_test_pow');
+    expect(plan?.runs[0].rotates?.some((rotation) => rotation !== 0)).toBe(true);
+    noSpend(ctx);
+  });
+
+  it('keeps joined script shaped and refuses incompatible effects before writing', async () => {
+    const { ctx, call } = setup((d) => {
+      withSounds(d);
+      d.format.language = 'te';
+    });
+    const res = await call('restyle_balloons', { target: { page: 1, kind: 'sfx' }, style: { sfx_effect: 'arched' } });
+    expect(res).toMatch(/^Error: Arched would separate joined letters in Telugu/);
+    expect(ctx.events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'ops' })]));
+    noSpend(ctx);
+  });
+
+  it('still draws an arc when the creator asks to replace all of a sound’s previous styling', async () => {
+    const { ctx, call } = setup(withSounds);
+    await call('restyle_balloons', { target: { line_ids: ['ln_test_whoosh'] }, style: { sfx_effect: 'arched' }, reset: true });
+    const sound = ctx.session.doc.pages[0].panels[0].lines.find((l) => l.id === 'ln_test_whoosh');
+    expect(sound?.style).toEqual({ sfxEffect: 'arched', arc: 0.4 });
+  });
+
+  it('uses the catalog outline width when the request only overrides its color', async () => {
+    const { ctx, call } = setup(withSounds);
+    await call('restyle_balloons', { target: { line_ids: ['ln_test_pow'] }, style: { sfx_effect: 'outlined', outline_color: '#660033' } });
+    const sound = ctx.session.doc.pages[0].panels[0].lines.find((l) => l.id === 'ln_test_pow');
+    expect(sound?.style).toEqual({ sfxEffect: 'outlined', textColor: '#ffffff', textStroke: { color: '#660033', width: 0.14 } });
   });
 });
 

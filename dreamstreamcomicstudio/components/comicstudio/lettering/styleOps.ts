@@ -11,6 +11,7 @@ import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout';
 import { drawnSpotPatch, letteringSizer, placementCoverOptions, turnedOutlineBox, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { placeBalloonsWholeWords, safeAreaBox } from '../../../shared/comic/lettering/place';
+import { sfxStylePatch, sfxStyleSupports, type DrawnSfxEffect } from '../../../shared/comic/lettering/sfxCatalog';
 import {
   DEFAULT_LETTERING,
   DEFAULT_SAFE_MARGIN,
@@ -57,6 +58,20 @@ const chunk = <T,>(xs: T[], n: number): T[][] => {
 /** `line_style` ops for lines, chunked (replace / merge / clear with null). */
 export const lineStyleOps = (pageId: string, lineIds: string[], patch: LetterStylePatch | null, mode?: 'merge' | 'replace'): DocOp[] =>
   chunk(lineIds, MAX_LINE_IDS).map((ids) => ({ op: 'line_style', pageId, lineIds: ids, patch, ...(mode ? { mode } : {}) }) as DocOp);
+
+/** Apply an effect to selected sound lettering while preserving each line's own existing arc or shadow. */
+export function sfxStyleOps(doc: ComicDoc, page: Page, lineIds: readonly string[], effect: DrawnSfxEffect): DocOp[] {
+  const groups = new Map<string, { patch: LetterStylePatch; ids: string[] }>();
+  for (const line of linesOf(page, lineIds)) {
+    if (line.kind !== 'sfx' || !sfxStyleSupports(effect, line.lang || doc.format.language)) continue;
+    const patch = sfxStylePatch(effect, resolveLetterStyle(doc, line));
+    const key = JSON.stringify(patch);
+    const group = groups.get(key) ?? { patch, ids: [] };
+    group.ids.push(line.id);
+    groups.set(key, group);
+  }
+  return [...groups.values()].flatMap(({ patch, ids }) => lineStyleOps(page.id, ids, patch));
+}
 
 /**
  * Per-line overrides that would hide a scope-level change: lines in scope that override any of `keys`

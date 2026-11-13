@@ -11,12 +11,14 @@
 // target matched nothing — what actually exists ("No whisper balloons; page 1 has speech ×2, caption ×3").
 
 import { findPage, resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
+import { languageSpec } from '../../../../shared/comic/languages.js';
 import { PRO_EDIT_OPS_PATCHABLE, applyOps, type DocOp } from '../../../../shared/comic/ops.js';
 import { placeLine } from '../../../../shared/comic/dialogue/placement.js';
 import type { Placement } from '../../../../shared/comic/dialogue/types.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
 import { drawnSpotPatch, estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions, planLettering, PLAN_W, withDrawnSpots } from '../../../../shared/comic/lettering/layout.js';
 import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
+import { sfxStyleIds, sfxStyleOf, sfxStylePatch, sfxStyleSupports } from '../../../../shared/comic/lettering/sfxCatalog.js';
 import {
   BORDER_STYLES,
   BUBBLE_SHAPES,
@@ -172,9 +174,23 @@ const sizeArg = (raw: unknown, current: number): number => {
 };
 
 /** styleArgs (flat, natural names) → a sanitized LetterStylePatch, relative to the style it modifies. */
-const buildStylePatch = (raw: unknown, current: LetterStyle): LetterStylePatch => {
+const buildStylePatch = (raw: unknown, current: LetterStyle, soundLanguage?: string): LetterStylePatch => {
   if (!isObject(raw)) throw toolArgError('style must be an object, e.g. {"font":"bangers","text_color":"red"}.');
   const p: Record<string, unknown> = {};
+  let effectDefaults: LetterStylePatch | undefined;
+  if (raw.sfx_effect !== undefined) {
+    const choices = soundLanguage === undefined ? SFX_EFFECTS : sfxStyleIds(PRO_EDIT_OPS_PATCHABLE);
+    const effect = enumArg(raw.sfx_effect, choices, 'sound-effect style');
+    if (soundLanguage === undefined) p.sfxEffect = effect;
+    else {
+      if (!sfxStyleSupports(effect, soundLanguage)) {
+        const language = languageSpec(soundLanguage)?.english ?? 'this script';
+        throw toolArgError(`${sfxStyleOf(effect).label} would separate joined letters in ${language}. Try Filled, Outlined or Shadow.`);
+      }
+      effectDefaults = sfxStylePatch(effect, current);
+      Object.assign(p, effectDefaults);
+    }
+  }
   if (raw.font !== undefined) p.font = parseFont(raw.font);
   if (raw.size !== undefined) p.sizeScale = sizeArg(raw.size, current.sizeScale);
   if (typeof raw.bold === 'boolean') p.weight = raw.bold ? (current.weight >= 700 ? Math.min(900, current.weight + 100) : 700) : 400;
@@ -186,8 +202,9 @@ const buildStylePatch = (raw: unknown, current: LetterStyle): LetterStylePatch =
     const colorRaw = raw.outline_color;
     if (width === 0 || (typeof colorRaw === 'string' && /^(none|no|off|transparent)$/i.test(colorRaw.trim()))) p.textStroke = null;
     else {
-      const color = colorRaw !== undefined ? colorArg(colorRaw, 'outline colour') : current.textStroke?.color ?? '#111111';
-      p.textStroke = { color, width: clamp(width ?? current.textStroke?.width ?? 0.08, 0.01, 0.3) };
+      const stroke = effectDefaults?.textStroke ?? current.textStroke;
+      const color = colorRaw !== undefined ? colorArg(colorRaw, 'outline colour') : stroke?.color ?? '#111111';
+      p.textStroke = { color, width: clamp(width ?? stroke?.width ?? 0.08, 0.01, 0.3) };
     }
   }
   if (raw.fill_color !== undefined) p.fill = normalizeColor(raw.fill_color) === 'none' ? 'none' : colorArg(raw.fill_color, 'fill colour');
@@ -213,7 +230,6 @@ const buildStylePatch = (raw: unknown, current: LetterStyle): LetterStylePatch =
     p[key] = n;
   }
   if (raw.align !== undefined) p.align = enumArg(raw.align, ['center', 'left', 'right'] as const, 'alignment');
-  if (raw.sfx_effect !== undefined) p.sfxEffect = enumArg(raw.sfx_effect, SFX_EFFECTS, 'sound-effect style');
   const clean = sanitizeLetterStylePatch(p, { allowPro: PRO_EDIT_OPS_PATCHABLE });
   if (!clean && !('textStroke' in p)) throw toolArgError('That style has nothing I can change. Try font, size, text_color, fill_color, shape or tail.');
   // textStroke: null (remove outline) is a valid clearing value the sanitizer keeps.
@@ -245,7 +261,7 @@ const describePatch = (p: LetterStylePatch): string => {
   if (p.align) parts.push(`${p.align}-aligned`);
   if (p.padding !== undefined) parts.push(`padding ×${p.padding}`);
   if (p.rotate !== undefined) parts.push(p.rotate === 'auto' ? 'auto tilt' : `tilt ${p.rotate}°`);
-  if (p.sfxEffect) parts.push(`${p.sfxEffect.replace('_', ' ')} sound effects`);
+  if (p.sfxEffect) parts.push(`${sfxStyleOf(p.sfxEffect)?.label ?? p.sfxEffect} sound effects`);
   if (p.arc !== undefined) parts.push(`arc ${p.arc}`);
   return parts.join(', ');
 };
@@ -617,6 +633,22 @@ const STYLE_SCHEMA = {
   }
 };
 
+const letteringStyleSchema = () => {
+  const effects = sfxStyleIds(PRO_EDIT_OPS_PATCHABLE);
+  return {
+    ...STYLE_SCHEMA,
+    description: 'Only the keys you set change. A sound-effect style supplies defaults that explicit fields can override.',
+    properties: {
+      ...STYLE_SCHEMA.properties,
+      sfx_effect: {
+        type: 'string',
+        enum: [...effects],
+        description: `Sound lettering only. ${effects.map((id) => `${id}: ${sfxStyleOf(id).description}`).join(' ')}`
+      }
+    }
+  };
+};
+
 /** Which balloons a lettering tool changes (the lettering group's full target). */
 export const TARGET_SCHEMA = {
   type: 'object',
@@ -687,7 +719,7 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
         scope: { type: 'string', enum: ['comic', 'kind', 'speaker'], description: 'Default: comic' },
         kind: { type: 'string', enum: [...LINE_KINDS], description: 'With scope "kind"' },
         speaker: { type: 'string', description: 'Character name, with scope "speaker"' },
-        style: STYLE_SCHEMA,
+        style: letteringStyleSchema(),
         reset: { type: 'boolean', description: 'Clear the custom overrides of that scope' }
       }
     },
@@ -695,11 +727,13 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
       const doc = ctx.session.doc;
       requireOverlay(doc);
       const preset = args.preset !== undefined && str(args.preset) ? parsePreset(args.preset) : undefined;
+      const effect = isObject(args.style) && args.style.sfx_effect !== undefined;
       const scopeRaw = str(args.scope, 10).toLowerCase();
       const scope: 'comic' | 'kind' | 'speaker' =
-        scopeRaw === 'kind' || scopeRaw === 'speaker' || scopeRaw === 'comic' ? scopeRaw : args.speaker ? 'speaker' : args.kind ? 'kind' : 'comic';
-      const kind = scope === 'kind' ? (args.kind !== undefined ? parseKind(args.kind) : undefined) : undefined;
+        scopeRaw === 'kind' || scopeRaw === 'speaker' || scopeRaw === 'comic' ? scopeRaw : args.speaker ? 'speaker' : args.kind || effect ? 'kind' : 'comic';
+      const kind = scope === 'kind' ? (args.kind !== undefined ? parseKind(args.kind) : effect ? 'sfx' : undefined) : undefined;
       if (scope === 'kind' && !kind) throw toolArgError(`scope "kind" needs kind: one of ${LINE_KINDS.join(', ')}.`);
+      if (effect && kind !== 'sfx') throw toolArgError('Choose the sound-effect kind for a sound-effect style. Use restyle_balloons to target particular sounds.');
       let speakerId: string | undefined;
       let speakerName: string | undefined;
       if (scope === 'speaker') {
@@ -712,7 +746,7 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
         speakerName = who.name;
       }
       const reset = args.reset === true;
-      const stylePatch = args.style !== undefined ? buildStylePatch(args.style, currentScopeStyle(doc, scope, kind, speakerId)) : undefined;
+      const stylePatch = args.style !== undefined ? buildStylePatch(args.style, currentScopeStyle(doc, scope, kind, speakerId), effect ? doc.format.language || 'en' : undefined) : undefined;
       if (!preset && !stylePatch && !reset) throw toolArgError('Give a preset, a style change, or reset: true.');
 
       const ls = doc.letterStyle ?? DEFAULT_LETTERING;
@@ -778,13 +812,18 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
     'Restyle specific balloons (per-balloon overrides): pick them by page, panel, kind, speaker, words, line ids or the user\'s selection, then set style changes or reset them to the comic\'s lettering.',
     {
       type: 'object',
-      properties: { target: TARGET_SCHEMA, style: STYLE_SCHEMA, reset: { type: 'boolean', description: 'Remove these balloons\' own overrides (with style: replace them by it)' } },
+      properties: { target: TARGET_SCHEMA, style: letteringStyleSchema(), reset: { type: 'boolean', description: 'Remove these balloons\' own overrides (with style: replace them by it)' } },
       required: ['target']
     },
     (args) => {
       const doc = ctx.session.doc;
       requireOverlay(doc);
       const t = parseTarget(doc, args.target, turn);
+      const effect = isObject(args.style) && args.style.sfx_effect !== undefined;
+      if (effect) {
+        if (t.kind && t.kind !== 'sfx') throw toolArgError('A sound-effect style applies to sound lettering. Choose target kind sfx.');
+        t.kind = 'sfx';
+      }
       const reset = args.reset === true;
       if (args.style === undefined && !reset) throw toolArgError('Give style changes, or reset: true.');
       const { hits, pages } = matchTargets(doc, t);
@@ -794,7 +833,9 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
       const groups = new Map<string, { pageId: string; ids: string[]; patch: LetterStylePatch | null }>();
       let summary: LetterStylePatch | undefined;
       for (const h of hits) {
-        const patch = args.style !== undefined ? buildStylePatch(args.style, resolveLetterStyle(doc, h.line)) : null;
+        const line = effect && reset ? { ...h.line, style: undefined } : h.line;
+        const soundLanguage = effect ? line.lang || doc.format.language || 'en' : undefined;
+        const patch = args.style !== undefined ? buildStylePatch(args.style, resolveLetterStyle(doc, line), soundLanguage) : null;
         if (patch && !summary) summary = patch;
         const key = `${h.page.id}|${patch ? JSON.stringify(patch) : 'null'}`;
         const g = groups.get(key) ?? { pageId: h.page.id, ids: [], patch };
@@ -1252,6 +1293,7 @@ const LETTERING_RULES = [
   '- If the preset is still automatic and no longer fits the comic (kids → storybook, manga, webtoon, noir/detective), call set_lettering_style with that preset; never override a preset the user picked.',
   '- Overlapping or edge-hugging balloons → arrange_balloons auto_layout (free; it keeps faces clear and leaves balloons the user placed).',
   '- whisper / thought / shout / caption / sfx = change the line KIND (dialogue_edit set_kind); shapes, colours and fonts = restyle.',
+  '- For existing sound lettering, choose a library style with restyle_balloons style.sfx_effect. For all sounds, use set_lettering_style with kind sfx. These effects are static lettering overlays.',
   '- A dialogue edit that matches more than one line → let dialogue_edit ask "Which line?"; never apply it to all unless the user said all / every / both.',
   '- Repeat tool results honestly: if nothing matched, say what exists instead.'
 ].join('\n');

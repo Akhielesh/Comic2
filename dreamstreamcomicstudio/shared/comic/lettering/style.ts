@@ -74,7 +74,7 @@ export const PRO_BUBBLE_SHAPES: readonly ProBubbleShape[] = ['radio', 'monster',
 export type ProSfxEffect = 'extrude3d' | 'outline_stack' | 'wobble' | 'shatter' | 'gradient' | 'halftone_fill';
 export const PRO_SFX_EFFECTS: readonly ProSfxEffect[] = ['extrude3d', 'outline_stack', 'wobble', 'shatter', 'gradient', 'halftone_fill'];
 /** The Pro SFX effects this build draws (S2): every PRO_SFX_EFFECTS id but halftone_fill (PE-TONES, S3). */
-export const DRAWN_PRO_SFX_EFFECTS: readonly ProSfxEffect[] = ['extrude3d', 'outline_stack', 'wobble', 'shatter', 'gradient'];
+export const DRAWN_PRO_SFX_EFFECTS: readonly Exclude<ProSfxEffect, 'halftone_fill'>[] = ['extrude3d', 'outline_stack', 'wobble', 'shatter', 'gradient'];
 /** Any bubble shape or SFX effect a resolved style may carry at runtime (the base unions stay narrow until the fold). */
 export type AnyBubbleShape = BubbleShape | ProBubbleShape;
 export type AnySfxEffect = SfxEffect | ProSfxEffect;

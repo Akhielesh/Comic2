@@ -117,7 +117,7 @@ describe('client acceptance of Pro lettering: only with {allowPro: true} (behind
     for (const sfxEffect of PRO_SFX_EFFECTS) {
       expect(sanitizeLetterStylePatch({ sfxEffect }), sfxEffect).toBeUndefined();
       // halftone_fill does not draw until S3, so no client may store it even with the switch on.
-      expect(sanitizeLetterStylePatch({ sfxEffect }, PRO), sfxEffect).toEqual(DRAWN_PRO_SFX_EFFECTS.includes(sfxEffect) ? { sfxEffect } : undefined);
+      expect(sanitizeLetterStylePatch({ sfxEffect }, PRO), sfxEffect).toEqual(sfxEffect !== 'halftone_fill' && DRAWN_PRO_SFX_EFFECTS.includes(sfxEffect) ? { sfxEffect } : undefined);
     }
   });
 

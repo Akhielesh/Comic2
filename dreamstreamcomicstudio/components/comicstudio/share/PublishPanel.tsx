@@ -137,7 +137,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preTick, readyKey]);
-  // The edition readers start in (offered once more than one language is ticked); an unticked choice falls back to the original.
+  // The language suggested on the shared cover; an unticked choice falls back to the original.
   const [defaultLang, setDefaultLang] = useState<string>(() => (view?.defaultLang && languages.includes(view.defaultLang) ? view.defaultLang : source));
   const [allowDownload, setAllowDownload] = useState(view?.allowDownload ?? true);
   const [allowEmbed, setAllowEmbed] = useState(view?.allowEmbed ?? true);
@@ -221,7 +221,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
               );
             })}
           </div>
-          <p className="m-0 mt-1.5 text-[12px] text-[var(--ds-muted)]">Readers always get the original and can switch to any language you publish.</p>
+          <p className="m-0 mt-1.5 text-[12px] text-[var(--ds-muted)]">Readers can choose from the languages you publish before they start reading.</p>
           {unready.length > 0 && (
             <p className={cx('m-0 mt-1.5 text-[12px]', TONE_TEXT.warning)}>
               {unready.map((l) => languageSpec(l)?.english || l).join(', ')} {unready.length === 1 ? 'isn’t' : 'aren’t'} ready to publish: untick {unready.length === 1 ? 'it' : 'them'} to publish without {unready.length === 1 ? 'it' : 'them'}, or finish the translation first.
@@ -230,7 +230,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           {sent.length > 1 && (
             <div className="mt-2 flex min-h-[44px] min-w-0 items-center justify-between gap-3 text-[13px] text-[var(--ds-ink)]">
               <label htmlFor={startInId} className="min-w-0 font-medium">
-                Readers start in
+                Suggested language
               </label>
               <select
                 id={startInId}

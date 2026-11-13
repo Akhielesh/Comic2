@@ -88,6 +88,27 @@ describe('LetteringInspector', () => {
     expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'storybook', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
   });
 
+  it('Easy offers the six drawn sound styles and applies a visible curve through one undoable line edit', () => {
+    const { apply } = inspector(['pg_1_l5']);
+    const styles = screen.getByRole('radiogroup', { name: 'Sound effect style' });
+    expect(within(styles).getAllByRole('radio')).toHaveLength(6);
+    expect(within(styles).getByRole('radio', { name: 'Filled' })).toBeChecked();
+    fireEvent.click(within(styles).getByRole('radio', { name: 'Arched' }));
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l5'], patch: { sfxEffect: 'arched', arc: 0.4 } }], { label: 'Sound effect style' });
+    expect(screen.queryByRole('radiogroup', { name: 'Pro sound effect style' })).toBeNull();
+  });
+
+  it('Easy leaves joined sound lettering intact and offers effects that work on the whole word', () => {
+    const doc = makeSampleDoc((d) => (d.format.language = 'te'));
+    const { apply } = inspector(['pg_1_l5'], {}, doc);
+    const styles = screen.getByRole('radiogroup', { name: 'Sound effect style' });
+    expect(within(styles).getByRole('radio', { name: 'Arched' })).toBeDisabled();
+    expect(within(styles).getByRole('radio', { name: 'Pop' })).toBeDisabled();
+    expect(styles).toHaveAccessibleDescription(/separate joined letters/);
+    fireEvent.click(within(styles).getByRole('radio', { name: 'Outlined' }));
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l5'], patch: { sfxEffect: 'outlined', textColor: '#ffffff', textStroke: { color: '#111111', width: 0.14 } } }], { label: 'Sound effect style' });
+  });
+
   it('multi-select colour → ONE line_style with both ids', () => {
     const { apply } = inspector(['pg_1_l2', 'pg_1_l4']);
     expect(screen.getByText('2 balloons')).toBeInTheDocument();

@@ -1,6 +1,6 @@
 // Reader preferences and deep links (contract §13.5 keys, §1 URL params): storage is optional and
 // validated; the creator's settings are overridden locally; resume is offered only when useful; the
-// URL params p / lang / guided / panel round-trip and preserve everything else.
+// Page and language URL params round-trip, including when older links specify Guided View.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_READER } from '../../../shared/comic/doc';
 import {
@@ -30,10 +30,10 @@ afterEach(() => {
 describe('prefs', () => {
   it('defaults, round-trip, and validation of stored junk', () => {
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
-    writePrefs({ ...DEFAULT_PREFS, turn: 'slide', sound: true, wpm: 260, room: 'day' });
-    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, wpm: 260, room: 'day' });
-    window.localStorage.setItem(PREFS_KEY, '{"turn":"slide","sound":true}');
-    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, room: 'night' });
+    writePrefs({ ...DEFAULT_PREFS, turn: 'slide', sound: true, room: 'day' });
+    expect(readPrefs()).toMatchObject({ turn: 'slide', sound: true, room: 'day' });
+    window.localStorage.setItem(PREFS_KEY, '{"turn":"slide","sound":true,"guidedOverview":"on","balloonPop":true,"wpm":260}');
+    expect(readPrefs()).toEqual({ ...DEFAULT_PREFS, turn: 'slide', sound: true });
     window.localStorage.setItem(PREFS_KEY, '{"turn":"spin","wpm":999,"paper":"maybe","sound":"yes","room":"automatic"}');
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
     window.localStorage.setItem(PREFS_KEY, 'not json');
@@ -61,11 +61,13 @@ describe('prefs', () => {
     expect(readLayoutPref()).toBe('single');
     writeLayoutPref('auto');
     expect(window.localStorage.getItem(LAYOUT_KEY)).toBeNull();
+    window.localStorage.setItem(LAYOUT_KEY, 'guided');
+    expect(readLayoutPref()).toBe('auto');
   });
 
   it('viewer prefs override the creator; paper texture is off for webtoons and strips', () => {
     const creator = { ...DEFAULT_READER, turn: 'fade' as const, paperTexture: true };
-    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'fade', paper: true, ambient: true, guidedOverview: true });
+    expect(effectiveReader(creator, DEFAULT_PREFS, 'comic')).toEqual({ turn: 'fade', paper: true, ambient: true });
     expect(effectiveReader(creator, { ...DEFAULT_PREFS, turn: 'paper', paper: 'off', ambient: 'off' }, 'manga')).toMatchObject({ turn: 'paper', paper: false, ambient: false });
     expect(effectiveReader(creator, DEFAULT_PREFS, 'webtoon').paper).toBe(false);
     expect(effectiveReader(undefined, DEFAULT_PREFS, 'strip')).toMatchObject({ turn: 'paper', paper: false });
@@ -74,8 +76,10 @@ describe('prefs', () => {
 
 describe('position, intro', () => {
   it('stores the reading position per comic and offers resume only when useful', () => {
-    writePosition('doc1', { key: 'pg_5', at: 1000, panel: 2 });
-    expect(readPosition('doc1')).toEqual({ key: 'pg_5', at: 1000, panel: 2 });
+    writePosition('doc1', { key: 'pg_5', at: 1000 });
+    expect(readPosition('doc1')).toEqual({ key: 'pg_5', at: 1000 });
+    window.localStorage.setItem('comicstudio.reader.pos.doc1', '{"key":"pg_5","at":1000,"panel":2}');
+    expect(readPosition('doc1')).toEqual({ key: 'pg_5', at: 1000 });
     expect(readPosition('other')).toBeNull();
     const pos = readPosition('doc1');
     expect(shouldOfferResume(pos, 4, 2000)).toBe(true);
@@ -94,8 +98,8 @@ describe('position, intro', () => {
 });
 
 describe('reader URL params', () => {
-  it('parses p / lang / guided / panel and ignores junk and rejected aliases', () => {
-    expect(parseReaderParams('?view=read&id=x&p=3&lang=te&guided=1&panel=2')).toEqual({ p: 3, lang: 'te', guided: true, panel: 2 });
+  it('parses page and language, ignoring old Guided View values and rejected aliases', () => {
+    expect(parseReaderParams('?view=read&id=x&p=3&lang=te&guided=1&panel=2')).toEqual({ p: 3, lang: 'te' });
     expect(parseReaderParams('p=0')).toEqual({ p: 0 });
     expect(parseReaderParams('?p=-1&lang=<script>&guided=yes&panel=0')).toEqual({});
     expect(parseReaderParams('?page=4&mode=spread')).toEqual({});
@@ -105,9 +109,7 @@ describe('reader URL params', () => {
   it('writes params back preserving everything else', () => {
     expect(withReaderParams('/c/AbC123?via=x#top', { p: 4, lang: 'hi' })).toBe('/c/AbC123?via=x&p=4&lang=hi#top');
     expect(withReaderParams('/?view=read&id=1&p=4&guided=1&panel=2', { p: 0 })).toBe('/?view=read&id=1&p=0');
-    expect(withReaderParams('https://example.com/c/a?p=1', { p: 2, guided: true, panel: 3 })).toBe('https://example.com/c/a?p=2&guided=1&panel=3');
-    // A panel without guided is meaningless and dropped.
-    expect(withReaderParams('/c/a', { p: 2, panel: 3 })).toBe('/c/a?p=2');
+    expect(withReaderParams('https://example.com/c/a?p=1&panel=3', { p: 2 })).toBe('https://example.com/c/a?p=2');
   });
 
   it('debounces replaceState and never pushes history', () => {

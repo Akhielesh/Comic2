@@ -206,18 +206,32 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(screen.queryByTestId('reader-cover-card')).toBeNull();
   });
 
-  it('reads the published edition named by ?lang= and offers the language picker', async () => {
+  it('suggests the old link’s language but lets the recipient choose before reading and sharing', async () => {
     window.history.replaceState(null, '', `/c/${SLUG}?lang=te`);
     const doc = snapshotDoc((d) => {
       d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, brief: { title: { text: 'కుంకుమపువ్వు దొంగ', status: 'edited', sourceHash: 'h' } }, register: 'neutral' } as never }, glossary: [] };
     });
-    api.loadPublicComicBySlug.mockResolvedValue(payload({ languages: ['en', 'te'] }, doc));
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ languages: ['en', 'te'], defaultLang: 'te' }, doc));
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
     expect(await screen.findByRole('heading', { level: 1, name: 'కుంకుమపువ్వు దొంగ' })).toBeInTheDocument();
-    expect(screen.getByTestId('public-reader-header').querySelector('button[aria-haspopup="listbox"]')).not.toBeNull();
+    const choice = screen.getByRole('combobox');
+    expect(choice).toHaveValue('te');
+    expect(api.trackPublicEvent).not.toHaveBeenCalled();
+    fireEvent.change(choice, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read on this page' }));
+    expect(await screen.findByTestId('comic-reader')).toBeInTheDocument();
+    expect(new URLSearchParams(window.location.search).has('lang')).toBe(false);
+    expect(window.localStorage.getItem('comicstudio.reader.lang')).toBeNull();
+    await waitFor(() => expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({ type: 'view', lang: 'en' })));
+    const header = within(screen.getByTestId('public-reader-header'));
+    expect(header.getByRole('button', { name: 'Language: English' })).toBeInTheDocument();
+    fireEvent.click(header.getByRole('button', { name: 'Share' }));
+    const whatsapp = await screen.findByRole('menuitem', { name: 'WhatsApp' });
+    expect(decodeURIComponent(whatsapp.getAttribute('href')!)).toContain(`/c/${SLUG}`);
+    expect(decodeURIComponent(whatsapp.getAttribute('href')!)).not.toContain('lang=en');
   });
 
-  it('opens a link without ?lang= in the author’s default edition (a returning reader keeps their own choice)', async () => {
+  it('asks each visit and suggests the publication default, independent of a saved language on the same device', async () => {
     const doc = snapshotDoc((d) => {
       d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, brief: { title: { text: 'కుంకుమపువ్వు దొంగ', status: 'edited', sourceHash: 'h' } }, register: 'neutral' } as never }, glossary: [] };
     });
@@ -227,7 +241,21 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     unmount();
     window.localStorage.setItem('comicstudio.reader.lang', 'en');
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
-    expect(await screen.findByRole('heading', { level: 1, name: 'The Saffron Thief' })).toBeInTheDocument();
+    expect(await screen.findByRole('combobox')).toHaveValue('te');
+  });
+
+  it('retains a multilingual link’s starting page after the visitor confirms their language', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}?p=3`);
+    const doc = snapshotDoc((d) => {
+      d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, register: 'neutral' } as never }, glossary: [] };
+    });
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ languages: ['en', 'te'] }, doc));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    expect(await screen.findByRole('combobox', { name: 'Choose a language' })).toHaveValue('en');
+    expect(screen.queryByTestId('comic-reader')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Start reading' }));
+    await waitFor(() => expect(screen.getAllByTestId('reader-page').map((el) => el.getAttribute('data-key'))).toContain('pg_3'));
+    expect(screen.queryByTestId('reader-cover-card')).toBeNull();
   });
 
   it('offers downloads only when the author allows them', async () => {

@@ -5,13 +5,11 @@ import { keyDelta, tapDelta } from '../reader/readerModel';
 import type { ReaderLayout } from './readerLayout';
 
 export type ReaderCommand =
-  /** Next / previous page (a panel in Guided View). */
+  /** Next / previous page. */
   | { type: 'step'; delta: 1 | -1 }
   | { type: 'home' }
   | { type: 'end' }
-  | { type: 'guided' }
   | { type: 'fullscreen' }
-  | { type: 'play' }
   | { type: 'shortcuts' }
   | { type: 'escape' }
   | { type: 'hud' }
@@ -38,15 +36,9 @@ export const keyCommand = (e: KeyLike, ctx: { rtl: boolean; layout: ReaderLayout
       return { type: 'home' };
     case 'End':
       return { type: 'end' };
-    case 'g':
-    case 'G':
-      return { type: 'guided' };
     case 'f':
     case 'F':
       return { type: 'fullscreen' };
-    case 'p':
-    case 'P':
-      return { type: 'play' };
     case '?':
       return { type: 'shortcuts' };
     case ' ':
@@ -120,14 +112,12 @@ export class WheelAccumulator {
 /** The keyboard shortcuts sheet (single source for the "?" panel and the tests). */
 export const SHORTCUTS: { keys: string; action: string }[] = [
   { keys: '← →', action: 'Previous / next page (follows the reading direction)' },
-  { keys: 'Space · Shift+Space', action: 'Next / previous page (panel in Guided View)' },
+  { keys: 'Space · Shift+Space', action: 'Next / previous page' },
   { keys: 'Page Up · Page Down', action: 'Previous / next page' },
   { keys: 'Home · End', action: 'Cover · last page' },
   { keys: '↑ ↓', action: 'Scroll (vertical reading)' },
-  { keys: 'G', action: 'Guided View (panel by panel)' },
-  { keys: 'P', action: 'Play / pause Guided View' },
   { keys: 'F', action: 'Full screen' },
-  { keys: 'Esc', action: 'Zoom out → leave Guided View → close the reader' },
+  { keys: 'Esc', action: 'Zoom out → close the reader' },
   { keys: '?', action: 'This list' }
 ];
 

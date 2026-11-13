@@ -31,11 +31,11 @@ describe('parsePublicComicPath', () => {
 });
 
 describe('readerStartFromSearch', () => {
-  it('reads ?p= (0 = cover), ?guided=1 and ?panel= and clamps the page', () => {
+  it('reads and clamps the page, including when an old link specifies Guided View', () => {
     expect(readerStartFromSearch('?p=3')).toEqual({ page: 3 });
     expect(readerStartFromSearch('?p=0')).toEqual({ page: 0 });
     expect(readerStartFromSearch('?p=9999')).toEqual({ page: 500 });
-    expect(readerStartFromSearch('?p=2&guided=1&panel=4')).toEqual({ page: 2, guided: true, panel: 4 });
+    expect(readerStartFromSearch('?p=2&guided=1&panel=4')).toEqual({ page: 2 });
     expect(readerStartFromSearch('?panel=4')).toEqual({});
   });
 

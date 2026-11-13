@@ -172,8 +172,7 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
           ]}
         />
       </div>
-      <div className="mt-1 grid gap-0.5 md:grid-cols-3">
-        <SwitchRow label="Guided overview" description="Guided View shows the whole page before zooming into panels" checked={r.guidedOverview} onChange={(on) => set({ guidedOverview: on })} />
+      <div className="mt-1 grid gap-0.5 md:grid-cols-2">
         <SwitchRow label="Paper texture" description="A subtle paper grain under the art" checked={r.paperTexture} onChange={(on) => set({ paperTexture: on })} />
         <SwitchRow label="Ambient room" description="The room glows with each page’s colors" checked={r.ambient} onChange={(on) => set({ ambient: on })} />
       </div>
@@ -210,7 +209,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [lookOpen, setLookOpen] = useState(false);
-  const [immersive, setImmersive] = useState<{ intro: boolean; guided: boolean } | null>(null);
+  const [immersive, setImmersive] = useState<{ intro: boolean } | null>(null);
   const sheetAnchor = useRef<HTMLSpanElement>(null);
   const abort = useRef<AbortController | null>(null);
   const mounted = useRef(true);
@@ -238,12 +237,12 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
     };
   }, []);
 
-  // A chip / card / the director asked to open the reader (immersive, or straight into Guided View).
+  // Older action cards with guided=true still open the full-screen reader.
   const request = studio.readerRequest;
   useEffect(() => {
     if (!request || answeredRequests.has(request)) return;
     answeredRequests.add(request);
-    if (request.immersive || request.guided) setImmersive({ intro: false, guided: !!request.guided });
+    if (request.immersive || request.guided) setImmersive({ intro: false });
   }, [request]);
 
   const set = (s: ExportState) => mounted.current && setState(s);
@@ -382,7 +381,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
 
   const openFullScreen = (intro = false) => {
     setSheetOpen(false);
-    setImmersive({ intro, guided: false });
+    setImmersive({ intro });
   };
   const preview = () => {
     setSheetOpen(false);
@@ -407,7 +406,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
         size="sm"
         onClick={() => openFullScreen(false)}
         aria-label="Read full screen"
-        title="Read full screen (page turns, Guided View, your languages)"
+        title="Read full screen"
         data-action="read"
       >
         <Expand className="h-3.5 w-3.5" aria-hidden /> <span className={dense ? 'sr-only' : 'hidden sm:inline'}>Read full screen</span>
@@ -612,7 +611,6 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           doc={doc}
           urlFor={studio.urlFor}
           intro={immersive.intro}
-          initialGuided={immersive.guided || undefined}
           language={L.slot}
           endCard={shareUrl ? { shareUrl } : undefined}
           onExit={() => setImmersive(null)}

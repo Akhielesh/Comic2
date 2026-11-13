@@ -13,6 +13,7 @@ import { modelsToolGroup } from './models.js';
 import { publishToolGroup } from './publish.js';
 import { readerToolGroup } from './reader.js';
 import { refsToolGroup } from './refs.js';
+import { researchToolGroup } from './research.js';
 import { safetyToolGroup } from './safety.js';
 import { timelineToolGroup } from './timeline.js';
 // --- history (versions plan §9; H0 stub, H4 replaces it). Listed only while COMIC_HISTORY is on. ---
@@ -37,6 +38,7 @@ const registry = createKeyedRegistry<ToolGroup>({
       libraryToolGroup,
       readerToolGroup,
       modelsToolGroup,
+      researchToolGroup,
       ...(historyToolGroupEnabled() ? [historyToolGroup] : []),
       ...(layoutToolGroupEnabled() ? [layoutToolGroup] : []),
       ...(consistencyToolGroupEnabled() ? [consistencyToolGroup] : [])

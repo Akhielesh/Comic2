@@ -9,10 +9,6 @@ const props = (over: Partial<ReaderHudProps> = {}): ReaderHudProps => ({
   title: 'Rooftop Heist',
   counter: 'Page 2 of 6',
   compact: false,
-  guided: { on: false, playing: false, available: true },
-  onGuided: vi.fn(),
-  onPlay: vi.fn(),
-  onPanel: vi.fn(),
   layout: { effective: 'single', allowSpread: true, show: true },
   onLayout: vi.fn(),
   onSettings: vi.fn(),
@@ -21,7 +17,6 @@ const props = (over: Partial<ReaderHudProps> = {}): ReaderHudProps => ({
   onFullscreen: vi.fn(),
   onClose: vi.fn(),
   scrubber: <div className="pointer-events-auto" data-testid="scrubber" />,
-  rtl: false,
   onFocusWithin: vi.fn(),
   ...over
 });

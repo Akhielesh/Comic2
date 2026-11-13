@@ -128,6 +128,19 @@ describe('createSupabaseAssetStore', () => {
     expect(admin.bucketApi.download).not.toHaveBeenCalled();
   });
 
+  it('stores a composited WebP without changing pixels outside the edit', async () => {
+    const admin = makeAdmin();
+    const store = createSupabaseAssetStore({ admin: () => admin.client, bucket: 'test-bucket' });
+    const input = Buffer.from(Array.from({ length: 16 * 16 * 3 }, (_, i) => i * 157 % 256));
+    const webp = await sharp(input, { raw: { width: 16, height: 16, channels: 3 } }).webp({ lossless: true }).toBuffer();
+    const ref = await store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: `data:image/webp;base64,${webp.toString('base64')}`, lossless: true });
+    const [path, data] = admin.bucketApi.upload.mock.calls[0] as unknown as [string, Buffer];
+    expect(path).toBe(ref.path);
+    expect(await sharp(data).raw().toBuffer()).toEqual(input);
+    await expect(store.saveGenerated({ userId: USER, projectId: PROJECT, dataUrl: await pngDataUrl(16, 16), lossless: true })).rejects.toMatchObject({ code: 'NO_IMAGE' });
+    expect(admin.bucketApi.upload).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the tmp lane and a null project_id for non-UUID projects', async () => {
     const admin = makeAdmin();
     const store = createSupabaseAssetStore({ admin: () => admin.client });
@@ -250,6 +263,11 @@ describe('createSupabaseAssetStore', () => {
 });
 
 describe('buildOutlineSvg', () => {
+  it('draws an ellipse inside the same normalized bounds when selected', () => {
+    const box = { x: 0.2, y: 0.2, w: 0.6, h: 0.3 };
+    expect(buildOutlineSvg(100, 200, box, 'ellipse')).toContain('<ellipse cx="50" cy="70" rx="30" ry="30" ');
+    expect(buildOutlineSvg(100, 200, box)).toContain('<rect x="20" y="40" width="60" height="60" ');
+  });
   it('scales the stroke with the long edge and keeps it inside the image', () => {
     const svg = buildOutlineSvg(2000, 3000, { x: 0, y: 0, w: 1, h: 1 });
     expect(svg).toContain('stroke-width="18"');

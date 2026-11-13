@@ -28,6 +28,7 @@ const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/(^|\.)duckduckgo\.com$/, 'duckduckgo'],
   [/(^|\.)bing\.com$/, 'bing-scrape'],
   [/(^|\.)wikipedia\.org$/, 'wikipedia'],
+  [/^commons\.wikimedia\.org$/, 'wikipedia'],
   [/(^|\.)api\.met\.no$/, 'metno'],
   [/(^|\.)open-meteo\.com$/, 'open-meteo'],
   [/(^|\.)nominatim\.openstreetmap\.org$/, 'nominatim'],

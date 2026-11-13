@@ -12,6 +12,7 @@ import { ColorField, withAlpha } from './ColorField';
 import { FontPicker } from './FontPicker';
 import { EasyShapePicker } from './ShapePicker';
 import { PresetGallery } from './PresetGallery';
+import { SfxStylePicker } from './SfxStylePicker';
 import { paintOf } from './svgMarkup';
 import {
   deleteLinesOps,
@@ -22,6 +23,7 @@ import {
   presetOps,
   sharedValue,
   sizeStepOps,
+  sfxStyleOps,
   styleScopeOps,
   tailToggleOps
 } from './styleOps';
@@ -91,6 +93,17 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
 
   return (
     <div className="space-y-3.5" data-testid="easy-lettering">
+      {sfxOnly && (
+        <section className={ROW} aria-label="Sound effects">
+          <p className={ROW_LABEL}>Sound effect style</p>
+          <SfxStylePicker
+            value={sharedValue(doc, lines, 'sfxEffect')}
+            languages={lines.map((line) => line.lang || doc.format.language)}
+            onPick={(effect) => run(sfxStyleOps(doc, page, ids, effect), 'Sound effect style')}
+          />
+        </section>
+      )}
+
       <section className={ROW} aria-label="Comic lettering style">
         <p className={ROW_LABEL}>Comic style (every balloon)</p>
         <PresetGallery variant="chips" value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => run(presetOps(id), 'Change lettering style')} lang={lang} />

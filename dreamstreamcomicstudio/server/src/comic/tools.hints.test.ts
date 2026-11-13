@@ -26,6 +26,7 @@ const PHRASES = [
   'turn that into a thought bubble',
   'put the narration in a caption box at the bottom',
   'swap the order of these two lines',
+  'arch the sound effect on page 2',
   'the second panel needs a shout',
   'the tail should point at the robot'
 ];

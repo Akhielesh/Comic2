@@ -126,7 +126,7 @@ describe('PublishPanel language chips', () => {
     expect(english).toBeChecked();
     expect(english).toBeDisabled();
     expect(english.closest('label')?.textContent).toMatch(/original/);
-    expect(screen.getByText(/Readers always get the original/)).toBeInTheDocument();
+    expect(screen.getByText(/Readers can choose from the languages you publish/)).toBeInTheDocument();
     fireEvent.click(english);
     expect(english).toBeChecked();
     // Editions can still be unticked (the original keeps the publication valid on its own).
@@ -185,12 +185,12 @@ describe('PublishPanel — a published edition that went stale, and the readers\
     expect(onPublish.mock.calls[0][0]).not.toHaveProperty('defaultLang');
   });
 
-  it('"Readers start in" picks the default edition among the ticked languages (starts at the published default)', () => {
+  it('"Suggested language" picks the default edition among the ticked languages (suggests the published default)', () => {
     const doc = withHindi(makeSampleDoc());
     const onPublish = vi.fn();
     const ready = liveView({ defaultLang: 'hi', readiness: { ...liveView().readiness, languages: [{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: true }] } });
     render(<PublishPanel doc={doc} view={ready} visibility="unlisted" onPublish={onPublish} />);
-    const startIn = screen.getByRole('combobox', { name: 'Readers start in' }) as HTMLSelectElement;
+    const startIn = screen.getByRole('combobox', { name: 'Suggested language' }) as HTMLSelectElement;
     expect(startIn.value).toBe('hi');
     expect([...startIn.options].map((o) => o.textContent)).toEqual(['English (original)', 'हिन्दी']);
     fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
@@ -201,7 +201,7 @@ describe('PublishPanel — a published edition that went stale, and the readers\
     // Only the original left: nothing to choose, and no default is sent.
     fireEvent.change(startIn, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('checkbox', { name: /हिन्दी/ }));
-    expect(screen.queryByRole('combobox', { name: 'Readers start in' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Suggested language' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
     expect(onPublish.mock.calls.at(-1)![0].languages).toEqual(['en']);
     expect(onPublish.mock.calls.at(-1)![0]).not.toHaveProperty('defaultLang');
@@ -211,9 +211,9 @@ describe('PublishPanel — a published edition that went stale, and the readers\
     const doc = withHindi(makeSampleDoc());
     const onPublish = vi.fn();
     render(<PublishPanel doc={doc} view={unpublishedView([{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: false }])} visibility="unlisted" onPublish={onPublish} />);
-    expect(screen.queryByRole('combobox', { name: 'Readers start in' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Suggested language' })).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: /हिन्दी/ }));
-    const startIn = screen.getByRole('combobox', { name: 'Readers start in' }) as HTMLSelectElement;
+    const startIn = screen.getByRole('combobox', { name: 'Suggested language' }) as HTMLSelectElement;
     expect(startIn.value).toBe('en');
     fireEvent.change(startIn, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
@@ -293,7 +293,7 @@ describe('PublishPanel — a first publish starts with every finished language t
     expect(hindi).toBeChecked();
     expect(hindi).not.toBeDisabled();
     // More than one language: the owner can pick where readers start (the original, unless they choose).
-    expect((screen.getByRole('combobox', { name: 'Readers start in' }) as HTMLSelectElement).value).toBe('en');
+    expect((screen.getByRole('combobox', { name: 'Suggested language' }) as HTMLSelectElement).value).toBe('en');
     fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
     expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'en' }));
   });

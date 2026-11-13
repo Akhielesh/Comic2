@@ -14,9 +14,9 @@ import { loadProExtras } from '../../lettering/pro/proExtras';
 import { LetteringInspector } from '../../lettering/LetteringInspector';
 import { findLineRef } from '../../lettering/styleOps';
 import { PRO_SHAPE_LABEL } from '../../lettering/ShapePicker';
-import { PRO_SFX_LABEL } from '../../lettering/ProLetteringPanel';
+import { sfxStyleIds, sfxStyleOf } from '../../../../shared/comic/lettering/sfxCatalog';
 import { InspectorPanel } from './InspectorPanel';
-import { PRO_SFX_DRAWN, proFieldsWritable, writablePatch } from './proGate';
+import { proFieldsWritable, writablePatch } from './proGate';
 import type { PartPanelProps } from './types';
 
 vi.mock('../../../../shared/comic/ops', async (orig) => ({ ...(await orig<Record<string, unknown>>()), PRO_EDIT_OPS_PATCHABLE: true }));
@@ -135,8 +135,8 @@ describe('Pro controls with the switch on', () => {
   it('the 5 drawn Pro SFX effects send line_style {sfxEffect}; halftone waits for S3', () => {
     const { apply } = inspector(['pg_1_l5']);
     const sfx = screen.getByRole('radiogroup', { name: 'Pro sound effect style' });
-    expect(within(sfx).getAllByRole('radio').map((r) => r.textContent)).toEqual(PRO_SFX_DRAWN.map((e) => PRO_SFX_LABEL[e]));
-    expect(PRO_SFX_DRAWN).not.toContain('halftone_fill');
+    for (const id of sfxStyleIds(true).slice(sfxStyleIds().length)) expect(within(sfx).getByRole('radio', { name: sfxStyleOf(id).label })).toBeEnabled();
+    expect(within(sfx).queryByRole('radio', { name: 'Halftone' })).toBeNull();
     fireEvent.click(within(sfx).getByRole('radio', { name: '3D extrude' }));
     expect(apply).toHaveBeenLastCalledWith(style(['pg_1_l5'], { sfxEffect: 'extrude3d' }), { label: 'Sound effect style' });
   });

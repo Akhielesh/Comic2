@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const model = vi.hoisted(() => ({
   ready: false,
   loads: [] as Array<{ resolve: (asr: unknown) => void; reject: (e: unknown) => void }>,
-  text: 'make it rain'
+  text: 'make it rain',
+  transcribe: vi.fn<() => Promise<string>>()
 }));
 
 vi.mock('../services/dictation/whisperEngine', () => ({
@@ -20,7 +21,7 @@ vi.mock('../services/dictation/whisperEngine', () => ({
       : new Promise((resolve, reject) => {
           model.loads.push({ resolve, reject });
         }),
-  transcribe: async () => model.text
+  transcribe: model.transcribe
 }));
 
 import { TAKE_LIMIT_MS, useDictation, type FinalInfo } from './useDictation';
@@ -132,6 +133,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   model.ready = false;
   model.loads = [];
+  model.transcribe.mockReset().mockImplementation(async () => model.text);
   mic.tracks = [];
   mic.calls = 0;
   mic.mode = 'auto';
@@ -152,6 +154,34 @@ afterEach(() => {
 });
 
 describe('useDictation: the microphone is never left on', () => {
+  it('cancelled Whisper work settles before a new take decodes and delivers only the latest transcript', async () => {
+    model.ready = true;
+    let finishFirst: (text: string) => void = () => undefined;
+    model.transcribe.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+    const { result, onFinal, onPartial } = setup();
+    act(() => result.current.start());
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(model.transcribe).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.stop());
+    act(() => result.current.cancel());
+    act(() => result.current.start());
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(model.transcribe).toHaveBeenCalledTimes(1);
+    act(() => result.current.stop());
+    await flush();
+    expect(model.transcribe).toHaveBeenCalledTimes(1);
+    expect(liveTracks()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await act(async () => { finishFirst('discarded words'); });
+    expect(model.transcribe).toHaveBeenCalledTimes(2);
+    expect(onPartial).not.toHaveBeenCalled();
+    expect(onFinal).toHaveBeenCalledExactlyOnceWith('make it rain', { engine: 'whisper', end: 'user' });
+  });
+
   it('a failed model download never turns the mic on, and says so in one calm sentence', async () => {
     const { result } = setup();
     act(() => result.current.start());

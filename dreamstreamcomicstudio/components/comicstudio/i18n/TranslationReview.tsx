@@ -7,12 +7,16 @@
 // Esc reverts, J/K (or Alt+↓/↑ inside a field) move between lines. Edits are free ('edited' lines
 // are never overwritten by a later translation).
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Eye, Lightbulb, Undo2 } from 'lucide-react';
 import type { ComicDoc, EditionTextField, Line, Page, TextTranslation } from '../../../shared/comic/doc';
 import { editionReadiness, i18nOf, localizeDoc, translationStatus, type DerivedStatus } from '../../../shared/comic/i18n';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import { graphemes } from '../../../shared/comic/textLayout';
+import { sarvamTranslationPair } from '../../../shared/comic/sarvam';
+import { hasUsableKey } from '../../../services/apiKeys';
+import { post } from '../../../services/apiClient';
+import { isProviderEnabled } from '../../../services/sourceGovernance';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, translationBudget } from '../../../shared/comic/translationPlan';
 import { textSourceHash } from '../../../shared/comic/i18n';
 import { ComicPageView } from '../board/ComicPageView';
@@ -79,13 +83,21 @@ interface RowProps {
   onNavigate(id: string, dir: 1 | -1): void;
   registerField(id: string, el: HTMLTextAreaElement | null): void;
   onFocusRow?(): void;
+  sarvam?: boolean;
 }
 
-function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry, status, fitFor, onSave, onNavigate, registerField, onFocusRow }: RowProps) {
+function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry, status, fitFor, onSave, onNavigate, registerField, onFocusRow, sarvam }: RowProps) {
   const [draft, setDraft] = useState(entry?.text ?? '');
   const [busy, setBusy] = useState(false);
+  const [sarvamState, setSarvamState] = useState<'idle' | 'working' | 'ready' | 'error'>('idle');
+  const sarvamRequest = useRef<AbortController | null>(null);
+  const skipBlurSave = useRef(false);
   const saved = entry?.text ?? '';
   React.useEffect(() => setDraft(saved), [saved]);
+  useEffect(() => {
+    setSarvamState('idle');
+    return () => sarvamRequest.current?.abort();
+  }, [id, lang, source, saved]);
   const sourceLang = studio.doc?.format.language || 'en';
   const accept = async (useSuggestion: boolean) => {
     setBusy(true);
@@ -97,7 +109,25 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
   };
   /** "Keep my wording": the author's edit still fits the changed original — re-hashed, free, still theirs. */
   const keepWording = () => void accept(false);
+  const suggestWithSarvam = async () => {
+    if (!studio.doc || sarvamState === 'working') return;
+    const controller = new AbortController();
+    sarvamRequest.current = controller;
+    setSarvamState('working');
+    try {
+      const result = await post<{ lineId: string; lang: string }, { text: string }>(
+        `/api/comic/projects/${encodeURIComponent(studio.doc.id)}/sarvam-line`, { lineId: id, lang }, { signal: controller.signal, useSarvamKey: true }
+      );
+      if (controller.signal.aborted) return;
+      if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('No translation.');
+      setDraft(result.text);
+      setSarvamState('ready');
+    } catch {
+      if (!controller.signal.aborted) setSarvamState('error');
+    }
+  };
   const commit = (viaEnter = false) => {
+    if (!viaEnter && sarvamState === 'ready') return;
     const v = draft.trim();
     if (!v || v === saved) {
       setDraft(saved);
@@ -129,17 +159,27 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         rows={Math.min(4, Math.max(1, Math.ceil(graphemes(draft || source).length / 38)))}
         lang={lang}
         dir={dirOf(lang)}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => commit()}
+        onChange={(e) => {
+          if (sarvamState === 'working') sarvamRequest.current?.abort();
+          if (sarvamState !== 'ready') setSarvamState('idle');
+          setDraft(e.target.value);
+        }}
+        onBlur={() => { if (!skipBlurSave.current) commit(); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             commit(true);
+            skipBlurSave.current = true;
             onNavigate(id, 1);
+            skipBlurSave.current = false;
           } else if (e.key === 'Escape') {
             e.preventDefault();
+            sarvamRequest.current?.abort();
+            setSarvamState('idle');
             setDraft(saved);
-            (e.target as HTMLTextAreaElement).blur();
+            skipBlurSave.current = true;
+            e.currentTarget.blur();
+            skipBlurSave.current = false;
           } else if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
             e.preventDefault();
             commit();
@@ -153,6 +193,11 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] coarse:text-[16px] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25"
       />
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+        {sarvam && !draft.trim() && <GhostButton size="xs" title="Sends this line to Sarvam using your API key" busy={sarvamState === 'working'} onClick={() => void suggestWithSarvam()}>
+          Draft with Sarvam
+        </GhostButton>}
+        {sarvamState === 'ready' && <span role="status">Draft ready. Edit it and press Enter to save.</span>}
+        {sarvamState === 'error' && <span role="alert">Sarvam couldn’t draft this line. Check your key or try again.</span>}
         {entry?.gloss && (
           <span className="min-w-0 flex-1 break-words italic text-[var(--ds-muted)]">
             Means: <span lang={sourceLang}>{entry.gloss}</span>
@@ -229,6 +274,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
   const localized = useMemo(() => (doc ? localizeDoc(doc, lang) : null), [doc, lang]);
   if (!doc || !localized) return null;
   const spec = languageSpec(lang);
+  const canUseSarvam = isProviderEnabled('sarvam') && hasUsableKey('sarvam');
   const edition = i18nOf(doc).editions[lang];
   const pages = [...doc.pages].sort((a, b) => a.n - b.n);
 
@@ -391,6 +437,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
                       speaker={line.speakerId ? doc.cast.find((c) => c.id === line.speakerId)?.name : undefined}
                       kindLabel={KIND_LABEL[line.kind] || line.kind}
                       source={line.text}
+                      sarvam={canUseSarvam && !!sarvamTranslationPair(line.lang || doc.format.language, lang)}
                       entry={entry}
                       status={status}
                       fitFor={(text) => fitOf(doc, page, line, lang, text)}

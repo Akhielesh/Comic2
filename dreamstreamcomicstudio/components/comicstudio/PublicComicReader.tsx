@@ -31,7 +31,7 @@ import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
 import { aspectNumber } from './board/balloonGeometry';
 import { ReaderLanguagePicker } from './i18n/ReaderLanguagePicker';
-import { nextLanguage, readStoredReaderLang, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
+import { nextLanguage, readUrlLang, useReaderLanguage } from './i18n/readerLanguage';
 import { readerString } from './i18n/readerStrings';
 import { ImmersiveReader } from './immersive/ImmersiveReader';
 import { connectionHints, pageImageCache } from './immersive/pageImageCache';
@@ -178,14 +178,13 @@ const ReaderShell: React.FC<ShellProps> = ({
   const { theme } = useComicTheme();
   const urlFor = useMemo(() => urlForMap(urls), [urls]);
   const published = mode === 'slug' ? publication?.languages : undefined;
-  // A share link without ?lang= means the author's default edition (buildShareUrl drops lang when it
-  // equals the default) — for a first-time reader; a returning reader keeps their own choice.
-  const [linkHasLang] = useState(() => !!readUrlLang());
-  const [hasStoredLang] = useState(() => !!readStoredReaderLang());
-  const authorDefault = mode === 'slug' && !linkHasLang && !hasStoredLang ? publication?.defaultLang || boot?.lang : undefined;
-  const langEnv = useMemo(() => (authorDefault ? { search: `?lang=${encodeURIComponent(authorDefault)}` } : undefined), [authorDefault]);
-  const L = useReaderLanguage({ doc, published, persist: mode === 'slug', env: langEnv });
+  const [linkLanguage] = useState(readUrlLang);
+  const suggestedLanguage = linkLanguage ?? (mode === 'slug' ? publication?.defaultLang || boot?.lang : undefined);
+  const langEnv = useMemo(() => ({ search: suggestedLanguage ? `?lang=${encodeURIComponent(suggestedLanguage)}` : '' }), [suggestedLanguage]);
+  const L = useReaderLanguage({ doc, published, persist: false, env: langEnv });
   const lang = L.lang;
+  const [languageConfirmed, setLanguageConfirmed] = useState(false);
+  const chooseBeforeReading = mode === 'slug' && !embed && !!L.slot && !languageConfirmed;
   const t = useCallback((key: Parameters<typeof readerString>[1]) => readerString(lang, key), [lang]);
   const localized = L.localized;
   const source = doc?.format.language || 'en';
@@ -195,9 +194,10 @@ const ReaderShell: React.FC<ShellProps> = ({
   const canReport = mode === 'slug' && !!slug && SLUG_RE.test(slug) && !isOwner && identityReady;
 
   // ── View: the cover card, the inline reader, or the immersive reader over either ──
-  const deepLinked = start.page !== undefined && !start.guided;
-  const [view, setView] = useState<'card' | 'inline'>(() => (embed || deepLinked || mode === 'project' ? 'inline' : 'card'));
-  const [immersive, setImmersive] = useState<{ guided: boolean; page?: number | 'cover'; panel?: number; intro: boolean } | null>(null);
+  const deepLinked = start.page !== undefined;
+  const [preferredView, setView] = useState<'card' | 'inline'>(() => (embed || deepLinked || mode === 'project' ? 'inline' : 'card'));
+  const view = chooseBeforeReading ? 'card' : preferredView;
+  const [immersive, setImmersive] = useState<{ page?: number | 'cover'; intro: boolean } | null>(null);
   const [page, setPage] = useState(0);
   const [reportOpen, setReportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -232,9 +232,9 @@ const ReaderShell: React.FC<ShellProps> = ({
   // ── Analytics: never for the owner; only once identity has settled ──
   const canTrack = mode === 'slug' && identityReady && !isOwner && !!track;
   useEffect(() => {
-    if (canTrack && status === 'ready') track!('view', lang);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canTrack, status]);
+    if (!canTrack || status !== 'ready' || chooseBeforeReading) return;
+    track!('view', lang);
+  }, [canTrack, status, chooseBeforeReading, track, lang]);
   const lastPageN = useMemo(() => (doc ? Math.max(0, ...readerItems(doc).map((i) => i.page?.n ?? 0)) : 0), [doc]);
   // "Complete" means read through to the end: a link that opens on the last page (?p=, the author's
   // start page) only counts once the reader has been on an earlier page too.
@@ -251,7 +251,7 @@ const ReaderShell: React.FC<ShellProps> = ({
   // ── The `L` key switches language (not while typing or inside the immersive reader) ──
   useEffect(() => {
     const slot = L.slot;
-    if (!slot) return;
+    if (!slot || chooseBeforeReading) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'l' && e.key !== 'L') return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
@@ -266,14 +266,15 @@ const ReaderShell: React.FC<ShellProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [L.slot]);
+  }, [L.slot, chooseBeforeReading]);
 
-  // ── Share link (canonical, read-only; carries the reader's language) ──
+  // The reader's own language stays in this visit. A recipient gets the publication's share link.
   const shareUrl = useMemo(() => {
     if (mode !== 'slug' || !slug || !SLUG_RE.test(slug)) return undefined;
-    const linkDefault = publication?.defaultLang || source;
-    return buildShareUrl(COMICS_ORIGIN, slug, sameLanguage(lang, linkDefault) ? {} : { lang }, { defaultLang: publication?.defaultLang, startPage: publication?.startPage ?? null });
-  }, [mode, slug, lang, source, publication?.defaultLang, publication?.startPage]);
+    return buildShareUrl(COMICS_ORIGIN, slug);
+  }, [mode, slug]);
+  const sharedTitle = publication?.card.title || boot?.card.title || doc?.cover.title || doc?.brief.title || title;
+  const sharedDescription = publication?.card.description || boot?.card.description || doc?.brief.logline || doc?.cover.tagline;
   const embedOpenHref = slug && SLUG_RE.test(slug) ? `${COMICS_ORIGIN}${SHARE_PATH(slug)}` : COMICS_ORIGIN;
 
   // ── Downloads: made here, from the public images; withheld pages are never included ──
@@ -362,13 +363,31 @@ const ReaderShell: React.FC<ShellProps> = ({
     [boot?.card.creator, embed, isOwner, shareUrl]
   );
 
-  const openImmersive = (guided: boolean) => {
+  const confirmReadingLanguage = () => {
+    if (!chooseBeforeReading) return;
+    setLanguageConfirmed(true);
+    try {
+      const url = new URL(window.location.href);
+      for (const key of ['lang', 'guided', 'panel']) url.searchParams.delete(key);
+      if (url.href !== window.location.href) window.history.replaceState(window.history.state, '', url.href);
+    } catch {
+      // Reading still works when the host prevents address changes.
+    }
+  };
+  const startReading = () => {
+    if (deepLinked) {
+      confirmReadingLanguage();
+      setView('inline');
+      return;
+    }
+    confirmReadingLanguage();
+    openImmersive();
+  };
+  const openImmersive = () => {
     if (!doc) return;
     setImmersive({
-      guided,
-      intro: !guided && start.page === undefined,
-      ...(start.page !== undefined ? { page: start.page === 0 ? 'cover' : start.page } : {}),
-      ...(guided && start.panel !== undefined ? { panel: start.panel } : {})
+      intro: start.page === undefined,
+      ...(start.page !== undefined ? { page: start.page === 0 ? 'cover' : start.page } : {})
     });
   };
   const onShareClick = useCallback(() => {
@@ -381,7 +400,7 @@ const ReaderShell: React.FC<ShellProps> = ({
     try {
       const nav = navigator as Navigator & { share?: (d: { title?: string; url?: string }) => Promise<void> };
       if (typeof nav.share === 'function') {
-        await nav.share({ title, url: shareUrl });
+        await nav.share({ title: sharedTitle, url: shareUrl });
         return;
       }
       await navigator.clipboard.writeText(shareUrl);
@@ -390,7 +409,7 @@ const ReaderShell: React.FC<ShellProps> = ({
       if ((err as { name?: string })?.name === 'AbortError') return;
       setNotice('Couldn’t share — copy the link from the address bar instead.');
     }
-  }, [shareUrl, onShareClick, title]);
+  }, [shareUrl, onShareClick, sharedTitle]);
 
   // Keep the publication's preloaded cover variant after the snapshot arrives. Only try the
   // original when the variant fails, so an ordinary share never downloads the cover twice.
@@ -436,7 +455,7 @@ const ReaderShell: React.FC<ShellProps> = ({
       {status === 'ready' && (
         <div className="flex shrink-0 items-center gap-0.5">
           {rating && !compact && <RatingBadge rating={rating} />}
-          {L.slot && <ReaderLanguagePicker {...L.slot} source={source} compact={compact} />}
+          {L.slot && !chooseBeforeReading && <ReaderLanguagePicker {...L.slot} source={source} compact={compact} />}
           {shareUrl && (
             <div
               onClickCapture={(e) => {
@@ -446,7 +465,7 @@ const ReaderShell: React.FC<ShellProps> = ({
                 if (trigger && trigger.getAttribute('aria-expanded') !== 'true') onShareClick();
               }}
             >
-              <ShareButton compact target={{ url: shareUrl, title, text: logline || undefined, coverUrl: boot?.card.coverUrl }} />
+              <ShareButton compact target={{ url: shareUrl, title: sharedTitle, text: sharedDescription || undefined, coverUrl: boot?.card.coverUrl }} />
             </div>
           )}
           {downloadItems.length > 0 && <ReaderMenu label={t('download')} icon={<Download className="h-4 w-4" />} items={downloadItems} />}
@@ -536,11 +555,14 @@ const ReaderShell: React.FC<ShellProps> = ({
           loading={status !== 'ready'}
           onCoverReady={warmFirstPage}
           onReadingIntent={warmFirstPage}
-          onRead={() => openImmersive(false)}
-          onGuided={() => openImmersive(true)}
-          onReadHere={() => setView('inline')}
+          languageChoice={chooseBeforeReading ? L.slot : undefined}
+          onRead={startReading}
+          onReadHere={deepLinked ? undefined : () => {
+            confirmReadingLanguage();
+            setView('inline');
+          }}
           cta={isOwner ? undefined : { label: 'Made with DreamStream Studio — make your own', href: MAKE_YOUR_OWN_HREF }}
-          labels={{ read: t('startReading'), guided: t('guidedView'), readsRightToLeft: t('readsRightToLeft') }}
+          labels={{ read: t('startReading'), readsRightToLeft: t('readsRightToLeft'), chooseLanguage: t('chooseLanguage') }}
         />
       </div>
     );
@@ -552,6 +574,7 @@ const ReaderShell: React.FC<ShellProps> = ({
         initialPage={start.page === 0 ? 'cover' : start.page}
         onPageChange={onPageChange}
         syncUrl={mode === 'slug'}
+        syncLanguageInUrl={embed}
         language={L.slot}
         endCard={endCard}
         chrome={embed || compact ? 'auto-hide' : 'docked'}
@@ -646,12 +669,11 @@ const ReaderShell: React.FC<ShellProps> = ({
           endCard={endCard}
           intro={immersive.intro}
           initialPage={immersive.page}
-          initialGuided={immersive.guided}
-          initialPanel={immersive.panel}
           allowDownload={builtInDownload}
           // The host's gated download replaces the immersive reader's built-in PDF (onDownload wins).
           onDownload={builtInDownload ? () => download('pdf') : undefined}
           syncUrl={mode === 'slug'}
+          syncLanguageInUrl={embed}
           onImageError={onImageError}
           onPageChange={onPageChange}
           onExit={() => setImmersive(null)}
@@ -768,7 +790,7 @@ export const PublicComicReader: React.FC<PublicComicReaderProps> = ({ source, pr
   const [startFromUrl] = useState<PublicReaderStart>(() => start ?? (typeof window !== 'undefined' ? readerStartFromSearch(window.location.search) : {}));
   if (!resolved) return null;
   if (resolved.kind === 'slug') {
-    return <SlugReader slug={resolved.slug} embed={!!resolved.embed} isOwner={isOwner} identityReady={identityReady} start={startFromUrl} onClose={onClose} />;
+    return <SlugReader key={`${resolved.slug}:${!!resolved.embed}`} slug={resolved.slug} embed={!!resolved.embed} isOwner={isOwner} identityReady={identityReady} start={startFromUrl} onClose={onClose} />;
   }
   return <ProjectReader projectId={resolved.projectId} isOwner={isOwner} start={startFromUrl} onClose={onClose} />;
 };

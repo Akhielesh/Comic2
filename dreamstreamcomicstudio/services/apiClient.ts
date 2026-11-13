@@ -137,10 +137,11 @@ const getAuthToken = async (): Promise<string | undefined> => {
 
 // Build the common request headers (provider keys honoring governance, auth token,
 // model/source selection, free-only, allowed-sources). Shared by post + postStream.
-const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string; expectedAccountId?: string }): Promise<Record<string, string>> => {
+const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string; expectedAccountId?: string; useSarvamKey?: boolean }): Promise<Record<string, string>> => {
   const providerHeaders = providerKeyHeaders();
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
+  const sarvamKey = options?.useSarvamKey && isProviderEnabled('sarvam') ? getActiveKeyValue('sarvam') : null;
   const token = await getAuthToken();
   if (options?.expectedAccountId && (!token || token !== cachedAccessToken || cachedUserId !== options.expectedAccountId)) {
     throw new ApiError('The active account changed. Sign in again and retry.', 401);
@@ -155,6 +156,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
     ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : {}),
     ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
     ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
+    ...(sarvamKey ? { 'X-Sarvam-Key': sarvamKey } : {}),
     ...(textModel ? { 'X-Text-Model': textModel } : {}),
     ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
     ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
@@ -165,7 +167,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   };
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string }): Promise<TRes> => {
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions; expectedAccountId?: string; useSarvamKey?: boolean }): Promise<TRes> => {
   const attempt = async (): Promise<TRes> => {
     const headers = await buildRequestHeaders(options);
     const res = await safeFetch(buildApiUrl(path), {

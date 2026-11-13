@@ -1,13 +1,9 @@
-// Reader deep links (contract §1 "Reader URL params"): `p` (1-based page; 0 = cover), `lang`, `guided=1`,
-// `panel` (1-based). Read once on open; written back with history.replaceState (debounced) when the
-// reader settles, preserving every other parameter. `page=` / `mode=` are rejected aliases and are
-// neither read nor written.
+// Reader deep links keep the page (1-based, 0 = cover) and edition. On update, retire the old
+// Guided View query parameters while preserving unrelated parameters and the hash.
 
 export interface ReaderParams {
   p?: number;
   lang?: string;
-  guided?: boolean;
-  panel?: number;
 }
 
 const LANG_RE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
@@ -31,10 +27,6 @@ export const parseReaderParams = (search: string): ReaderParams => {
   if (p !== undefined) out.p = p;
   const lang = q.get('lang');
   if (lang && LANG_RE.test(lang)) out.lang = lang;
-  const guided = q.get('guided');
-  if (guided === '1' || guided === 'true') out.guided = true;
-  const panel = intParam(q.get('panel'), 1);
-  if (panel !== undefined) out.panel = panel;
   return out;
 };
 
@@ -50,8 +42,8 @@ export const withReaderParams = (href: string, params: ReaderParams): string => 
   const set = (k: string, v: string | undefined) => (v === undefined ? q.delete(k) : q.set(k, v));
   set('p', params.p !== undefined && params.p >= 0 ? String(Math.round(params.p)) : undefined);
   set('lang', params.lang && LANG_RE.test(params.lang) ? params.lang : undefined);
-  set('guided', params.guided ? '1' : undefined);
-  set('panel', params.guided && params.panel !== undefined && params.panel >= 1 ? String(Math.round(params.panel)) : undefined);
+  q.delete('guided');
+  q.delete('panel');
   const out = `${url.pathname}${q.toString() ? `?${q.toString()}` : ''}${url.hash}`;
   return url.origin === 'http://local.invalid' && !/^https?:/i.test(href) ? out : `${url.origin}${out}`;
 };
