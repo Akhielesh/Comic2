@@ -190,7 +190,7 @@ export const PROVIDER_ICONS: Record<string, React.FC<IconProps>> = {
 const Monogram: React.FC<{ vendor: VendorMeta; className?: string }> = ({ vendor, className }) => (
   <span
     aria-hidden
-    className={`inline-flex items-center justify-center rounded font-bold text-[0.62em] leading-none select-none border border-black/20 ${vendor.color} ${className ?? 'w-4 h-4'}`}
+    className={`inline-flex items-center justify-center rounded font-bold text-[0.62em] leading-none select-none border border-[var(--ds-hairline)] ${vendor.color} ${className ?? 'w-4 h-4'}`}
   >
     {vendor.label.charAt(0).toUpperCase()}
   </span>

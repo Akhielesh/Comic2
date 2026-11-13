@@ -13,6 +13,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
       await expect(page.getByRole('article')).toHaveCount(5);
       await expect(page.locator('vite-error-overlay, [data-qa-crash]')).toHaveCount(0);
+      expect(await qa.legacyClasses()).toEqual([]);
       const tabs = page.getByRole('tablist', { name: 'Model comparisons' });
       const activate = async (control: Locator) => { if (touch) await control.tap(); else await control.click(); };
       const expectFits = async () => {
@@ -47,6 +48,11 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       };
       await expectFits();
       await expectTouchTarget(page.getByRole('link', { name: /Artificial Analysis/ }).first());
+      const nextOutput = page.getByRole('button', { name: 'Next Nano Banana 2.1 output', exact: true });
+      await expectTouchTarget(nextOutput);
+      await activate(nextOutput);
+      await expect(page.getByRole('article', { name: 'Nano Banana 2.1', exact: true })).toContainText('2/2');
+      await expect(page.getByRole('checkbox', { name: 'Compare Nano Banana 2.1', exact: true })).not.toBeChecked();
 
       for (const name of ['Nano Banana 2.1', 'Nano Banana Pro', 'FLUX.3']) {
         await page.getByRole('checkbox', { name: `Compare ${name}`, exact: true }).check();
