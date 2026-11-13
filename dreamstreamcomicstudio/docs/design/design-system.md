@@ -611,7 +611,10 @@ editor kit (Program 2, promoted to `components/ds/creative` in DS-10).
 `styles/ds-motion.css` is Atlas's motion system, renamed `ds-*` and reading the tokens (`--ds-motion-enter-slow`
 for page and list entrances, `--ds-motion-enter-quick` for fades and pops, `--ds-motion-stagger` between list items:
 240 / 200 / 24 ms under the skin, every entrance within Atlas's 150-250 ms, and 420 / 280 / 40 ms outside it;
-`--ds-ease-enter`): entrances `.ds-rise-in .ds-fade-in .ds-scale-in .ds-slide-in-right .ds-blur-in
+`--ds-ease-enter`; besides these classes, the cover and library image fades read `--ds-motion-enter` in script, the
+progress fill (`Progress`) glides on `--ds-motion-enter-slow`, as Atlas's own progress bar moves within that range, and
+the landing's stagger is a multiple of `--ds-motion-stagger`, so all of them change with the skin too; only the reader's
+page turns spell their own times): entrances `.ds-rise-in .ds-fade-in .ds-scale-in .ds-slide-in-right .ds-blur-in
 .ds-pop .ds-draw .ds-flash` (backwards fill, landing on `transform: none`), `.ds-stagger` (children, or
 `--ds-i` to place one), `.ds-reveal` (on the scroll timeline only, so it is visible without JavaScript),
 `.ds-disclosure` (a `<details>` whose body glides), `.ds-lift` and `.ds-link`, the loading and live loops

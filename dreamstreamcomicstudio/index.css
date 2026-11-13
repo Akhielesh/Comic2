@@ -1266,7 +1266,7 @@ html:root[data-ds-colour="off"] .ds-art-scope {
   --ds-text-4xl: 2.25rem;               /* --text-4xl */
   --ds-text-5xl: 3rem;                  /* --text-5xl */
   --ds-text-7xl: 4.5rem;                /* --text-7xl */
-  /* DS-1a. Motion: Atlas's --motion-enter-quick (an alias of the 200 ms entrance, restated so it follows
+  /* Motion: Atlas's --motion-enter-quick (an alias of the 200 ms entrance, restated so it follows
      this block), --motion-enter (240 ms) and --motion-stagger-step (24 ms): the Atlas design branch keeps
      every entrance within 150-250 ms (outside the skin they stay 280 / 420 / 40 ms). The danger label: white on Atlas's
      red in both themes. Atlas has no z or density tokens: the ladder and the row heights are restated

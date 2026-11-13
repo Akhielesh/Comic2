@@ -182,10 +182,10 @@ comics host and the Comic Studio roots do, and the other pages read this default
 | `--ds-ease` | `--motion-ease` | `cubic-bezier(0.2, 0.8, 0.2, 1)` | `cubic-bezier(0.4, 0, 0.2, 1)` (Tailwind's default) |
 | `--ds-ease-spring` | `--motion-spring` | `cubic-bezier(0.34, 1.36, 0.64, 1)` | same |
 | `--ds-ease-enter` (wave 5) | `--motion-ease-enter` | `cubic-bezier(0.16, 1, 0.3, 1)` | same |
-| `--ds-motion-enter` / `-exit` (wave 5) | `--motion-enter-quick` / `--motion-exit` | 200 / 160 ms | 280 / 160 ms |
-| `--ds-motion-enter-quick` (DS-1a) | `--motion-enter-quick` | an alias of the 200 ms `--ds-motion-enter` | an alias of the 280 ms `--ds-motion-enter` |
-| `--ds-motion-enter-slow` (DS-1a) | `--motion-enter` (page and section entrances) | 240 ms | 420 ms |
-| `--ds-motion-stagger` (DS-1a) | `--motion-stagger-step` | 24 ms | 40 ms |
+| `--ds-motion-enter` / `-exit` | `--motion-enter-quick` / `--motion-exit` | 200 / 160 ms | 280 / 160 ms |
+| `--ds-motion-enter-quick` | `--motion-enter-quick` | an alias of the 200 ms `--ds-motion-enter` | an alias of the 280 ms `--ds-motion-enter` |
+| `--ds-motion-enter-slow` | `--motion-enter` (page and section entrances) | 240 ms | 420 ms |
+| `--ds-motion-stagger` | `--motion-stagger-step` | 24 ms | 40 ms |
 | `--ds-tooltip-delay` | `--tooltip-delay` | 300 ms | 300 ms |
 | `--ds-glass-blur` (wave 9, bridge D3) | none: Atlas surfaces are opaque | `0` | 12 px (`backdrop-blur-md`; GLASS, GLASS_STRONG, MENU) |
 | `--ds-header-blur` (wave 9, bridge D3) | the sticky header's `blur(18px)` | 18 px | 18 px (HEADER_GLASS, once content scrolls under) |
@@ -437,7 +437,7 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 - The Atlas repository, its design branch, commit **`43b2f8ec`** (2026-11-13): taken from it are the
   high-contrast hue and status overrides, the shorter entrances under the skin (200 / 240 ms, a 24 ms step) and the
   guard against a status colour or a chart step used as text; what differs on purpose is listed under "Deliberate
-  differences from Atlas" above. Before it, commit **`c567c621`** (checked for the S2b release on 2026-11-12). The
+  differences from Atlas" above. Before it, commit **`c567c621`** (checked 2026-11-12). The
   design files are byte-identical from `0677199b` through `c567c621`: the one commit after `7a6f3e16` touches none of
   them, and the 4 commits after `292b17b6` change only `lib/server`, deploy, CI and docs, nothing to port. At the S2a
   check (`292b17b6`) the 7 commits since `0677199b` changed connector,
