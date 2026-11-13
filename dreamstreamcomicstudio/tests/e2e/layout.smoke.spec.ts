@@ -292,12 +292,18 @@ interface ColourFloors {
 const FLOORS: ColourFloors = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'baselines/colourFloors.json'), 'utf8'));
 
 /**
- * The strong-colour share of the viewport: pictures, video, canvases and SVG images hidden (the art is content, not
- * the interface), one screenshot, then every second pixel's OKLCH chroma in the page itself (no image library).
+ * What the colour budget hides before it measures: the art is content, not the interface. Pictures, video, canvases
+ * and SVG images; comic art drawn in the DOM (ComicPageSpecimen and anything else marked data-comic-art or data-art);
+ * and any element painted with an inline background image (a cover or a page drawn as a CSS background).
+ */
+const ART_HIDDEN_SELECTOR = 'img, picture, video, canvas, svg image, [data-comic-art], [data-art], [style*="background-image"], [style*="url("]';
+/**
+ * The strong-colour share of the viewport: the art hidden (ART_HIDDEN_SELECTOR), one screenshot, then every second
+ * pixel's OKLCH chroma in the page itself (no image library).
  */
 async function strongColourShare(qa: QaHarness, chromaMin: number): Promise<number> {
   const page = qa.page;
-  const style = await page.addStyleTag({ content: 'img, picture, video, canvas, svg image { visibility: hidden !important; }' });
+  const style = await page.addStyleTag({ content: `${ART_HIDDEN_SELECTOR} { visibility: hidden !important; }` });
   await qa.settle(150);
   const shot = (await page.screenshot()).toString('base64');
   await style.evaluate((el) => (el as Element).remove());
@@ -349,6 +355,16 @@ test.describe('colour budget @smoke @colour', () => {
     expect(FLOORS.chromaMin).toBe(0.1);
     expect(FLOORS.floors.map((f) => [f.id, f.floor])).toEqual([['landing', 0.04], ['library', 0.03], ['empty', 0.02], ['board', 0.01], ['model-picker', 0.01]]);
     for (const f of FLOORS.floors) expect(f.switchedOnBy.length, f.id).toBeGreaterThan(5);
+  });
+
+  test('the measurement hides the art: the landing draws pages in the DOM, and every one is hidden', async ({ qa }) => {
+    await openColourScene(qa, FLOORS.floors.find((f) => f.id === 'landing')!, 'light');
+    const art = await qa.page.evaluate((sel) => {
+      const drawn = [...document.querySelectorAll('[data-comic-art], [data-art], [style*="background-image"]')];
+      return { drawn: drawn.length, missed: drawn.filter((el) => !el.matches(sel)).length };
+    }, ART_HIDDEN_SELECTOR);
+    expect(art.drawn, 'the landing shows drawn example pages').toBeGreaterThan(0);
+    expect(art.missed, 'drawn art the colour budget would count as interface').toBe(0);
   });
 
   for (const theme of ['light', 'dark'] as const) {
