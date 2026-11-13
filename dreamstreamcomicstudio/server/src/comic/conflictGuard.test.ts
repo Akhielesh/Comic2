@@ -296,3 +296,20 @@ describe('recordConflicts and conflictCardFor', () => {
     expect(styleWords(null)).toBe('its look');
   });
 });
+
+describe('a reorder inside one panel names the place (B-TOOL #7)', () => {
+  it('line_move within the same panel says "moved to line K of panel N", and the creator side names where it is now', () => {
+    const { session, ctx, turn } = setup();
+    session.commit([text('ln_b', 'Line B, edited')], { origin: 'user' });
+    const reorder: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_2', index: 0 };
+    const [blocked] = guardUserEdits(ctx, turn, [reorder]).blocked;
+    expect(blocked.theirs).toBe('“Line B, edited”, moved to line 1 of panel 2');
+    expect(blocked.mine).toBe('“Line B, edited”, line 2 of panel 2');
+    // No index puts it last, as applyLineMove does.
+    const last: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_2' };
+    expect(guardUserEdits(ctx, turn, [last]).blocked[0].theirs).toBe('“Line B, edited”, moved to line 2 of panel 2');
+    // A move to another panel still names only the panel.
+    const away: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_3' };
+    expect(guardUserEdits(ctx, turn, [away]).blocked[0].theirs).toBe('“Line B, edited”, moved to panel 3');
+  });
+});

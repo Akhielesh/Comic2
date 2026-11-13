@@ -20,6 +20,11 @@ export interface MenuRow {
   hint?: string;
   /** Opens another sheet (shows a chevron). */
   opensSheet?: boolean;
+  /**
+   * The row's `data-action` id when it is one home of an action that also has a control elsewhere ('quality',
+   * 'read', 'history'): the declutter probe counts duplicates by it (C2; DC-1 wave note 9).
+   */
+  action?: string;
   onSelect: () => void;
 }
 
@@ -58,6 +63,7 @@ export const CompactHeaderMenu: React.FC<CompactHeaderMenuProps> = ({ open, onCl
             key={r.id}
             type="button"
             role="menuitem"
+            data-action={r.action}
             disabled={r.disabled}
             onClick={() => {
               onClose();

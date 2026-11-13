@@ -5,6 +5,7 @@ import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
 import { comicsEntryUrl } from '../services/productHost';
+import { SUPPORT_EMAIL } from './legal/contacts';
 
 interface HomePageProps {
   onEnterStudio: () => void;
@@ -410,7 +411,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
             <p className="text-xs font-mono text-slate-400 mt-4">
               Prefer email? Reach us at{' '}
-              <a href="mailto:contact@dreamstreamstudio.ai" className="underline hover:text-black">contact@dreamstreamstudio.ai</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="underline hover:text-black">{SUPPORT_EMAIL}</a>
             </p>
           </div>
         </div>
@@ -448,7 +449,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <div>
             <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Support</h4>
             <ul className="space-y-4 text-sm font-bold">
-              <li><a href="mailto:contact@dreamstreamstudio.ai" className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
+              <li><a href={`mailto:${SUPPORT_EMAIL}`} className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
               <li><button onClick={scrollToUpdates} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Sparkles size={16} /> Stay Updated</button></li>
               <li><button onClick={() => setFaqOpen(0)} className="flex items-center gap-2 hover:text-brand-yellow text-left"><HelpCircle size={16} /> FAQs</button></li>
               <li><button onClick={() => onNavigate?.('how-it-works')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Info size={16} /> About</button></li>

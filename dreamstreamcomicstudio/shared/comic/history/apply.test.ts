@@ -14,7 +14,7 @@ import { encodeStudioEvent } from '../events';
 import { editionProgress, i18nOf } from '../i18n';
 import { MAX_ARCHIVE, MAX_RENDER_HISTORY, MAX_TRASH } from '../limits';
 import { historyEmptyDoc, historyV4Doc, historyV5Doc, BOOK_NOW } from './__fixtures__/books';
-import { evolveBook, randomBook, randomScope } from './__fixtures__/random';
+import { evolveBook, randomBook, randomScope, withRandomMotion } from './__fixtures__/random';
 import { diffBooks } from './diff';
 import { isPanelSourceArchive } from './apply';
 import { exactRestoreSet, historyRestoreOp, isEmptyRestoreSet, restoreEffects, restoreOps } from './restore';
@@ -180,6 +180,61 @@ describe('merge-mode invariants I1–I6 (property tests over random books and sc
   function int(seed: number, lo: number, hi: number): number {
     return lo + ((seed * 2654435761) >>> 0) % (hi - lo + 1);
   }
+});
+
+describe('random books with page motion (Pro Edit; S2 integration, PE-0 wave note 11)', () => {
+  const motionOf = (doc: ComicDoc, pageId: string) => doc.pages.find((p) => p.id === pageId)?.motion;
+
+  it('the restore stays server == client and normalized, and pages outside its scope keep their animation exactly', () => {
+    let clips = 0;
+    let outside = 0;
+    for (let seed = 1; seed <= 120; seed += 1) {
+      const base = withRandomMotion(randomBook(seed), seed);
+      const version = asVersion(evolveBook(base, seed * 101, 4 + (seed % 17)));
+      const current = evolveBook(base, seed * 7, 6 + (seed % 35), { allowBusy: true });
+      const scope = randomScope(version, current, seed * 13);
+      const op = historyRestoreOp(restoreOps(current, version, scope), { versionId: 'v', at: AT });
+      const after = applyOps(current, [op], AT);
+      const ctx = `seed ${seed} scope ${JSON.stringify(scope)}`;
+      expect(applyOps(wireDoc(current), [overTheWire(op)], AT), ctx).toEqual(wireDoc(after));
+      expect(normalizeDoc(after), ctx).toEqual(after);
+      clips += after.pages.reduce((n, p) => n + (p.motion?.clips.length ?? 0), 0);
+      const touched = pagesTouchedBy(scope);
+      if (!touched) continue;
+      for (const p of current.pages) {
+        const q = after.pages.find((x) => x.id === p.id);
+        if (!q || touched.has(p.id)) continue;
+        outside += 1;
+        expect(q.motion, `${ctx} motion ${p.id}`).toEqual(p.motion);
+      }
+    }
+    // The property ran over real animation, not over pages without it.
+    expect(clips).toBeGreaterThan(500);
+    expect(outside).toBeGreaterThan(100);
+  });
+
+  it("a page restore brings back the page's animation as saved; a book restore brings back every page's", () => {
+    for (let seed = 1; seed <= 40; seed += 1) {
+      const base = withRandomMotion(randomBook(seed), seed);
+      const animated = base.pages.find((p) => p.motion?.clips.length);
+      if (!animated) continue;
+      const version = asVersion(base);
+      // Since that version: one page's clips deleted and its camera and hold cleared, another page's first clip changed.
+      const other = base.pages.find((p) => p.id !== animated.id && p.motion?.clips.length);
+      const edits: DocOp[] = [
+        ...animated.motion!.clips.map((c): DocOp => ({ op: 'motion', pageId: animated.id, id: c.id, patch: null })),
+        { op: 'page_motion', pageId: animated.id, patch: null },
+        ...(other ? [{ op: 'motion', pageId: other.id, id: other.motion!.clips[0].id, patch: { at: { anchor: 'reveal', ms: 2500 } } } as DocOp] : [])
+      ];
+      const current = applyOps(base, edits);
+      expect(motionOf(current, animated.id), `seed ${seed}`).toBeUndefined();
+      const page = restore(current, version, { kind: 'page', pageId: animated.id, mode: 'replace', part: 'all' });
+      expect(motionOf(page, animated.id), `seed ${seed} page`).toEqual(animated.motion);
+      if (other) expect(motionOf(page, other.id), `seed ${seed} other page untouched`).toEqual(motionOf(current, other.id));
+      const book = restore(current, version, { kind: 'book' });
+      for (const p of base.pages) expect(motionOf(book, p.id), `seed ${seed} book ${p.id}`).toEqual(p.motion);
+    }
+  });
 });
 
 describe('I1 on panelized pages: frame sources and image overlays (K2a)', () => {

@@ -41,6 +41,7 @@ import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pag
 import { useCostFormat, type CostFormat } from './costFormat';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { keepRefusedInComposer } from '../conversation/composerBus';
+import { proEditorV2On } from '../../../shared/comic/capabilities';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -171,6 +172,16 @@ export const PageCard: React.FC<{
   const target: RenderTarget = { kind: 'page', id: page.id };
   const render = (safe = false) => fire('render', () => studio.act({ type: 'render_pages', pageIds: [page.id], force: true, ...(safe ? { safe: true } : {}) }));
   const open = () => studio.openPage(page.id);
+  // Pro editor flag on (PE-SHELL; master plan §2.2 Entry): "Edit lettering" opens the same editor on the lettering, with
+  // the first balloon in reading order selected so its lettering panel is open (Select tool). Overlay lettering only.
+  const firstLine = page.panels.flatMap((p) => p.lines).find((l) => l.text.trim());
+  const letteringEntry = proEditorV2On(studio.caps) && !compact && drawn && !blocked && doc.format.lettering === 'overlay' && !!firstLine;
+  const openLettering = () => {
+    if (!firstLine) return;
+    // The editor opens on the Select tool (its default) with this balloon selected ("Show me" path).
+    studio.setSelection({ pageId: page.id, lineIds: [firstLine.id], surface: 'page_editor' });
+    studio.openPage(page.id);
+  };
   const scriptView = !compact && (status === 'planned' || status === 'empty' || (drawn && showScript));
   const mismatch = drawn && !blocked ? aspectMismatch(doc, asset) : null;
   const priceId = `price-${page.id}`;
@@ -182,6 +193,7 @@ export const PageCard: React.FC<{
       page={page}
       imageUrl={imageUrl}
       srcWidth={blocked ? undefined : () => imageUrl}
+      urlForPath={(path, widthPx) => studio.urlFor(path, widthPx ? { width: widthPx } : undefined)}
       alt={`Page ${page.n}`}
       overlay={
         <RenderOverlay
@@ -316,7 +328,12 @@ export const PageCard: React.FC<{
         {(status === 'failed' || status === 'stale' || status === 'planned' || (status === 'ready' && !compact)) && <PriceNote id={priceId}>{cost.quote(price)}</PriceNote>}
         {mismatch && <FitButton studio={studio} target={target} want={mismatch.want} disabled={busy} short={compact} />}
         {!compact && <VersionsButton studio={studio} target={target} label={`Page ${page.n}`} />}
-        <GhostButton size="xs" onClick={open} aria-label={`${drawn ? 'Edit' : 'Open'} page ${page.n}`} className={compact ? '' : 'ml-auto'}>
+        {letteringEntry && (
+          <GhostButton size="xs" onClick={openLettering} aria-label={`Edit lettering on page ${page.n}`} className="ml-auto" data-testid="edit-lettering">
+            Edit lettering
+          </GhostButton>
+        )}
+        <GhostButton size="xs" onClick={open} aria-label={`${drawn ? 'Edit' : 'Open'} page ${page.n}`} className={compact || letteringEntry ? '' : 'ml-auto'}>
           {drawn ? 'Edit' : 'Open'}
         </GhostButton>
       </footer>
@@ -615,7 +632,7 @@ export const BookSection: React.FC<{ studio: StudioController; doc: ComicDoc; ed
             label="Title page"
             description="The cover title and tagline on a page of their own"
             checked={book.titlePage}
-            onChange={(on) => set({ titlePage: on }, on ? 'Title page added — free, made by software' : 'Title page hidden')}
+            onChange={(on) => set({ titlePage: on }, on ? 'Title page added — made by software' : 'Title page hidden')}
             after={book.titlePage ? editBtn('title', 'Preview') : undefined}
           />
         </div>
@@ -626,7 +643,7 @@ export const BookSection: React.FC<{ studio: StudioController; doc: ComicDoc; ed
             label="“The End” page"
             description="A closing page with your credits"
             checked={book.endPage}
-            onChange={(on) => set({ endPage: on }, on ? '“The End” added — free, made by software' : '“The End” hidden')}
+            onChange={(on) => set({ endPage: on }, on ? '“The End” added — made by software' : '“The End” hidden')}
             after={book.endPage ? editBtn('end', 'Credits') : undefined}
           />
         </div>
@@ -637,7 +654,7 @@ export const BookSection: React.FC<{ studio: StudioController; doc: ComicDoc; ed
             label="Back cover"
             description="Your blurb on the back (defaults to the logline)"
             checked={book.backCover === 'auto'}
-            onChange={(on) => set({ backCover: on ? 'auto' : 'none' }, on ? 'Back cover added — free, made by software' : 'Back cover hidden')}
+            onChange={(on) => set({ backCover: on ? 'auto' : 'none' }, on ? 'Back cover added — made by software' : 'Back cover hidden')}
             after={book.backCover === 'auto' ? editBtn('back_cover', 'Blurb') : undefined}
           />
         </div>
@@ -654,7 +671,7 @@ export const BookSection: React.FC<{ studio: StudioController; doc: ComicDoc; ed
           onChange={(on) => set({ uniformTrim: on }, on ? 'Exports use one trim size' : 'Exports keep each image’s own shape')}
         />
       </div>
-      <TimelineDialog open={!!plate} onClose={() => setPlate(null)} title={plate ? `${PLATE_LABEL[plate]} · free` : ''}>
+      <TimelineDialog open={!!plate} onClose={() => setPlate(null)} title={plate ? PLATE_LABEL[plate] : ''}>
         {plate && (
           <PlateEditor
             doc={doc}

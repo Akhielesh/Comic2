@@ -409,19 +409,21 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- The Atlas repository, its design branch, commit **`292b17b6`** (2026-11-05, checked for S2a on 2026-11-12). The
-  design files are byte-identical from `0677199b` through `292b17b6`: the 7 commits since change connector, beta-copy
-  and `lib/server` code, tests and docs, and the only design-list hit is again Atlas's own connector copy guard
-  (`tests/lib/beta-connector-copy.test.ts`, a Google Photos case), nothing to port. At `0677199b` the design files
+- The Atlas repository, its design branch, commit **`c567c621`** (checked for the S2b release on 2026-11-12). The
+  design files are byte-identical from `0677199b` through `c567c621`: the one commit after `7a6f3e16` touches none of
+  them, and the 4 commits after `292b17b6` change only `lib/server`, deploy, CI and docs, nothing to port. At the S2a
+  check (`292b17b6`) the 7 commits since `0677199b` changed connector,
+  beta-copy and `lib/server` code, tests and docs, and the only design-list hit was again Atlas's own connector copy
+  guard (`tests/lib/beta-connector-copy.test.ts`, a Google Photos case). At `0677199b` the design files
   were **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
   `components/WorkspacePrimitives.tsx`, `components/shell/**`, `GlobalNotificationBar`, `PublicSiteChrome`,
   `GlobalFooter`, `WorkspaceShell`, `AuthenticatedAppHeader`, `app/layout.tsx`, `AppShell` and the UI guide; the
   12 commits since are security dependency bumps, connector fixes and public beta-copy pages, and the only
   design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
-  agreed with the Atlas session from `0677199b`. Previous syncs `0677199b`, `acbdaff7` (= `98240e5b` design files),
+  agreed with the Atlas session from `0677199b`. Previous syncs `7a6f3e16`, `292b17b6`, `0677199b`, `acbdaff7` (= `98240e5b` design files),
   `496f265c`, `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
-  `git diff 292b17b6 <design branch> -- app/globals.css
+  `git diff c567c621 <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).
@@ -487,6 +489,23 @@ No Atlas token changes name or value. The default (non-Atlas) skin's `--ds-info`
 CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3.7 from the spark.
 
 ## Changelog
+
+### S2b — the app shell (DS-2; Atlas `7a6f3e16`, design files = `0677199b`, 2026-11-12)
+
+- DS-2 (S2): index.html's body and #app-splash read --ds-canvas/--ds-ink with the skin values as fallbacks (appShell.test.ts
+  pins them); the body text stays the light ink for the legacy pages. The site header is AppHeader. The App root reads the
+  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab).
+- Lead decision D8: the browser chrome colour (both `theme-color` metas and `public/app.webmanifest` theme_color) is the
+  Atlas paper, #ffffff light and #0a0a0a dark, pinned to the `[data-ds-skin="atlas"]` --ds-canvas by appShell.test.ts. The
+  default skin's #FAF9F5 / #262624 read as a warm band above the dark Atlas page. Not changed: the manifests'
+  background_color, `public/comics.webmanifest` and the QA page `qa/comic-qa.html`.
+- Lead decision D9: the shell's Contact link, the home page, the comics landing (DS-3) and the studio-access refusal write
+  to the one support address, `SUPPORT_EMAIL` (components/legal/contacts.ts, Atlas #263's constant). ComicReader's footer address (Atlas #263
+  owns that line) and Stream Studio (live/**, owner to confirm) are unchanged.
+- Atlas #263 (lead decision (a)): #263 is not in dev, so DS-2's `components/layout/LegalMicroLinks.tsx` ships as DS-2
+  built it (on `SUPPORT_EMAIL`). The rebase recipe for when #263 reaches dev (keep #263's nav, anchors and handlers,
+  DS-2's link class and 44 px targets, `CONTACT_HREF = mailto:${SUPPORT_EMAIL}`) is a carry note for the next
+  integration.
 
 ### S2a — the colour layer (Atlas `292b17b6`, design files = `0677199b`, 2026-11-12)
 

@@ -106,6 +106,7 @@ export const DREAMSTREAM_SKIN: SkinTokens = {
     '--ds-z-reader': '80',
     '--ds-z-scrim': '85',
     '--ds-z-sheet': '86',
+    '--ds-z-dialog': '88',
     '--ds-z-popover': '90',
     '--ds-z-toast': '95',
     '--ds-z-tooltip': '100',

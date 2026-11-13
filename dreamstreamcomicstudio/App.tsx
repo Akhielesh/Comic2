@@ -59,7 +59,14 @@ import { createStudioProject } from './components/comicstudio/studioApi';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
-import { Loader2 } from 'lucide-react';
+import { Lock } from 'lucide-react';
+import { cn } from './lib/utils';
+import { CANVAS_BG, INK, Z } from './components/chat/studioDesign';
+import { Button } from './components/ds/Button';
+import { EmptyState } from './components/ds/EmptyState';
+import { ErrorState } from './components/ds/ErrorState';
+import { LoadingState } from './components/ds/LoadingState';
+import { toast, ToastHost, TOAST_DURATION_MS } from './components/ds/Toast';
 import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppStatusBar } from './components/status/AppStatusBar';
@@ -69,9 +76,8 @@ import { ComicsHeader } from './components/comicshost/ComicsHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
+import { resolveProjectOpen } from './services/projectOpen';
 import { comicsChromeFor } from './components/comicshost/hostRouting';
-import { CANVAS_BG, INK } from './components/chat/studioDesign';
-import { cn } from './lib/utils';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
@@ -160,51 +166,60 @@ const VIEW_PRODUCT: Partial<Record<AppView, ProductId>> = {
   comicstudio: 'comic_studio',
 };
 
-// Friendly gate for accounts confined to specific studios (product_access rows exist).
-const ProductGateScreen: React.FC<{ productLabel: string; canStream: boolean; onGoHome: () => void }> = ({ productLabel, canStream, onGoHome }) => (
-  <div className="min-h-[70vh] flex items-center justify-center p-4">
-    <div className="max-w-md w-full bg-white border-2 border-black rounded-2xl shadow-comic p-8 text-center">
-      <div className="w-14 h-14 mx-auto rounded-2xl bg-brand-yellow border-4 border-black shadow-comic flex items-center justify-center font-display text-2xl">
-        DS
-      </div>
-      <h2 className="font-display text-2xl mt-4">This account doesn&apos;t include {productLabel}</h2>
-      <p className="text-sm text-slate-600 mt-2">
-        Your account is set up for specific studios. Ask your admin to enable {productLabel} for you.
-      </p>
-      <div className="flex flex-wrap gap-2 justify-center mt-6">
-        {canStream && (
-          <button
-            onClick={() => { void openLiveApp('/live.html'); }}
-            className="px-4 py-2 bg-brand-yellow border-2 border-black rounded-lg font-bold shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
-          >
-            Open Stream Studio
-          </button>
-        )}
-        <button
-          onClick={onGoHome}
-          className="px-4 py-2 bg-white border-2 border-black rounded-lg font-bold shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
-        >
-          Back to home
-        </button>
-      </div>
+// Friendly gate for accounts confined to specific studios (product_access rows exist): the DS empty state,
+// in plain words, with the way out (Stream Studio when the account has it, else home).
+export const ProductGateScreen: React.FC<{ productLabel: string; canStream: boolean; onGoHome: () => void }> = ({ productLabel, canStream, onGoHome }) => (
+  <div data-slot="product-gate" className="mx-auto flex min-h-[70vh] w-full max-w-xl items-center px-4 py-12">
+    <EmptyState
+      as="h2"
+      className="w-full"
+      icon={<Lock />}
+      title={`This account doesn’t include ${productLabel}`}
+      description={`Your account is set up for specific studios. Ask your admin to enable ${productLabel} for you.`}
+      action={canStream ? { label: 'Open Stream Studio', onClick: () => { void openLiveApp('/live.html'); } } : { label: 'Back to home', onClick: onGoHome }}
+      secondaryAction={canStream ? { label: 'Back to home', onClick: onGoHome } : undefined}
+    />
+  </div>
+);
+
+// Calm full-screen loader: the page canvas (light or dark, never a flash of colour) with the DS loading
+// state, so a lazy-route switch or the auth check reads as "loading content", not "losing the app". It
+// matches index.html's first-paint splash, so the hand-over from the splash does not jump.
+export const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
+  <div data-slot="app-loader" aria-busy="true" className={cn('flex min-h-screen flex-col items-center justify-center px-4', CANVAS_BG, INK)}>
+    <LoadingState variant="inline" title={label || 'Loading…'} />
+  </div>
+);
+
+// A page that could not open (a private or missing comic, a broken editor link): the DS error state on
+// the canvas, the reason in plain words, Try again (a reload) and Dismiss (back to the app as it was).
+export const SystemErrorScreen: React.FC<{ message: string; onRetry: () => void; onDismiss: () => void }> = ({ message, onRetry, onDismiss }) => (
+  <div data-slot="system-error" className={cn('flex min-h-screen items-center justify-center p-4', CANVAS_BG, INK)}>
+    <div className="flex w-full max-w-md flex-col items-center gap-3">
+      <ErrorState as="h2" className="w-full" title="That didn’t open" description={message} retryLabel="Try again" onRetry={onRetry} />
+      <Button variant="ghost" onClick={onDismiss}>
+        Dismiss
+      </Button>
     </div>
   </div>
 );
 
-// Calm full-screen loader. The old solid-blue flash made every lazy-route switch and
-// auth check look like a hard reload; this matches the app surface so transitions read
-// as "loading content", not "losing the app".
-const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
-  <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
-    <div className="w-14 h-14 rounded-2xl bg-brand-yellow border-4 border-black shadow-comic flex items-center justify-center font-display text-2xl animate-pulse">
-      DS
-    </div>
-    <div className="flex items-center gap-2 text-slate-500 text-sm font-bold">
-      <Loader2 className="w-4 h-4 animate-spin" />
-      {label || 'Loading…'}
-    </div>
-  </div>
-);
+// Views still painted with the legacy kit that lean on the root for their light page: they keep that
+// light page in both themes (the legacy-kit pages keep their light surfaces in dark, atlas-skin.md D5)
+// until their package moves them onto tokens (the dashboard DS-R4, Learn DS-4, the classic editor D4).
+// Every other view sits on the canvas token, light or dark.
+export const LEGACY_PAPER_VIEWS: ReadonlySet<string> = new Set(['dashboard', 'learn', 'editor', 'fontlab']);
+/** The root's page under the views: the canvas token, or the legacy light page for the views above. */
+export const appRootSurface = (view: string): string => (LEGACY_PAPER_VIEWS.has(view) ? 'bg-slate-50' : CANVAS_BG);
+/**
+ * The root div's classes. A gated view (product_access) shows the product gate, which is on the DS, so it
+ * always sits on the canvas, even for a legacy-paper view such as the dashboard. The comics host's own views
+ * (`comicsChrome`: the landing and, signed out, sign-in, Privacy, Terms and the Library; hostRouting.ts
+ * comicsChromeFor) sit on the canvas too and the root owns their ink, so nothing under it inherits the body's
+ * (the light theme's ink in both themes, index.html).
+ */
+export const appRootClass = (view: string, gated: boolean, comicsChrome = false): string =>
+  cn('relative min-h-screen font-sans', gated || comicsChrome ? CANVAS_BG : appRootSurface(view), comicsChrome && INK);
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -340,7 +355,6 @@ const App: React.FC = () => {
   // Capture the code off the URL, keep it across the whole auth round trip
   // (localStorage survives sign-up → email verify → sign-in), and auto-redeem on the
   // first signed-in load — invited people never have to type the code by hand.
-  const [inviteNotice, setInviteNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const inviteRedeemInFlightRef = useRef(false);
   useEffect(() => {
     if (authLoading) return;
@@ -362,15 +376,12 @@ const App: React.FC = () => {
       inviteRedeemInFlightRef.current = false;
       // Invalid/expired codes are cleared too — a dead code must not retry forever.
       clearPendingInviteCode();
-      setInviteNotice({ tone: result.ok ? 'success' : 'error', message: result.message });
+      // The app's one toast slot (components/ds/Toast): a calm card above the tab bar. Accepted: it goes after 8 s;
+      // not accepted (expired, used, invalid): it waits for the person, as the old banner did.
+      toast({ title: result.message, tone: result.ok ? 'healthy' : 'attention', duration: result.ok ? TOAST_DURATION_MS : 0 });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user]);
-  useEffect(() => {
-    if (!inviteNotice || inviteNotice.tone !== 'success') return;
-    const id = window.setTimeout(() => setInviteNotice(null), 8000);
-    return () => window.clearTimeout(id);
-  }, [inviteNotice]);
   // Route uncaught errors / rejections / failed loads into the in-app status bar.
   useEffect(() => installAppStatusCapture(), []);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -434,13 +445,17 @@ const App: React.FC = () => {
     }
     if (local) {
       setIsHydratingProject(true);
-      hydrateProjectAssets(id).finally(() => {
-        setPublicProject(null);
-        setActiveProjectId(id);
-        setCurrentView('reader');
-        setReaderUrlParams(id);
-        setIsHydratingProject(false);
-      });
+      void resolveProjectOpen(() => hydrateProjectAssets(id), () => local)
+        .then((opened) => {
+          // The comic's full state did not load: stay where the reader was asked for (the hook has said
+          // "Couldn't load this comic. Try again."), never a reader on the library card.
+          if (opened.outcome === 'stayed') return;
+          setPublicProject(null);
+          setActiveProjectId(id);
+          setCurrentView('reader');
+          setReaderUrlParams(id);
+        })
+        .finally(() => setIsHydratingProject(false));
       return;
     }
 
@@ -889,20 +904,20 @@ const App: React.FC = () => {
       if (view === 'comicstudio') openComicStudio(id);
       else setCurrentView(view);
     };
-    hydrateProjectAssets(id)
-      .then((hydrated) => {
-        if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
+    void resolveProjectOpen(() => hydrateProjectAssets(id), () => projects.find((candidate) => candidate.id === id))
+      .then((opened) => {
+        // The comic's full state did not load (EGRESS-DB E1: the library holds only its card). Stay on the library:
+        // the hook has said "Couldn't load this comic. Try again.", and a workspace on a card would show a comic
+        // with pieces missing and refuse every change. Opening it again retries.
+        if (opened.outcome === 'stayed') return;
+        if (opened.outcome === 'opened' && activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
           setPublicProject(null);
         }
         setActiveProjectId(id);
-        // Route off the freshly hydrated project (not the stale render-time snapshot),
-        // so a migrated/updated pipelineMode opens the correct workspace.
-        routeTo(hydrated);
-      })
-      .catch(() => {
-        // Hydration failed — still open the project, best-effort on the workspace.
-        setActiveProjectId(id);
-        routeTo(projects.find((candidate) => candidate.id === id));
+        // Route off the freshly hydrated project (not the stale render-time snapshot), so a migrated/updated
+        // pipelineMode opens the correct workspace. When only the image signing failed, the comic is whole and
+        // still opens, best-effort, from the copy in memory.
+        routeTo(opened.project);
       })
       .finally(() => setIsHydratingProject(false));
   };
@@ -1002,28 +1017,7 @@ const App: React.FC = () => {
   };
 
   if (systemError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white p-4">
-        <div className="max-w-md p-6 bg-red-950/30 border border-red-500/50 rounded-lg text-center">
-          <h2 className="text-xl font-bold text-red-400 mb-2">System Error</h2>
-          <p className="mb-4">{systemError}</p>
-          <div className="flex gap-2 justify-center mt-6">
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded font-bold text-white transition-colors"
-            >
-              Retry
-            </button>
-            <button
-              onClick={() => setSystemError(null)}
-              className="px-4 py-2 bg-transparent border border-red-500/50 hover:bg-red-900/30 rounded font-bold text-red-300 transition-colors"
-            >
-              Ignore
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <SystemErrorScreen message={systemError} onRetry={() => window.location.reload()} onDismiss={() => setSystemError(null)} />;
   }
 
   // The share reader paints at once from its boot card; it never waits for auth or key checks
@@ -1088,23 +1082,10 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      {/* The comics host's own views sit on the skin's paper (dark in dark mode), as the landing does; elsewhere the
-          app's page colour is unchanged. The wrapper also owns the ink, so nothing under it inherits the body's. */}
-      <div className={cn('min-h-screen font-sans relative', comicsChrome ? cn(CANVAS_BG, INK) : 'bg-slate-50')}>
-        {inviteNotice && (
-          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-md">
-            <div
-              className={`flex items-start gap-2 rounded-xl border-2 px-4 py-3 text-sm font-bold shadow-lg ${
-                inviteNotice.tone === 'success'
-                  ? 'border-green-600 bg-green-50 text-green-700'
-                  : 'border-red-500 bg-red-50 text-red-600'
-              }`}
-            >
-              <span className="flex-1">{inviteNotice.message}</span>
-              <button onClick={() => setInviteNotice(null)} aria-label="Dismiss" className="opacity-60 hover:opacity-100">✕</button>
-            </div>
-          </div>
-        )}
+      {/* The comics host's own views sit on the skin's paper and own their ink (appRootClass), as the landing does. */}
+      <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome)}>
+        {/* The app's one toast slot: every app toast renders here (portalled to <body>, above the tab bar). */}
+        <ToastHost />
         {showSharedHeader && (() => {
           const header = (
             <StaticSiteHeader
@@ -1125,9 +1106,9 @@ const App: React.FC = () => {
           // space and slides back down when the cursor reaches the top edge.
           if (effectiveView === 'chat') {
             return (
-              <div className="group sticky top-0 z-50 h-0">
+              <div className={cn('group sticky top-0 h-0', Z.header)}>
                 <div className="absolute inset-x-0 top-0 h-3" />
-                <div className="absolute inset-x-0 top-0 -translate-y-full group-hover:translate-y-0 focus-within:translate-y-0 transition-transform duration-200 ease-out shadow-lg">
+                <div className="absolute inset-x-0 top-0 -translate-y-full shadow-[shadow:var(--ds-shadow-panel)] transition-transform duration-[var(--ds-motion-medium,200ms)] ease-[var(--ds-ease,cubic-bezier(0.4,0,0.2,1))] focus-within:translate-y-0 group-hover:translate-y-0 motion-reduce:transition-none">
                   {header}
                 </div>
               </div>

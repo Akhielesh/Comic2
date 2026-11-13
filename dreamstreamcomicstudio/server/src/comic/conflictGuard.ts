@@ -210,6 +210,7 @@ function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
   let speaker: string | null | undefined;
   let removed = false;
   let toPanel: string | undefined;
+  let toIndex: number | undefined;
   let balloon: Partial<Balloon> | undefined;
   let style: LetterStylePatch | null | undefined;
   for (const op of ops) {
@@ -221,7 +222,10 @@ function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
         if ('speakerId' in op.patch) speaker = op.patch.speakerId ?? null;
         if (op.patch.style !== undefined) style = op.patch.style ?? null;
       }
-    } else if (op.op === 'line_move') toPanel = op.toPanelId;
+    } else if (op.op === 'line_move') {
+      toPanel = op.toPanelId;
+      toIndex = op.index;
+    }
     else if (op.op === 'balloon') balloon = { ...(balloon || {}), ...op.patch };
     else if (op.op === 'line_style') style = op.patch;
   }
@@ -237,7 +241,11 @@ function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
     const parts = [`“${clip(line.text, 120)}”`];
     if (kind !== undefined) parts.push(`as ${kindWord(line.kind)}`);
     if (speaker !== undefined) parts.push(line.speakerId ? `said by ${nameOf(doc, line.speakerId)}` : 'with no speaker');
-    if (toPanel) parts.push(`in panel ${at!.panel.n}`);
+    if (toPanel) {
+      // A move inside the same panel only changes the order, so name the line's place in it.
+      const k = at!.panel.lines.findIndex((l) => l.id === lineId) + 1;
+      parts.push(toPanel === at!.panel.id && k > 0 ? `line ${k} of panel ${at!.panel.n}` : `in panel ${at!.panel.n}`);
+    }
     const placed = at!.page.balloons.find((b) => b.lineId === lineId);
     if (balloon) parts.push(placed ? `balloon where you put it, at ${balloonSpot(placed)}` : 'balloon placed automatically');
     if (style !== undefined) parts.push(line.style && Object.keys(line.style).length ? `your look (${styleWords(line.style)})` : 'the comic’s usual look');
@@ -254,7 +262,13 @@ function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
     if (speaker !== undefined) parts.push(speaker ? `said by ${nameOf(doc, speaker)}` : 'with no speaker');
     if (toPanel) {
       const panel = at?.page.panels.find((p) => p.id === toPanel);
-      parts.push(panel ? `moved to panel ${panel.n}` : 'moved to another panel');
+      if (!panel) parts.push('moved to another panel');
+      else if (panel.id === at!.panel.id) {
+        // B-TOOL #7: inside the same panel, say where in it the line lands (as applyLineMove places it).
+        const rest = panel.lines.length - 1;
+        const k = (typeof toIndex === 'number' && Number.isFinite(toIndex) ? Math.min(rest, Math.max(0, Math.floor(toIndex))) : rest) + 1;
+        parts.push(`moved to line ${k} of panel ${panel.n}`);
+      } else parts.push(`moved to panel ${panel.n}`);
     }
     if (balloon) {
       const placed = at?.page.balloons.find((b) => b.lineId === lineId);

@@ -38,6 +38,10 @@
 //   - sendNow(id): with caps.liveAgent.steer and a steer function, the note joins the running turn
 //     (studioApi.steerStudio, A2; injectable through UseStudioDeps); otherwise Stop the director, then send (D2).
 //   - The queue is saved per project in sessionStorage (messageQueue.ts), every access in try/catch.
+//
+// Live agent, presence (agent-editor plan §3 A2 "Presence", wave 2 A4): `presence` is where the director is working
+// right now, from the `where` of an activity start (studioReducer presenceOf). It clears on that activity's end, on its
+// stream's done or error, and on Stop. No event carries `where` → it stays null and nothing else changes. No timer.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp, type StudioAction } from '../../shared/comic/ops';
@@ -91,6 +95,7 @@ import {
   isTargetRendering,
   isTurnLocked,
   needsRefresh,
+  presenceOf,
   queueOf,
   renderingCount,
   studioReducer,
@@ -123,9 +128,23 @@ import {
   type DrainRequest,
   type QueueAddRefusal,
   type QueueHold,
+  type QueueHoldInput,
   type QueuedNote
 } from './messageQueue';
 import { composeInStudio } from './conversation/composerBus';
+
+/**
+ * What holds the live queue, read from the studio state: the one input the send path, the Up next line and the drain all
+ * pass to holdReason, so they cannot drift (SETTLE-UI #3). It carries this tab's pending message: a 'sending' one passes
+ * the question it follows, so Up next never says "Answer the question above first" while that answer is on its way.
+ */
+export const queueHoldInputOf = (s: StudioState): QueueHoldInput => ({
+  doc: s.doc,
+  held: queueOf(s).held,
+  planning: isPlanning(s),
+  failed: s.pendingMessage?.status === 'failed',
+  pending: s.pendingMessage
+});
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -988,9 +1007,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       // message holds them, so "Try again" (which comes back through here) goes before them.
       const q = queueOf(s);
       const locked = !!messageInFlightRef.current || isTurnLocked(s);
-      const failed = s.pendingMessage?.status === 'failed';
       const drainsNext =
-        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed }));
+        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason(queueHoldInputOf(s)));
       // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
       const note: QueuedNote | null =
         files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
@@ -1153,6 +1171,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   /** <img> load failures per path within IMG_ERROR_WINDOW_MS (a broken file vs. an expired link). */
   const loadErrorsRef = useRef(new Map<string, { n: number; first: number }>());
   const signTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped when the signer gives up on a path, so isUnsignable readers render again (no state of its own). */
+  const [unsignableSeq, bumpUnsignable] = useReducer((n: number) => n + 1, 0);
 
   const flushSigning = useCallback(async () => {
     signTimerRef.current = null;
@@ -1170,19 +1190,28 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       signingRef.current.add(p);
       signAttemptsRef.current.set(p, (signAttemptsRef.current.get(p) || 0) + 1);
     });
+    /** A path was given up on in this round (isUnsignable turns true for it). */
+    let gaveUp = false;
     try {
       const signed = await signStudioUrls(projectRef.current, paths);
       if (generation !== generationRef.current) return;
       guarded(generation)({ type: 'urls_merge', urls: signed, now: Date.now() });
       Object.keys(signed).forEach((p) => signAttemptsRef.current.delete(p));
       paths.forEach((p) => {
-        if (!signed[p]) unsignableRef.current.add(p);
+        if (signed[p] || unsignableRef.current.has(p)) return;
+        unsignableRef.current.add(p);
+        gaveUp = true;
       });
     } catch {
       /* the placeholder stays; the next render or image error asks again (bounded) */
+      // The last allowed try failed: that path is given up on now.
+      gaveUp = generation === generationRef.current && paths.some((p) => (signAttemptsRef.current.get(p) || 0) >= MAX_SIGN_ATTEMPTS);
     } finally {
       paths.forEach((p) => signingRef.current.delete(p));
     }
+    // Renew isUnsignable's identity so the panes reading it render again: a failed try dispatches nothing else. After
+    // the in-flight marks are gone, so that render reads true.
+    if (gaveUp && mountedRef.current) bumpUnsignable();
   }, [guarded]);
 
   const requestSign = useCallback(
@@ -1257,11 +1286,18 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [urls, requestSign, assetWithVariants]
   );
 
-  // The signer gave up on this path (never stored, broken, out of attempts): exactly urlFor's test for skipping a
-  // variant, so a chat tile can say so instead of waiting forever (PF-2 #7). Refs only: stable, never fetches.
+  /**
+   * The signer gave up on this path (PF-2 #7): the server declined it, MAX_SIGN_ATTEMPTS signing tries failed, or the
+   * image kept failing to load — urlFor's test for skipping a variant, except that the last allowed try still in flight
+   * is not given up on yet (it may come back signed: the tile keeps its shimmer, never flickers "Preview unavailable").
+   * Cards show "Preview unavailable" instead of waiting forever. Refs only: no request. Its identity changes when a
+   * path is given up on, so the panes reading it render again.
+   */
   const isUnsignable = useCallback(
-    (path: string): boolean => unsignableRef.current.has(path) || (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS,
-    []
+    (path: string): boolean =>
+      unsignableRef.current.has(path) || (!signingRef.current.has(path) && (signAttemptsRef.current.get(path) || 0) >= MAX_SIGN_ATTEMPTS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the refs are read live; the count only renews the identity
+    [unsignableSeq]
   );
 
   // An <img> anywhere in the studio failed to load one of our URLs: it expired or was
@@ -1285,8 +1321,10 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       dispatch({ type: 'urls_invalidate', paths: [path] });
       if (rec.n > MAX_SIGN_ATTEMPTS) {
         // Stop re-signing it; urlFor falls back from a broken variant to its original.
+        const fresh = !unsignableRef.current.has(path);
         unsignableRef.current.add(path);
         signAttemptsRef.current.set(path, MAX_SIGN_ATTEMPTS);
+        if (fresh) bumpUnsignable();
         return;
       }
       requestSign(path);
@@ -1520,7 +1558,6 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const queueOn = liveQueueOn(caps);
   const queueState = queueOf(state);
   const turnLocked = isTurnLocked(state);
-  const planning = isPlanning(state);
   const queueNotes = queueState.notes;
   // The creator's last message failed before the server took it: the drain must not put a new message in its place.
   const pendingFailed = state.pendingMessage?.status === 'failed';
@@ -1531,7 +1568,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       ? null
       : messageBusy
         ? queueState.held
-        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed });
+        : holdReason(queueHoldInputOf(state));
   const hasBase = !!state.base;
   /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
   const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
@@ -1558,7 +1595,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       sendQueued([express]);
       return;
     }
-    const hold = holdReason({ doc: stateRef.current.doc, held: q.held, failed: stateRef.current.pendingMessage?.status === 'failed' });
+    const hold = holdReason(queueHoldInputOf(stateRef.current));
     if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
     sendQueued(batchesForDrain(ready)[0] ?? []);
   }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued, steerSettled]);
@@ -1670,6 +1707,9 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [sendQueued, cancel, say]
   );
 
+  /** Where the director is working (activity.where), or null: the same object while it lasts. */
+  const presence = presenceOf(state);
+
   return useMemo(
     () => ({
       doc,
@@ -1724,6 +1764,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       refreshPublication,
       readerRequest,
       ...(state.lastHistoryVersion ? { lastHistoryVersion: state.lastHistoryVersion } : {}),
+      // Live agent, presence (A4): where the director is editing right now, or null.
+      presence,
       // Live queue (plan §3 A1): present only while caps.liveAgent.queue is on (absent = today's behaviour).
       ...(queueOn
         ? {
@@ -1796,6 +1838,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       refreshPublication,
       readerRequest,
       state.lastHistoryVersion,
+      presence,
       queueOn,
       queueNotes,
       queueHold,

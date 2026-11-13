@@ -11,7 +11,7 @@ import {
   type RefAsset,
   type RenderState
 } from '../../../shared/comic/doc.js';
-import { LETTERING_PRESETS } from '../../../shared/comic/lettering/style.js';
+import { LETTERING_PRESETS, PRO_LETTERING_PRESETS, type LetteringPresetId } from '../../../shared/comic/lettering/style.js';
 import { getImageModel } from '../../../shared/comic/models.js';
 import { RATING_RULES, SAFE_TAKE_LINE } from '../../../shared/comic/safety.js';
 import {
@@ -1446,6 +1446,13 @@ describe('in-art lettering look (lettering.md §9)', () => {
     const classic = lettered(() => undefined);
     expect(classic).toContain(LETTERING_LOOK.speech);
     expect(classic).toContain(LETTERING_PRESETS.classic.promptHint);
+  });
+
+  it("a Pro look's promptHint reaches in-art lettering (PE-LETTER wave note 6), never the classic one in its place", () => {
+    // A Pro look is stored only by a client with PRO_EDIT_OPS_PATCHABLE on, or kept on load after a rollback.
+    const horror = lettered((d) => (d.letterStyle = { presetId: 'horror' as unknown as LetteringPresetId }));
+    expect(horror).toContain(PRO_LETTERING_PRESETS.horror.promptHint);
+    expect(horror).not.toContain(LETTERING_PRESETS.classic.promptHint);
   });
 
   it('caseless scripts drop case words from the hint', () => {

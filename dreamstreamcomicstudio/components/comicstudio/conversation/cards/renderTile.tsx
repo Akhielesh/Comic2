@@ -573,9 +573,18 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
     </>
   );
 
+  // A tile that shows "Out of date" names itself from what it shows, after a hidden "Open ": an aria-label of
+  // "Open <label>" would leave the visible badge words out of the button's name (axe label-content-name-mismatch).
+  const namedByContent = !busy && !!stale && hasImage;
   // The whole tile opens the image — except while it holds its own control (Check again): no button in a button.
   return onOpen && ((hasImage && url) || noPreview) && !(stuck && recheck) ? (
-    <button type="button" onClick={onOpen} className={cx('block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40', className)} aria-label={`Open ${label}`}>
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cx('block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40', className)}
+      aria-label={namedByContent ? undefined : `Open ${label}`}
+    >
+      {namedByContent && <span className="sr-only">Open </span>}
       {content}
     </button>
   ) : (

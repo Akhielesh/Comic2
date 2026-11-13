@@ -119,8 +119,9 @@ import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, MAX_BALLOON_SNAPSHOT, MO
 // --- Ship 2 (K2a): frames carry their lettering and overlays along (pure; space.ts never imports this module) ---
 import { panelPointMap, type PointMap } from './panelize/space.js';
 import {
-  LETTERING_PRESETS,
   MAX_SAFE_MARGIN,
+  isStoredLookId,
+  mergeNamedStyles,
   mergeStylePatch,
   type LetteringStyle,
   type LetteringStyleOpPatch,
@@ -452,8 +453,8 @@ export const PRO_PAGE_OPS_PATCHABLE = true;
 /** The Pro Edit ops: page motion (free content edits; no spend, no new asset). Objects ride the existing `layer` op. */
 export const PRO_EDIT_OPS: readonly DocOp['op'][] = ['motion', 'page_motion'];
 /**
- * One-line switch (master plan §2.10): the Pro Edit ops join CLIENT_PATCHABLE_OPS. OFF until the S2 integration flips it,
- * after PE-SERVER's sanitizer (server/src/comic/sanitize/motion.ts) is deployed. Off, a client batch carrying one is
+ * One-line switch (master plan §2.10): the Pro Edit ops join CLIENT_PATCHABLE_OPS. OFF until the package that flips it,
+ * after the PE-SERVER deploy (its sanitizer, server/src/comic/sanitize/motion.ts) — never in S2b (lead decision D1). Off, a client batch carrying one is
  * refused ("can't be changed directly"); every build still applies them when the server streams them (KNOWN_DOC_OPS)
  * and computes their inverses (undo.ts), so the contract ships ahead of any writer.
  */
@@ -1037,7 +1038,9 @@ const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): C
   const cur = letterStyleOf(doc);
   const next: LetteringStyle = { ...cur };
   if (patch.presetId !== undefined && patch.presetId !== null) {
-    if (!LETTERING_PRESETS[patch.presetId]) return doc;
+    // A base or Pro look, or a newer build's look the doc stored (kept on load, PE-0): the undo of a restyle after a
+    // rollback restores it with its patches instead of dropping the whole op (the reset before it would wipe them).
+    if (!isStoredLookId(patch.presetId)) return doc;
     if (patch.presetId !== cur.presetId) {
       next.presetId = patch.presetId;
       if (!patch.keepOverrides) {
@@ -1082,6 +1085,13 @@ const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): C
   if (patch.safeMargin === null) delete next.safeMargin;
   else if (typeof patch.safeMargin === 'number' && Number.isFinite(patch.safeMargin)) {
     next.safeMargin = Math.min(MAX_SAFE_MARGIN, Math.max(0, patch.safeMargin));
+  }
+  // Saved named styles (PE-LETTER; Pro fields, C-9: only a server with PRO_EDIT_OPS_PATCHABLE on accepts them from a
+  // client): an entry upserts that style, null deletes it, through the shared merge (≤ PRO_LETTER_LIMITS.namedStyles).
+  if (isObject(patch.named)) {
+    const named = mergeNamedStyles(next.named, patch.named);
+    if (named) next.named = named;
+    else delete next.named;
   }
   return { ...doc, letterStyle: next };
 };

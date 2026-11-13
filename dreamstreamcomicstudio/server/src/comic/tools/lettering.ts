@@ -10,8 +10,10 @@
 // Results are honest sentences: what changed (counts, pages), what was kept and why, and — when a
 // target matched nothing — what actually exists ("No whisper balloons; page 1 has speech ×2, caption ×3").
 
-import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
-import type { DocOp } from '../../../../shared/comic/ops.js';
+import { findPage, resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
+import { PRO_EDIT_OPS_PATCHABLE, applyOps, type DocOp } from '../../../../shared/comic/ops.js';
+import { placeLine } from '../../../../shared/comic/dialogue/placement.js';
+import type { Placement } from '../../../../shared/comic/dialogue/types.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
 import { drawnSpotPatch, estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions, planLettering, PLAN_W, withDrawnSpots } from '../../../../shared/comic/lettering/layout.js';
 import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
@@ -21,13 +23,14 @@ import {
   DEFAULT_LETTERING,
   DEFAULT_SAFE_MARGIN,
   FONT_IDS,
-  LETTERING_PRESETS,
   LETTERING_PRESET_IDS,
   LINE_KINDS,
   NAMED_COLORS,
+  PRO_LETTERING_PRESET_IDS,
   SFX_EFFECTS,
   TAIL_STYLES,
   TEXT_CASES,
+  letteringPresetOf,
   normalizeColor,
   presetForComic,
   resolveLetterStyle,
@@ -45,6 +48,7 @@ import { defineTool, toolArgError, type DirectorTool, type SanitizeCtx, type Too
 import type { DirectorTurn } from '../tools.js';
 import type { StudioContext } from '../types.js';
 import { LETTERING_SANITIZERS } from '../sanitize/lettering.js';
+import { conflictToolNote, guardUserEdits, recordConflicts, type BlockedEdit } from '../conflictGuard.js';
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -94,8 +98,9 @@ const FONT_ALIASES: Record<string, FontId> = {
   hindi: 'kalam', devanagari: 'kalam', 'noto': 'noto-sans', 'plain': 'noto-sans', sans: 'noto-sans'
 };
 
+/** The Latin faces to offer (the 12 base faces + Noto Sans); a comic's script faces are picked by its language. */
 const fontChoices = () =>
-  FONT_IDS.filter((id) => FONT_REGISTRY[id].source === 'fontsource' || id === 'noto-sans')
+  FONT_IDS.filter((id) => !id.startsWith('noto-') || id === 'noto-sans')
     .map((id) => `${FONT_REGISTRY[id].label ?? id} (${id})`)
     .join(', ');
 
@@ -110,13 +115,21 @@ const parseFont = (raw: unknown): FontId => {
   throw toolArgError(`I don't have a font called "${str(raw, 40)}". Choose one of: ${fontChoices()}.`);
 };
 
+/**
+ * The looks the director may pick: the 8 base looks, plus the 16 Pro looks only while PRO_EDIT_OPS_PATCHABLE is on
+ * (PE-LETTER #21). A Pro id travels as a LetteringPresetId at runtime, as style.ts documents; the sanitizers then accept
+ * it only with allowPro.
+ */
+const presetChoices = (): readonly LetteringPresetId[] =>
+  PRO_EDIT_OPS_PATCHABLE ? [...LETTERING_PRESET_IDS, ...(PRO_LETTERING_PRESET_IDS as readonly string[] as readonly LetteringPresetId[])] : LETTERING_PRESET_IDS;
+
 const parsePreset = (raw: unknown): LetteringPresetId => {
   const key = str(raw, 60).toLowerCase();
-  const id = LETTERING_PRESET_IDS.find(
-    (p) => p === key || p === key.replace(/[\s-]+/g, '_') || LETTERING_PRESETS[p].name.toLowerCase() === key || LETTERING_PRESETS[p].name.toLowerCase().includes(key)
-  );
+  const choices = presetChoices();
+  const nameOf = (p: LetteringPresetId) => letteringPresetOf(p).name.toLowerCase();
+  const id = choices.find((p) => p === key || p === key.replace(/[\s-]+/g, '_') || nameOf(p) === key || nameOf(p).includes(key));
   if (!id || !key) {
-    throw toolArgError(`Unknown lettering preset "${str(raw, 40)}". Choose one of: ${LETTERING_PRESET_IDS.map((p) => `${p} (${LETTERING_PRESETS[p].name})`).join(', ')}.`);
+    throw toolArgError(`Unknown lettering preset "${str(raw, 40)}". Choose one of: ${choices.map((p) => `${p} (${letteringPresetOf(p).name})`).join(', ')}.`);
   }
   return id;
 };
@@ -201,7 +214,7 @@ const buildStylePatch = (raw: unknown, current: LetterStyle): LetterStylePatch =
   }
   if (raw.align !== undefined) p.align = enumArg(raw.align, ['center', 'left', 'right'] as const, 'alignment');
   if (raw.sfx_effect !== undefined) p.sfxEffect = enumArg(raw.sfx_effect, SFX_EFFECTS, 'sound-effect style');
-  const clean = sanitizeLetterStylePatch(p);
+  const clean = sanitizeLetterStylePatch(p, { allowPro: PRO_EDIT_OPS_PATCHABLE });
   if (!clean && !('textStroke' in p)) throw toolArgError('That style has nothing I can change. Try font, size, text_color, fill_color, shape or tail.');
   // textStroke: null (remove outline) is a valid clearing value the sanitizer keeps.
   return clean ?? { textStroke: null };
@@ -371,6 +384,207 @@ const runSanitizer = (doc: ComicDoc, op: DocOp, ctx: StudioContext): DocOp => {
   return s.sanitize(doc, op, sctx);
 };
 
+/**
+ * The lettering sanitizers over a list of director ops, each checked against the doc as the earlier ones leave it (a
+ * restyle of a line added in the same edit). Ops the sanitizers do not own pass through. Throws the sanitizer's
+ * StudioError (a calm reason) on a bad op.
+ */
+export function sanitizeLetteringOps(doc: ComicDoc, ops: readonly DocOp[], ctx: StudioContext): DocOp[] {
+  let work = doc;
+  const out: DocOp[] = [];
+  for (const op of ops) {
+    const clean = runSanitizer(work, op, ctx);
+    out.push(clean);
+    work = applyOps(work, [clean]);
+  }
+  return out;
+}
+
+/** What a guarded director write committed and what it left for the conflict card (agent-editor plan §3 A3.1). */
+export interface GuardedCommit {
+  /** The doc after the commit (the doc as it was when nothing was allowed). */
+  after: ComicDoc;
+  allowed: DocOp[];
+  blocked: BlockedEdit[];
+  /** "Conflict: you changed … so I left it. …" for the tool result ('' when nothing was held back). */
+  note: string;
+}
+
+/**
+ * How a guarded write's ops hang together beyond what the guard sees (commitGuarded). The guard splits ops by entity;
+ * some ops only make sense next to another one, so when that one is held they are held with it.
+ */
+export interface GuardDeps {
+  /**
+   * Ops that stand or fall together: the same key is one unit, so holding any op of it holds them all (edit_panel_text:
+   * a panel's new, removed and moved lines; dialogue_edit: a reorder or a swap). Undefined = no unit.
+   */
+  unitOf?: (op: DocOp) => string | undefined;
+  /**
+   * Ops that follow from a part of the write, built AFTER the guard so they match what really happens: for the part
+   * that commits (`held` false, against the doc as it stands; guarded too) and for each held item (`held` true, against
+   * the doc after the commit, so "Use the director's" brings them along). set_line and edit_panel_text add a new
+   * speaker to the panel's cast this way, so a held line never leaves a cast change (and a stale page) behind.
+   */
+  follow?: (ops: readonly DocOp[], doc: ComicDoc, held: boolean) => DocOp[];
+}
+
+/** The line ids an op names (a line, its move, its balloon, its own style). */
+export const lineIdsOfOp = (op: DocOp): string[] =>
+  op.op === 'line' || op.op === 'line_move' ? [op.id] : op.op === 'balloon' ? [op.lineId] : op.op === 'line_style' ? [...op.lineIds] : [];
+
+const clipWords = (s: string, max: number): string => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
+};
+
+/**
+ * What the ops carried over to a held item add to its "The director's" words, so the card shows everything "Use the
+ * director's" would apply ("Add “Hello”. Add ARJUN to the panel's cast.").
+ */
+function carriedWords(doc: ComicDoc, ops: readonly DocOp[]): string[] {
+  const out: string[] = [];
+  const textOf = (id: string) => doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).find((l) => l.id === id)?.text;
+  let reorder = false;
+  for (const op of ops) {
+    if (op.op === 'line') {
+      if (op.patch === null) {
+        const t = textOf(op.id);
+        out.push(t ? `Remove “${clipWords(t, 60)}”` : 'Remove a line');
+      } else if (typeof op.index === 'number') out.push(`Add “${clipWords(op.patch.text ?? '', 60)}”`);
+      else if (typeof op.patch.text === 'string') out.push(`Make “${clipWords(textOf(op.id) ?? '', 40)}” read “${clipWords(op.patch.text, 60)}”`);
+    } else if (op.op === 'line_move') reorder = true;
+    else if (op.op === 'panel' && Array.isArray(op.patch?.castIds)) {
+      const before = new Set(findPage(doc, op.pageId)?.panels.find((p) => p.id === op.id)?.castIds ?? []);
+      const names = op.patch.castIds.filter((id) => !before.has(id)).map((id) => doc.cast.find((c) => c.id === id)?.name || 'a speaker');
+      if (names.length) out.push(`Add ${names.join(' and ')} to the panel's cast`);
+    }
+  }
+  if (reorder) out.push("Reorder the panel's lines");
+  return [...new Set(out)];
+}
+
+/**
+ * The guard's split, with the hold carried over to the ops that depend on a held one (agent-editor plan §3 A3.1, B-TOOL
+ * review): a `balloon`, `line_style` or `line_move` on a line whose `line` op (create, patch or delete) is held, and
+ * every op of a unit (`deps.unitOf`) any of whose ops is held. The carried ops join the held item of their line (else of
+ * their unit, else the first item), in plan order, and its words say what they add. Without a held op, nothing moves.
+ */
+function carryHold(doc: ComicDoc, planned: readonly DocOp[], allowed: DocOp[], blocked: BlockedEdit[], unitOf?: GuardDeps['unitOf']): { allowed: DocOp[]; blocked: BlockedEdit[] } {
+  if (!blocked.length || !allowed.length) return { allowed, blocked };
+  const anchors = new Set<string>();
+  const units = new Set<string>();
+  const mark = (op: DocOp) => {
+    if (op.op === 'line') anchors.add(op.id);
+    const u = unitOf?.(op);
+    if (u) units.add(u);
+  };
+  for (const b of blocked) b.proposed.forEach(mark);
+  if (!anchors.size && !units.size) return { allowed, blocked };
+  let rest = allowed;
+  const carried: DocOp[] = [];
+  for (let changed = true; changed; ) {
+    changed = false;
+    const next: DocOp[] = [];
+    for (const op of rest) {
+      const u = unitOf?.(op);
+      if (u && units.has(u)) {
+        carried.push(op);
+        mark(op);
+        changed = true;
+        continue;
+      }
+      if (op.op === 'line_style' && op.lineIds.some((id) => anchors.has(id))) {
+        // A restyle of several lines: only the held lines' part waits with them.
+        const keep = op.lineIds.filter((id) => !anchors.has(id));
+        carried.push(keep.length ? { ...op, lineIds: op.lineIds.filter((id) => anchors.has(id)) } : op);
+        if (keep.length) next.push({ ...op, lineIds: keep });
+        changed = true;
+        continue;
+      }
+      if ((op.op === 'balloon' || op.op === 'line_move') && lineIdsOfOp(op).some((id) => anchors.has(id))) {
+        carried.push(op);
+        mark(op);
+        changed = true;
+        continue;
+      }
+      next.push(op);
+    }
+    rest = next;
+  }
+  if (!carried.length) return { allowed, blocked };
+  const items = blocked.map((b) => ({ ...b, proposed: [...b.proposed] }));
+  const extra = new Map<number, DocOp[]>();
+  for (const op of carried) {
+    const ids = lineIdsOfOp(op);
+    let at = items.findIndex((b) => ids.some((id) => b.where.lineId === id || b.proposed.some((p) => p.op === 'line' && p.id === id)));
+    const u = unitOf?.(op);
+    if (at < 0 && u) at = items.findIndex((b) => b.proposed.some((p) => unitOf?.(p) === u));
+    if (at < 0) at = 0;
+    extra.set(at, [...(extra.get(at) ?? []), op]);
+  }
+  // Plan order inside each item (a balloon after the line it belongs to); an op the guard split keeps its neighbour's place.
+  const order = new Map(planned.map((op, i) => [op, i]));
+  for (const [at, ops] of extra) {
+    const item = items[at];
+    let last = -1;
+    const ranked = [...item.proposed, ...ops].map((op, k) => {
+      const i = order.get(op);
+      if (i !== undefined) last = i;
+      return { op, rank: i ?? last + 0.5, k };
+    });
+    ranked.sort((a, b) => a.rank - b.rank || a.k - b.k);
+    const words = carriedWords(doc, ops);
+    const end = (s: string) => (!s || /[.!?…]$/.test(s) ? s : `${s}.`);
+    items[at] = { ...item, proposed: ranked.map((r) => r.op), theirs: words.length ? `${end(item.theirs)} ${words.join('. ')}.`.trim() : item.theirs };
+  }
+  return { allowed: rest, blocked: items };
+}
+
+/**
+ * Every director line, balloon and style write goes through here (A3 fixer wave note 6): guardUserEdits splits the
+ * planned ops; the hold is carried over to the ops that depend on a held one (carryHold) and `deps.follow` builds the
+ * follow-up ops for what really commits; the allowed part commits with origin 'director' as one step; recordConflicts
+ * keeps the held part for the one conflict card (right after the guard, so the next call on the same entity builds on
+ * it), and `note` goes into the tool result. Without a turn (a caller outside the director loop) everything commits as
+ * before. Callers word their result from `allowed`, never from what they planned.
+ */
+export function commitGuarded(ctx: StudioContext, turn: DirectorTurn | undefined, ops: DocOp[], label?: string, deps: GuardDeps = {}): GuardedCommit {
+  if (!ops.length) return { after: ctx.session.doc, allowed: [], blocked: [], note: '' };
+  const doc = ctx.session.doc;
+  const split = turn ? guardUserEdits(ctx, turn, ops) : { allowed: ops, blocked: [] as BlockedEdit[] };
+  let { allowed, blocked } = carryHold(doc, ops, split.allowed, split.blocked, deps.unitOf);
+  const heldItems = blocked.length;
+  if (deps.follow && allowed.length) {
+    const more = deps.follow(allowed, doc, false);
+    if (more.length) {
+      // A follow-up the creator collided with (they changed the panel's cast mid-turn) is held like any other op.
+      const g = turn ? guardUserEdits(ctx, turn, more) : { allowed: more, blocked: [] as BlockedEdit[] };
+      allowed = [...allowed, ...g.allowed];
+      blocked = [...blocked, ...g.blocked];
+    }
+  }
+  const after = allowed.length ? ctx.session.commit(allowed, { origin: 'director', ...(label ? { label } : {}) }) : doc;
+  if (deps.follow && heldItems) {
+    blocked = blocked.map((b, i) => {
+      if (i >= heldItems) return b;
+      const more = deps.follow!(b.proposed, after, true);
+      if (!more.length) return b;
+      const words = carriedWords(after, more);
+      return { ...b, proposed: [...b.proposed, ...more], theirs: words.length ? `${/[.!?…]$/.test(b.theirs) ? b.theirs : `${b.theirs}.`} ${words.join('. ')}.` : b.theirs };
+    });
+  }
+  if (turn) recordConflicts(turn, blocked);
+  return { after, allowed, blocked, note: conflictToolNote(blocked) };
+}
+
+/** A tool result with the conflict note after it (never silent about a held-back edit). */
+const withNote = (text: string, note: string): string => (note ? `${text} ${note}`.trim() : text);
+
+/** The line ids a held-back edit names (its proposed ops), for honest counts. */
+export const blockedLineIds = (blocked: readonly BlockedEdit[]): Set<string> =>
+  new Set(blocked.flatMap((b) => [...(b.where.lineId ? [b.where.lineId] : []), ...b.proposed.flatMap(lineIdsOfOp)]));
+
 const USER_ASKED_LETTERING_RE = /\b(font|letter(?:ing)?|balloon|bubble|text|caption|style|preset|manga|storybook|noir|webtoon|pulp|handwritten|minimal|classic)\b/i;
 
 // ── set_lettering_style ──────────────────────────────────────────────────────
@@ -403,7 +617,8 @@ const STYLE_SCHEMA = {
   }
 };
 
-const TARGET_SCHEMA = {
+/** Which balloons a lettering tool changes (the lettering group's full target). */
+export const TARGET_SCHEMA = {
   type: 'object',
   description: 'Which balloons (all conditions must match; no page = every page).',
   properties: {
@@ -415,6 +630,17 @@ const TARGET_SCHEMA = {
     line_ids: { type: 'array', items: { type: 'string' } },
     selected: { type: 'boolean', description: 'The balloons the user has selected ("this bubble")' }
   }
+};
+
+/**
+ * The core line tools' target (set_line, edit_panel_text; agent-editor plan §3 B3): the four ways to name a line
+ * without counting — its id from read_pages, the user's selection, its speaker, or words from it. Typed (a validator may
+ * refuse an object without properties) and bare: it sits in every director prompt (golden/scenarios.test.ts measures
+ * the core).
+ */
+export const LINE_TARGET_SCHEMA = {
+  type: 'object',
+  properties: { line_ids: { type: 'array', items: { type: 'string' } }, selected: { type: 'boolean' }, speaker: { type: 'string' }, text_contains: { type: 'string' } }
 };
 
 const currentScopeStyle = (doc: ComicDoc, scope: 'comic' | 'kind' | 'speaker', kind?: LineKind, speakerId?: string): LetterStyle =>
@@ -453,11 +679,11 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
   return defineTool(
     'set_lettering_style',
     'free',
-    'Change the lettering look of the whole comic, one balloon kind, or one speaker: a preset (classic, manga, storybook, noir, webtoon, retro_pulp, minimal, handwritten) and/or style changes (font, size, colours, bubble shape, tail…). Overlay edit — never redraw for lettering.',
+    `Change the lettering look of the whole comic, one balloon kind, or one speaker: a preset (${presetChoices().join(', ')}) and/or style changes (font, size, colours, bubble shape, tail…). Overlay edit — never redraw for lettering.`,
     {
       type: 'object',
       properties: {
-        preset: { type: 'string', enum: [...LETTERING_PRESET_IDS] },
+        preset: { type: 'string', enum: [...presetChoices()] },
         scope: { type: 'string', enum: ['comic', 'kind', 'speaker'], description: 'Default: comic' },
         kind: { type: 'string', enum: [...LINE_KINDS], description: 'With scope "kind"' },
         speaker: { type: 'string', description: 'Character name, with scope "speaker"' },
@@ -508,11 +734,14 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
         patch.speakers = { [speakerId]: reset && !stylePatch ? null : stylePatch ?? null };
       }
       const castIds = new Set(doc.cast.map((c) => c.id));
-      const clean = sanitizeLetteringStyleOpPatch(patch, castIds);
+      const clean = sanitizeLetteringStyleOpPatch(patch, castIds, { allowPro: PRO_EDIT_OPS_PATCHABLE });
       if (!clean) throw toolArgError('That lettering change has nothing valid in it.');
       const op = runSanitizer(doc, { op: 'letter_style', patch: clean }, ctx);
-      const label = preset ? `Lettering: ${LETTERING_PRESETS[preset].name}` : 'Lettering style';
-      const after = ctx.session.commit([op], { origin: 'director', label });
+      const label = preset ? `Lettering: ${letteringPresetOf(preset).name}` : 'Lettering style';
+      // The creator's own lettering change since the turn began wins: the guard holds this back and the card asks.
+      const guarded = commitGuarded(ctx, turn, [op], label);
+      if (!guarded.allowed.length) return guarded.note;
+      const after = guarded.after;
 
       const lines = allHits(after, after.pages);
       const inScope = (l: Line) => (scope === 'kind' ? l.kind === kind : scope === 'speaker' ? l.speakerId === speakerId : true);
@@ -522,11 +751,11 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
       const who = scope === 'kind' ? `${KIND_WORD[kind!]} balloons` : scope === 'speaker' ? `${speakerName}'s balloons` : 'the comic';
       const parts: string[] = [];
       if (preset) {
-        const p = LETTERING_PRESETS[preset];
+        const p = letteringPresetOf(preset);
         parts.push(`Lettering is now *${p.name}* — ${p.blurb}`);
         if (ls.presetId !== preset && (ls.base || ls.kinds) && !clean.keepOverrides) parts.push('Earlier comic-wide lettering tweaks were cleared for the new preset.');
       }
-      if (reset && !stylePatch) parts.push(`Reset the custom lettering for ${who}${preset ? '' : ` back to the ${LETTERING_PRESETS[(after.letterStyle ?? DEFAULT_LETTERING).presetId].name} preset`}.`);
+      if (reset && !stylePatch) parts.push(`Reset the custom lettering for ${who}${preset ? '' : ` back to the ${letteringPresetOf((after.letterStyle ?? DEFAULT_LETTERING).presetId).name} preset`}.`);
       if (stylePatch) parts.push(`Set ${describePatch(stylePatch)} for ${who}.`);
       parts.push(affected ? `${plural(changed, 'balloon')} restyled.` : 'No lettered lines yet — new ones will use it.');
       if (blocked) {
@@ -535,7 +764,7 @@ function setLetteringStyleTool(ctx: StudioContext, turn: DirectorTurn | undefine
         );
       }
       const note = coverageNote(after, stylePatch?.font);
-      return `${parts.join(' ')}${note} ${FREE_NOTE}`;
+      return withNote(`${parts.join(' ')}${note} ${FREE_NOTE}`, guarded.note);
     }
   );
 }
@@ -579,13 +808,17 @@ function restyleBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
           ops.push(runSanitizer(doc, { op: 'line_style', pageId: g.pageId, lineIds: g.ids.slice(i, i + 80), patch: g.patch, mode: reset && g.patch ? 'replace' : 'merge' }, ctx));
         }
       }
-      ctx.session.commit(ops, { origin: 'director', label: reset && !summary ? 'Reset balloon style' : 'Restyle balloons' });
+      const guarded = commitGuarded(ctx, turn, ops, reset && !summary ? 'Reset balloon style' : 'Restyle balloons');
+      // Balloons the creator restyled while the director worked keep their look (the conflict card asks).
+      const held = blockedLineIds(guarded.blocked);
+      const done = hits.filter((h) => !held.has(h.line.id));
+      if (!done.length) return guarded.note;
       const speakerBit = t.speakerName ? ` of ${t.speakerName}'s` : '';
-      const where = pageRange(hits.map((h) => h.page.n));
+      const where = pageRange(done.map((h) => h.page.n));
       const what = summary ? `(${describePatch(summary)})` : '(back to the comic\'s lettering)';
       const total = t.speakerId ? allHits(doc, doc.pages).filter((h) => h.line.speakerId === t.speakerId).length : 0;
-      const ofTotal = t.speakerId && total > hits.length ? ` ${hits.length} of ${total}` : ` ${hits.length}`;
-      return `Restyled${ofTotal}${speakerBit} balloon${hits.length === 1 ? '' : 's'} on ${where} ${what}.${coverageNote(doc, summary?.font)} ${FREE_NOTE}`;
+      const ofTotal = t.speakerId && total > done.length ? ` ${done.length} of ${total}` : ` ${done.length}`;
+      return withNote(`Restyled${ofTotal}${speakerBit} balloon${done.length === 1 ? '' : 's'} on ${where} ${what}.${coverageNote(doc, summary?.font)} ${FREE_NOTE}`, guarded.note);
     }
   );
 }
@@ -693,6 +926,8 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         action: { type: 'string', enum: [...ARRANGE_ACTIONS] },
         target: TARGET_SCHEMA,
         position: { type: 'string', enum: [...POSITIONS], description: 'Inside the balloon\'s panel (move)' },
+        frame: { type: 'string', enum: ['panel', 'page'], description: 'move: page = that spot of the whole page' },
+        near: { type: 'string', description: 'move: next to this character (position top/bottom/left/right = above/below/beside)' },
         dx: { type: 'number', description: 'nudge: fraction of page width (+ right), e.g. 0.03' },
         dy: { type: 'number', description: 'nudge: fraction of page height (+ down)' },
         width_scale: { type: 'number', description: 'resize: 0.5–2' },
@@ -729,11 +964,13 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
 
       const ops: DocOp[] = [];
       const label = `Arrange balloons · page ${page.n}`;
+      // Guarded (A3): a balloon the creator moved, resized or restyled while the director worked stays theirs.
+      let guarded = undefined as GuardedCommit | undefined;
       const commit = () => {
-        if (ops.length) ctx.session.commit(ops, { origin: 'director', label });
+        if (ops.length) guarded = commitGuarded(ctx, turn, ops, label);
       };
       const who = hits.length === 1 ? `the ${KIND_WORD[hits[0].line.kind]} balloon ${quote(hits[0].line.text, 30)}` : plural(hits.length, 'balloon');
-
+      const arrange = (): string => {
       switch (action) {
         case 'auto_layout': {
           // Lettering tools are FREE by contract (lettering.md §8): never start a vision call from here, even
@@ -771,7 +1008,23 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         }
         case 'move': {
           const pos = args.position !== undefined ? enumArg(args.position, POSITIONS, 'position') : undefined;
-          if (!pos) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel). Use nudge with dx/dy for small shifts.`);
+          const near = str(args.near, 80);
+          if (!pos && !near) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel). Use nudge with dx/dy for small shifts.`);
+          if (args.frame === 'page' || near) {
+            // A spot of the whole page, or next to a character: the shared dialogue placement (agent-editor plan §3 B3),
+            // so arrange_balloons and dialogue_edit put a balloon in the same place for the same words.
+            if (hits.length > 1) throw toolArgError(`Place one balloon at a time on the page or next to a character — which of the ${hits.length}? Give its words or line id.`);
+            const h = hits[0];
+            const relation: Placement['relation'] = !pos ? 'near' : pos.startsWith('top') ? 'above' : pos.startsWith('bottom') ? 'below' : pos === 'left' ? 'left' : pos === 'right' ? 'right' : 'near';
+            const place: Placement = near ? { frame: 'panel', near, relation } : { frame: 'page', cell: pos! };
+            const spot = placeLine(doc, page.id, h.line.id, place);
+            if (spot.ok === false) return `${spot.reason} Nothing was moved.`;
+            const cur = pc.current.get(h.line.id);
+            ops.push(balloonOp(pc, h.line.id, { x: spot.x, y: spot.y, ...(spot.w !== undefined ? { w: spot.w } : cur ? { w: cur.w } : {}), pinned: true }));
+            commit();
+            return `Moved ${who} to ${spot.where}, inside the safe margin. Pinned, so auto-layout won't move it.${spot.note ? ` ${spot.note}` : ''} ${FREE_NOTE}`;
+          }
+          if (!pos) throw toolArgError(`move needs position: ${POSITIONS.join(', ')} (inside the balloon's panel).`);
           // Several balloons sent to one spot stack in reading order (outline to outline, 0.01 apart):
           // downwards from a top/middle spot, upwards from a bottom one — never on top of each other.
           const stacks = new Map<number, { top: number; bottom: number }>();
@@ -938,6 +1191,10 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
         default:
           throw toolArgError(`Unknown action. Use one of: ${ARRANGE_ACTIONS.join(', ')}.`);
       }
+      };
+      const result = arrange();
+      if (guarded && !guarded.allowed.length) return guarded.note;
+      return withNote(result, guarded?.note ?? '');
     }
   );
 }
@@ -994,6 +1251,8 @@ const LETTERING_RULES = [
   '- "this/that bubble" while balloons are selected → target {selected: true}.',
   '- If the preset is still automatic and no longer fits the comic (kids → storybook, manga, webtoon, noir/detective), call set_lettering_style with that preset; never override a preset the user picked.',
   '- Overlapping or edge-hugging balloons → arrange_balloons auto_layout (free; it keeps faces clear and leaves balloons the user placed).',
+  '- whisper / thought / shout / caption / sfx = change the line KIND (dialogue_edit set_kind); shapes, colours and fonts = restyle.',
+  '- A dialogue edit that matches more than one line → let dialogue_edit ask "Which line?"; never apply it to all unless the user said all / every / both.',
   '- Repeat tool results honestly: if nothing matched, say what exists instead.'
 ].join('\n');
 

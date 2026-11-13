@@ -58,9 +58,10 @@ export async function openSpend(qa: QaHarness): Promise<boolean> {
 }
 
 /**
- * Open the Quality sheet: the header button ("Quality: Standard") on tablets and desktops; on phones
- * it lives in the ⋯ menu (visualqa P0-4 — the phone Quality popover is exactly what broke in v4, so
- * it must be measured there too, not skipped).
+ * Open the Quality sheet: the header chip ("Quality: Standard") below 1024; from 1024 and on phones
+ * ⋯ › Quality (DC-1: from 1024 the composer's chip is quality's on-screen home and the header has none).
+ * The phone row must be measured too, not skipped (visualqa P0-4 — the phone Quality popover is exactly
+ * what broke in v4).
  */
 export async function openQuality(qa: QaHarness): Promise<boolean> {
   const p = qa.page;

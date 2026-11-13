@@ -200,6 +200,10 @@ export const LIFT =
  * put `ds-stagger` on the parent instead: its children rise --ds-motion-stagger apart.
  */
 export const RISE_IN = 'ds-rise-in';
+/** The overlay entrance (DS-2): fade and grow from 96 % over --ds-motion-enter-quick (280 ms); still under reduced motion. */
+export const SCALE_IN = 'ds-scale-in';
+/** A plain fade over --ds-motion-enter-quick (DS-2: the tab hint); still under reduced motion. */
+export const FADE_IN = 'ds-fade-in';
 
 /** Press feedback: dips while pressed and springs back (index.css; motion-safe, skin only). */
 export const PRESS = 'ds-press';
@@ -425,7 +429,8 @@ export const INVERSE_SURFACE = 'ds-inverse-surface bg-[var(--ds-ink)] text-[var(
  * The stacking ladder (index.css `--ds-z-*`). A screen takes a LAYER, never a number: stage 0 (the
  * canvas / page content; its own layers stack 1–30 inside it), chrome and the sticky header 40, the
  * full-screen page editor 70 and reader 80, a sheet's scrim 85 and the sheet 86 (the ladder
- * mobile/sheets documents), popovers and menus 90, toasts 95, tooltips 100. This is the one place a
+ * mobile/sheets documents), a modal dialog 88 (above every sheet, below the menus and popovers it opens), popovers and
+ * menus 90, toasts 95, tooltips 100. This is the one place a
  * z-index class is spelled; anywhere else a raw z class is off the ladder (DS-0's z-ladder guard).
  */
 export const Z = {
@@ -436,6 +441,7 @@ export const Z = {
   reader: 'z-[var(--ds-z-reader)]',
   scrim: 'z-[var(--ds-z-scrim)]',
   sheet: 'z-[var(--ds-z-sheet)]',
+  dialog: 'z-[var(--ds-z-dialog)]',
   popover: 'z-[var(--ds-z-popover)]',
   toast: 'z-[var(--ds-z-toast)]',
   tooltip: 'z-[var(--ds-z-tooltip)]'

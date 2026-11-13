@@ -170,6 +170,21 @@ panelization, B5 (the page prompt on `planAnchors`), then the C packages on the 
 History restore filter and forgetting a photo (`sanitize/refs.ts`) drop frame and overlay sources too
 (`dropPanelSourcePaths`).
 
+**B1 composition (PE-COMPOSE, S2b):** `shared/comic/panelize/compose.ts` `composePage` lays a page out in the editor
+scene's order. Pieces show their cut of the one drawing; frames use at most 1 + `sourcesPerPage` pictures, and image
+overlays are bounded by `layersPerPage`. Empty frames are blank, or dashed in the editor; nine seeded border looks,
+absent = today's clean line; bleed reaches the page edges. Overlays come by z, clipped ones right after their frame.
+`compose/pageNodes.ts` is the one node tree the screen and print draw as SVG (`ComposedArt` in `ComicPageView`) and the
+PNG / PDF / ZIP draw on a canvas (`composeCanvas.ts`, one pooled offscreen buffer per page). Guide-only and opaque layers
+never draw in readers or exports. A page without frames or overlays renders byte-identically
+(`compose/legacyGolden.test.tsx`). Other pictures need `urlForPath` (overlays are asked for at their drawn width).
+`loading="lazy"` holds a composed page's pictures until it is near the screen. Each other picture carries its own safety
+verdict: blocked ones are left out, and the veil takes the strictest. Effect drawings load lazily (`setFxLoader` /
+`ensureFxDrawings`): the screen re-draws when they arrive; exports and print wait, and say so calmly when they can't.
+Print lists a picture with no link yet under "Not included". Lead decision **D18** (S2b integration): when the effect
+drawings cannot load, PNG, PDF and ZIP refuse calmly, and print prints the sheet without its effects and lists it under
+"Not included" (`export/printView.ts`), so nothing is dropped silently.
+
 ## 10. Editor engine (B9)
 
 Code: `shared/comic/editor/` — pure functions (no React, no server imports, no clock) shared by the editor canvas (C1),

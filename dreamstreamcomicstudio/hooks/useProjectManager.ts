@@ -25,6 +25,7 @@ import { getDefaultStoryPlanningState, recommendStoryPlanning } from '../service
 import { makeDefaultComicAgentSettings, normalizeComicAgentSettings } from '../services/comicAgentSettings';
 import { makeDefaultComicAgentRun, syncAgentRunWithState } from '../services/comicAgentRun';
 import { isStudioV4Project } from '../services/studioDeepLink';
+import { ProjectStateLoadError } from '../services/projectOpen';
 import { TOAST, Z } from '../components/chat/studioDesign';
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -1018,8 +1019,9 @@ export const useProjectManager = () => {
     persist(copy);
   };
 
-  // A comic that failed to open is still returned as its card (App's fallback shows it, with its own way back to
-  // the library); updateProject refuses every change made on it until it opens.
+  // A comic that failed to open is still returned as its card. App stays on the library after a failed open
+  // (services/projectOpen.ts resolveProjectOpen), so no workspace shows the card; as a second line, updateProject
+  // refuses every change made on such a card until the comic opens.
   const getProject = (id: string) => projects.find(p => p.id === id);
 
   /** ensureProjectState for an open: a failed load is retried (OPEN_RETRY_DELAYS_MS) while the app shows its loader. */
@@ -1047,7 +1049,9 @@ export const useProjectManager = () => {
     } catch (error) {
       if (projectsRef.current.some((p) => p.id === projectId && isCardState(p.state))) openFailedIdsRef.current.add(projectId);
       showProjectNotice(STATE_LOAD_FAILED);
-      throw error;
+      // A typed rejection, so the app can tell "the comic did not load" (stay on the library: resolveProjectOpen)
+      // from "its images could not be signed" (open it best-effort).
+      throw new ProjectStateLoadError(projectId, error, STATE_LOAD_FAILED);
     }
     openFailedIdsRef.current.delete(projectId);
     if (!full) return undefined;

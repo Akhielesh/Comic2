@@ -9,7 +9,7 @@ import { newId, type Balloon, type Box, type ComicDoc, type Line, type LineKind,
 import type { DocOp } from '../../../shared/comic/ops';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout';
-import { drawnSpotPatch, letteringSizer, placementCoverOptions, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
+import { drawnSpotPatch, letteringSizer, placementCoverOptions, turnedOutlineBox, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { placeBalloonsWholeWords, safeAreaBox } from '../../../shared/comic/lettering/place';
 import {
   DEFAULT_LETTERING,
@@ -54,7 +54,8 @@ const chunk = <T,>(xs: T[], n: number): T[][] => {
   return out;
 };
 
-const lineStyleOps = (pageId: string, lineIds: string[], patch: LetterStylePatch | null, mode?: 'merge' | 'replace'): DocOp[] =>
+/** `line_style` ops for lines, chunked (replace / merge / clear with null). */
+export const lineStyleOps = (pageId: string, lineIds: string[], patch: LetterStylePatch | null, mode?: 'merge' | 'replace'): DocOp[] =>
   chunk(lineIds, MAX_LINE_IDS).map((ids) => ({ op: 'line_style', pageId, lineIds: ids, patch, ...(mode ? { mode } : {}) }) as DocOp);
 
 /**
@@ -247,12 +248,32 @@ export const deleteLinesOps = (page: Page, lineIds: readonly string[]): DocOp[] 
     .map((r) => ({ op: 'line', pageId: page.id, panelId: r.panel.id, id: r.line.id, patch: null }) as DocOp);
 
 /** Duplicate a line right after itself, same style, balloon offset by 0.02. */
-export function duplicateLineOps(page: Page, lineId: string, resolved: ReadonlyMap<string, Balloon>, id = newId('ln')): DocOp[] {
+export function duplicateLineOps(
+  page: Page,
+  lineId: string,
+  resolved: ReadonlyMap<string, Balloon>,
+  id = newId('ln'),
+  /**
+   * What the copy may carry (Pro Edit, collisions C-9): `keepLink: false` drops the saved-style link (`styleId`) and
+   * `clean` filters the copied style (the inspector strips the Pro keys a newer build kept on the line while Pro fields
+   * are not writable). Omitted, the copy is the line's every field, as before.
+   */
+  opts?: { keepLink?: boolean; clean?: (style: LetterStylePatch | undefined) => LetterStylePatch | undefined }
+): DocOp[] {
   const ref = findLineRef(page, lineId);
   const b = resolved.get(lineId);
   if (!ref) return [];
   const { id: _old, ...fields } = ref.line;
-  const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: ref.panel.id, id, patch: { ...fields }, index: ref.index + 1 }];
+  const copy: Partial<Line> = { ...fields };
+  if (opts) {
+    if (!opts.keepLink) delete copy.styleId;
+    if (opts.clean) {
+      const style = opts.clean(copy.style);
+      if (style) copy.style = style;
+      else delete copy.style;
+    }
+  }
+  const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: ref.panel.id, id, patch: copy, index: ref.index + 1 }];
   if (b) {
     const nb: Partial<Balloon> = { x: r4(clamp(b.x + 0.02, 0, 1 - b.w)), y: r4(clamp(b.y + 0.02, 0, 0.98)), w: b.w, pinned: true };
     if (typeof b.tailX === 'number' && typeof b.tailY === 'number') {
@@ -391,14 +412,27 @@ export function moveBalloon(plan: LetterPlan, H: number, dx: number, dy: number,
   return out;
 }
 
-/** Shift balloons whose outline leaves the safe area back inside it (the inspector's "Fix"). */
+/**
+ * A plan's outline as drawn, in page fractions: for a balloon turned by Balloon.rot (its chain head's, for a linked
+ * member) the box around the turned outline (turnedOutlineBox), as the layout's outOfSafeArea judges it; otherwise
+ * outlineFractions (a style tilt alone keeps the unturned box it always had). PE-LETTER wave note 23.
+ */
+export const drawnOutlineFractions = (plan: LetterPlan, H: number): Box => {
+  const tilt = typeof plan.style.rotate === 'number' ? plan.style.rotate : 0;
+  const turned = !!plan.transform && Math.abs(plan.transform.rotate - tilt) > 1e-6;
+  if (!turned) return outlineFractions(plan, H);
+  const b = turnedOutlineBox(plan);
+  return { x: b.x / 1000, y: b.y / H, w: b.w / 1000, h: b.h / H };
+};
+
+/** Shift balloons whose outline leaves the safe area back inside it (the inspector's "Fix"), judged as drawn. */
 export function fixSafeAreaOps(doc: ComicDoc, page: Page, plans: readonly LetterPlan[], H: number, resolved: ReadonlyMap<string, Balloon>, only?: readonly string[]): DocOp[] {
   const ls = doc.letterStyle ?? DEFAULT_LETTERING;
   const safe = safeAreaBox(typeof ls.safeMargin === 'number' ? ls.safeMargin : DEFAULT_SAFE_MARGIN, 1000 / H);
   const ops: DocOp[] = [];
   for (const p of plans) {
     if (!p.outOfSafeArea || p.locked || (only && !only.includes(p.lineId))) continue;
-    const o = outlineFractions(p, H);
+    const o = drawnOutlineFractions(p, H);
     const dx = o.w > safe.w ? safe.x + (safe.w - o.w) / 2 - o.x : clamp(o.x, safe.x, safe.x + safe.w - o.w) - o.x;
     const dy = o.h > safe.h ? safe.y + (safe.h - o.h) / 2 - o.y : clamp(o.y, safe.y, safe.y + safe.h - o.h) - o.y;
     if (Math.abs(dx) < 1e-5 && Math.abs(dy) < 1e-5) continue;
@@ -568,14 +602,18 @@ export function addLineAtOps(doc: ComicDoc, page: Page, kind: LineKind, point: {
   };
 }
 
-/** Move a line to another panel (the crowded-panel fix); its balloon is re-placed there by software. */
-export function moveLineToPanelOps(page: Page, lineId: string, toPanelId: string): DocOp[] {
+/**
+ * Move a line to another panel (the crowded-panel fix, and a Layers drag to another panel group); its balloon is
+ * re-placed there by software. `index` is its place in the target panel's reading order (default first).
+ */
+export function moveLineToPanelOps(page: Page, lineId: string, toPanelId: string, index = 0): DocOp[] {
   const ref = findLineRef(page, lineId);
   const target = page.panels.find((p) => p.id === toPanelId);
   if (!ref || !target || target.id === ref.panel.id) return [];
+  const at = Math.max(0, Math.min(target.lines.length, Number.isFinite(index) ? Math.round(index) : 0));
   // The line travels whole — never a delete + create, which would prune its translations, their review state and
   // the editions' balloons (paid, reviewed work). Its stored balloon is released so the placer sets it in the new panel.
-  const ops: DocOp[] = [{ op: 'line_move', pageId: page.id, id: lineId, toPanelId: target.id, index: 0 }];
+  const ops: DocOp[] = [{ op: 'line_move', pageId: page.id, id: lineId, toPanelId: target.id, index: at }];
   if (page.balloons.some((b) => b.lineId === lineId)) ops.push({ op: 'balloons', pageId: page.id, balloons: page.balloons.filter((b) => b.lineId !== lineId) });
   const { kind, speakerId } = ref.line;
   if (SPOKEN.has(kind) && speakerId && !target.castIds.includes(speakerId) && target.castIds[0]) {
@@ -677,4 +715,34 @@ export function widenOps(doc: ComicDoc, page: Page, plans: readonly LetterPlan[]
 /** "Fit text": a balanced width for the line's text (the same curve auto-placement uses). */
 export function fitWidthOps(doc: ComicDoc, page: Page, lineIds: readonly string[], resolved: ReadonlyMap<string, Balloon>): DocOp[] {
   return linesOf(page, lineIds).map((l) => balloonOp(page, l.id, { w: estimateWidthForText(l.text, l.lang || doc.format?.language || 'en'), pinned: true }, resolved));
+}
+
+// ── Pro inspector (PE-INSPECT; agent-editor plan §3 C3) ──────────────────────────────────────────────────────────────
+//
+// Only the kind row lives here (the Easy path reads it: the kind row and keys 1–6 are plain `line` ops). Align and
+// distribute, Copy / Paste style, saved styles and the Layers restack are B9 engine edits: they live in proStyleOps.ts,
+// which only the lazily loaded Pro modules import, so the scene engine never rides in the page editor's chunk.
+
+/** The kind row's order, and its keys 1–6 (agent-editor plan §3 C3). */
+export const KIND_ROW: readonly LineKind[] = ['speech', 'thought', 'whisper', 'shout', 'caption', 'sfx'];
+
+/**
+ * The kind row: `line {kind}` for every selected line that is not that kind already. Kind and look are separate
+ * (C3): the comic's look for the kind follows through the cascade, and a shape the creator picked stays theirs. The
+ * speaker follows the script editor's rule (PageEditor lineKindOps): a caption or sound effect has none, and a spoken
+ * line without one takes its panel's first character.
+ */
+export function kindOps(page: Page, lineIds: readonly string[], kind: LineKind): DocOp[] {
+  const ops: DocOp[] = [];
+  for (const line of linesOf(page, lineIds)) {
+    if (line.kind === kind) continue;
+    const ref = findLineRef(page, line.id);
+    if (!ref) continue;
+    const patch: Partial<Line> = { kind };
+    // null clears the speaker (the line op merges its patch; the wire type has no null, hence the cast).
+    if (!SPOKEN.has(kind) && line.speakerId) patch.speakerId = null as unknown as undefined;
+    if (SPOKEN.has(kind) && !line.speakerId && ref.panel.castIds[0]) patch.speakerId = ref.panel.castIds[0];
+    ops.push({ op: 'line', pageId: page.id, panelId: ref.panel.id, id: line.id, patch });
+  }
+  return ops;
 }

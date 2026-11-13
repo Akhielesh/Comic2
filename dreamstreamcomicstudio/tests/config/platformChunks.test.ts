@@ -22,6 +22,7 @@
 // points it at another build directory.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
 const APP = path.resolve(__dirname, '../..');
@@ -42,6 +43,45 @@ const RENDERERS: Renderer[] = [
   { name: 'pptx', markers: ['PptxGenJS', 'addMedia() is disabled'], callers: /\b(?:exportPptx|loadPptx|loadPlatformRender)\s*\(/ },
   { name: 'markdown', markers: ['The rest of this document was too long to include.'], callers: /\b(?:exportMarkdownDocx|loadMarkdown|loadPlatformRender)\s*\(/ },
 ];
+
+/**
+ * Pro code the reader and the first paint never load (master plan §2.8: the Pro chunk is lazy, never in the reader's
+ * first load). Each marker is a literal that survives minification and that only this code holds; none may be in an
+ * eagerly loaded chunk or in the reader's own chunk (ComicReaderView-*). PE-QA (S3) extends this list (effect
+ * generators, font tables, the Pro editor); the scan below stays the same.
+ */
+interface ProOnly {
+  name: string;
+  markers: string[];
+}
+
+const PRO_ONLY: ProOnly[] = [
+  // PE-MOTION-ENGINE wave note 8: Penner's bounce constant and the seeded hash's multiplier (0x9e3779b1, as minified),
+  // the same markers shared/comic/motion/chunks.test.ts checks on an esbuild bundle.
+  { name: 'motion engine', markers: ['7.5625', '2654435761'] },
+];
+
+/**
+ * The first-load ceiling per HTML entry: the gzip -9 bytes of its module scripts, modulepreloads and their static imports
+ * (what every visitor pays before first paint, the public share reader and the comics landing included). S2b grew the
+ * site entry from 279,251 B (99b870c4) to 303,837 B (the S2b integration): tailwind-merge and 17 components/ds modules
+ * moved onto the critical path (App.tsx's cn and DS primitives, DS-3's eager AuthPage, DS-2's StaticSiteHeader).
+ *
+ * Lead decision D17b (the S2b release; docs/features/pro-edit.md §8): that growth is ACCEPTED for this release with the
+ * ceiling pinned; the cut (AuthPage and the Toast host lazy, a clsx-only `cx` in eager chrome) is a later performance
+ * package. Taking production's three releases into S2b then raised the site entry from 303,837 B to 308,786 B (+4,949 B),
+ * measured on a production build of the merged tree: about three quarters is the slim-reads release's save guards and
+ * card projection in hooks/useProjectManager.ts and services/db.ts, the rest is the comics host's own header
+ * (ComicsHeader and its routing, which App draws on sign-in, Privacy, Terms and the Library) and the public-page recipes;
+ * the token waitlist form gives some back. All of it already ships on production. The ceiling rises by exactly that
+ * measured amount (306,000 + 4,949, rounded up to 310,950), so it still holds the measured number plus the same ~2 KB
+ * for zlib and build noise: nothing grows it unseen. live.html is unchanged (314,239 B measured). A cut lowers the
+ * ceiling here; a reviewed rise raises it with the lead's decision named beside it.
+ */
+const EAGER_GZ_CEILING: Record<string, number> = { 'index.html': 310_950, 'live.html': 316_500 };
+
+/** The reader's own chunk: the comic reader is code-split from the studio (one lazy chunk per entry). */
+const READER_CHUNK = /^ComicReaderView-[\w-]+\.js$/;
 
 /** App source that ships to the browser: no tests, no server, no packages (the renderers themselves), no build output. */
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-qa', 'server', 'packages', 'tests', 'qa', 'scripts', 'docs', 'public', 'api-proxy', 'live-worker', 'email-worker', 'data-egress', 'comics-edge', 'functions', 'deploy', '.git']);
@@ -70,10 +110,10 @@ const callersOf = (r: Renderer, sources: string[]): string[] =>
 const STATIC_IMPORT = /\bfrom\s*["']\.\/([\w.-]+\.js)["']|\bimport\s*["']\.\/([\w.-]+\.js)["']/g;
 
 /** The chunks a page loads before any `import()`: its module scripts and modulepreloads, and their static imports. */
-const eagerChunks = (assets: string): Set<string> => {
+const eagerChunks = (assets: string, entries: string[] = HTML_ENTRIES): Set<string> => {
   const seen = new Set<string>();
   const queue: string[] = [];
-  for (const html of HTML_ENTRIES) {
+  for (const html of entries) {
     const file = path.join(DIST, html);
     if (!existsSync(file)) continue;
     const text = readFileSync(file, 'utf8');
@@ -109,9 +149,29 @@ describe('platform renderers stay out of the entry chunk (real build)', () => {
       expect(lazy.length).toBeGreaterThan(0);
     });
 
+    for (const [html, ceiling] of Object.entries(EAGER_GZ_CEILING)) {
+      it(`${html}: the first load stays under its gzip ceiling (${ceiling.toLocaleString('en')} B)`, () => {
+        const files = [...eagerChunks(assets, [html])];
+        expect(files.length, `${html} loads no module script`).toBeGreaterThan(0);
+        const gz = files.reduce((sum, f) => sum + gzipSync(readFileSync(path.join(assets, f)), { level: 9 }).length, 0);
+        expect(gz, `${html} first load is ${gz} B gz (${files.join(', ')}); lower EAGER_GZ_CEILING after a cut, or raise it with a lead decision`).toBeLessThanOrEqual(ceiling);
+      });
+    }
+
     it('the comic pitch deck calls the PowerPoint renderer, so its markers must be in the build', () => {
       expect(callersOf(RENDERERS.find((r) => r.name === 'pptx')!, sources)).toContain(path.join('components', 'comicstudio', 'export', 'pitchDeck.ts'));
     });
+
+    for (const pro of PRO_ONLY) {
+      it(`${pro.name}: never in an eagerly loaded chunk or in the reader's chunk`, () => {
+        const reader = chunks.filter((c) => READER_CHUNK.test(c));
+        expect(reader.length, 'no ComicReaderView-* chunk in the build: the reader chunk was renamed or merged').toBeGreaterThan(0);
+        const scanned = [...new Set([...eager, ...reader])];
+        for (const marker of pro.markers) {
+          expect(scanned.filter((c) => read(c).includes(marker)), `"${marker}" (${pro.name}) is in the reader or an eagerly loaded chunk`).toEqual([]);
+        }
+      });
+    }
 
     for (const r of RENDERERS) {
       it(`${r.name}: markers are never eagerly loaded, and are in a lazy chunk whenever the app calls it`, () => {

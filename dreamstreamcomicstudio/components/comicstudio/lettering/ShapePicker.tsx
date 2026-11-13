@@ -4,7 +4,7 @@
 
 import React, { useMemo } from 'react';
 import { bubbleGeometry, borderDashArray } from '../../../shared/comic/lettering/shapes';
-import { BUBBLE_SHAPES, TAIL_STYLES, type BorderStyle, type BubbleShape, type TailStyle } from '../../../shared/comic/lettering/style';
+import { BUBBLE_SHAPES, PRO_BUBBLE_SHAPES, TAIL_STYLES, type BorderStyle, type BubbleShape, type ProBubbleShape, type TailStyle } from '../../../shared/comic/lettering/style';
 import { EASY_SHAPES, type EasyShapeId } from './styleOps';
 import { cx } from '../board/ui';
 
@@ -23,6 +23,15 @@ export const SHAPE_LABEL: Record<BubbleShape, string> = {
   wavy: 'Wavy',
   electronic: 'Electronic',
   none: 'No bubble'
+};
+/** The 6 Pro shapes (PE-LETTER draws them; the unions stay separate in S2, collisions B-4). */
+export const PRO_SHAPE_LABEL: Record<ProBubbleShape, string> = {
+  radio: 'Radio',
+  monster: 'Monster',
+  telepathic: 'Telepathic',
+  icicle: 'Icicle',
+  heart: 'Heart',
+  sticky: 'Sticky note'
 };
 export const TAIL_LABEL: Record<TailStyle, string> = {
   auto: 'Auto',
@@ -98,6 +107,29 @@ export const ShapePicker: React.FC<{ value: BubbleShape | undefined; onChange(sh
       >
         <ShapeIcon shape={s} tail="none" size={40} />
         <span className="w-full truncate text-center text-[var(--ds-muted)]">{SHAPE_LABEL[s]}</span>
+      </button>
+    ))}
+  </div>
+);
+
+/**
+ * Pro Edit: the 6 Pro shapes, in the same tiles. Drawn by the shared library once PE-LETTER lands (an older library
+ * draws its default outline for an id it does not know). Only rendered while Pro fields are writable.
+ */
+export const ProShapePicker: React.FC<{ value: string | undefined; onChange(shape: ProBubbleShape): void; label?: string }> = ({ value, onChange, label = 'Pro bubble shape' }) => (
+  <div role="radiogroup" aria-label={label} data-testid="pro-shapes" className="grid grid-cols-4 gap-1.5 text-[var(--ds-ink)]">
+    {PRO_BUBBLE_SHAPES.map((s) => (
+      <button
+        key={s}
+        type="button"
+        role="radio"
+        aria-checked={value === s}
+        title={PRO_SHAPE_LABEL[s]}
+        onClick={() => onChange(s)}
+        className={cx(TILE, 'coarse:min-h-11', value === s ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent hover:bg-[var(--ds-hover)]')}
+      >
+        <ShapeIcon shape={s as unknown as BubbleShape} tail="none" size={40} />
+        <span className="w-full truncate text-center text-[var(--ds-muted)]">{PRO_SHAPE_LABEL[s]}</span>
       </button>
     ))}
   </div>

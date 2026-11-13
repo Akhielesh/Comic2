@@ -336,6 +336,9 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
                   type="button"
                   role="tab"
                   id={`board-tab-${t.id}`}
+                  // The Assets tab is the media library's home on the board (declutter C2; DC-1 wave note 5). Read is a view,
+                  // not the full-screen action, so it carries no id; History gets one only with DC-1 #7.
+                  data-action={t.id === 'media' ? 'media' : undefined}
                   aria-selected={active}
                   aria-controls="board-panel"
                   tabIndex={active ? 0 : -1}

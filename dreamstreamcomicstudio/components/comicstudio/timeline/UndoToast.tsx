@@ -14,47 +14,25 @@ import { Undo2, X } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import type { StudioController } from '../types';
+import { claimToast, subscribeToastSlot, toastSlotOwner } from '../../ds/Toast';
 import { undoPlan } from './bookModel';
 import { cx, FOCUS_RING, useReducedMotion } from './ui';
 
 export const UNDO_TOAST_MS = 8000;
 const MAX_ENTRIES = 20;
 
-// One toast at a time across every timeline surface (dock, media bin, version stacks): the newest
-// edit's toast wins, so two surfaces never stack toasts on top of each other.
-let toastSeq = 0;
-let latestToast = 0;
-const toastSubs = new Set<() => void>();
-const publishToast = (id: number) => {
-  latestToast = id;
-  toastSubs.forEach((f) => f());
-};
-const subscribeToasts = (f: () => void) => {
-  toastSubs.add(f);
-  return () => toastSubs.delete(f);
-};
-const latestToastId = () => latestToast;
+// One toast at a time across the whole app (components/ds/Toast.tsx holds the one slot): the newest toast wins —
+// a timeline edit's on any timeline surface (dock, media bin, version stacks), History's restore toast, or an app
+// toast from the ds Toast host — so two toasts never stack on top of each other.
 
 /**
  * Claims the one toast slot for a toast that is not a timeline edit's (History's restore toast, history/ui.tsx
  * RestoredToast): every timeline toast on screen steps aside, exactly as for a newer edit. A newer claim — a timeline
  * edit's toast or another claim — takes the slot back; `onLost`, when given, is told once when that happens. Returns
- * the claim's id. Timeline toasts behave as before: the newest one owns the slot.
+ * the claim's id. Timeline toasts behave as before: the newest one owns the slot. (The ds Toast's `claimToast`,
+ * re-exported: the slot is app-wide.)
  */
-export const claimUndoToast = (onLost?: () => void): number => {
-  toastSeq += 1;
-  const id = toastSeq;
-  publishToast(id);
-  if (onLost) {
-    const watch = () => {
-      if (latestToast === id) return;
-      toastSubs.delete(watch);
-      onLost();
-    };
-    toastSubs.add(watch);
-  }
-  return id;
-};
+export const claimUndoToast: (onLost?: () => void) => number = claimToast;
 
 export interface UndoEntry {
   id: number;
@@ -93,11 +71,10 @@ export function useTimelineEdit(studio: StudioController): TimelineEdit {
       const label = opts.label ?? plan.label;
       void studio.patch(ops, { label });
       if (plan.inverse && plan.inverse.length) {
-        toastSeq += 1;
-        const entry: UndoEntry = { id: toastSeq, message, inverse: plan.inverse, ...(label ? { label } : {}) };
+        // The edit's toast claims the app's one slot (its id is the claim's).
+        const entry: UndoEntry = { id: claimToast(), message, inverse: plan.inverse, ...(label ? { label } : {}) };
         stack.current = [...stack.current, entry].slice(-MAX_ENTRIES);
         setToast(entry);
-        publishToast(entry.id);
       }
       return true;
     },
@@ -139,8 +116,8 @@ export interface UndoToastProps {
 }
 
 export const UndoToast: React.FC<UndoToastProps> = ({ entry: own, onUndo, onDismiss, durationMs = UNDO_TOAST_MS }) => {
-  const latest = useSyncExternalStore(subscribeToasts, latestToastId, latestToastId);
-  // A newer edit on another timeline surface owns the single toast slot.
+  const latest = useSyncExternalStore(subscribeToastSlot, toastSlotOwner, toastSlotOwner);
+  // A newer toast (another timeline surface's edit, a restore, an app toast) owns the single toast slot.
   const entry = own && own.id === latest ? own : null;
   const [paused, setPaused] = useState(false);
   const reduce = useReducedMotion();

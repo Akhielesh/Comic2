@@ -28,6 +28,7 @@ import {
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
 import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../board/ui';
+import { duplicateCopyOptions } from '../editor/inspector/proSwitch';
 
 const ROW = 'space-y-1.5';
 const ROW_LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
@@ -195,7 +196,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
           </button>
         )}
         {one && (
-          <button type="button" className={SMALL_BTN} onClick={() => run(duplicateLineOps(page, one.id, placements.balloons), 'Duplicate balloon')}>
+          <button type="button" className={SMALL_BTN} onClick={() => run(duplicateLineOps(page, one.id, placements.balloons, undefined, duplicateCopyOptions()), 'Duplicate balloon')}>
             <Copy className="h-3.5 w-3.5" aria-hidden /> Duplicate
           </button>
         )}

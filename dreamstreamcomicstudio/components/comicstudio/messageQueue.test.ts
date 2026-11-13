@@ -220,6 +220,27 @@ describe('holdReason', () => {
     expect(holdReason({ doc: withConversation([resolved]) })).toBeNull();
   });
 
+  // Settled cards (PROGRAM3 SETTLE-UI; settle.md §5.10): the rule is shared/comic/settle.ts isOpenQuestion. Before it,
+  // a question the creator had moved past kept holding the queue whenever no newer reply came (a director turn that
+  // ended without one, a refused turn): every note waited behind "Answer the question above first".
+  it('a passed card does not hold the queue: the creator moved past it (committed, or this tab sending)', () => {
+    const passed = withConversation([question, { id: 'u2', role: 'user', text: 'Make it rain instead', at: 3 }]);
+    expect(openQuestion(passed)).toBe(false);
+    expect(holdReason({ doc: passed })).toBeNull();
+    // This tab's message on its way passes the question too — unless it is that question's own answer (then it is
+    // answered, not open, either way).
+    const open = withConversation([question]);
+    expect(openQuestion(open, { text: 'something else', status: 'sending' })).toBe(false);
+    expect(holdReason({ doc: open, pending: { text: 'something else', status: 'sending' } })).toBeNull();
+    expect(holdReason({ doc: open, pending: { text: 'Moody', status: 'sending', card: { id: 'card_q', choiceIds: ['c1'] } } })).toBeNull();
+    // A message that failed before the server took it passed nothing: the question still holds.
+    expect(openQuestion(open, { text: 'something else', status: 'failed' })).toBe(true);
+    // A conflict the creator moved past with an item unresolved: their edit stands ("Left as yours"), nothing holds.
+    const item = { id: 'i1', where: { pageId: 'pg_1', label: 'page 1 · panel 1' }, mine: 'a', theirs: 'b', proposed: [] };
+    const conflict = reply([{ type: 'conflict', id: 'cf', items: [item] }] as unknown as Msg['cards']);
+    expect(holdReason({ doc: withConversation([conflict, { id: 'u3', role: 'user', text: 'never mind', at: 3 }]) })).toBeNull();
+  });
+
   it('holds for an open spend gate', () => {
     const gate = { id: 'g1', action: { type: 'render_cover' }, title: 'Draw the cover', summary: '', estimateUsd: 0.07, imageCount: 1, model: 'm', createdAt: 1, status: 'open', reason: 'policy' };
     expect(holdReason({ doc: makeSampleDoc({ gate } as unknown as Partial<ComicDoc>) })).toBe('gate');

@@ -5,6 +5,7 @@
 import { EDITOR_LIMITS, PRO_PAGE_LIMITS } from '../limits.js';
 import { layersOf, type Balloon, type BalloonGeometryOverride, type Box, type ComicDoc, type Page } from '../doc.js';
 import { i18nOf } from '../i18n.js';
+import { chainHeadOf } from '../lettering/layout.js';
 import { buildScene, clamp, editOf, lockedReason, NOTHING_TO_CHANGE, r4, refuse, roundBox, sameBox, sceneObject, UNIT_BOX, type EditResult, type PageScene, type Point, type SceneRef } from './scene.js';
 
 export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -248,7 +249,14 @@ export function rotateEdit(doc: ComicDoc, page: Page, ref: SceneRef, deg: number
     if ((layer.rot ?? 0) === rot) return refuse(NOTHING_TO_CHANGE);
     return editOf(doc, [{ op: 'layer', pageId: page.id, id: layer.id, patch: { rot: rot === 0 ? null : rot } }], `Rotate ${(layer.name || (layer.kind === 'shape' ? 'shape' : 'image')).toLowerCase()}`);
   }
-  const b = page.balloons.find((x) => x.lineId === ref.id);
+  // A linked chain turns as one, by its head's Balloon.rot (the layout draws every member with the head's turn): a turn
+  // on any member writes the head's balloon, so it never stores a rot the drawing ignores (PE-LETTER wave note 24).
+  const headId = chainHeadOf(page, ref.id);
+  if (headId !== ref.id) {
+    const headLocked = lockedReason(page, { kind: 'balloon', id: headId });
+    if (headLocked) return refuse(headLocked);
+  }
+  const b = page.balloons.find((x) => x.lineId === headId);
   if (!b) return refuse('Place the balloon first, then rotate it.');
   const rot = Math.round(clampRot(deg, EDITOR_LIMITS.balloonRot) * 10) / 10;
   if ((b.rot ?? 0) === rot) return refuse(NOTHING_TO_CHANGE);

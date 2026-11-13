@@ -8,13 +8,24 @@
 //
 // parseIntent: phase-2 structural edits (flag COMIC_FAST_INTENTS, wired by the route in wave 2):
 // "swap pages 2 and 3", "delete page 4", "make the shouts red" → one FREE tool call with its args.
+//
+// dialogueFastIntent: the dialogue fast path (agent-editor plan §3 B3, flag COMIC_DIALOGUE_FAST → caps.dialogueFast):
+// "make it a whisper" with a balloon selected is applied by the deterministic dialogue engine, with no model call, and
+// answered with its own sentence and an Undo chip. Anything less than certain goes to the director.
 
 import { isPageStale, isTargetStale, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
+import { dialogueFastOn } from '../../../shared/comic/capabilities.js';
+import { dialogueFastPath } from '../../../shared/comic/dialogue/index.js';
+import type { StudioFocus } from '../../../shared/comic/events.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import type { DocOp } from '../../../shared/comic/ops.js';
 import { formatUsd } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan.js';
 import { costFormatter, type CostFormatter } from './costText.js';
 import { drawnBookLine, nothingNextSteps } from './replies.js';
 import { breakdownCardFor } from './tools/breakdown.js';
+import { sanitizeLetteringOps } from './tools/lettering.js';
+import type { StudioContext } from './types.js';
 
 export interface RoutedIntent {
   kind: 'show_pages' | 'nothing_to_draw';
@@ -268,3 +279,59 @@ export function parseIntent(text: string, doc: ComicDoc): ParsedIntent | null {
 /** Whether the route may run `parsed` without the director (flag, no attachments, no open gate). */
 export const canFastPath = (parsed: ParsedIntent | null, opts: { enabled: boolean; attachments: number; gateOpen: boolean }): parsed is ParsedIntent =>
   !!parsed && opts.enabled && opts.attachments === 0 && !opts.gateOpen && parsed.confidence >= 0.95;
+
+// ── The dialogue fast path (COMIC_DIALOGUE_FAST; agent-editor plan §3 B3) ────
+
+/** What the dialogue fast path did: the edit is committed; the caller commits the user's message and this reply. */
+export interface DialogueFastIntent {
+  kind: 'dialogue_fast';
+  reply: string;
+  cards: Card[];
+  /** Undo first, then the engine's free follow-up chips ("Make it a shout", "Move it"). */
+  nextSteps: NextStep[];
+  /** Ops committed as one undoable director step. */
+  ops: number;
+  label: string;
+}
+
+/** A sentence longer than this is never one clear dialogue edit. */
+const FAST_DIALOGUE_MAX_CHARS = 300;
+
+/**
+ * The free dialogue fast path: with caps.dialogueFast on (COMIC_DIALOGUE_FAST; off by default, admins when on), a
+ * sentence the grammar is sure of, whose every intent resolves to exactly one line (an add: one panel) and compiles to
+ * free dialogue ops, is applied right here: no model call, $0. `confirmed` is never passed (a big plural always goes to
+ * the director, which asks). The ops pass the lettering sanitizers; if anything is uncertain, nothing is committed and it
+ * returns null so the director takes the sentence. Never on an open spend gate. Callers skip it for attachments and for
+ * messages the screen annotated.
+ *
+ * No conflict guard here, and none is needed: the edit is compiled from the doc the creator sees right now and committed
+ * in the same synchronous step (no await in between, so no edit of theirs can land in the middle), and the stream route
+ * refuses a message BUSY while a director turn runs, so no director edit is in flight to collide with either. The guard
+ * protects edits made WHILE a turn works; this path never spans one.
+ */
+export function dialogueFastIntent(ctx: StudioContext, text: string, focus?: StudioFocus): DialogueFastIntent | null {
+  if (!dialogueFastOn(ctx.caps)) return null;
+  const doc = ctx.session.doc;
+  const sentence = String(text || '').trim();
+  if (!sentence || sentence.length > FAST_DIALOGUE_MAX_CHARS || !doc?.pages?.length || doc.gate?.status === 'open') return null;
+  let ops: DocOp[];
+  let run: ReturnType<typeof dialogueFastPath>;
+  try {
+    run = dialogueFastPath(doc, sentence, {
+      ...(focus?.lineIds?.length ? { lineIds: focus.lineIds } : {}),
+      ...(focus?.pageId ? { pageId: focus.pageId } : {}),
+      ...(typeof focus?.panelN === 'number' ? { panelN: focus.panelN } : {})
+    });
+    if (!run || run.status !== 'apply' || !run.ops.length) return null;
+    ops = sanitizeLetteringOps(doc, run.ops, ctx);
+  } catch {
+    return null;
+  }
+  const label = run.label || 'Dialogue';
+  ctx.session.commit(ops, { origin: 'director', label });
+  const chips = run.followUps.filter((s) => !!s?.label && !s.action && (!!s.say || !!s.client));
+  const undo: NextStep = { label: 'Undo', client: { type: 'undo' } };
+  const nextSteps: NextStep[] = [undo, ...chips.filter((s) => s.label !== 'Undo')].slice(0, DOC_LIMITS.nextSteps);
+  return { kind: 'dialogue_fast', reply: `${run.note || 'Done.'} Free — undo is one tap.`, cards: [], nextSteps, ops: ops.length, label };
+}

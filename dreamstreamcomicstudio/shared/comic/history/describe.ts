@@ -7,7 +7,8 @@
 
 import type { ComicDoc, Page, PageLayer } from '../doc.js';
 import { fxName } from '../fx/names.js'; // metadata only: never the registry (generators stay in the Pro chunk)
-import { motionPresetWord, type MotionTarget } from '../motion/index.js';
+import { motionPresetWord } from '../motion/words.js';
+import type { MotionTarget } from '../motion/types.js';
 import { HISTORY_LIMITS } from '../limits.js';
 import { languageSpec } from '../languages.js';
 import type { DocOp } from '../ops.js';

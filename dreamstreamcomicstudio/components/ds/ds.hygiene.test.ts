@@ -20,7 +20,7 @@ import { APP_ROOT, parseRules, indexCss, tokenBlocks } from '../../tests/config/
 import { findCompetingInks, findHandRolledOverlines } from '../../tests/config/classLists';
 
 const DS_DIR = path.join(APP_ROOT, 'components/ds');
-const SCENE = path.join(APP_ROOT, 'qa/app/scenes/ds-gallery.tsx');
+const SCENES = ['qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx', 'qa/app/scenes/ds-content.tsx'].map((f) => path.join(APP_ROOT, f));
 const isTest = (f: string) => /\.(test|spec)\.[tj]sx?$/.test(f);
 
 function sources(): Array<{ rel: string; text: string }> {
@@ -33,7 +33,7 @@ function sources(): Array<{ rel: string; text: string }> {
     }
   };
   walk(DS_DIR);
-  out.push(SCENE);
+  out.push(...SCENES);
   return out.map((f) => ({ rel: path.relative(APP_ROOT, f).split(path.sep).join('/'), text: readFileSync(f, 'utf8') }));
 }
 
@@ -65,7 +65,7 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
 
   it('scans the primitives and the gallery scene', () => {
     expect(files.length).toBeGreaterThan(20);
-    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx']));
+    expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(['components/ds/Button.tsx', 'components/ds/index.ts', 'qa/app/scenes/ds-gallery.tsx', 'qa/app/scenes/ds-overlays.tsx', 'qa/app/scenes/ds-content.tsx']));
   });
 
   it('the scanner catches each forbidden spelling (planted samples)', () => {
@@ -118,8 +118,8 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
     expect([...used].filter((t) => !ROOT_TOKENS.has(t))).toEqual([]);
   });
 
-  it('no overlay here yet (Dialog, Menu, Popover, Tooltip and the Toast host wait for DS-1c)', () => {
-    for (const { rel, text } of files) expect(text, rel).not.toMatch(/aria-modal|role="dialog"|role="menu"|role="tooltip"/);
+  it('no hand-rolled overlay: Dialog, AlertDialog, Menu, Popover and Tooltip take their roles and modality from Radix (DS-1c)', () => {
+    for (const { rel, text } of files) expect(text, rel).not.toMatch(/aria-modal|role="dialog"|role="alertdialog"|role="menu"|role="tooltip"/);
   });
 });
 
@@ -132,7 +132,7 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
  */
 const twRequire = createRequire(import.meta.url);
 /** Hand-written classes in index.css or styles/ds-motion.css (no Tailwind utility behind them). */
-export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'ds-rise-in', 'ds-making-sweep', 'ds-benday', 'ds-shimmer-text', 'ds-overline-display'];
+export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'ds-rise-in', 'ds-scale-in', 'ds-fade-in', 'ds-making-sweep', 'ds-benday', 'ds-shimmer-text', 'ds-overline-display'];
 /** A named group or peer (`group/checkbox`) only anchors `group-…/checkbox:` variants; it has no CSS of its own. */
 const NAMED_MARKER = /^(?:group|peer)\/[\w-]+$/;
 

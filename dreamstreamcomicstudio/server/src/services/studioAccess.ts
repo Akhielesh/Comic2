@@ -38,7 +38,9 @@ const studiosFor = (streamHostOn: boolean): Record<StudioId, { label: string; ta
   baby_monitor: { label: 'Baby monitor & family calls', tagline: 'A private nursery camera, the baby tracker and FaceTime-style calls', href: streamAppHref('/live#/monitor', streamHostOn) },
 });
 
-const ASK = { label: 'Ask an admin for access', href: 'mailto:contact@dreamstreamstudio.ai?subject=Studio%20access' };
+// The one support address (lead decision D9): the same mailbox as components/legal/contacts.ts SUPPORT_EMAIL, spelled
+// here because server code does not import from components/.
+const ASK = { label: 'Ask an admin for access', href: 'mailto:support@dreamstreamstudio.ai?subject=Studio%20access' };
 
 /** Pure: the access picture from what the database says. */
 export function computeStudioAccess(i: AccessInputs, opts: { streamHostOn?: boolean } = {}): { confined: boolean; studios: StudioAccess[] } {

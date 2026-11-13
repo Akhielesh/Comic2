@@ -420,3 +420,34 @@ for (const view of DECLUTTER_VIEWS) {
     });
   }
 }
+
+// DC-1 #3 / lead D10 (S2b review): from 1024 px the header has no quality chip, so the composer's chip is quality's only
+// on-screen home. jsdom only checks it exists; here the real layout must leave it, and the lock glyph of a locked
+// comic, hit-testable at their centres — not display:none in a narrow composer, not clipped by the chip row's scroller.
+test.describe('the composer quality chip is on screen from 1024 px @declutter', () => {
+  const device = deviceByName('smoke-1280x800')!;
+  for (const width of [1024, 1280]) {
+    for (const theme of ['light', 'dark'] as const) {
+      test.describe(`${width} px, ${theme}`, () => {
+        test.use({ viewport: { width, height: 800 }, isMobile: false, hasTouch: false, deviceScaleFactor: 1, colorScheme: theme });
+        test('the chip and its lock glyph answer a click at their centres (heist-12p is locked)', async ({ page }, testInfo) => {
+          const qa = new QaHarness(page, device, testInfo);
+          await qa.open({ surface: 'studio', fixture: 'heist-12p', theme, skin: 'atlas', img: 'svg' });
+          await page.locator('[data-action="quality"]').first().waitFor({ state: 'attached' });
+          const hits = await page.evaluate(() => {
+            const at = (el: Element | null) => {
+              if (!el) return { found: false, inside: false, box: null as null | { x: number; y: number; w: number; h: number } };
+              const r = el.getBoundingClientRect();
+              const hit = r.width > 0 && r.height > 0 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null;
+              return { found: true, inside: !!hit && (el === hit || el.contains(hit) || !!hit.closest('[data-action="quality"]')), box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } };
+            };
+            const chip = document.querySelector('[data-action="quality"]');
+            return { chip: at(chip), lock: at(chip?.querySelector('[data-testid="composer-quality-lock"]') ?? null) };
+          });
+          expect(hits.chip, `the quality chip at ${width} px: ${JSON.stringify(hits.chip.box)}`).toMatchObject({ found: true, inside: true });
+          expect(hits.lock, `the lock glyph at ${width} px: ${JSON.stringify(hits.lock.box)}`).toMatchObject({ found: true, inside: true });
+        });
+      });
+    }
+  }
+});

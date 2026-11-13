@@ -2,6 +2,10 @@
 // Caption / SFX balloon (pick, then click on the page), undo / redo, Tidy (free re-layout of balloons
 // you haven't placed by hand), Fix edges (move balloons back inside the safe area) and the Easy/Pro view.
 // Wraps instead of overflowing; every control is a 44 px target on touch.
+//
+// With COMIC_PRO_EDITOR_V2 on (PE-SHELL), the page editor's header holds the one Easy | Pro switch, so the page editor
+// passes showMode={false} (the duplicate goes); in Pro with the tool rail, adding lives on the rail (showAdd={false})
+// and undo with its label in the top bar (showUndo={false}). Every prop defaults to today's toolbar.
 
 import React from 'react';
 import { Cloud, MessageCircle, Redo2, Sparkles, Square, Undo2, Wand2, Zap } from 'lucide-react';
@@ -27,6 +31,12 @@ export interface LetteringToolbarProps {
   onModeChange(mode: StudioMode): void;
   canPro: boolean;
   disabled?: boolean;
+  /** The Easy | Pro switch (default true; the page editor drops it with the Pro editor flag on). */
+  showMode?: boolean;
+  /** The add-a-balloon group (default true; the Pro tool rail replaces it). */
+  showAdd?: boolean;
+  /** Undo / redo (default true; the Pro top bar shows them with their label). */
+  showUndo?: boolean;
 }
 
 const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
@@ -58,9 +68,13 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
   mode,
   onModeChange,
   canPro,
-  disabled
+  disabled,
+  showMode = true,
+  showAdd = true,
+  showUndo = true
 }) => (
   <div role="toolbar" aria-label="Lettering tools" className="flex min-w-0 flex-wrap items-center gap-1" data-testid="lettering-toolbar">
+    {showAdd && (
     <div className="flex flex-wrap items-center gap-0.5 rounded-xl bg-[var(--ds-segment-track)] p-0.5" role="group" aria-label="Add a balloon">
       {ADD.map((a) => (
         <button
@@ -81,12 +95,17 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
         </button>
       ))}
     </div>
-    <button type="button" className={BTN} disabled={!canUndo} onClick={onUndo} title={undoLabel ? `Undo: ${undoLabel} (⌘Z)` : 'Undo (⌘Z)'} aria-label={undoLabel ? `Undo ${undoLabel}` : 'Undo'}>
-      <Undo2 className="h-3.5 w-3.5" aria-hidden />
-    </button>
-    <button type="button" className={BTN} disabled={!canRedo} onClick={onRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
-      <Redo2 className="h-3.5 w-3.5" aria-hidden />
-    </button>
+    )}
+    {showUndo && (
+      <>
+        <button type="button" className={BTN} disabled={!canUndo} onClick={onUndo} title={undoLabel ? `Undo: ${undoLabel} (⌘Z)` : 'Undo (⌘Z)'} aria-label={undoLabel ? `Undo ${undoLabel}` : 'Undo'}>
+          <Undo2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+        <button type="button" className={BTN} disabled={!canRedo} onClick={onRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
+          <Redo2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </>
+    )}
     <button type="button" className={BTN} disabled={disabled || !onTidy} onClick={() => onTidy?.()} title={onTidy ? 'Re-place the balloons you haven’t moved by hand (free)' : 'Nothing to tidy — every balloon is placed by hand'}>
       <Wand2 className="h-3.5 w-3.5" aria-hidden /> Tidy
     </button>
@@ -95,7 +114,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
         <Sparkles className="h-3.5 w-3.5" aria-hidden /> Fix edges ({outsideCount})
       </button>
     )}
-    {canPro && (
+    {canPro && showMode && (
       <Segmented<StudioMode>
         label="Editor view"
         size="xs"

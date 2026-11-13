@@ -21,6 +21,9 @@
 // allowlist.json (the a11y helper), no console errors, and under reduced motion no animation or transition
 // started at all (recorded from the first frame) and none in effect (with motion on, the entrances finish first).
 // A scene that crashes fails on its own; the scenes after it are still measured.
+//
+// Pro Edit scenes (PE-SHELL (c)), `@pro`: every scene in qa/pro, discovered at RUNTIME the same way
+// (`?surface=pro` publishes window.__QA_PRO_SCENES__), measured with the app scenes' assertions.
 
 import { test, expect, type QaHarness } from './helpers/harness';
 import type { ComicDevice } from './devices';
@@ -178,7 +181,7 @@ const appChecks = (device: ComicDevice, scene: string): CheckId[] => [
 const APP_CONTENT = 'main, [role="main"]';
 
 /** Every app-page assertion at the current URL (index or scene). Soft: one run reports every scene's findings. */
-const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, theme: 'light' | 'dark'): Promise<void> => {
+const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, theme: 'light' | 'dark', surface: 'app' | 'pro' = 'app'): Promise<void> => {
   const where = `${scene} (${theme}) on ${qa.testInfo.project.name}`;
   if (await qa.prefersReducedMotion()) {
     // No waiting first: under reduced motion nothing may move at all, so an entrance that ignores the preference
@@ -196,10 +199,10 @@ const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, t
   // A duplicated id makes <label for> / aria-labelledby name the wrong element; axe files duplicate-id-aria under
   // "incomplete", which the a11y helper does not report.
   expect.soft(await qa.duplicateIds(), `${where}: duplicate ids`).toEqual([]);
-  await qa.check('app', `${scene}-${theme}`, { checks: appChecks(device, scene), axe: true, hinge: null, contentSelector: APP_CONTENT });
+  await qa.check(surface, `${scene}-${theme}`, { checks: appChecks(device, scene), axe: true, hinge: null, contentSelector: APP_CONTENT });
   // The 44 px check measures only controls fully on screen: walk the rest of the page too (app scenes scroll the
   // document), and count the sparks in each of those viewports as well.
-  if (device.coarse) await qa.eachScrollStep((top) => qa.check('app', `${scene}-${theme}-y${top}`, { checks: ['hit-target', ...sparkChecks(scene)], hinge: null }));
+  if (device.coarse) await qa.eachScrollStep((top) => qa.check(surface, `${scene}-${theme}-y${top}`, { checks: ['hit-target', ...sparkChecks(scene)], hinge: null }));
 };
 
 /** One page's open and measurement: a crash or a throw fails that page (soft), and every later scene is still measured. */
@@ -232,6 +235,32 @@ test.describe('app scenes @smoke @app', () => {
             await qa.open({ surface: 'app', scene: id, theme, still: false });
             await expect.soft(qa.page.locator(`[data-qa-app-scene="${id}"]`), `${id} mounts`).toBeAttached();
             await checkAppPage(qa, device, id, theme);
+          })
+        );
+      }
+    });
+  }
+});
+
+// ── Pro Edit scenes (PE-SHELL (c)) ─────────────────────────────────────────────
+
+test.describe('pro scenes @smoke @pro', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`every Pro Edit scene (${theme})`, async ({ qa, device }) => {
+      test.skip(!qa.themes.includes(theme), `this project measures ${qa.themes.join(' and ')} only`);
+      await qa.recordMotionStarts();
+      await qa.open({ surface: 'pro', theme, still: false });
+      const scenes = await qa.proScenes();
+      test.setTimeout(30_000 + 15_000 * (scenes.length + 1));
+      expect(scenes.length, 'the harness index lists the Pro Edit scenes (window.__QA_PRO_SCENES__)').toBeGreaterThan(0);
+      qa.testInfo.annotations.push({ type: 'pro-scenes', description: scenes.map((s) => s.id).join(', ') });
+      await test.step(`index (${theme})`, () => measured(qa, `pro index (${theme})`, () => checkAppPage(qa, device, 'index', theme, 'pro')));
+      for (const { id } of scenes) {
+        await test.step(`${id} (${theme})`, () =>
+          measured(qa, `${id} (${theme})`, async () => {
+            await qa.open({ surface: 'pro', scene: id, theme, still: false });
+            await expect.soft(qa.page.locator(`[data-qa-pro-scene="${id}"]`), `${id} mounts`).toBeAttached();
+            await checkAppPage(qa, device, id, theme, 'pro');
           })
         );
       }

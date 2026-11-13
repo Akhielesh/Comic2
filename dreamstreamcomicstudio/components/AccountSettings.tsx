@@ -12,6 +12,7 @@ import {
 } from '../services/db';
 import { getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
+import { SUPPORT_EMAIL } from './legal/contacts';
 import { ApiConfiguration } from './ApiConfiguration';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, Bell, CheckCircle2, ChevronLeft, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
@@ -103,7 +104,7 @@ const ContactSection = () => {
             </p>
             <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
                 <p className="font-bold mb-1">Basic Contact Info</p>
-                <p className="text-slate-600">Support Email: support@dreamstream.com</p>
+                <p className="text-slate-600">Support Email: <a href={`mailto:${SUPPORT_EMAIL}`} className="underline">{SUPPORT_EMAIL}</a></p>
                 <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
             </div>
             <form onSubmit={send} className="space-y-4">

@@ -14,6 +14,7 @@
 import { conflictGuardOn } from '../../../../shared/comic/capabilities.js';
 import { newId, normalizeConflictCard, type Card, type ComicDoc, type ConflictCard, type ConflictItem, type Msg } from '../../../../shared/comic/doc.js';
 import { applyOps, type DocOp, type ResolveConflictAction } from '../../../../shared/comic/ops.js';
+import { isPassed, settledCardsOn } from '../../../../shared/comic/settle.js';
 import { locateLine } from '../conflictGuard.js';
 import type { ActionHandler } from '../extensions.js';
 import { sanitizeCtxFor, sanitizePatchOps, type ActionOutcome, type RunActionOptions, type StartedAction } from '../jobs.js';
@@ -28,6 +29,8 @@ export const USE_THEIRS_LABEL = "Use the director's version";
 export const TOO_BIG_TEXT = "that change is too big to apply from here; Show me opens it";
 /** The same, for an item with no page to open (the page plan, the lettering), where the card has no Show me. */
 export const TOO_BIG_NO_PAGE_TEXT = "that change is too big to apply from here; ask the director to redo it if you want it";
+/** A conflict card the chat has moved past (settled, "left"): the creator's version stands. */
+export const SETTLED_TEXT = 'That question has moved on: your version stands. Nothing was changed.';
 export const STALE_TEXT = "it was removed since, so the director's version can't be applied";
 
 const finished = (outcome: ActionOutcome): StartedAction => ({ outcome, done: Promise.resolve() });
@@ -35,11 +38,11 @@ const finished = (outcome: ActionOutcome): StartedAction => ({ outcome, done: Pr
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** The message holding conflict card `cardId` (newest first), with the card as stored. */
-const findCard = (doc: ComicDoc, cardId: string): { msg: Msg; card: ConflictCard } | undefined => {
+const findCard = (doc: ComicDoc, cardId: string): { msg: Msg; card: ConflictCard; index: number } | undefined => {
   for (let i = doc.conversation.length - 1; i >= 0; i -= 1) {
     const msg = doc.conversation[i];
     const card = msg.cards?.find((c): c is ConflictCard => c.type === 'conflict' && c.id === cardId);
-    if (card) return { msg, card };
+    if (card) return { msg, card, index: i };
   }
   return undefined;
 };
@@ -137,6 +140,18 @@ export function resolveConflict(ctx: StudioContext, raw: ResolveConflictAction, 
   const card = found ? normalizeConflictCard(found.card) : undefined;
   if (!found || !card) {
     const message = "That question is no longer in the conversation. Nothing was changed.";
+    say(ctx, opts, message);
+    return { status: 'blocked', message };
+  }
+  // Settled cards (D3): once the chat has moved past this card it is settled ("left": the creator's edit stands, and
+  // the director was told so). The UI shows no controls then; a late tap from a stale tab or a replayed answer is
+  // refused here too, by the same rule and flag as options cards (director.ts), so nothing rewrites the creator's words.
+  if (
+    settledCardsOn((opts?.caps ?? ctx.caps)?.admin) &&
+    isPassed(doc, found.index) &&
+    card.items.some((it) => !it.resolved)
+  ) {
+    const message = SETTLED_TEXT;
     say(ctx, opts, message);
     return { status: 'blocked', message };
   }

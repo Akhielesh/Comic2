@@ -10,6 +10,7 @@
 
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type NextStep, type RefAsset } from '../../../shared/comic/doc.js';
 import { conflictGuardOn } from '../../../shared/comic/capabilities.js';
+import { cardSettle, isPassed, matchChoices, normalizeAnswer, outcomeForModel, settledCardsOn } from '../../../shared/comic/settle.js';
 import { STEER_LIMITS, type StudioFocus } from '../../../shared/comic/events.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
@@ -38,7 +39,7 @@ import {
   wantsRecap
 } from './replies.js';
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
-import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
+import { activityWhere, buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { conflictCardFor, conflictCardText } from './conflictGuard.js';
 import { CONFLICT_PROMPT_LINE, decidedLine } from './decided.js';
 import { LONG_MESSAGE_CHARS, openSteerOf, takeSteerOf, type SteerNote } from './session.js';
@@ -153,7 +154,7 @@ HOW TO USE TOOLS
 - "Error: …" → fix the arguments once, or tell the user plainly what went wrong.
 - After ask_user, end your turn.
 - A long pasted script: save_source (no arguments if the message says it was already saved, else useMessage:true), then offer the next step.
-- Dialogue: read_pages, then edit_panel_text or set_line. A drawn page's art: edit_page; its script: revise_pages.
+- Dialogue: dialogue_edit (asks which line itself); whole panels: edit_panel_text. A drawn page's art: edit_page; its script: revise_pages.
 
 ATTACHMENTS
 Images are numbered "Attached image 1, 2, …" (earlier unassigned images continue the numbering) and you can see them. Do what the user says they are for: a person or drawing for a character (attach_refs — keep every photo of them), a look to follow (set_style), or a location (upsert_place). If unclear, ask ("Is this Maya, or a style to follow?"). Also write what you see into the look fields. A SAFETY, IP or CARE NOTE after the message is from the studio: follow it.
@@ -315,11 +316,20 @@ function summaryBody(doc: ComicDoc, compact: boolean): string {
 
 // ── Conversation window ──────────────────────────────────────────────────────
 
-/** One card as words for the model. Breakdown cards are live views: `doc` (when given) counts their pages. */
-const cardText = (card: Card, cardDoc?: ComicDoc): string => {
+/**
+ * One card as words for the model. Breakdown cards are live views: `doc` (when given) counts their pages. `outcome`
+ * (SETTLE-CORE, behind SETTLED_CARDS) is the settled card's outcome in words (settle.outcomeForModel): it replaces the
+ * options card's "answered:" suffix and closes the gate and conflict brackets. '' (an open or live card) adds nothing.
+ * Never an amount.
+ */
+const cardText = (card: Card, cardDoc?: ComicDoc, outcome?: string): string => {
+  const tail = outcome ? `; ${outcome}` : '';
   switch (card.type) {
-    case 'options':
-      return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${answeredLabels(card).join(', ')}` : ''}]`;
+    case 'options': {
+      const asked = `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}`;
+      if (outcome !== undefined) return `${asked}${tail}]`;
+      return `${asked}${card.answered?.length ? `; answered: ${answeredLabels(card).join(', ')}` : ''}]`;
+    }
     case 'style_choice':
       return '[showed style options to pick from]';
     case 'cast':
@@ -333,32 +343,50 @@ const cardText = (card: Card, cardDoc?: ComicDoc): string => {
       return cardDoc ? `[showed the page breakdown: ${pages.length} page${pages.length === 1 ? '' : 's'}, ${panels} panel${panels === 1 ? '' : 's'}]` : '[showed the page breakdown]';
     }
     case 'gate':
-      return '[asked the user to approve a spend]';
+      return `[asked the user to approve a spend${tail}]`;
     case 'renders':
       return `[drawing: ${clip(card.label, 80)}]`;
     case 'notice':
       return `[${card.tone}: ${clip(card.text, 200)}]`;
     case 'model_outage':
       return outageCardText(card);
-    case 'conflict':
-      return conflictCardText(card);
+    case 'conflict': {
+      const text = conflictCardText(card);
+      return tail && text.endsWith(']') ? `${text.slice(0, -1)}${tail}]` : text;
+    }
     default:
       return '';
   }
 };
 
-const messageText = (m: Msg, doc?: ComicDoc): string => {
+/** The card types whose settled outcome the model reads (SETTLE-CORE #2(e)). */
+const OUTCOME_CARDS: ReadonlySet<Card['type']> = new Set<Card['type']>(['options', 'gate', 'conflict']);
+
+/**
+ * One message as words for the model. With `outcomes` (and a doc), an options, gate or conflict card reads its settled
+ * outcome, judged on `conversation` with this message at `index` (the doc's own conversation may still hold the message
+ * being answered, which never counts).
+ */
+const messageText = (m: Msg, doc?: ComicDoc, index = -1, conversation?: Msg[], outcomes = false): string => {
   const parts = [clip(m.text, 3000)];
   if (m.attachments?.length) parts.push(`[${m.attachments.length} image(s) attached]`);
-  for (const card of m.cards || []) parts.push(cardText(card, doc));
+  const settleDoc = outcomes && doc && conversation && index >= 0 ? { ...doc, conversation } : undefined;
+  for (const card of m.cards || []) {
+    const outcome = settleDoc && OUTCOME_CARDS.has(card.type) ? outcomeForModel(card, settleDoc, cardSettle(settleDoc, index, card)) : undefined;
+    parts.push(cardText(card, doc, outcome));
+  }
   return parts.filter(Boolean).join(' ');
 };
 
-/** The last messages as provider turns (consecutive same-role turns merged; starts with the user). */
-export function conversationForDirector(conversation: Msg[], window = HISTORY_WINDOW, doc?: ComicDoc): ChatMessage[] {
+/**
+ * The last messages as provider turns (consecutive same-role turns merged; starts with the user). `opts.outcomes`
+ * (settledCardsOn) makes settled options, gate and conflict cards say how they ended (SETTLE-CORE #2).
+ */
+export function conversationForDirector(conversation: Msg[], window = HISTORY_WINDOW, doc?: ComicDoc, opts: { outcomes?: boolean } = {}): ChatMessage[] {
   const out: ChatMessage[] = [];
-  for (const m of conversation.slice(-window)) {
-    const content = messageText(m, doc);
+  const start = conversation.length - Math.min(window, conversation.length);
+  for (const [k, m] of conversation.slice(-window).entries()) {
+    const content = messageText(m, doc, start + k, conversation, opts.outcomes === true);
     if (!content) continue;
     const last = out[out.length - 1];
     if (last && last.role === m.role && typeof last.content === 'string') last.content = `${last.content}\n\n${content}`;
@@ -392,6 +420,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   read_pages: 'Reading the plan',
   edit_panel_text: 'Editing dialogue',
   set_line: 'Editing a line',
+  dialogue_edit: 'Editing dialogue',
   render_pages: 'Preparing pages',
   edit_page: 'Preparing the edit',
   render_cover: 'Preparing the cover',
@@ -480,22 +509,6 @@ type OptionsCard = Extract<Card, { type: 'options' }>;
 /** `answered` holds choice ids (what the OptionsCard locks on); the model reads the labels. */
 const answeredLabels = (card: OptionsCard): string[] => (card.answered || []).map((a) => card.choices.find((c) => c.id === a)?.label ?? a);
 
-const normalizeAnswer = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
-
-/** The choice ids the user's text picks on an options card (none when it is free text). */
-function pickedChoices(card: OptionsCard, userText: string): string[] {
-  const want = normalizeAnswer(userText);
-  if (!want) return [];
-  const byText = (s: string) => card.choices.find((c) => normalizeAnswer(c.reply || c.label) === s || normalizeAnswer(c.label) === s);
-  const one = byText(want);
-  if (one) return [one.id];
-  if (!card.multi) return [];
-  // A multi-select card sends its picks as "A, B and C" (OptionsCard.joinChoices).
-  const parts = want.split(/\s*,\s*|\s+and\s+/).filter(Boolean);
-  const ids = parts.map((p) => byText(p)?.id);
-  return parts.length > 1 && ids.every((id): id is string => !!id) ? [...new Set(ids)] : [];
-}
-
 /**
  * The options card a message answers, as the client knows it (OptionsCard): the card's id and the
  * picked choice ids, or `custom` for an answer typed into the card's own field. Optional: without
@@ -521,13 +534,16 @@ function commitAnswer(session: StudioContext['session'], m: Msg, cardId: string,
  * does not fit it — nothing is written: the client said which card, so no other card is guessed), or
  * 'unknown' (no such card in the conversation: fall back to the text).
  */
-function answerByRef(session: StudioContext['session'], userText: string, ref: OptionAnswerRef): 'answered' | 'kept' | 'unknown' {
+function answerByRef(session: StudioContext['session'], userText: string, ref: OptionAnswerRef, settled = false): 'answered' | 'kept' | 'unknown' {
   const conv = session.doc.conversation;
   for (let i = conv.length - 1; i >= 0; i -= 1) {
     const m = conv[i];
     if (m.role !== 'assistant') continue;
     const card = m.cards?.find((c): c is OptionsCard => c.type === 'options' && c.id === ref.id);
     if (!card) continue;
+    // SETTLED_CARDS: a card the chat has moved past is settled; a late tap on it is ordinary text (the message being
+    // routed is not committed yet, so it never counts).
+    if (settled && isPassed(session.doc, i)) return 'kept';
     if (card.answered?.length) return 'kept';
     const ids = [...new Set(ref.choiceIds || [])];
     if (ids.length) {
@@ -555,18 +571,20 @@ function answerByRef(session: StudioContext['session'], userText: string, ref: O
  * director's window wins.
  * Returns whether a card was answered. The route calls it for every message (fast paths included).
  */
-export function recordOptionAnswer(session: StudioContext['session'], userText: string, ref?: OptionAnswerRef): boolean {
+export function recordOptionAnswer(session: StudioContext['session'], userText: string, ref?: OptionAnswerRef, opts: { settled?: boolean } = {}): boolean {
   if (ref) {
-    const byRef = answerByRef(session, userText, ref);
+    const byRef = answerByRef(session, userText, ref, opts.settled === true);
     if (byRef !== 'unknown') return byRef === 'answered';
   }
   const conv = session.doc.conversation;
   for (let i = conv.length - 1; i >= Math.max(0, conv.length - HISTORY_WINDOW); i -= 1) {
+    // Walking back from the end: once a message is passed, every earlier one is too (SETTLED_CARDS).
+    if (opts.settled && isPassed(session.doc, i)) break;
     const m = conv[i];
     if (m.role !== 'assistant' || !m.cards?.length) continue;
     for (const card of m.cards) {
       if (card.type !== 'options' || card.answered?.length) continue;
-      const answered = pickedChoices(card, userText);
+      const answered = matchChoices(card, userText);
       if (!answered.length) continue;
       commitAnswer(session, m, card.id, answered);
       return true;
@@ -606,7 +624,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     ...(attachments.length ? { attachments } : {})
   };
   try {
-    if (!input.optionAnswerHandled) recordOptionAnswer(session, userText);
+    if (!input.optionAnswerHandled) recordOptionAnswer(session, userText, undefined, { settled: settledCardsOn(ctx.caps?.admin) });
   } catch (err) {
     logger.warn('comic_director_answer_record_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
   }
@@ -715,7 +733,7 @@ async function directorTurnBody(
   ]
     .filter(Boolean)
     .join('\n\n');
-  const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1, doc);
+  const history = conversationForDirector(doc.conversation.filter((m) => m.id !== userMsg.id), HISTORY_WINDOW - 1, doc, { outcomes: settledCardsOn(ctx.caps?.admin) });
   const imageParts = await loadTurnImages(ctx, images, attachments.length);
   let hint: string | undefined;
   try {
@@ -863,7 +881,9 @@ async function directorTurnBody(
           const label = TOOL_ACTIVITY[call.name] ?? toolset.activity[call.name];
           // The badge follows THIS call: insert_page is free, but with write:true it runs the (paid) writer.
           const badge = call.name === 'insert_page' && args.write === true ? 'text' : tool.cost === 'paid' ? 'image' : tool.cost;
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: badge });
+          // Presence (plan §3 A2/A4): the page and balloons this call works on, so the editor can outline them.
+          const where = label ? activityWhere(ctx, turn, call.name, args) : undefined;
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'start', cost: badge, ...(where ? { where } : {}) });
           let committed = 0;
           const unsubscribe = session.subscribe((e) => {
             if (e.type === 'ops') committed += e.ops.length;
@@ -874,7 +894,7 @@ async function directorTurnBody(
             unsubscribe();
           }
           const ok = !/^(Error|Refused)\b/.test(output);
-          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok, cost: badge });
+          if (label) session.emit({ type: 'activity', id: actId, label, phase: 'end', ok, cost: badge, ...(where ? { where } : {}) });
           turn.log.push({ tool: call.name, ok, cost: tool.cost, result: output.slice(0, 400), ops: committed });
         }
         if (!tool || malformed) turn.log.push({ tool: call.name, ok: false, cost: tool?.cost ?? 'free', result: output.slice(0, 400), ops: 0 });

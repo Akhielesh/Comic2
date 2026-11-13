@@ -119,8 +119,8 @@ export const defaultSplitFor = (ff: Pick<FormFactor, 'width' | 'orientation' | '
 
 /**
  * Touch windows narrower than this keep the medium header even from 1024: with 44 px targets AND the
- * pane switcher, the full labelled header (Share · Easy/Pro · Quality · $ · saved · usage · Read)
- * leaves an iPad Pro in portrait (1024 / 1032 wide) about 30 px for the comic's title.
+ * pane switcher, the full labelled header (Share · Easy/Pro · $ · ⋯, with Read only while the board is hidden;
+ * DC-1) leaves an iPad Pro in portrait (1024 / 1032 wide) about 30 px for the comic's title.
  */
 export const TOUCH_REGULAR_HEADER_MIN = 1100;
 

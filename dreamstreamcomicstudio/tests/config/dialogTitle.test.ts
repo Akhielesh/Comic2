@@ -50,7 +50,11 @@ const CENTRED: Record<string, 'DIALOG_TITLE' | 'DIALOG_TITLE_FROM_SM'> = {
   // A bottom sheet below `sm`, centred from `sm` up (`items-end sm:items-center`).
   'components/comicstudio/timeline/ui.tsx': 'DIALOG_TITLE_FROM_SM',
   'components/comicstudio/models/ModelChangeConfirm.tsx': 'DIALOG_TITLE_FROM_SM',
-  'components/comicstudio/models/lab/RunConfirmDialog.tsx': 'DIALOG_TITLE_FROM_SM'
+  'components/comicstudio/models/lab/RunConfirmDialog.tsx': 'DIALOG_TITLE_FROM_SM',
+  // Centred on the scrim at every width (DS-3).
+  'components/modals/ProjectInfoModal.tsx': 'DIALOG_TITLE',
+  // The image lightbox over Project info, a layer above it (Z.sheet).
+  'components/modals/MasterGalleryModal.tsx': 'DIALOG_TITLE'
 };
 /** Modal (or modal-capable) surfaces that are not a centred dialog with a title, and why. */
 const NOT_CENTRED: Record<string, string> = {
@@ -183,5 +187,45 @@ describe('dialog titles — the rest of the app (ratchet)', () => {
     expect(problems).toEqual([]);
     expect(over, 'A new modal dialog: classify it in CENTRED (title with DIALOG_TITLE / DIALOG_TITLE_FROM_SM) or NOT_CENTRED (with the reason).').toEqual([]);
     expect(under, 'A modal was classified or removed: lower the baseline so the gain is kept.').toEqual([]);
+  });
+});
+
+/**
+ * Radix dialogs (DS-1c wave note 14). Radix sets aria-modal at runtime, so the classification above never sees a
+ * components/ds Dialog or AlertDialog: here every `<DialogContent` / `<AlertDialogContent` element (comments excluded)
+ * must render a `<DialogTitle` or `<AlertDialogTitle` before it closes. The primitives put DIALOG_TITLE on that title
+ * themselves (components/ds/Dialog.test.tsx), so a caller only has to render one.
+ */
+export function radixDialogsWithoutTitle(source: string): number[] {
+  const src = stripComments(source);
+  const missing: number[] = [];
+  for (const open of src.matchAll(/<(Alert)?DialogContent\b/g)) {
+    const start = open.index ?? 0;
+    const tag = open[1] ? 'AlertDialogContent' : 'DialogContent';
+    const end = src.indexOf(`</${tag}>`, start);
+    const body = end < 0 ? src.slice(start, src.indexOf('>', start) + 1) : src.slice(start, end);
+    if (!/<(?:Alert)?DialogTitle\b/.test(body)) missing.push(src.slice(0, start).split('\n').length);
+  }
+  return missing;
+}
+
+describe('dialog titles — Radix dialogs render a title (DS-1c #14)', () => {
+  it('finds a DialogContent or AlertDialogContent without a title, and passes one that has it', () => {
+    expect(radixDialogsWithoutTitle('<DialogContent>\n  <DialogHeader><DialogTitle>Rename</DialogTitle></DialogHeader>\n</DialogContent>')).toEqual([]);
+    expect(radixDialogsWithoutTitle('<AlertDialogContent><AlertDialogTitle>Delete?</AlertDialogTitle></AlertDialogContent>')).toEqual([]);
+    expect(radixDialogsWithoutTitle('<p/>\n<DialogContent>\n  <p>No title</p>\n</DialogContent>')).toEqual([2]);
+    expect(radixDialogsWithoutTitle('<AlertDialogContent><p>x</p></AlertDialogContent>')).toEqual([1]);
+    expect(radixDialogsWithoutTitle('<DialogContent aria-label="x" />')).toEqual([1]);
+    // A usage note in a comment is no dialog.
+    expect(radixDialogsWithoutTitle('/* <DialogContent></DialogContent> */')).toEqual([]);
+  });
+
+  it('every scanned file (components/**, App.tsx, qa/**) titles its Radix dialogs', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const files = listScannedFiles();
+    const rendering = files.filter((rel) => /<(?:Alert)?DialogContent\b/.test(read(rel)));
+    // The DS-1c overlay scene renders both kinds, so the rule has something to check.
+    expect(rendering).toContain('qa/app/scenes/ds-overlays.tsx');
+    const missing = rendering.flatMap((rel) => radixDialogsWithoutTitle(readFileSync(path.join(ROOT, rel), 'utf8')).map((line) => `${rel}:${line}`));
+    expect(missing, 'Render a DialogTitle / AlertDialogTitle inside every DialogContent / AlertDialogContent.').toEqual([]);
   });
 });

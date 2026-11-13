@@ -4,7 +4,8 @@
  * Security: the host is FIXED (the project's Supabase URL from env, else the compiled-in public
  * constant) — never a user-supplied URL, so there is no SSRF surface; redirects are not followed;
  * the only credential is the PUBLIC anon key (it already ships in the frontend bundle). The anon
- * role can execute only the allow-listed SECURITY DEFINER read RPCs (server/sql/comic_publications.sql).
+ * role can execute only the allow-listed SECURITY DEFINER read RPCs (server/sql/comic_publications.sql and
+ * server/sql/comic_discovery.sql).
  * Function names are allow-listed too.
  */
 
@@ -18,7 +19,15 @@ export interface SupabaseEnv {
   VITE_SUPABASE_ANON_KEY?: string;
 }
 
-const RPC_NAMES = new Set(['comic_share_card', 'comic_public_payload', 'comic_share_card_by_project', 'comic_publication_track']);
+const RPC_NAMES = new Set([
+  'comic_share_card',
+  'comic_public_payload',
+  'comic_share_card_by_project',
+  'comic_publication_track',
+  // Discover's listing (server/sql/comic_discovery.sql; api-proxy/src/publicDiscover.ts): live public comics only.
+  'comic_discover_list',
+  'comic_discover_shelves'
+]);
 
 /** The Supabase origin to talk to: env (validated https *.supabase.co) else the public constant. */
 export function supabaseOrigin(env: SupabaseEnv | undefined): string {

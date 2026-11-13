@@ -95,7 +95,7 @@ import { noticePrice } from '../conversation/cards/NoticeCard';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
-import { FIT_DOT_COLOR, PageWireframe, fitDotOf, type FitDot } from './PageWireframe';
+import { FIT_DOT_COLOR, PageWireframe, fitDotOf, wireframeFramesOf, type FitDot } from './PageWireframe';
 import { CostInsights } from '../insights/CostInsights';
 
 export type BreakdownCardData = Extract<Card, { type: 'breakdown' }>;
@@ -397,7 +397,7 @@ const Thumb: React.FC<{
           <span className="line-clamp-3 break-words text-[12px] font-semibold leading-tight text-[var(--ds-ink)]">{book.cover.title || 'Untitled'}</span>
         </div>
       ) : (
-        <PageWireframe panels={tile.summary?.panels ?? []} aspect={doc.format.pageAspect} detail={width >= TILE_W} />
+        <PageWireframe panels={tile.summary?.panels ?? []} aspect={doc.format.pageAspect} detail={width >= TILE_W} frames={tile.page ? wireframeFramesOf(tile.page) : undefined} />
       )}
       {held ? (
         <span className="absolute inset-x-1 bottom-1 inline-flex items-center justify-center gap-1 rounded-md bg-[var(--ds-surface-strong)] px-1 py-0.5 text-[9.5px] text-[var(--ds-ink)]" aria-hidden>

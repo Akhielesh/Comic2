@@ -556,7 +556,7 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     expect(offences).toEqual([]);
   });
 
-  it('Pro text styling is neutral and the lettering sanitizer does not accept a Pro key or id until the drawing lands', () => {
+  it('Pro text styling is neutral and the lettering sanitizer does not accept a Pro key or id while PRO_EDIT_OPS_PATCHABLE is off', () => {
     const doc = v5();
     const line = doc.pages[0].panels[2].lines[0];
     const before = JSON.stringify(resolveLetterStyle(doc, line));
@@ -568,8 +568,11 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     for (const sfxEffect of PRO_SFX_EFFECTS) expect(sanitizeLetterStylePatch({ sfxEffect }), sfxEffect).toBeUndefined();
     expect(PRO_BUBBLE_SHAPES.filter((s) => (BUBBLE_SHAPES as readonly string[]).includes(s))).toEqual([]);
     expect(PRO_SFX_EFFECTS.filter((s) => (SFX_EFFECTS as readonly string[]).includes(s))).toEqual([]);
-    expect(PRO_FONT_IDS).toEqual([]);
-    expect(isProFontId('bungee')).toBe(false);
+    // PE-FONTS filled the font seam (28 faces) and PE-LETTER draws them; a client still cannot write one while
+    // PRO_EDIT_OPS_PATCHABLE is off (the server's `allowPro` is that switch).
+    expect(PRO_FONT_IDS).toHaveLength(28);
+    expect(isProFontId('bungee')).toBe(true);
+    expect(sanitizeLetterStylePatch({ font: 'bungee' })).toBeUndefined();
   });
 
   // ── Rollback (§2.3 graft 1, §6.4): S2 writes Pro lettering; rolled back to PE-0, a load + write-back must keep it. ──
@@ -597,7 +600,7 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     return d;
   };
 
-  it('stored Pro lettering and named styles round-trip normalizeDoc (rollback-safe) and draw exactly as today', () => {
+  it('stored Pro lettering and named styles round-trip normalizeDoc (rollback-safe) and draw what this build ships', () => {
     const stored = proLettered();
     const loaded = normalizeDoc(json(stored));
     expect(loaded.pages[0].panels[2].lines[0].style).toEqual(PRO_LINE_STYLE);
@@ -606,17 +609,15 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     // Idempotent, and a jsonb reload (keys reordered) changes nothing.
     expect(normalizeDoc(json(loaded))).toEqual(loaded);
     expect(normalizeDoc(jsonbOrder(json(loaded)) as ComicDoc)).toEqual(loaded);
-    // Draws exactly as today: the cascade skips what this build cannot draw (Pro text keys, a Pro shape, SFX effect or
-    // font), so the line resolves as if only its base keys were stored, and every id is one the exhaustive records know.
+    // Draws what this build ships (PE-LETTER): the Pro text keys, the Pro shape and SFX effect apply through the cascade
+    // (doc.base, then named st_radio, then the line's own style); a face this build does not ship (bungee before
+    // PE-FONTS) is skipped, so the exhaustive font records only see shipped ids.
     const line = loaded.pages[0].panels[2].lines[0];
-    const today = { ...loaded, letterStyle: { ...loaded.letterStyle!, base: { textColor: '#222222' } } };
     const resolved = resolveLetterStyle(loaded, line);
-    expect(resolved).toEqual(resolveLetterStyle(today, { ...line, style: { italic: true } }));
-    expect(BUBBLE_SHAPES).toContain(resolved.shape);
-    expect(SFX_EFFECTS).toContain(resolved.sfxEffect);
-    expect(JSON.stringify(resolved)).not.toMatch(/fillGradient|strokes|glow|warp|bungee|heart|wobble/);
+    expect(resolved).toMatchObject({ italic: true, shape: 'heart', fillGradient: PRO_LINE_STYLE.fillGradient, strokes: PRO_LINE_STYLE.strokes, glow: PRO_LINE_STYLE.glow, warp: 'arc', warpAmount: 0.5, textColor: '#00aa00' });
+    expect(resolved.font).toBe(isProFontId('bungee') ? 'bungee' : resolveLetterStyle(v5(), { ...line, style: undefined, styleId: undefined }).font);
     const sfx = { ...line, kind: 'sfx' as const };
-    expect(resolveLetterStyle(loaded, sfx)).toEqual(resolveLetterStyle(today, { ...sfx, style: { italic: true } }));
+    expect(resolveLetterStyle(loaded, sfx).sfxEffect).toBe('wobble');
     // No spec hash moves.
     expect(specHashes(loaded)).toEqual(specHashes(v5()));
   });
@@ -651,6 +652,17 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     ] as DocOp[]) {
       const after = applyOp(doc, op);
       expect(after.letterStyle?.named, JSON.stringify(op)).toEqual(NAMED);
+      expect(apply(after, inverseOps(doc, [op])).letterStyle, JSON.stringify(op)).toEqual(doc.letterStyle);
+    }
+  });
+
+  it("a newer build's look (kept on load) and its patches come back through the op's own inverse (a reset, then the look)", () => {
+    const d = json(v5());
+    (d as unknown as { letterStyle: unknown }).letterStyle = { presetId: 'future_look', base: { sizeScale: 1.2 }, kinds: { shout: { weight: 800 } } };
+    const doc = normalizeDoc(d);
+    expect(doc.letterStyle?.presetId).toBe('future_look');
+    for (const op of [{ op: 'letter_style', patch: { base: { sizeScale: 1.4 } } }, { op: 'letter_style', patch: { presetId: 'manga' } }, { op: 'letter_style', patch: null }] as DocOp[]) {
+      const after = applyOp(doc, op);
       expect(apply(after, inverseOps(doc, [op])).letterStyle, JSON.stringify(op)).toEqual(doc.letterStyle);
     }
   });
@@ -723,15 +735,18 @@ describe('Pro Edit contract (PE-0): flags and seams', () => {
     for (const key of ['proMotion', 'proStickers', 'readerMotion']) expect(key in DEFAULT_CAPS, key).toBe(false);
   });
 
-  it('the stubs carry their final names and do nothing yet: no generator, no font, no part ready', () => {
-    expect(FX_GENERATORS).toEqual([]);
+  it('the seams carry their final names; registered seams draw nothing on their own; only compose, inspector, kit and layers are ready', () => {
+    // PE-FX filled the registry (14 generators); nothing draws until fx/generators.ts is loaded, which this file never imports.
+    expect(FX_GENERATORS.map((g) => `${g.gen}@${g.v}`)).toHaveLength(14);
     expect(renderFx(FX, { aspect: 1 })).toEqual([]);
     expect(fxParamsOf({ params: { n: { kind: 'number', min: 0, max: 1, default: 0.5 }, c: { kind: 'color', default: '#000000' } } }, { n: 4, c: 'red', x: 1 })).toEqual({ n: 1, c: '#000000' });
     expect(MOTION_PRESET_IDS).toHaveLength(30);
     expect(CAMERA_MOVE_IDS).toHaveLength(6);
     const parts = [composePart, renderPart, kitPart, inspectorPart, layersPart, assetsPart, animatePart, stagePart];
     expect(parts.map((p) => p.id).sort()).toEqual([...PRO_EDIT_PARTS].sort());
-    expect(parts.every((p) => p.ready === false)).toBe(true);
+    // The parts the merged S2 packages made ready (PE-COMPOSE: compose; PE-SHELL: kit; PE-INSPECT: inspector, layers);
+    // the rest stay stubs.
+    expect(parts.filter((p) => p.ready).map((p) => p.id).sort()).toEqual(['compose', 'inspector', 'kit', 'layers']);
     // The barrel reaches the contracts under their namespaces.
     expect(comic.fx.renderFx).toBe(renderFx);
     expect(comic.motion.MOTION_PRESET_IDS).toBe(MOTION_PRESET_IDS);

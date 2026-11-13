@@ -1,6 +1,8 @@
 // useStudio — the live message queue, "Up next" (agent-editor plan §3 A1; lead decisions D1, D2).
 // A fake server whose streams stay open until the test closes them, so a director turn can be "running".
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { StreamRequest, StudioEvent } from '../../shared/comic/events';
@@ -24,7 +26,9 @@ vi.mock('./studioApi', async (importOriginal) => {
 });
 
 import { StudioApiError } from './studioApi';
-import { BUSY_REFUSED_COPY, STEER_GOES_NEXT_COPY, useStudio, type UseStudioDeps } from './useStudio';
+import { BUSY_REFUSED_COPY, STEER_GOES_NEXT_COPY, queueHoldInputOf, useStudio, type UseStudioDeps } from './useStudio';
+import { initialStudioState, type PendingUserMessage, type StudioState } from './studioReducer';
+import { holdReason } from './messageQueue';
 import { STEER_LIMITS } from '../../shared/comic/events';
 
 interface FakeStream {
@@ -454,6 +458,41 @@ describe('holds', () => {
   });
 });
 
+describe('the hold input every queue site reads (SETTLE-UI #3)', () => {
+  // The send path, the Up next line and the drain all build holdReason's input with queueHoldInputOf, so this tab's
+  // message on its way is never left out at one of them: a 'sending' one passes the question it follows.
+  const asked = (): StudioState => {
+    const doc = makeSampleDoc();
+    doc.conversation = [
+      { id: 'u0', role: 'user', text: 'make a cover', at: 1 },
+      { id: 'a0', role: 'assistant', text: 'Which mood?', at: 2, cards: [OPTIONS_CARD] }
+    ];
+    return { ...initialStudioState(), base: doc, doc, queue: { notes: [{ id: 'n1', text: 'and a back cover', at: 3 }], held: null, express: null, force: false, busyRetries: 0 } } as StudioState;
+  };
+  const answer = (status: PendingUserMessage['status']): PendingUserMessage => ({ id: 'p1', text: 'Moody', attachments: [], at: 4, status, card: { id: 'card_mood', choiceIds: ['m1'] }, streamId: 's2' });
+
+  it('an open question holds Up next until the answer is on its way; a sending answer passes it, a failed one holds as failed', () => {
+    expect(holdReason(queueHoldInputOf(asked()))).toBe('question');
+    const sending = { ...asked(), pendingMessage: answer('sending') };
+    expect(queueHoldInputOf(sending).pending).toBe(sending.pendingMessage);
+    expect(holdReason(queueHoldInputOf(sending))).toBeNull();
+    expect(holdReason(queueHoldInputOf({ ...asked(), pendingMessage: answer('failed') }))).toBe('failed');
+  });
+
+  it('useStudio has no other way into holdReason: the send path, the Up next line and the drain all pass queueHoldInputOf', () => {
+    const src = readFileSync(resolve(process.cwd(), 'components/comicstudio/useStudio.ts'), 'utf8');
+    const calls = [...src.matchAll(/holdReason\(([^)]{0,40})/g)].map((m) => m[1]);
+    expect(calls.length).toBe(3);
+    for (const arg of calls) expect(arg.startsWith('queueHoldInputOf(')).toBe(true);
+  });
+
+  it('reads the event hold and a running plan_pages from the state as well', () => {
+    expect(holdReason(queueHoldInputOf({ ...asked(), queue: { ...asked().queue!, held: 'stopped' } }))).toBe('stopped');
+    const planning = { ...asked(), streams: { a1: { id: 'a1', kind: 'action', actionType: 'plan_pages', startedAt: 1 } } } as unknown as StudioState;
+    expect(holdReason(queueHoldInputOf(planning))).toBe('plan_pages');
+  });
+});
+
 describe('editing the queue', () => {
   it('edit, move and remove change Up next', async () => {
     const { result } = await setup();
@@ -762,6 +801,45 @@ describe('Send now', () => {
     expect(result.current.error).toBe('That note can’t be used.');
     expect(api.cancelStudio).not.toHaveBeenCalled();
     expect(result.current.queue).toHaveLength(1);
+  });
+
+  // A4 (wave 2) verified the steer path against its refusal table; these two cases were not covered yet.
+  it('steering on, a note with photos: a steer carries text only, so the director stops and the note goes next (D2)', async () => {
+    const { result } = await setup(STEER_ON);
+    act(() => void result.current.send('go'));
+    const s1 = lastStream();
+    await act(async () => void (await result.current.send('add this cat', { inboxPaths: ['u/x/inbox/cat.webp'] })));
+    const id = result.current.queue![0].id;
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(id);
+    });
+    expect(outcome).toBe('queued');
+    expect(api.steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).toHaveBeenCalledTimes(1);
+    expect(result.current.queueSendingNow).toBe(id);
+    reply(s1, 'Stopped.');
+    await waitFor(() => expect(messages()).toHaveLength(2));
+    const sent = lastStream().req;
+    expect(sent.kind === 'message' && sent.attachments).toEqual([{ inboxPath: 'u/x/inbox/cat.webp' }]);
+  });
+
+  it('steering on during a plan_pages run: Send now neither steers nor stops it — the note goes the moment the plan is in', async () => {
+    const { result } = await setup(STEER_ON);
+    act(() => void result.current.act({ type: 'plan_pages' } as never));
+    const plan = lastStream();
+    await act(async () => void (await result.current.send('use six pages')));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(result.current.queue![0].id);
+    });
+    expect(outcome).toBe('queued');
+    expect(api.steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+    expect(messages()).toHaveLength(0);
+    await close(plan);
+    await waitFor(() => expect(messages()).toHaveLength(1));
+    expect(textOf(lastStream())).toBe(`${QUEUE_PREFIX} use six pages`);
   });
 
   it('when only a hold keeps the queue (the turn is free), Send now sends at once', async () => {

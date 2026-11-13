@@ -565,6 +565,7 @@ describe('spark guard — the detector', () => {
       costSummaryForExport: 'the export JSON payload, not on screen',
       aiUsageForExport: 'the export JSON payload, not on screen',
       artifactsForExport: 'the export JSON payload, not on screen',
+      projectForExport: 'the export JSON payload (project.json, dollar fields dropped for governed users), not on screen',
       costContextFor: 'a display context, not text',
       useCostContext: 'a display context, not text',
       boardCostContext: 'a display context, not text',

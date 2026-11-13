@@ -120,6 +120,13 @@ describe('clips and the dock summary', () => {
     const fresh = makeSampleDoc({ pages: [], spend: { totalUsd: 0, byKind: {}, entries: [] } });
     expect(dockSummary(fresh)).toBe('Book · No cover yet · no pages yet');
   });
+
+  it('{ pages: false } leaves out the page count only; an empty book still says "no pages yet" (DC-1 #10)', () => {
+    expect(dockSummary(richDoc(), formatUsd, { pages: false })).toBe('Book · Cover ✓ · 4 versions · $0.55 spent · $0.06 saved by software');
+    expect(dockSummary(richDoc(), formatUsd, { pages: true })).toBe(dockSummary(richDoc(), formatUsd));
+    const fresh = makeSampleDoc({ pages: [], spend: { totalUsd: 0, byKind: {}, entries: [] } });
+    expect(dockSummary(fresh, undefined, { pages: false })).toBe('Book · No cover yet · no pages yet');
+  });
 });
 
 describe('op builders and undo', () => {

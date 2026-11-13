@@ -11,7 +11,8 @@ import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetF
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
 import { ModeToggle, MODE_HINT } from './ModeToggle';
-import { SAVINGS_COPY, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
+import { SAVINGS_COPY, SavingsBreakdown, SavingsChip, savedEntries, savedTotal } from './SavingsChip';
+import { claimToast, resetToastsForTests, ToastHost } from '../../ds/Toast';
 import { FormFactorProvider, formFactorFor } from './useFormFactor';
 import { HEADER_BANNER_MIN_ORDER, HEADER_SLOT_ORDER } from './headerSlots';
 import { feature } from './index';
@@ -488,6 +489,22 @@ describe('ModeToggle (decisions-final #1: a view, never a permission)', () => {
     expect(screen.getByText(MODE_HINT)).toBeInTheDocument();
   });
 
+  it('both forms carry data-action="mode", the switch’s one home per viewport (declutter C2; DC-1 #8)', () => {
+    const studio = makeFakeStudio();
+    const { container: header } = render(
+      <FormFactorProvider value={DESKTOP}>
+        <ModeToggle studio={studio} />
+      </FormFactorProvider>
+    );
+    expect(header.querySelectorAll('[data-action="mode"]')).toHaveLength(1);
+    const { container: menu } = render(
+      <FormFactorProvider value={PHONE}>
+        <ModeToggle studio={studio} variant="menu" />
+      </FormFactorProvider>
+    );
+    expect(menu.querySelectorAll('[data-action="mode"]')).toHaveLength(1);
+  });
+
   it('Pro is shown as unavailable (never hidden) when the capability is off', () => {
     const studio = makeFakeStudio({ caps: { ...DEFAULT_CAPS, proEditor: false }, mode: 'pro' });
     render(
@@ -503,7 +520,13 @@ describe('ModeToggle (decisions-final #1: a view, never a permission)', () => {
 describe('SavingsChip (decisions-final #6)', () => {
   // Admin / own-key wording (dollars) unless a test says otherwise; governed users never see dollars.
   beforeEach(() => showDollarPrices());
-  afterEach(() => resetUsageStatus());
+  afterEach(() => {
+    resetUsageStatus();
+    act(() => resetToastsForTests());
+  });
+
+  /** The app toast card the host shows (one slot, components/ds/Toast); null when none. */
+  const appToast = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-slot="toast"]');
 
   const docWithSavings = (saved: number): ComicDoc => {
     const doc = makeSampleDoc();
@@ -516,6 +539,12 @@ describe('SavingsChip (decisions-final #6)', () => {
       }
     };
   };
+  const withHost = (ff: typeof PHONE, doc: ComicDoc) => (
+    <FormFactorProvider value={ff}>
+      <ToastHost />
+      <SavingsChip studio={{ doc }} />
+    </FormFactorProvider>
+  );
 
   it('totals honestly and shows nothing when nothing was saved', () => {
     expect(savedTotal(makeSampleDoc())).toBe(0);
@@ -526,80 +555,67 @@ describe('SavingsChip (decisions-final #6)', () => {
         <SavingsChip studio={{ doc: makeSampleDoc() }} />
       </FormFactorProvider>
     );
-    expect(container).toBeEmptyDOMElement();
+    // Nothing in the header: no text, no element.
+    expect(container.textContent).toBe('');
+    expect(container.querySelectorAll('*')).toHaveLength(0);
+    expect(appToast()).toBeNull();
   });
 
-  it('a quiet chip that opens the breakdown with the copy', () => {
-    render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Saved \$0\.30 by software/ }));
-    expect(screen.getByRole('dialog', { name: 'Saved by software' })).toHaveTextContent(SAVINGS_COPY);
+  it('draws no header chip at any width: "Saved" in the header means the save state only (declutter F3)', () => {
+    for (const ff of [DESKTOP, formFactorFor({ w: 900, h: 700 }), PHONE]) {
+      const { unmount } = render(withHost(ff, docWithSavings(0.3)));
+      // First sight never flashes, and there is no chip to show instead: no toast, no button, no "Saved".
+      expect(appToast()).toBeNull();
+      expect(screen.queryByRole('button')).toBeNull();
+      expect(document.body.textContent || '').not.toMatch(/\bSaved\b/);
+      unmount();
+    }
+  });
+
+  it('the breakdown (shown in the Spending sheet at every width) carries the copy and the savings', () => {
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(screen.getByText('Saved by software')).toBeInTheDocument();
+    expect(screen.getByText('$0.30')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(SAVINGS_COPY))).toBeInTheDocument();
     expect(screen.getByText('Moved 3 balloons')).toBeInTheDocument();
   });
 
-  it('governed users read the saving as a share of their usage — never dollars, also before the status loads', () => {
+  it('governed users read the breakdown as a share of their usage — never dollars, also before the status loads', () => {
     showUsagePrices(1);
-    const { unmount } = render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    const chip = screen.getByRole('button', { name: /^Saved (≈[\d.]+%|<0\.1%) of your usage by software/ });
-    expect(chip.textContent).not.toMatch(/\$/);
-    fireEvent.click(chip);
-    expect(screen.getByRole('dialog', { name: 'Saved by software' }).textContent).not.toMatch(/\$/);
+    const { unmount } = render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).toMatch(/Saved (≈[\d.]+%|<0\.1%) of your usage/);
+    expect(document.body.textContent).not.toMatch(/\$/);
     unmount();
     resetUsageStatus();
-    render(
-      <FormFactorProvider value={DESKTOP}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    expect(screen.getByRole('button', { name: /^Saved some of your usage by software/ }).textContent).toBe('Saved');
+    render(<SavingsBreakdown doc={docWithSavings(0.3)} />);
+    expect(document.body.textContent).not.toMatch(/\$/);
   });
 
-  it('phones: no header chip; a new saving shows the copy as a calm toast', async () => {
-    const { rerender } = render(
-      <FormFactorProvider value={PHONE}>
-        <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-      </FormFactorProvider>
-    );
-    expect(screen.queryByRole('button')).toBeNull();
-    rerender(
-      <FormFactorProvider value={PHONE}>
-        <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
-      </FormFactorProvider>
-    );
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(SAVINGS_COPY));
-  });
-
-  it('the phone toast is portalled outside the shell, so it carries the phone header size itself (it sat 4 px low)', async () => {
-    const toastFor = async (ff: typeof PHONE) => {
-      const { rerender, unmount } = render(
-        <FormFactorProvider value={ff}>
-          <SavingsChip studio={{ doc: docWithSavings(0.3) }} />
-        </FormFactorProvider>
-      );
-      rerender(
-        <FormFactorProvider value={ff}>
-          <SavingsChip studio={{ doc: docWithSavings(0.5) }} />
-        </FormFactorProvider>
-      );
-      const toast = await waitFor(() => screen.getByRole('status'));
-      const out = { parent: toast.parentElement, header: toast.style.getPropertyValue('--header-h'), top: toast.style.top };
+  it('a new saving shows the copy as an app toast on every form factor, announced by the host’s status region', async () => {
+    for (const ff of [DESKTOP, formFactorFor({ w: 900, h: 700 }), PHONE]) {
+      const { rerender, unmount } = render(withHost(ff, docWithSavings(0.3)));
+      const region = screen.getByRole('status');
+      expect(region).toBeEmptyDOMElement();
+      rerender(withHost(ff, docWithSavings(0.5)));
+      await waitFor(() => expect(appToast()).toHaveTextContent(SAVINGS_COPY));
+      // The host's polite region holds it (one region, already in the page), and the copy carries no money.
+      expect(region).toHaveTextContent(SAVINGS_COPY);
+      expect(screen.getAllByRole('status')).toEqual([region]);
+      expect(appToast()!.textContent).not.toMatch(/\$/);
+      expect(screen.queryByRole('button', { name: /saved/i })).toBeNull();
       unmount();
-      return out;
-    };
-    const portrait = await toastFor(PHONE);
-    expect(portrait.parent).toBe(document.body);
-    expect(portrait.header).toBe('44px');
-    expect(portrait.top).toBe('calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)');
-    // Phones in landscape keep index.css's compact-height header (no override).
-    const landscape = await toastFor(formFactorFor({ w: 852, h: 393, coarse: true }));
-    expect(landscape.header).toBe('');
+      act(() => resetToastsForTests());
+    }
+  });
+
+  it('takes the one toast slot: a toast already showing (the timeline’s Undo toast) steps aside, so two never stack', async () => {
+    const onLost = vi.fn();
+    const { rerender } = render(withHost(DESKTOP, docWithSavings(0.3)));
+    act(() => void claimToast(onLost));
+    rerender(withHost(DESKTOP, docWithSavings(0.5)));
+    await waitFor(() => expect(appToast()).toHaveTextContent(SAVINGS_COPY));
+    expect(onLost).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll('[data-slot="toast"]')).toHaveLength(1);
   });
 });
 

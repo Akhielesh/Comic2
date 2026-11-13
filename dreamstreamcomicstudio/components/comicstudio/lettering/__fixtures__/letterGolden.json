@@ -1,0 +1,1575 @@
+{
+ "note": "The lettering engine before PE-LETTER (756b5a70): hashString of JSON.stringify(planLettering(...)), letteringSvgMarkup(plans, {widthPx: 1000, idPrefix: \"gold\"}) and JSON.stringify of the canvas exporter's recorded calls (fakeCanvas), per page, estimateMeasure. Every QA fixture and its rtl edition, the sample doc, and the 8 base looks on heist-12p and lake-1p. The chat-14 fixture (S2a, after 756b5a70) was recorded at the S2b integration on the merged tree just before PE-LETTER (94893a2d), whose engine gives the same hashes as 756b5a70 on every page both cover.",
+ "pages": {
+  "lake-1p|pg_1": {
+   "plans": "7313c529",
+   "markup": "de8947b8",
+   "canvas": "8b0ba357"
+  },
+  "lake-1p|rtl|pg_1": {
+   "plans": "7313c529",
+   "markup": "de8947b8",
+   "canvas": "8b0ba357"
+  },
+  "heist-12p|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "heist-12p|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "heist-12p|pg_3": {
+   "plans": "ba2b8a54",
+   "markup": "73058c3b",
+   "canvas": "8a9fb8fa"
+  },
+  "heist-12p|pg_4": {
+   "plans": "615211d4",
+   "markup": "a7b762e3",
+   "canvas": "1e5e1820"
+  },
+  "heist-12p|pg_5": {
+   "plans": "672178df",
+   "markup": "83b70c09",
+   "canvas": "41ddcf3d"
+  },
+  "heist-12p|pg_6": {
+   "plans": "8cdb65cd",
+   "markup": "d6fe350b",
+   "canvas": "6137b9c6"
+  },
+  "heist-12p|pg_7": {
+   "plans": "69c21416",
+   "markup": "5b81b7dc",
+   "canvas": "c812451c"
+  },
+  "heist-12p|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "heist-12p|pg_9": {
+   "plans": "c3dddae4",
+   "markup": "a1446fae",
+   "canvas": "3601c912"
+  },
+  "heist-12p|pg_10": {
+   "plans": "75b2fe0b",
+   "markup": "756f8e6d",
+   "canvas": "dacec2f2"
+  },
+  "heist-12p|pg_11": {
+   "plans": "0b54c5d6",
+   "markup": "b4fae104",
+   "canvas": "0de9beff"
+  },
+  "heist-12p|pg_12": {
+   "plans": "989e6dab",
+   "markup": "fc087737",
+   "canvas": "0aaf30df"
+  },
+  "heist-12p|rtl|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "heist-12p|rtl|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "heist-12p|rtl|pg_3": {
+   "plans": "f891bf0e",
+   "markup": "9822a1f5",
+   "canvas": "584d5822"
+  },
+  "heist-12p|rtl|pg_4": {
+   "plans": "17b296c0",
+   "markup": "a55bbb8b",
+   "canvas": "1e01e908"
+  },
+  "heist-12p|rtl|pg_5": {
+   "plans": "01075475",
+   "markup": "d0ff0048",
+   "canvas": "c5540fbc"
+  },
+  "heist-12p|rtl|pg_6": {
+   "plans": "d7b64a69",
+   "markup": "1ae8ac77",
+   "canvas": "a352cdd0"
+  },
+  "heist-12p|rtl|pg_7": {
+   "plans": "295ffe5e",
+   "markup": "d0d90df6",
+   "canvas": "066ca502"
+  },
+  "heist-12p|rtl|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "heist-12p|rtl|pg_9": {
+   "plans": "2df52988",
+   "markup": "4db0802a",
+   "canvas": "d8dda918"
+  },
+  "heist-12p|rtl|pg_10": {
+   "plans": "75b2fe0b",
+   "markup": "756f8e6d",
+   "canvas": "dacec2f2"
+  },
+  "heist-12p|rtl|pg_11": {
+   "plans": "0b54c5d6",
+   "markup": "b4fae104",
+   "canvas": "0de9beff"
+  },
+  "heist-12p|rtl|pg_12": {
+   "plans": "564dfd75",
+   "markup": "3ddb66e4",
+   "canvas": "045dde5d"
+  },
+  "deep-40p|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "deep-40p|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "deep-40p|pg_3": {
+   "plans": "ddd65004",
+   "markup": "8c16be0b",
+   "canvas": "7760c55f"
+  },
+  "deep-40p|pg_4": {
+   "plans": "b82780d5",
+   "markup": "160555f9",
+   "canvas": "1fb44701"
+  },
+  "deep-40p|pg_5": {
+   "plans": "b8ebfb83",
+   "markup": "1ccd81e0",
+   "canvas": "6f6b4289"
+  },
+  "deep-40p|pg_6": {
+   "plans": "467d3a75",
+   "markup": "0a9746e8",
+   "canvas": "68e5c6d4"
+  },
+  "deep-40p|pg_7": {
+   "plans": "36c2778a",
+   "markup": "b0586521",
+   "canvas": "6afc0ba5"
+  },
+  "deep-40p|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "deep-40p|pg_9": {
+   "plans": "30ac31d0",
+   "markup": "c0c6de4e",
+   "canvas": "71565450"
+  },
+  "deep-40p|pg_10": {
+   "plans": "75b2fe0b",
+   "markup": "756f8e6d",
+   "canvas": "dacec2f2"
+  },
+  "deep-40p|pg_11": {
+   "plans": "0b54c5d6",
+   "markup": "b4fae104",
+   "canvas": "0de9beff"
+  },
+  "deep-40p|pg_12": {
+   "plans": "bf5c9e6b",
+   "markup": "28d41510",
+   "canvas": "3fd715af"
+  },
+  "deep-40p|pg_13": {
+   "plans": "c0f8db77",
+   "markup": "c846c09f",
+   "canvas": "149485c2"
+  },
+  "deep-40p|pg_14": {
+   "plans": "e5b75860",
+   "markup": "c319ef83",
+   "canvas": "015bfcc6"
+  },
+  "deep-40p|pg_15": {
+   "plans": "ea987b92",
+   "markup": "44751705",
+   "canvas": "a52ff9b3"
+  },
+  "deep-40p|pg_16": {
+   "plans": "17706409",
+   "markup": "1087a432",
+   "canvas": "9f6241ee"
+  },
+  "deep-40p|pg_17": {
+   "plans": "9aab5f35",
+   "markup": "bd727de0",
+   "canvas": "25ef8900"
+  },
+  "deep-40p|pg_18": {
+   "plans": "dec5ef26",
+   "markup": "511edde7",
+   "canvas": "e78203db"
+  },
+  "deep-40p|pg_19": {
+   "plans": "fb3fc2b7",
+   "markup": "1d4dcb9c",
+   "canvas": "53128536"
+  },
+  "deep-40p|pg_20": {
+   "plans": "d65fef56",
+   "markup": "c9f30574",
+   "canvas": "d5aa9990"
+  },
+  "deep-40p|pg_21": {
+   "plans": "9a29b751",
+   "markup": "ff9f1664",
+   "canvas": "fbe08372"
+  },
+  "deep-40p|pg_22": {
+   "plans": "ba90b7de",
+   "markup": "f4fef3ec",
+   "canvas": "a3a367d1"
+  },
+  "deep-40p|pg_23": {
+   "plans": "1d5239b0",
+   "markup": "baf1b1d1",
+   "canvas": "58f39e08"
+  },
+  "deep-40p|pg_24": {
+   "plans": "f72a8955",
+   "markup": "a2d290f1",
+   "canvas": "edb6ab6b"
+  },
+  "deep-40p|pg_25": {
+   "plans": "d3f52738",
+   "markup": "519684fd",
+   "canvas": "e6ac0dfc"
+  },
+  "deep-40p|pg_26": {
+   "plans": "d39a6f52",
+   "markup": "59471c9a",
+   "canvas": "18855351"
+  },
+  "deep-40p|pg_27": {
+   "plans": "d09f9fd7",
+   "markup": "bc3594ba",
+   "canvas": "f16faeca"
+  },
+  "deep-40p|pg_28": {
+   "plans": "3943665e",
+   "markup": "a965b7ef",
+   "canvas": "c455958d"
+  },
+  "deep-40p|pg_29": {
+   "plans": "30acb796",
+   "markup": "715a4c29",
+   "canvas": "fee19c5d"
+  },
+  "deep-40p|pg_30": {
+   "plans": "39158cd3",
+   "markup": "397c9dd0",
+   "canvas": "57baf2a9"
+  },
+  "deep-40p|pg_31": {
+   "plans": "9718a841",
+   "markup": "cdd97079",
+   "canvas": "2aec84a3"
+  },
+  "deep-40p|pg_32": {
+   "plans": "50a41fc9",
+   "markup": "45fe6336",
+   "canvas": "0698bec6"
+  },
+  "deep-40p|pg_33": {
+   "plans": "66335d21",
+   "markup": "70a4afe8",
+   "canvas": "4748a7ef"
+  },
+  "deep-40p|pg_34": {
+   "plans": "f2b18fd7",
+   "markup": "dd5bb87d",
+   "canvas": "36d08302"
+  },
+  "deep-40p|pg_35": {
+   "plans": "cc7eb4df",
+   "markup": "3862f92b",
+   "canvas": "f87f976b"
+  },
+  "deep-40p|pg_36": {
+   "plans": "155c8b5f",
+   "markup": "d0351778",
+   "canvas": "3ebc139a"
+  },
+  "deep-40p|pg_37": {
+   "plans": "ae468aa0",
+   "markup": "1c9579e9",
+   "canvas": "745df594"
+  },
+  "deep-40p|pg_38": {
+   "plans": "462f7c0d",
+   "markup": "84db003a",
+   "canvas": "60cf35ca"
+  },
+  "deep-40p|pg_39": {
+   "plans": "e375214d",
+   "markup": "7e6f50ba",
+   "canvas": "4c5b18c9"
+  },
+  "deep-40p|pg_40": {
+   "plans": "547ed478",
+   "markup": "6c563554",
+   "canvas": "f8724228"
+  },
+  "deep-40p|rtl|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "deep-40p|rtl|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "deep-40p|rtl|pg_3": {
+   "plans": "98802e48",
+   "markup": "500c5505",
+   "canvas": "44d53d7d"
+  },
+  "deep-40p|rtl|pg_4": {
+   "plans": "b82780d5",
+   "markup": "160555f9",
+   "canvas": "1fb44701"
+  },
+  "deep-40p|rtl|pg_5": {
+   "plans": "b8ebfb83",
+   "markup": "1ccd81e0",
+   "canvas": "6f6b4289"
+  },
+  "deep-40p|rtl|pg_6": {
+   "plans": "e579bcd5",
+   "markup": "4d3fb5be",
+   "canvas": "e5535a54"
+  },
+  "deep-40p|rtl|pg_7": {
+   "plans": "36c2778a",
+   "markup": "b0586521",
+   "canvas": "6afc0ba5"
+  },
+  "deep-40p|rtl|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "deep-40p|rtl|pg_9": {
+   "plans": "b6a181cc",
+   "markup": "62933b74",
+   "canvas": "3745d2c2"
+  },
+  "deep-40p|rtl|pg_10": {
+   "plans": "75b2fe0b",
+   "markup": "756f8e6d",
+   "canvas": "dacec2f2"
+  },
+  "deep-40p|rtl|pg_11": {
+   "plans": "0b54c5d6",
+   "markup": "b4fae104",
+   "canvas": "0de9beff"
+  },
+  "deep-40p|rtl|pg_12": {
+   "plans": "5d97edc8",
+   "markup": "cd76ea1f",
+   "canvas": "bbe5afb5"
+  },
+  "deep-40p|rtl|pg_13": {
+   "plans": "c0f8db77",
+   "markup": "c846c09f",
+   "canvas": "149485c2"
+  },
+  "deep-40p|rtl|pg_14": {
+   "plans": "e5b75860",
+   "markup": "c319ef83",
+   "canvas": "015bfcc6"
+  },
+  "deep-40p|rtl|pg_15": {
+   "plans": "1b2c6f62",
+   "markup": "6b0c7207",
+   "canvas": "8f71f981"
+  },
+  "deep-40p|rtl|pg_16": {
+   "plans": "17706409",
+   "markup": "1087a432",
+   "canvas": "9f6241ee"
+  },
+  "deep-40p|rtl|pg_17": {
+   "plans": "9aab5f35",
+   "markup": "bd727de0",
+   "canvas": "25ef8900"
+  },
+  "deep-40p|rtl|pg_18": {
+   "plans": "c4535f2a",
+   "markup": "ccda8cd9",
+   "canvas": "a174c13f"
+  },
+  "deep-40p|rtl|pg_19": {
+   "plans": "fb3fc2b7",
+   "markup": "1d4dcb9c",
+   "canvas": "53128536"
+  },
+  "deep-40p|rtl|pg_20": {
+   "plans": "d65fef56",
+   "markup": "c9f30574",
+   "canvas": "d5aa9990"
+  },
+  "deep-40p|rtl|pg_21": {
+   "plans": "d4a6bf7b",
+   "markup": "f0303d18",
+   "canvas": "3a55f83e"
+  },
+  "deep-40p|rtl|pg_22": {
+   "plans": "ba90b7de",
+   "markup": "f4fef3ec",
+   "canvas": "a3a367d1"
+  },
+  "deep-40p|rtl|pg_23": {
+   "plans": "1d5239b0",
+   "markup": "baf1b1d1",
+   "canvas": "58f39e08"
+  },
+  "deep-40p|rtl|pg_24": {
+   "plans": "6d82f081",
+   "markup": "4e1f0797",
+   "canvas": "0e8f293a"
+  },
+  "deep-40p|rtl|pg_25": {
+   "plans": "d3f52738",
+   "markup": "519684fd",
+   "canvas": "e6ac0dfc"
+  },
+  "deep-40p|rtl|pg_26": {
+   "plans": "d39a6f52",
+   "markup": "59471c9a",
+   "canvas": "18855351"
+  },
+  "deep-40p|rtl|pg_27": {
+   "plans": "e6723997",
+   "markup": "2d5c492c",
+   "canvas": "61e4f570"
+  },
+  "deep-40p|rtl|pg_28": {
+   "plans": "3943665e",
+   "markup": "a965b7ef",
+   "canvas": "c455958d"
+  },
+  "deep-40p|rtl|pg_29": {
+   "plans": "30acb796",
+   "markup": "715a4c29",
+   "canvas": "fee19c5d"
+  },
+  "deep-40p|rtl|pg_30": {
+   "plans": "9df44e27",
+   "markup": "d64caa56",
+   "canvas": "2f6cbed9"
+  },
+  "deep-40p|rtl|pg_31": {
+   "plans": "9718a841",
+   "markup": "cdd97079",
+   "canvas": "2aec84a3"
+  },
+  "deep-40p|rtl|pg_32": {
+   "plans": "50a41fc9",
+   "markup": "45fe6336",
+   "canvas": "0698bec6"
+  },
+  "deep-40p|rtl|pg_33": {
+   "plans": "60f550b1",
+   "markup": "24b49dc2",
+   "canvas": "8b834a79"
+  },
+  "deep-40p|rtl|pg_34": {
+   "plans": "f2b18fd7",
+   "markup": "dd5bb87d",
+   "canvas": "36d08302"
+  },
+  "deep-40p|rtl|pg_35": {
+   "plans": "cc7eb4df",
+   "markup": "3862f92b",
+   "canvas": "f87f976b"
+  },
+  "deep-40p|rtl|pg_36": {
+   "plans": "e2476c5c",
+   "markup": "b7c1d13b",
+   "canvas": "802cb3be"
+  },
+  "deep-40p|rtl|pg_37": {
+   "plans": "ae468aa0",
+   "markup": "1c9579e9",
+   "canvas": "745df594"
+  },
+  "deep-40p|rtl|pg_38": {
+   "plans": "462f7c0d",
+   "markup": "84db003a",
+   "canvas": "60cf35ca"
+  },
+  "deep-40p|rtl|pg_39": {
+   "plans": "9e4c1115",
+   "markup": "9b18e0fc",
+   "canvas": "b6241b53"
+  },
+  "deep-40p|rtl|pg_40": {
+   "plans": "547ed478",
+   "markup": "6c563554",
+   "canvas": "f8724228"
+  },
+  "webtoon-20p|pg_1": {
+   "plans": "98a3080a",
+   "markup": "5695c66e",
+   "canvas": "d92428ff"
+  },
+  "webtoon-20p|pg_2": {
+   "plans": "b7ad94fe",
+   "markup": "efc9949d",
+   "canvas": "baed0d0f"
+  },
+  "webtoon-20p|pg_3": {
+   "plans": "c83dba93",
+   "markup": "1bc23969",
+   "canvas": "94dcd9d9"
+  },
+  "webtoon-20p|pg_4": {
+   "plans": "82a83a5b",
+   "markup": "b51a09cc",
+   "canvas": "3546d33b"
+  },
+  "webtoon-20p|pg_5": {
+   "plans": "049fa1c5",
+   "markup": "2fa4d6d4",
+   "canvas": "9758318c"
+  },
+  "webtoon-20p|pg_6": {
+   "plans": "1e9294a7",
+   "markup": "d2637f3f",
+   "canvas": "ee364f3c"
+  },
+  "webtoon-20p|pg_7": {
+   "plans": "eb773d4b",
+   "markup": "86d172da",
+   "canvas": "c6fb49f2"
+  },
+  "webtoon-20p|pg_8": {
+   "plans": "54410403",
+   "markup": "f1262779",
+   "canvas": "c9adef0b"
+  },
+  "webtoon-20p|pg_9": {
+   "plans": "9e0066df",
+   "markup": "b909fbdc",
+   "canvas": "d42480d2"
+  },
+  "webtoon-20p|pg_10": {
+   "plans": "edf41186",
+   "markup": "1d428b87",
+   "canvas": "23d8d027"
+  },
+  "webtoon-20p|pg_11": {
+   "plans": "ae1097ab",
+   "markup": "29c60f42",
+   "canvas": "318c16b8"
+  },
+  "webtoon-20p|pg_12": {
+   "plans": "61160c31",
+   "markup": "08c567c5",
+   "canvas": "1b826c5d"
+  },
+  "webtoon-20p|pg_13": {
+   "plans": "b6fa67b8",
+   "markup": "c161b7b3",
+   "canvas": "1433b644"
+  },
+  "webtoon-20p|pg_14": {
+   "plans": "0b01e788",
+   "markup": "34116616",
+   "canvas": "246b4f62"
+  },
+  "webtoon-20p|pg_15": {
+   "plans": "60e37568",
+   "markup": "ab253d20",
+   "canvas": "01353e14"
+  },
+  "webtoon-20p|pg_16": {
+   "plans": "d273c37b",
+   "markup": "011685d7",
+   "canvas": "1e3de16f"
+  },
+  "webtoon-20p|pg_17": {
+   "plans": "2aab447d",
+   "markup": "bc27b66d",
+   "canvas": "326c8183"
+  },
+  "webtoon-20p|pg_18": {
+   "plans": "87ffddd3",
+   "markup": "426aaaab",
+   "canvas": "c6eba625"
+  },
+  "webtoon-20p|pg_19": {
+   "plans": "aed6b22e",
+   "markup": "50611d9a",
+   "canvas": "872b1308"
+  },
+  "webtoon-20p|pg_20": {
+   "plans": "41a29775",
+   "markup": "fb18fc6c",
+   "canvas": "b6ac0011"
+  },
+  "webtoon-20p|rtl|pg_1": {
+   "plans": "98a3080a",
+   "markup": "5695c66e",
+   "canvas": "d92428ff"
+  },
+  "webtoon-20p|rtl|pg_2": {
+   "plans": "b7ad94fe",
+   "markup": "efc9949d",
+   "canvas": "baed0d0f"
+  },
+  "webtoon-20p|rtl|pg_3": {
+   "plans": "c83dba93",
+   "markup": "1bc23969",
+   "canvas": "94dcd9d9"
+  },
+  "webtoon-20p|rtl|pg_4": {
+   "plans": "82a83a5b",
+   "markup": "b51a09cc",
+   "canvas": "3546d33b"
+  },
+  "webtoon-20p|rtl|pg_5": {
+   "plans": "049fa1c5",
+   "markup": "2fa4d6d4",
+   "canvas": "9758318c"
+  },
+  "webtoon-20p|rtl|pg_6": {
+   "plans": "1e9294a7",
+   "markup": "d2637f3f",
+   "canvas": "ee364f3c"
+  },
+  "webtoon-20p|rtl|pg_7": {
+   "plans": "eb773d4b",
+   "markup": "86d172da",
+   "canvas": "c6fb49f2"
+  },
+  "webtoon-20p|rtl|pg_8": {
+   "plans": "54410403",
+   "markup": "f1262779",
+   "canvas": "c9adef0b"
+  },
+  "webtoon-20p|rtl|pg_9": {
+   "plans": "9e0066df",
+   "markup": "b909fbdc",
+   "canvas": "d42480d2"
+  },
+  "webtoon-20p|rtl|pg_10": {
+   "plans": "edf41186",
+   "markup": "1d428b87",
+   "canvas": "23d8d027"
+  },
+  "webtoon-20p|rtl|pg_11": {
+   "plans": "ae1097ab",
+   "markup": "29c60f42",
+   "canvas": "318c16b8"
+  },
+  "webtoon-20p|rtl|pg_12": {
+   "plans": "61160c31",
+   "markup": "08c567c5",
+   "canvas": "1b826c5d"
+  },
+  "webtoon-20p|rtl|pg_13": {
+   "plans": "b6fa67b8",
+   "markup": "c161b7b3",
+   "canvas": "1433b644"
+  },
+  "webtoon-20p|rtl|pg_14": {
+   "plans": "0b01e788",
+   "markup": "34116616",
+   "canvas": "246b4f62"
+  },
+  "webtoon-20p|rtl|pg_15": {
+   "plans": "60e37568",
+   "markup": "ab253d20",
+   "canvas": "01353e14"
+  },
+  "webtoon-20p|rtl|pg_16": {
+   "plans": "d273c37b",
+   "markup": "011685d7",
+   "canvas": "1e3de16f"
+  },
+  "webtoon-20p|rtl|pg_17": {
+   "plans": "2aab447d",
+   "markup": "bc27b66d",
+   "canvas": "326c8183"
+  },
+  "webtoon-20p|rtl|pg_18": {
+   "plans": "87ffddd3",
+   "markup": "426aaaab",
+   "canvas": "c6eba625"
+  },
+  "webtoon-20p|rtl|pg_19": {
+   "plans": "aed6b22e",
+   "markup": "50611d9a",
+   "canvas": "872b1308"
+  },
+  "webtoon-20p|rtl|pg_20": {
+   "plans": "41a29775",
+   "markup": "fb18fc6c",
+   "canvas": "b6ac0011"
+  },
+  "stress|pg_1": {
+   "plans": "1bcbfa50",
+   "markup": "8721d111",
+   "canvas": "0b8debec"
+  },
+  "stress|pg_2": {
+   "plans": "c0963966",
+   "markup": "210701db",
+   "canvas": "87fcdbcb"
+  },
+  "stress|pg_3": {
+   "plans": "5de9d98e",
+   "markup": "dd564109",
+   "canvas": "6196e35b"
+  },
+  "stress|pg_4": {
+   "plans": "f5daf8ef",
+   "markup": "05ea2c84",
+   "canvas": "dd02f4e4"
+  },
+  "stress|pg_5": {
+   "plans": "db589a6e",
+   "markup": "308caaf9",
+   "canvas": "af6b0b36"
+  },
+  "stress|pg_6": {
+   "plans": "18607089",
+   "markup": "3c81eb1a",
+   "canvas": "389628c2"
+  },
+  "stress|pg_7": {
+   "plans": "c569f17a",
+   "markup": "4aaba571",
+   "canvas": "56ca9799"
+  },
+  "stress|pg_8": {
+   "plans": "c9efe9e0",
+   "markup": "06248be4",
+   "canvas": "cb74660a"
+  },
+  "stress|pg_9": {
+   "plans": "c8e276ab",
+   "markup": "18a03a8d",
+   "canvas": "1cea9e1d"
+  },
+  "stress|pg_10": {
+   "plans": "d940d950",
+   "markup": "9645e0e1",
+   "canvas": "5447af35"
+  },
+  "stress|pg_11": {
+   "plans": "9c2e128e",
+   "markup": "62300daa",
+   "canvas": "ea7eeff1"
+  },
+  "stress|pg_12": {
+   "plans": "2f58c486",
+   "markup": "47eba8b3",
+   "canvas": "e19945b9"
+  },
+  "stress|pg_13": {
+   "plans": "1f484394",
+   "markup": "5b663f0c",
+   "canvas": "7c031be9"
+  },
+  "stress|pg_14": {
+   "plans": "6b4a02ee",
+   "markup": "e9d818b3",
+   "canvas": "770a0e24"
+  },
+  "stress|pg_15": {
+   "plans": "cf39071f",
+   "markup": "0e56fe10",
+   "canvas": "3f573908"
+  },
+  "stress|pg_16": {
+   "plans": "ef206877",
+   "markup": "5fb34990",
+   "canvas": "5b350b4a"
+  },
+  "stress|pg_17": {
+   "plans": "239721f7",
+   "markup": "6e1633ae",
+   "canvas": "b1385cba"
+  },
+  "stress|pg_18": {
+   "plans": "ce259612",
+   "markup": "1319db28",
+   "canvas": "47db485a"
+  },
+  "stress|pg_19": {
+   "plans": "e1579759",
+   "markup": "da6964b7",
+   "canvas": "cd7a4aba"
+  },
+  "stress|pg_20": {
+   "plans": "c3d8ba6f",
+   "markup": "b9ff4e43",
+   "canvas": "e04091a9"
+  },
+  "stress|rtl|pg_1": {
+   "plans": "b43cf89e",
+   "markup": "61ecbbe3",
+   "canvas": "96bce948"
+  },
+  "stress|rtl|pg_2": {
+   "plans": "d6108c80",
+   "markup": "fb7eb57a",
+   "canvas": "095a7490"
+  },
+  "stress|rtl|pg_3": {
+   "plans": "c310de0e",
+   "markup": "84658cdf",
+   "canvas": "038ae6a7"
+  },
+  "stress|rtl|pg_4": {
+   "plans": "21e39b56",
+   "markup": "c6665e49",
+   "canvas": "58d61acc"
+  },
+  "stress|rtl|pg_5": {
+   "plans": "e838e696",
+   "markup": "f3bdb3db",
+   "canvas": "68f6c2fe"
+  },
+  "stress|rtl|pg_6": {
+   "plans": "c72ac8f6",
+   "markup": "4711c77f",
+   "canvas": "1418bdf7"
+  },
+  "stress|rtl|pg_7": {
+   "plans": "8fb4213b",
+   "markup": "cce4fc70",
+   "canvas": "0fe67239"
+  },
+  "stress|rtl|pg_8": {
+   "plans": "63583c46",
+   "markup": "a21cbf47",
+   "canvas": "160797cf"
+  },
+  "stress|rtl|pg_9": {
+   "plans": "4a499ac9",
+   "markup": "c0f71f8f",
+   "canvas": "3b98d2b0"
+  },
+  "stress|rtl|pg_10": {
+   "plans": "34aadbf5",
+   "markup": "4ae5b7aa",
+   "canvas": "058aad49"
+  },
+  "stress|rtl|pg_11": {
+   "plans": "02f99246",
+   "markup": "0e4a99c8",
+   "canvas": "f4146834"
+  },
+  "stress|rtl|pg_12": {
+   "plans": "174ff03b",
+   "markup": "f4a86b77",
+   "canvas": "92f1bdbd"
+  },
+  "stress|rtl|pg_13": {
+   "plans": "e00c9d34",
+   "markup": "41272149",
+   "canvas": "1c352157"
+  },
+  "stress|rtl|pg_14": {
+   "plans": "cb1fa35b",
+   "markup": "d7c50a4e",
+   "canvas": "a41195da"
+  },
+  "stress|rtl|pg_15": {
+   "plans": "0091617e",
+   "markup": "249cd853",
+   "canvas": "4ebbb723"
+  },
+  "stress|rtl|pg_16": {
+   "plans": "6ad014e4",
+   "markup": "07365d2c",
+   "canvas": "d6d368c5"
+  },
+  "stress|rtl|pg_17": {
+   "plans": "7511eaa9",
+   "markup": "cf5d092a",
+   "canvas": "464a6d9a"
+  },
+  "stress|rtl|pg_18": {
+   "plans": "ddf503cd",
+   "markup": "e10ea3b8",
+   "canvas": "a84a280f"
+  },
+  "stress|rtl|pg_19": {
+   "plans": "a860972f",
+   "markup": "8e4c2625",
+   "canvas": "52bcfa0c"
+  },
+  "stress|rtl|pg_20": {
+   "plans": "723ecbd4",
+   "markup": "19d77393",
+   "canvas": "c2d9ecaf"
+  },
+  "chat-14|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "chat-14|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "chat-14|pg_3": {
+   "plans": "b6ae476b",
+   "markup": "b6370f51",
+   "canvas": "7a3b5b60"
+  },
+  "chat-14|pg_4": {
+   "plans": "b82780d5",
+   "markup": "160555f9",
+   "canvas": "1fb44701"
+  },
+  "chat-14|pg_5": {
+   "plans": "b8ebfb83",
+   "markup": "1ccd81e0",
+   "canvas": "6f6b4289"
+  },
+  "chat-14|pg_6": {
+   "plans": "8cdb65cd",
+   "markup": "d6fe350b",
+   "canvas": "6137b9c6"
+  },
+  "chat-14|pg_7": {
+   "plans": "36c2778a",
+   "markup": "b0586521",
+   "canvas": "6afc0ba5"
+  },
+  "chat-14|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "chat-14|pg_9": {
+   "plans": "c3dddae4",
+   "markup": "a1446fae",
+   "canvas": "3601c912"
+  },
+  "chat-14|rtl|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "chat-14|rtl|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "chat-14|rtl|pg_3": {
+   "plans": "03c4cc2d",
+   "markup": "032ca8e3",
+   "canvas": "59f50254"
+  },
+  "chat-14|rtl|pg_4": {
+   "plans": "b82780d5",
+   "markup": "160555f9",
+   "canvas": "1fb44701"
+  },
+  "chat-14|rtl|pg_5": {
+   "plans": "b8ebfb83",
+   "markup": "1ccd81e0",
+   "canvas": "6f6b4289"
+  },
+  "chat-14|rtl|pg_6": {
+   "plans": "d7b64a69",
+   "markup": "1ae8ac77",
+   "canvas": "a352cdd0"
+  },
+  "chat-14|rtl|pg_7": {
+   "plans": "36c2778a",
+   "markup": "b0586521",
+   "canvas": "6afc0ba5"
+  },
+  "chat-14|rtl|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "chat-14|rtl|pg_9": {
+   "plans": "2df52988",
+   "markup": "4db0802a",
+   "canvas": "d8dda918"
+  },
+  "sample|pg_1": {
+   "plans": "dc77b574",
+   "markup": "8ccfa676",
+   "canvas": "8c338023"
+  },
+  "sample|pg_2": {
+   "plans": "5eeeb87a",
+   "markup": "32261505",
+   "canvas": "0edbdc11"
+  },
+  "sample|pg_3": {
+   "plans": "fb65274c",
+   "markup": "957ea6bc",
+   "canvas": "b03f362a"
+  },
+  "sample|pg_4": {
+   "plans": "434d210b",
+   "markup": "aabe4367",
+   "canvas": "ec8a496e"
+  },
+  "sample|pg_5": {
+   "plans": "1d51b782",
+   "markup": "9c853ab4",
+   "canvas": "38fd1d64"
+  },
+  "sample|pg_6": {
+   "plans": "08f0fa8a",
+   "markup": "3f812286",
+   "canvas": "498a3cfb"
+  },
+  "heist-12p|preset:classic|pg_1": {
+   "plans": "d97c22e7",
+   "markup": "fa904ddb",
+   "canvas": "d33d36be"
+  },
+  "heist-12p|preset:classic|pg_2": {
+   "plans": "4048a793",
+   "markup": "03a42173",
+   "canvas": "d3842ffe"
+  },
+  "heist-12p|preset:classic|pg_3": {
+   "plans": "ba2b8a54",
+   "markup": "73058c3b",
+   "canvas": "8a9fb8fa"
+  },
+  "heist-12p|preset:classic|pg_4": {
+   "plans": "615211d4",
+   "markup": "a7b762e3",
+   "canvas": "1e5e1820"
+  },
+  "heist-12p|preset:classic|pg_5": {
+   "plans": "672178df",
+   "markup": "83b70c09",
+   "canvas": "41ddcf3d"
+  },
+  "heist-12p|preset:classic|pg_6": {
+   "plans": "8cdb65cd",
+   "markup": "d6fe350b",
+   "canvas": "6137b9c6"
+  },
+  "heist-12p|preset:classic|pg_7": {
+   "plans": "69c21416",
+   "markup": "5b81b7dc",
+   "canvas": "c812451c"
+  },
+  "heist-12p|preset:classic|pg_8": {
+   "plans": "a243e150",
+   "markup": "e46a1087",
+   "canvas": "052d1da0"
+  },
+  "heist-12p|preset:classic|pg_9": {
+   "plans": "c3dddae4",
+   "markup": "a1446fae",
+   "canvas": "3601c912"
+  },
+  "heist-12p|preset:classic|pg_10": {
+   "plans": "75b2fe0b",
+   "markup": "756f8e6d",
+   "canvas": "dacec2f2"
+  },
+  "heist-12p|preset:classic|pg_11": {
+   "plans": "0b54c5d6",
+   "markup": "b4fae104",
+   "canvas": "0de9beff"
+  },
+  "heist-12p|preset:classic|pg_12": {
+   "plans": "989e6dab",
+   "markup": "fc087737",
+   "canvas": "0aaf30df"
+  },
+  "lake-1p|preset:classic|pg_1": {
+   "plans": "7313c529",
+   "markup": "de8947b8",
+   "canvas": "8b0ba357"
+  },
+  "heist-12p|preset:manga|pg_1": {
+   "plans": "05d576b5",
+   "markup": "c0b14842",
+   "canvas": "06ac3587"
+  },
+  "heist-12p|preset:manga|pg_2": {
+   "plans": "0a0657c6",
+   "markup": "92eacca9",
+   "canvas": "dfc3f14f"
+  },
+  "heist-12p|preset:manga|pg_3": {
+   "plans": "dbd2184d",
+   "markup": "b6e8af2b",
+   "canvas": "82535c5e"
+  },
+  "heist-12p|preset:manga|pg_4": {
+   "plans": "d0cfcd26",
+   "markup": "be0b031d",
+   "canvas": "3a7bfedd"
+  },
+  "heist-12p|preset:manga|pg_5": {
+   "plans": "e4ac9504",
+   "markup": "411517f2",
+   "canvas": "e824f15c"
+  },
+  "heist-12p|preset:manga|pg_6": {
+   "plans": "fa55721f",
+   "markup": "57f3530d",
+   "canvas": "68ae1f2f"
+  },
+  "heist-12p|preset:manga|pg_7": {
+   "plans": "0c3c4eca",
+   "markup": "892cf0ec",
+   "canvas": "724d3a3a"
+  },
+  "heist-12p|preset:manga|pg_8": {
+   "plans": "78f19794",
+   "markup": "a6f85a40",
+   "canvas": "93a3977d"
+  },
+  "heist-12p|preset:manga|pg_9": {
+   "plans": "401633bd",
+   "markup": "885bb7f6",
+   "canvas": "66b593c6"
+  },
+  "heist-12p|preset:manga|pg_10": {
+   "plans": "45b8d5e5",
+   "markup": "fe34235c",
+   "canvas": "1225c445"
+  },
+  "heist-12p|preset:manga|pg_11": {
+   "plans": "a73a1d8a",
+   "markup": "b209660d",
+   "canvas": "936339ef"
+  },
+  "heist-12p|preset:manga|pg_12": {
+   "plans": "b20ee0e3",
+   "markup": "0cb0fe65",
+   "canvas": "585df8db"
+  },
+  "lake-1p|preset:manga|pg_1": {
+   "plans": "ad5ec11b",
+   "markup": "ef87f212",
+   "canvas": "b9652d52"
+  },
+  "heist-12p|preset:storybook|pg_1": {
+   "plans": "ffbfb540",
+   "markup": "e5e39a02",
+   "canvas": "3983cecc"
+  },
+  "heist-12p|preset:storybook|pg_2": {
+   "plans": "8de01d37",
+   "markup": "139358b1",
+   "canvas": "fb23318f"
+  },
+  "heist-12p|preset:storybook|pg_3": {
+   "plans": "948c6db5",
+   "markup": "08229b2c",
+   "canvas": "959518bc"
+  },
+  "heist-12p|preset:storybook|pg_4": {
+   "plans": "8c1b6f9e",
+   "markup": "c6ebf775",
+   "canvas": "c2a717e2"
+  },
+  "heist-12p|preset:storybook|pg_5": {
+   "plans": "cd22d98a",
+   "markup": "e0e1dacb",
+   "canvas": "69f2d626"
+  },
+  "heist-12p|preset:storybook|pg_6": {
+   "plans": "969e0a3d",
+   "markup": "97a6420c",
+   "canvas": "a4d69576"
+  },
+  "heist-12p|preset:storybook|pg_7": {
+   "plans": "a964b1d1",
+   "markup": "38db56f5",
+   "canvas": "75eda226"
+  },
+  "heist-12p|preset:storybook|pg_8": {
+   "plans": "b20e4d11",
+   "markup": "7d7e8d6a",
+   "canvas": "c58d0ad5"
+  },
+  "heist-12p|preset:storybook|pg_9": {
+   "plans": "5a87280d",
+   "markup": "18628487",
+   "canvas": "8fd04e23"
+  },
+  "heist-12p|preset:storybook|pg_10": {
+   "plans": "5dbf785d",
+   "markup": "499de352",
+   "canvas": "2d708a6c"
+  },
+  "heist-12p|preset:storybook|pg_11": {
+   "plans": "c8faf79a",
+   "markup": "5e7f68eb",
+   "canvas": "023ec17f"
+  },
+  "heist-12p|preset:storybook|pg_12": {
+   "plans": "61d678fa",
+   "markup": "6c55f41d",
+   "canvas": "19af7f0e"
+  },
+  "lake-1p|preset:storybook|pg_1": {
+   "plans": "cc3af158",
+   "markup": "79a328e9",
+   "canvas": "b48b289f"
+  },
+  "heist-12p|preset:noir|pg_1": {
+   "plans": "831ff9a9",
+   "markup": "931b6e40",
+   "canvas": "9437c4e9"
+  },
+  "heist-12p|preset:noir|pg_2": {
+   "plans": "2008179a",
+   "markup": "a30b5791",
+   "canvas": "1205d4ff"
+  },
+  "heist-12p|preset:noir|pg_3": {
+   "plans": "7b1f16a5",
+   "markup": "cae2dae9",
+   "canvas": "0291fe06"
+  },
+  "heist-12p|preset:noir|pg_4": {
+   "plans": "0fdea265",
+   "markup": "61b34eec",
+   "canvas": "b0cc8a31"
+  },
+  "heist-12p|preset:noir|pg_5": {
+   "plans": "dda144ce",
+   "markup": "a71fb568",
+   "canvas": "597004a2"
+  },
+  "heist-12p|preset:noir|pg_6": {
+   "plans": "dfebb043",
+   "markup": "f06cd51b",
+   "canvas": "465056c2"
+  },
+  "heist-12p|preset:noir|pg_7": {
+   "plans": "3a903d4e",
+   "markup": "814473df",
+   "canvas": "8dea0ef9"
+  },
+  "heist-12p|preset:noir|pg_8": {
+   "plans": "8f195451",
+   "markup": "b1e0048b",
+   "canvas": "a77f361f"
+  },
+  "heist-12p|preset:noir|pg_9": {
+   "plans": "f4c794e4",
+   "markup": "dc3bbec4",
+   "canvas": "21eaabd2"
+  },
+  "heist-12p|preset:noir|pg_10": {
+   "plans": "529b24d2",
+   "markup": "0c7d0ad6",
+   "canvas": "eb35bcff"
+  },
+  "heist-12p|preset:noir|pg_11": {
+   "plans": "1c8f3e68",
+   "markup": "9938376a",
+   "canvas": "1fd03350"
+  },
+  "heist-12p|preset:noir|pg_12": {
+   "plans": "9cbc8900",
+   "markup": "fa1debe7",
+   "canvas": "7b3c2093"
+  },
+  "lake-1p|preset:noir|pg_1": {
+   "plans": "19d68f33",
+   "markup": "8427c8b8",
+   "canvas": "8fe5bfe4"
+  },
+  "heist-12p|preset:webtoon|pg_1": {
+   "plans": "c7f95143",
+   "markup": "62f98762",
+   "canvas": "ce2b4fba"
+  },
+  "heist-12p|preset:webtoon|pg_2": {
+   "plans": "53320e43",
+   "markup": "6ac5a696",
+   "canvas": "2fca9153"
+  },
+  "heist-12p|preset:webtoon|pg_3": {
+   "plans": "de1891b9",
+   "markup": "6d5beadb",
+   "canvas": "37b5feb3"
+  },
+  "heist-12p|preset:webtoon|pg_4": {
+   "plans": "528538e9",
+   "markup": "94443387",
+   "canvas": "d8155061"
+  },
+  "heist-12p|preset:webtoon|pg_5": {
+   "plans": "a1bf0f69",
+   "markup": "f940b1ac",
+   "canvas": "6150a757"
+  },
+  "heist-12p|preset:webtoon|pg_6": {
+   "plans": "f0346358",
+   "markup": "e9ea060e",
+   "canvas": "11c0695b"
+  },
+  "heist-12p|preset:webtoon|pg_7": {
+   "plans": "f4433656",
+   "markup": "36096d78",
+   "canvas": "99d6067e"
+  },
+  "heist-12p|preset:webtoon|pg_8": {
+   "plans": "ebd1a14b",
+   "markup": "d39f87af",
+   "canvas": "ed8b5c85"
+  },
+  "heist-12p|preset:webtoon|pg_9": {
+   "plans": "955a0fa5",
+   "markup": "fa3ab4ad",
+   "canvas": "14b928db"
+  },
+  "heist-12p|preset:webtoon|pg_10": {
+   "plans": "5900b82b",
+   "markup": "21f68bef",
+   "canvas": "dc81b2d5"
+  },
+  "heist-12p|preset:webtoon|pg_11": {
+   "plans": "ef9815e4",
+   "markup": "214a432e",
+   "canvas": "f08de740"
+  },
+  "heist-12p|preset:webtoon|pg_12": {
+   "plans": "23e95e22",
+   "markup": "c6615c94",
+   "canvas": "8011ab8f"
+  },
+  "lake-1p|preset:webtoon|pg_1": {
+   "plans": "025a1be9",
+   "markup": "7a044908",
+   "canvas": "3bc421c2"
+  },
+  "heist-12p|preset:retro_pulp|pg_1": {
+   "plans": "4bde8bfb",
+   "markup": "61f48cb0",
+   "canvas": "fa651287"
+  },
+  "heist-12p|preset:retro_pulp|pg_2": {
+   "plans": "31f94b13",
+   "markup": "7d2888e3",
+   "canvas": "08872496"
+  },
+  "heist-12p|preset:retro_pulp|pg_3": {
+   "plans": "ce1e0116",
+   "markup": "02446a41",
+   "canvas": "8dbd1e55"
+  },
+  "heist-12p|preset:retro_pulp|pg_4": {
+   "plans": "3d703ced",
+   "markup": "79ad6f21",
+   "canvas": "19ecad73"
+  },
+  "heist-12p|preset:retro_pulp|pg_5": {
+   "plans": "4beddd68",
+   "markup": "609f3527",
+   "canvas": "35a628a7"
+  },
+  "heist-12p|preset:retro_pulp|pg_6": {
+   "plans": "c6f80c6c",
+   "markup": "82c8f88e",
+   "canvas": "4b378f52"
+  },
+  "heist-12p|preset:retro_pulp|pg_7": {
+   "plans": "b6318582",
+   "markup": "ceaf5f19",
+   "canvas": "5056142f"
+  },
+  "heist-12p|preset:retro_pulp|pg_8": {
+   "plans": "e2059dcc",
+   "markup": "ea8feb59",
+   "canvas": "f5282124"
+  },
+  "heist-12p|preset:retro_pulp|pg_9": {
+   "plans": "99447e48",
+   "markup": "7d56f6c9",
+   "canvas": "c10be34e"
+  },
+  "heist-12p|preset:retro_pulp|pg_10": {
+   "plans": "e1edacbf",
+   "markup": "af3bf507",
+   "canvas": "d778ee46"
+  },
+  "heist-12p|preset:retro_pulp|pg_11": {
+   "plans": "b276e123",
+   "markup": "83c884d6",
+   "canvas": "057ddbd3"
+  },
+  "heist-12p|preset:retro_pulp|pg_12": {
+   "plans": "8dedf7dc",
+   "markup": "fd01b624",
+   "canvas": "bffff0cf"
+  },
+  "lake-1p|preset:retro_pulp|pg_1": {
+   "plans": "f819db19",
+   "markup": "6b0433d8",
+   "canvas": "63b46a6e"
+  },
+  "heist-12p|preset:minimal|pg_1": {
+   "plans": "c4fcb18f",
+   "markup": "fd790db4",
+   "canvas": "24fdda7b"
+  },
+  "heist-12p|preset:minimal|pg_2": {
+   "plans": "c1d68ca0",
+   "markup": "ae52db3f",
+   "canvas": "f0bf5f83"
+  },
+  "heist-12p|preset:minimal|pg_3": {
+   "plans": "d98005f1",
+   "markup": "2e044e7b",
+   "canvas": "e434b298"
+  },
+  "heist-12p|preset:minimal|pg_4": {
+   "plans": "dded049e",
+   "markup": "4fb8965d",
+   "canvas": "d815c3b2"
+  },
+  "heist-12p|preset:minimal|pg_5": {
+   "plans": "4bfcfc74",
+   "markup": "8db57b7e",
+   "canvas": "9993f69b"
+  },
+  "heist-12p|preset:minimal|pg_6": {
+   "plans": "b10f743b",
+   "markup": "3df8d6e7",
+   "canvas": "1908f145"
+  },
+  "heist-12p|preset:minimal|pg_7": {
+   "plans": "b3fa0842",
+   "markup": "375a5980",
+   "canvas": "a32b61d5"
+  },
+  "heist-12p|preset:minimal|pg_8": {
+   "plans": "2f482236",
+   "markup": "16681011",
+   "canvas": "eb32d8cb"
+  },
+  "heist-12p|preset:minimal|pg_9": {
+   "plans": "17dd2804",
+   "markup": "ebe325d7",
+   "canvas": "ec69fa62"
+  },
+  "heist-12p|preset:minimal|pg_10": {
+   "plans": "e6a01943",
+   "markup": "990c1614",
+   "canvas": "d537f319"
+  },
+  "heist-12p|preset:minimal|pg_11": {
+   "plans": "4fbf97b4",
+   "markup": "3013c765",
+   "canvas": "05af428f"
+  },
+  "heist-12p|preset:minimal|pg_12": {
+   "plans": "7417e709",
+   "markup": "26c2a699",
+   "canvas": "5538e670"
+  },
+  "lake-1p|preset:minimal|pg_1": {
+   "plans": "a5787872",
+   "markup": "6026725e",
+   "canvas": "66ee6f01"
+  },
+  "heist-12p|preset:handwritten|pg_1": {
+   "plans": "236718a1",
+   "markup": "742acbf8",
+   "canvas": "fc2e7cdf"
+  },
+  "heist-12p|preset:handwritten|pg_2": {
+   "plans": "a31bb555",
+   "markup": "2a04292f",
+   "canvas": "1906b464"
+  },
+  "heist-12p|preset:handwritten|pg_3": {
+   "plans": "5fd1337b",
+   "markup": "d5b69f10",
+   "canvas": "df120f66"
+  },
+  "heist-12p|preset:handwritten|pg_4": {
+   "plans": "474c9f7f",
+   "markup": "8f23a952",
+   "canvas": "f598537b"
+  },
+  "heist-12p|preset:handwritten|pg_5": {
+   "plans": "1f4f10fb",
+   "markup": "62fa4f0d",
+   "canvas": "e9e7ee67"
+  },
+  "heist-12p|preset:handwritten|pg_6": {
+   "plans": "8ac4fc83",
+   "markup": "14be8965",
+   "canvas": "203ed983"
+  },
+  "heist-12p|preset:handwritten|pg_7": {
+   "plans": "fbcdc853",
+   "markup": "1dab6e13",
+   "canvas": "01b7d496"
+  },
+  "heist-12p|preset:handwritten|pg_8": {
+   "plans": "37b002d1",
+   "markup": "3b2e7618",
+   "canvas": "46ccf5da"
+  },
+  "heist-12p|preset:handwritten|pg_9": {
+   "plans": "72818005",
+   "markup": "7a5c59b9",
+   "canvas": "fdd8fd7a"
+  },
+  "heist-12p|preset:handwritten|pg_10": {
+   "plans": "af4680cd",
+   "markup": "4c30545b",
+   "canvas": "011a5382"
+  },
+  "heist-12p|preset:handwritten|pg_11": {
+   "plans": "38f721c3",
+   "markup": "48cdaf19",
+   "canvas": "c0bf3a8e"
+  },
+  "heist-12p|preset:handwritten|pg_12": {
+   "plans": "f0ac2015",
+   "markup": "21074ac0",
+   "canvas": "7236975d"
+  },
+  "lake-1p|preset:handwritten|pg_1": {
+   "plans": "7de5fe39",
+   "markup": "4efe701a",
+   "canvas": "0501cfc6"
+  }
+ }
+}

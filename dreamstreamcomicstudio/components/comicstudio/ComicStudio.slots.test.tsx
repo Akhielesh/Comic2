@@ -34,7 +34,7 @@ vi.mock('./mobile/index', async () => {
             throw new Error('slot exploded');
           }
         },
-        { id: 'savings', order: 950, Component: () => createElement('span', null, 'Saved $0.40') },
+        { id: 'savings', order: 950, Component: () => createElement('span', null, 'Savings slot') },
         { id: 'statusBanner', order: 1000, Component: ({ compact }: { compact: boolean }) => createElement('p', { role: 'status' }, compact ? 'Model slow (compact)' : 'Model slow') }
       ]
     }
@@ -52,17 +52,22 @@ beforeEach(() => {
 
 describe('ComicStudio header slots', () => {
   it('interleaves registered slots with the built-ins by order', () => {
-    state.studio = makeFakeStudio();
-    render(<ComicStudio projectId="proj_1" onBack={vi.fn()} />);
+    // A regular header with the board out of sight (Chat only), so the header carries its Read (DC-1: Read shows only
+    // while the board, whose Read tab is the reader, is hidden).
+    window.localStorage.setItem('cs.split.mode.expanded', 'chat');
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 1100, h: 800 })}>
+        <ComicStudioShell studio={makeFakeStudio()} onBack={vi.fn()} />
+      </FormFactorProvider>
+    );
     const header = screen.getByRole('banner');
     const order = [
       within(header).getByRole('button', { name: 'Easy' }),
-      within(header).getByTitle('Quality'),
       within(header).getByRole('button', { name: /^Spent / }),
       within(header).getByRole('button', { name: 'Share' }),
       within(header).getByRole('button', { name: 'Read the comic' }),
       within(header).getByRole('button', { name: 'More' }),
-      within(header).getByText('Saved $0.40')
+      within(header).getByText('Savings slot')
     ];
     for (let i = 1; i < order.length; i += 1) {
       // DOCUMENT_POSITION_FOLLOWING = 4
@@ -71,6 +76,17 @@ describe('ComicStudio header slots', () => {
     // The crashing slot disappears (logged); the header and studio keep working.
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('header slot "broken"'), expect.any(Error));
     expect(screen.getByLabelText('Comic title')).toBeInTheDocument();
+  });
+
+  it('below 1024 the icon-only quality chip sits in its built-in place between the slots', () => {
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 900, h: 800 })}>
+        <ComicStudioShell studio={makeFakeStudio()} onBack={vi.fn()} />
+      </FormFactorProvider>
+    );
+    const header = screen.getByRole('banner');
+    const order = [within(header).getByRole('button', { name: 'Easy' }), within(header).getByTitle('Quality'), within(header).getByRole('button', { name: /^Spent / })];
+    for (let i = 1; i < order.length; i += 1) expect(order[i - 1].compareDocumentPosition(order[i]) & 4).toBe(4);
   });
 
   it('renders banner slots (order ≥ 1000) in a strip under the header, not inside it', () => {
