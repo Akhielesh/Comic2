@@ -78,7 +78,10 @@
     "RATE_LIMIT_TEXT_MAX_REQUESTS": "120",
     "RATE_LIMIT_IMAGE_MAX_REQUESTS": "40",
     "RATE_LIMIT_VISION_MAX_REQUESTS": "120",
-    "RATE_LIMIT_SYSTEM_MAX_REQUESTS": "240"
+    "RATE_LIMIT_SYSTEM_MAX_REQUESTS": "240",
+    // Comic Studio rollout stages (off | admins | all; docs/infrastructure/ENV_MATRIX.md). Steering: an admin's
+    // "Send now" goes into the running director turn (about half a cent a note). Back to "off" = this line + deploy.
+    "COMIC_STEER": "admins"
   },
 
   "d1_databases": [
