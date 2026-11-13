@@ -91,6 +91,29 @@ describe('ConversationPane — messages', () => {
     expect(within(screen.getByRole('log')).getByText('Thinking…')).toBeInTheDocument();
   });
 
+  it('keeps recent Director steps behind a disclosure while the reply is pending', () => {
+    const studio = makeFakeStudio({
+      doc: makeSampleDoc({ conversation: [...conversation, msg('u2', 'user', 'Keep the same outfit')] }),
+      messageBusy: true,
+      busy: true,
+      activity: [
+        { id: 'scan', label: 'Reading the previous page', phase: 'end', at: 1, ok: true },
+        { id: 'draw', label: 'Drawing page 2', phase: 'start', at: 2 }
+      ]
+    });
+    const { rerender } = render(<ConversationPane studio={studio} />);
+    const log = within(screen.getByRole('log'));
+    const disclosure = log.getByText('Director activity').closest('details');
+    expect(disclosure).not.toHaveAttribute('open');
+    fireEvent.click(log.getByText('Director activity'));
+    expect(disclosure).toHaveAttribute('open');
+    expect(log.getByRole('list', { name: 'Recent Director steps' })).toHaveTextContent('Reading the previous page · Done');
+    expect(log.getByRole('list', { name: 'Recent Director steps' })).toHaveTextContent('Drawing page 2 · In progress');
+    rerender(<ConversationPane studio={{ ...studio, drafts: { a2: 'The coat matches now.' } }} />);
+    expect(log.queryByText('Director activity')).not.toBeInTheDocument();
+    expect(log.getByText('The coat matches now.')).toBeInTheDocument();
+  });
+
   it('shows the pending message immediately, and a failed one with retry / edit / discard', () => {
     const studio = makeFakeStudio({
       doc: makeSampleDoc({ conversation }),

@@ -9,6 +9,7 @@
 //                     lettering band — lettering always stays above overlays); onto another panel's row, header or
 //                     empty group: move the line there (line_move, its translations travel with it)
 //   Alt+↑ / Alt+↓     the same restack without a drag (WCAG 2.5.7); Alt+← / Alt+→ move to the previous / next panel
+//   overlay Alt+↑/↓   restack within its group; add Shift for front/back (also available in the Arrange buttons)
 //   eye               hide in this view only (no edit, nothing saved)
 //   lock              lock / unlock (balloon {locked}, layer {locked})
 //   badge             "Director is editing" while the director works on that balloon (StudioController.presence); on
@@ -23,7 +24,7 @@ import { Bot, Eye, EyeOff, GripVertical, Lock, LockOpen } from 'lucide-react';
 import type { DocOp } from '../../../../shared/comic/ops';
 import type { LetterPlan } from '../../../../shared/comic/lettering/layout';
 import { LETTERING_ON_TOP_NOTE } from '../../../../shared/comic/pro/types';
-import { BANDS, zOrderEdit, type EditResult } from '../../../../shared/comic/editor/scene';
+import { BANDS, zOrderEdit, type EditResult, type ZMove } from '../../../../shared/comic/editor/scene';
 import { cn } from '../../../../lib/utils';
 import { ACCENT_SOFT_BG, FOCUS_RING, INK, MUTED, OVERLINE, RADIUS_CONTROL, RADIUS_PILL } from '../../../chat/studioDesign';
 import { LINE_KIND_LABEL } from '../../board/boardModel';
@@ -50,6 +51,13 @@ const ICON_BTN = cn(
   MUTED,
   FOCUS_RING
 );
+const ARRANGE_MOVES: readonly { move: ZMove; label: string; shortcut: string }[] = [
+  { move: 'forward', label: 'Bring forward', shortcut: 'Alt+ArrowUp' },
+  { move: 'backward', label: 'Send backward', shortcut: 'Alt+ArrowDown' },
+  { move: 'front', label: 'Bring to front', shortcut: 'Alt+Shift+ArrowUp' },
+  { move: 'back', label: 'Send to back', shortcut: 'Alt+Shift+ArrowDown' }
+];
+
 const KIND_SHORT: Record<string, string> = { speech: 'Speech', thought: 'Thought', whisper: 'Whisper', shout: 'Shout', caption: 'Caption', sfx: 'SFX' };
 
 export type LayersPanelProps = PartPanelProps;
@@ -69,6 +77,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, pla
   // The overlays the studio has selected on this page (selectLayers sets them; the balloon selection is then empty).
   const studioSel = studio?.selection;
   const selectedLayers = new Set(studioSel && studioSel.pageId === page.id ? (studioSel.layerIds ?? []) : []);
+  const overlayRows = bands.flatMap((band) => band.groups.flatMap((group) => group.rows)).filter((row) => row.kind === 'overlay');
+  const activeOverlay = selectedLayers.size === 1 ? overlayRows.find((row) => selectedLayers.has(row.id)) : undefined;
+  const scene = useMemo(() => sceneFor(doc, page, plans), [doc, page, plans]);
+  const arrangeActions = useMemo(() => activeOverlay ? ARRANGE_MOVES.map((item) => ({ ...item, result: zOrderEdit(doc, page, { kind: 'overlay', id: activeOverlay.id }, item.move, scene) })) : [], [doc, page, scene, activeOverlay]);
   const inEdition = !!editionLang;
   const inOriginal = inEdition ? 'Stacking, locks and panels belong to the original language — switch to it to change them.' : undefined;
   const lettering = balloonRows(bands);
@@ -144,6 +156,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, pla
       if (other) return sendEdit(restackEdit(doc, page, plans as LetterPlan[], row.id, other, placements.balloons), dir === 'forward' ? 'Brought forward' : 'Sent backward');
     }
     sendEdit(r, dir === 'forward' ? 'Brought forward' : 'Sent backward');
+  };
+  const arrangeOverlay = (row: LayerRow, move: ZMove) => {
+    if (inEdition) return;
+    sendEdit(zOrderEdit(doc, page, { kind: 'overlay', id: row.id }, move, scene), `${row.label}: ${ARRANGE_MOVES.find((item) => item.move === move)!.label.toLowerCase()}`);
   };
   const movePanelStep = (row: LayerRow, dir: -1 | 1) => {
     if (inEdition) return;
@@ -305,9 +321,16 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, pla
         onKeyDown={
           pick
             ? (e) => {
-                if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
-                e.preventDefault();
-                chooseLayer(row, e.shiftKey || e.metaKey || e.ctrlKey);
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  chooseLayer(row, e.shiftKey || e.metaKey || e.ctrlKey);
+                } else if (e.altKey && !e.metaKey && !e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const up = e.key === 'ArrowUp';
+                  arrangeOverlay(row, e.shiftKey ? (up ? 'front' : 'back') : (up ? 'forward' : 'backward'));
+                }
               }
             : undefined
         }
@@ -344,6 +367,37 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ studio, doc, page, pla
         {said}
       </p>
       {inOriginal && <p className={cn('m-0 text-[11px] leading-snug', MUTED)}>{inOriginal}</p>}
+      {activeOverlay && (
+        <section aria-label={`Arrange ${activeOverlay.label}`} className="min-w-0 space-y-2">
+          <h4 className={cn('m-0 break-words', OVERLINE)}>Arrange {activeOverlay.label}</h4>
+          <div className="grid grid-cols-2 gap-1">
+            {arrangeActions.map(({ move, label, shortcut, result }) => {
+              const reason = inOriginal ?? (result.ok === false ? result.reason : undefined);
+              return (
+                <button
+                  key={move}
+                  type="button"
+                  disabled={!!reason}
+                  title={reason ?? `${label} (${shortcut})`}
+                  aria-keyshortcuts={shortcut}
+                  className={cn('min-h-9 min-w-0 whitespace-normal border border-[var(--ds-hairline)] px-2 py-1 text-[12px] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-40 coarse:min-h-11', RADIUS_CONTROL, INK, FOCUS_RING)}
+                  onClick={() => arrangeOverlay(activeOverlay, move)}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <p className={cn('m-0 text-[11px] leading-snug', MUTED)}>
+            {activeOverlay.locked ? 'Unlock this overlay to change its stacking.' : 'Stacking stays within this group. Lettering stays above overlays.'}
+          </p>
+        </section>
+      )}
+      {overlayRows.length > 0 && (
+        <p className={cn('m-0 text-[11px] leading-snug', MUTED)}>
+          Select one overlay to arrange it, or focus its row and press Alt+↑ or Alt+↓. Add Shift to move it to the front or back.
+        </p>
+      )}
       {bands.map((band) => (
         <section key={band.band} aria-label={band.title} className="min-w-0 space-y-1">
           <h4 className={cn('m-0', OVERLINE)}>{band.title}</h4>
