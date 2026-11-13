@@ -258,18 +258,18 @@ describe('ComicsLanding', () => {
       // Nothing in the header is a filled button on the landing (the ink primary or the spark).
       const fills = [...header.querySelectorAll('[data-slot="button"]')].filter((b) => ['default', 'create'].includes(b.getAttribute('data-variant') || ''));
       expect(fills.map((b) => b.textContent?.trim())).toEqual([]);
-      // The hero carries the one fill: the spark signed out, the ink primary signed in.
-      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', signedIn ? 'default' : 'create');
+      // The hero carries the one fill, scoped to the Comic Studio theme.
+      expect(screen.getByTestId('comics-hero-cta')).toHaveAttribute('data-variant', 'default');
+      expect(screen.getByTestId('comics-hero-cta')).toHaveClass('comics-primary-action');
       unmount();
     }
   });
 
-  it('one spark: signed out exactly one create fill (the hero), signed in none; never hard white', () => {
+  it('uses the scoped comic primary without the global purple spark', () => {
     for (const signedIn of [false, true]) {
       const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
       const sparks = container.querySelectorAll('[data-variant="create"]');
-      expect(sparks).toHaveLength(signedIn ? 0 : 1);
-      if (!signedIn) expect(sparks[0]).toBe(screen.getByTestId('comics-hero-cta'));
+      expect(sparks).toHaveLength(0);
       expect(container.innerHTML).not.toMatch(/(?<![\w-])text-white(?![\w-])/);
       unmount();
     }
