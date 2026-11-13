@@ -59,7 +59,7 @@ describe('BoardPane', () => {
   it('renders the style tab with current style and look selection', () => {
     render(<BoardPane studio={makeStudio(makeSampleDoc(), { tab: 'style' })} />);
     const workspace = screen.getByRole('tabpanel', { name: /^Style/ });
-    expect(within(workspace).getByRole('heading', { name: 'Your style', exact: true })).toBeInTheDocument();
+    expect(within(workspace).getByRole('heading', { name: /^Your style$/ })).toBeInTheDocument();
     expect(within(workspace).getByRole('tab', { name: 'Current style' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(within(workspace).getByRole('tab', { name: 'Choose a look' }));
     expect(within(workspace).getByRole('heading', { name: 'Quick presets' })).toBeInTheDocument();
