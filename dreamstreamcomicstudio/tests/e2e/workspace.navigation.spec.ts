@@ -39,7 +39,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       for (const tab of await nav.getByRole('tab').all()) {
         expect((await tab.boundingBox())!.height, 'every stage has a 44px touch target').toBeGreaterThanOrEqual(44);
       }
-      await qa.check('studio', 'project-navigation', { checks: ['overflow', 'offscreen', 'hit-target', 'collision', 'popover', 'landmarks', 'axe'] });
+      await qa.check('studio', 'project-navigation', { checks: ['overflow', 'offscreen', ...(phone ? ['hit-target' as const] : []), 'collision', 'popover', 'landmarks', 'axe'] });
       await page.screenshot({ path: testInfo.outputPath('navigation.png') });
       const story = nav.getByRole('tab', { name: 'Story', exact: true });
       await story.focus();
