@@ -2,7 +2,7 @@
   "guard": "overflow",
   "test": "tests/config/overflowGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/overflowGuard.test.ts lowers it (see README.md).",
-  "totals": { "breakWords": 71, "maxHNoOverflow": 25, "nowrapNoClip": 76, "rawErrorSink": 48, "rawErrorText": 118 },
+  "totals": { "breakWords": 71, "maxHNoOverflow": 25, "nowrapNoClip": 75, "rawErrorSink": 48, "rawErrorText": 118 },
   "files": {
     "App.tsx": { "rawErrorText": 5 },
     "components/AccountSettings.tsx": { "rawErrorText": 10 },
@@ -95,7 +95,6 @@
     "components/comicstudio/refs/RefStrip.tsx": { "rawErrorSink": 1 },
     "components/comicstudio/refs/RefsDrawer.tsx": { "rawErrorSink": 2 },
     "components/comicstudio/refs/useRefUpload.ts": { "rawErrorText": 5 },
-    "components/comicstudio/reliability/OptionButtons.tsx": { "nowrapNoClip": 1 },
     "components/comicstudio/safety/RatingBadge.tsx": { "nowrapNoClip": 1 },
     "components/comicstudio/safety/RatingPicker.tsx": { "breakWords": 2 },
     "components/comicstudio/safety/ReportDialog.tsx": { "breakWords": 2, "rawErrorText": 2 },
