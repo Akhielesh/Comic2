@@ -203,15 +203,34 @@ describe('prepareMemoryImportContent', () => {
     expect(prepareMemoryImportContent(`\n${md}\n`)).toBe(md);
   });
 
-  it('treats text that looks like JSON but does not parse as plain text, as today', () => {
+  it('sends nothing for a cut-off export: it opens like JSON but parses neither whole nor line by line', () => {
     const truncated = '{"memories": ["Vegetarian", "Lives in Lisbon"';
-    expect(prepareMemoryImportContent(truncated)).toBe(truncated);
+    expect(prepareMemoryImportContent(truncated)).toBe('');
+    const cutOffLines = '{"role":"user","text":"I am vegan"}\n{"role":"assistant","text":"ASSISTANT ANSWER cut';
+    expect(prepareMemoryImportContent(cutOffLines)).toBe('');
+    // A ChatGPT conversations.json cut off mid-file (a paste that stopped, a partial download).
+    const conversations = JSON.stringify([
+      {
+        title: 'Trip',
+        mapping: {
+          a: { message: { author: { role: 'user' }, content: { content_type: 'text', parts: ['I am vegan'] } } },
+          b: { message: { author: { role: 'assistant' }, content: { content_type: 'text', parts: ['ASSISTANT ANSWER long'] } } }
+        }
+      }
+    ]);
+    const cut = conversations.slice(0, conversations.indexOf('ASSISTANT') + 12);
+    expect(prepareMemoryImportContent(cut)).toBe('');
+    expect(prepareMemoryImportContent(`  \n${cut}`)).toBe('');
+    expect(prepareMemoryImportContent('[ {"title":"Trip","mapping":{')).toBe('');
+  });
+
+  it('keeps bracketed plain text and markdown that is not JSON as written', () => {
     const bracketed = '[x] I take notes in markdown\n[ ] Remind me about the dentist';
     expect(prepareMemoryImportContent(bracketed)).toBe(bracketed);
-    // Known limit, kept on purpose: a cut-off export is not JSON, whole or line by line, so it goes
-    // as written, assistant lines included (the docs and the privacy copy say so).
-    const cutOffLines = '{"role":"user","text":"I am vegan"}\n{"role":"assistant","text":"ASSISTANT ANSWER cut';
-    expect(prepareMemoryImportContent(cutOffLines)).toBe(cutOffLines);
+    const wiki = '[[Home]] is my notes index\n{curly} is my nickname';
+    expect(prepareMemoryImportContent(wiki)).toBe(wiki);
+    const linkFirst = '[Portfolio](https://example.com) is up to date';
+    expect(prepareMemoryImportContent(linkFirst)).toBe(linkFirst);
   });
 
   it('reads a .jsonl export line by line: the user’s turns are sent, the assistant’s never', () => {
@@ -239,11 +258,11 @@ describe('prepareMemoryImportContent', () => {
     expect(prepareMemoryImportContent('{"id":"a","create_time":1}\n{"id":"b","create_time":2}')).toBe('');
   });
 
-  it('only real JSON Lines are read that way: one bad line, or a line that is not an object or array, keeps the text as written', () => {
+  it('only real JSON Lines are read that way: one bad line, or a line that is not an object or array, and the file opens like JSON, so nothing is sent', () => {
     const oneBadLine = '{"role":"user","text":"I am vegan"}\nnot json at all\n{"role":"assistant","text":"ANSWER"}';
-    expect(prepareMemoryImportContent(oneBadLine)).toBe(oneBadLine);
+    expect(prepareMemoryImportContent(oneBadLine)).toBe('');
     const scalarLine = '{"role":"user","text":"I am vegan"}\n42';
-    expect(prepareMemoryImportContent(scalarLine)).toBe(scalarLine);
+    expect(prepareMemoryImportContent(scalarLine)).toBe('');
   });
 
   it('keeps the caps across the lines of a .jsonl file: 800 pieces and 24,000 characters', () => {

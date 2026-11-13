@@ -179,6 +179,9 @@ const parseJsonLines = (text: string): unknown[] | null => {
  * as written, whatever it holds, so a cut-off conversations.json keeps its assistant
  * lines (text that is not JSON stays text).
  */
+/** Text that opens like a JSON object or array of objects/strings: `{"`, `["`, `[{"` (whitespace allowed). */
+const LOOKS_LIKE_JSON = /^(?:\{\s*"|\[\s*(?:"|\{\s*"))/;
+
 export const prepareMemoryImportContent = (raw: string): string => {
   const trimmed = (raw || '').trim();
   if (!trimmed) return '';
@@ -188,10 +191,13 @@ export const prepareMemoryImportContent = (raw: string): string => {
     try {
       roots = [JSON.parse(trimmed) as unknown];
     } catch {
-      // Not one JSON value. JSON Lines is read line by line (each line is its own root);
-      // anything else is not JSON at all and is treated as plain text.
+      // Not one JSON value. JSON Lines is read line by line (each line is its own root).
+      // A cut-off export (it opens like JSON, `{"`, `["` or `[{"`, but parses neither way)
+      // sends nothing: its raw text holds the assistant's replies too, and only the user's
+      // own words may leave. Anything else is not JSON at all and is treated as plain text
+      // (markdown checklists like "[x] …" included).
       const lines = parseJsonLines(trimmed);
-      if (!lines) return trimmed.slice(0, MAX_IMPORT_CHARS);
+      if (!lines) return LOOKS_LIKE_JSON.test(trimmed) ? '' : trimmed.slice(0, MAX_IMPORT_CHARS);
       roots = lines;
     }
     const out: string[] = [];
