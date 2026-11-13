@@ -271,6 +271,34 @@ describe('a language ask on a drawn book keeps the language tools (GROUP_HINTS.i
   }
 });
 
+describe('English named as the comic\'s own words, and a glossary page, do not seat the language group first', () => {
+  // Most comics are written in English. When bare "English" and "glossary" seated the language group first, ordinary page
+  // and lettering turns lost their lettering, quote, safety and show_pages tools to the per-turn cap.
+  const DRAWN: Record<string, () => ComicDoc> = { sixPageDrawnDoc, lockedLakeDoc };
+  const LETTERING = ['arrange_balloons', 'restyle_balloons'];
+  for (const [fixture, make] of Object.entries(DRAWN)) {
+    for (const say of ['redraw page 4 panel 2, the English sign is misspelled', 'make the English dialogue on page 2 shorter']) {
+      it(`${fixture}: "${say}" keeps the lettering tools`, () => {
+        expect(GROUP_HINTS.i18n!.test(say), say).toBe(false);
+        const { names } = offered(make(), say);
+        expect(names, say).toEqual(expect.arrayContaining(LETTERING));
+      });
+    }
+    it(`${fixture}: "add a glossary page at the end" keeps the lettering tools and show_pages`, () => {
+      const say = 'add a glossary page at the end';
+      expect(GROUP_HINTS.i18n!.test(say), say).toBe(false);
+      const { names } = offered(make(), say);
+      expect(names, say).toEqual(expect.arrayContaining([...LETTERING, 'show_pages']));
+    });
+  }
+  it('English asked for as a language still seats the language group, and counts as a language ask', () => {
+    for (const ask of ['translate it into English', 'make an English version', 'switch the comic to English', 'add English subtitles']) {
+      expect(GROUP_HINTS.i18n!.test(ask), ask).toBe(true);
+      expect(isLanguageAsk(ask), ask).toBe(true);
+    }
+  });
+});
+
 describe('reserved core slot for dialogue_edit (plan §3 B3)', () => {
   it('dialogue_edit took its reserved seat: a core tool now, so nothing is reserved any more (wave 2 B-TOOL)', () => {
     const ctx = testContext(newSession(plannedDoc()));

@@ -28,12 +28,21 @@ const wholeWord = (alternatives: string) => String.raw`(?<![\p{L}\p{N}_])(?:${al
 const NAMING_WORDS = String.raw`translat\w*|languages?|${LATIN_NAMES.map(reEscape).join('|')}|editions?|glossary|subtitles?|mother tongue`;
 
 /**
+ * The hint's words: NAMING_WORDS without bare "English" and "glossary". Most comics are written in English, so "the
+ * English sign is misspelled" or "fix the English lettering" is an ordinary page or lettering turn, and "a glossary
+ * page" is a page of the book; seating the language group first on those made the per-turn cap drop lettering, quote,
+ * safety and show_pages tools. English seats the language group only when it is asked for as a language ("into
+ * English", "an English version"). LANG_WORDS keeps both words, so the language group is still offered on them.
+ */
+const HINT_WORDS = String.raw`translat\w*|languages?|${LATIN_NAMES.filter((name) => name !== 'english').map(reEscape).join('|')}|editions?|subtitles?|mother tongue|(?:into|to)\s+english|english\s+(?:versions?|editions?|translations?|cop(?:y|ies)|subtitles?)`;
+
+/**
  * GROUP_HINTS.i18n: the turn's words make the language tools relevant, so they are seated before groups whose words do
  * not appear ("make an Indonesian version", "in my mother tongue please" on a comic that already has pages). Bare
  * "versions" is left out here: "use version 2 of page 3" is the timeline's, and seating the language group first on it
  * would only cost the turn tool seats. LANG_WORDS adds it back for offering the group at all.
  */
-export const LANGUAGE_HINT_RE = new RegExp(`${wholeWord(NAMING_WORDS)}|${LANG_SCRIPTS}`, 'iu');
+export const LANGUAGE_HINT_RE = new RegExp(`${wholeWord(HINT_WORDS)}|${LANG_SCRIPTS}`, 'iu');
 
 /**
  * Words that say a turn is about languages: they open the language group, and they tell a translate the user asked for
