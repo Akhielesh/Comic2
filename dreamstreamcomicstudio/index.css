@@ -1044,7 +1044,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* THE OFF SWITCH (VITE_DS_COLOUR=off; vite.config.ts dsColourPlugin marks <html data-ds-colour="off"> in every HTML
    entry at build time). This one block points every name the colour layer added back to neutral: tints
    transparent, hue text the muted ink, solids the strong well under ink, the ramps the ink steps, no washes, no
-   studio accent, the comic's tint the plain card. It wins over every token block by specificity, wherever it sits in
+   studio accent, the comic's tint the plain card. A chart keeps its series and steps apart: hues 6 and 7 take two
+   different ink steps, and both ramps become one ordered grey ramp (the diverging poles dark and light, never mirrored
+   into the same grey). It wins over every token block by specificity, wherever it sits in
    the file (html:root[...] is (0,2,1) against .dark[data-ds-skin]'s (0,2,0); the nested ones are (0,3,1)), on <html>
    and on every element that restates the tokens (a nested skin root, a .dark subtree, a studio, an art scope). The hues 1-5, the spark and
    the ink chart steps are not new and stay. tests/config/dsColourSwitch.test.ts. */
@@ -1053,7 +1055,7 @@ html:root[data-ds-colour="off"] .dark,
 html:root[data-ds-colour="off"] [data-ds-skin],
 html:root[data-ds-colour="off"] [data-ds-studio] {
   --ds-hue-6: var(--ds-chart-2);
-  --ds-hue-7: var(--ds-chart-2);
+  --ds-hue-7: var(--ds-chart-3);
   --ds-hue-1-text: var(--ds-muted);
   --ds-hue-2-text: var(--ds-muted);
   --ds-hue-3-text: var(--ds-muted);
@@ -1080,15 +1082,15 @@ html:root[data-ds-colour="off"] [data-ds-studio] {
   --ds-chart-seq-2: var(--ds-chart-4);
   --ds-chart-seq-3: var(--ds-chart-3);
   --ds-chart-seq-4: var(--ds-chart-2);
-  --ds-chart-seq-5: var(--ds-chart-1);
+  --ds-chart-seq-5: color-mix(in srgb, var(--ds-chart-2), var(--ds-chart-1));
   --ds-chart-seq-6: var(--ds-chart-1);
-  --ds-chart-div-1: var(--ds-chart-2);
-  --ds-chart-div-2: var(--ds-chart-3);
-  --ds-chart-div-3: var(--ds-chart-4);
-  --ds-chart-div-4: var(--ds-chart-5);
-  --ds-chart-div-5: var(--ds-chart-4);
-  --ds-chart-div-6: var(--ds-chart-3);
-  --ds-chart-div-7: var(--ds-chart-2);
+  --ds-chart-div-1: var(--ds-chart-1);
+  --ds-chart-div-2: var(--ds-chart-2);
+  --ds-chart-div-3: color-mix(in srgb, var(--ds-chart-2), var(--ds-chart-3));
+  --ds-chart-div-4: var(--ds-chart-3);
+  --ds-chart-div-5: color-mix(in srgb, var(--ds-chart-3), var(--ds-chart-4));
+  --ds-chart-div-6: var(--ds-chart-4);
+  --ds-chart-div-7: var(--ds-chart-5);
   --ds-wash-hero: none;
   --ds-wash-empty: none;
   --ds-studio: var(--ds-ink);

@@ -21,7 +21,7 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 import viteConfig, { DS_COLOUR_OFF_ATTR, DS_COLOUR_VAR, dsColourOn, dsColourPlugin, dsColourWarning, markDsColourOff } from '../../vite.config';
 import * as design from '../../components/chat/studioDesign';
-import { APP_ROOT, compareSpecificity, indexCss, over, parseRules, resolveColor, type Rgba, specificity, tokenBlocks, tokensOf, topLevelSplit } from './cssTokens';
+import { APP_ROOT, compareSpecificity, indexCss, luminance, over, parseRules, ratio, resolveColor, type Rgba, specificity, tokenBlocks, tokensOf, topLevelSplit } from './cssTokens';
 
 const INDEX_HTML = readFileSync(path.join(APP_ROOT, 'index.html'), 'utf8');
 const LIVE_HTML = readFileSync(path.join(APP_ROOT, 'live.html'), 'utf8');
@@ -189,6 +189,34 @@ describe('the one neutral block in index.css', () => {
       expect(grey(over(on.color('--ds-hue-6'), canvas))).toBe(false);
       expect(on.color('--ds-hue-2-soft').a).toBe(1);
       expect(on.lookup('--ds-wash-hero')).toMatch(/radial-gradient/);
+    });
+  }
+
+  for (const [name, blocks] of Object.entries(CONTEXTS)) {
+    it(`${name}: with colour off a chart still tells its series and its steps apart (no two series, ramp steps or diverging poles the same grey)`, () => {
+      const off = resolverOf([OFF_TOKENS, ...blocks]);
+      const canvas = off.color('--ds-canvas');
+      const tokenOf = (cls: string) => /var\((--ds-[\w-]+)\)/.exec(cls)![1];
+      const seen = (t: string) => over(off.color(t), canvas);
+      const apart = (a: string, b: string) => ratio(seen(a), seen(b)) >= 1.1;
+      // The first four series in CHART_HUE_ORDER (two keep their hue, hues 6 and 7 go grey): pairwise apart.
+      const series = [0, 1, 2, 3].map((i) => tokenOf(design.chartHue('fill', i)!));
+      const distance = (a: Rgba, b: Rgba) => Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+      for (let a = 0; a < series.length; a++) {
+        for (let b = a + 1; b < series.length; b++) expect(distance(seen(series[a]), seen(series[b])), `${series[a]} vs ${series[b]}`).toBeGreaterThanOrEqual(40);
+      }
+      expect(apart('--ds-hue-6', '--ds-hue-7'), 'hue-6 vs hue-7').toBe(true);
+      // Both ramps become one ordered grey ramp: every neighbour a visible step, each way monotonic, the poles apart.
+      for (const [prefix, n] of [['--ds-chart-seq-', 6], ['--ds-chart-div-', 7]] as const) {
+        const steps = Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+        const lum = steps.map((t) => luminance(seen(t)));
+        const rising = lum[n - 1] > lum[0];
+        for (let i = 1; i < n; i++) {
+          expect(apart(steps[i - 1], steps[i]), `${steps[i - 1]} vs ${steps[i]}`).toBe(true);
+          expect(lum[i] > lum[i - 1], `${steps[i]} keeps the order`).toBe(rising);
+        }
+      }
+      expect(apart('--ds-chart-div-1', '--ds-chart-div-7'), 'the diverging poles').toBe(true);
     });
   }
 
