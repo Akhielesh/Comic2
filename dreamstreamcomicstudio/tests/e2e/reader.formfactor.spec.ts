@@ -4,7 +4,8 @@
 // the page sits inside the viewport, `page=5` opens on page 5, a swipe turns the page (RTL turns
 // the other way), the phone HUD auto-hides and comes back with a centre tap, and a hidden HUD never
 // takes a tap. (mobile.md's "double-tap → zoom 2.5" is superseded by reader.md: a double-tap opens
-// Guided View on that panel; pinch zooms.)
+// Guided View on that panel; pinch zooms.) On the desktop, one Ctrl + wheel notch zooms about ×1.4 (it was
+// ×2.7) and the right arrow turns a zoomed page, with motion reduced and with motion on.
 
 import { test, expect } from './helpers/harness';
 import { Touch } from './helpers/touch';
@@ -146,6 +147,47 @@ test.describe('immersive reader per form factor', () => {
     );
     expect(live, 'HUD controls still hit-testable while hidden').toEqual([]);
   });
+
+  for (const motion of ['reduce', 'no-preference'] as const) {
+    test(`desktop, motion ${motion === 'reduce' ? 'reduced' : 'on'}: a Ctrl+wheel notch zooms gently and → turns the zoomed page`, async ({ qa, device, page }) => {
+      test.skip(device.kind !== 'desktop' || device.hasTouch, 'a mouse wheel and a keyboard');
+      await page.emulateMedia({ reducedMotion: motion });
+      // deep-40p: every page is drawn. SVG art: the gesture is under test, not image loading.
+      await qa.open({ surface: 'reader', fixture: 'deep-40p', page: 4, img: 'svg', still: motion === 'reduce' }, { settle: 900 });
+      await page.locator('[data-testid="immersive-reader"]').focus();
+      // How wide the book is drawn on screen: its laid-out width times the camera's scale.
+      const bookWidth = () => page.evaluate(() => document.querySelector('[data-testid="reader-book"]')!.getBoundingClientRect().width);
+      const counter = async () => (await readerState(page)).counter;
+      const fit = await bookWidth();
+      const before = await counter();
+      expect(fit, 'the book is on screen').toBeGreaterThan(100);
+      expect(pageNumber(before), `counter "${before}" readable`).not.toBeNull();
+
+      const vp = page.viewportSize()!;
+      await page.mouse.move(vp.width / 2, vp.height / 2);
+      const notch = async (dy: number) => {
+        await page.keyboard.down('Control');
+        await page.mouse.wheel(0, dy);
+        await page.keyboard.up('Control');
+        await page.waitForTimeout(250); // the zoom settles (the book is laid out at the new size)
+      };
+      await notch(-100);
+      const one = (await bookWidth()) / fit;
+      expect.soft(one, `one notch zooms ×${one.toFixed(2)} (about ×1.4; it was ×2.72)`).toBeGreaterThan(1.3);
+      expect.soft(one, `one notch zooms ×${one.toFixed(2)} (about ×1.4; it was ×2.72)`).toBeLessThanOrEqual(1.5);
+      await notch(-100);
+      const two = (await bookWidth()) / fit;
+      expect.soft(two, `two notches zoom ×${two.toFixed(2)} (they used to hit the 4× cap)`).toBeGreaterThan(1.7);
+      expect.soft(two, `two notches zoom ×${two.toFixed(2)} (they used to hit the 4× cap)`).toBeLessThan(2.1);
+      test.info().annotations.push({ type: 'zoom', description: `one notch ×${one.toFixed(2)} · two notches ×${two.toFixed(2)}` });
+      expect.soft(await counter(), 'zooming does not turn the page').toBe(before);
+      expect.soft(await page.evaluate(() => window.visualViewport?.scale ?? 1), 'the browser itself did not zoom').toBe(1);
+
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(async () => pageNumber(await counter()) ?? 0, { timeout: 8_000, message: '→ turns the page while zoomed' }).toBeGreaterThan(pageNumber(before)!);
+      await expect.poll(async () => Math.abs((await bookWidth()) - fit), { timeout: 4_000, message: 'and the zoom resets to the whole page' }).toBeLessThanOrEqual(1);
+    });
+  }
 
   test('a webtoon scrolls vertically on every device', async ({ qa, page }) => {
     await qa.open({ surface: 'reader', fixture: 'webtoon-20p' }, { settle: 700 });

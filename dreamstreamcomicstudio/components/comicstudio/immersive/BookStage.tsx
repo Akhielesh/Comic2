@@ -71,6 +71,21 @@ const DRAG_SLOP = 6;
 export const EDGE_MAX = 6;
 export const edgeThickness = (views: number): number => Math.min(EDGE_MAX, 0.6 * Math.max(0, views));
 
+/** One Ctrl/⌘ + wheel notch zooms by this much (the inline reader's step: TouchCanvas, exp(100 / 300) ≈ 1.4). */
+export const WHEEL_NOTCH_ZOOM = 1.4;
+/**
+ * Ctrl/⌘ + wheel → the zoom factor of one wheel event. A trackpad pinch arrives as a stream of small
+ * Ctrl+wheel deltas (Chromium builds them so that exp(-deltaY / 100) is the scale the fingers asked for):
+ * those pass through unchanged, so the page keeps following the pinch. A mouse wheel notch is one big delta
+ * (100 or 120 px, or 3 lines): it is held to WHEEL_NOTCH_ZOOM, a gentle step. Unheld it was ×2.7 a notch, and
+ * two notches hit the 4× cap.
+ */
+export const wheelZoomFactor = (deltaY: number, deltaMode = 0): number => {
+  const px = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 400 : 1);
+  const notch = Math.log(WHEEL_NOTCH_ZOOM);
+  return Math.exp(Math.min(notch, Math.max(-notch, -px / 100)));
+};
+
 /** What a view needs decoded before it can show art: per item, its alternatives (source, original). */
 type ViewNeeds = { item: number; alts: string[]; standIn?: string; source?: { path: string; url?: string } }[];
 
@@ -282,7 +297,13 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
   useEffect(() => {
     if (guidedOn) return;
     if (!state.zoom) {
+      // A pointer held down while zoomed was panning. Forget it, so the same drag cannot turn the page once
+      // the zoom is gone (an arrow key, Escape or a double tap mid-pan); its release does nothing.
+      down.current = null;
       if (camera.current.current.s !== 1 || camera.current.current.tx !== 0 || camera.current.current.ty !== 0) {
+        // A zoom that had not settled yet (a key right after a wheel notch) must not lay the book out at the
+        // old zoom while the camera eases back: a turn may already be running. This move settles it at fit.
+        if (settleTimer.current) clearTimeout(settleTimer.current);
         camera.move({ to: IDENTITY_CAMERA(size.w, size.h), durationMs: reduced ? 0 : 260, onDone: () => settleCrisp(IDENTITY_CAMERA(size.w, size.h)) });
       }
     }
@@ -740,8 +761,9 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
     }
   };
 
-  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor (not in Guided View). A wheel over content that can
-  // still scroll that way (the End card when it overflows) scrolls it instead of turning the page.
+  // Wheel: steps; Ctrl/⌘ + wheel zooms at the cursor (not in Guided View), a gentle step per notch
+  // (wheelZoomFactor). A wheel over content that can still scroll that way (the End card when it overflows)
+  // scrolls it instead of turning the page.
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -751,7 +773,7 @@ export const BookStage: React.FC<BookStageProps> = (props) => {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
         const cam = camera.current.current;
-        const s = Math.min(4, Math.max(1, cam.s * Math.exp(-e.deltaY * 0.01)));
+        const s = Math.min(4, Math.max(1, cam.s * wheelZoomFactor(e.deltaY, e.deltaMode)));
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
         const wx = (mx - cam.tx) / cam.s;

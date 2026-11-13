@@ -16,6 +16,8 @@ import { lakeDrawnDoc, sixPageDrawnDoc } from './golden/fixtures.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
 import { GROUP_HINTS, RESERVED_CORE_TOOLS, buildDirectorTools, buildTurnToolset, createDirectorTurn } from './tools.js';
 import { toolGroups } from './tools/index.js';
+import { LANGUAGE_HINT_RE } from './tools/languageAsk.js';
+import { isLanguageAsk } from './tools/i18n.js';
 
 /** The dialogue phrases of plan §0 spot-check 5 / §3 B4 (the first and fifth were trimmed before 0a). */
 const PHRASES = [
@@ -223,6 +225,78 @@ describe('lettering AND a page action in one sentence, on a drawn unlocked book 
       expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
     });
   }
+});
+
+describe('a language ask on a drawn book keeps the language tools (GROUP_HINTS.i18n from the language-ask words)', () => {
+  // Before: the i18n hint listed 21 language names by hand. "make an Indonesian version" and "in my mother tongue please"
+  // matched none, so on a book with pages the language group sorted behind the hot timeline and the cap trimmed it whole.
+  const ASKS = ['make an Indonesian version', 'in my mother tongue please', 'can we get it in Bahasa Indonesia', 'una edición en español', 'add Hindi subtitles'];
+  const DRAWN: Record<string, () => ComicDoc> = { sixPageDrawnDoc, lockedLakeDoc };
+
+  it('the hint is the one list in tools/languageAsk.ts, and every language ask wakes it', () => {
+    expect(GROUP_HINTS.i18n).toBe(LANGUAGE_HINT_RE);
+    for (const ask of [...ASKS, 'add telugu and hindi versions', 'translate the book into Hindi', 'हिंदी version भी बनाओ', '日本語でお願い']) {
+      expect(GROUP_HINTS.i18n!.test(ask), ask).toBe(true);
+    }
+    // A bare "version" is a take, not a language: it does not seat the language group first.
+    for (const say of ['use version 2 of page 3', 'restore the previous version of page 2', 'make the hero taller', 'polish the dialogue']) {
+      expect(GROUP_HINTS.i18n!.test(say), say).toBe(false);
+    }
+  });
+
+  for (const [fixture, make] of Object.entries(DRAWN)) {
+    for (const ask of ASKS) {
+      it(`${fixture}: "${ask}" offers translate_comic`, () => {
+        const { set, names } = offered(make(), ask);
+        expect(set.groups, ask).toContain('i18n');
+        expect(names, ask).toEqual(expect.arrayContaining(['translate_comic', 'read_translation']));
+        expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
+      });
+    }
+  }
+
+  // Page-shaped asks that name a language are still the timeline's: the hint does not take their seats.
+  for (const [say, tool] of [
+    ['put page 3 before page 2 in the Hindi version', 'move_page'],
+    ['restore the previous version of page 2 in Hindi', 'use_version'],
+    ['delete page 3 of the Indonesian edition', 'delete_page'],
+    ['make the Hindi edition a square book', 'set_book']
+  ] as const) {
+    it(`lockedLakeDoc: "${say}" keeps ${tool}`, () => {
+      expect(isLanguageAsk(say), say).toBe(false);
+      const { set, names } = offered(lockedLakeDoc(), say);
+      expect(set.groups, say).toContain('timeline');
+      expect(names, say).toContain(tool);
+    });
+  }
+});
+
+describe('English named as the comic\'s own words, and a glossary page, do not seat the language group first', () => {
+  // Most comics are written in English. When bare "English" and "glossary" seated the language group first, ordinary page
+  // and lettering turns lost their lettering, quote, safety and show_pages tools to the per-turn cap.
+  const DRAWN: Record<string, () => ComicDoc> = { sixPageDrawnDoc, lockedLakeDoc };
+  const LETTERING = ['arrange_balloons', 'restyle_balloons'];
+  for (const [fixture, make] of Object.entries(DRAWN)) {
+    for (const say of ['redraw page 4 panel 2, the English sign is misspelled', 'make the English dialogue on page 2 shorter']) {
+      it(`${fixture}: "${say}" keeps the lettering tools`, () => {
+        expect(GROUP_HINTS.i18n!.test(say), say).toBe(false);
+        const { names } = offered(make(), say);
+        expect(names, say).toEqual(expect.arrayContaining(LETTERING));
+      });
+    }
+    it(`${fixture}: "add a glossary page at the end" keeps the lettering tools and show_pages`, () => {
+      const say = 'add a glossary page at the end';
+      expect(GROUP_HINTS.i18n!.test(say), say).toBe(false);
+      const { names } = offered(make(), say);
+      expect(names, say).toEqual(expect.arrayContaining([...LETTERING, 'show_pages']));
+    });
+  }
+  it('English asked for as a language still seats the language group, and counts as a language ask', () => {
+    for (const ask of ['translate it into English', 'make an English version', 'switch the comic to English', 'add English subtitles']) {
+      expect(GROUP_HINTS.i18n!.test(ask), ask).toBe(true);
+      expect(isLanguageAsk(ask), ask).toBe(true);
+    }
+  });
 });
 
 describe('reserved core slot for dialogue_edit (plan §3 B3)', () => {
