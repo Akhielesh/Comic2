@@ -14,7 +14,7 @@ import { CARD_DESCRIPTION, CARD_TITLE } from './Card';
 import { Badge } from './Badge';
 import { Button, BUTTON_BASE, labelChildren } from './Button';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from './AlertDialog';
-import { ComicCard } from './ComicCard';
+import { ComicCard, COMIC_CARD_HERO } from './ComicCard';
 import { ErrorState } from './ErrorState';
 import { MessageText } from './MessageText';
 
@@ -151,6 +151,14 @@ describe('Button: the label inside its edge', () => {
     for (const name of ['Keep it', 'Delete page']) {
       expect(screen.getByRole('button', { name }).querySelector('[data-slot="button-label"]')?.textContent).toBe(name);
     }
+  });
+
+  it('the hero ComicCard stacks below sm, so its text and actions get the whole width on a phone', () => {
+    render(<ComicCard variant="hero" title="The Harbor Lights" onOpen={() => undefined} open={{ onClick: () => undefined, label: 'Continue' }} />);
+    const card = document.querySelector('[data-slot="comic-card"][data-variant="hero"]')!;
+    expect(tokens(card.className)).toEqual(expect.arrayContaining(tokens(COMIC_CARD_HERO)));
+    expect(tokens(COMIC_CARD_HERO)).toEqual(expect.arrayContaining(['flex-col', 'sm:flex-row']));
+    expect(tokens(card.className)).not.toContain('flex-row');
   });
 
   it("ComicCard's link action label sits in the label span too", () => {

@@ -62,7 +62,7 @@ export { useImageReveal, decodeImage, allowFilterEffects, canPlayEntrances, isCo
 export { useReducedMotion, prefersReducedMotion } from './useReducedMotion';
 
 // Content kit (DS-R1). Inspector and FilterSheet stay out of the barrel (they pull in the mobile sheets); import them by path.
-export { ComicCard, COMIC_CARD, COMIC_CARD_PRIMARY, COMIC_CARD_ROW, type ComicCardAction, type ComicCardProps, type ComicCardVariant } from './ComicCard';
+export { ComicCard, COMIC_CARD, COMIC_CARD_HERO, COMIC_CARD_PRIMARY, COMIC_CARD_ROW, type ComicCardAction, type ComicCardProps, type ComicCardVariant } from './ComicCard';
 export { CoverImage, RevealImage, useNearViewport, isPublicationCoverSource, publicationCoverOrigins, revealKeyOf, artBoxStyle, COVER_BOX, COVER_WIDTHS, PUBLICATION_PATH_RE, type CoverImageProps, type CoverSources, type CoverWidth, type RevealImageProps } from './CoverImage';
 export { MediaTile, MEDIA_TILE, MEDIA_TILE_RING_INSIDE, ON_ART_LABEL, type MediaTileProps } from './MediaTile';
 export { CardGrid, CARD_GRID, CARD_GRID_STAGGER_MAX, focusTargetOf, nextGridIndex, type CardGridProps } from './CardGrid';

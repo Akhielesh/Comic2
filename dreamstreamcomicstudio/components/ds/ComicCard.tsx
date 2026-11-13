@@ -89,6 +89,11 @@ const ROW_COVER_ASPECT = '3 / 4';
  * cover, everything centred on it.
  */
 export const COMIC_CARD_ROW = 'min-h-[72px] flex-row items-center gap-3 px-3 py-[3px]';
+/**
+ * The `hero` card: cover beside the title from `sm` up; below it the cover sits above the text, so the title, the
+ * logline and the Read / Continue buttons get the card's whole width instead of an 84 px column at 320 px (OV-1).
+ */
+export const COMIC_CARD_HERO = 'flex-col items-start gap-4 p-4 sm:flex-row sm:items-stretch';
 /** Clicks on these never open the card: they are controls of their own. */
 const OWN_CONTROLS = 'a,button,input,select,textarea,label,summary,[role="checkbox"],[role="switch"],[role="menuitem"],[data-card-ignore]';
 
@@ -229,7 +234,7 @@ export function ComicCard({
         COMIC_CARD,
         interactive && cn(LIFT, 'cursor-pointer'),
         'has-[[data-card-primary]:focus-visible]:outline has-[[data-card-primary]:focus-visible]:outline-2 has-[[data-card-primary]:focus-visible]:outline-offset-2 has-[[data-card-primary]:focus-visible]:outline-[color:var(--ds-focus)]',
-        row ? COMIC_CARD_ROW : hero ? 'flex-row items-stretch gap-4 p-4' : 'overflow-hidden',
+        row ? COMIC_CARD_ROW : hero ? COMIC_CARD_HERO : 'overflow-hidden',
         variant === 'rail' && 'w-full',
         className
       )}
