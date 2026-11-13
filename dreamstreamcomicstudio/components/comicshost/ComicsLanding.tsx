@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
-import { DENSITY, FOCUS_RING, RADIUS_CONTROL } from '../chat/studioDesign';
+import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';
 import { useComicTheme } from '../comicstudio/useComicTheme';
 import { SAMPLE_LOOKS, sampleThumbnailUrl, type SampleLook } from '../comicstudio/library/sampleArt';
 import { Button } from '../ds/Button';
@@ -66,7 +66,7 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
       <main className="comics-shell-width comics-landing-column">
         <section aria-labelledby="comics-hero-title" className="comics-hero">
           <div className="comics-hero-copy">
-            <h1 id="comics-hero-title" className="comics-title"><span>Make your story</span>{' '}<span>a comic.</span></h1>
+            <h1 id="comics-hero-title" className={cn('comics-title', FONT_DISPLAY)}><span>Make your story</span>{' '}<span>a comic.</span></h1>
             <p className="comics-lead">Start with an idea or a script. Plan, draw and letter your pages with the Comic Director.</p>
             <div className="comics-hero-actions">
               <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={signedIn ? (onStartCreating ?? onOpenComics) : onSignIn}>
@@ -86,7 +86,7 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
 
         <section id="looks" aria-labelledby="comics-looks" className="comics-looks-section">
           <div className="comics-looks-heading">
-            <h2 id="comics-looks" tabIndex={-1} className="comics-looks-title focus:outline-none">Find your look</h2>
+            <h2 id="comics-looks" tabIndex={-1} className={cn('comics-looks-title focus:outline-none', FONT_DISPLAY)}>Find your look</h2>
             <p className="comics-looks-context">The Paper Boat · six looks</p>
           </div>
           <ul className="comics-looks">
