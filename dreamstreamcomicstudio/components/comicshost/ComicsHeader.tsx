@@ -1,14 +1,15 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowRight, Menu as MenuIcon, Palette, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Menu as MenuIcon, Palette, UserRound, X } from 'lucide-react';
 import type { ComicsHeaderCurrent } from './hostRouting';
 import { cn } from '../../lib/utils';
 import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
 import { useComicTheme } from '../comicstudio/useComicTheme';
-import { AppHeader, HEADER_INNER } from '../ds/AppHeader';
+import { AppHeader } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from './ComicsMark';
+import './comicsShell.css';
 
 export type ComicsSectionId = 'looks';
 
@@ -22,6 +23,8 @@ export interface ComicsHeaderProps {
   onSignIn: () => void;
   onRequestAccess: () => void;
   onOpenComics: () => void;
+  /** Opens account settings with the current Comic Studio page as its return destination. */
+  onOpenAccount?: () => void;
   onBrowseGallery: () => void;
   onShowSection?: (id: ComicsSectionId) => void;
 }
@@ -46,6 +49,8 @@ interface MenuEntry {
   run: () => void;
   /** A hairline above it (the access row after the links). */
   separated?: boolean;
+  current?: boolean;
+  compactOnly?: boolean;
 }
 
 export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
@@ -56,6 +61,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   onSignIn,
   onRequestAccess,
   onOpenComics,
+  onOpenAccount,
   onBrowseGallery,
   onShowSection
 }) => {
@@ -70,6 +76,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   const home = page === 'home';
   const onLibrary = !home && current === 'gallery';
   const onSignInPage = !home && current === 'auth';
+  const accountMenu = signedIn && !!onOpenAccount;
 
   // Close on Esc (focus back to the trigger) and on a press outside the header. Listeners only while open.
   useEffect(() => {
@@ -96,11 +103,18 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   };
 
   const menu: MenuEntry[] = [
+    ...(!home ? [{ label: 'Home', run: onGoHome }] : []),
     ...(sections
       ? [{ label: 'Looks', run: () => onShowSection!('looks') }]
       : []),
-    { label: 'Library', run: onBrowseGallery },
-    ...(signedIn ? [] : [{ label: 'Request access', run: onRequestAccess, separated: true }])
+    { label: 'Library', run: onBrowseGallery, current: onLibrary },
+    ...(signedIn
+      ? [
+        { label: 'My comics', run: onOpenComics, separated: true },
+        ...(onOpenAccount ? [{ label: 'Account settings', run: onOpenAccount }] : [])
+      ]
+      : [{ label: 'Request access', run: onRequestAccess, separated: true }]),
+    { label: themeLabel, run: () => setTheme(nextTheme), separated: true, compactOnly: true }
   ];
 
   const brand = (
@@ -109,7 +123,13 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   // From lg: the section links on the landing, and the Library on every page (marked when it is the page).
   const nav = (
-    <nav aria-label="Comic Studio" className="hidden items-center gap-7 lg:flex">
+    <nav aria-label="Comic Studio" className="comics-header-nav hidden items-center gap-7 expanded:flex">
+      {!home && (
+        <button type="button" className={cn(NAV_LINK, 'gap-1.5')} onClick={onGoHome}>
+          <ArrowLeft size={16} aria-hidden />
+          Home
+        </button>
+      )}
       {sections && (
         <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
           Looks
@@ -128,22 +148,22 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const actions = (
     <>
-      <IconButton label={themeLabel} variant="ghost" onClick={() => setTheme(nextTheme)}>
+      <IconButton label={themeLabel} variant="ghost" className="comics-header-theme" onClick={() => setTheme(nextTheme)}>
         <Palette />
       </IconButton>
       {signedIn ? (
-        <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'px-2 medium:px-4')} onClick={onOpenComics}>
+        <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'comics-header-entry comics-header-my-comics', !home && 'comics-primary-action')} onClick={onOpenComics}>
           My comics
         </Button>
       ) : (
         <>
           {!home && (
-            <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden lg:inline-flex')} onClick={onRequestAccess}>
+            <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden expanded:inline-flex')} onClick={onRequestAccess}>
               Request access
             </Button>
           )}
           {onSignInPage ? null : (
-            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'group px-2 medium:px-4')} onClick={onSignIn}>
+            <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'comics-header-entry group', !home && 'comics-primary-action')} onClick={onSignIn}>
               Sign in
               <ArrowRight aria-hidden className={cn('hidden medium:block', ARROW_NUDGE)} />
             </Button>
@@ -152,26 +172,26 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
       )}
       <IconButton
         ref={triggerRef}
-        label="Menu"
+        label={accountMenu ? 'Account and navigation' : 'Menu'}
         variant="ghost"
         aria-expanded={open}
         aria-controls={menuId}
-        className={cn(RADIUS_ROUND, 'border border-[var(--ds-hairline)] lg:hidden')}
+        className={cn(RADIUS_ROUND, 'comics-header-menu-toggle border border-[var(--ds-hairline)]', !accountMenu && 'expanded:hidden')}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? <X aria-hidden /> : <MenuIcon aria-hidden />}
+        {open ? <X aria-hidden /> : accountMenu ? <UserRound aria-hidden /> : <MenuIcon aria-hidden />}
       </IconButton>
     </>
   );
 
   return (
-    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} innerClassName="px-2 medium:px-6">
-      <div className={cn(HEADER_INNER, 'pointer-events-none absolute inset-x-0 top-full flex justify-end lg:hidden')}>
-        <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'ds-scale-in pointer-events-auto mt-2 w-60 origin-top-right p-1')}>
+    <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} className="comics-header" innerClassName="comics-shell-width">
+      <div className={cn('comics-shell-width pointer-events-none absolute inset-x-0 top-full flex justify-end', !accountMenu && 'expanded:hidden')}>
+        <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'comics-header-menu ds-scale-in pointer-events-auto mt-2 w-60 origin-top-right p-1')}>
           <ul className="flex flex-col">
             {menu.map((entry) => (
-              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1')}>
-                <button type="button" className={MENU_ROW} onClick={choose(entry.run)}>
+              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1', entry.compactOnly && 'comics-header-menu-theme')}>
+                <button type="button" aria-current={entry.current ? 'page' : undefined} className={MENU_ROW} onClick={choose(entry.run)}>
                   {entry.label}
                 </button>
               </li>

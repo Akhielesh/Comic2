@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // ComicsHeader: the comics host's header is the app's own AppHeader (the studio's header height and glass), with
-// the ink Comic Studio lockup, the right actions per sign-in state, and a menu below `lg` whose rows follow the
+// the ink Comic Studio lockup, the right actions per sign-in state, and a compact menu whose rows follow the
 // page (section links on the landing only). ComicsMark: drawn in ink and page tokens, no hex.
 import React from 'react';
 import { readFileSync } from 'node:fs';
@@ -100,23 +100,37 @@ describe('ComicsHeader', () => {
 
   it('the menu rows per state and page: section links on the landing only, Request access only signed out', () => {
     const cases: Array<[Partial<ComicsHeaderProps>, string[]]> = [
-      [{ signedIn: false, page: 'home' }, ['Looks', 'Library', 'Request access']],
-      [{ signedIn: true, page: 'home' }, ['Looks', 'Library']],
-      [{ signedIn: false, page: 'other' }, ['Library', 'Request access']],
-      [{ signedIn: true, page: 'other' }, ['Library']]
+      [{ signedIn: false, page: 'home' }, ['Looks', 'Library', 'Request access', 'Use Paper theme']],
+      [{ signedIn: true, page: 'home' }, ['Looks', 'Library', 'My comics', 'Use Paper theme']],
+      [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Request access', 'Use Paper theme']],
+      [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics', 'Use Paper theme']]
     ];
     for (const [over, rows] of cases) {
       const { unmount } = render(<ComicsHeader {...props(over)} />);
       expect(menuRows(), JSON.stringify(over)).toEqual(rows);
-      // The lg nav: on the landing the section links and the Library; elsewhere the Library alone (the menu trigger
-      // is hidden from lg, so without it a desktop visitor on sign-in or a legal page had no way to the Library).
+      // Public pages keep an explicit way home beside the current Library destination.
       const nav = screen.getByRole('navigation', { name: 'Comic Studio' });
       expect(within(nav).getAllByRole('button').map((b) => b.textContent), JSON.stringify(over)).toEqual(
-        over.page === 'home' ? ['Looks', 'Library'] : ['Library']
+        over.page === 'home' ? ['Looks', 'Library'] : ['Home', 'Library']
       );
-      expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'lg:flex']));
+      expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'expanded:flex']));
       unmount();
     }
+  });
+
+  it('keeps account settings and My comics available from the signed-in Library menu', () => {
+    const p = props({ signedIn: true, page: 'other', current: 'gallery', onOpenAccount: vi.fn() });
+    render(<ComicsHeader {...p} />);
+    const trigger = screen.getByRole('button', { name: 'Account and navigation' });
+    fireEvent.click(trigger);
+    const menu = within(document.querySelector('[data-slot="comics-menu"]') as HTMLElement);
+    expect(menu.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(menu.getByRole('button', { name: 'Account settings' }));
+    expect(p.onOpenAccount).toHaveBeenCalledOnce();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
+    fireEvent.click(menu.getByRole('button', { name: 'My comics' }));
+    expect(p.onOpenComics).toHaveBeenCalledOnce();
   });
 
   it('on the sign-in page the header offers no Sign in (Request access stays); on the Library its link is the current page', () => {

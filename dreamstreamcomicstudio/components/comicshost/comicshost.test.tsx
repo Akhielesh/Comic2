@@ -65,9 +65,12 @@ describe('comicsChromeFor (App.tsx: the suite header, ComicsHeader and the float
     expect(comicsChromeFor('gallery', on(false))).toEqual({ owns: true, header: true, widgets: false, current: 'gallery' });
   });
 
-  it('signed in, only the landing is comics chrome; every other view keeps the app header and the widgets', () => {
+  it('signed in, the public journey stays in Comic Studio; working views retain their app chrome', () => {
     expect(comicsChromeFor('home', on(true))).toMatchObject({ owns: true, header: false, widgets: false });
-    for (const view of ['auth', 'privacy', 'terms', 'gallery', 'dashboard', 'comicstudio', 'reader', 'settings']) {
+    for (const view of ['auth', 'privacy', 'terms', 'gallery']) {
+      expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: true, header: true, widgets: false });
+    }
+    for (const view of ['dashboard', 'comicstudio', 'reader', 'settings']) {
       expect(comicsChromeFor(view, on(true)), view).toMatchObject({ owns: false, header: false, widgets: true });
     }
   });
@@ -128,10 +131,11 @@ describe('useComicsHost', () => {
     for (const view of ['dashboard', 'comicstudio', 'reader', 'settings', 'learn']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
-  it('signed in, only the landing is comics chrome: the Library, Privacy, Terms and the dashboard keep the app header and its account menu', () => {
+  it('signed in, the Library and public pages retain Comic Studio chrome while working views keep their app header', () => {
     const { result } = renderHook(() => useComicsHost({ view: 'dashboard', setView: vi.fn(), signedIn: true, ready: true, hostname: COMICS }));
     expect(result.current.ownsChrome('home')).toBe(true);
-    for (const view of ['gallery', 'privacy', 'terms', 'auth', 'dashboard', 'comicstudio']) expect(result.current.ownsChrome(view), view).toBe(false);
+    for (const view of ['gallery', 'privacy', 'terms', 'auth']) expect(result.current.ownsChrome(view), view).toBe(true);
+    for (const view of ['dashboard', 'comicstudio']) expect(result.current.ownsChrome(view), view).toBe(false);
   });
 
   it('starts each view change at the top of the page on the comics host (never on the first render, never on the main site)', () => {

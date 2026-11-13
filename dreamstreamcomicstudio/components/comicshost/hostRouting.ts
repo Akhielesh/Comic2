@@ -32,7 +32,7 @@ export const shouldBootToDashboard = (location: { pathname: string; search: stri
   return true;
 };
 
-/** Views the comics host draws in its own chrome for a signed-out visitor (the landing, for everyone). */
+/** Public Comic Studio views keep the product chrome before and after sign-in. */
 export const COMICS_CHROME_VIEWS: ReadonlySet<string> = new Set(['home', 'auth', 'privacy', 'terms', 'gallery']);
 
 /** Which view the comics header is drawn over (it hides "Sign in" on the sign-in page, marks the Library). */
@@ -51,12 +51,12 @@ export interface ComicsChrome {
 
 /**
  * The comics host's chrome for one view, as App.tsx renders it. The landing is always the comics host's own; the
- * sign-in, Privacy, Terms and Library views are too for a signed-out visitor, so the journey from the landing stays
- * in one product. A signed-in visitor keeps the app header everywhere else (its account menu and notifications),
+ * sign-in, Privacy, Terms and Library views are too, so the journey from the landing stays in one product even
+ * after sign-in. Account settings remain reachable from ComicsHeader. Other app views keep their existing header,
  * and off the comics host nothing changes. Pure, so every rule is unit-tested without rendering App.
  */
-export const comicsChromeFor = (view: string, { active, signedIn }: { active: boolean; signedIn: boolean }): ComicsChrome => {
-  const owns = active && (view === 'home' || (!signedIn && COMICS_CHROME_VIEWS.has(view)));
+export const comicsChromeFor = (view: string, { active }: { active: boolean; signedIn: boolean }): ComicsChrome => {
+  const owns = active && COMICS_CHROME_VIEWS.has(view);
   return {
     owns,
     header: owns && view !== 'home',
