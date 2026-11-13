@@ -28,6 +28,7 @@ import {
   resolveColor,
   specificity,
   tokenBlocks,
+  tokensOf,
   topLevelSplit,
   withAlpha,
   type Rgba
@@ -282,6 +283,36 @@ describe('Atlas skin under "increase contrast" — every derived token still mee
         const low = SLOTS.map((s) => hexOf(which(mode, `--ds-hue-${s}`))).filter((hex) => oklchOf(hex).C < 0.1);
         expect(low, `${mode} ${which === base ? 'base' : 'more contrast'}`).toEqual(mode === 'light' && which === more ? [GAMUT_LIMITED_LIGHT_TEAL] : []);
       }
+    }
+  });
+
+  it('with the colour off switch on top (VITE_DS_COLOUR=off), the moves still apply to hues 1-5 and success / warning; hues 6 and 7 stay its ink steps and the tints stay clear', () => {
+    // design-system.md promises this. The off block outranks both skin blocks, in and out of the media query, so a
+    // reorder of the file cannot change it; this resolves the cascade with the off block first and pins the outcome.
+    const OFF = 'html:root[data-ds-colour="off"]';
+    const offRule = rules.find((r) => r.parents.length === 0 && topLevelSplit(r.selector).includes(OFF));
+    expect(offRule, 'the off block').toBeDefined();
+    const OFF_TOKENS = tokensOf(rules, (sel) => sel === offRule!.selector);
+    const offSpecs = topLevelSplit(offRule!.selector).map(specificity);
+    for (const skinSel of [...topLevelSplit(ATLAS_LIGHT_SELECTOR), ...topLevelSplit(ATLAS_DARK_SELECTOR)]) {
+      for (const offSpec of offSpecs) expect(compareSpecificity(offSpec, specificity(skinSel)), skinSel).toBeGreaterThan(0);
+    }
+    const offMore: Record<Mode, Map<string, string>[]> = { light: [OFF_TOKENS, ...CASCADE.light.more], dark: [OFF_TOKENS, ...CASCADE.dark.more] };
+    const at = (mode: Mode, name: string) => hexOf(tokenIn(offMore[mode], name));
+    // Hues 6 and 7 are the off switch's ink steps, not the moved sky.
+    expect(OFF_TOKENS.get('--ds-hue-7')).toBe('var(--ds-chart-3)');
+    for (const mode of MODES) {
+      expect(at(mode, '--ds-hue-7'), `${mode} hue-7`).toBe(at(mode, '--ds-chart-3'));
+      expect(at(mode, '--ds-hue-6'), `${mode} hue-6`).toBe(at(mode, '--ds-chart-2'));
+    }
+    // The moves to hues 1-5 and to success and warning still apply.
+    for (const k of ['--ds-hue-2', '--ds-hue-3', '--ds-hue-4', '--ds-success', '--ds-warning'] as const) expect(at('light', k), k).toBe(LIGHT_OVERRIDES[k]);
+    for (const [k, v] of Object.entries(DARK_OVERRIDES)) expect(at('dark', k), k).toBe(v);
+    expect(at('light', '--ds-hue-4')).toBe('#06847f');
+    // The tints stay clear (the off block's transparent wins over the skin's mix from the moved colour).
+    for (const mode of MODES) {
+      for (const slot of SLOTS) expect(offMore[mode][0].get(`--ds-hue-${slot}-soft`), `${mode} hue-${slot}-soft`).toBe('transparent');
+      expect(tokenIn(offMore[mode], '--ds-hue-4-soft').a, `${mode} hue-4-soft`).toBe(0);
     }
   });
 
