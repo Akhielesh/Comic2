@@ -24,7 +24,7 @@ import { focusedTextModels, formatContext, formatDate, formatLatency, modelCapab
 
 const ApiConfiguration = lazy(() => import('./ApiConfiguration').then((m) => ({ default: m.ApiConfiguration })));
 const ModelsUsagePanel = lazy(() => import('./models/ModelsUsagePanel').then((m) => ({ default: m.ModelsUsagePanel })));
-const COMPARISON_TAB = 'h-auto min-h-11 whitespace-normal px-2 py-1 text-center leading-4 sm:flex-none sm:whitespace-nowrap sm:px-3';
+const COMPARISON_TAB = 'h-auto min-h-11 whitespace-normal px-2 py-1 text-center leading-4 sm:flex-none sm:px-3';
 
 export interface ModelsWorkspaceData {
   catalog: CatalogResponse;
