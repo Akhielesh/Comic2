@@ -253,6 +253,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
     try {
       const context = await buildContext();
+      if (currentScope.current !== sendingScope) return;
       const response = await queryUniversalAssistant(message, history, context);
       if (overrideText === undefined) draft.clearIfCurrent(submitted);
       if (currentScope.current !== sendingScope) return;
