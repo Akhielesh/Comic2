@@ -10,12 +10,12 @@ import { findSample, sampleArtwork, type SamplePage, type SampleStory } from '..
 import './comicsLanding.css';
 export type { SampleStory } from '../comicstudio/library/sampleCatalog';
 
-function SampleArtwork({ page, active, standalone }: { page: SamplePage; active: boolean; standalone: boolean }) {
+function SampleArtwork({ page, active, standalone, enlarged = false }: { page: SamplePage; active: boolean; standalone: boolean; enlarged?: boolean }) {
   const reveal = useImageReveal(page.src);
   return (
     <div className="comics-sample-art" data-comic-art="" style={standalone ? { aspectRatio: `${page.width} / ${page.height}` } : undefined}>
       <img ref={reveal.ref} alt="" width={page.width} height={page.height} src={page.src} srcSet={page.srcSet}
-        sizes={standalone ? '(max-width: 600px) 90vw, 900px' : '(max-width: 719px) 85vw, 48vw'}
+        sizes={enlarged ? '1200px' : standalone ? '(max-width: 600px) 90vw, 900px' : '(max-width: 719px) 85vw, 48vw'}
         decoding="async" loading={active ? 'eager' : 'lazy'} fetchPriority={active ? 'high' : 'low'} draggable={false}
         data-reveal={reveal.fromCache ? 'cached' : reveal.phase} />
       {reveal.phase === 'error' && <span className="comics-sample-error">Artwork could not load. Please refresh to try again.</span>}
@@ -54,7 +54,7 @@ export function ComicSampleReader({ look = 'ligne-claire', standalone = false, s
           const dx = event.clientX - start.x, dy = event.clientY - start.y;
           if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) turn(dx < 0 ? 1 : -1);
         }} onPointerCancel={() => { gesture.current = null; }}>
-        {enlarged ? <div aria-hidden className="comics-sample-enlarged"><SampleArtwork page={current} active standalone /></div> : (
+        {enlarged ? <div aria-hidden className="comics-sample-enlarged"><SampleArtwork page={current} active standalone enlarged /></div> : (
           <div aria-hidden className="comics-sample-track" data-page={safeIndex} style={{ transform: `translateX(-${safeIndex * 88}%)` }}>
             {sample.pages.map((_, index) => <div key={`${story}-${look}-${index}`} className="comics-sample-page" data-active={index === safeIndex}>
               <SampleArtwork page={sampleArtwork(sample, index, look)} active={index === safeIndex} standalone={standalone} />
