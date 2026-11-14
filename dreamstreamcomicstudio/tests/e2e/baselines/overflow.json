@@ -41,9 +41,6 @@
     "studio-read@phone-dark": { "textEscapes": 1 },
     "studio-story@narrow-light": { "popoverEscapes": 1 },
     "studio-story@phone-dark": { "popoverEscapes": 1 },
-    "studio-streaming@desk-light": { "textEscapes": 2, "popoverEscapes": 4 },
-    "studio-style@desk-light": { "textEscapes": 1 },
-    "studio-style@narrow-light": { "textEscapes": 1 },
-    "studio-style@phone-dark": { "textEscapes": 1 }
+    "studio-streaming@desk-light": { "textEscapes": 2, "popoverEscapes": 4 }
   }
 }
