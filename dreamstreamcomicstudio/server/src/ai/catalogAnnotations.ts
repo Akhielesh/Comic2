@@ -36,6 +36,8 @@ export type AnnotatedModel = CatalogModel & {
   /** Hosted-API callability: false = listed but download-only (not callable via the
    *  hosted API, e.g. NVIDIA NIMs you must self-host). undefined = not yet probed. */
   apiCallable?: boolean;
+  /** Epoch milliseconds of an actual platform-account callability probe (not model discovery). */
+  apiCallableCheckedAt?: number;
 };
 
 export { costClassFor };

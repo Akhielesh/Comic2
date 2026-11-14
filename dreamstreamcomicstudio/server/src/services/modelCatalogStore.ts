@@ -16,6 +16,13 @@ import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 const TABLE = 'model_catalog_cache';
+/** The daily probe gets one missed run of grace; older/undated evidence is unknown. */
+export const CALLABILITY_TTL_MS = 48 * 60 * 60_000;
+const recentProbeAt = (value: unknown): number | undefined => {
+  const checkedAt = typeof value === 'string' ? Date.parse(value) : NaN;
+  const age = Date.now() - checkedAt;
+  return Number.isFinite(checkedAt) && age >= -30_000 && age <= CALLABILITY_TTL_MS ? checkedAt : undefined;
+};
 
 /**
  * An unchanged list is not upserted again within this window (EGRESS-DB E4): the hourly refresh and every keyed
@@ -36,13 +43,18 @@ export const catalogContentHash = (models: AnnotatedModel[]): string => {
 /** Forget what this process persisted (tests). */
 export const resetPersistMemo = (): void => lastPersisted.clear();
 
-/** Upsert the public metadata of a source's models. Fire-and-forget; never throws. */
-export const persistHarvestedModels = async (source: string, models: AnnotatedModel[]): Promise<void> => {
-  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return;
+/** Request paths are best-effort; maintenance uses strict/force to verify a fresh durable write. */
+export const persistHarvestedModels = async (
+  source: string, models: AnnotatedModel[], options: { strict?: boolean; force?: boolean } = {}
+): Promise<void> => {
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+    if (options.strict) throw new Error('CATALOG_STORAGE_UNAVAILABLE');
+    return;
+  }
   if (!models.length) return;
   const hash = catalogContentHash(models);
   const previous = lastPersisted.get(source);
-  if (previous && previous.hash === hash && Date.now() - previous.at < PERSIST_UNCHANGED_WINDOW_MS) return;
+  if (!options.force && previous && previous.hash === hash && Date.now() - previous.at < PERSIST_UNCHANGED_WINDOW_MS) return;
   try {
     const admin = getSupabaseAdmin();
     const seenAt = new Date().toISOString();
@@ -57,9 +69,11 @@ export const persistHarvestedModels = async (source: string, models: AnnotatedMo
         last_seen_at: seenAt
       }));
     const { error } = await admin.from(TABLE).upsert(rows, { onConflict: 'source,model_id' });
+    if (error && options.strict) throw new Error('CATALOG_PERSIST_FAILED');
     if (error) console.warn('[catalog-cache] persist failed:', error.message);
     else lastPersisted.set(source, { hash, at: Date.now() });
   } catch (err) {
+    if (options.strict) throw new Error('CATALOG_PERSIST_FAILED');
     console.warn('[catalog-cache] persist threw:', (err as Error)?.message);
   }
 };
@@ -70,11 +84,11 @@ export const loadPersistedModels = async (source?: string): Promise<AnnotatedMod
   try {
     const admin = getSupabaseAdmin();
     // Supabase caps each response. Read every page so large catalogs are not silently cut off.
-    type Row = { source?: string; payload?: unknown; api_callable?: boolean | null; last_seen_at?: string };
+    type Row = { source?: string; payload?: unknown; api_callable?: boolean | null; api_callable_checked_at?: string | null; last_seen_at?: string };
     const rows: Row[] = [];
     const pageSize = 500;
     for (let offset = 0; ; offset += pageSize) {
-      let query = admin.from(TABLE).select('source, payload, api_callable, last_seen_at')
+      let query = admin.from(TABLE).select('source, payload, api_callable, api_callable_checked_at, last_seen_at')
         .order('source').order('model_id').range(offset, offset + pageSize - 1);
       if (source) query = query.eq('source', source);
       const { data, error } = await query;
@@ -89,15 +103,18 @@ export const loadPersistedModels = async (source?: string): Promise<AnnotatedMod
       .map((row): AnnotatedModel | null => {
         const model = row.payload as AnnotatedModel;
         if (!model?.id) return null;
+        // A saved payload or a fresh metadata harvest must not revive old probe flags.
+        const { apiCallable: _oldCallable, apiCallableCheckedAt: _oldProbeAt, ...publicModel } = model;
         const checkedAt = Date.parse(row.last_seen_at || '');
+        const probeAt = recentProbeAt(row.api_callable_checked_at);
         return {
-          ...model,
+          ...publicModel,
           catalogOrigin: 'cached' as const,
           // Older NVIDIA snapshots predate explicit price provenance. Listing access
           // proves neither a free allowance nor a current per-call price.
-          ...(model.source === 'nvidia' && model.pricingKnown === undefined ? { pricingKnown: false, pricingOrigin: 'unknown' as const } : {}),
+          ...(model.source === 'nvidia' ? { pricingKnown: false, pricingOrigin: 'unknown' as const, isFree: false, costClass: 'paid' as const } : {}),
           ...(Number.isFinite(checkedAt) ? { catalogCheckedAt: checkedAt } : {}),
-          ...(typeof row.api_callable === 'boolean' ? { apiCallable: row.api_callable } : {})
+          ...(typeof row.api_callable === 'boolean' && probeAt !== undefined ? { apiCallable: row.api_callable, apiCallableCheckedAt: probeAt } : {})
         };
       })
       .filter((model): model is AnnotatedModel => model !== null);
@@ -112,10 +129,10 @@ export const loadCallabilityMap = async (source: string): Promise<Map<string, bo
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return map;
   try {
     const admin = getSupabaseAdmin();
-    const { data, error } = await admin.from(TABLE).select('model_id, api_callable').eq('source', source);
+    const { data, error } = await admin.from(TABLE).select('model_id, api_callable, api_callable_checked_at').eq('source', source);
     if (error || !Array.isArray(data)) return map;
-    for (const row of data as Array<{ model_id?: string; api_callable?: boolean | null }>) {
-      if (row.model_id && typeof row.api_callable === 'boolean') map.set(row.model_id, row.api_callable);
+    for (const row of data as Array<{ model_id?: string; api_callable?: boolean | null; api_callable_checked_at?: string | null }>) {
+      if (row.model_id && typeof row.api_callable === 'boolean' && recentProbeAt(row.api_callable_checked_at) !== undefined) map.set(row.model_id, row.api_callable);
     }
     return map;
   } catch {
@@ -126,17 +143,28 @@ export const loadCallabilityMap = async (source: string): Promise<Map<string, bo
 /** Persist hosted-API callability results from a probe. Updates only api_callable. */
 export const persistCallability = async (
   source: string,
-  results: Array<{ modelId: string; callable: boolean }>
+  results: Array<{ modelId: string; callable: boolean }>,
+  options: { strict?: boolean } = {}
 ): Promise<void> => {
-  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled || !results.length) return;
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+    if (options.strict) throw new Error('CATALOG_STORAGE_UNAVAILABLE');
+    return;
+  }
+  if (!results.length) return;
   try {
     const admin = getSupabaseAdmin();
-    await Promise.all(
-      results.map((r) =>
-        admin.from(TABLE).update({ api_callable: r.callable }).eq('source', source).eq('model_id', r.modelId)
-      )
+    const checkedAt = new Date().toISOString();
+    const writes = await Promise.all(
+      results.map((r) => {
+        const update = admin.from(TABLE).update({ api_callable: r.callable, api_callable_checked_at: checkedAt })
+          .eq('source', source).eq('model_id', r.modelId);
+        return options.strict ? update.select('model_id') : update;
+      })
     );
+    if (options.strict && writes.some((write, index) => write.error || !Array.isArray(write.data)
+      || write.data.length !== 1 || write.data[0].model_id !== results[index].modelId)) throw new Error('CATALOG_PERSIST_FAILED');
   } catch (err) {
+    if (options.strict) throw new Error('CATALOG_PERSIST_FAILED');
     console.warn('[catalog-cache] callability persist threw:', (err as Error)?.message);
   }
 };

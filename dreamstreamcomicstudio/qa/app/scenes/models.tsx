@@ -56,7 +56,9 @@ const imageRows: ModelShowcaseRow[] = imageIdentities.map((identity, i) => {
     ownExampleCount: i === 1 ? examples.length : 0,
     sampleState: examples.length ? 'available' : i === 3 ? 'source_unavailable' : 'not_recorded',
     metrics: i === 0 ? [{ kind: 'page', resolution: '2K', calls: 16, successfulCalls: 15, failedCalls: 1, medianCostUsd: 0.0375, costSamples: 12, costFrom: '2026-11-01T00:00:00.000Z', costTo: '2026-11-12T00:00:00.000Z', medianLatencyMs: null, latencySamples: 0 }] : [],
-    metricState: i === 0 ? 'available' : i === 3 ? 'source_unavailable' : 'insufficient_data'
+    metricState: i === 0 ? 'available' : i === 3 ? 'source_unavailable' : 'insufficient_data',
+    ownMetrics: i === 1 ? [{ kind: 'page', resolution: '1K', calls: 6, successfulCalls: 5, failedCalls: 1, medianCostUsd: 0.041, costSamples: 5, costFrom: '2026-11-01T00:00:00.000Z', costTo: '2026-11-12T00:00:00.000Z', medianLatencyMs: 12500, latencySamples: 5 }] : [],
+    ownMetricState: i === 1 ? 'available' : i === 3 ? 'source_unavailable' : 'insufficient_data'
   };
 });
 
@@ -91,7 +93,7 @@ export const MODELS_QA_DATA: ModelsWorkspaceData = {
   ],
   showcase: {
     generatedAt: new Date(NOW).toISOString(), windowDays: 30, windowStart: '2026-10-14T12:00:00.000Z', scope: 'platform_and_yours',
-    sourceStatus: { samples: 'ready', metrics: 'ready', ownSamples: 'ready' }, rows: imageRows
+    sourceStatus: { samples: 'ready', metrics: 'ready', ownSamples: 'ready', ownMetrics: 'ready' }, rows: imageRows
   }
 };
 

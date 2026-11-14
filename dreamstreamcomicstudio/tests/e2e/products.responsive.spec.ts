@@ -8,7 +8,16 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
     const touch = viewport.width < 1000;
     test.use({ viewport, hasTouch: touch, isMobile: touch });
 
-    test('tabs, filters and comparisons stay usable within the screen', async ({ page, qa }) => {
+    test('tabs, filters and comparisons stay usable within the screen', async ({ page, qa }, testInfo) => {
+      // Keep successful-run visual evidence in the existing CI report. These are
+      // synthetic QA fixtures, not platform output or screenshot baselines.
+      const attachModelShot = async (name: string, fullPage = false) => {
+        if (viewport.width === 852) return;
+        await testInfo.attach(`models-qa-synthetic-${name}-${viewport.width}.png`, {
+          body: await page.screenshot({ fullPage, animations: 'disabled' }),
+          contentType: 'image/png'
+        });
+      };
       await qa.open({ surface: 'model-library', skin: 'atlas' });
       await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
       await expect(page.getByRole('article')).toHaveCount(5);
@@ -47,6 +56,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
         expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
       };
       await expectFits();
+      await attachModelShot('image-overview', true);
       await expectTouchTarget(page.getByRole('link', { name: /Artificial Analysis/ }).first());
       const nextOutput = page.getByRole('button', { name: 'Next Nano Banana 2.1 output', exact: true });
       await expectTouchTarget(nextOutput);
@@ -62,6 +72,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       await activate(compareImages);
       const imagesDialog = page.getByRole('dialog', { name: 'Compare image outputs', exact: true });
       await expectDialogFits(imagesDialog);
+      await attachModelShot('image-comparison');
       // Native dialog scrolling reaches the final comparison, including in short landscape.
       await imagesDialog.getByRole('article', { name: 'FLUX.3', exact: true }).scrollIntoViewIfNeeded();
       const inspect = imagesDialog.getByRole('button', { name: 'Inspect Nano Banana 2.1 output', exact: true });
@@ -96,6 +107,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 852, height: 393 }
       await activate(compareLanguage);
       const languageDialog = page.getByRole('dialog', { name: 'Compare language models', exact: true });
       await expectDialogFits(languageDialog);
+      if (!touch) await attachModelShot('language-comparison');
       await languageDialog.getByRole('button', { name: 'Set text default', exact: true }).last().scrollIntoViewIfNeeded();
       await page.keyboard.press('Escape');
       await expect(languageDialog).toHaveCount(0);

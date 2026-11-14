@@ -48,6 +48,7 @@ import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
+import { catalogMaintenanceRouter } from './routes/catalogMaintenance.js';
 import { modelShowcaseRouter } from './routes/modelShowcase.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
@@ -121,6 +122,7 @@ app.use(
 app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter);
 
 app.use(express.json({ limit: MAX_BODY_SIZE }));
+app.use('/api/internal/catalog', catalogMaintenanceRouter);
 app.use(attachKeys);
 app.use(attachFreeOnly);
 

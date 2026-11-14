@@ -1,21 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import { getBillingSummary } from '../services/billingLedger.js';
+import { allowedProviderFilter } from './keys.js';
 
 type ProviderKey = 'gemini' | 'pixazo' | 'ideogram';
 
-const providerKeyConfig: Record<ProviderKey, { headers: string[]; label: string }> = {
-  gemini: {
-    headers: ['X-Gemini-Key'],
-    label: 'X-Gemini-Key'
-  },
-  pixazo: {
-    headers: ['X-Pixazo-Key', 'X-Flux-Key'],
-    label: 'X-Pixazo-Key'
-  },
-  ideogram: {
-    headers: ['X-Ideogram-Key'],
-    label: 'X-Ideogram-Key'
-  }
+const providerKeyLabels: Record<ProviderKey, string> = {
+  gemini: 'X-Gemini-Key',
+  pixazo: 'X-Pixazo-Key',
+  ideogram: 'X-Ideogram-Key'
 };
 
 export const checkLimits = (requiredProvider: ProviderKey) => async (req: Request, res: Response, next: NextFunction) => {
@@ -24,8 +16,13 @@ export const checkLimits = (requiredProvider: ProviderKey) => async (req: Reques
     return;
   }
 
-  const { headers, label } = providerKeyConfig[requiredProvider];
-  const hasRequiredProviderKey = headers.some((header) => !!req.header(header));
+  const label = providerKeyLabels[requiredProvider];
+  // Account keys are resolved before this middleware and do not appear in raw
+  // headers. Use the same selected credential as the image route, including its
+  // ownership flag and source governance; platform keys cannot bypass billing.
+  const hasRequiredProviderKey = allowedProviderFilter(req)(requiredProvider)
+    && req.apiKeys?.[`${requiredProvider}Byok`] === true
+    && Boolean(req.apiKeys?.[`${requiredProvider}Key`]?.trim());
 
   if (hasRequiredProviderKey) {
     next();

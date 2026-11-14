@@ -196,6 +196,13 @@ describe('POST /api/keys/validate never touches the platform key', () => {
     expect(r.body).toMatchObject({ provider: 'nvidia', status: 'missing', valid: false });
     expect(upstream).toEqual([]);
   });
+
+  it('all sources off suppresses candidate and account-key validation before any provider call', async () => {
+    store.rows = [{ provider: 'openrouter', encrypted_key: 'sk-or-account', iv: 'test-iv' }];
+    const r = await validate('openrouter', { 'X-OpenRouter-Key': 'sk-or-candidate', 'X-Allowed-Sources': '' });
+    expect(r.body).toMatchObject({ provider: 'openrouter', status: 'missing', valid: false });
+    expect(upstream).toEqual([]);
+  });
 });
 
 describe('signed-out callers', () => {
@@ -232,10 +239,12 @@ describe('the caller’s own key', () => {
     expect(upstream.map(authOut)).toEqual(['Bearer sk-or-user']);
   });
 
-  it('NVIDIA header key: model count stays in the message, no detail object', async () => {
-    const r = await validate('nvidia', { 'X-Nvidia-Key': 'nvapi-user' });
-    expect(r.body).toEqual({ provider: 'nvidia', status: 'valid', valid: true, message: 'Valid — 3 models reachable.' });
-    expect(upstream.map(authOut)).toEqual(['Bearer nvapi-user']);
+  it.each(['nvapi-user', 'not-a-real-nvidia-key'])('NVIDIA key %s: a public 200 model list cannot verify a credential', async (key) => {
+    // The fake /models answers 200 for every caller, just like NVIDIA's public listing.
+    const r = await validate('nvidia', { 'X-Nvidia-Key': key });
+    expect(r.body).toMatchObject({ provider: 'nvidia', status: 'unsupported', valid: false });
+    expect(r.body.message).toContain('public model list cannot verify');
+    expect(upstream).toEqual([]); // Never generate to validate a saved key.
   });
 
   it('direct providers use the header key only (OpenAI bearer, Anthropic x-api-key)', async () => {
@@ -309,7 +318,6 @@ describe('the signed-in user’s account key (real attachAccountKeys)', () => {
 
 describe('failures never echo internal detail', () => {
   it.each([
-    ['nvidia', { 'X-Nvidia-Key': 'nvapi-user' }, 'Could not reach NVIDIA Build right now.'],
     ['gemini', { 'X-Gemini-Key': 'AIza-user' }, 'Could not reach Google right now.'],
     ['openai', { 'X-OpenAI-Key': 'sk-openai-user' }, 'Could not reach OpenAI right now.'],
     ['anthropic', { 'X-Anthropic-Key': 'sk-ant-user' }, 'Could not reach Anthropic right now.'],
@@ -333,7 +341,6 @@ describe('failures never echo internal detail', () => {
   });
 
   it.each([
-    ['nvidia', { 'X-Nvidia-Key': 'nvapi-user' }],
     ['gemini', { 'X-Gemini-Key': 'AIza-user' }],
     ['openai', { 'X-OpenAI-Key': 'sk-openai-user' }],
     ['openrouter', { 'X-OpenRouter-Key': 'sk-or-user' }]
@@ -344,7 +351,6 @@ describe('failures never echo internal detail', () => {
   });
 
   it.each([
-    ['nvidia', { 'X-Nvidia-Key': 'nvapi-user' }],
     ['gemini', { 'X-Gemini-Key': 'AIza-user' }],
     ['openai', { 'X-OpenAI-Key': 'sk-openai-user' }],
     ['openrouter', { 'X-OpenRouter-Key': 'sk-or-user' }]

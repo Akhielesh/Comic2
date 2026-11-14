@@ -1,68 +1,33 @@
-# Root-level copy of dreamstreamcomicstudio/.github/workflows/probe-nvidia-availability.yml.
-# GitHub Actions only scans the REPO ROOT .github/workflows — the nested app copy NEVER
-# ran, so model_catalog_cache.api_callable was never populated and every download-only
-# NVIDIA NIM looked selectable (then 404'd on use). Same job, adjusted paths.
-#
-# NVIDIA Build's /models lists many "download-only" NIMs that are NOT served on the hosted
-# API (integrate.api.nvidia.com) — calling them returns 404 "not found for account". This
-# job VERIFIES each model with a tiny probe request and persists the result so the UI can
-# flag and DISABLE models that can't actually be called.
-# Requires repo secrets: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NVIDIA_API_KEY.
-
+# The backend already owns provider/database credentials. GitHub authenticates with
+# a short-lived OIDC token restricted to this exact production workflow; no copied secrets.
 name: Probe NVIDIA Availability
 
 on:
   schedule:
-    - cron: '15 6 * * *' # daily at 06:15 UTC, offset from other jobs
+    - cron: '15 6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
+
+concurrency:
+  group: catalog-maintenance-probe-nvidia
+  cancel-in-progress: false
 
 jobs:
-  probe-nvidia:
+  maintain:
+    if: github.ref == 'refs/heads/Dreamstrream-v1'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: dreamstreamcomicstudio
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-
-      - name: Check NVIDIA probe configuration
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-        run: |
-          missing=0
-          for name in VITE_SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY NVIDIA_API_KEY; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing Actions secret ${name}. Configure it in repository Settings > Secrets and variables > Actions; backend Cloudflare/D1 secrets are not inherited by this job."
-              missing=1
-            fi
-          done
-          exit "$missing"
-
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # The backend image's Node (Dockerfile.cloudflare): supabase-js ≥ 2.118 needs Node 22.
           node-version: 22
-          cache: npm
-          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
-
-      # No install scripts. Provider and service-role keys are scoped to the probe step.
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Probe NVIDIA hosted-API callability
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-        run: npm run nvidia:probe
+      - name: Run authorized backend maintenance
+        run: node dreamstreamcomicstudio/scripts/ops/catalogMaintenance.mjs probe-nvidia

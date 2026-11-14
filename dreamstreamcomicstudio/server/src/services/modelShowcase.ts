@@ -1,12 +1,13 @@
 // Read-only Models evidence. Public artwork comes only from published platform-library snapshots.
 // Authenticated owners may also see their own generated assets through the separately scoped owner reader.
-// Unpublished library candidates, Model Lab runs and generation calls are never used here.
+// Unpublished library candidates and Model Lab runs are never used here; this reader never generates images.
 import { isAdminSpendCallKind, sanitizeLibraryProvenance, type LibraryIndex } from '../../../shared/comic/library.js';
 import { getImageModel, type ImageModelSpec } from '../../../shared/comic/models.js';
 import {
   MODEL_SHOWCASE_IDS,
   type ModelShowcaseExample,
   type ModelShowcaseMetric,
+  type ModelShowcaseOwnMetric,
   type ModelShowcaseResponse,
   type ModelShowcaseRow
 } from '../../../shared/modelShowcase.js';
@@ -16,9 +17,12 @@ import { qualityEntriesFor } from '../comic/models/quality.js';
 import { logger } from '../lib/logger.js';
 import { getSupabaseCapabilityStatus } from './supabase.js';
 import { readOwnerModelExamples } from './modelShowcaseOwner.js';
+import { median, type ImageCallRow } from '../comic/models/observed.js';
+import { OBSERVED_MIN_N, OBSERVED_WINDOW } from '../comic/models/pricing.js';
 
 export const SHOWCASE_WINDOW_DAYS = 30 as const;
 export const SHOWCASE_EXAMPLES_PER_MODEL = 3;
+export const SHOWCASE_OWN_CALL_LIMIT = 500;
 const READ_TIMEOUT_MS = 6_000;
 const IMAGE_KINDS = new Set(['page', 'cover', 'sheet', 'place', 'style_option', 'edit']);
 const finiteNonnegative = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
@@ -30,6 +34,7 @@ export interface ModelShowcaseDeps {
   publishedLibrary(): Promise<LibraryIndex | null>;
   platformStats(sinceIso: string): Promise<PlatformStatRow[] | null>;
   ownExamples?(userId: string): Promise<ModelShowcaseExample[] | null>;
+  ownCalls?(userId: string, sinceIso: string): Promise<ImageCallRow[] | null>;
   now?: () => number;
 }
 
@@ -43,7 +48,11 @@ const defaults: ModelShowcaseDeps = {
     const calls = createSupabaseImageCallsDb();
     return calls ? calls.platformStats(sinceIso) : null;
   },
-  ownExamples: readOwnerModelExamples
+  ownExamples: readOwnerModelExamples,
+  async ownCalls(userId, sinceIso) {
+    const calls = createSupabaseImageCallsDb();
+    return calls ? calls.callsForUser(userId, { sinceIso, limit: SHOWCASE_OWN_CALL_LIMIT }) : null;
+  }
 };
 
 /** Only public platform-library objects, never user lanes, signed private URLs or inline content. */
@@ -113,7 +122,33 @@ function metricsFor(stats: PlatformStatRow[] | null, modelId: string): ModelShow
   }).sort((a, b) => `${a.kind}|${a.resolution ?? ''}`.localeCompare(`${b.kind}|${b.resolution ?? ''}`));
 }
 
-async function boundedRead<T>(source: 'samples' | 'metrics' | 'ownSamples', read: () => Promise<T | null>): Promise<T | null> {
+function ownMetricsFor(rows: ImageCallRow[] | null, modelId: string): ModelShowcaseOwnMetric[] {
+  const groups = new Map<string, ImageCallRow[]>();
+  for (const row of rows ?? []) {
+    if (row.modelId !== modelId || !IMAGE_KINDS.has(row.kind) || row.outcome === 'blocked') continue;
+    const key = `${row.kind}|${row.res ?? ''}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, group]) => {
+    const successful = group.filter((row) => row.outcome === 'ok');
+    const priced = successful.filter((row) => finiteNonnegative(row.providerCostUsd)).slice(0, OBSERVED_WINDOW);
+    const timed = successful.filter((row) => finiteNonnegative(row.latencyMs) && row.latencyMs > 0).slice(0, OBSERVED_WINDOW);
+    const hasPrice = priced.length >= OBSERVED_MIN_N;
+    const hasTime = timed.length >= OBSERVED_MIN_N;
+    return {
+      kind: group[0].kind, resolution: group[0].res, calls: group.length,
+      successfulCalls: successful.length, failedCalls: group.filter((row) => row.outcome === 'failed').length,
+      medianCostUsd: hasPrice ? median(priced.map((row) => row.providerCostUsd!)) : null,
+      costSamples: hasPrice ? priced.length : 0,
+      costFrom: hasPrice ? isoDate(priced[priced.length - 1].createdAt) : null,
+      costTo: hasPrice ? isoDate(priced[0].createdAt) : null,
+      medianLatencyMs: hasTime ? median(timed.map((row) => row.latencyMs!)) : null,
+      latencySamples: hasTime ? timed.length : 0
+    };
+  });
+}
+
+async function boundedRead<T>(source: 'samples' | 'metrics' | 'ownSamples' | 'ownMetrics', read: () => Promise<T | null>): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -131,11 +166,16 @@ async function boundedRead<T>(source: 'samples' | 'metrics' | 'ownSamples', read
 export async function getModelShowcase(userId?: string, deps: ModelShowcaseDeps = defaults): Promise<ModelShowcaseResponse> {
   const now = (deps.now ?? Date.now)();
   const windowStart = new Date(now - SHOWCASE_WINDOW_DAYS * 86_400_000).toISOString();
-  const [library, stats, own] = await Promise.all([
+  const [library, stats, own, calls] = await Promise.all([
     boundedRead('samples', () => deps.publishedLibrary()),
     boundedRead('metrics', () => deps.platformStats(windowStart)),
-    userId ? boundedRead('ownSamples', () => deps.ownExamples ? deps.ownExamples(userId) : Promise.resolve(null)) : Promise.resolve(null)
+    userId ? boundedRead('ownSamples', () => deps.ownExamples ? deps.ownExamples(userId) : Promise.resolve(null)) : Promise.resolve(null),
+    userId ? boundedRead('ownMetrics', () => deps.ownCalls ? deps.ownCalls(userId, windowStart) : Promise.resolve(null)) : Promise.resolve(null)
   ]);
+  // Enforce the declared sample window and bound even for injected/read-adapter results.
+  const ownCalls = calls === null ? null : calls
+    .filter((call) => Date.parse(call.createdAt) >= Date.parse(windowStart) && Date.parse(call.createdAt) <= now)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, SHOWCASE_OWN_CALL_LIMIT);
   const rows: ModelShowcaseRow[] = MODEL_SHOWCASE_IDS.flatMap((id) => {
     const spec = getImageModel(id);
     if (!spec) return [];
@@ -143,6 +183,7 @@ export async function getModelShowcase(userId?: string, deps: ModelShowcaseDeps 
     const personal = (own ?? []).filter((example) => example.modelId === id && example.source === 'your_comic');
     const examples = [...personal, ...published];
     const metrics = metricsFor(stats, id);
+    const ownMetrics = ownMetricsFor(ownCalls, id);
     return [{
       modelId: spec.id,
       providerModelId: spec.routes.openrouter ?? spec.routes.gemini ?? null,
@@ -173,9 +214,10 @@ export async function getModelShowcase(userId?: string, deps: ModelShowcaseDeps 
       examples: examples.slice(0, SHOWCASE_EXAMPLES_PER_MODEL),
       publishedExampleCount: published.length,
       ownExampleCount: personal.length,
-      sampleState: examples.length ? 'available' : library === null && (!userId || own === null) ? 'source_unavailable' : 'not_recorded',
+      sampleState: examples.length ? 'available' : (library === null || Boolean(userId && own === null)) ? 'source_unavailable' : 'not_recorded',
       metrics,
-      metricState: stats === null ? 'source_unavailable' : metrics.length ? 'available' : 'insufficient_data'
+      metricState: stats === null ? 'source_unavailable' : metrics.length ? 'available' : 'insufficient_data',
+      ...(userId ? { ownMetrics, ownMetricState: ownCalls === null ? 'source_unavailable' as const : ownMetrics.length ? 'available' as const : 'insufficient_data' as const } : {})
     }];
   });
   return {
@@ -186,7 +228,8 @@ export async function getModelShowcase(userId?: string, deps: ModelShowcaseDeps 
     sourceStatus: {
       samples: library === null ? 'unavailable' : 'ready',
       metrics: stats === null ? 'unavailable' : 'ready',
-      ownSamples: !userId ? 'not_requested' : own === null ? 'unavailable' : 'ready'
+      ownSamples: !userId ? 'not_requested' : own === null ? 'unavailable' : 'ready',
+      ownMetrics: !userId ? 'not_requested' : ownCalls === null ? 'unavailable' : 'ready'
     },
     rows
   };

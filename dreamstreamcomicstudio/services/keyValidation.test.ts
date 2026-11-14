@@ -8,7 +8,7 @@ vi.mock('./supabase', () => ({
 }));
 
 const { validateApiKey, KEY_CHECK_SIGNED_OUT_COPY, KEY_CHECK_UNAVAILABLE_COPY } = await import('./keyValidation');
-const { PROVIDER_META } = await import('./apiKeys');
+const { PROVIDER_META, ALL_PROVIDERS } = await import('./apiKeys');
 
 type Call = { url: string; headers: Record<string, string>; body: string };
 const calls: Call[] = [];
@@ -30,6 +30,19 @@ describe('validateApiKey', () => {
     expect(Object.keys(calls[0].headers).filter((h) => /-key$/i.test(h))).toEqual([]);
     expect(calls[0].headers.Authorization).toBe('Bearer session-token');
     expect(calls[0].headers['X-Allowed-Sources'].split(',')).not.toContain('openrouter');
+  });
+
+  it('preserves disabled-source governance when checking a candidate browser key', async () => {
+    localStorage.setItem('dreamstream_source_governance', JSON.stringify({ gemini: false }));
+    await validateApiKey('gemini', 'candidate-gemini-key');
+    expect(calls[0].headers['X-Allowed-Sources'].split(',')).not.toContain('gemini');
+    expect(Object.keys(calls[0].headers).filter((h) => /-key$/i.test(h))).toEqual([PROVIDER_META.gemini.header]);
+  });
+
+  it('sends an explicitly empty allow-list when all sources are off, even with a candidate key', async () => {
+    localStorage.setItem('dreamstream_source_governance', JSON.stringify(Object.fromEntries(ALL_PROVIDERS.map((id) => [id, false]))));
+    await validateApiKey('openrouter', 'candidate-openrouter-key');
+    expect(calls[0].headers['X-Allowed-Sources']).toBe('');
   });
   it('Gemini: the key travels only in X-Gemini-Key — not in the body or the URL — with the session token', async () => {
     const r = await validateApiKey('gemini', 'AIza-mine-secret');
