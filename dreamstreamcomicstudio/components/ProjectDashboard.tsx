@@ -12,6 +12,8 @@ import { SmartImage } from './common/SmartImage';
 import { LoadingState } from './ds/LoadingState';
 import { streamStudio } from './comicstudio/studioApi';
 import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../services/studioDeepLink';
+import { ComicIdeaForm, ComicWorkspaceFrame } from './comicstudio/ComicCreationWorkspace';
+import { useComicIdeaDraft } from './comicstudio/comicIdeaDraft';
 
 /** How a new comic starts: the conversational Comic Studio (default) or a classic pipeline. */
 export type NewComicMode = 'studio' | 'classic' | 'pagestudio';
@@ -101,11 +103,15 @@ const TitleRenameInput: React.FC<{ initial: string; onDone: (value: string | nul
 
 interface ProjectDashboardProps {
   projects: Project[];
+  projectsLoaded?: boolean;
   /** One-shot navigation intent: show the existing creation form without creating a draft. */
   openNewComic?: boolean;
   onNewComicOpened?: () => void;
+  /** The comics host's focused entry. Main-suite and classic dashboards retain their existing UI. */
+  comicWorkspace?: boolean;
+  accountId?: string;
   /** May return a promise: the dashboard shows progress and an inline error if it rejects. */
-  onCreateProject: (name: string, mode: NewComicMode) => void | Promise<void>;
+  onCreateProject: (name: string, mode: NewComicMode, initialIdea?: string) => void | Promise<void>;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDuplicateProject: (id: string) => void;
@@ -117,19 +123,31 @@ interface ProjectDashboardProps {
 
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
-  projects, openNewComic = false, onNewComicOpened, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
+  projects, projectsLoaded = true, openNewComic = false, onNewComicOpened, comicWorkspace = false, accountId, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
-  const [isCreating, setIsCreating] = useState(openNewComic);
+  const [isCreating, setIsCreating] = useState(openNewComic || (comicWorkspace && projectsLoaded && !projects.length));
+  const initialEntryChosen = useRef(openNewComic || projectsLoaded);
+  const [classicForm, setClassicForm] = useState(false);
+  useEffect(() => {
+    if (initialEntryChosen.current || !projectsLoaded) return;
+    initialEntryChosen.current = true;
+    if (comicWorkspace && !projects.length) setIsCreating(true);
+  }, [projectsLoaded, comicWorkspace, projects.length]);
   useEffect(() => {
     if (!openNewComic) return;
+    initialEntryChosen.current = true;
     setIsCreating(true);
+    setClassicForm(false);
     onNewComicOpened?.();
   }, [openNewComic, onNewComicOpened]);
-  const [newProjectName, setNewProjectName] = useState('');
+  const draft = useComicIdeaDraft(comicWorkspace ? accountId : undefined);
+  const { name: newProjectName, setName: setNewProjectName } = draft;
   const [createPending, setCreatePending] = useState<NewComicMode | null>(null);
   // Synchronous guard: Enter + click in the same tick must not create two comics.
   const createInFlightRef = useRef(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const beginNewComic = () => { initialEntryChosen.current = true; setClassicForm(false); setIsCreating(true); };
+  const formMode = comicWorkspace && classicForm ? 'classic' : 'studio';
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
@@ -252,6 +270,24 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     }
   };
 
+  const startIdea = async (blank = false) => {
+    if (createInFlightRef.current || (!blank && !draft.idea.trim())) return;
+    createInFlightRef.current = true;
+    setCreateError(null);
+    setCreatePending('studio');
+    try {
+      await onCreateProject(newProjectName.trim().slice(0, PROJECT_NAME_MAX), 'studio', blank ? undefined : draft.idea);
+      // Start blank leaves an unfinished idea available when the author returns.
+      if (!blank) draft.clear();
+      setIsCreating(false);
+    } catch (err) {
+      setCreateError(friendlyCreateError(err));
+    } finally {
+      createInFlightRef.current = false;
+      setCreatePending(null);
+    }
+  };
+
   const commitRename = (project: Project, value: string | null) => {
     setRenamingId(null);
     if (value === null) return;
@@ -274,14 +310,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         <p className="text-lg font-comic text-slate-600">Describe your idea and the studio plans, draws and letters it with you.</p>
       </div>
       <div className="flex justify-center gap-6">
-        <Button onClick={() => setIsCreating(true)} className="text-xl px-12 py-6" icon={<Sparkles />}>Create New Comic</Button>
+        <Button onClick={beginNewComic} className="text-xl px-12 py-6" icon={<Sparkles />}>Create New Comic</Button>
       </div>
 
     </div>
   );
 
-  return (
-    <div className="max-w-7xl mx-auto p-8 animate-fade-in">
+  const dashboard = (
+    <div className={`max-w-7xl mx-auto ${comicWorkspace ? 'p-4 medium:p-8' : 'p-8'} animate-fade-in`}>
       <DataRescue />
       <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
@@ -297,7 +333,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <Button onClick={() => setIsCreating(true)} icon={<Plus />}>New Comic</Button>
+              <Button onClick={beginNewComic} icon={<Plus />}>New Comic</Button>
             </div>
           </div>
 
@@ -327,14 +363,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             onChange={(e) => setNewProjectName(e.target.value)}
             placeholder="The Amazing Adventures of..."
             className="w-full border-2 border-black bg-white text-black rounded-lg px-4 py-2 font-comic text-lg focus:shadow-comic outline-none transition-all placeholder-slate-400 disabled:opacity-60"
-            onKeyDown={(e) => e.key === 'Enter' && void handleCreate('studio')}
+            onKeyDown={(e) => e.key === 'Enter' && void handleCreate(formMode)}
           />
 
           <div className="mt-5 rounded-lg border-2 border-black bg-slate-50 p-4">
-            <div className="flex items-center gap-2 font-display text-black"><MessageSquare className="w-5 h-5" /> Comic Studio</div>
+            <div className="flex items-center gap-2 font-display text-black"><MessageSquare className="w-5 h-5" /> {formMode === 'classic' ? 'Classic editor' : 'Comic Studio'}</div>
             <p className="mt-1 text-xs font-comic text-slate-600">
-              Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon.
-              You see the page plan and the cost before anything is drawn.
+              {formMode === 'classic' ? 'Open the step-by-step editor to add your script, choose a style and build your pages.' : 'Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon. You see the page plan and the cost before anything is drawn.'}
             </p>
           </div>
 
@@ -346,23 +381,23 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           )}
 
           <div className="flex flex-wrap items-center gap-4 mt-5">
-            <Button onClick={() => void handleCreate('studio')} isLoading={createPending === 'studio'} disabled={!!createPending}>
-              {createPending === 'studio' ? 'Creating…' : 'Create'}
+            <Button onClick={() => void handleCreate(formMode)} isLoading={createPending === formMode} disabled={!!createPending}>
+              {createPending === formMode ? 'Creating…' : 'Create'}
             </Button>
-            <Button variant="secondary" onClick={() => { setIsCreating(false); setCreateError(null); }} disabled={!!createPending}>Cancel</Button>
-            <button
+            <Button variant="secondary" onClick={() => { if (comicWorkspace && classicForm) setClassicForm(false); else setIsCreating(false); setCreateError(null); }} disabled={!!createPending}>Cancel</Button>
+            {formMode !== 'classic' && <button
               type="button"
               onClick={() => void handleCreate('classic')}
               disabled={!!createPending}
               className="ml-auto text-xs font-bold text-slate-500 underline-offset-2 hover:text-black hover:underline disabled:opacity-50"
             >
               Use the classic editor instead
-            </button>
+            </button>}
           </div>
         </div>
       )}
 
-      {projects.length === 0 ? renderLanding() : (
+      {projects.length === 0 ? (!projectsLoaded ? <LoadingState title="Loading your comics…" /> : renderLanding()) : (
         <>
           <div className="bg-white border-4 border-black rounded-xl shadow-comic p-4 mb-6">
             <div className="flex flex-col lg:flex-row lg:items-center gap-3">
@@ -665,4 +700,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       )}
     </div>
   );
+  if (!comicWorkspace) return dashboard;
+  return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
+    onHome={() => onNavigate?.('home')} onAccount={() => onNavigate?.('settings')}
+    navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
+      onNewComic: beginNewComic,
+      onAllComics: () => { initialEntryChosen.current = true; setIsCreating(false); setCreateError(null); },
+      onLibrary: () => onNavigate?.('gallery'), onOpenProject }}>
+    {isCreating && !classicForm ? <ComicIdeaForm name={newProjectName} idea={draft.idea} pending={!!createPending} error={createError}
+      onName={setNewProjectName} onIdea={draft.setIdea} onStart={() => void startIdea()} onStartBlank={() => void startIdea(true)}
+      onClassic={() => setClassicForm(true)} onLibrary={() => onNavigate?.('gallery')} /> : dashboard}
+  </ComicWorkspaceFrame>;
 };

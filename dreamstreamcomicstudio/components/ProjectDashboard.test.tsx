@@ -16,6 +16,8 @@ vi.mock('../services/supabase', async () => ({ supabase: (await import('../servi
 import { DUPLICATE_UNAVAILABLE_FOR_STUDIO, ProjectDashboard, syncStudioTitle } from './ProjectDashboard';
 import { fakeSupabase } from '../services/projectRows.testkit';
 import { loadProjects } from '../services/db';
+import { clearOtherComicIdeaDrafts } from './comicstudio/comicIdeaDraft';
+import { FormFactorProvider, formFactorFor } from './comicstudio/mobile/useFormFactor';
 
 const baseState = (): ComicState => ({
   step: 0,
@@ -85,8 +87,112 @@ const cardFor = (name: string): HTMLElement => {
 };
 
 beforeEach(() => {
+  sessionStorage.clear();
+  clearOtherComicIdeaDrafts('author-a');
   studioApi.streamStudio.mockReset();
   studioApi.streamStudio.mockResolvedValue(undefined);
+});
+
+describe('Comic Studio idea workspace', () => {
+  const options = { comicWorkspace: true, accountId: 'author-a', openNewComic: true };
+  it('waits for the listing before choosing an empty-author entry', () => {
+    const first = renderDashboard([], { comicWorkspace: true, projectsLoaded: false, accountId: 'author-a' });
+    expect(screen.queryByLabelText('Your comic idea or script')).toBeNull();
+    first.rerender(<ProjectDashboard {...first.props} projects={[studioProject()]} projectsLoaded />);
+    expect(screen.getByRole('heading', { name: 'My comics' })).toBeVisible();
+    expect(screen.queryByLabelText('Your comic idea or script')).toBeNull();
+    first.unmount();
+    const empty = renderDashboard([], { comicWorkspace: true, projectsLoaded: false, accountId: 'author-a' });
+    empty.rerender(<ProjectDashboard {...empty.props} projectsLoaded />);
+    expect(screen.getByLabelText('Your comic idea or script')).toBeVisible();
+  });
+  it('keeps the entry local until explicit Start and prevents double creation', async () => {
+    let resolve!: () => void;
+    const onCreateProject = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
+    renderDashboard([studioProject()], { ...options, onCreateProject });
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Comic name (optional)'), { target: { value: ' Observatory ' } });
+    const idea = screen.getByLabelText('Your comic idea or script');
+    fireEvent.change(idea, { target: { value: 'A botanist finds a garden on the moon.' } });
+    expect(onCreateProject).not.toHaveBeenCalled();
+    fireEvent.keyDown(idea, { key: 'Enter', ctrlKey: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Preparing…' }));
+    expect(onCreateProject).toHaveBeenCalledExactlyOnceWith('Observatory', 'studio', 'A botanist finds a garden on the moon.');
+    await act(async () => resolve());
+    fireEvent.click(screen.getByRole('button', { name: 'New comic' }));
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('');
+  });
+
+  it('retains the idea and optional name after a failed create, then allows retry', async () => {
+    const onCreateProject = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(undefined);
+    renderDashboard([], { ...options, onCreateProject });
+    fireEvent.change(screen.getByLabelText('Comic name (optional)'), { target: { value: 'Keep my name' } });
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'Keep my script' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't create your comic");
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('Keep my script');
+    expect(screen.getByLabelText('Comic name (optional)')).toHaveValue('Keep my name');
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(2));
+  });
+
+  it('restores an account-scoped entry after recent navigation and reload without serializing on each change', () => {
+    const storageWrite = vi.spyOn(Storage.prototype, 'setItem');
+    const first = renderDashboard([studioProject()], options);
+    const script = 'A long scene. '.repeat(12000);
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: script } });
+    expect(storageWrite).not.toHaveBeenCalledWith(expect.stringContaining('comicstudio.new-idea.'), expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Spice Market' }));
+    expect(first.props.onOpenProject).toHaveBeenCalledWith('studio-1');
+    first.unmount();
+    const second = renderDashboard([studioProject()], options);
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
+    fireEvent.click(screen.getByRole('button', { name: 'All comics' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New comic' }));
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue(script);
+    fireEvent(window, new Event('pagehide'));
+    expect(JSON.parse(sessionStorage.getItem('comicstudio.new-idea.author-a')!).idea).toBe(script);
+    // Identity changes purge prior text, including a late cleanup from the old view.
+    clearOtherComicIdeaDrafts('author-b');
+    second.unmount();
+    expect(sessionStorage.getItem('comicstudio.new-idea.author-a')).toBeNull();
+    renderDashboard([], { ...options, accountId: 'author-b' });
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('');
+  });
+
+  it('Start blank is explicit and leaves the unfinished entry available', async () => {
+    const { props } = renderDashboard([], options);
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'An idea for later' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start blank' }));
+    await waitFor(() => expect(props.onCreateProject).toHaveBeenCalledExactlyOnceWith('', 'studio', undefined));
+    fireEvent.click(screen.getByRole('button', { name: 'New comic' }));
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('An idea for later');
+  });
+
+  it('keeps classic creation explicit and lets Cancel return to the unfinished idea', async () => {
+    const { props } = renderDashboard([], options);
+    fireEvent.change(screen.getByLabelText('Your comic idea or script'), { target: { value: 'A later idea' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use the classic editor' }));
+    expect(props.onCreateProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByLabelText('Your comic idea or script')).toHaveValue('A later idea');
+    fireEvent.click(screen.getByRole('button', { name: 'Use the classic editor' }));
+    fireEvent.change(screen.getByLabelText('Comic Title'), { target: { value: 'Classic title' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(props.onCreateProject).toHaveBeenCalledExactlyOnceWith('Classic title', 'classic'));
+  });
+
+  it('uses a keyboard-accessible phone drawer and preserves the top context on entry', () => {
+    const props = { projects: [], ...options, onCreateProject: vi.fn(), onOpenProject: vi.fn(), onDeleteProject: vi.fn(), onDuplicateProject: vi.fn(), onReadProject: vi.fn(), onUpdateProject: vi.fn() };
+    render(<FormFactorProvider value={formFactorFor({ w: 320, h: 568, coarse: true })}><ProjectDashboard {...props} /></FormFactorProvider>);
+    expect(screen.getByLabelText('Your comic idea or script')).not.toHaveFocus();
+    const opener = screen.getByRole('button', { name: 'Open comic navigation' });
+    opener.focus(); fireEvent.click(opener);
+    expect(screen.getByRole('dialog', { name: 'Comic navigation' })).toBeVisible();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(opener).toHaveFocus();
+  });
 });
 
 afterEach(() => {

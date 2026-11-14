@@ -11,8 +11,8 @@
 //   • option boards: the content-check veil, ≤ 480w variants, calm failures, version stacks;
 //   • prices print through formatCostForUser (governed users never see dollars); no hover-only UI.
 
-import React, { useState } from 'react';
-import { Check, Lock, Palette, Plus, Sparkles, Type, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { ArrowDown, Check, Lock, Palette, Plus, Sparkles, Type, X } from 'lucide-react';
 import type { ComicDoc, StyleBible, StyleOption } from '../../../shared/comic/doc';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets';
 import { stylePreviewId } from '../../../shared/comic/library';
@@ -20,6 +20,7 @@ import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
 import type { StudioController } from '../types';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
 import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
 import { LibraryImage } from '../library/LibraryImage';
@@ -242,10 +243,12 @@ const PresetArt: React.FC<{ preset: StylePreset; className?: string }> = ({ pres
 
 export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
   const style = doc.style;
+  const customBoardsRef = useRef<HTMLElement>(null);
   const byok = byokFromDoc(doc);
   const cost = useCostFormat(studio.caps);
   const rating = effectiveRating(doc, studio.caps?.ratingCeiling).rating;
   const { busyKey, fire } = useClickGuard(4000);
+  const [section, setSection] = useState(style.status === 'empty' ? 'looks' : 'current');
   const [confirming, setConfirming] = useState<StylePreset | null>(null);
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => isBusy(o.render));
@@ -261,6 +264,7 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
       return;
     }
     void studio.patch(presetOps(doc, p));
+    setSection('current');
   };
   const chosenOption = (o: StyleOption) => !!style.board?.path && style.board.path === o.render.asset?.path;
   const letterPreset = (doc.letterStyle?.presetId ?? 'classic') as LetteringPresetId;
@@ -283,7 +287,13 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
   };
 
   return (
-    <div className="space-y-5 p-4 sm:p-5">
+    <Tabs value={section} onValueChange={setSection} className="min-w-0 p-3 sm:p-5">
+      <TabsList label="Style sections" fullWidth className="mb-4">
+        <TabsTrigger value="current" className="min-w-0 flex-1 px-2 text-[12px]">Current style</TabsTrigger>
+        <TabsTrigger value="looks" className="min-w-0 flex-1 px-2 text-[12px]">Choose a look</TabsTrigger>
+        <TabsTrigger value="lettering" className="min-w-0 flex-1 px-2 text-[12px]">Lettering</TabsTrigger>
+      </TabsList>
+      <TabsContent value="current" className="space-y-5">
       <Surface className="p-3 sm:p-4" aria-label="Current style">
         <SectionTitle
           icon={<Palette className="h-3.5 w-3.5" />}
@@ -302,7 +312,8 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         </SectionTitle>
         {style.status === 'empty' && !style.spec ? (
           <EmptyHint icon={<EmptyIllustration variant="style" />} title="No style yet" className="py-6">
-            Pick a preset below, describe a look in the chat, or explore {STYLE_DIRECTIONS} directions drawn from your story.
+            <p>Choose a preset or explore directions drawn from your story.</p>
+            <GhostButton size="sm" className="mt-3" onClick={() => setSection('looks')}>Choose a look</GhostButton>
           </EmptyHint>
         ) : (
           <div className={cx('grid gap-4', style.board && 'md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]')}>
@@ -361,13 +372,74 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         </p>
       </section>
 
-      <section aria-labelledby="style-options-title">
+      </TabsContent>
+      <TabsContent value="looks" className="space-y-6">
+        <GhostButton size="sm" onClick={() => {
+          customBoardsRef.current?.focus({ preventScroll: true });
+          customBoardsRef.current?.scrollIntoView({ block: 'start' });
+        }}>
+          <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+          {style.options.length ? `Custom boards (${style.options.length})` : 'Explore custom boards'}
+        </GhostButton>
+      <section aria-labelledby="style-presets-title">
+        <SectionTitle id="style-presets-title" right={<span className="text-[11px] font-medium normal-case tracking-normal text-[var(--ds-muted)]">Free</span>}>
+          Quick presets
+        </SectionTitle>
+        {confirming && (
+          <div className="mb-3">
+            <ConfirmStrip
+              tone="accent"
+              message={`Replace your locked style with ${confirming.name}? Drawn pages will be marked out of date (nothing is redrawn until you ask).`}
+              confirmLabel="Replace style"
+              cancelLabel="Keep current"
+              onConfirm={() => {
+                void studio.patch(presetOps(doc, confirming));
+                setConfirming(null);
+                setSection('current');
+              }}
+              onCancel={() => setConfirming(null)}
+            />
+          </div>
+        )}
+        <ul className="grid items-stretch gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,120px),1fr))]">
+          {STYLE_PRESETS.map((p) => {
+            const on = style.presetId === p.id && style.status !== 'empty';
+            return (
+              <li key={p.id} className="min-w-0">
+                <button
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => choosePreset(p)}
+                  title={p.tagline}
+                  className={cx(
+                    'block h-full w-full rounded-xl border p-2 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] motion-reduce:transition-none',
+                    on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:-translate-y-px hover:bg-[var(--ds-hover)] motion-reduce:hover:translate-y-0'
+                  )}
+                >
+                  <span className="relative block">
+                    <PresetArt preset={p} className="h-20" />
+                    {on && (
+                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent)] text-white" aria-hidden>
+                        <Check className="h-3 w-3" />
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-1.5 block [overflow-wrap:anywhere] text-[12px] font-semibold text-[var(--ds-ink)]">{p.name}</span>
+                  <span className="line-clamp-2 block text-[10.5px] leading-snug text-[var(--ds-muted)]">{p.tagline}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section ref={customBoardsRef} tabIndex={-1} aria-labelledby="style-options-title" className="scroll-mt-3 outline-none">
         <SectionTitle
           id="style-options-title"
           // The primary call only while no look is locked; afterwards exploring is optional.
           right={exploreButton(!locked)}
         >
-          Style options
+          Custom boards
         </SectionTitle>
         {!exploring && (
           <p id="style-explore-price" className="-mt-1 mb-2 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">
@@ -387,57 +459,8 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         )}
       </section>
 
-      <section aria-labelledby="style-presets-title">
-        <SectionTitle id="style-presets-title" right={<span className="text-[11px] font-medium normal-case tracking-normal text-[var(--ds-muted)]">Free</span>}>
-          Quick presets
-        </SectionTitle>
-        {confirming && (
-          <div className="mb-3">
-            <ConfirmStrip
-              tone="accent"
-              message={`Replace your locked style with ${confirming.name}? Drawn pages will be marked out of date (nothing is redrawn until you ask).`}
-              confirmLabel="Replace style"
-              cancelLabel="Keep current"
-              onConfirm={() => {
-                void studio.patch(presetOps(doc, confirming));
-                setConfirming(null);
-              }}
-              onCancel={() => setConfirming(null)}
-            />
-          </div>
-        )}
-        <ul className="-mx-1 flex gap-3 overflow-x-auto overscroll-x-contain px-1 pb-2 [scrollbar-width:thin]">
-          {STYLE_PRESETS.map((p) => {
-            const on = style.presetId === p.id && style.status !== 'empty';
-            return (
-              <li key={p.id} className="shrink-0">
-                <button
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => choosePreset(p)}
-                  title={p.tagline}
-                  className={cx(
-                    'block w-32 rounded-xl border p-1.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 motion-reduce:transition-none',
-                    on ? 'border-[var(--ds-accent)] bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:-translate-y-px hover:bg-[var(--ds-hover)] motion-reduce:hover:translate-y-0'
-                  )}
-                >
-                  <span className="relative block">
-                    <PresetArt preset={p} className="h-16" />
-                    {on && (
-                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent)] text-white" aria-hidden>
-                        <Check className="h-3 w-3" />
-                      </span>
-                    )}
-                  </span>
-                  <span className="mt-1.5 block truncate text-[12px] font-semibold text-[var(--ds-ink)]">{p.name}</span>
-                  <span className="line-clamp-2 block text-[10.5px] leading-snug text-[var(--ds-muted)]">{p.tagline}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-
+      </TabsContent>
+      <TabsContent value="lettering">
       <section aria-labelledby="style-lettering-title">
         <SectionTitle id="style-lettering-title" icon={<Type className="h-3.5 w-3.5" />} right={<span className="text-[11px] font-medium normal-case tracking-normal text-[var(--ds-muted)]">Free · instant</span>}>
           Lettering style
@@ -451,6 +474,7 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
           onChange={(id) => void studio.patch(letteringPresetOps(id), { label: 'Change lettering style' })}
         />
       </section>
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 };

@@ -421,6 +421,23 @@ describe('CastTab', () => {
 });
 
 describe('StyleTab', () => {
+  it('navigates current style, look selection and lettering with the keyboard without changing the comic', () => {
+    const studio = makeStudio();
+    render(<StyleTab studio={studio} doc={studio.doc!} />);
+    const current = screen.getByRole('tab', { name: 'Current style' });
+    current.focus();
+    expect(screen.queryByRole('heading', { name: 'Quick presets' })).toBeNull();
+    fireEvent.keyDown(current, { key: 'ArrowRight' });
+    const looks = screen.getByRole('tab', { name: 'Choose a look' });
+    expect(looks).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Quick presets' })).toBeInTheDocument();
+    fireEvent.keyDown(looks, { key: 'End' });
+    expect(screen.getByRole('tab', { name: 'Lettering' })).toHaveFocus();
+    expect(screen.getByRole('radiogroup', { name: 'Lettering style' })).toBeInTheDocument();
+    expect(studio.patch).not.toHaveBeenCalled();
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
   it('shows the locked board and edits the spec', () => {
     const studio = makeStudio();
     render(<StyleTab studio={studio} doc={studio.doc!} />);
@@ -444,6 +461,7 @@ describe('StyleTab', () => {
     const doc = makeSampleDoc((d) => (d.style.board = { path: 'u/other.png', source: 'generated', at: 0 }));
     const studio = dollarStudio(doc);
     render(<StyleTab studio={studio} doc={doc} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Choose a look' }));
     const options = screen.getAllByTestId('style-option');
     expect(options.map((o) => o.getAttribute('data-status'))).toEqual(['ready', 'rendering', 'failed']);
     fireEvent.click(within(options[0]).getByRole('button', { name: 'Use Heroic' }));
@@ -456,6 +474,7 @@ describe('StyleTab', () => {
   it('marks the option that is the locked board as chosen', () => {
     const studio = makeStudio();
     render(<StyleTab studio={studio} doc={studio.doc!} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Choose a look' }));
     expect(screen.getByRole('button', { name: 'Heroic is your style' })).toBeDisabled();
   });
 
@@ -463,6 +482,7 @@ describe('StyleTab', () => {
     const doc = makeSampleDoc((d) => (d.style.options = []));
     const studio = dollarStudio(doc);
     render(<StyleTab studio={studio} doc={doc} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Choose a look' }));
     expect(screen.getByText(new RegExp(`≈ \\${formatUsd(estimateOne(doc, 'style_option', byokFromDoc(doc), 3).usd)} for 3 small boards`))).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Explore 3 directions/ }));
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_style_options' });
@@ -472,6 +492,7 @@ describe('StyleTab', () => {
     const studio = makeStudio();
     const doc = studio.doc!;
     render(<StyleTab studio={studio} doc={doc} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Choose a look' }));
     fireEvent.click(screen.getByRole('button', { name: /^Noir ink/ }));
     expect(studio.patch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Replace style' }));
@@ -486,6 +507,7 @@ describe('StyleTab', () => {
     expect(webtoon.querySelector('svg')).not.toBeNull();
     fireEvent.click(webtoon);
     expect(studio.patch).toHaveBeenCalledWith(presetOps(doc, getStylePreset('webtoon-cel')!));
+    expect(screen.getByRole('tab', { name: 'Current style' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('the style references are visible (the old bug) with their count and an Add tile', () => {
@@ -508,6 +530,7 @@ describe('StyleTab', () => {
     });
     const studio = makeStudio(doc);
     render(<StyleTab studio={studio} doc={doc} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Choose a look' }));
     const option = screen.getAllByTestId('style-option')[0];
     const show = within(option).getByRole('button', { name: 'Show' });
     expect(show.parentElement?.closest('button')).toBeNull();
@@ -520,6 +543,7 @@ describe('StyleTab', () => {
   it('picks the lettering preset for the whole comic (free, undoable)', () => {
     const studio = makeStudio();
     render(<StyleTab studio={studio} doc={studio.doc!} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Lettering' }));
     const gallery = screen.getByRole('radiogroup', { name: 'Lettering style' });
     fireEvent.click(within(gallery).getByRole('radio', { name: /Manga/ }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });

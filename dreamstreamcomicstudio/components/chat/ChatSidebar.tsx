@@ -237,7 +237,12 @@ const ProjectGroup: React.FC<{
           </button>
           {menuOpen && (
             <div className={`absolute right-0 top-7 z-30 w-36 ${MENU} py-1`}>
-              <button onClick={() => { setMenuOpen(false); onEdit(); }} className={MENU_ITEM}><Pencil className="w-3.5 h-3.5" /> Edit</button>
+              <button onClick={() => {
+                // The menu item unmounts; let the dialog capture its persistent return target.
+                menuButtonRef.current?.focus();
+                setMenuOpen(false);
+                onEdit();
+              }} className={MENU_ITEM}><Pencil className="w-3.5 h-3.5" /> Edit</button>
               <button onClick={() => { setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-red-600 hover:bg-red-500/10`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
             </div>
           )}
