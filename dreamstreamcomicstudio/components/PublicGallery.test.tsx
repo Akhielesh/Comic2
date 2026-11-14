@@ -2,6 +2,7 @@
 // the public cover; the publish gate's rating shows as a badge; "Kids-friendly (G/PG)" keeps only G and
 // PG comics (an unrated comic is never assumed kids-friendly). Classic comics keep the in-app reader.
 import React from 'react';
+import { FEATURED_SAMPLES } from './comicstudio/library/sampleCatalog';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -427,6 +428,17 @@ describe('Library sample reading', () => {
     });
     const title = screen.getByRole('heading', { name: 'Library', level: 1 });
     await waitFor(() => expect(title).toHaveFocus());
+    await screen.findByText('The Lake');
+  });
+
+  it.each(FEATURED_SAMPLES)('opens the complete new $title edition from a cold Library link', async (comic) => {
+    window.history.replaceState({}, '', `/?view=gallery&sample=${comic.id}`);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: comic.title, level: 1 })).toHaveFocus();
+    const reader = within(screen.getByRole('figure', { name: comic.title }));
+    expect(reader.getByRole('status')).toHaveTextContent('Page 1 of 1');
+    expect(reader.getByRole('button', { name: 'Enlarge comic page' })).toBeInTheDocument();
+    expect(reader.queryByRole('button', { name: 'Next sample page' })).toBeNull();
     await screen.findByText('The Lake');
   });
 
