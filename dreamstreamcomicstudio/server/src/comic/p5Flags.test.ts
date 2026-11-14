@@ -15,18 +15,18 @@ describe('p5Flags', () => {
     expect(p5StageOf('qcV2', { COMIC_QC_V2: 'everyone' })).toBe('all');
   });
 
-  it('scene chains never reach everyone in this build: all and everyone read as admins', () => {
-    expect(P5_FLAG_MAX).toEqual({ runChains: 'admins' });
+  it('scene chains are available to every author by default, with explicit off and admins rollback stages', () => {
+    expect(P5_FLAG_MAX).toEqual({});
     for (const value of ['all', 'ALL', ' everyone ']) {
-      expect(p5StageOf('runChains', { COMIC_RUN_CHAINS: value })).toBe('admins');
-      expect(p5FlagOn('runChains', false, { COMIC_RUN_CHAINS: value })).toBe(false);
-      expect(p5FlagOn('runChains', true, { COMIC_RUN_CHAINS: value })).toBe(true);
+      expect(p5StageOf('runChains', { COMIC_RUN_CHAINS: value })).toBe('all');
+      expect(p5FlagOn('runChains', false, { COMIC_RUN_CHAINS: value })).toBe(true);
     }
+    expect(p5StageOf('runChains', {})).toBe('all');
     expect(p5StageOf('runChains', { COMIC_RUN_CHAINS: 'admins' })).toBe('admins');
+    expect(p5FlagOn('runChains', false, { COMIC_RUN_CHAINS: 'admins' })).toBe(false);
     expect(p5StageOf('runChains', { COMIC_RUN_CHAINS: 'off' })).toBe('off');
-    expect(p5StageOf('runChains', {})).toBe('off');
-    // The cap is only on chains: the other two flags still reach everyone.
-    expect(p5FlagsFor(false, { COMIC_STORY_FIXES: 'all', COMIC_RUN_CHAINS: 'all', COMIC_QC_V2: 'all' })).toEqual({ storyFixes: true, runChains: false, qcV2: true });
+    expect(p5StageOf('runChains', { COMIC_RUN_CHAINS: 'invalid' })).toBe('off');
+    expect(p5FlagsFor(false, { COMIC_STORY_FIXES: 'all', COMIC_RUN_CHAINS: 'all', COMIC_QC_V2: 'all' })).toEqual({ storyFixes: true, runChains: true, qcV2: true });
   });
 
   it('reads unset, empty and unknown values as off', () => {
@@ -50,11 +50,11 @@ describe('p5Flags', () => {
 
   it('each flag reads only its own variable', () => {
     expect(p5FlagsFor(true, { COMIC_RUN_CHAINS: 'admins' })).toEqual({ storyFixes: false, runChains: true, qcV2: false });
-    expect(p5FlagsFor(true, { COMIC_QC_V2: 'all' })).toEqual({ storyFixes: false, runChains: false, qcV2: true });
+    expect(p5FlagsFor(true, { COMIC_QC_V2: 'all' })).toEqual({ storyFixes: false, runChains: true, qcV2: true });
   });
 
-  it('defaults to all off, and the result cannot be changed afterwards', () => {
-    expect(p5FlagsFor(true, {})).toEqual(P5_FLAGS_OFF);
+  it('defaults only scene continuity on, and the result cannot be changed afterwards', () => {
+    expect(p5FlagsFor(true, {})).toEqual({ storyFixes: false, runChains: true, qcV2: false });
     expect(Object.values(P5_FLAGS_OFF).every((v) => v === false)).toBe(true);
     expect(Object.isFrozen(p5FlagsFor(true, {}))).toBe(true);
   });

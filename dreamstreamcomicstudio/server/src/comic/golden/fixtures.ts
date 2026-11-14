@@ -30,7 +30,7 @@ const panel = (id: string, n: number, action: string, castIds: string[], lines: 
 export function lakeBriefDoc(): ComicDoc {
   const doc = createEmptyDoc('golden_lake', 'Splash Day', T0);
   doc.brief = { ...doc.brief, premise: 'A baby plays by a lake with friendly animals.', audience: 'kids 2–6', setting: 'a sunny lake shore', tone: 'gentle, playful' };
-  doc.format = { ...doc.format, kind: 'storybook', pageCount: 1, pageAspect: '4:5' };
+  doc.format = { ...doc.format, kind: 'storybook', pageCount: 1, pageCountMode: 'fixed', pageAspect: '4:5' };
   doc.cast = [
     character('c_baby', 'The Baby', { tier: 'lead', look: { summary: 'A chubby toddler in a yellow sunhat and blue romper' } }),
     character('c_ducks', 'Ducklings', { kind: 'animal', count: 3, look: { summary: 'Three identical fluffy yellow ducklings', species: 'mallard duckling' } }),

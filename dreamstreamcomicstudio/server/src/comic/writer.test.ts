@@ -43,6 +43,7 @@ const baseDoc = (patch: (doc: ComicDoc) => void = () => undefined): ComicDoc => 
   const doc = createEmptyDoc('doc_w', 'Saffron Run', 1);
   doc.brief = { title: 'Saffron Run', logline: 'A courier races a stolen ledger across Mumbai.', genre: 'adventure', notes: ['ends on a cliffhanger'] };
   doc.format.pageCount = 2;
+  doc.format.pageCountMode = 'fixed';
   doc.cast = [
     { id: 'ch_maya', name: 'Maya Rao', tier: 'lead', look: { summary: 'Wiry courier, red kurta' }, refs: [], sheet: emptyRender() },
     { id: 'ch_arjun', name: 'Arjun', tier: 'support', look: { summary: 'Spice merchant' }, refs: [], sheet: emptyRender() }
@@ -101,7 +102,7 @@ describe('writer prompts', () => {
       'turn-hook',
       'establishing',
       'never more than 2 panels in a row with the same shot type',
-      'At most 1 splash',
+      'There is no splash quota',
       'At most 25 words per balloon, at most 3 balloons per panel, at most 210 words',
       '180° rule',
       'At most 4 recurring named characters',
@@ -112,9 +113,9 @@ describe('writer prompts', () => {
     ]) {
       expect(prompt).toContain(needle);
     }
-    expect(prompt).toContain('Panels per page: usually 3 big panels (2–4)');
+    expect(prompt).toContain('Panels per page: choose independently');
     expect(writerSystemPrompt(baseDoc((d) => (d.settings.quality = 'pro')))).toContain('At most 5 recurring named characters');
-    expect(writerSystemPrompt(baseDoc((d) => (d.format.panelsPerPage = 4)))).toContain('exactly 4 on every page');
+    expect(writerSystemPrompt(baseDoc((d) => (d.format.panelsPerPage = 4)))).toContain('preferred density is around 4');
     const manga = writerSystemPrompt(baseDoc((d) => ((d.format.kind = 'manga'), (d.format.readingDirection = 'rtl'))));
     expect(manga).toContain('RIGHT-TO-LEFT');
     expect(writerSystemPrompt(baseDoc((d) => (d.format.lettering = 'in_art')))).toContain('At most 18 words per balloon');
@@ -247,36 +248,25 @@ describe('writePagePlan', () => {
     expect(out.pages[1].panels.map((p) => p.size)).toEqual(['wide', 'medium']);
   });
 
-  it('clamps panels per page (≤ 9) and lines per panel (≤ 4)', async () => {
+  it('repairs over-capacity panels without silently discarding any', async () => {
     const doc = baseDoc((d) => (d.format.pageCount = 1));
-    const lines = Array.from({ length: 6 }, (_, i) => ({ kind: 'speech', speakerId: 'ch_maya', text: `L${i}` }));
-    const panels = Array.from({ length: 11 }, (_, i) => rawPanel({ n: i + 1, lines: i === 0 ? lines : [] }));
-    // First reply has fixable problems → one repair; the repaired reply is identical, so it is used as-is.
-    const { llm, calls } = fakeLlm([json(plan([rawPage(1, panels)])), json(plan([rawPage(1, panels)]))]);
-    const out = await writePagePlan({ doc, llm });
+    const tooMany = plan([rawPage(1, Array.from({ length: 10 }, (_, i) => rawPanel({ n: i + 1 })))]);
+    const { llm, calls } = fakeLlm([json(tooMany), json(tooMany)]);
+    await expect(writePagePlan({ doc, llm })).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
     expect(calls).toHaveLength(2);
-    expect(out.pages[0].panels).toHaveLength(9);
-    expect(out.pages[0].panels[0].lines.map((l) => l.text)).toEqual(['L0', 'L1', 'L2', 'L3']);
-    expect(out.pages[0].panels.map((p) => p.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(String(calls[1].messages.at(-1)?.content)).toContain('at most 9 panels');
   });
 
-  it('enforces the requested page count after the repair round (splitting dense pages)', async () => {
+  it('honors an explicit count only through a repaired story plan; does not mechanically stretch it', async () => {
     const doc = baseDoc((d) => (d.format.pageCount = 3));
-    const six = Array.from({ length: 6 }, (_, i) => rawPanel({ n: i + 1, action: `Beat ${i + 1}.` }));
-    const short = json(plan([rawPage(1, six), rawPage(2, [rawPanel(), rawPanel({ n: 2 })])]));
-    const { llm, calls } = fakeLlm([short, short]);
+    const short = json(plan([rawPage(1, [rawPanel()]), rawPage(2, [rawPanel()])]));
+    const repaired = json(plan([1, 2, 3].map((n) => rawPage(n, [rawPanel({ action: `Beat ${n}` })]))));
+    const { llm, calls } = fakeLlm([short, repaired]);
     const out = await writePagePlan({ doc, llm });
     expect(calls).toHaveLength(2);
-    const repair = calls[1].messages;
-    expect(repair[repair.length - 2].role).toBe('assistant');
-    expect(String(repair[repair.length - 1].content)).toContain('Return exactly 3 pages (you returned 2).');
-    expect(out.pages).toHaveLength(3);
-    expect(out.pages.map((p) => p.n)).toEqual([1, 2, 3]);
-    expect(out.pages[0].panels.map((p) => p.action)).toEqual(['Beat 1.', 'Beat 2.', 'Beat 3.']);
-    expect(out.pages[1].panels.map((p) => p.action)).toEqual(['Beat 4.', 'Beat 5.', 'Beat 6.']);
-    expect(out.pages[1].summary).toBe('Summary 1 (continued)');
-    expect(new Set(out.pages.map((p) => p.id)).size).toBe(3);
-    for (const p of out.pages) expect(p.panels.map((panel) => panel.n)).toEqual(p.panels.map((_, i) => i + 1));
+    expect(String(calls[1].messages.at(-1)?.content)).toContain('Return exactly 3 pages');
+    expect(out.pages.map((page) => page.panels[0].action)).toEqual(['Beat 1', 'Beat 2', 'Beat 3']);
+    await expect(writePagePlan({ doc, llm: fakeLlm([short, short]).llm })).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
   });
 
   it('repair path: invalid JSON first, then a valid reply; costs add up', async () => {
@@ -316,9 +306,8 @@ describe('writePagePlan', () => {
 
     const firstOnly = json(plan([rawPage(1, [rawPanel(), rawPanel({ n: 2 })])]));
     const { llm, calls } = fakeLlm([firstOnly, new Error('socket hang up')]);
-    const out = await writePagePlan({ doc, llm });
-    expect(calls).toHaveLength(2);
-    expect(out.pages).toHaveLength(2); // 1 page split to reach the requested 2
+    await expect(writePagePlan({ doc, llm })).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(calls).toHaveLength(2); // A count-mismatched first reply is never a usable fallback.
   });
 
   it('wraps unknown errors as PROVIDER_ERROR and honors an aborted signal', async () => {
@@ -390,7 +379,7 @@ describe('writePagePlan', () => {
     const { llm, calls } = fakeLlm([json(plan([rawPage(7, [rawPanel()]), rawPage(8, [rawPanel()])])), json(plan([rawPage(2, [rawPanel()])]))]);
     const out = await writePagePlan({ doc, llm, pageIds: ['pg_2'] });
     expect(calls).toHaveLength(2);
-    expect(String(calls[1].messages[3].content)).toContain('Return the rewritten page 2');
+    expect(String(calls[1].messages[3].content)).toContain('Return exactly 1 pages');
     expect(out.pages.map((p) => p.id)).toEqual(['pg_2']);
     // One page back for one target with a wrong n: mapped by order, no repair needed.
     const single = fakeLlm([json(plan([rawPage(9, [rawPanel()])]))]);
@@ -555,9 +544,9 @@ describe('enforcePageCount', () => {
     expect(enforcePageCount([page(1, 1)], 3, doc)).toHaveLength(1);
   });
 
-  it('drops the lightest middle page when nothing can merge', () => {
+  it('retains every page when a lossless merge cannot fit', () => {
     const out = enforcePageCount([page(1, 6), page(2, 6, 0), page(3, 6, 2), page(4, 6)], 3, doc);
-    expect(out.map((p) => p.id)).toEqual(['pg_1', 'pg_3', 'pg_4']);
+    expect(out.map((p) => p.id)).toEqual(['pg_1', 'pg_2', 'pg_3', 'pg_4']);
   });
 });
 
@@ -813,26 +802,26 @@ describe('writer plan fit', () => {
   it('the system prompt carries the panel-count and word-budget lines', () => {
     const prompt = writerSystemPrompt(baseDoc());
     expect(prompt).toContain(
-      'Panels per page: usually 3 big panels (2–4) — fewer, larger panels give the art and the words room; let the dialogue and the beats decide. Use 5 only for a fast, nearly silent sequence (12 words or fewer on the whole page). Never more than 5.'
+      'Panels per page: choose independently from the scene\'s beats'
     );
     expect(prompt).toContain(
       'Word budget by panel size (every balloon and caption in the panel together): a full-width row holds about 40 words, a half-width panel on a two-row page about 32, a half-width panel on a three-row page about 20, a third-width small panel about 11.'
     );
     expect(prompt).toContain('Small panels are silent or carry one line of 12 words or fewer; conversations go in wide or medium panels.');
     expect(prompt).toContain('pov and insert shots carry at most 1 line of 12 words or fewer.');
-    expect(prompt).toContain('At most 1 splash (one dominant panel) per 4 pages, never on two pages in a row');
+    expect(prompt).toContain('There is no splash quota');
     expect(prompt).toContain('Open every scene (a new place or a jump in time) with an establishing panel in a full-width row.');
     expect(prompt).toContain('Begin each action with the one thing the panel must show');
     expect(prompt).toContain('except an off-panel voice in a pov, insert or establishing shot');
     expect(prompt).not.toContain('Never more than 7');
     const webtoon = writerSystemPrompt(baseDoc((d) => (d.format.kind = 'webtoon')));
-    expect(webtoon).toContain('Panels per page: 2–5 (usually 3).');
-    expect(webtoon).toContain('segment of 2–5 full-width panels');
+    expect(webtoon).toContain('Panels per page: choose independently');
+    expect(webtoon).toContain('segment with as many full-width panels as its beats need');
     // Character-counted scripts get the same budgets in their own unit (lineLengthRule's ratio).
     const ja = writerSystemPrompt(baseDoc((d) => (d.format.language = 'ja')));
     expect(ja).toContain('a full-width row holds about 64 characters, a half-width panel on a two-row page about 51, a half-width panel on a three-row page about 32, a third-width small panel about 17.');
     expect(ja).toContain('Small panels are silent or carry one line of 19 characters or fewer');
-    expect(ja).toContain('Use 5 only for a fast, nearly silent sequence (19 characters or fewer on the whole page).');
+    expect(ja).toContain('never force a uniform count');
   });
 
   it('the validator flags 6 panels on auto, 29 words in a 0.084 panel no layout can fit and a 2-line pov panel — in one repair round', async () => {
@@ -854,7 +843,7 @@ describe('writer plan fit', () => {
     const out = await writePagePlan({ doc, llm });
     expect(calls).toHaveLength(2);
     const repair = String(calls[1].messages[calls[1].messages.length - 1].content);
-    expect(repair).toContain('Page 1 has 6 panels; plan 2–4 big panels (usually 3).');
+    expect(repair).not.toContain('Page 1 has 6 panels;');
     expect(repair).toContain('Page 1, panel 6: 29 words in a small panel (8% of the page; it holds about 9 in 2 balloons) — give it a full-width row');
     expect(repair).toContain('Page 1, panel 6 is a point-of-view shot with 2 lines (29 words)');
     expect(out.pages[0].panels).toHaveLength(3);
@@ -887,25 +876,14 @@ describe('writer plan fit', () => {
     expect(check.value!.pages[0].layout).toBe(p1.layout);
   });
 
-  it('a storybook set to 4 panels per page plans at most 3, with a note', async () => {
-    const doc = baseDoc((d) => {
-      d.format.kind = 'storybook';
-      d.format.panelsPerPage = 4;
-      d.format.pageCount = 1;
-    });
-    const prompt = writerSystemPrompt(doc);
-    expect(prompt).toContain('Panels per page: exactly 3 on every page — a storybook page holds at most 3 large panels (the format asks for 4).');
-    expect(prompt).not.toContain('exactly 4 on every page');
-    const four = rawPage(1, [1, 2, 3, 4].map((n) => rawPanel({ n, size: n === 1 ? 'wide' : 'medium' })), { layout: 'Row 1: one wide panel. Row 2: three small panels.' });
-    const three = rawPage(1, [1, 2, 3].map((n) => rawPanel({ n })));
-    const { llm, calls } = fakeLlm([json(plan([four])), json(plan([three]))]);
+  it('a storybook can keep four panels without an editorial clamp or repair charge', async () => {
+    const doc = baseDoc((d) => { d.format.kind = 'storybook'; d.format.panelsPerPage = 4; d.format.pageCount = 1; });
+    const four = rawPage(1, [1, 2, 3, 4].map((n) => rawPanel({ n })), { layout: 'Row 1: two equal panels. Row 2: two equal panels.' });
+    const { llm, calls } = fakeLlm([json(plan([four]))]);
     const out = await writePagePlan({ doc, llm });
-    expect(calls).toHaveLength(2);
-    expect(String(calls[1].messages[calls[1].messages.length - 1].content)).toContain('Page 1 has 4 panels; plan exactly 3 (storybook pages hold at most 3).');
-    expect(out.pages.every((p) => p.panels.length <= 3)).toBe(true);
-    expect(out.notes).toEqual([
-      'Storybook pages hold at most 3 large panels, so new pages are planned with 3 (your format asks for 4). Pages already planned keep theirs.'
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(out.pages[0].panels).toHaveLength(4);
+    expect(out.notes).toBeUndefined();
   });
 
   it('a pov speaker is not pushed into castIds (heard off-panel), while a non-pov speaker still is', async () => {
@@ -944,26 +922,14 @@ describe('writer plan fit', () => {
     expect(out.newCast.find((c) => c.name === 'Crow')!.tier).toBe('extra');
   });
 
-  it('a format fixed at 1 panel per page is not a splash problem: no repair, exactly one writer call', async () => {
-    const doc = baseDoc((d) => {
-      d.format.panelsPerPage = 1;
-      d.format.pageCount = 3;
-    });
-    const prompt = writerSystemPrompt(doc);
-    expect(prompt).toContain('Panels per page: exactly 1 on every page — the author chose single-panel pages, so every page is one full-page panel.');
-    expect(prompt).not.toContain('At most 1 splash');
-    const reply = plan([1, 2, 3].map((n) => rawPage(n, [rawPanel({ size: 'splash', shot: 'wide', lines: [say('ch_maya', 6, n)] })], { layout: 'One full-page splash panel.' })));
-    expect(normalizePlan(reply, { doc, targets: null, pageCount: 3 }).problems).toEqual([]);
-    const { llm, calls } = fakeLlm([json(reply)]);
-    const out = await writePagePlan({ doc, llm });
-    expect(calls).toHaveLength(1);
-    expect(out.pages.map((p) => p.panels.length)).toEqual([1, 1, 1]);
-    // An auto comic still spaces its splashes.
-    const auto = baseDoc((d) => (d.format.pageCount = 3));
-    expect(writerSystemPrompt(auto)).toContain('At most 1 splash (one dominant panel) per 4 pages');
-    expect(normalizePlan(reply, { doc: auto, targets: null, pageCount: 3 }).problems).toContain(
-      'Page 2 is a splash only 1 page after the splash on page 1: use at most one splash per 4 pages, never two in a row.'
-    );
+  it('consecutive splashes are supported for every density preference, with no quota repair', async () => {
+    for (const preferred of ['auto', 1, 4] as const) {
+      const doc = baseDoc((d) => { d.format.pageCount = 3; d.format.panelsPerPage = preferred; });
+      const reply = plan([1, 2, 3].map((n) => rawPage(n, [rawPanel({ size: 'splash', shot: 'wide' })], { layout: 'One full-page splash panel.' })));
+      const { llm, calls } = fakeLlm([json(reply)]);
+      expect((await writePagePlan({ doc, llm })).pages.map((p) => p.panels.length)).toEqual([1, 1, 1]);
+      expect(calls).toHaveLength(1);
+    }
   });
 
   it('revising a storybook page planned with 4 panels before the clamp keeps its 4 panels: one writer call, no clamp note', async () => {
@@ -999,16 +965,13 @@ describe('writer plan fit', () => {
     const { llm, calls } = fakeLlm([json(plan([reworded]))]);
     const out = await writePagePlan({ doc, llm, pageIds: ['pg_story1'], instructions: 'Reword the captions' });
     expect(calls).toHaveLength(1);
-    expect(String(calls[0].messages[1].content)).toContain('page 1 may keep up to 4 (it has 4)');
+    expect(String(calls[0].messages[1].content)).toContain('PAGES TO REWRITE (current version)');
     expect(out.pages[0].panels).toHaveLength(4);
     expect(out.pages[0].panels.map((p) => p.id)).toEqual(['pn_s1', 'pn_s2', 'pn_s3', 'pn_s4']);
     expect(out.notes).toBeUndefined(); // "Pages already planned keep theirs" is a full-plan note
-    // More than it had is still a problem, and a NEW page is still clamped to 3.
     const five = rawPage(1, [1, 2, 3, 4, 5].map((n) => rawPanel({ n })));
-    expect(normalizePlan(plan([five]), { doc, targets: [existing], pageCount: 1 }).problems).toContain(
-      'Page 1 has 5 panels; keep at most 4 (a page planned before the 3-panel storybook limit keeps up to its own count).'
-    );
-    expect(normalizePlan(plan([reworded]), { doc, targets: null, pageCount: 1 }).problems).toContain('Page 1 has 4 panels; plan exactly 3 (storybook pages hold at most 3).');
+    expect(normalizePlan(plan([five]), { doc, targets: [existing], pageCount: 1 }).problems.some((p) => /panels;/.test(p))).toBe(false);
+    expect(normalizePlan(plan([reworded]), { doc, targets: null, pageCount: 1 }).problems).toEqual([]);
   });
 
   it('a voice heard only in pov and insert panels (never drawn) stays an extra: no model sheet for it', async () => {
@@ -1150,5 +1113,73 @@ describe('P5-TRUTH: crowd lines with COMIC_STORY_FIXES', () => {
     // Another character's praise is fine.
     const other = cheer([{ kind: 'shout', speakerId: 'Hanuman', text: 'Glory to Rama!' }]);
     expect(normalizePlan(other, { doc: hanumanDoc(), targets: null, pageCount: 1, storyFixes: true }).value!.speakerNotes).toBeUndefined();
+  });
+});
+
+// Story-driven length is planned once, then retained through chunk repairs.
+describe('adaptive story planning', () => {
+  const outline = (count: number) => ({ pages: Array.from({ length: count }, (_, i) => ({ n: i + 1, summary: `Scene ${i + 1}`, turnHook: '', characters: ['Maya Rao'], place: 'Spice Market' })), newCast: [] });
+
+  it('chooses three pages instead of the six-page estimate and keeps mixed splash/action/dialogue geometry in chronological order', async () => {
+    const doc = baseDoc((d) => { d.format.pageCountMode = 'auto'; d.format.pageCount = 6; d.format.panelsPerPage = 2; });
+    const pages = [
+      rawPage(1, [rawPanel({ size: 'splash', action: 'The city opens below Maya.' })], { layout: 'One full-page splash panel.' }),
+      rawPage(2, [1, 2, 3, 4, 5].map((n) => rawPanel({ n, shot: 'close_up', action: `The chase advances: beat ${n}.` })).reverse()),
+      rawPage(3, [rawPanel({ lines: [{ kind: 'speech', speakerId: 'ch_maya', text: 'We made it.' }] }), rawPanel({ n: 2, lines: [{ kind: 'speech', speakerId: 'ch_arjun', text: 'Together.' }] })])
+    ];
+    const binding = outline(3);
+    binding.pages.reverse();
+    const { llm, calls } = fakeLlm([json(binding), json(plan([...pages].reverse()))]);
+    const out = await writePagePlan({ doc, llm });
+    expect(out.pages.map((p) => p.n)).toEqual([1, 2, 3]);
+    expect(out.pages.map((p) => p.panels.length)).toEqual([1, 5, 2]);
+    expect(out.pages[0].panels[0].action).toBe('The city opens below Maya.');
+    expect(out.pages[1].panels.map((panel) => panel.action)).toEqual([1, 2, 3, 4, 5].map((n) => `The chase advances: beat ${n}.`));
+    expect(out.pages[2].panels[1].lines[0].text).toBe('Together.');
+    expect(calls).toHaveLength(2);
+    expect(String(calls[0].messages[1].content)).toContain('no default count');
+    expect(String(calls[0].messages[1].content)).not.toContain('exactly 6 pages');
+    expect(String(calls[1].messages[1].content)).toContain('Return exactly 3 pages');
+    expect(out.pages.map((p) => p.layout).every(Boolean)).toBe(true);
+  });
+
+  it('carries closing physical state and complete style into the next chunk and its retry without rewriting previous pages', async () => {
+    const doc = baseDoc((d) => { d.format.pageCountMode = 'auto'; d.style.name = 'Ink'; d.style.spec = 'Black ink, vermilion highlights, fixed warm dusk lighting.'; });
+    const first = [1, 2, 3, 4, 5].map((n) => rawPage(n, [rawPanel({ action: n === 5 ? 'Maya kneels beside the broken blue cart, her red scarf wet, holding the recovered ledger in her left hand.' : `Scene ${n} unfolds.` })]));
+    const wrong = plan([rawPage(6, [rawPanel()]), rawPage(7, [rawPanel()])]);
+    const final = plan([rawPage(6, [rawPanel({ action: 'Maya stands beside the same broken cart, still holding the ledger in her left hand.' })])]);
+    const { llm, calls } = fakeLlm([json(outline(6)), json(plan(first)), json(wrong), json(final)]);
+    const out = await writePagePlan({ doc, llm });
+    expect(calls).toHaveLength(4);
+    expect(out.pages).toHaveLength(6);
+    expect(out.pages[4].panels[0].action).toContain('red scarf wet');
+    for (const call of calls.slice(2)) {
+      const context = String(call.messages[1].content);
+      expect(context).toContain('PREVIOUS PAGE CLOSING STATE');
+      expect(context).toContain('red scarf wet');
+      expect(context).toContain('left hand');
+      expect(context).toContain('vermilion highlights');
+      expect(context).toContain('Page 1: Scene 1');
+      expect(context).toContain('Page 6: Scene 6');
+    }
+    expect(String(calls[3].messages.at(-1)?.content)).toContain('Return exactly 1 pages');
+  });
+
+  it('repairs blank outline entries instead of silently reducing the story length', async () => {
+    const doc = baseDoc((d) => { d.format.pageCountMode = 'auto'; });
+    const broken = outline(3);
+    broken.pages[1].summary = '';
+    const { llm, calls } = fakeLlm([json(broken), json(outline(3)), json(plan([1, 2, 3].map((n) => rawPage(n, [rawPanel()]))))]);
+    expect((await writePagePlan({ doc, llm })).pages).toHaveLength(3);
+    expect(calls).toHaveLength(3);
+    expect(String(calls[1].messages.at(-1)?.content)).toContain('Every outline page needs its story summary');
+  });
+
+  it('does not pad or truncate an explicit long outline after two wrong-count replies', async () => {
+    const doc = baseDoc((d) => { d.format.pageCount = 8; });
+    const { llm, calls } = fakeLlm([json(outline(7)), json(outline(7))]);
+    await expect(writePagePlan({ doc, llm })).rejects.toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(calls).toHaveLength(2);
+    expect(String(calls[1].messages.at(-1)?.content)).toContain('exactly 8 pages');
   });
 });

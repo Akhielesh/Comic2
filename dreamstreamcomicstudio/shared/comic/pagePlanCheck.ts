@@ -1,6 +1,5 @@
 // The free page-plan check (plan §4.1): before anything is drawn, does every panel's dialogue fit its panel?
-// count → boxes → minimum area → fit of every panel → shot sense, plus the book rules (one splash per 4 pages,
-// never two in a row; an establishing panel in a full-width row opens each scene).
+// Capacity → boxes → minimum area → lettering fit → shot sense; scene openings retain establishing-shot notes.
 //
 // When a page is overfull, `chooseLayout` tries every same-count, same-order blueprint (rows of 1–3 panels, a
 // large single row, tall-beside-stack variants; extra-tall panels for webtoon segments) and returns the one that
@@ -18,7 +17,6 @@ import {
   minAreaFor,
   PANEL_LIMITS,
   panelCountProblem,
-  panelCountRule,
   panelWords,
   PLAN_POLICY,
   QUIET_SHOTS,
@@ -169,15 +167,7 @@ export function checkPagePlan(doc: ComicDoc, page: Page, opts: PlanCheckOptions 
 
   const count = panelCountProblem(doc.format, page.panels, { unit, existing: opts.existingPanels });
   if (count) {
-    const rule = count.rule;
-    const text =
-      rule.exact !== undefined
-        ? count.max > rule.exact
-          ? `${label} has ${page.panels.length} panels; keep at most ${count.max} (a page planned before the ${PANEL_LIMITS.storybookMax}-panel storybook limit keeps up to its own count).`
-          : `${label} has ${page.panels.length} panels; plan exactly ${rule.exact}${rule.clampedFrom !== undefined ? ` (storybook pages hold at most ${PANEL_LIMITS.storybookMax})` : ''}.`
-        : rule.fast
-          ? `${label} has ${page.panels.length} panels; plan ${rule.min}–${rule.max} big panels (usually ${rule.typical}). ${rule.fast.panels} only for a fast, nearly silent sequence of ${unitCount(count.fastWords ?? scaledLimit(rule.fast.maxWords, unit), unit)} or fewer on the page — combine moments or move one to another page.`
-          : `${label} has ${page.panels.length} panels; plan ${rule.min}–${rule.max} (usually ${rule.typical}) — combine moments or move one to another page.`;
+    const text = `${label} has ${page.panels.length} panels; the renderer supports up to ${count.max} per page. Repace these beats without dropping story content.`;
     check.issues.push({ kind: 'count', severity: 'repair', text });
   }
 
@@ -393,29 +383,12 @@ const isSplashPage = (page: Pick<Page, 'panels' | 'layout'>): boolean =>
  * in a row (comics and manga; storybooks, strips and webtoons are exempt, and so is a format fixed at one panel per
  * page — the author chose single-panel pages). One repair issue per offending page.
  */
-export function splashIssues(doc: Pick<ComicDoc, 'format'>, pages: Pick<Page, 'id' | 'n' | 'panels' | 'layout'>[]): { pageId: string; issue: PlanIssue }[] {
-  if (doc.format.kind !== 'comic' && doc.format.kind !== 'manga') return [];
-  if (panelCountRule(doc.format).exact === 1) return [];
-  const out: { pageId: string; issue: PlanIssue }[] = [];
-  let last: Pick<Page, 'n'> | undefined;
-  for (const page of [...pages].sort((a, b) => a.n - b.n)) {
-    if (!isSplashPage(page)) continue;
-    if (last && page.n - last.n < PANEL_LIMITS.splashEvery) {
-      out.push({
-        pageId: page.id,
-        issue: {
-          kind: 'splash',
-          severity: 'repair',
-          text: `Page ${page.n} is a splash only ${plural(page.n - last.n, 'page')} after the splash on page ${last.n}: use at most one splash per ${PANEL_LIMITS.splashEvery} pages, never two in a row.`
-        }
-      });
-    }
-    last = page;
-  }
-  return out;
+/** Splash pacing is an editorial choice; adjacent splashes are supported. */
+export function splashIssues(_doc: ComicDoc, _pages: Page[]): { pageId: string; issue: PlanIssue }[] {
+  return [];
 }
 
-/** Check every page plus the book rules (splash spacing; establishing panels opening scenes). */
+/** Check every page plus establishing panels opening scenes. */
 export function checkBookPlan(doc: ComicDoc, opts: { pages?: Page[]; measure?: Measure; fixLayout?: boolean } = {}): PagePlanCheck[] {
   const pages = [...(opts.pages ?? doc.pages)].sort((a, b) => a.n - b.n);
   const meter = needMeter(doc, { aspect: letteringAspect(doc, null), measure: opts.measure });

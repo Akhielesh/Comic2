@@ -16,7 +16,9 @@ import { Button } from './ds/Button';
 import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
-import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
+import { SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
+import { SAMPLE_COMICS, findSample, type SampleStory } from './comicstudio/library/sampleCatalog';
+import { ComicSampleShelf } from './comicshost/ComicSampleDeck';
 import { ComicSampleReader } from './comicshost/ComicSampleReader';
 import './comicshost/comicsLanding.css';
 import './publicGallery.css';
@@ -104,15 +106,7 @@ const fallbackUsernameFromId = (userId?: string): string => {
 
 type GallerySort = 'trending' | 'recent';
 type SearchKind = 'title' | 'creator';
-type SampleStory = 'paper-boat' | 'last-tram';
-const SAMPLES = [
-    { id: 'last-tram' as const, title: 'The Last Tram', note: 'One last ride through a city after dark.', image: '/assets/comic-sample/last-tram-page-1-480.webp', detail: 'A city story · 2 pages' },
-    { id: 'paper-boat' as const, title: 'The Paper Boat', note: 'A small boat. A big adventure for Mira and Biscuit.', image: SAMPLE_COVER_URL, detail: 'An everyday adventure · 2 pages' }
-];
-const sampleFromLocation = (): SampleStory | null => {
-    const value = new URLSearchParams(window.location.search).get('sample');
-    return value === 'paper-boat' || value === 'last-tram' ? value : null;
-};
+const sampleFromLocation = (): SampleStory | null => findSample(new URLSearchParams(window.location.search).get('sample'))?.id ?? null;
 const libraryHref = (sample?: SampleStory) => {
     const url = new URL(window.location.href);
     url.searchParams.set('view', 'gallery');
@@ -328,7 +322,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
     const filteredProjects = projects.filter((project) => !kidsOnly || isKidsFriendly(project.contentRating));
     const isSearching = search.trim() !== query;
-    const showSamples = !query && !search.trim() && !kidsOnly;
+    const matchingSamples = !kidsOnly && (!query || searchKind === 'title') ? SAMPLE_COMICS.filter(story => !query || `${story.title} ${story.style}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : [];
+    const showSamples = matchingSamples.length > 0;
+    const currentSample = findSample(sample);
 
     const toggleLike = async (project: PublicProject) => {
         if (!user) { onRequireAuth?.(); return; }
@@ -356,9 +352,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                     <section aria-labelledby="library-sample-title" className="library-reader">
                         <a className={cn('library-back', FOCUS_RING)} href={libraryHref()} onClick={(event) => navigateSample(event, null)}><ArrowLeft aria-hidden /> Back to Library</a>
                         <div className="library-reader-heading">
-                            <p className="library-eyebrow">Studio sample · 2 pages</p>
-                            <h1 id="library-sample-title" ref={sampleTitle} tabIndex={-1}>{SAMPLES.find((story) => story.id === sample)?.title}</h1>
-                            <p>Read at your own pace. Use the arrows or swipe to turn the page.</p>
+                            <p className="library-eyebrow">Studio sample · {currentSample?.style} · {currentSample?.pages.length} {currentSample?.pages.length === 1 ? 'page' : 'pages'}</p>
+                            <h1 id="library-sample-title" ref={sampleTitle} tabIndex={-1}>{currentSample?.title}</h1>
+                            <p>{currentSample?.synopsis}</p>
                         </div>
                         <ComicSampleReader key={sample} look={SAMPLE_LOOKS[0]} standalone story={sample} />
                         <a className={cn('library-back', FOCUS_RING)} href={libraryHref()} onClick={(event) => navigateSample(event, null)}><ArrowLeft aria-hidden /> Find your next read</a>
@@ -370,17 +366,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
                     {showSamples && (
-                        <section aria-labelledby="library-samples-title" className="library-samples">
-                            <div className="library-section-heading"><h2 id="library-samples-title">Studio samples</h2><span>From Comic Studio</span></div>
-                            <div className="library-sample-grid">
-                                {SAMPLES.map((story) => (
-                                    <a key={story.id} href={libraryHref(story.id)} onClick={(event) => navigateSample(event, story.id)} className={cn('library-sample-card', FOCUS_RING)} aria-label={`Read ${story.title}`}>
-                                        <div className="library-sample-image" data-story={story.id}><img src={story.image} srcSet={story.id === 'last-tram' ? '/assets/comic-sample/last-tram-page-1-480.webp 480w, /assets/comic-sample/last-tram-page-1-768.webp 768w, /assets/comic-sample/last-tram-page-1-1200.webp 1200w' : undefined} sizes={story.id === 'last-tram' ? '(max-width: 639px) 44vw, 24vw' : undefined} alt="" width={story.id === 'paper-boat' ? 768 : 480} height={story.id === 'paper-boat' ? 1152 : 384} decoding="async" /></div>
-                                        <div className="library-sample-copy"><h3>{story.title}</h3><p className="library-sample-note">{story.note}</p><p className="library-sample-detail">{story.detail}</p><span className="library-read-link">Read the story <ArrowRight aria-hidden /></span></div>
-                                    </a>
-                                ))}
-                            </div>
-                        </section>
+                        <ComicSampleShelf comics={matchingSamples} title="Studio samples" onRead={(event, story) => navigateSample(event, story)} />
                     )}
                     <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
                         <div className="library-section-heading"><h2 id="library-community-title">From the community</h2>{!user && onRequireAuth && <Button type="button" variant="outline" size="sm" onClick={onRequireAuth}>Sign in</Button>}</div>

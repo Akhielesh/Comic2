@@ -336,6 +336,8 @@ export interface StudioContext {
   assets: AssetStore;
   billing: BillingHooks;
   signal: AbortSignal;
+  /** Request-scoped opening handoff: even model-inferred consent cannot start a gated spend. */
+  planningOnly?: boolean;
   /** Emit signed URLs for newly created assets to the client. */
   publishUrls(paths: string[]): Promise<void>;
   /** Tracks background work started by this turn so the stream stays open until it settles. */

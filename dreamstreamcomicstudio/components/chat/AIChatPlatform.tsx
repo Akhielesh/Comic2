@@ -1209,7 +1209,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // be active when an async tick resolves — so switching/creating chats mid-stream
     // never crosses settings or output between conversations.
     const session = latestSession(sessionId);
-    if (!session) return;
+    if (!session) return false;
 
     // Busy and abortable from module scope: the reply keeps streaming (and is saved) if this view
     // unmounts, and a view mounted meanwhile sees the chat busy (services/chatStreams).
@@ -1421,6 +1421,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
       updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true, reqSource);
+      return true;
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever, and keep the
@@ -1430,7 +1431,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           turns: s.turns.map((t) => (t.id === aiTurnId ? toStoppedTurn(t, metaConnectorPrivacy) : t)),
           updatedAt: Date.now()
         }));
-        return;
+        return false;
       }
       // The calm refusals of connected-account privacy (a free model would have received this
       // chat's connected content, or usage is used up and the free fallback is off for it): nothing
@@ -1450,7 +1451,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           turns: s.turns.map((t) => (t.id === aiTurnId ? toNoticeTurn(t, notice) : t)),
           updatedAt: Date.now()
         }));
-        return;
+        return false;
       }
       const friendly = friendlyChatError(err);
       // Record the failed chat (with its session/turn + model) so every failure is
@@ -1491,6 +1492,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }),
         updatedAt: Date.now()
       }));
+      return false;
     } finally {
       endStream(sessionId, controller);
       noteGeneration(false);
@@ -1498,15 +1500,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   };
 
   const handleSend = async (text: string, attachments: ChatAttachment[], overrideModel?: CatalogModel) => {
-    if (!activeSession || busy) return;
-    if (!text && attachments.length === 0) return;
+    if (!activeSession || busy) return false;
+    if (!text && attachments.length === 0) return false;
 
     const sessionId = activeSession.id;
     // `busy` is React state and flips a tick late, so a mobile double-tap (touchend +
     // click) can fire two sends before it updates — which is how a chat ends up with two
     // identical user turns. The stream registry is set synchronously when a generation starts
     // (and outlives this view), so it's the reliable guard against a duplicate in-flight send.
-    if (isStreaming(sessionId)) return;
+    if (isStreaming(sessionId)) return false;
     // The newest turns, not this render's: a card may have just recorded its outcome on its turn
     // (the clarify card records "sent" and then posts its answers in the same tick).
     const current = latestSession(sessionId) ?? activeSession;
@@ -1535,7 +1537,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // swaps in a beat later.
     if (isFirst && text) void autoTitleSession(sessionId, text, reqSource);
 
-    await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
+    return runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
   };
 
   // Library → "Use in a new chat": open a fresh chat and hand the composer the picked
@@ -1655,12 +1657,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Edit a user message and resend: replace its text, drop everything after it, and
   // generate a fresh answer.
   const handleEditUserMessage = async (turnId: string, newText: string) => {
-    if (!activeSession || busy || isStreaming(activeSession.id)) return;
+    if (!activeSession || busy || isStreaming(activeSession.id)) return false;
     const text = newText.trim();
-    if (!text) return;
+    if (!text) return false;
     const turns = (latestSession(activeSession.id) ?? activeSession).turns;
     const idx = turns.findIndex((t) => t.id === turnId);
-    if (idx < 0 || turns[idx].role !== 'user') return;
+    if (idx < 0 || turns[idx].role !== 'user') return false;
 
     const sessionId = activeSession.id;
     const editedTurn: ChatTurn = { ...turns[idx], content: text };
@@ -1668,7 +1670,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     updateSession(sessionId, (s) => ({ ...s, turns: baseTurns, updatedAt: Date.now() }));
 
     const { reqModel, reqSource, reqTools } = resolveRequest(text);
-    await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
+    return runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
   };
 
   // Switch which regenerated version of an assistant turn is shown.
@@ -1820,6 +1822,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       {resolvedView === 'chat' && activeSession ? (
       <ArtifactTurnsContext.Provider value={artifactTurns}>
       <ChatConversation
+        accountId={user?.id}
         session={activeSession}
         features={features}
         busy={busy}

@@ -341,9 +341,11 @@ export interface Brief {
 
 export interface Format {
   kind: ComicKind;
+  /** Current/estimated count; binding only when pageCountMode is fixed (or absent on a legacy book). */
   pageCount: number;
+  pageCountMode?: 'auto' | 'fixed';
   pageAspect: AspectRatio;
-  /** 'auto' lets the writer vary density per page (3–6). */
+  /** Preferred density only. The Director chooses each page's actual count from its scenes. */
   panelsPerPage: 'auto' | number;
   readingDirection: 'ltr' | 'rtl';
   lettering: LetteringMode;
@@ -1292,7 +1294,7 @@ export const createEmptyDoc = (id: string, title = 'Untitled comic', now = Date.
   updatedAt: now,
   rev: 0,
   brief: { title, notes: [] },
-  format: { ...DEFAULT_FORMAT },
+  format: { ...DEFAULT_FORMAT, pageCountMode: 'auto' },
   source: {},
   style: { status: 'empty', refs: [], options: [] },
   cast: [],

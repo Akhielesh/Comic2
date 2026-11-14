@@ -1988,7 +1988,7 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       return { ...doc, brief: { ...doc.brief, notes: [...doc.brief.notes, text].slice(-40) } };
     }
     case 'format':
-      return { ...doc, format: { ...doc.format, ...op.patch } };
+      return { ...doc, format: { ...doc.format, ...(op.patch.pageCount !== undefined ? { pageCountMode: 'fixed' as const } : {}), ...op.patch } };
     case 'settings':
       return { ...doc, settings: { ...doc.settings, ...op.patch } };
     case 'source':
