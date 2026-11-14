@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useComposerDraft } from '../services/composerDrafts';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bot, BookmarkPlus, Check, RotateCcw, Send, Sparkles, X } from 'lucide-react';
 import { AssistantMessage, AssistantLimitInfo, UniversalAssistantContext } from '../apiTypes';
@@ -103,7 +104,12 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [input, setInput] = useState('');
+  const scopeId = `${user?.id ?? 'guest'}:${activeProject?.id ?? 'app'}`;
+  const currentScope = useRef(scopeId);
+  currentScope.current = scopeId;
+  const pendingSend = useRef<string | null>(null);
+  const draft = useComposerDraft(user?.id ? { accountId: user.id, surface: 'assistant', conversationId: activeProject?.id ?? 'app' } : undefined);
+  const { text: input, setText: setInput } = draft;
   const [savedMsgIds, setSavedMsgIds] = useState<Set<string>>(new Set());
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [lastLimitInfo, setLastLimitInfo] = useState<AssistantLimitInfo | undefined>(undefined);
@@ -111,6 +117,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useLayoutEffect(() => { setMessages([]); setIsSending(false); setStatusMessage(null); }, [scopeId]);
   const isAuthenticated = !!user;
 
   useEffect(() => {
@@ -204,7 +211,10 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
   const handleSend = async (overrideText?: string) => {
     const message = (overrideText ?? input).trim();
-    if (!message || isSending) return;
+    if (!message || isSending || pendingSend.current === scopeId) return;
+    const submitted = draft.capture();
+    const sendingScope = scopeId;
+    pendingSend.current = sendingScope;
 
     const userMessage: ChatItem = {
       id: crypto.randomUUID(),
@@ -215,7 +225,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     const history = assistantHistory.slice(-24);
     setMessages((prev) => [...prev, userMessage]);
     // A suggestion chip sends its own prompt — it must not eat a draft the user typed.
-    if (overrideText === undefined) setInput('');
+    // The draft is committed only after the reply is accepted.
     setStatusMessage(null);
     setIsSending(true);
 
@@ -244,6 +254,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     try {
       const context = await buildContext();
       const response = await queryUniversalAssistant(message, history, context);
+      if (overrideText === undefined) draft.clearIfCurrent(submitted);
+      if (currentScope.current !== sendingScope) return;
       setLastLimitInfo(response.limitInfo);
       setMessages((prev) => [
         ...prev,
@@ -255,6 +267,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         }
       ]);
     } catch (error) {
+      if (currentScope.current !== sendingScope) return;
       if (error instanceof ApiError && error.status === 429) {
         setMessages((prev) => [
           ...prev,
@@ -282,7 +295,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         metadata: { historyLength: history.length }
       });
     } finally {
-      setIsSending(false);
+      if (pendingSend.current === sendingScope) pendingSend.current = null;
+      if (currentScope.current === sendingScope) setIsSending(false);
     }
   };
 

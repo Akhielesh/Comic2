@@ -19,6 +19,7 @@
 // entrance baseline is seeded on the first render of each doc (MO-2: stored messages never rise in again).
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { ComposerDraftAccountContext } from '../../../services/composerDrafts';
 import { ArrowDown } from 'lucide-react';
 import { buildSettleIndex, settledCardsOn } from '../../../shared/comic/settle';
 import { retriesVersion, subscribeRetries, waitingRetries } from '../reliability/retryIntents';
@@ -85,6 +86,7 @@ export interface ConversationPaneProps {
    * of the line plus a "N pages rendering · View" pill).
    */
   onViewActivity?: () => void;
+  draftAccountId?: string;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
 }
@@ -98,7 +100,7 @@ const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null) => {
   else (ref as React.MutableRefObject<T | null>).current = value;
 };
 
-export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity, initialIdea, onInitialIdeaConsumed }) => {
+export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity, draftAccountId, initialIdea, onInitialIdeaConsumed }) => {
   const { doc, drafts, pendingMessage, messageBusy } = studio;
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -230,6 +232,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   };
 
   return (
+    <ComposerDraftAccountContext.Provider value={draftAccountId}>
     <section aria-label="Conversation" className={cx('relative flex h-full min-h-0 w-full flex-col', className)} onDragOver={onDragOver} onDrop={onDrop}>
       {replaceList ? (
         <div className="min-h-0 flex-1 overflow-hidden">{replaceList}</div>
@@ -325,9 +328,10 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
           <ActivityLine studio={studio} className="mb-0.5" onView={onViewActivity} />
           <QueuedMessages studio={studio} className="mb-1.5" />
           {aboveComposer}
-          <StudioComposer studio={studio} apiRef={setComposer} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />
+          <StudioComposer studio={studio} apiRef={setComposer} draftAccountId={draftAccountId} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />
         </div>
       </div>
     </section>
+    </ComposerDraftAccountContext.Provider>
   );
 };

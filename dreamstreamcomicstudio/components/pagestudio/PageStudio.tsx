@@ -1,3 +1,4 @@
+import { useComposerDraft } from '../../services/composerDrafts';
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -26,6 +27,7 @@ type Stage = NonNullable<PageStudioState['stage']>;
 
 interface PageStudioProps {
   project: Project;
+  draftAccountId?: string;
   onUpdate: (updater: (prev: Project) => Partial<Project>) => void;
   onBack: () => void;
 }
@@ -91,7 +93,7 @@ const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ 
   />
 );
 
-export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBack }) => {
+export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBack, draftAccountId }) => {
   const ps: PageStudioState = useMemo(
     () => ({ ...DEFAULT_STATE, ...(project.state.pageStudio || {}) }),
     [project.state.pageStudio]
@@ -101,7 +103,7 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
   const [error, setError] = useState<string | null>(null);
   const styleFileRef = useRef<HTMLInputElement>(null);
   const layoutFileRef = useRef<HTMLInputElement>(null);
-  const [editInstruction, setEditInstruction] = useState('');
+
 
   const patch = (next: Partial<PageStudioState>) => {
     onUpdate((prev) => ({
@@ -115,6 +117,8 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
   const goto = (s: Stage) => patch({ stage: s });
 
   const activePage = ps.pages.find((p) => p.id === ps.activePageId) || ps.pages[ps.pages.length - 1];
+  const editDraft = useComposerDraft(draftAccountId ? { accountId: draftAccountId, surface: 'page-edit', conversationId: `${project.id}:${activePage?.id ?? 'new'}` } : undefined);
+  const { text: editInstruction, setText: setEditInstruction } = editDraft;
 
   // ---- Style intake ----------------------------------------------------------
   const onStyleFile = async (file?: File) => {
@@ -246,6 +250,7 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
   // ---- Edit (image-editing model patches) ------------------------------------
   const runEdit = async () => {
     if (!activePage?.imageUrl || !editInstruction.trim()) return;
+    const submitted = editDraft.capture();
     setError(null);
     setBusy('Applying your edit…');
     try {
@@ -272,7 +277,7 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
           : p
       );
       patch({ pages: updatedPages });
-      setEditInstruction('');
+      editDraft.clearIfCurrent(submitted);
     } catch (e) {
       setError(errMessage(e));
     } finally {
