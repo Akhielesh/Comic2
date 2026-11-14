@@ -49,6 +49,8 @@
 //  - A selection in the page editor shows as a focus chip ("Page 3 · 2 balloons ×"); the next
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
+import { useComposerDraft } from '../../../services/composerDrafts';
+import { claimOpeningIdea, readOpeningIdea } from '../openingIdea';
 import React, { lazy, Suspense, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { AlertTriangle, ArrowUp, AudioLines, Camera, Crosshair, FileText, Image as ImageIcon, ListPlus, Lock, Palette, Plus, Search, Sparkles, Square, Users, X } from 'lucide-react';
 import { composerIsQualityHome } from '../qualityHome';
@@ -391,18 +393,20 @@ export interface StudioComposerProps {
   onSent?: () => void;
   /** Placeholder override (the sheet: "Ask the director about this board…"). */
   placeholder?: string;
-  /** An App-owned, project-scoped first draft. This prefills only; sending remains explicit. */
+  /** The idea explicitly submitted by Start; one planning-only opening message. */
+  draftAccountId?: string;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
 }
 
-export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className, variant = 'docked', onSent, placeholder: placeholderProp, initialIdea, onInitialIdeaConsumed }) => {
+export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className, variant = 'docked', onSent, placeholder: placeholderProp, draftAccountId, initialIdea, onInitialIdeaConsumed }) => {
   const { doc, messageBusy, cancelling } = studio;
   const ff = useFormFactor();
   const coarse = ff.coarse;
   const phone = isPhoneLayout(ff.layout);
   const inSheet = variant === 'sheet';
-  const [text, setText] = useState('');
+  const draft = useComposerDraft(draftAccountId && doc?.id ? { accountId: draftAccountId, surface: 'director', conversationId: doc.id } : undefined);
+  const { text, setText } = draft;
   const consumedIdeas = useRef(new Set<string>());
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
@@ -534,18 +538,6 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       place(el);
     });
   }, [autoGrow]);
-
-  useEffect(() => {
-    if (!doc || !initialIdea || inSheet) return;
-    const key = `${doc.id}:${initialIdea.id}`;
-    if (consumedIdeas.current.has(key)) return;
-    consumedIdeas.current.add(key);
-    // A person may have started typing while the project loaded. Keep that draft too.
-    setText((draft) => draft.trim() ? `${draft.trimEnd()}\n\n${initialIdea.text}` : initialIdea.text);
-    setHint('Your idea is ready. Review it, then Send to the Director.');
-    onInitialIdeaConsumed?.(initialIdea.id);
-    focusEnd();
-  }, [doc?.id, initialIdea, inSheet, onInitialIdeaConsumed, focusEnd]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -987,7 +979,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const busyCount = attachments.filter((a) => a.kind === 'image' && isUploadBusy(a.upload)).length;
 
   const sendNow = useCallback(
-    (rawText: string, list: ComposerAttachment[]) => {
+    (rawText: string, list: ComposerAttachment[], opening = false) => {
       if (!ready || (locked && !queueMode)) return false;
       // Photos still on their way in: the server only takes inbox paths that exist — wait.
       if (list.some((a) => a.kind === 'image' && isUploadBusy(a.upload))) return false;
@@ -1008,9 +1000,13 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       // phone sheet closes); were it refused after all, every word and photo comes back. A locked turn: the note goes
       // to Up next, and the box clears only once send() says it was queued — 'refused' leaves it all where it was
       // (the controller says why).
-      const sentNow = !queueing;
+      const sentNow = !queueing && !studio.confirmsMessages;
+      const submitted = draft.capture();
+      let afterOptimisticClear = submitted;
       const clearSent = () => {
-        setText((prev) => (prev === rawText ? '' : prev));
+        if (submitted.text === rawText) draft.clearIfCurrent(submitted);
+        afterOptimisticClear = draft.capture();
+        if (!mountedRef.current) return;
         setAttachments((prev) => prev.filter((a) => !list.some((x) => x.id === a.id)));
         setRows([]);
         setHint(null);
@@ -1025,7 +1021,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         clearSent();
         onSent?.();
       }
-      void Promise.resolve(studio.send(sendText, opts))
+      const sendOptions = opening || studio.confirmsMessages ? { ...(Array.isArray(opts) ? { attachments: opts } : opts), ...(opening ? { planningOnly: true as const } : {}), ...(studio.confirmsMessages ? { onAccepted: (accepted: boolean) => { if (accepted) { clearSent(); if (mountedRef.current && (!queueing || !inSheet)) onSent?.(); } } } : {}) } : opts;
+      void Promise.resolve(studio.send(sendText, sendOptions))
         .then(sendOutcomeOf, () => 'refused' as const)
         .then((outcome) => {
           if (outcome !== 'refused') {
@@ -1039,20 +1036,34 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           if (!mountedRef.current) return;
           if (outcome === 'refused') {
             if (sentNow) {
-              setText((prev) => (prev.trim() ? prev : rawText));
+              draft.replaceIfCurrent(afterOptimisticClear, rawText);
               setAttachments((prev) => (prev.length ? prev : list));
             }
             return;
           }
-          if (sentNow) return;
+          if (sentNow || studio.confirmsMessages) return;
           clearSent();
           // The phone ask sheet stays open on a queued note, so its Up next shows where it went.
           if (outcome === 'sent' || !inSheet) onSent?.();
         });
       return true;
     },
-    [locked, queueMode, queueing, ready, studio, focusActive, onSent, showNotice, inSheet]
+    [locked, queueMode, queueing, ready, studio, focusActive, onSent, showNotice, inSheet, draft.capture, draft.clearIfCurrent, draft.replaceIfCurrent]
   );
+
+  useEffect(() => {
+    if (!doc || inSheet || locked) return;
+    const idea = initialIdea ?? readOpeningIdea(draftAccountId, doc.id);
+    if (!idea) return;
+    const key = `${doc.id}:${idea.id}`;
+    if (consumedIdeas.current.has(key)) return;
+    consumedIdeas.current.add(key);
+    if (draftAccountId && !claimOpeningIdea(draftAccountId, doc.id, idea)) { onInitialIdeaConsumed?.(idea.id); return; }
+    // Keep any independently restored/typed note; Start submits exactly the idea it captured.
+    if (!draft.capture().text) setText(idea.text);
+    onInitialIdeaConsumed?.(idea.id);
+    sendNow(idea.text, [], true);
+  }, [doc?.id, initialIdea, draftAccountId, inSheet, locked, onInitialIdeaConsumed, sendNow, draft.capture, setText]);
 
   const submit = () => {
     if (!canSend) return;
@@ -1172,7 +1183,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         if (req.research.projectId !== doc?.id) return;
         addResearch(req.research.result, req.research.file);
       }
-      if (typeof req.text === 'string') setText((prev) => (req.append && prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n${req.text}` : req.text!));
+      if (typeof req.text === 'string') setText((prev) => (prev.trim() && prev !== req.text ? `${prev.replace(/\s+$/, '')}\n\n${req.text}` : req.text!));
       if (req.hint !== undefined) setHint(req.hint || null);
       if (req.openPanel === 'format' || req.openPanel === 'style' || req.openPanel === 'quality') setPanel(req.openPanel);
       if (req.pickFiles) fileInputRef.current?.click();
@@ -1758,7 +1769,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                   <span className="tabular-nums">
                     {/* Narrow: the glyph already shows the page shape. */}
                     {roomy && <span>{format?.pageAspect || '2:3'} · </span>}
-                    {format?.pageCount ?? 6}p
+                    {format && 'pageCountMode' in format && format.pageCountMode === 'auto' ? 'Story-led length' : `${format?.pageCount ?? 6}p`}
                   </span>
                 </>,
                 'Format: page shape, pages, panels, lettering',

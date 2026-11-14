@@ -1,3 +1,4 @@
+import { useComposerDraft, type DraftScope } from '../../services/composerDrafts';
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Server } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
@@ -29,7 +30,8 @@ interface ChatComposerProps {
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onToggleMcpServer: (id: string, on: boolean) => void;
-  onSend: (text: string, attachments: ChatAttachment[]) => void;
+  draftScope?: DraftScope;
+  onSend: (text: string, attachments: ChatAttachment[]) => void | boolean | Promise<void | boolean>;
   /** When set, prefill the composer with this text (e.g. a suggested follow-up). */
   seedText?: string;
   onSeedConsumed?: () => void;
@@ -101,13 +103,20 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   onToggleConnector,
   onToggleMcpServer,
   onSend,
+  draftScope,
   seedText,
   onSeedConsumed,
   onStop
 }) => {
-  const [text, setText] = useState('');
+  const draft = useComposerDraft(draftScope);
+  const { text, setText } = draft;
+  const sending = useRef(false);
   const [slashIndex, setSlashIndex] = useState(0);
-  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const attachmentDraft = useComposerDraft(draftScope ? { ...draftScope, surface: 'chat-pasted-text' } : undefined);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>(() => {
+    try { const value = JSON.parse(attachmentDraft.text); return Array.isArray(value) ? value.filter((a) => a?.kind === 'text' && typeof a.dataUrl === 'string').slice(0, MAX_ATTACHMENTS) : []; } catch { return []; }
+  });
+  useEffect(() => { const textFiles = attachments.filter((a) => a.kind === 'text'); attachmentDraft.setText(textFiles.length ? JSON.stringify(textFiles) : ''); }, [attachments, attachmentDraft.setText]);
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
@@ -133,10 +142,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     });
   };
 
-  // Prefill from a suggested follow-up, then focus the box.
+  const consumedSeed = useRef<string | null>(null);
+  // Append a suggested follow-up without replacing a restored draft.
   useEffect(() => {
-    if (!seedText) return;
-    setText(seedText);
+    if (!seedText) { consumedSeed.current = null; return; }
+    if (consumedSeed.current === seedText) return;
+    consumedSeed.current = seedText;
+    setText((current) => current.trim() ? `${current.trimEnd()}\n\n${seedText}` : seedText);
     onSeedConsumed?.();
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -156,7 +168,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     const onCompose = (e: Event) => {
       const draft = (e as CustomEvent<{ text?: string }>).detail?.text;
       if (!draft) return;
-      setText(draft);
+      setText((current) => current.trim() ? `${current.trimEnd()}\n\n${draft}` : draft);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el) {
@@ -214,7 +226,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   // Improve the draft prompt in place (intent preserved); keeps the original for undo.
   const handleEnhance = async () => {
     if (!canEnhance) return;
-    const prev = text;
+    const previous = draft.capture();
+    const prev = previous.text;
     setEnhancing(true);
     setEnhanceNote(null);
     try {
@@ -223,7 +236,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       if (skipped === 'usage') {
         setEnhanceNote(ENHANCE_PAUSED_NOTE);
       } else if (enhanced && enhanced.trim() && enhanced.trim() !== prev.trim()) {
-        setText(enhanced.trim());
+        if (!draft.replaceIfCurrent(previous, enhanced.trim())) return;
         setBeforeEnhance(prev);
         requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
       }
@@ -242,20 +255,25 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
   };
 
-  const resetInput = () => {
-    setText('');
-    setAttachments([]);
-    setBeforeEnhance(null);
-    setEnhanceNote(null);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  const submitMessage = async (message: string, files: ChatAttachment[], clearsDraft = true) => {
+    if (busy || sending.current || (!message.trim() && !files.length)) return;
+    sending.current = true;
+    const submitted = draft.capture();
+    try {
+      const accepted = await onSend(message.trim(), files);
+      if (accepted === false) return;
+      if (clearsDraft) draft.clearIfCurrent(submitted);
+      setAttachments((current) => current.filter((file) => !files.some((sent) => sent.id === file.id)));
+      attachmentDraft.setText((stored) => {
+        try { const keep = (JSON.parse(stored) as ChatAttachment[]).filter((file) => !files.some((sent) => sent.id === file.id)); return keep.length ? JSON.stringify(keep) : ''; } catch { return ''; }
+      });
+      setBeforeEnhance(null);
+      setEnhanceNote(null);
+    } catch { /* A failed send retains the draft; the conversation reports the failure. */ }
+    finally { sending.current = false; }
   };
 
-  const submit = () => {
-    if (busy) return;
-    if (!canSend) return;
-    onSend(text.trim(), attachments);
-    resetInput();
-  };
+  const submit = () => { if (canSend) void submitMessage(text, attachments); };
 
   // "/" launcher: when the whole draft is "/word" (no space yet), offer connector/tool
   // commands. Picking one either runs a ready prompt or seeds the box, and enables the
@@ -276,8 +294,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       if (conn) onToggleConnector(conn, true);
     }
     if (cmd.send && !busy) {
-      onSend(cmd.prompt, []);
-      resetInput();
+      void submitMessage(cmd.prompt, []);
       return;
     }
     setText(cmd.prompt);

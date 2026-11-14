@@ -578,3 +578,34 @@ describe('useStudio — cancel and cleanup', () => {
     expect(s.signal?.aborted).toBe(false);
   });
 });
+
+
+describe('Director draft acceptance receipts', () => {
+  it('acknowledges only a durable user message, while carrying planningOnly to the server', async () => {
+    const { result } = await setup();
+    const accepted = vi.fn();
+    act(() => void result.current.send('Plan a moon garden', { planningOnly: true, onAccepted: accepted }));
+    const stream = lastStream();
+    expect(stream.req).toMatchObject({ kind: 'message', planningOnly: true });
+    expect(accepted).not.toHaveBeenCalled();
+    emit(stream, { type: 'hello', rev: result.current.doc!.rev, turnId: 't' });
+    expect(accepted).not.toHaveBeenCalled();
+    const rev = result.current.doc!.rev + 1;
+    emit(stream, { type: 'ops', rev, ops: [{ op: 'message', msg: { id: 'saved-user', role: 'user', text: 'Plan a moon garden', at: 1 } }] });
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+    await finish(stream, rev);
+    expect(accepted).toHaveBeenCalledTimes(1);
+  });
+  it('failed request keeps its receipt and planning-only protection when retried', async () => {
+    const { result } = await setup();
+    const accepted = vi.fn();
+    act(() => void result.current.send('Draw my idea', { planningOnly: true, onAccepted: accepted }));
+    await act(async () => lastStream().reject(new StudioApiError('network', 'Offline')));
+    expect(accepted).toHaveBeenCalledWith(false);
+    expect(result.current.pendingMessage?.planningOnly).toBe(true);
+    act(() => result.current.retryPendingMessage());
+    expect(lastStream().req).toMatchObject({ kind: 'message', planningOnly: true });
+    await finish(lastStream(), result.current.doc!.rev);
+    expect(accepted).toHaveBeenLastCalledWith(true);
+  });
+});
