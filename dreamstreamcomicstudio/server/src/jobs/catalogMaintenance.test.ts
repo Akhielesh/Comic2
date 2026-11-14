@@ -53,4 +53,15 @@ describe('scheduled catalog jobs', () => {
     await expect(probeNvidiaAvailability()).rejects.toThrow('NVIDIA_PROBE_UNAVAILABLE');
     expect(deps.callability).toHaveBeenLastCalledWith('nvidia', [], { strict: true });
   });
+  it('never turns one account\'s 404 into a global BYOK exclusion', async () => {
+    vi.stubEnv('NVIDIA_API_KEY', 'test-only-key');
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ data: [
+      { id: 'test/works' }, { id: 'test/account-denied' }, { id: 'test/no-endpoints' }
+    ] })).mockResolvedValueOnce(Response.json({ choices: [{ message: { content: 'ok' } }] }))
+      .mockResolvedValueOnce(new Response('not found for account', { status: 404 }))
+      .mockResolvedValueOnce(new Response('no endpoints', { status: 404 }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(probeNvidiaAvailability()).resolves.toEqual({ callable: 1, downloadOnly: 0, unknown: 2 });
+    expect(deps.callability).toHaveBeenCalledExactlyOnceWith('nvidia', [{ modelId: 'test/works', callable: true }], { strict: true });
+  });
 });

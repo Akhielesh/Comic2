@@ -1,10 +1,8 @@
 // Probe NVIDIA hosted-API callability.
 //
-// NVIDIA Build's /models lists many "download-only" NIMs that aren't served on the
-// hosted API (integrate.api.nvidia.com) — calling them returns 404 "not found for
-// account". The metadata gives no signal, so we VERIFY by probing each model with a
-// tiny request and persist the result (model_catalog_cache.api_callable) so the UI can
-// flag/disable models that can't actually be called.
+// Public model discovery does not prove hosted account access. A tiny successful
+// request records positive platform-account evidence. Failures, including account-scoped
+// 404s, cannot prove that every user's BYOK account is unable to call the model.
 //
 // Run via `npm run nvidia:probe` (needs NVIDIA_API_KEY + Supabase service role).
 // Schedule it alongside the catalog refresh. Transient failures (rate-limit/timeout)
@@ -14,7 +12,7 @@ import { NVIDIA_BASE_URL } from '../config.js';
 import { persistCallability } from '../services/modelCatalogStore.js';
 import { getSupabaseCapabilityStatus } from '../services/supabase.js';
 
-type ProbeStatus = 'callable' | 'download_only' | 'unknown';
+type ProbeStatus = 'callable' | 'unknown';
 
 const probeModel = async (key: string, model: string): Promise<ProbeStatus> => {
   const controller = new AbortController();
@@ -27,9 +25,10 @@ const probeModel = async (key: string, model: string): Promise<ProbeStatus> => {
       signal: controller.signal
     });
     if (res.ok) return 'callable';
-    const body = await res.text();
-    if (res.status === 404 && /not found for account|no endpoints/i.test(body)) return 'download_only';
-    // Validation errors do not prove account access or successful inference.
+    // "Not found for account" / "no endpoints" can describe this account's access,
+    // routing, or a temporary outage. Never persist a global false from such a response:
+    // public catalog consumers use false to disable selection for other BYOK users too.
+    // Validation errors likewise do not prove account access or successful inference.
     return 'unknown';
   } catch {
     return 'unknown';
@@ -70,7 +69,8 @@ export const probeNvidiaAvailability = async (): Promise<{ callable: number; dow
 
   const summary = {
     callable: statuses.filter((s) => s.status === 'callable').length,
-    downloadOnly: statuses.filter((s) => s.status === 'download_only').length,
+    // Retained for the existing report contract; an account probe cannot establish this.
+    downloadOnly: 0,
     unknown: statuses.filter((s) => s.status === 'unknown').length
   };
   if (!decided.length) throw new Error('NVIDIA_PROBE_UNAVAILABLE');

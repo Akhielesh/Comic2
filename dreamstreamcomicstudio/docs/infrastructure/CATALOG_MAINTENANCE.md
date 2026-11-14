@@ -22,8 +22,10 @@ refresh awaits a strict database write. Empty/fallback lists and database failur
 The NVIDIA probe requires `NVIDIA_API_KEY` in the backend. Without it the endpoint returns 503
 `NVIDIA_API_KEY_MISSING`, and Actions fails explicitly. Do not copy a user's personal BYOK into
 platform configuration. The existing probe sends a one-token generation per listed text model;
-it can consume provider credits. Only successful inference proves callability; validation errors
-and transient failures remain unknown. Existing `api_callable` records are historical observations,
+it can consume provider credits. Only successful inference supplies positive platform-account
+evidence. Validation errors, account-specific 404s (including "not found for account" and "no
+endpoints"), and transient failures remain unknown; they never globally disable another user's
+BYOK model selection. Existing `api_callable` records are historical observations,
 not a guarantee of a different account's entitlement. `api_callable_checked_at` records only a
 conclusive probe, independently of discovery; missing dates or evidence older than 48 hours are
 returned as unknown. The additive `server/sql/model_catalog_callability_freshness.sql` must be
