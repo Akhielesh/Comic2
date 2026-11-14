@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    if: github.ref == 'refs/heads/Dreamstrream-v1'
+    if: github.ref == 'refs/heads/codex/catalog-oidc-diagnostic'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -31,5 +31,5 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-      - name: Run authorized backend maintenance
-        run: node dreamstreamcomicstudio/scripts/ops/catalogMaintenance.mjs refresh
+      - name: Inspect non-secret OIDC policy checks
+        run: node dreamstreamcomicstudio/scripts/ops/catalogOidcDiagnostic.mjs
