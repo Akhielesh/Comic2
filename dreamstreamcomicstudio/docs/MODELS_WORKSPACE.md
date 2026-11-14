@@ -12,9 +12,9 @@ The `/models` page uses Atlas primitives and tokens, with the search, provider f
 
 ## Generated examples and privacy
 
-`GET /api/models/showcase` joins registry facts with attributed published library images and privacy-approved image-call aggregates. With an authenticated session it also includes a bounded selection from that user's recent Comic documents. Only ready generated assets with explicit model provenance qualify; the project model lock is never substituted for an asset's model. Private images have short-lived signed URLs and are never included in a shared cache or public response.
+`GET /api/models/showcase` joins registry facts with attributed published library images and privacy-approved image-call aggregates. With an authenticated session it also includes a bounded selection from that user's recent Comic documents and that owner's recorded image-call measurements. Only ready generated assets with explicit model provenance qualify; the project model lock is never substituted for an asset's model. Private images have short-lived signed URLs and are never included in a shared cache or public response.
 
-The page clears private examples and open image dialogs on account changes. Published snapshots currently omit model provenance, so those images cannot be assigned to a model just by inspecting the artwork. An empty gallery is intentional until qualifying assets exist. No generated examples, measured latency, costs or usage are fabricated.
+The page clears private examples, measurements and open image dialogs on account changes. An explicit Your results / Platform results switch keeps private and aggregate observations separate. Private medians use the latest at most 20 successful priced or timed calls per exact model, kind and resolution, with at least three samples, from at most the latest 500 owner calls in 30 days. Cost and timing sample sizes can differ. These are provider-reported costs, not the customer billing amount. They are group observations, never an asserted cost for the displayed individual image. Published snapshots currently omit model provenance, so those images cannot be assigned to a model just by inspecting the artwork. An empty gallery is intentional until qualifying assets exist. No generated examples, measured latency, costs or usage are fabricated.
 
 ## Freshness and connections
 
@@ -22,7 +22,7 @@ The catalog combines live discovery, durable discoveries and explicitly dated cu
 
 Credential validation checks the selected credential, including an account-only credential. Saving or rotating a key is separate from verifying it. A late response cannot validate a replacement key. Disabling every source does not fall back to account or platform keys. Classic workflows accept only their implemented providers and report incompatible routes explicitly.
 
-Scheduled catalog/NVIDIA workflows require their own GitHub Actions configuration; Cloudflare backend secrets are not inherited. Preflight checks identify missing secret names without exposing values. Do not describe this scheduler as repaired until those jobs have run successfully.
+Scheduled catalog/NVIDIA workflows authenticate to fixed backend maintenance operations with short-lived GitHub OIDC tokens restricted to the production branch, repository and exact workflow. Provider/database credentials remain in backend configuration. Discovery is separate from credential validation and model callability; NVIDIA's public model list proves neither. Missing probe credentials remain explicit unavailability. Job execution and deployed commit evidence belong in the release audit; code changes alone do not establish operational success.
 
 ## Verification
 

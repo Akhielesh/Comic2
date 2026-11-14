@@ -163,6 +163,7 @@ export const imageCallFromDb = (r: Record<string, unknown>): ImageCallRow | null
     httpStatus: num(r.http_status),
     errorCode: str(r.error_code),
     providerCostUsd: num(r.provider_cost_usd),
+    latencyMs: num(r.latency_ms),
     createdAt: new Date(createdAt).toISOString()
   };
 };
@@ -200,10 +201,11 @@ export const createSupabaseImageCallsDb = (): ImageCallsDb | null => {
     async callsForUser(userId, opts) {
       const { data, error } = await db()
         .from('comic_image_calls')
-        .select('model_id, kind, res, outcome, http_status, error_code, provider_cost_usd, created_at')
+        .select('model_id, kind, res, outcome, http_status, error_code, provider_cost_usd, latency_ms, created_at')
         .eq('user_id', userId)
         .gte('created_at', opts.sinceIso)
         .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
         .limit(opts.limit)
         .abortSignal(timeout());
       if (error) throw new Error(error.message);

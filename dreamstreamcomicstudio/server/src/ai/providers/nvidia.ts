@@ -1,8 +1,8 @@
 // NVIDIA Build (NIM) provider — an OpenAI-compatible TEXT/LLM source.
 //
 // Text:   POST /chat/completions (OpenAI-compatible).
-// Models: GET /models (OpenAI-style { data: [{ id }] }; requires a key — NVIDIA's catalog
-//         is NOT public the way OpenRouter's is).
+// Models: GET /models is public (verified 2026-11-14). A successful listing proves
+//         discovery only, never key validity or account-specific callability.
 // Auth:   Authorization: Bearer nvapi-...
 // Base:   https://integrate.api.nvidia.com/v1  (NVIDIA_BASE_URL)
 //
@@ -218,18 +218,20 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     supportedParameters: isImage ? [] : ['response_format'],
     // NVIDIA Build models are credit-based with no per-call pricing in the catalog.
     pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
-    // Free to call under the NVIDIA Build free tier (subject to its own credit/rate caps).
-    isFree: true,
-    costClass: 'free_verified',
+    // Public metadata has no quote or account allowance. As with other unknown-price
+    // providers, exclude from the verified-free lane; pricingKnown controls the label.
+    isFree: false,
+    costClass: 'paid',
     supportsImageOutput: isImage,
     supportsImageInput: isEdit || isVision,
     supportsJsonOutput: !isImage
   };
 };
 
-const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {
-  if (!ctx?.apiKey) return []; // NVIDIA's /models requires auth; no key => no NVIDIA catalog.
-  const data = await nvidiaFetch<any>('/models', { method: 'GET' }, NVIDIA_REQUEST_TIMEOUT_MS, ctx);
+const listModels = async (_ctx?: ProviderContext): Promise<CatalogModel[]> => {
+  // Do not attach a private key to a public metadata request. An invalid or rate-limited
+  // key must not make the public catalog disappear.
+  const data = await nvidiaFetch<any>('/models', { method: 'GET' }, NVIDIA_REQUEST_TIMEOUT_MS);
   const rows: any[] = Array.isArray(data?.data) ? data.data : [];
   return rows.map(normalizeCatalogModel).filter((model) => Boolean(model.id));
 };

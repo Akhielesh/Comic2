@@ -13,26 +13,32 @@ import { PROVIDERS_ORDERED } from '../../../shared/providers.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
 type SourceSpec = { id: AIProviderId; key: string | null };
+export type CatalogRefreshResult = { source: string; count: number; status: 'refreshed' | 'unconfigured' | 'unavailable' };
 
-export const refreshModelCatalog = async (): Promise<{ source: string; count: number }[]> => {
+export const refreshModelCatalog = async (): Promise<CatalogRefreshResult[]> => {
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) throw new Error('CATALOG_STORAGE_UNAVAILABLE');
   // Harvest every provider's public model metadata with its platform key (when set), so the
   // logged-out models page stays fresh. OpenRouter's list is public; the others ship a curated
   // seed and add live ids when a platform key exists. Never stores keys.
   const sources: SourceSpec[] = PROVIDERS_ORDERED.map((def) => ({
     id: def.id as AIProviderId,
-    key: def.id === 'openrouter' ? null : process.env[def.keyEnv] || null
+    key: def.id === 'openrouter' || def.id === 'nvidia' ? null : process.env[def.keyEnv]?.trim() || null
   }));
 
-  const results: { source: string; count: number }[] = [];
+  const results: CatalogRefreshResult[] = [];
   for (const { id, key } of sources) {
+    if (!key && id !== 'openrouter' && id !== 'nvidia') {
+      results.push({ source: id, count: 0, status: 'unconfigured' });
+      continue;
+    }
     const models = await getProviderModels(id, key);
     const live = models.filter((model) => model.catalogOrigin === 'live');
     if (live.length) {
-      await persistHarvestedModels(id, live);
+      await persistHarvestedModels(id, live, { strict: true, force: true });
     } else {
       console.warn(`[catalog-refresh] ${id}: No live listing; keeping the saved snapshot (platform key set? ${Boolean(key)})`);
     }
-    results.push({ source: id, count: live.length });
+    results.push({ source: id, count: live.length, status: live.length ? 'refreshed' : 'unavailable' });
   }
   return results;
 };
@@ -45,7 +51,11 @@ if (isDirectRun) {
     process.exitCode = 1;
   } else {
     refreshModelCatalog()
-      .then((results) => console.log(JSON.stringify({ ok: true, results, refreshedAt: new Date().toISOString() })))
+      .then((results) => {
+        const ok = !results.some((result) => result.status === 'unavailable');
+        console.log(JSON.stringify({ ok, results, refreshedAt: new Date().toISOString() }));
+        if (!ok) process.exitCode = 1;
+      })
       .catch((error) => {
         console.error(JSON.stringify({ ok: false, error: (error as Error).message }));
         process.exitCode = 1;

@@ -22,7 +22,7 @@
 // provider name is never echoed.
 
 import { Request, Response, Router } from 'express';
-import { GEMINI_BASE_URL, NVIDIA_BASE_URL, OPENROUTER_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
+import { GEMINI_BASE_URL, OPENROUTER_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getProviderDef, isTextProvider, type ProviderDef, type ProviderId } from '../../../shared/providers.js';
 import { accountKeyForValidation, canonicalAccountProvider } from '../middleware/accountKeys.js';
@@ -110,37 +110,6 @@ const unreachable = (provider: string, name: string, err: unknown): ValidationRe
   const e = err as (Error & { cause?: { code?: string } }) | undefined;
   logger.warn('key_validate_unreachable', { provider, error: e?.name, code: e?.cause?.code, message: e?.message });
   return { provider, status: 'unavailable', valid: false, message: `Could not reach ${name} right now.` };
-};
-
-// NVIDIA Build: GET /models requires auth, so a 200 proves the key works (and tells us how
-// many models it can reach); 401/403 means invalid/revoked/out-of-credits.
-const validateNvidia = async (key: string): Promise<ValidationResult> => {
-  try {
-    const res = await timedFetch(`${NVIDIA_BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${key}` }
-    });
-    if (res.ok) {
-      const data = await res.json().catch(() => null);
-      const count = Array.isArray(data?.data) ? data.data.length : undefined;
-      return {
-        provider: 'nvidia',
-        status: 'valid',
-        valid: true,
-        message: count != null ? `Valid — ${count} models reachable.` : 'Valid NVIDIA Build key.'
-      };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return {
-        provider: 'nvidia',
-        status: 'invalid',
-        valid: false,
-        message: 'Rejected by NVIDIA (auth failed) — key is invalid, revoked, or out of credits.'
-      };
-    }
-    return { provider: 'nvidia', status: 'unavailable', valid: false, message: `NVIDIA returned ${res.status}.` };
-  } catch (err) {
-    return unreachable('nvidia', 'NVIDIA Build', err);
-  }
 };
 
 // OpenRouter: GET /api/v1/key answers 200 for a good key and 401/403 for a bad one. Only the
@@ -235,7 +204,12 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
   switch (provider) {
     case 'nvidia': {
       const key = keyForCheck;
-      result = key ? await validateNvidia(key) : missing('nvidia');
+      // NVIDIA's /models is public. Its 200 response cannot authenticate this key,
+      // and checking a key must never secretly make a billable generation request.
+      result = key ? {
+        provider: 'nvidia', status: 'unsupported', valid: false,
+        message: 'Stored — NVIDIA’s public model list cannot verify this key. Access is checked when you use a model.'
+      } : missing('nvidia');
       break;
     }
     case 'openrouter': {

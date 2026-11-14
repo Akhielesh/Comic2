@@ -56,6 +56,19 @@ describe('clearAllKeys (sign-out security)', () => {
     expect(getProviderKeyValue('nvidia')).toBe('nvapi-active');
   });
 
+  it('forgets old NVIDIA verification from its public model list without losing the saved key', () => {
+    const nvidia = addKey({ provider: 'nvidia', key: 'nvapi-stored' });
+    const openai = addKey({ provider: 'openai', key: 'sk-stored' });
+    setKeyValidation(nvidia.id, 'valid', 'Valid — 3 models reachable.');
+    setKeyValidation(openai.id, 'valid', 'Valid OpenAI key.');
+    const keys = listKeys();
+    expect(keys.find((key) => key.id === nvidia.id)).toMatchObject({ key: 'nvapi-stored', validation: 'unknown' });
+    expect(keys.find((key) => key.id === nvidia.id)?.validatedAt).toBeUndefined();
+    expect(keys.find((key) => key.id === nvidia.id)?.validationMessage).toBeUndefined();
+    expect(keys.find((key) => key.id === openai.id)?.validation).toBe('valid');
+    expect(getProviderKeyValue('nvidia')).toBe('nvapi-stored');
+  });
+
   it('a malformed persisted key collection does not break every request', () => {
     window.localStorage.setItem('dreamstream_api_keys_v2', '{"keys":[]}');
     expect(listKeys()).toEqual([]);

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import type { LibraryAssetPublic, LibraryIndex } from '../../../shared/comic/library.js';
-import type { PlatformStatRow } from '../comic/models/observed.js';
+import type { ImageCallRow, PlatformStatRow } from '../comic/models/observed.js';
 import { getModelShowcase, type ModelShowcaseDeps } from './modelShowcase.js';
 
 const NOW = Date.parse('2026-11-13T12:00:00Z');
@@ -29,6 +29,49 @@ const deps = (assets: LibraryAssetPublic[] = [], stats: PlatformStatRow[] = []):
 });
 
 describe('Models showcase evidence', () => {
+  it('keeps owner costs and timing private, groups exact resolution, and samples only successful recorded calls', async () => {
+    const call = (i: number, patch: Partial<ImageCallRow> = {}): ImageCallRow => ({
+      modelId: MODEL, kind: 'page', res: '2K', outcome: 'ok', providerCostUsd: i / 100,
+      latencyMs: i * 1000, createdAt: new Date(NOW - i * 1000).toISOString(), ...patch
+    });
+    const ownCalls = vi.fn(async () => [
+      ...Array.from({ length: 25 }, (_, i) => call(i + 1)),
+      call(0, { outcome: 'failed', providerCostUsd: 999, latencyMs: 999_999 }),
+      call(0, { outcome: 'blocked' }), call(0, { kind: 'lab_page' }),
+      call(0, { createdAt: '2026-09-01T00:00:00Z' }), call(0, { createdAt: '2027-01-01T00:00:00Z' }),
+      call(1, { res: '1K' }), call(2, { res: '1K' }),
+      call(0, { providerCostUsd: null, latencyMs: null })
+    ]);
+    const source = { ...deps([], [stat({ distinctUsers: 1 })]), ownCalls };
+    const personal = await getModelShowcase('owner-a', source);
+    expect(ownCalls).toHaveBeenCalledWith('owner-a', '2026-10-14T12:00:00.000Z');
+    expect(personal.rows[0].ownMetrics).toEqual([
+      expect.objectContaining({ resolution: '1K', medianCostUsd: null, costSamples: 0, medianLatencyMs: null, latencySamples: 0 }),
+      expect.objectContaining({ resolution: '2K', calls: 27, successfulCalls: 26, failedCalls: 1, medianCostUsd: expect.closeTo(0.105, 6), costSamples: 20, medianLatencyMs: 10500, latencySamples: 20 })
+    ]);
+    expect(personal.rows[0].metrics).toEqual([]);
+    const guest = await getModelShowcase(undefined, source);
+    expect(guest.rows[0]).not.toHaveProperty('ownMetrics');
+    expect(ownCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes an owner measurement failure from an empty successful read without borrowing public data', async () => {
+    const failed = await getModelShowcase('owner', { ...deps([], [stat()]), ownCalls: async () => { throw new Error('private detail'); } });
+    expect(failed.sourceStatus.ownMetrics).toBe('unavailable');
+    expect(failed.rows[0]).toMatchObject({ ownMetrics: [], ownMetricState: 'source_unavailable', metricState: 'available' });
+    expect(JSON.stringify(failed)).not.toContain('private detail');
+    const empty = await getModelShowcase('owner', { ...deps(), ownCalls: async () => [] });
+    expect(empty.sourceStatus.ownMetrics).toBe('ready');
+    expect(empty.rows[0].ownMetricState).toBe('insufficient_data');
+  });
+
+  it('does not report missing images when either requested example source failed', async () => {
+    const failedPublic = await getModelShowcase('owner', { ...deps(), publishedLibrary: async () => null, ownExamples: async () => [] });
+    const failedOwner = await getModelShowcase('owner', { ...deps(), ownExamples: async () => null });
+    expect(failedPublic.rows[0].sampleState).toBe('source_unavailable');
+    expect(failedOwner.rows[0].sampleState).toBe('source_unavailable');
+  });
+
   it('returns five honest comparison rows, with catalog-only entries gated and dated list prices separate', async () => {
     const out = await getModelShowcase(undefined, deps());
     expect(out.rows).toHaveLength(5);
@@ -100,7 +143,7 @@ describe('Models showcase evidence', () => {
   it('distinguishes source failure from a successful empty read and never requests owner data for guests', async () => {
     const ownExamples = vi.fn(async () => []);
     const out = await getModelShowcase(undefined, { ...deps(), publishedLibrary: async () => { throw new Error('private storage detail'); }, ownExamples });
-    expect(out.sourceStatus).toEqual({ samples: 'unavailable', metrics: 'ready', ownSamples: 'not_requested' });
+    expect(out.sourceStatus).toEqual({ samples: 'unavailable', metrics: 'ready', ownSamples: 'not_requested', ownMetrics: 'not_requested' });
     expect(out.rows[0].sampleState).toBe('source_unavailable');
     expect(out.rows[0].metricState).toBe('insufficient_data');
     expect(ownExamples).not.toHaveBeenCalled();

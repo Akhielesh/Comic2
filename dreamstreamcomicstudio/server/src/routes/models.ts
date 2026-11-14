@@ -217,7 +217,8 @@ modelsRouter.get('/verify', requireAuth, attachAccountKeys, async (req: Request,
     const def = getProviderDef(id);
     const key = def ? keyFor(id) : null;
     const models = allModels.filter((model) => model.source === id);
-    const connected = Boolean(key) && (id === 'openrouter'
+    // NVIDIA's listing is public: discovering its models is not authentication evidence.
+    const connected = Boolean(key) && id !== 'nvidia' && (id === 'openrouter'
       ? openRouterKeyStatus !== null
       : models.some((model) => model.catalogOrigin === 'live'));
     providers[id] = { connected, configured: Boolean(key), status: connected ? 'verified' : key ? 'unverified' : 'missing', modelCount: models.length };
@@ -244,7 +245,7 @@ modelsRouter.get('/verify', requireAuth, attachAccountKeys, async (req: Request,
       nvidia: {
         connected: providers.nvidia.connected,
         modelCount: allModels.filter((m) => m.source === 'nvidia').length,
-        note: 'Model listing confirms access only. Availability depends on your NVIDIA account; per-call USD cost is not reported.'
+        note: 'The public model list does not verify your NVIDIA key or model access. Access is checked when you use a model; per-call USD cost is not reported.'
       }
     },
     // Per-provider connection + counts for every direct source (openrouter, nvidia, openai,

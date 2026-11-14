@@ -47,6 +47,12 @@ export interface ModelShowcaseMetric {
   latencySamples: 0;
 }
 
+/** Private observations from the authenticated owner's calls, never public aggregates. */
+export interface ModelShowcaseOwnMetric extends Omit<ModelShowcaseMetric, 'medianLatencyMs' | 'latencySamples'> {
+  medianLatencyMs: number | null;
+  latencySamples: number;
+}
+
 export interface ModelShowcaseRow {
   modelId: string;
   providerModelId: string | null;
@@ -75,6 +81,9 @@ export interface ModelShowcaseRow {
   sampleState: 'available' | 'not_recorded' | 'source_unavailable';
   metrics: ModelShowcaseMetric[];
   metricState: 'available' | 'insufficient_data' | 'source_unavailable';
+  /** Omitted for guests. Sampled from at most the owner's latest 500 calls in the window. */
+  ownMetrics?: ModelShowcaseOwnMetric[];
+  ownMetricState?: 'available' | 'insufficient_data' | 'source_unavailable';
 }
 
 export interface ModelShowcaseResponse {
@@ -86,6 +95,7 @@ export interface ModelShowcaseResponse {
     samples: 'ready' | 'unavailable';
     metrics: 'ready' | 'unavailable';
     ownSamples: 'ready' | 'unavailable' | 'not_requested';
+    ownMetrics?: 'ready' | 'unavailable' | 'not_requested';
   };
   rows: ModelShowcaseRow[];
 }

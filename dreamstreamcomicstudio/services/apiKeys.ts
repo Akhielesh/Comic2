@@ -239,7 +239,14 @@ const readAll = (): ManagedApiKey[] => {
   // Apply monthly resets on read and persist if anything changed.
   let changed = false;
   keys = keys.map((k) => {
-    const next = applyPeriodReset(k);
+    let next = applyPeriodReset(k);
+    // Older versions marked NVIDIA keys valid after reading its public /models list.
+    // That never authenticated the key; discard the old green badge on every surface.
+    if (next.provider === 'nvidia' && next.validation === 'valid') {
+      next = { ...next, validation: 'unknown' };
+      delete next.validatedAt;
+      delete next.validationMessage;
+    }
     if (next !== k) changed = true;
     return next;
   });

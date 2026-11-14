@@ -42,7 +42,8 @@ export const validateApiKey = async (
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(keyValue?.trim() ? { [header]: keyValue.trim() } : { 'X-Allowed-Sources': allowedSourcesHeader() })
+        'X-Allowed-Sources': allowedSourcesHeader(),
+        ...(keyValue?.trim() ? { [header]: keyValue.trim() } : {})
       },
       body: JSON.stringify({ provider })
     });

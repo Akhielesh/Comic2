@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { annotateModel } from '../ai/catalogAnnotations.js';
 
 const roles = vi.hoisted(() => ({ fail: false }));
 
@@ -147,6 +148,24 @@ describe('GET /api/models/verify — platform-key telemetry is for admins only',
     expect(r.body.providers.openai.connected).toBe(false);
     expect(r.body.providers.openai).toMatchObject({ configured: true, status: 'unverified' });
     expect(upstream.map((u) => u.auth)).toEqual(['Bearer sk-or-PLATFORM-secret', 'Bearer sk-or-PLATFORM-secret']);
+  });
+
+  it.each([undefined, 'not-a-real-nvidia-key'])('a public live NVIDIA listing cannot verify a missing or supplied key (%s)', async (key) => {
+    const publicModel = annotateModel({
+      id: 'nvidia/public-model', name: 'Public NVIDIA listing', source: 'nvidia',
+      inputModalities: ['text'], outputModalities: ['text'], supportedParameters: [],
+      pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
+      pricingKnown: false, pricingOrigin: 'unknown', catalogOrigin: 'live',
+      isFree: false, costClass: 'paid', supportsImageOutput: false,
+      supportsImageInput: false, supportsJsonOutput: false
+    });
+    vi.mocked(catalogService.getProviderModels).mockResolvedValueOnce([publicModel]);
+    const r = await verify('user-token', key ? { 'X-Nvidia-Key': key } : {});
+    expect(r.body.sources.nvidia.connected).toBe(false);
+    expect(r.body.providers.nvidia).toMatchObject({
+      connected: false, configured: Boolean(key), status: key ? 'unverified' : 'missing', modelCount: 1
+    });
+    expect(upstream).toEqual([]);
   });
 
   it('signed out → 401, no provider call', async () => {

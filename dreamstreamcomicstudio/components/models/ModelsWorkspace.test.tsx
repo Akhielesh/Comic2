@@ -249,19 +249,83 @@ describe('Language model discovery and comparison', () => {
 });
 
 describe('Image model outputs use recorded evidence', () => {
+  it.each(['thumbnail', 'full'] as const)('retries a failed %s image when its URL refreshes without changing the example id', (kind) => {
+    const sample = example('refresh', {
+      url: 'https://artwork.test/output.png?signature=expired',
+      thumbnailUrl: kind === 'thumbnail' ? 'https://artwork.test/thumb.png?signature=expired' : ''
+    });
+    const dataFor = (output: ModelShowcaseExample) => showcase([imageRow('refresh', { examples: [output], sampleState: 'available' })]);
+    const view = render(<ImageModels data={dataFor(sample)} loading={false} error={null} onRetry={vi.fn()} />);
+    fireEvent.error(screen.getByRole('img', { name: sample.alt }));
+    expect(screen.getByText('Examples couldn’t load')).toBeInTheDocument();
+    const refreshed = {
+      ...sample,
+      url: 'https://artwork.test/output.png?signature=renewed',
+      thumbnailUrl: kind === 'thumbnail' ? 'https://artwork.test/thumb.png?signature=renewed' : ''
+    };
+    view.rerender(<ImageModels data={dataFor(refreshed)} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(screen.getByRole('img', { name: sample.alt })).toHaveAttribute('src', refreshed.thumbnailUrl || refreshed.url);
+    expect(screen.queryByText('Examples couldn’t load')).not.toBeInTheDocument();
+  });
+
+  it('keeps the displayed image, counter and navigation in sync when a refreshed list shrinks', () => {
+    const outputs = [1, 2, 3].map((n) => example('shrinking', { id: `output-${n}`, alt: `Recorded output ${n}` }));
+    const dataFor = (examples: ModelShowcaseExample[]) => showcase([imageRow('shrinking', { examples, sampleState: 'available' })]);
+    const view = render(<ImageModels data={dataFor(outputs)} loading={false} error={null} onRetry={vi.fn()} />);
+    const card = within(screen.getByRole('article', { name: 'Fixture shrinking' }));
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    expect(card.getByText('Published platform output · 3/3')).toBeInTheDocument();
+    view.rerender(<ImageModels data={dataFor(outputs.slice(0, 2))} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(card.getByRole('img', { name: 'Recorded output 2' })).toBeInTheDocument();
+    expect(card.getByText('Published platform output · 2/2')).toBeInTheDocument();
+    expect(card.getByRole('button', { name: 'Next Fixture shrinking output' })).toBeDisabled();
+    fireEvent.click(card.getByRole('button', { name: 'Previous Fixture shrinking output' }));
+    expect(card.getByRole('img', { name: 'Recorded output 1' })).toBeInTheDocument();
+    expect(card.getByText('Published platform output · 1/2')).toBeInTheDocument();
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    view.rerender(<ImageModels data={dataFor(outputs.slice(0, 1))} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(card.getByText('Published platform output · 1/1')).toBeInTheDocument();
+    expect(card.queryByRole('button', { name: /(?:Next|Previous) Fixture shrinking output/ })).not.toBeInTheDocument();
+  });
+
+  it('separates private page costs and measured time from platform costs at the selected resolution', () => {
+    const base = { kind: 'page', resolution: '1K', calls: 9, successfulCalls: 9, failedCalls: 0, costSamples: 9, costFrom: '2026-11-01', costTo: '2026-11-13' };
+    const data = showcase([imageRow('personal', {
+      ownMetrics: [{ ...base, medianCostUsd: 0.015, medianLatencyMs: 8500, latencySamples: 7 }], ownMetricState: 'available',
+      metrics: [{ ...base, medianCostUsd: 0.025, medianLatencyMs: null, latencySamples: 0 }], metricState: 'available'
+    })], { scope: 'platform_and_yours' });
+    render(<ImageModels data={data} loading={false} error={null} onRetry={vi.fn()} />);
+    const card = within(screen.getByRole('article', { name: 'Fixture personal' }));
+    expect(card.getByText('Your provider cost')).toBeInTheDocument();
+    expect(card.getByText('$0.015')).toBeInTheDocument();
+    expect(card.getByText('8.5 s')).toBeInTheDocument();
+    expect(card.queryByText('$0.025')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Observed image results' }), { target: { value: 'platform' } });
+    expect(card.getByText('Platform provider cost')).toBeInTheDocument();
+    expect(card.getByText('$0.025')).toBeInTheDocument();
+    expect(card.queryByText('8.5 s')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Observed image results' }), { target: { value: 'you' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Image price resolution' }), { target: { value: '2K' } });
+    expect(card.queryByText('$0.015')).not.toBeInTheDocument();
+    expect(card.queryByText('8.5 s')).not.toBeInTheDocument();
+  });
+
   it('clears owner-only images and an open inspection dialog immediately when the account changes', async () => {
     session.user = { id: 'owner-a' };
     const own = example('owner-fixture', { source: 'your_comic', projectId: 'project-a', alt: 'Owner A private page' });
-    const ownerData = showcase([imageRow('owner-fixture', { examples: [own], ownExampleCount: 1, sampleState: 'available' })], { scope: 'platform_and_yours' });
+    const ownerData = showcase([imageRow('owner-fixture', { examples: [own], ownExampleCount: 1, sampleState: 'available', ownMetrics: [{ kind: 'page', resolution: '1K', calls: 3, successfulCalls: 3, failedCalls: 0, medianCostUsd: 0.1234, costSamples: 3, costFrom: null, costTo: null, medianLatencyMs: 7777, latencySamples: 3 }], ownMetricState: 'available' })], { scope: 'platform_and_yours' });
     let finishNext!: (data: ModelShowcaseResponse) => void;
     modelServices.showcase.mockResolvedValueOnce(ownerData).mockImplementationOnce(() => new Promise((resolve) => { finishNext = resolve; }));
     const view = render(<ModelLibrary onBack={vi.fn()} />);
     await screen.findByRole('img', { name: own.alt });
+    expect(screen.getByText('$0.1234')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Inspect Fixture owner-fixture/ }));
     expect(screen.getByRole('dialog', { name: 'Generated in Comic Studio' })).toBeInTheDocument();
     session.user = { id: 'owner-b' };
     view.rerender(<ModelLibrary onBack={vi.fn()} />);
     expect(screen.queryByRole('img', { name: own.alt })).not.toBeInTheDocument();
+    expect(screen.queryByText('$0.1234')).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await act(async () => { finishNext(showcase([imageRow('new-owner')])); });
     expect(screen.getByRole('article', { name: 'Fixture new-owner' })).toBeInTheDocument();

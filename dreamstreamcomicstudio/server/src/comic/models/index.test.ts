@@ -94,6 +94,7 @@ describe('database rows', () => {
       httpStatus: null,
       errorCode: null,
       providerCostUsd: 0.0428,
+      latencyMs: null,
       createdAt: '2026-10-22T18:00:00.000Z'
     });
     expect(imageCallFromDb({ model_id: 'x', outcome: 'weird', created_at: '2026-10-22T18:00:00Z' })).toBeNull();
