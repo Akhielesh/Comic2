@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComicSampleExploreButton, ComicSampleShelf } from './ComicSampleDeck';
 import { FEATURED_SAMPLES, SAMPLE_COMICS, sampleLibraryHref } from '../comicstudio/library/sampleCatalog';
@@ -17,6 +17,23 @@ describe('Sample comic collection', () => {
       expect(comic.pages[0].transcript).toHaveLength(comic.pages[0].panels);
       expect(comic.pages[0].src).toContain(`${comic.id}-page-1`);
     }
+  });
+
+  it('keeps three rapid next selections authoritative over a delayed smooth-scroll event', () => {
+    render(<ComicSampleExploreButton />);
+    fireEvent.click(screen.getByRole('button', { name: /Explore sample comics/ }));
+    vi.useFakeTimers();
+    try {
+      const next = screen.getByRole('button', { name: 'Next sample comic' });
+      fireEvent.click(next); fireEvent.click(next); fireEvent.click(next);
+      expect(screen.getByRole('figure', { name: 'Hello, Europa' })).toBeInTheDocument();
+      fireEvent.scroll(screen.getByRole('list', { name: 'Choose a sample comic' }));
+      act(() => vi.advanceTimersByTime(200));
+      expect(screen.getByRole('figure', { name: 'Hello, Europa' })).toBeInTheDocument();
+      const track = screen.getByRole('list', { name: 'Choose a sample comic' });
+      fireEvent.keyDown(track, { key: 'ArrowLeft' }); fireEvent.keyDown(track, { key: 'ArrowLeft' }); fireEvent.keyDown(track, { key: 'ArrowLeft' });
+      expect(screen.getByRole('figure', { name: 'Rain for a Rooftop' })).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
   });
 
   it('opens a readable deck, browses with buttons and keyboard, and restores its exact opener', async () => {

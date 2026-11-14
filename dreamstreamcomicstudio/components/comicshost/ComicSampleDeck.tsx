@@ -56,6 +56,8 @@ function DeckContents({ initialStory }: { initialStory?: SampleStory }) {
   const initialId = initialStory ?? FEATURED_SAMPLES[0].id;
   const [activeId, setActiveId] = useState<SampleStory>(initialId);
   const [scrolling, setScrolling] = useState(false);
+  const selectedIndex = useRef(SAMPLE_COMICS.findIndex(comic => comic.id === initialId));
+  const scrollTarget = useRef<number | null>(selectedIndex.current);
   const track = useRef<HTMLUListElement>(null);
   const reader = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -65,6 +67,8 @@ function DeckContents({ initialStory }: { initialStory?: SampleStory }) {
     const entry = SAMPLE_COMICS[next];
     const card = track.current?.children[next] as HTMLElement | undefined;
     if (!entry || !card || !track.current) return;
+    selectedIndex.current = next;
+    scrollTarget.current = next;
     setActiveId(entry.id);
     track.current.scrollTo({ left: card.offsetLeft - (track.current.clientWidth - card.clientWidth) / 2, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
     if (focus) card.querySelector('button')?.focus({ preventScroll: true });
@@ -75,15 +79,15 @@ function DeckContents({ initialStory }: { initialStory?: SampleStory }) {
     return () => clearTimeout(timer.current);
   }, [initialId]);
   return <>
-    <div className="comic-deck-controls"><IconButton label="Previous sample comic" variant="outline" disabled={index === 0} onClick={() => select(index - 1)}><ChevronLeft /></IconButton>
+    <div className="comic-deck-controls"><IconButton label="Previous sample comic" variant="outline" disabled={index === 0} onClick={() => select(selectedIndex.current - 1)}><ChevronLeft /></IconButton>
       <p role="status" aria-live="polite"><span>{index + 1} / {SAMPLE_COMICS.length}</span> {comic.title}</p>
-      <IconButton label="Next sample comic" variant="outline" disabled={index === SAMPLE_COMICS.length - 1} onClick={() => select(index + 1)}><ChevronRight /></IconButton>
+      <IconButton label="Next sample comic" variant="outline" disabled={index === SAMPLE_COMICS.length - 1} onClick={() => select(selectedIndex.current + 1)}><ChevronRight /></IconButton>
     </div>
-    <ul ref={track} className="comic-deck-track" aria-label="Choose a sample comic" data-scrolling={scrolling || undefined}
+    <ul ref={track} onPointerDown={() => { scrollTarget.current = null; }} onWheel={event => { if (Math.abs(event.deltaX) > 0 || event.shiftKey) scrollTarget.current = null; }} className="comic-deck-track" aria-label="Choose a sample comic" data-scrolling={scrolling || undefined}
       onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        select(event.key === 'Home' ? 0 : event.key === 'End' ? SAMPLE_COMICS.length - 1 : Math.max(0, Math.min(SAMPLE_COMICS.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), true);
+        select(event.key === 'Home' ? 0 : event.key === 'End' ? SAMPLE_COMICS.length - 1 : Math.max(0, Math.min(SAMPLE_COMICS.length - 1, selectedIndex.current + (event.key === 'ArrowRight' ? 1 : -1))), true);
       }} onScroll={() => {
         setScrolling(true); clearTimeout(timer.current);
         timer.current = setTimeout(() => {
@@ -92,7 +96,13 @@ function DeckContents({ initialStory }: { initialStory?: SampleStory }) {
           const center = strip.scrollLeft + strip.clientWidth / 2;
           let nearest = 0, distance = Infinity;
           Array.from(strip.children).forEach((child, at) => { const card = child as HTMLElement; const delta = Math.abs(card.offsetLeft + card.clientWidth / 2 - center); if (delta < distance) { nearest = at; distance = delta; } });
-          setActiveId(SAMPLE_COMICS[nearest].id); setScrolling(false);
+          // A smooth scroll can finish after a newer button/key selection. It must not
+          // overwrite that deliberate target; only native user scrolling chooses by position.
+          if (scrollTarget.current === null) {
+            selectedIndex.current = nearest;
+            setActiveId(SAMPLE_COMICS[nearest].id);
+          } else if (nearest === scrollTarget.current) scrollTarget.current = null;
+          setScrolling(false);
         }, 140);
       }}>
       {SAMPLE_COMICS.map((entry, at) => <li key={entry.id} data-active={entry.id === activeId}><button type="button" aria-pressed={entry.id === activeId} aria-label={`Read ${entry.title}`} className={FOCUS_RING} onClick={() => select(at)}>
