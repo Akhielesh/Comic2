@@ -16,6 +16,7 @@ const JWKS_URL = `${CATALOG_MAINTENANCE_ISSUER}/.well-known/jwks`;
 export function validateMaintenanceClaims(claims: Claims, action: CatalogMaintenanceAction, now = Date.now()): void {
   const seconds = Math.floor(now / 1000);
   const { iat, nbf, exp, jti } = claims;
+  const expectedWorkflowRef = `Akhielesh/Comic2/.github/workflows/${CATALOG_MAINTENANCE_WORKFLOWS[action]}@${CATALOG_MAINTENANCE_REF}`;
   const subjects = [
     `repo:Akhielesh/Comic2:ref:${CATALOG_MAINTENANCE_REF}`,
     `repo:Akhielesh@102168504/Comic2@1151761968:ref:${CATALOG_MAINTENANCE_REF}`
@@ -24,8 +25,11 @@ export function validateMaintenanceClaims(claims: Claims, action: CatalogMainten
     || claims.repository !== 'Akhielesh/Comic2' || claims.repository_id !== '1151761968'
     || claims.repository_owner !== 'Akhielesh' || claims.repository_owner_id !== '102168504'
     || claims.ref !== CATALOG_MAINTENANCE_REF || claims.ref_type !== 'branch'
-    || claims.workflow_ref !== `Akhielesh/Comic2/.github/workflows/${CATALOG_MAINTENANCE_WORKFLOWS[action]}@${CATALOG_MAINTENANCE_REF}`
-    || !subjects.includes(String(claims.sub)) || claims.job_workflow_ref !== undefined
+    || claims.workflow_ref !== expectedWorkflowRef
+    // GitHub also emits a self-reference for direct jobs (verified by an isolated-branch
+    // diagnostic). A different called workflow, repository, or branch is never trusted.
+    || !subjects.includes(String(claims.sub))
+    || (claims.job_workflow_ref !== undefined && claims.job_workflow_ref !== expectedWorkflowRef)
     || !['schedule', 'workflow_dispatch'].includes(String(claims.event_name))
     || claims.runner_environment !== 'github-hosted'
     || typeof jti !== 'string' || jti.length < 8 || jti.length > 200

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { CATALOG_MAINTENANCE_AUDIENCE, CATALOG_MAINTENANCE_ISSUER, createMaintenanceAuthenticator, validateMaintenanceClaims } from './catalogMaintenanceAuth.js';
+import { CATALOG_MAINTENANCE_AUDIENCE, CATALOG_MAINTENANCE_ISSUER, CATALOG_MAINTENANCE_WORKFLOWS, createMaintenanceAuthenticator, validateMaintenanceClaims } from './catalogMaintenanceAuth.js';
 
 const now = Date.parse('2026-11-14T02:00:00Z');
 const seconds = now / 1000;
@@ -31,13 +31,32 @@ describe('catalog maintenance GitHub OIDC trust', () => {
     await expect(authenticate(token(), 'refresh')).rejects.toThrow('MAINTENANCE_UNAUTHORIZED');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it.each(['refresh', 'probe-nvidia'] as const)('accepts absent or exact self-reference with a signed %s token', async (action) => {
+    const payload = claims({ workflow_ref: `Akhielesh/Comic2/.github/workflows/${CATALOG_MAINTENANCE_WORKFLOWS[action]}@refs/heads/Dreamstrream-v1` });
+    const withSelfReference = { ...payload, job_workflow_ref: payload.workflow_ref };
+    // Actual direct-job shape from diagnostic run 43547186640; the previous blanket
+    // rejection of job_workflow_ref made this valid identity fail before signature checking.
+    expect(() => validateMaintenanceClaims(payload, action, now)).not.toThrow();
+    expect(() => validateMaintenanceClaims(withSelfReference, action, now)).not.toThrow();
+    const fetcher = fetchKeys();
+    const authenticate = createMaintenanceAuthenticator(fetcher as typeof fetch, () => now);
+    await expect(authenticate(token(payload), action)).resolves.toEqual({ runId: '43521777624', attempt: '1' });
+    await expect(authenticate(token({ ...withSelfReference, jti: 'second-self-reference-token' }), action)).resolves.toEqual({ runId: '43521777624', attempt: '1' });
+    await expect(authenticate(token({ ...withSelfReference, jti: 'cross-operation-token' }), action === 'refresh' ? 'probe-nvidia' : 'refresh')).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it.each([
     { repository_id: 'other' }, { repository_owner_id: 'other' }, { repository: 'attacker/Comic2' },
     { repository_owner: 'attacker' }, { ref: 'refs/heads/feature' }, { event_name: 'pull_request' },
     { workflow_ref: 'Akhielesh/Comic2/.github/workflows/ci.yml@refs/heads/Dreamstrream-v1' },
     { iss: 'https://attacker.invalid' }, { aud: 'another-service' }, { sub: 'repo:other/Comic2:ref:refs/heads/Dreamstrream-v1' },
     { exp: seconds - 1 }, { exp: seconds + 3600 }, { nbf: seconds + 100 }, { iat: seconds - 1000 },
-    { runner_environment: 'self-hosted' }, { job_workflow_ref: 'other/workflow' }, { jti: undefined }
+    { runner_environment: 'self-hosted' }, { job_workflow_ref: 'other/workflow' },
+    { job_workflow_ref: 'Akhielesh/Comic2/.github/workflows/refresh-model-catalog.yml@refs/heads/feature' },
+    { job_workflow_ref: 'Akhielesh/Comic2/.github/workflows/probe-nvidia-availability.yml@refs/heads/Dreamstrream-v1' },
+    { job_workflow_ref: 'attacker/Comic2/.github/workflows/refresh-model-catalog.yml@refs/heads/Dreamstrream-v1' },
+    { job_workflow_ref: null }, { job_workflow_ref: 123 },
+    { jti: undefined }
   ])('rejects changed trust claims before fetching keys: %j', async (change) => {
     const fetcher = fetchKeys();
     await expect(createMaintenanceAuthenticator(fetcher as typeof fetch, () => now)(token(claims(change)), 'refresh')).rejects.toThrow('MAINTENANCE_UNAUTHORIZED');
