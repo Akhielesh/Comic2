@@ -6,7 +6,9 @@
 // Feature tabs (Media, Languages, …) come from the tab registry (features.ts, contract
 // §13.2): they merge with the built-ins by `order` and show only while `visible(doc, caps)`.
 //
-// Small screens (mobile.md §3.1, visualqa P1-6/P1-7): the tab strip is a row of 44 px chips that
+// Standalone boards retain an inline tab strip. The project shell supplies left navigation
+// and uses navigation="external" to give this pane all remaining height.
+// Small standalone screens: the tab strip is a row of 44 px chips that
 // scrolls sideways with snap, fades the clipped edge so it reads as "more", and keeps the active
 // tab in view; inactive badges step aside below 380 px. The spend gate stays pinned above the
 // scroller as ONE compact line in a narrow board (details on demand) so the content keeps ≥ 45 %
@@ -19,13 +21,12 @@
 // Prices print through formatCostForUser — governed users see a share of their usage, never dollars.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ChevronDown, FileText, LayoutGrid, Palette, Users } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { getImageModel } from '../../../shared/comic/models';
 import type { ComicDoc } from '../../../shared/comic/doc';
-import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import type { BoardTab, StudioController, StudioTab } from '../types';
-import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
+import type { BoardTab, StudioController } from '../types';
+import { boardTabsFor } from './boardNavigation';
 import { ACCENT_SOFT_BG, CLIP_TEXT, HAIRLINE, OVERLINE, RADIUS_PANEL, WRAP_TEXT } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
@@ -48,43 +49,7 @@ export const GATE_COMPACT_BELOW_H_PX = 480;
 /** Below this window width only the active tab keeps its badge (so the strip fits a 360 phone better). */
 export const TAB_BADGES_MIN_WIDTH = 380;
 
-/** The built-in tabs (always present, in this order). */
-export const BOARD_TABS: { id: BoardTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'story', label: 'Story', icon: <FileText className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'cast', label: 'Cast', icon: <Users className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'style', label: 'Style', icon: <Palette className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'pages', label: 'Pages', icon: <LayoutGrid className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'read', label: 'Read', icon: <BookOpen className="h-3.5 w-3.5" aria-hidden /> }
-];
-
-interface ShownTab {
-  id: StudioTab;
-  label: string;
-  icon: React.ReactNode;
-  /** Set for registry tabs; built-ins render their own panel below. */
-  registration?: BoardTabRegistration;
-}
-
-const isVisible = (reg: BoardTabRegistration, doc: ComicDoc, caps: StudioCaps): boolean => {
-  if (!reg.visible) return true;
-  try {
-    return !!reg.visible(doc, caps);
-  } catch {
-    return false; // a feature's visibility check must never break the board
-  }
-};
-
-/**
- * Built-in tabs plus the registered tabs visible for this doc, sorted by `order` (stable). The
- * `active` registered tab is always included, so the strip never loses the tab whose panel is shown.
- */
-export const boardTabsFor = (doc: ComicDoc, caps: StudioCaps, active?: StudioTab): ShownTab[] => {
-  const builtIns = BOARD_TABS.map((t, i) => ({ tab: t as ShownTab, order: BUILTIN_TAB_ORDER[t.id] ?? (i + 1) * 100, i }));
-  const extra = registeredTabs()
-    .filter((reg) => reg.id === active || isVisible(reg, doc, caps))
-    .map((reg, i) => ({ tab: { id: reg.id, label: reg.label, icon: reg.icon, registration: reg }, order: reg.order, i: BOARD_TABS.length + i }));
-  return [...builtIns, ...extra].sort((a, b) => a.order - b.order || a.i - b.i).map((x) => x.tab);
-};
+export { BOARD_TABS, boardTabsFor } from './boardNavigation';
 
 /** An open spend approval, mirrored on the board so a click here can be answered here. */
 export const GateBanner: React.FC<{
@@ -269,7 +234,7 @@ const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ ch
   </span>
 );
 
-export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) => {
+export const BoardPane: React.FC<{ studio: StudioController; navigation?: 'inline' | 'external' }> = ({ studio, navigation = 'inline' }) => {
   const { doc, tab, setTab } = studio;
   const ff = useFormFactor();
   const [rootRef, rootSize] = useElementSize<HTMLDivElement>();
@@ -368,11 +333,12 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
   // and the one-line gate — loses its outer padding, so the panel under them is not a 35 px slit.
   const denseChrome = ff.heightClass === 'compact';
   const mask = edgeFadeMask(clip);
+  const externalNavigation = navigation === 'external';
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>
       <FrozenWhileEditing frozen={!!focused}>
-        <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 sm:px-4', denseChrome ? 'py-0.5' : 'py-1.5 sm:py-2', HAIRLINE)} data-board-tabs={denseChrome ? 'dense' : undefined}>
+        {!externalNavigation && <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 sm:px-4', denseChrome ? 'py-0.5' : 'py-1.5 sm:py-2', HAIRLINE)} data-board-tabs={denseChrome ? 'dense' : undefined}>
           <span className={cx('hidden md:inline', OVERLINE)}>Board</span>
           <div
             ref={stripRef}
@@ -415,14 +381,15 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
               );
             })}
           </div>
-        </div>
+        </div>}
         <GateBanner studio={studio} compact={gateCompact} dense={denseChrome} />
         <div
           ref={scrollRef}
           onScroll={onScroll}
           id="board-panel"
           role="tabpanel"
-          aria-labelledby={`board-tab-${tab}`}
+          aria-labelledby={externalNavigation ? undefined : `board-tab-${tab}`}
+          aria-label={externalNavigation ? `${tabs.find((item) => item.id === tab)?.label || 'Comic'} workspace` : undefined}
           tabIndex={-1}
           data-board-scroll={tab === 'read' ? 'reader' : 'board'}
           className={cx(

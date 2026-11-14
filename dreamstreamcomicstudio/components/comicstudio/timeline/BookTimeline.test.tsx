@@ -692,6 +692,33 @@ describe('declutter: one home per action, one count, no "Free" on the add tiles'
     expect(screen.getByRole('button', { name: HISTORY })).toBeInTheDocument();
   });
 
+  it('a persistent workspace rail owns Assets; temporary drawers retain the dock fallback', () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc(), tab: 'pages', caps: ON });
+    const workspace = (persistent: boolean, showNavigation = true, hidden = false) => (
+      <main id="studio-main">
+        {showNavigation && <aside data-persistent-stage-navigation={persistent || undefined} hidden={hidden}>
+          <button type="button" role="tab" id="board-tab-media">Assets</button>
+        </aside>}
+        <div data-board><BookTimeline studio={studio} reorderActivation="immediate" /></div>
+      </main>
+    );
+    const { rerender } = render(workspace(true));
+    expect(screen.queryByRole('button', { name: MEDIA })).toBeNull();
+    // A destination the rail does not offer still has its dock shortcut.
+    expect(screen.getByRole('button', { name: HISTORY })).toBeInTheDocument();
+    // Reopening and closing a temporary drawer never consumes the phone's shortcut.
+    rerender(workspace(false));
+    expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
+    rerender(workspace(false, false));
+    expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
+    rerender(workspace(false));
+    expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
+    rerender(workspace(true, true, true));
+    expect(screen.getByRole('button', { name: MEDIA })).toBeInTheDocument();
+    rerender(workspace(true));
+    expect(screen.queryByRole('button', { name: MEDIA })).toBeNull();
+  });
+
   it('the real board at 1280: the Assets and History tabs show, so the timeline has no Assets or History link', () => {
     const studio = makeStudio(makeSampleDoc(), { tab: 'pages', caps: ON });
     render(

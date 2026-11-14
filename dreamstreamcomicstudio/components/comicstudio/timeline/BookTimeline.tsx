@@ -142,20 +142,18 @@ export const timelineSummary = (doc: ComicDoc, money?: (usd: number) => string):
 type DockLink = 'media' | 'history';
 
 /**
- * Which of the summary row's destinations this timeline's own board already offers as a tab (declutter F11, rubric
- * C2: one home per action). The dock sits under the board's tab strip, where Assets and History are tabs, so a link
- * there is a second home within a few hundred pixels. A host without a tab strip (or with it hidden) keeps the
- * links. It reads BoardPane's markup (`[data-board]` › `[data-tab-strip]` › `#board-tab-<id>`) after every commit
- * (two lookups, no listener), so a tab that appears with the first image is seen in the same frame. If that markup
- * ever changes, the links come back: it fails toward a duplicate, never toward a lost way in.
+ * Keep a dock shortcut only when neither the board's inline tabs nor its workspace's persistent
+ * stage rail provides that destination. Phone drawers are temporary and never consume the shortcut.
+ * Check after each commit so feature visibility and form-factor changes update in the same frame.
  */
 const useBoardOffers = (ref: React.RefObject<HTMLElement | null>): Record<DockLink, boolean> => {
   const [offers, setOffers] = useState<Record<DockLink, boolean>>({ media: true, history: true });
   useLayoutEffect(() => {
     const board = ref.current?.closest('[data-board]');
+    const rail = board?.closest('#studio-main')?.querySelector('[data-persistent-stage-navigation]');
     const offered = (id: DockLink) => {
-      const tab = board?.querySelector(`[data-tab-strip] #board-tab-${id}`);
-      return !!tab && !tab.closest('[hidden]');
+      const tabs = [board?.querySelector(`[data-tab-strip] #board-tab-${id}`), rail?.querySelector(`#board-tab-${id}`)];
+      return tabs.some((tab) => !!tab && !tab.closest('[hidden]'));
     };
     const media = offered('media');
     const history = offered('history');

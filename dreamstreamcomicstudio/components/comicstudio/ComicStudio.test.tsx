@@ -49,7 +49,7 @@ const PHONE_LANDSCAPE = formFactorFor({ w: 852, h: 393, coarse: true });
 const IPAD_PORTRAIT = formFactorFor({ w: 820, h: 1180, coarse: true });
 /** A split window below 1024 (fine pointer): the medium header, which keeps the icon-only quality chip. */
 const MEDIUM = formFactorFor({ w: 900, h: 800 });
-/** A regular header that still offers the pane switcher (below 1200): Chat only hides the board. */
+/** A regular header: Chat only hides the board without remounting either pane. */
 const LAPTOP = formFactorFor({ w: 1100, h: 800 });
 const DESK = formFactorFor({ w: 1280, h: 800 });
 
@@ -77,6 +77,45 @@ beforeEach(() => showDollarPrices());
 afterEach(() => resetUsageStatus());
 
 describe('ComicStudio shell', () => {
+  it('expanding navigation preserves the conversation draft and exposes the supplied project links', () => {
+    const studio = makeFakeStudio();
+    render(<FormFactorProvider value={DESK}><ComicStudioShell studio={studio} onBack={vi.fn()} navigationFooter={<button type="button">Recent comic</button>} /></FormFactorProvider>);
+    const composer = screen.getByRole('textbox', { name: 'Message the Comic Director' });
+    fireEvent.change(composer, { target: { value: 'Keep this draft' } });
+    expect(screen.queryByRole('button', { name: 'Recent comic' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand project navigation' }));
+    expect(screen.getByRole('button', { name: 'Recent comic' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    expect(studio.setTab).toHaveBeenCalledWith('story');
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse project navigation' }));
+    expect(composer).toHaveValue('Keep this draft');
+    expect(window.localStorage.getItem('cs.workspace.navigation.expanded')).toBe('false');
+  });
+
+  it('phone navigation includes project links and closes after choosing a stage', async () => {
+    const studio = makeFakeStudio();
+    render(<FormFactorProvider value={PHONE}><ComicStudioShell studio={studio} onBack={vi.fn()} navigationFooter={<button type="button">Recent comic</button>} /></FormFactorProvider>);
+    const toggle = screen.getByRole('button', { name: 'Open project navigation' });
+    fireEvent.click(toggle);
+    const drawer = screen.getByRole('dialog', { name: 'Project navigation' });
+    expect(within(drawer).getByRole('button', { name: 'Recent comic' })).toBeInTheDocument();
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Story' }));
+    expect(studio.setTab).toHaveBeenCalledWith('story');
+    expect(pane('board')).not.toHaveAttribute('inert');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Project navigation' })).not.toBeInTheDocument());
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('passes the project-scoped initial idea to the real composer without sending', async () => {
+    const studio = makeFakeStudio();
+    state.studio = studio;
+    const consumed = vi.fn();
+    render(<ComicStudio projectId="proj_1" onBack={vi.fn()} initialIdea={{ id: 'first-idea', text: 'A quiet rooftop heist.' }} onInitialIdeaConsumed={consumed} />);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message the Comic Director' })).toHaveValue('A quiet rooftop heist.'));
+    expect(consumed).toHaveBeenCalledWith('first-idea');
+    expect(studio.send).not.toHaveBeenCalled();
+  });
+
   it('shows a skeleton while loading, then the studio once the doc arrives', () => {
     const loading = makeFakeStudio({ doc: null, loading: true });
     const { rerender, onBack } = mount(loading);
@@ -345,9 +384,9 @@ describe('ComicStudio on phones (single)', () => {
     expect(skeleton.style.getPropertyValue('--header-h')).toBe('44px');
     expect(skeleton.querySelector('header')?.style.height).toBe('var(--header-h, 56px)');
     unmount();
-    // Tablets and desktop keep index.css's values.
+    // Tablets and desktop use the same slim header while loading and after load.
     mountAt(formFactorFor({ w: 1440, h: 900 }), makeFakeStudio({ doc: null, loading: true }));
-    expect(screen.getByLabelText('Opening your comic').style.getPropertyValue('--header-h')).toBe('');
+    expect(screen.getByLabelText('Opening your comic').style.getPropertyValue('--header-h')).toBe('48px');
   });
 
   it('opening a page from a card reveals the board', () => {
@@ -548,14 +587,14 @@ describe('ComicStudio on other form factors', () => {
     expect(within(header).getByRole('button', { name: 'More' })).toBeInTheDocument();
   });
 
-  it('desktop: spend and ⋯ in the header, no pane switcher; quality lives in the composer (and ⋯), Read on the board', () => {
+  it('desktop: spend, ⋯ and pane controls in the header; quality lives in the composer (and ⋯), Read on the board', () => {
     mountAt(formFactorFor({ w: 1440, h: 900 }), makeFakeStudio());
     const header = screen.getByRole('banner');
     expect(header).toHaveAttribute('data-header', 'regular');
     expect(within(header).getByRole('button', { name: /^Spent / })).toBeInTheDocument();
     expect(within(header).queryByTitle('Quality')).toBeNull();
     expect(within(header).queryByRole('button', { name: 'Read the comic' })).toBeNull();
-    expect(within(header).queryByRole('radiogroup', { name: 'Panes' })).toBeNull();
+    expect(within(header).getByRole('radiogroup', { name: 'Panes' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'studio-main');
   });
 });

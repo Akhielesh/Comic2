@@ -391,15 +391,19 @@ export interface StudioComposerProps {
   onSent?: () => void;
   /** Placeholder override (the sheet: "Ask the director about this board…"). */
   placeholder?: string;
+  /** An App-owned, project-scoped first draft. This prefills only; sending remains explicit. */
+  initialIdea?: { id: string; text: string };
+  onInitialIdeaConsumed?: (id: string) => void;
 }
 
-export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className, variant = 'docked', onSent, placeholder: placeholderProp }) => {
+export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, className, variant = 'docked', onSent, placeholder: placeholderProp, initialIdea, onInitialIdeaConsumed }) => {
   const { doc, messageBusy, cancelling } = studio;
   const ff = useFormFactor();
   const coarse = ff.coarse;
   const phone = isPhoneLayout(ff.layout);
   const inSheet = variant === 'sheet';
   const [text, setText] = useState('');
+  const consumedIdeas = useRef(new Set<string>());
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [panel, setPanel] = useState<ComposerPanel | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
@@ -530,6 +534,18 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       place(el);
     });
   }, [autoGrow]);
+
+  useEffect(() => {
+    if (!doc || !initialIdea || inSheet) return;
+    const key = `${doc.id}:${initialIdea.id}`;
+    if (consumedIdeas.current.has(key)) return;
+    consumedIdeas.current.add(key);
+    // A person may have started typing while the project loaded. Keep that draft too.
+    setText((draft) => draft.trim() ? `${draft.trimEnd()}\n\n${initialIdea.text}` : initialIdea.text);
+    setHint('Your idea is ready. Review it, then Send to the Director.');
+    onInitialIdeaConsumed?.(initialIdea.id);
+    focusEnd();
+  }, [doc?.id, initialIdea, inSheet, onInitialIdeaConsumed, focusEnd]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);

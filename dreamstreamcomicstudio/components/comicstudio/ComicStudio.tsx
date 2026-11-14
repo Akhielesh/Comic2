@@ -36,6 +36,7 @@ import {
   LayoutGrid,
   Lock,
   MessageSquare,
+  PanelLeft,
   MoreHorizontal,
   RefreshCw,
   Settings2,
@@ -78,8 +79,10 @@ import { HEADER_BANNER_MIN_ORDER } from './mobile/headerSlots';
 import { ModeToggle } from './mobile/ModeToggle';
 import { SavingsBreakdown, savedTotal } from './mobile/SavingsChip';
 import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
+import { SideSheet } from './mobile/sheets/SideSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
 import { phoneChromeVars } from './mobile/shell/phoneChrome';
+import { WorkspaceNavigation, WORKSPACE_NAVIGATION_ID, WORKSPACE_NAVIGATION_KEY, readNavigationExpanded } from './mobile/shell/WorkspaceNavigation';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -313,16 +316,17 @@ export interface StudioHeaderProps {
    * a third bottom bar that left the board under 45 % of an iPhone's height (P1-QA phone-content).
    */
   ask?: { busy: boolean; onAsk: () => void; onViewChat: () => void };
+  navigation?: { expanded: boolean; overlay: boolean; onToggle: () => void; buttonRef: React.RefObject<HTMLButtonElement | null> };
 }
 
 /**
  * The studio header. `variant` (from the form factor):
  *  - compact  phones: Back · Title · slots · $ · ⋯ (quality, spending, Read, Easy/Pro, settings in ⋯)
  *  - medium   split below 1024: icon-only quality, Easy/Pro in ⋯, pane switcher
- *  - regular  1024+: today's desktop header (pane switcher on touch tablets), quality in the composer and ⋯
+ *  - regular  1024+: compact desktop header with pane switcher, quality in the composer and ⋯
  * Read (icon-only below regular) shows only while the board is out of sight and a page is drawn.
  */
-export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask }) => {
+export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onBack, onRead, readHint, boardVisible = false, onOpenSettings, paneMode, onPaneMode, ask, navigation }) => {
   const [open, setOpen] = useState<HeaderSheet>(null);
   const variant: HeaderVariant = headerVariantFor(ff);
   const compact = variant !== 'regular';
@@ -459,7 +463,11 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
 
   const lead = (
     <>
-      {showBack && (
+      {navigation ? (
+        <button ref={navigation.buttonRef} type="button" onClick={navigation.onToggle} aria-label={navigation.overlay ? 'Open project navigation' : navigation.expanded ? 'Collapse project navigation' : 'Expand project navigation'} title="Project navigation" aria-expanded={navigation.expanded} aria-controls={!navigation.overlay || navigation.expanded ? WORKSPACE_NAVIGATION_ID : undefined} aria-haspopup={navigation.overlay ? 'dialog' : undefined} className={`grid h-11 w-11 shrink-0 place-items-center rounded-[var(--ds-radius-control)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}>
+          <PanelLeft className="h-[18px] w-[18px]" aria-hidden />
+        </button>
+      ) : showBack && (
         <button type="button" onClick={onBack} aria-label="Back to My comics" title="My comics" className={headerIconBtn}>
           <ArrowLeft className="h-4 w-4" />
         </button>
@@ -969,11 +977,30 @@ const KeyboardInsetMount: React.FC = () => {
   return null;
 };
 
-export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack: () => void }> = ({ studio, onBack }) => {
+interface WorkspaceProps {
+  onBack: () => void;
+  navigationFooter?: React.ReactNode;
+  initialIdea?: { id: string; text: string };
+  onInitialIdeaConsumed?: (id: string) => void;
+}
+
+export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
   const ff = useFormFactor();
   useComicThemeScope(!isComicsHost());
   useThemeColor();
   const phone = isPhoneLayout(ff.layout);
+  const navigationOverlay = phone || ff.width < 1024 || ff.layout === 'dual-screen';
+  const [navigationExpanded, setNavigationExpanded] = useState(readNavigationExpanded);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const navigationButton = useRef<HTMLButtonElement | null>(null);
+  const toggleNavigation = () => {
+    if (navigationOverlay) setNavigationOpen((open) => !open);
+    else setNavigationExpanded((expanded) => {
+      try { window.localStorage.setItem(WORKSPACE_NAVIGATION_KEY, String(!expanded)); } catch { /* private storage */ }
+      return !expanded;
+    });
+  };
+  useEffect(() => { setNavigationOpen(false); }, [navigationOverlay]);
   const [view, setView] = useState<'chat' | 'board'>('chat');
   const [paneModeState, setPaneModeState] = useState<PaneMode>(() => readPaneMode(ff.widthClass));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1164,7 +1191,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       : undefined;
 
   const chat = (
-    <ConversationPane studio={chatStudio} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
+    <ConversationPane studio={chatStudio} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
   );
 
   const board = (
@@ -1176,7 +1203,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       style={phone && !tabBar ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
     >
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <BoardPane studio={studio} />
+        <BoardPane studio={studio} navigation="external" />
       </div>
     </section>
   );
@@ -1209,13 +1236,23 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
         onOpenSettings={() => setSettingsOpen(true)}
         paneMode={paneMode}
         onPaneMode={setPaneMode}
+        navigation={{ expanded: navigationOverlay ? navigationOpen : navigationExpanded, overlay: navigationOverlay, onToggle: toggleNavigation, buttonRef: navigationButton }}
         ask={phone && view === 'board' && !readerOpen ? { busy: studio.messageBusy, onAsk: openAsk, onViewChat: () => setView('chat') } : undefined}
       />
       <HeaderBanners studio={studio} compact={headerVariantFor(ff) !== 'regular'} />
 
-      <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <StudioLayout ff={ff} chat={chat} board={board} view={view} paneMode={paneMode} navItems={navItems} onBack={onBack} />
+      <main id="studio-main" className="flex min-h-0 min-w-0 flex-1 overflow-clip">
+        {!navigationOverlay && <aside aria-label="Comic workspace navigation" data-persistent-stage-navigation className={cx('min-h-0 shrink-0 border-r border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]', navigationExpanded ? 'w-56' : 'w-14')}>
+          <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} compact={!navigationExpanded} onBack={onBack} onConversation={skipToComposer} onSelect={(tab) => { setTab(tab); showBoard(); }} footer={navigationFooter} />
+        </aside>}
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-clip">
+          <StudioLayout ff={ff} chat={chat} board={board} view={view} paneMode={paneMode} navItems={navItems} onBack={onBack} />
+        </div>
       </main>
+
+      {navigationOverlay && <SideSheet open={navigationOpen} onClose={() => setNavigationOpen(false)} label="Project navigation" title="This comic" side="left" width={288} modal anchorRef={navigationButton}>
+        <WorkspaceNavigation doc={doc} caps={studio.caps} tab={studio.tab} onBack={onBack} onConversation={() => { setNavigationOpen(false); skipToComposer(); }} onSelect={(tab) => { setTab(tab); showBoard(); setNavigationOpen(false); }} footer={navigationFooter} />
+      </SideSheet>}
 
       <AdaptiveSheet
         open={settingsOpen}
@@ -1264,10 +1301,10 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
   );
 };
 
-export const ComicStudio: React.FC<{ projectId: string; onBack: () => void }> = ({ projectId, onBack }) => {
+export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
   const studio = useStudio(projectId);
   // A new project starts with a fresh shell (chat view, closed sheets, empty composer).
-  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} />;
+  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} navigationFooter={navigationFooter} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
 };
 
 export default ComicStudio;

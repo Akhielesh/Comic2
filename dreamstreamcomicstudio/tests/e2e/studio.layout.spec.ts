@@ -116,12 +116,15 @@ test.describe('studio layout', () => {
       await qa.toBoard();
       expect.soft(await page.locator('[role="radiogroup"][aria-label="Card size"]').count(), `Card size is on the Pages tab (${at})`).toBe(1);
       expect.soft(await cutRadioLabels(page, /^Card size$/), `Card size labels whole at ${at}`).toEqual([]);
-      // The board tab count: the 11 px chrome step, never the old 10 px.
+      // The project rail expands (or opens as a drawer) to show the stage counts.
+      const navigation = page.getByRole('button', { name: /^(Open|Expand) project navigation$/ });
+      if (await navigation.isVisible()) await navigation.click();
       const badgePx = await page.evaluate(() =>
         [...document.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Board"] [role="tab"] > span.tabular-nums')].map((b) => parseFloat(getComputedStyle(b).fontSize))
       );
       expect.soft(badgePx.length, `a board tab carries a count (${at})`).toBeGreaterThan(0);
       for (const px of badgePx) expect.soft(px, `board tab count font size at ${at}`).toBeGreaterThanOrEqual(11);
+      if (await page.getByRole('dialog', { name: 'Project navigation', exact: true }).isVisible()) await page.keyboard.press('Escape');
       // The Easy | Pro switch in the regular header (wide windows only).
       expect.soft(await cutRadioLabels(page, /^Editor view$/), `Editor view labels whole at ${at}`).toEqual([]);
 
