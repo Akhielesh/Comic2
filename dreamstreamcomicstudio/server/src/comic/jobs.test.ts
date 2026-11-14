@@ -437,6 +437,25 @@ describe('runAction render_pages', () => {
 // ── Gating ───────────────────────────────────────────────────────────────────
 
 describe('spend gating', () => {
+  it.each([false, true])('planning-only holds images despite confirmed=%s and confirm never; a later approval still works', async (confirmed) => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'never';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    ctx.planningOnly = true;
+    const started = await startAction(ctx, { type: 'render_cover' }, { confirmed });
+    expect(started.outcome.status).toBe('gated');
+    const gate = session.doc.gate!;
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy' });
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate).toEqual(gate);
+    ctx.planningOnly = false;
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: false });
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(session.doc.cover.render.status).toBe('ready');
+  });
+
   it('policy gate: no spend, a gate card; approving runs it', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';

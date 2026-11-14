@@ -1092,6 +1092,7 @@ export function gateDecision(
   confirmed: boolean,
   opts: {
     budgetApproved?: boolean;
+    planningOnly?: boolean;
     pendingUsd?: number;
     priorUsd?: number;
     forceGate?: Gate['reason'];
@@ -1102,6 +1103,7 @@ export function gateDecision(
 ): Gate['reason'] | null {
   const budget = budgetOf(doc.settings);
   if (budget !== undefined && !opts.budgetApproved && round4(doc.spend.totalUsd + (opts.pendingUsd || 0) + estimate.usd) > budget + 1e-9) return 'budget';
+  if (opts.planningOnly) return 'policy';
   if (confirmed) return null;
   const policy = doc.settings.confirm;
   if (opts.forceGate) {
@@ -1308,6 +1310,7 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(ctx.session.doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
@@ -1337,6 +1340,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
   }
+  if (ctx.planningOnly) return finished({ status: 'gated', message: 'The plan is ready for review. Approve the quote in a later turn to start drawing.' });
   const gated = gate.action as StudioAction | ProPageAction;
   if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
@@ -1878,6 +1882,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
@@ -2072,6 +2077,7 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
