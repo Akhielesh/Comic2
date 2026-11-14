@@ -56,6 +56,7 @@ describe('Sample comic collection', () => {
     expect(figure.queryByRole('button', { name: 'Next sample page' })).toBeNull();
     fireEvent.click(figure.getByRole('button', { name: 'Enlarge comic page' }));
     expect(figure.getByRole('group', { name: `${FEATURED_SAMPLES[0].title} pages` })).toHaveAttribute('data-enlarged', 'true');
+    expect(figure.getByAltText('')).toHaveAttribute('sizes', '1200px');
     fireEvent.click(figure.getByRole('button', { name: 'Fit comic page' }));
     expect(figure.getByRole('group', { name: `${FEATURED_SAMPLES[0].title} pages` })).not.toHaveAttribute('data-enlarged');
     fireEvent.keyDown(document, { key: 'Escape' });
