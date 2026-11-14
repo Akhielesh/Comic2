@@ -133,15 +133,19 @@ describe('StudioComposer — sending', () => {
 });
 
 describe('StudioComposer — option chips', () => {
-  it('Format chip shows aspect and pages and opens the format panel; picking a kind patches instantly', () => {
+  it('Format chip shows aspect and story-led length and opens the format panel; picking a kind patches instantly', () => {
     const studio = makeFakeStudio();
-    render(<StudioComposer studio={studio} />);
+    const { rerender } = render(<StudioComposer studio={studio} />);
     const chip = screen.getByRole('button', { name: /Format/ });
-    expect(chip).toHaveTextContent('2:3 · 6p');
+    expect(chip).toHaveTextContent('2:3 · Story-led length');
     fireEvent.click(chip);
     const panel = screen.getByRole('dialog', { name: 'Format' });
     fireEvent.click(within(panel).getByRole('radio', { name: /Manga/ }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'format', patch: { kind: 'manga', readingDirection: 'rtl' } }]);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Set page count' }));
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { pageCountMode: 'fixed' } }]);
+    studio.doc = { ...studio.doc!, format: { ...studio.doc!.format, pageCountMode: 'fixed' } };
+    rerender(<StudioComposer studio={studio} />);
     fireEvent.click(within(panel).getByRole('button', { name: '12' }));
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { pageCount: 12 } }]);
   });
