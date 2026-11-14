@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: catalog-maintenance-refresh
@@ -17,6 +16,9 @@ concurrency:
 
 jobs:
   maintain:
+    permissions:
+      contents: read
+      id-token: write
     if: github.ref == 'refs/heads/Dreamstrream-v1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
