@@ -249,6 +249,46 @@ describe('Language model discovery and comparison', () => {
 });
 
 describe('Image model outputs use recorded evidence', () => {
+  it.each(['thumbnail', 'full'] as const)('retries a failed %s image when its URL refreshes without changing the example id', (kind) => {
+    const sample = example('refresh', {
+      url: 'https://artwork.test/output.png?signature=expired',
+      thumbnailUrl: kind === 'thumbnail' ? 'https://artwork.test/thumb.png?signature=expired' : ''
+    });
+    const dataFor = (output: ModelShowcaseExample) => showcase([imageRow('refresh', { examples: [output], sampleState: 'available' })]);
+    const view = render(<ImageModels data={dataFor(sample)} loading={false} error={null} onRetry={vi.fn()} />);
+    fireEvent.error(screen.getByRole('img', { name: sample.alt }));
+    expect(screen.getByText('Examples couldn’t load')).toBeInTheDocument();
+    const refreshed = {
+      ...sample,
+      url: 'https://artwork.test/output.png?signature=renewed',
+      thumbnailUrl: kind === 'thumbnail' ? 'https://artwork.test/thumb.png?signature=renewed' : ''
+    };
+    view.rerender(<ImageModels data={dataFor(refreshed)} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(screen.getByRole('img', { name: sample.alt })).toHaveAttribute('src', refreshed.thumbnailUrl || refreshed.url);
+    expect(screen.queryByText('Examples couldn’t load')).not.toBeInTheDocument();
+  });
+
+  it('keeps the displayed image, counter and navigation in sync when a refreshed list shrinks', () => {
+    const outputs = [1, 2, 3].map((n) => example('shrinking', { id: `output-${n}`, alt: `Recorded output ${n}` }));
+    const dataFor = (examples: ModelShowcaseExample[]) => showcase([imageRow('shrinking', { examples, sampleState: 'available' })]);
+    const view = render(<ImageModels data={dataFor(outputs)} loading={false} error={null} onRetry={vi.fn()} />);
+    const card = within(screen.getByRole('article', { name: 'Fixture shrinking' }));
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    expect(card.getByText('Published platform output · 3/3')).toBeInTheDocument();
+    view.rerender(<ImageModels data={dataFor(outputs.slice(0, 2))} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(card.getByRole('img', { name: 'Recorded output 2' })).toBeInTheDocument();
+    expect(card.getByText('Published platform output · 2/2')).toBeInTheDocument();
+    expect(card.getByRole('button', { name: 'Next Fixture shrinking output' })).toBeDisabled();
+    fireEvent.click(card.getByRole('button', { name: 'Previous Fixture shrinking output' }));
+    expect(card.getByRole('img', { name: 'Recorded output 1' })).toBeInTheDocument();
+    expect(card.getByText('Published platform output · 1/2')).toBeInTheDocument();
+    fireEvent.click(card.getByRole('button', { name: 'Next Fixture shrinking output' }));
+    view.rerender(<ImageModels data={dataFor(outputs.slice(0, 1))} loading={false} error={null} onRetry={vi.fn()} />);
+    expect(card.getByText('Published platform output · 1/1')).toBeInTheDocument();
+    expect(card.queryByRole('button', { name: /(?:Next|Previous) Fixture shrinking output/ })).not.toBeInTheDocument();
+  });
+
   it('separates private page costs and measured time from platform costs at the selected resolution', () => {
     const base = { kind: 'page', resolution: '1K', calls: 9, successfulCalls: 9, failedCalls: 0, costSamples: 9, costFrom: '2026-11-01', costTo: '2026-11-13' };
     const data = showcase([imageRow('personal', {
