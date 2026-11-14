@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { FOCUS_RING } from '../chat/studioDesign';
+import { DENSITY, FOCUS_RING } from '../chat/studioDesign';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ds/Dialog';
 import { IconButton } from '../ds/IconButton';
 import { prefersReducedMotion } from '../ds/useReducedMotion';
@@ -44,8 +44,8 @@ export function ComicSampleShelf({ comics = FEATURED_SAMPLES, onRead, title = 'F
       <IconButton label="Scroll to next sample comics" variant="outline" disabled={edges.end} onClick={() => strip.current?.scrollBy({ left: strip.current.clientWidth * .8, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })}><ChevronRight /></IconButton>
     </div>}</div>
     <ul ref={strip} onScroll={measureEdges} className="comic-sample-shelf-track" aria-label="Studio sample comics">
-      {comics.map(comic => <li key={comic.id}><a href={sampleLibraryHref(comic.id)} className={cn('comic-sample-book', FOCUS_RING)} onClick={event => onRead?.(event, comic.id)} aria-label={`Read ${comic.title}`}>
-        <div className="comic-sample-cover" data-comic-art=""><SampleCover comic={comic} /></div>
+      {comics.map(comic => <li key={comic.id}><a href={sampleLibraryHref(comic.id)} className={cn('comic-sample-book', DENSITY.coarse, FOCUS_RING)} onClick={event => onRead?.(event, comic.id)} aria-label={`Read ${comic.title}`}>
+        <div className="comic-sample-cover" data-comic-art="" aria-hidden="true"><SampleCover comic={comic} /></div>
         <div className="comic-sample-book-copy"><span className="comic-sample-style">{comic.style}</span><h3>{comic.title}</h3><p>{comic.synopsis}</p><span className="comic-sample-read">Read the story <ArrowRight aria-hidden /></span></div>
       </a></li>)}
     </ul>
@@ -105,14 +105,14 @@ function DeckContents({ initialStory }: { initialStory?: SampleStory }) {
           setScrolling(false);
         }, 140);
       }}>
-      {SAMPLE_COMICS.map((entry, at) => <li key={entry.id} data-active={entry.id === activeId}><button type="button" aria-pressed={entry.id === activeId} aria-label={`Read ${entry.title}`} className={FOCUS_RING} onClick={() => select(at)}>
-        <div className="comic-deck-card-art" data-comic-art=""><SampleCover comic={entry} eager={at < 2} /></div><span>{entry.title}</span><small>{entry.style}</small>
+      {SAMPLE_COMICS.map((entry, at) => <li key={entry.id} data-active={entry.id === activeId}><button type="button" aria-pressed={entry.id === activeId} aria-label={`Read ${entry.title}`} className={cn(DENSITY.coarse, FOCUS_RING)} onClick={() => select(at)}>
+        <div className="comic-deck-card-art" data-comic-art="" aria-hidden="true"><SampleCover comic={entry} eager={at < 2} /></div><span>{entry.title}</span><small>{entry.style}</small>
       </button></li>)}
     </ul>
     <div ref={reader} className="comic-deck-reader" data-selected-sample={comic.id}>
       <div className="comic-deck-story-heading"><p>{comic.synopsis}</p><span>{comic.pages.length} {comic.pages.length === 1 ? 'complete page' : 'pages'} · {comic.pages.reduce((total, page) => total + page.panels, 0)} panels</span></div>
       <ComicSampleReader key={comic.id} story={comic.id} standalone />
-      <a href={sampleLibraryHref(comic.id)} className={cn('comic-deck-library-link', FOCUS_RING)}>Open {comic.title} in the Library <ArrowRight aria-hidden /></a>
+      <a href={sampleLibraryHref(comic.id)} className={cn('comic-deck-library-link', DENSITY.coarse, FOCUS_RING)}>Open {comic.title} in the Library <ArrowRight aria-hidden /></a>
     </div>
   </>;
 }
@@ -132,7 +132,7 @@ export function ComicSampleDeckDialog({ open, onOpenChange, initialStory, return
 export function ComicSampleExploreButton({ className }: { className?: string }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  return <><button ref={trigger} type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" className={cn('comic-sample-explore', FOCUS_RING, className)}>
+  return <><button ref={trigger} type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" className={cn('comic-sample-explore', DENSITY.coarse, FOCUS_RING, className)}>
     <span className="comic-sample-explore-art" aria-hidden>{FEATURED_SAMPLES.slice(0, 3).map(comic => <span key={comic.id}><SampleCover comic={comic} /></span>)}</span>
     <span><strong>Explore sample comics</strong><small>Five new stories, five different looks.</small></span><ArrowRight aria-hidden />
   </button><ComicSampleDeckDialog open={open} onOpenChange={setOpen} returnFocusRef={trigger} /></>;
