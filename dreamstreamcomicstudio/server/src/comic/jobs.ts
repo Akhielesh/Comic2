@@ -1340,7 +1340,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
   }
-  if (ctx.planningOnly) return finished({ status: 'gated', message: 'The plan is ready for review. Approve the quote in a later turn to start drawing.' });
+  if (ctx.planningOnly) return finished({ status: 'gated', gate, message: 'The plan is ready for review. Approve the quote in a later turn to start drawing.' });
   const gated = gate.action as StudioAction | ProPageAction;
   if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
