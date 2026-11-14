@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ChatProjectModal } from './ChatProjectModal';
+import { ChatSidebar } from './ChatSidebar';
 import type { ChatProject } from '../../services/chatStorage';
 import { resetBackStack } from '../comicstudio/mobile/backStack';
 
@@ -11,6 +12,25 @@ function Harness({ project = null, onSave = vi.fn() }: { project?: ChatProject |
   const [open, setOpen] = useState(false);
   return <><button onClick={() => setOpen(true)}>Open project</button><button>Outside</button>{open && <ChatProjectModal project={project} onClose={() => setOpen(false)} onSave={(...args) => { onSave(...args); setOpen(false); }} />}</>;
 }
+function SidebarHarness() {
+  const [project, setProject] = useState<ChatProject>({ id: 'p1', name: 'Work', icon: 'book', color: 'teal', createdAt: 1, updatedAt: 1 });
+  const [editing, setEditing] = useState(false);
+  const noop = () => {};
+  return <>
+    <ChatSidebar
+      sessions={[]} projects={[project]} activeId={null} hasMemory={false}
+      onSelect={noop} onNew={noop} onDelete={noop} onRename={noop} onMoveToProject={noop}
+      onNewProject={noop} onEditProject={() => setEditing(true)} onDeleteProject={noop}
+      onEditMemory={noop} onBack={noop} onOpenSearch={noop} onOpenLibrary={noop}
+      onOpenDashboards={noop} onOpenGallery={noop} onOpenTools={noop}
+    />
+    {editing && <ChatProjectModal project={project} onClose={() => setEditing(false)} onSave={(name, icon, color) => {
+      setProject({ ...project, name, icon, color });
+      setEditing(false);
+    }} />}
+  </>;
+}
+
 const open = () => {
   const trigger = screen.getByRole('button', { name: 'Open project' });
   trigger.focus();
@@ -19,6 +39,29 @@ const open = () => {
 };
 
 describe('Chat project dialog', () => {
+  it.each(['Escape', 'Save'] as const)('returns focus to the persistent sidebar project button after Edit and %s', async (action) => {
+    render(<SidebarHarness />);
+    const trigger = screen.getByRole('button', { name: 'Options for Work' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const edit = screen.getByRole('button', { name: 'Edit' });
+    edit.focus();
+    fireEvent.click(edit);
+    const dialog = screen.getByRole('dialog', { name: 'Edit project' });
+    const input = within(dialog).getByRole('textbox', { name: 'Project name' });
+    expect(input).toHaveFocus();
+    expect(edit.isConnected).toBe(false);
+    expect(within(dialog).getByRole('button', { name: 'book' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(dialog).getByRole('button', { name: 'teal' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(input, { target: { value: 'Updated work' } });
+    if (action === 'Save') fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    else fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(trigger).toHaveAccessibleName(action === 'Save' ? 'Options for Updated work' : 'Options for Work');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('creates a named project with the chosen icon and color, without accepting a blank name', async () => {
     const onSave = vi.fn();
     render(<Harness onSave={onSave} />);
