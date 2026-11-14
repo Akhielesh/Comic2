@@ -458,9 +458,9 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   }
 
   let pagesNote = '';
-  if (analysis.suggestedPageCount && current.planStatus === 'none' && analysis.suggestedPageCount !== current.format.pageCount) {
-    ops.push({ op: 'format', patch: { pageCount: analysis.suggestedPageCount } });
-    pagesNote = `; page count set to ${analysis.suggestedPageCount}`;
+  if (analysis.suggestedPageCount && current.format.pageCountMode === 'auto' && current.planStatus === 'none' && analysis.suggestedPageCount !== current.format.pageCount) {
+    ops.push({ op: 'format', patch: { pageCount: analysis.suggestedPageCount, pageCountMode: 'auto' } });
+    pagesNote = `; estimated ${analysis.suggestedPageCount} pages; Director chooses final pacing`;
   } else if (analysis.suggestedPageCount) {
     pagesNote = `; suggested ${analysis.suggestedPageCount} pages`;
   }
@@ -946,9 +946,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       'Set the format. If drawn pages would go out of date, the first call only reports it (confirm:true applies).',
       schema({
         kind: { type: 'string', enum: COMIC_KINDS },
-        pageCount: I('1–40.'),
+        pageCount: I('Explicit author-requested count, 1–40. Sets fixed mode unless pageCountMode:auto is supplied. Do not invent a count when the author leaves length open.'),
+        pageCountMode: S('auto lets the Director choose story length; fixed honors an explicit author page count.', { enum: ['auto', 'fixed'] }),
         pageAspect: S('2:3 = a standard comic page.', { enum: ASPECT_RATIOS }),
-        panelsPerPage: S(`"auto" = ${PANEL_LIMITS.autoTypical}–4 big panels, the dialogue decides.`, {
+        panelsPerPage: S('Preferred density only; auto lets scenes decide. Each page may have a different count, including splashes.', {
           enum: ['auto', ...PANEL_LIMITS.uiChoices.map(String)]
         }),
         readingDirection: S('ltr, or rtl for manga.', { enum: ['ltr', 'rtl'] }),

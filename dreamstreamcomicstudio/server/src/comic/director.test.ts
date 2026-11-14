@@ -333,7 +333,7 @@ describe('summaries', () => {
     doc.gate = { id: 'g', action: { type: 'render_cover' }, title: 'Draw the cover?', summary: '', estimateUsd: 0.07, imageCount: 1, model: 'NB', createdAt: 1, status: 'open', reason: 'policy' };
     const s = summarizeDocForDirector(doc);
     expect(s).toContain('Title: Spice Run | Logline: A courier races through a spice market.');
-    expect(s).toContain('Format: comic, 6 pages, 2:3');
+    expect(s).toContain('Format: comic, 6 pages requested, 2:3');
     expect(s).toContain('Style: drafted “Ligne claire”');
     expect(s).toContain('- ARJUN [c_arjun] support — Bearded spice vendor in a green kurta; sheet not drawn');
     expect(s).toContain('Places: SPICE MARKET [pl_market]');
@@ -388,6 +388,14 @@ describe('summaries', () => {
     // BYOK: the provider price of the same model.
     const byok = summarizeDocForDirector(doc, true).split('\n').find((l) => l.startsWith('Settings:'))!;
     expect(byok).toContain(`${c.approx(unitPrice(doc, 'page', { byok: true }).usd)}/page`);
+  });
+
+  it('labels adaptive planning cost as an estimate, not a fixed-length quote', () => {
+    const doc = createEmptyDoc('adaptive');
+    const quote = planPagesQuoteText(doc, costFormatter(), false);
+    expect(quote).toContain('as an estimate');
+    expect(quote).toContain('Director chooses the final length');
+    expect(quote).not.toContain('up to');
   });
 
   it('before a plan exists, the summary quotes planning with its honest "up to" bound, in usage words for governed users', () => {

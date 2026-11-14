@@ -4705,6 +4705,9 @@ export async function planPages(
     for (const p of old) if (!kept.has(p.id) && hasArt(p) && !isBusy(p.render)) ops.push({ op: 'page_delete', id: p.id, deletedAt: Date.now() });
   }
   ops.push({ op: 'pages', pages });
+  if (!revising && doc.format.pageCountMode === 'auto' && pages.length) {
+    ops.push({ op: 'format', patch: { pageCount: pages.length, pageCountMode: 'auto' } });
+  }
   // A (re)written plan is a draft again until the user approves it (a revision of some pages keeps the status).
   if (!revising || rewroteAll || doc.planStatus === 'none') ops.push({ op: 'plan_status', status: 'draft' });
   commitAs(ctx, ops, origin, revising && !rewroteAll ? 'Revise pages' : 'Plan pages');
@@ -4931,6 +4934,7 @@ export const sanitizeFormatPatch = (raw: unknown): Partial<Format> =>
     raw,
     {
       kind: (v) => oneOf(v, COMIC_KINDS),
+      pageCountMode: (v) => oneOf(v, ['auto', 'fixed'] as const),
       pageCount: (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(40, Math.max(1, Math.round(v))) : undefined),
       pageAspect: (v) => oneOf(v, ASPECT_RATIOS),
       panelsPerPage: (v) => (v === 'auto' ? 'auto' : typeof v === 'number' && Number.isFinite(v) ? Math.min(9, Math.max(1, Math.round(v))) : undefined),
@@ -5585,6 +5589,7 @@ export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
 export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
   const usd = planPagesUsd(doc, byok);
+  if (doc.format.pageCountMode === 'auto') return `${cost.approx(usd)} at ${plural(pages, 'page')} as an estimate; the Director chooses the final length. Outline and any repair are billed by actual usage.`;
   return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;
 };
 
