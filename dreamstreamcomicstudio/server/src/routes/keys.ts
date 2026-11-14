@@ -25,6 +25,8 @@ import { Request, Response, Router } from 'express';
 import { GEMINI_BASE_URL, NVIDIA_BASE_URL, OPENROUTER_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getProviderDef, isTextProvider, type ProviderDef, type ProviderId } from '../../../shared/providers.js';
+import { accountKeyForValidation, canonicalAccountProvider } from '../middleware/accountKeys.js';
+import { allowedProviderFilter } from '../middleware/keys.js';
 
 export const keysRouter = Router();
 
@@ -220,27 +222,35 @@ const validateDirectProvider = async (def: ProviderDef, key: string): Promise<Va
 
 keysRouter.post('/validate', async (req: Request, res: Response) => {
   const provider = String(req.body?.provider || '').trim().toLowerCase();
+  const canonical = canonicalAccountProvider(provider);
+  // Allowance preferences can intentionally keep generation on the platform key.
+  // Checking an account key is read-only and must still check that user's key.
+  const userId = (req as Request & { user?: { id?: string } }).user?.id;
+  const callerKey = canonical ? callerKeyFor(req, canonical) : null;
+  const keyForCheck = callerKey || (canonical && userId && allowedProviderFilter(req)(canonical)
+    ? await accountKeyForValidation(userId, canonical)
+    : null);
 
   let result: ValidationResult;
   switch (provider) {
     case 'nvidia': {
-      const key = callerKeyFor(req, 'nvidia');
+      const key = keyForCheck;
       result = key ? await validateNvidia(key) : missing('nvidia');
       break;
     }
     case 'openrouter': {
-      const key = callerKeyFor(req, 'openrouter');
+      const key = keyForCheck;
       result = key ? await validateOpenRouter(key) : missing('openrouter');
       break;
     }
     case 'gemini': {
-      const key = callerKeyFor(req, 'gemini');
+      const key = keyForCheck;
       result = key ? await validateGemini(key) : missing('gemini');
       break;
     }
     case 'pixazo': {
       // Pixazo/Flux has no documented key-introspection endpoint, so we can't live-check it.
-      const key = callerKeyFor(req, 'pixazo');
+      const key = keyForCheck;
       result = {
         provider: 'pixazo',
         status: key ? 'unsupported' : 'missing',
@@ -253,7 +263,7 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
     }
     case 'ideogram': {
       // Ideogram has no documented key-introspection endpoint either — same honest treatment.
-      const key = callerKeyFor(req, 'ideogram');
+      const key = keyForCheck;
       result = {
         provider: 'ideogram',
         status: key ? 'unsupported' : 'missing',
@@ -265,7 +275,7 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
       break;
     }
     case 'sarvam': {
-      const key = callerKeyFor(req, 'sarvam');
+      const key = keyForCheck;
       result = key ? { provider, status: 'unsupported', valid: false, message: 'Stored. Use it on a translation to verify it with Sarvam AI.' } : missing(provider);
       break;
     }
@@ -274,7 +284,7 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
       const def = isTextProvider(provider) ? getProviderDef(provider) : undefined;
       // Never echo the caller's input back.
       if (!def) return res.status(400).json({ error: { message: 'Unknown provider.' } });
-      const key = callerKeyFor(req, def.id);
+      const key = keyForCheck;
       result = key ? await validateDirectProvider(def, key) : missing(def.id);
       break;
     }

@@ -342,34 +342,39 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
     return { imageDataUrl: url, images: [url], model: String(data?.model || req.model), usage: {}, raw: data };
   };
 
-  // Live /models (when available + a key is present) merged ON TOP of the curated seed,
-  // so newly-released ids appear while the seed guarantees rich info offline / keyless.
+  // A successful live list is authoritative: never append retired seed IDs to it.
+  // The seed provides reference metadata for matching IDs and is an explicit offline fallback.
   const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {
     const seed = staticModelsFor(cfg.id);
     const seedById = new Map(seed.map((m) => [m.id, m]));
     if (!cfg.modelsPath || !ctx?.apiKey) return seed;
     try {
-      const data = await doFetch<any>(cfg.modelsPath, { method: 'GET' }, cfg.timeoutMs, ctx);
+      const data = await doFetch<any>(cfg.modelsPath, { method: 'GET' }, Math.min(cfg.timeoutMs, 8_000), ctx);
       const rows: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-      const live: CatalogModel[] = [];
+      const live = new Map<string, CatalogModel>();
       for (const row of rows) {
-        const id = String(row?.id || row?.name || '').trim();
+        // Gemini's compatibility API may return resource names; generation uses the bare ID.
+        const id = String(row?.id || row?.name || '').trim().replace(/^models\//, '');
         if (!id) continue;
-        // Prefer the curated entry (rich pricing/caps) when ids match; otherwise synthesize
-        // a minimal entry so the model is still selectable.
-        if (seedById.has(id)) continue;
-        live.push({
+        const curated = seedById.get(id);
+        if (curated) {
+          live.set(id, { ...curated, catalogOrigin: 'live' });
+          continue;
+        }
+        live.set(id, {
           id,
-          name: String(row?.name || row?.display_name || id),
+          name: String(row?.display_name || row?.name || id),
           source: cfg.id,
+          catalogOrigin: 'live',
+          pricingKnown: false,
+          pricingOrigin: 'unknown',
           description: typeof row?.description === 'string' ? row.description : undefined,
           contextLength: typeof row?.context_length === 'number' ? row.context_length : undefined,
           createdAt: typeof row?.created === 'number' ? row.created : undefined,
           inputModalities: VISION_HINT.test(id) ? ['text', 'image'] : ['text'],
           outputModalities: ['text'],
           supportedParameters: ['response_format'],
-          // No public pricing on these list endpoints — leave axes at 0 but classify as
-          // 'paid' so the model is never falsely advertised as free.
+          // Listing endpoints do not publish price quotes. Zeros are placeholders only.
           pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
           isFree: false,
           costClass: 'paid',
@@ -378,7 +383,8 @@ export const createOpenAICompatibleProvider = (cfg: OpenAICompatibleConfig): AIP
           supportsJsonOutput: true
         });
       }
-      return [...seed, ...live];
+      // An empty/malformed response is not evidence that every model was retired.
+      return live.size ? [...live.values()] : seed;
     } catch {
       return seed;
     }

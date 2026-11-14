@@ -2,15 +2,36 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The OpenRouter shim calls the gateway's provider; capture what schema it sends.
 const generateTextMock = vi.hoisted(() => vi.fn());
+const getProviderMock = vi.hoisted(() => vi.fn(() => ({ generateText: generateTextMock })));
 
 vi.mock('./gateway.js', () => ({
-  getProvider: () => ({ generateText: generateTextMock }),
+  getProvider: getProviderMock,
   resolveProviderContext: (apiKey: string) => ({ apiKey })
 }));
 vi.mock('./autoRouter.js', () => ({ TEXT_FALLBACK: 'openai/gpt-4o-mini' }));
 
 import { createClient } from './client.js';
 import { Type } from '@google/genai';
+
+describe('explicit pipeline provider routing', () => {
+  beforeEach(() => { generateTextMock.mockReset(); getProviderMock.mockClear(); });
+
+  it.each(['openrouter', 'nvidia'] as const)('routes %s explicitly even when the key has no known prefix', async (provider) => {
+    const model = 'publisher/model';
+    generateTextMock.mockResolvedValue({ text: 'ok', model, usage: {} });
+    const client = createClient('opaque-provider-key', provider);
+    await client.models.generateContent({ model, contents: 'hello' });
+    expect(getProviderMock).toHaveBeenCalledWith(provider);
+    expect(generateTextMock.mock.calls[0][0]).toMatchObject({ model });
+    expect(generateTextMock.mock.calls[0][1]).toMatchObject({ apiKey: 'opaque-provider-key' });
+  });
+
+  it('preserves the legacy gateway fallback for a Gemini default model id', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok', usage: {} });
+    await createClient('sk-or-test').models.generateContent({ model: 'gemini-default', contents: 'hello' });
+    expect(generateTextMock.mock.calls[0][0].model).toBe('openai/gpt-4o-mini');
+  });
+});
 
 const sentSchema = () => generateTextMock.mock.calls[0][0].jsonSchema.schema;
 

@@ -48,6 +48,7 @@ import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
+import { modelShowcaseRouter } from './routes/modelShowcase.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
 import { authEmailRouter } from './routes/authEmail.js';
@@ -189,6 +190,7 @@ app.get('/api/health', (_req, res) => {
 
 // Public routes
 app.use('/api/system', systemRateLimit, systemRouter);
+app.use('/api/models/showcase', systemRateLimit, optionalAuth, modelShowcaseRouter);
 app.use('/api/models', systemRateLimit, modelsRouter);
 // Telemetry + feedback capture. Public + optionalAuth so failures that happen
 // while logged-out (or while auth itself is failing) are still recorded; userId

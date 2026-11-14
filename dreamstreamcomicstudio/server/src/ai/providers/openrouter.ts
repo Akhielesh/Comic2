@@ -246,9 +246,9 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   // Did the upstream actually report pricing? `num()` coerces missing fields to 0,
   // which would otherwise read as "all axes free" → a false "Free" label. We only
   // trust an all-zero classification when at least one pricing field was present.
-  const pricingReported = ['prompt', 'completion', 'image', 'request'].some(
-    (k) => pricing[k] !== undefined && pricing[k] !== null && pricing[k] !== ''
-  );
+  const reportedPrices = ['prompt', 'completion', 'image', 'request']
+    .map((k) => pricing[k]).filter((v) => v !== undefined && v !== null && v !== '');
+  const pricingReported = reportedPrices.length > 0 && reportedPrices.every((v) => Number.isFinite(Number(v)) && Number(v) >= 0);
   // `isFree` is the strict classification from shared/pricing: a model whose id
   // ends `:free` OR whose four pricing axes are all zero. Token-billed image
   // models (imagePerImage=0 but completionPerToken>0) are NOT free — those bill
@@ -270,6 +270,8 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     id,
     name: String(raw?.name || id),
     source: 'openrouter',
+    pricingKnown: pricingReported || hasFreeSuffix(id),
+    pricingOrigin: pricingReported || hasFreeSuffix(id) ? 'provider' : 'unknown',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
     createdAt: typeof raw?.created === 'number' ? raw.created : undefined,

@@ -69,7 +69,13 @@ const asQuality = (v: unknown): QualityEntry | undefined => {
   const source = text(v.source, 200);
   if (score === undefined || !asOf || !source) return undefined;
   const ci = Array.isArray(v.ci) && v.ci.length === 2 && num(v.ci[0]) !== undefined && num(v.ci[1]) !== undefined ? ([v.ci[0], v.ci[1]] as [number, number]) : undefined;
-  return { board: v.board as QualityBoard, ...opt('rank', num(v.rank)), ...opt('of', num(v.of)), score, ...opt('ci', ci), asOf, source };
+  return {
+    board: v.board as QualityBoard, ...opt('rank', num(v.rank)), ...opt('of', num(v.of)), score, ...opt('ci', ci),
+    ...(text(v.name, 200) ? { name: text(v.name, 200) } : {}),
+    ...(num(v.samples) !== undefined && Number(v.samples) >= 0 ? { samples: Math.floor(Number(v.samples)) } : {}),
+    ...(num(v.votes) !== undefined && Number(v.votes) >= 0 ? { votes: Math.floor(Number(v.votes)) } : {}),
+    asOf, source
+  };
 };
 
 const asObserved = (v: unknown): ObservedEntry | undefined => {

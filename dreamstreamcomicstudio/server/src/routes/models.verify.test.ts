@@ -45,7 +45,7 @@ vi.mock('../services/modelCatalogStore.js', () => ({
   loadPersistedModels: vi.fn(async () => []),
   loadCallabilityMap: vi.fn(async () => new Map())
 }));
-vi.mock('../services/telemetryAnalytics.js', () => ({ getModelLatency: vi.fn(async () => ({})) }));
+vi.mock('../services/telemetryAnalytics.js', () => ({ getModelLatencyReport: vi.fn(async () => ({ models: {} })) }));
 vi.mock('../services/usageAnalytics.js', () => ({ getModelPopularity: vi.fn(async () => []), parsePopularityWindow: () => '7d' }));
 vi.mock('../services/modelStats.js', () => ({
   listModelScores: vi.fn(async () => []),
@@ -85,8 +85,8 @@ app.use('/api/models', modelsRouter);
 let server: Server;
 let base = '';
 beforeAll(async () => {
-  server = app.listen(0);
-  await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+  server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => {
@@ -144,7 +144,8 @@ describe('GET /api/models/verify — platform-key telemetry is for admins only',
   it('admin, no key header: the platform keys are reported (operator telemetry, unchanged)', async () => {
     const r = await verify('admin-token');
     expect(r.body.sources.openrouter).toMatchObject({ connected: true, liveKey: KEY_RECORD });
-    expect(r.body.providers.openai.connected).toBe(true);
+    expect(r.body.providers.openai.connected).toBe(false);
+    expect(r.body.providers.openai).toMatchObject({ configured: true, status: 'unverified' });
     expect(upstream.map((u) => u.auth)).toEqual(['Bearer sk-or-PLATFORM-secret', 'Bearer sk-or-PLATFORM-secret']);
   });
 

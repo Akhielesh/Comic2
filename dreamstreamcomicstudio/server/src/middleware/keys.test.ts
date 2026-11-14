@@ -43,4 +43,12 @@ describe('attachKeys provider resolution', () => {
     const keys = run({ 'X-XAI-Key': 'xai-test', 'X-Allowed-Sources': 'xai' });
     expect(keys.providerKeys?.xai).toEqual({ key: 'xai-test', byok: true });
   });
+
+  it('an explicitly empty allowed-source list disables every provider', () => {
+    const keys = run({ 'X-OpenRouter-Key': 'sk-or-user', 'X-Gemini-Key': 'gemini-user', 'X-Allowed-Sources': '' });
+    expect(Object.values(keys.providerKeys || {}).every((entry) => entry.key === null)).toBe(true);
+    expect(keys.openRouterKey).toBeNull();
+    expect(keys.geminiKey).toBeNull();
+    expect(keys.pixazoKey).toBeNull();
+  });
 });

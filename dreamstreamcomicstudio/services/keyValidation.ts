@@ -15,6 +15,7 @@
 import { buildApiUrl } from './clientConfig';
 import { PROVIDER_META, type ApiKeyProvider } from './apiKeys';
 import { supabase } from './supabase';
+import { allowedSourcesHeader } from './sourceGovernance';
 
 export type KeyValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing' | 'unavailable';
 
@@ -31,7 +32,7 @@ export interface KeyValidationResult {
 
 export const validateApiKey = async (
   provider: ApiKeyProvider,
-  keyValue: string
+  keyValue?: string
 ): Promise<KeyValidationResult> => {
   const header = PROVIDER_META[provider].header;
   try {
@@ -41,7 +42,7 @@ export const validateApiKey = async (
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        [header]: keyValue
+        ...(keyValue?.trim() ? { [header]: keyValue.trim() } : { 'X-Allowed-Sources': allowedSourcesHeader() })
       },
       body: JSON.stringify({ provider })
     });

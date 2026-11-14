@@ -39,6 +39,12 @@ export interface QualityEntry {
   of?: number;
   score: number;
   ci?: [number, number];
+  /** Exact leaderboard entry, including evaluated settings such as (max) or (2K). */
+  name?: string;
+  /** Sample count reported by this leaderboard; not platform generations. */
+  samples?: number;
+  /** Vote count when the source explicitly labels its observations as votes. */
+  votes?: number;
   /** Board publish date / fetch time. */
   asOf: string;
   source: string;

@@ -8,6 +8,11 @@ export type DreamStreamRole = 'text-brain' | 'dialogue' | 'panel-art' | 'cover' 
 export type ModelSource = ProviderId;
 
 export interface CatalogModel {
+  catalogOrigin?: 'live' | 'curated' | 'cached';
+  /** Discovery time, independent of pricing freshness and the current key's access. */
+  catalogCheckedAt?: number;
+  pricingKnown?: boolean;
+  pricingOrigin?: 'provider' | 'curated' | 'unknown';
   id: string;
   name: string;
   /** Upstream source this model came from (drives the Library "source" filter). */
@@ -49,10 +54,12 @@ export interface CatalogResponse {
   sources?: Partial<Record<ModelSource, number>>;
   fetchedAt: number | null;
   degraded: boolean;
+  stale?: boolean;
   message?: string;
 }
 
 export interface CatalogQuery {
+  refresh?: boolean;
   free?: boolean;
   modality?: 'image' | 'text';
   refs?: boolean;
@@ -77,7 +84,7 @@ export const loadCachedCatalog = (): CatalogResponse | null => {
     const parsed = JSON.parse(raw) as { at: number; data: CatalogResponse };
     if (!parsed?.data?.models?.length) return null;
     if (Date.now() - parsed.at > CATALOG_CACHE_TTL_MS) return null;
-    return parsed.data;
+    return { ...parsed.data, stale: true };
   } catch {
     return null;
   }
@@ -98,6 +105,7 @@ const saveCachedCatalog = (data: CatalogResponse) => {
  */
 export const fetchModelCatalog = async (query: CatalogQuery = {}, opts?: { timeoutMs?: number; retries?: number }): Promise<CatalogResponse> => {
   const params = new URLSearchParams();
+  if (query.refresh) params.set('refresh', 'true');
   if (query.free) params.set('free', 'true');
   if (query.modality) params.set('modality', query.modality);
   if (query.refs) params.set('refs', 'true');
@@ -115,7 +123,8 @@ export const fetchModelCatalog = async (query: CatalogQuery = {}, opts?: { timeo
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const data = await get<CatalogResponse>(path, { signal: controller.signal });
-      saveCachedCatalog(data);
+      // A studio/source/search subset must never replace the full Library snapshot.
+      if (!query.free && !query.modality && !query.refs && !query.source && !query.q && !query.product) saveCachedCatalog(data);
       return data;
     } catch (err) {
       lastErr = err;
@@ -152,7 +161,7 @@ export interface ModelVerification {
   };
   /** Per-provider connection + model count for every direct source (openrouter, nvidia,
    *  openai, anthropic, gemini, deepseek, zai, minimax, tencent, xai). */
-  providers?: Partial<Record<ModelSource, { connected: boolean; modelCount: number }>>;
+  providers?: Partial<Record<ModelSource, { connected: boolean; configured?: boolean; status?: 'verified' | 'unverified' | 'missing'; modelCount: number }>>;
 }
 
 export const fetchModelVerification = (): Promise<ModelVerification> =>
@@ -160,10 +169,13 @@ export const fetchModelVerification = (): Promise<ModelVerification> =>
 
 /** Human-readable cost label, product-friendly (per image / per 1M output tokens). */
 export const costLabel = (model: CatalogModel): string => {
+  if (model.pricingKnown === false) return 'Pricing unavailable';
   if (model.isFree || model.costBand === 'free') return 'Free';
-  if (model.supportsImageOutput) {
+  if (Object.values(model.pricing).every((price) => price === 0)) return 'Pricing unavailable';
+  if (model.supportsImageOutput && model.pricing.imagePerImage > 0) {
     return `$${model.pricing.imagePerImage.toFixed(3)}/img`;
   }
+  if (model.supportsImageOutput) return 'Token-billed image';
   const perMillion = model.pricing.completionPerToken * 1_000_000;
   return `$${perMillion.toFixed(2)}/M out`;
 };

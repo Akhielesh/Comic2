@@ -1,6 +1,6 @@
 // Per-model typical latency (median, from real chat telemetry) so the model picker can
 // flag slow models — the durable fix for users unknowingly picking a 60-250s free model.
-// Fetched once per session, best-effort (empty map on failure → no badges, no harm).
+// Cached briefly, best-effort (empty map on failure → no badges, no harm).
 
 import { get } from './apiClient';
 
@@ -9,21 +9,42 @@ export interface ModelSpeed {
   samples: number;
 }
 
-let cache: Record<string, ModelSpeed> | null = null;
-let inflight: Promise<Record<string, ModelSpeed>> | null = null;
+export interface ModelSpeedReport {
+  models: Record<string, ModelSpeed>;
+  /** Time the server assembled the observation window; null when unavailable. */
+  measuredAt: number | null;
+  windowDays: number;
+  sampleLimit: number;
+  capped: boolean;
+  status: 'available' | 'empty' | 'unavailable';
+  measurement: 'chat_turn_latency_without_tools';
+  sourceScope: 'pooled';
+}
 
-export const fetchModelSpeed = async (): Promise<Record<string, ModelSpeed>> => {
-  if (cache) return cache;
+const CACHE_TTL_MS = 120_000;
+let cache: { at: number; report: ModelSpeedReport } | null = null;
+let inflight: Promise<ModelSpeedReport> | null = null;
+const unavailable = (): ModelSpeedReport => ({
+  models: {}, measuredAt: null, windowDays: 7, sampleLimit: 8000, capped: false,
+  status: 'unavailable', measurement: 'chat_turn_latency_without_tools', sourceScope: 'pooled'
+});
+
+export const fetchModelSpeedReport = async (opts?: { refresh?: boolean }): Promise<ModelSpeedReport> => {
+  if (!opts?.refresh && cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.report;
   if (inflight) return inflight;
-  inflight = get<{ models: Record<string, ModelSpeed> }>('/api/models/speed')
+  inflight = get<ModelSpeedReport>('/api/models/speed')
     .then((res) => {
-      cache = res?.models || {};
-      return cache;
+      const report = { ...unavailable(), ...res, models: res?.models || {} };
+      cache = { at: Date.now(), report };
+      return report;
     })
-    .catch(() => ({} as Record<string, ModelSpeed>))
+    .catch(unavailable)
     .finally(() => { inflight = null; });
   return inflight;
 };
+
+export const fetchModelSpeed = async (): Promise<Record<string, ModelSpeed>> =>
+  (await fetchModelSpeedReport()).models;
 
 export type SpeedTier = 'fast' | 'ok' | 'slow';
 export const speedTier = (p50Ms: number): SpeedTier => (p50Ms < 4000 ? 'fast' : p50Ms < 15000 ? 'ok' : 'slow');

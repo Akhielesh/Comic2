@@ -209,6 +209,8 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     id,
     name: String(raw?.name || raw?.display_name || prettifyId(id)),
     source: 'nvidia',
+    pricingKnown: false,
+    pricingOrigin: 'unknown',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
     inputModalities: isImage ? (isEdit ? ['text', 'image'] : ['text']) : (isVision ? ['text', 'image'] : ['text']),

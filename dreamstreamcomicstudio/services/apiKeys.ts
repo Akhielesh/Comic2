@@ -176,8 +176,7 @@ export const hasAccountKey = (provider: ApiKeyProvider): boolean =>
  * feature gates don't need to know where a key happens to live.
  */
 export const hasUsableKey = (provider: ApiKeyProvider): boolean =>
-  Boolean(getActiveKeyValue(provider)) ||
-  Boolean(read(LEGACY_KEYS[provider])?.trim()) ||
+  Boolean(getProviderKeyValue(provider)) ||
   hasAccountKey(provider);
 
 const uuid = () =>
@@ -224,7 +223,17 @@ const readAll = (): ManagedApiKey[] => {
   let keys: ManagedApiKey[] = [];
   const raw = read(STORAGE);
   if (raw) {
-    try { keys = JSON.parse(raw) as ManagedApiKey[]; } catch { keys = []; }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      keys = Array.isArray(parsed) ? parsed.filter((k): k is ManagedApiKey =>
+        k && typeof k === 'object' && ALL_PROVIDERS.includes(k.provider) &&
+        typeof k.id === 'string' && typeof k.key === 'string' && Boolean(k.key.trim()) &&
+        typeof k.periodStart === 'string' && typeof k.createdAt === 'string' &&
+        typeof k.label === 'string' && typeof k.active === 'boolean' &&
+        typeof k.usedUsd === 'number' && Number.isFinite(k.usedUsd) &&
+        (k.limitUsd === null || (typeof k.limitUsd === 'number' && Number.isFinite(k.limitUsd)))
+      ) : [];
+    } catch { keys = []; }
   }
   keys = migrateLegacyKeys(keys);
   // Apply monthly resets on read and persist if anything changed.
@@ -295,7 +304,12 @@ export const updateKey = (
     if (k.id !== id) return k;
     const next = { ...k };
     if (typeof patch.label === 'string') next.label = patch.label.trim() || next.label;
-    if (typeof patch.key === 'string' && patch.key.trim()) next.key = patch.key.trim();
+    if (typeof patch.key === 'string' && patch.key.trim() && patch.key.trim() !== k.key) {
+      next.key = patch.key.trim();
+      delete next.validation;
+      delete next.validatedAt;
+      delete next.validationMessage;
+    }
     if (patch.limitUsd !== undefined) {
       next.limitUsd = typeof patch.limitUsd === 'number' && patch.limitUsd > 0 ? patch.limitUsd : null;
     }
@@ -333,6 +347,10 @@ export const getActiveKey = (provider: ApiKeyProvider): ManagedApiKey | null =>
 /** Active key's secret value, for request headers. Null if none configured. */
 export const getActiveKeyValue = (provider: ApiKeyProvider): string | null =>
   getActiveKey(provider)?.key || null;
+
+/** One resolver for feature gates and request headers, including legacy studio inputs. */
+export const getProviderKeyValue = (provider: ApiKeyProvider): string | null =>
+  getActiveKeyValue(provider) || (LEGACY_KEYS[provider] ? read(LEGACY_KEYS[provider])?.trim() : null) || null;
 
 /** Fraction (0..1+) of a key's monthly limit consumed. 0 when no limit set. */
 export const usageFraction = (key: ManagedApiKey): number => {
@@ -382,9 +400,10 @@ export const recordKeyUsage = (provider: ApiKeyProvider, usd: number) => {
 };
 
 /** Persist the outcome of a live validity check for a key (badge + staleness tracking). */
-export const setKeyValidation = (id: string, state: KeyValidationState, message?: string) => {
+export const setKeyValidation = (id: string, state: KeyValidationState, message?: string, checkedKey?: string) => {
   const keys = readAll();
-  if (!keys.some((k) => k.id === id)) return;
+  // A response for an old secret must never validate the replacement entered meanwhile.
+  if (!keys.some((k) => k.id === id && (checkedKey === undefined || k.key === checkedKey))) return;
   writeAll(keys.map((k) =>
     k.id === id ? { ...k, validation: state, validatedAt: Date.now(), validationMessage: message } : k
   ));

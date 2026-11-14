@@ -101,6 +101,7 @@ describe('boot warm-up', () => {
     expect(store.loadPersistedModels).toHaveBeenCalledWith('openrouter');
     const result = await catalog.getCatalog();
     expect(result.models.map((m) => m.id)).toEqual(['persisted/one']);
+    expect(result).toMatchObject({ fetchedAt: null, stale: true, degraded: true });
     expect(reads()).toBe(1);
   });
 

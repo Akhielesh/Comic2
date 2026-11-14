@@ -85,6 +85,9 @@ const asQuality = (v: unknown): QualityEntry | undefined => {
     ...(of !== undefined && of >= 1 ? { of: Math.round(of) } : {}),
     score,
     ...(ci ? { ci } : {}),
+    ...(text(v.name, 200) ? { name: text(v.name, 200) } : {}),
+    ...(num(v.samples) !== undefined && Number(v.samples) >= 0 ? { samples: Math.floor(Number(v.samples)) } : {}),
+    ...(num(v.votes) !== undefined && Number(v.votes) >= 0 ? { votes: Math.floor(Number(v.votes)) } : {}),
     asOf,
     source: text(v.source, 300) || 'unknown source'
   };

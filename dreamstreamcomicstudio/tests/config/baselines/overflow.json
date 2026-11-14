@@ -2,7 +2,7 @@
   "guard": "overflow",
   "test": "tests/config/overflowGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/overflowGuard.test.ts lowers it (see README.md).",
-  "totals": { "breakWords": 71, "maxHNoOverflow": 25, "nowrapNoClip": 75, "rawErrorSink": 48, "rawErrorText": 118 },
+  "totals": { "breakWords": 71, "maxHNoOverflow": 25, "nowrapNoClip": 70, "rawErrorSink": 47, "rawErrorText": 116 },
   "files": {
     "App.tsx": { "rawErrorText": 5 },
     "components/AccountSettings.tsx": { "rawErrorText": 10 },
@@ -12,7 +12,6 @@
     "components/ComicReader.tsx": { "maxHNoOverflow": 4, "nowrapNoClip": 9 },
     "components/DataRescue.tsx": { "rawErrorText": 1 },
     "components/InviteFriends.tsx": { "rawErrorSink": 2, "rawErrorText": 2 },
-    "components/ModelLibrary.tsx": { "nowrapNoClip": 5, "rawErrorSink": 1, "rawErrorText": 2 },
     "components/PanelDialogue.tsx": { "breakWords": 3 },
     "components/ProjectDashboard.tsx": { "rawErrorText": 5 },
     "components/QuickFinder.tsx": { "breakWords": 1 },

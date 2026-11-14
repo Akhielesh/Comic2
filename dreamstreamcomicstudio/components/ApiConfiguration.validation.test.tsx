@@ -9,7 +9,7 @@ const validateApiKey = vi.hoisted(() =>
   vi.fn(async (provider: string) => ({ provider, status: 'valid' as const, valid: true, message: 'Valid key.' }))
 );
 const reconcileProviderMirror = vi.hoisted(() => vi.fn(async (): Promise<'synced' | 'failed'> => 'synced'));
-vi.mock('../services/keyValidation', () => ({ validateApiKey }));
+vi.mock('../services/keyValidation', () => ({ validateApiKey, KEY_CHECK_UNAVAILABLE_COPY: 'Couldn’t check this key right now — try Verify.' }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
 vi.mock('../services/modelCatalog', () => ({ fetchModelCatalog: vi.fn(async () => ({ models: [] })) }));
 vi.mock('./ModelSelectionPanel', () => ({ ModelSelectionPanel: () => null }));
@@ -27,7 +27,7 @@ vi.mock('../services/usageAllowance', () => ({
 }));
 
 const { ApiConfiguration } = await import('./ApiConfiguration');
-const { addKey, listKeys, setKeyValidation, PROVIDER_META } = await import('../services/apiKeys');
+const { addKey, listKeys, setKeyValidation, setAccountKeyMeta, PROVIDER_META } = await import('../services/apiKeys');
 
 const HOUR = 60 * 60 * 1000;
 const T0 = new Date('2026-11-05T12:00:00Z').getTime();
@@ -64,6 +64,44 @@ afterEach(() => {
 });
 
 describe('API Configuration key validation', () => {
+  it('checks an account-only key only when requested and does not label it connected', async () => {
+    setAccountKeyMeta([{ provider: 'openrouter', suffix: '1234' }]);
+    render(<ApiConfiguration />);
+    if (!screen.queryByRole('button', { name: 'Verify account key' })) await act(async () => { openProvider('openrouter'); });
+    expect(screen.getByText('Key saved')).toBeInTheDocument();
+    expect(validateApiKey).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Verify account key' })); });
+    expect(validateApiKey).toHaveBeenCalledWith('openrouter');
+    expect(screen.getByRole('status')).toHaveTextContent('Account key authenticated. Access can vary by model.');
+  });
+
+  it('account-check failures use calm status copy instead of displaying response text', async () => {
+    setAccountKeyMeta([{ provider: 'openrouter', suffix: '1234' }]);
+    validateApiKey.mockResolvedValueOnce({ provider: 'openrouter', status: 'unavailable', valid: false, message: 'Raw upstream detail: internal.example' } as never);
+    render(<ApiConfiguration />);
+    if (!screen.queryByRole('button', { name: 'Verify account key' })) await act(async () => { openProvider('openrouter'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Verify account key' })); });
+    expect(screen.getByRole('status')).toHaveTextContent('Couldn’t check this key right now — try Verify.');
+    expect(screen.queryByText(/internal\.example/)).not.toBeInTheDocument();
+  });
+
+  it('rotation starts a new check while an old check is in flight and ignores the old verdict', async () => {
+    seedKey('openrouter', 'sk-or-original', 25 * HOUR);
+    let finishOld!: (value: never) => void;
+    validateApiKey.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+    render(<ApiConfiguration />);
+    await act(async () => { openProvider('openrouter'); });
+    fireEvent.click(screen.getByTitle('Edit label / limit'));
+    fireEvent.change(screen.getByPlaceholderText('Leave blank to keep this key'), { target: { value: 'sk-or-replacement' } });
+    await act(async () => { fireEvent.click(screen.getByTitle('Save')); });
+    expect(validateApiKey).toHaveBeenCalledTimes(2);
+    expect(validateApiKey).toHaveBeenLastCalledWith('openrouter', 'sk-or-replacement');
+    expect(reconcileProviderMirror).toHaveBeenCalledWith('user-1', 'openrouter');
+    await act(async () => { finishOld({ provider: 'openrouter', status: 'invalid', valid: false, message: 'Rejected old key.' } as never); });
+    expect(listKeys()[0]).toMatchObject({ key: 'sk-or-replacement', validation: 'valid' });
+    expect(screen.queryByText('Rejected old key.')).not.toBeInTheDocument();
+  });
+
   it('registers no interval: an hour (and a day) open validates nothing', async () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval');
     seedKey('openrouter', 'sk-or-mine', 0);

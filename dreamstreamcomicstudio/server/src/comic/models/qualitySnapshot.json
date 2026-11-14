@@ -1,6 +1,6 @@
 {
-  "$comment": "Public leaderboard snapshot for Comic Studio image models (models.md §1.2, §4.5 S5/S6). Seeded from the 2026-10-22 research pull (LMArena Hugging Face dataset, CC BY 4.0; Artificial Analysis Image Arena v2.1 page data). The history (trend T4) holds one point per LMArena publish date per tracked model and board for the 90 days before 2026-10-22, read from the dataset's full split at 2026-10-22T17:53Z with the server's own matching rules (quality.ts lmarenaHistoryFromRows); 'name' is the leaderboard entry each point is. Refreshed only by the owner-run `node scripts/models-quality-refresh.mjs` (LMArena from the Hugging Face datasets-server, AA/Design Arena from OpenRouter's benchmarks API when it serves image models) and, for LMArena, on demand with a 24 h TTL. Keys are OpenRouter ids. Never edit a number by hand without a source and date.",
-  "generatedAt": "2026-10-22T17:51:00Z",
+  "$comment": "Public leaderboard snapshot for Comic Studio image models (models.md §1.2, §4.5 S5/S6). LMArena boards and history retain the 2026-10-22 research pull from its Hugging Face dataset (CC BY 4.0); history is one point per published date, never interpolated. AA text-to-image was reviewed against its primary Overall leaderboard on 2026-11-13: all tracked entries were rechecked, including GPT Image 2.6 max variants. Every board keeps its own source and date; generatedAt is assembly time, not proof every board is fresh. The owner-run scripts/models-quality-refresh.mjs refreshes LMArena and exports OpenRouter benchmark data for review; AA may also be refreshed by sourced owner-reviewed primary-page research. Production never scrapes AA. Keys are OpenRouter ids. Benchmark variant names and sample counts are evidence, not generation settings or price quotes.",
+  "generatedAt": "2026-11-13T22:41:51Z",
   "aliases": {
     "google/gemini-nano-banana-2.1": ["gemininanobanana21", "nanobanana21", "gemininanobanana212k"],
     "google/gemini-3-pro-image": ["gemini3proimage", "gemini3proimage2k", "nanobananapro2k"],
@@ -8,6 +8,8 @@
     "google/gemini-3.1-flash-lite-image": ["gemini31flashliteimage", "nanobanana2lite", "nanobananalite"],
     "openai/gpt-image-2.5-sunburst": ["gptimage25sunburst", "gptimage25sunburstmax"],
     "openai/gpt-image-2.5-flare": ["gptimage25flare", "gptimage25flaremax"],
+    "openai/gpt-image-2.6-sunburst": ["gptimage26sunburst", "gptimage26sunburstmax"],
+    "openai/gpt-image-2.6-flare": ["gptimage26flare", "gptimage26flaremax"],
     "black-forest-labs/flux-3-image": ["flux3image", "flux3"],
     "bytedance-seed/seedream-5-0-pro": ["seedream50pro", "seedream5pro"],
     "google/gemini-2.5-flash-image": ["gemini25flashimage", "nanobanana", "gemini25flashimagepreview"]
@@ -62,19 +64,22 @@
       }
     },
     "aa_t2i": {
-      "asOf": "2026-10-22T17:51:00Z",
-      "of": 105,
-      "source": "Artificial Analysis Image Arena v2.1, text-to-image leaderboard (artificialanalysis.ai), page data 2026-10-22T17:51Z — research pull; refreshed only by the owner-run script",
+      "asOf": "2026-11-13T22:41:51Z",
+      "of": 113,
+      "category": "overall",
+      "source": "Artificial Analysis AA-Image-T2I v2.1 (Overall), fetched 2026-11-13T22:41:51Z: https://artificialanalysis.ai/image/leaderboard/text-to-image",
       "entries": {
-        "google/gemini-nano-banana-2.1": { "rank": 4, "score": 1176, "ci": [1164, 1188] },
-        "google/gemini-3-pro-image": { "rank": 11, "score": 1118, "ci": [1108, 1128] },
-        "google/gemini-3.1-flash-image": { "rank": 7, "score": 1140, "ci": [1130, 1150] },
-        "google/gemini-3.1-flash-lite-image": { "rank": 15, "score": 1107, "ci": [1097, 1117] },
-        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1222, "ci": [1212, 1232] },
-        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1207, "ci": [1197, 1217] },
-        "black-forest-labs/flux-3-image": { "rank": 13, "score": 1117, "ci": [1105, 1129] },
-        "bytedance-seed/seedream-5-0-pro": { "rank": 16, "score": 1100, "ci": [1089, 1111] },
-        "google/gemini-2.5-flash-image": { "rank": 58, "score": 985, "ci": [973, 997] }
+        "google/gemini-nano-banana-2.1": { "rank": 7, "score": 1176, "ci": [1164, 1188], "name": "Nano Banana 2.1", "samples": 6744 },
+        "google/gemini-3-pro-image": { "rank": 16, "score": 1119, "ci": [1109, 1129], "name": "Nano Banana Pro (Gemini 3 Pro Image)", "samples": 15808 },
+        "google/gemini-3.1-flash-image": { "rank": 11, "score": 1143, "ci": [1133, 1153], "name": "Nano Banana 2 (Gemini 3.1 Flash Image)", "samples": 16657 },
+        "google/gemini-3.1-flash-lite-image": { "rank": 20, "score": 1110, "ci": [1100, 1120], "name": "Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)", "samples": 15695 },
+        "openai/gpt-image-2.5-sunburst": { "rank": 2, "score": 1229, "ci": [1219, 1239], "name": "GPT Image 2.5 Sunburst (max)", "samples": 13626 },
+        "openai/gpt-image-2.5-flare": { "rank": 4, "score": 1210, "ci": [1200, 1220], "name": "GPT Image 2.5 Flare (max)", "samples": 12970 },
+        "openai/gpt-image-2.6-sunburst": { "rank": 1, "score": 1261, "ci": [1247, 1275], "name": "GPT Image 2.6 Sunburst (max)", "samples": 5282 },
+        "openai/gpt-image-2.6-flare": { "rank": 3, "score": 1226, "ci": [1214, 1238], "name": "GPT Image 2.6 Flare (max)", "samples": 7169 },
+        "black-forest-labs/flux-3-image": { "rank": 19, "score": 1115, "ci": [1103, 1127], "name": "FLUX 3 Image", "samples": 6698 },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 21, "score": 1103, "ci": [1093, 1113], "name": "Seedream 5.0 Pro", "samples": 12220 },
+        "google/gemini-2.5-flash-image": { "rank": 64, "score": 987, "ci": [975, 999], "name": "Nano Banana (Gemini 2.5 Flash Image)", "samples": 5878 }
       }
     },
     "aa_edit": {

@@ -20,6 +20,13 @@ describe('asCatalogRow', () => {
     expect(asCatalogRow(JSON.parse(JSON.stringify(row)))).toEqual(row);
   });
 
+  it('retains the evaluated benchmark variant and sample basis through the wire decoder', () => {
+    const quality = { board: 'aa_t2i', rank: 1, score: 1261, ci: [1247, 1275], name: 'GPT Image 2.6 Sunburst (max)', samples: 5282, asOf: '2026-11-13T22:41:51Z', source: 'Artificial Analysis' };
+    expect(asCatalogRow({ ...catalogRows()[0], quality: [quality] })?.quality).toEqual([quality]);
+    expect(asCatalogRow({ ...catalogRows()[0], quality: [{ ...quality, samples: -1, votes: 'invalid' }] })?.quality[0]).not.toHaveProperty('samples');
+    expect(asCatalogRow({ ...catalogRows()[0], quality: [{ ...quality, samples: -1, votes: 'invalid' }] })?.quality[0]).not.toHaveProperty('votes');
+  });
+
   it('drops malformed rows and fields; null prices stay null with their copy', () => {
     expect(asCatalogRow({ id: 'x', nickname: 'X' })).toBeUndefined();
     expect(asCatalogRow({ ...catalogRows()[0], id: '<script>' })).toBeUndefined();
