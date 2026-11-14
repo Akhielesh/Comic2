@@ -2424,7 +2424,10 @@ class RenderRun {
     this.slots = slotsFor(ctx.session);
     this.inflight = inflightFor(ctx.session);
     this.cost = costOf(ctx);
-    this.p5 = p5FlagsFor(ctx.caps?.admin === true);
+    const flags = p5FlagsFor(ctx.caps?.admin === true);
+    const pageRefs = resolveJobFor(pinned, 'page').spec.refs;
+    // Keep character/style capacity on legacy models; serial continuity needs a spare object reference.
+    this.p5 = Object.freeze({ ...flags, runChains: flags.runChains && pageRefs.objects >= 2 && pageRefs.total > pageRefs.characters });
     this.signal.addEventListener('abort', this.onAbort, { once: true });
   }
 
@@ -2503,7 +2506,7 @@ class RenderRun {
     const pageJobs = pages.map((p) => this.pageJob(p, action));
     const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
     const jobs = [...sheetJobs, ...anchorJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
-    // Pages draw in pairs by default, or in full scene chains when enabled.
+    // Supported models continue each scene page by page; off/limited-reference models retain paired scheduling.
     const schedule = this.p5.runChains ? scheduleRun(doc, pages.map((p) => p.id), { chains: true }) : scheduleRun(doc, pages.map((p) => p.id));
     const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
     await this.run(jobs, label, async () => {
