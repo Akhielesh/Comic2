@@ -10,8 +10,11 @@ GitHub grants each job `id-token: write`. `scripts/ops/catalogMaintenance.mjs` r
 are accepted. The backend verifies the RS256 signature against GitHub's fixed JWKS endpoint,
 issuer, audience, immutable repository/owner IDs, names, production branch, exact corresponding
 workflow path, subject, GitHub-hosted runner, event type, and at most ten minutes of token
-lifetime. Pull requests, forks, other branches, reusable workflows, expired tokens and token
-replays are rejected. Operations are single-flight, rate limited and cooled down.
+lifetime. GitHub's direct jobs can include `job_workflow_ref` equal to their own `workflow_ref`
+(confirmed by diagnostic run `43547186640`). That claim may be absent or exactly the approved
+workflow path; another called workflow, repository, or branch is rejected. Pull requests, forks,
+expired tokens and token replays are rejected. Operations are single-flight, rate limited and
+cooled down.
 
 The refresh lists OpenRouter and NVIDIA anonymously. Public discovery does **not** validate a
 private API key or account-specific access. Other providers refresh only if their platform key

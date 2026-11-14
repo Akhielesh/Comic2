@@ -2,16 +2,16 @@
 
 This is a scoped evidence snapshot for the API-key, current-model, Models redesign,
 analytics and generated-output request. It is not a claim that every repository
-issue or studio feature is complete. Operational follow-up below must be updated
-with successful run and deployment evidence before it is marked verified.
+issue or studio feature is complete. Release evidence below distinguishes deployed code, completed checks and remaining
+external verification. No private provider credentials were read or used in this audit.
 
 ## Baseline and review coverage
 
 - GitHub's default branch is `Dreamstrream-v1`. The reviewed production baseline
   is [`7948c976`, PR #293](https://github.com/Akhielesh/Comic2/pull/293).
-  The active integration branch began at that commit as
-  `codex/models-live-verification`; uncommitted corrections are not deployed by
-  that fact alone.
+  Follow-up [PR #294](https://github.com/Akhielesh/Comic2/pull/294) is deployed at
+  `2053d748fc7581b5491a87bd4d93ed90f0e458e0`. The API deployment and Cloudflare
+  Pages production deployment both report that exact merge commit.
 - [PR #286](https://github.com/Akhielesh/Comic2/pull/286), including the Models
   redesign and provider/catalog corrections, is an ancestor of that baseline.
   The later combined release adds Comic/Chat workspace work without reverting the
@@ -34,11 +34,11 @@ with successful run and deployment evidence before it is marked verified.
 
 | Requested outcome | Implemented evidence | Remaining verification or limitation |
 |---|---|---|
-| Provider keys work across studios/devices | Shared provider registry; device/account key resolution; selected-credential validation; source governance; stale validation protection in #286. The current follow-up also repairs account-only legacy image limits. | A saved credential does not prove every model entitlement. Real paid generations were not run by this audit. |
-| Models stay current | Live discovery, durable catalog observations, provenance, paging, cached/fallback states and batch-model exclusion in #286. | The scheduled refresh was still failing at the last observed run; see the operational gate below. |
+| Provider keys work across studios/devices | Shared provider registry; device/account key resolution; selected-credential validation; source governance; stale validation protection in #286. PR #294 also repairs account-only legacy image limits. | A saved credential does not prove every model entitlement. Real paid generations were not run by this audit. |
+| Models stay current | Live discovery, durable catalog observations, provenance, paging, cached/fallback states and batch-model exclusion in #286. | The deployed maintenance endpoint exposed a GitHub OIDC claim mismatch during its first live run; the narrowly scoped correction and rerun are tracked below. |
 | Replace the old Models page | Atlas Image/Language/Usage tabs; ten featured makers; five image comparisons; three-way comparisons; filtering, details and connection state. | Ten makers are an editorial scope, not an invented quality ranking. Four image rows are Studio-supported; FLUX.3 is reference-only. |
 | Show actual platform data | Recorded usage and Chat response observations; exact-model image benchmark source/date; published and owner-only output contracts with explicit model attribution. | Public snapshots without attribution cannot be assigned to a model. Empty/error states remain explicit. An authenticated production output smoke check remains a separate gate. |
-| Good charts and useful comparison | Price/response chart excludes unknown values; usage charts derive from recorded counters; exact benchmark variants and dated prices stay separate from platform observations. | Full response time is not tokens/second. Different prompts are not a controlled quality comparison. Public image aggregates do not publish generation latency. |
+| Good charts and useful comparison | Price/response chart excludes unknown values; usage charts derive from recorded counters; exact benchmark variants and dated prices stay separate from platform observations. | Full response time is not tokens/second. Different prompts are not a controlled quality comparison. Private owner measurements include successful-call latency; public aggregates retain their privacy floor. |
 | Review branches/deployments/issues | Production ancestry, relevant open drafts and workflow results are recorded here. | Old security/legal/Stream/Code proposals are not silently included in this deliverable. |
 
 ## Concrete defect corrected in this follow-up
@@ -59,19 +59,26 @@ Regression evidence: the new middleware suite failed in four cases before the
 correction and passed all 19 afterward. Together with the existing key and account
 key middleware suites, **33 tests passed**. The test run used Node 24 and mocked
 billing; it did not read private credentials or call a generation provider.
-Whitespace validation also passed. Consolidated typecheck/release verification
-must include this follow-up before deployment.
+Client/server typechecks and the production frontend build passed. The deployed
+merge passed full CI, including the server boot and Workers typechecks.
 
 ## Operational and live-evidence gates
 
 | Item | Last directly observed evidence | Completion condition |
 |---|---|---|
-| Production CI | [Run 43535406778](https://github.com/Akhielesh/Comic2/actions/runs/43535406778) succeeded for `7948c976`; Scorecard also succeeded. | New follow-up commit must pass its required checks. |
-| API deployment | [Run 43532328561](https://github.com/Akhielesh/Comic2/actions/runs/43532328561) succeeded for `90c3994b`, the Models release merge. Later combined-release changes did not touch API deployment paths. | Follow-up API deployment and build identity must be checked separately. |
-| Scheduled model catalog | [Run 43521777624](https://github.com/Akhielesh/Comic2/actions/runs/43521777624) failed. Job logs showed empty `VITE_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, then `Storage disabled`. This run predates the new fail-fast preflight. | A real successful catalog refresh must persist observations. Preflight messaging alone does not repair it. The team is implementing a narrowly authorized GitHub OIDC call to the existing backend; this audit does not claim that work is deployed. |
-| NVIDIA model access | Public model discovery does not authenticate a key. The provider-validation follow-up distinguishes stored keys from verified access. The catalog owner reports no platform NVIDIA key in the backend configuration names. | A valid authorized credential and a successful access probe are required before claiming platform NVIDIA model callability. Public discovery can work without that claim. |
-| Actual image examples | The showcase requires server-recorded asset/model provenance, public publication permission or the current owner's authenticated scope. No synthetic example is substituted. | Complete the signed-in production browser check with qualifying owner output. Browser access/login gates must remain explicit if not completed. |
-| Performance data | Public observed costs retain the privacy floor; private owner cost/timing enrichment is being added separately by the feature owner. | Update the source contract and UI together; verify owner-only filtering. Do not present private measurements as public aggregates or claim those new measurements from this baseline audit. |
+| Production CI | [Run 43546294734](https://github.com/Akhielesh/Comic2/actions/runs/43546294734) succeeded for deployed `2053d748`, including verification, both Workers typechecks and server boot. | Any subsequent executable correction must pass its focused checks and deployment verification. |
+| API and frontend deployment | [API run 43546294543](https://github.com/Akhielesh/Comic2/actions/runs/43546294543) succeeded and verified `2053d748`. Cloudflare Pages production deployment `1f54de61-4d1c-4863-8701-b1c5203c5acd` succeeded for the same commit. | Check the next authentication correction's backend identity separately. |
+| Responsive rendering | [Run 43543830172](https://github.com/Akhielesh/Comic2/actions/runs/43543830172) completed its Playwright step: 294 passed, 2 skipped, no new findings. Screenshots were inspected at 320 px and 1280 px. | The workflow was canceled after artifact upload by a later workflow-only commit; this is passing test-step evidence, not an overall green run. Fixtures are visibly marked synthetic. |
+| Scheduled model catalog | [Production run 43546605092](https://github.com/Akhielesh/Comic2/actions/runs/43546605092) reached the new endpoint but received `MAINTENANCE_UNAUTHORIZED`. A [read-only diagnostic run 43547186640](https://github.com/Akhielesh/Comic2/actions/runs/43547186640) confirmed GitHub includes `job_workflow_ref` equal to `workflow_ref` even for this direct job. All other policy checks and signature verification passed. | Accept absent or exactly the already approved workflow reference, then run the production refresh and independently confirm persisted catalog timestamps. Do not loosen repository IDs, branch, workflow, audience or signature checks. |
+| NVIDIA model access | Both backend configuration stores were checked for key presence only: no platform `NVIDIA_API_KEY` exists. Public discovery works without authentication and cannot establish access. Account-specific 404s no longer mark a model globally unavailable. | An authorized platform credential is required for inference probing. The maintenance job must report missing configuration without making a provider generation request. |
+| Actual image examples | Read-only aggregate queries found 57 ready, attributed Nano Banana 2.1 assets (49 at 2K, 8 at 1K) and qualifying owner measurements at 2K. No private identities, prompts, keys or image URLs were returned. Public snapshots without attribution remain excluded. | Signed-in browser verification remains blocked by the browser tool's saved/managed origin policy, including after both user approvals. No alternate browser or HTTP session was used to bypass it. |
+| Performance data | PR #294 supplies owner-only medians by exact model, kind and resolution, a three-sample minimum, bounded history, and explicit Your results / Platform results selection. Regression tests cover owner isolation, private cache exclusion, account-switch clearing, missing/error states and signed-image retry. | Recorded provider cost is not the customer's bill; private measurements are not public aggregates. No controlled cross-provider performance or paid generation test was performed. |
+
+The additive `model_catalog_callability_freshness` database migration was applied
+successfully to the Comic project. Callability age is independent of metadata
+freshness, expires after 48 hours, and remains unknown without conclusive evidence.
+Final operational rerun links and outcomes are recorded in the follow-up release PR.
+
 
 ## Branch families and disposition
 
