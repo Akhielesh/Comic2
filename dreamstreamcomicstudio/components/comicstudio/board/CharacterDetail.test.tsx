@@ -26,6 +26,29 @@ describe('Character inspection', () => {
     expect(opener).toHaveFocus();
   });
 
+  it('browses the whole cast with buttons and keyboard, preserves each portrait choice, and restores the original opener', async () => {
+    const studio = makeStudio();
+    render(<CastTab studio={studio} doc={studio.doc!} />);
+    const opener = screen.getByRole('button', { name: 'Open Maya portrait and details' });
+    opener.focus(); fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: 'Reference photo 1' }));
+    expect(screen.getByRole('button', { name: 'Previous character' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next character' }));
+    const arjun = screen.getByRole('dialog', { name: 'Arjun' });
+    expect(within(arjun).getByText(/No portrait yet/)).toBeInTheDocument();
+    expect(within(arjun).queryByRole('img', { name: /Maya/ })).toBeNull();
+    const characters = within(arjun).getByRole('group', { name: 'Characters' });
+    fireEvent.keyDown(within(characters).getByRole('button', { name: 'Arjun' }), { key: 'Home' });
+    expect(screen.getByRole('dialog', { name: 'Maya' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Maya — reference photo 1' })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Characters' })).getByRole('button', { name: 'Maya' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Characters' }), { key: 'End' });
+    expect(screen.getByRole('button', { name: 'Next character' })).toBeDisabled();
+    expect(studio.patch).not.toHaveBeenCalled(); expect(studio.act).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
   it('inspects a character without art and returns to the existing name editor', async () => {
     const studio = makeStudio();
     render(<CastTab studio={studio} doc={studio.doc!} />);
