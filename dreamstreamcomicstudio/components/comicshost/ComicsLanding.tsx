@@ -10,6 +10,8 @@ import { CONTACT_HREF } from '../layout/LegalMicroLinks';
 import { getStylePreset } from '../../shared/comic/stylePresets';
 import { ComicsHeader } from './ComicsHeader';
 import { ComicSampleReader } from './ComicSampleReader';
+import { ComicSampleDeckDialog, ComicSampleShelf } from './ComicSampleDeck';
+import type { SampleStory } from '../comicstudio/library/sampleCatalog';
 import './comicsLanding.css';
 
 export interface ComicsLandingProps {
@@ -46,6 +48,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
   const { theme } = useComicTheme();
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [comparing, setComparing] = useState(false);
+  const [sample, setSample] = useState<SampleStory | null>(null);
+  const sampleTrigger = useRef<HTMLAnchorElement | null>(null);
   const lookTrigger = useRef<HTMLButtonElement | null>(null);
   const showLooks = useCallback(() => focusSection('looks'), []);
   const goTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), []);
@@ -84,6 +88,11 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
           <ComicSampleReader look={SAMPLE_LOOKS[0]} story="last-tram" />
         </section>
 
+        <ComicSampleShelf onRead={(event, story) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+          event.preventDefault(); sampleTrigger.current = event.currentTarget; setSample(story);
+        }} />
+
         <section id="looks" aria-labelledby="comics-looks" className="comics-looks-section">
           <div className="comics-looks-heading">
             <h2 id="comics-looks" tabIndex={-1} className={cn('comics-looks-title focus:outline-none', FONT_DISPLAY)}>Find your look</h2>
@@ -111,6 +120,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
           </ul>
         </section>
       </main>
+
+      <ComicSampleDeckDialog open={sample !== null} onOpenChange={open => { if (!open) setSample(null); }} initialStory={sample ?? undefined} returnFocusRef={sampleTrigger} />
 
       <Dialog open={comparing} onOpenChange={setComparing}>
         <DialogContent

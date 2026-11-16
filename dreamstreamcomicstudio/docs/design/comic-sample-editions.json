@@ -1,0 +1,184 @@
+{
+  "tool": "OpenAI built-in image_gen",
+  "created": "2026-11-13",
+  "publication": "Curated, complete one-page public Studio samples. No user project records, invented community metrics, or private assets.",
+  "processing": {
+    "tool": "sharp",
+    "format": "webp",
+    "quality": 88,
+    "effort": 6,
+    "widths": [
+      480,
+      768,
+      1200
+    ],
+    "note": "Original generated PNGs preserved outside repository. Responsive derivatives resize the complete page; no panels are cropped or rearranged. Preview cards alone use CSS object-fit cropping."
+  },
+  "editions": [
+    {
+      "slug": "rain-for-a-rooftop",
+      "source": {
+        "filename": "exec-8e2f963d-4b65-4963-83a7-796ec4ee3c97.png",
+        "sha256": "41c6a7500f92c0308e7cf8983e231cb952f93299332cccd0a077fcb6fae7bf4e",
+        "width": 1122,
+        "height": 1402
+      },
+      "prompt": "Use case: illustration-story. Create a finished, beautiful single-page watercolor comic for Comic Studio's public sample Library: \"Rain for a Rooftop\". This is actual comic artwork, NOT a website mockup or a cover. Portrait 4:5 page. Exactly four clearly readable panels, variable sizes: wide establishing strip, two middle panels, broad final panel. Fine warm graphite lines, translucent hand-painted watercolor on creamy cotton paper, restrained moss green and ochre yellow, lyrical European children's picture-book illustration. Consistent protagonist: young brown-skinned woman gardener with short curly dark hair, yellow raincoat, teal rain boots, on a little city rooftop. Same small chipped terracotta pot with one wilted leafy plant appears through the story. Panel1: gardener kneels sadly next to dry wilted plant, first raindrops on rooftop. Panel2: delighted idea; she turns an old blue umbrella upside-down on rooftop, visible raindrops collecting in concave interior. Panel3: now she carefully tips pooled water from the umbrella into the same pot; clear stream, no magic. Panel4: time passes, clouds open, same gardener smiling at now upright plant with single pale pink blossom in pot; blue umbrella rests beside her. Strong continuity of clothing, face, rooftop, pot and plant. Intimate purposeful cinematography, generous gutters, professional restrained panel framing. Entire scene and all panels within safe page margins. Wordless visual story. No text, captions, logos, title, page numbers or watermark. Natural anatomy and causally clear actions.",
+      "variants": [
+        {
+          "path": "/assets/comic-sample/rain-for-a-rooftop-page-1-480.webp",
+          "width": 480,
+          "height": 600,
+          "bytes": 108848,
+          "sha256": "4d9ef3264cab11b1299e7d0692e0f757b78242d25716b4d90d6fb651ace251ef"
+        },
+        {
+          "path": "/assets/comic-sample/rain-for-a-rooftop-page-1-768.webp",
+          "width": 768,
+          "height": 960,
+          "bytes": 260900,
+          "sha256": "92c395e276f5072c057d813afb6471e5fd202dd4db1ced415afe5d31e5d47f3f"
+        },
+        {
+          "path": "/assets/comic-sample/rain-for-a-rooftop-page-1-1200.webp",
+          "width": 1200,
+          "height": 1499,
+          "bytes": 496550,
+          "sha256": "c43640ca30d3e271a02cdedd10facf264d137b1a9460e1369f7da614b8a7625d"
+        }
+      ]
+    },
+    {
+      "slug": "midnight-parcel",
+      "source": {
+        "filename": "exec-8f0e9b0c-9734-478e-b846-338d6d9ff545.png",
+        "sha256": "6082779432c3bd8ecb8855fd01b6b1539221bbccedd4424fd0f183329140f325",
+        "width": 1024,
+        "height": 1536
+      },
+      "prompt": "Use case: illustration-story. Generate professional finished Japanese manga single-page short story \"Midnight Parcel\" for a public comic sample Library. Actual narrative comic page, not cover, not UI. Portrait2:3. Exactly6 readable panels in left-to-right western reading order: 2small first row, energetic wide action panel second row, 2small third row, wide warm ending. Expressive black-and-white penwork, sophisticated screentone, detailed cozy city at night, no color. Protagonist consistent every panel: young woman bicycle courier, short straight black bob, white helmet with one dark stripe, striped scarf, dark delivery jacket. Continuity object: rectangular white cake box tied with black ribbon secured to front bicycle basket. Panel1: courier at bakery receives cake box, clock face near midnight, no written signage. Panel2: rides narrow street with box in basket; stray cat about to cross ahead. Panel3: dramatic low-angle brake and swerve, cake box lifts slightly out of basket, courier reaches for it, cat safely clear. Panel4: close-up courier hand catches and steadies ribboned box before falling, relief. Panel5: courier stands at apartment doorway handing intact box to smiling elderly man in cardigan. Panel6: inside elderly man's small apartment, box open revealing small birthday cake with one lit candle, courier and man share grateful smiles; bicycle visible parked outside window. Coherent same box, courier outfit, faces and chronology. No collisions or injuries. No dialogue or lettering of any kind, no title or page number, no logos or watermarks. Story must read clearly through action and emotion. Generous safe margins and visible gutters, varied shot scales, no cramped panels.",
+      "variants": [
+        {
+          "path": "/assets/comic-sample/midnight-parcel-page-1-480.webp",
+          "width": 480,
+          "height": 720,
+          "bytes": 129372,
+          "sha256": "8ccbcfb1c21589e5ecb1021112c80fb00c276cc1d19e9fee5415b03e6c7492f5"
+        },
+        {
+          "path": "/assets/comic-sample/midnight-parcel-page-1-768.webp",
+          "width": 768,
+          "height": 1152,
+          "bytes": 313376,
+          "sha256": "2d486991bdc2905343a61f0f58998e25bf2a6cc544ef6c70da13a634c7179eb7"
+        },
+        {
+          "path": "/assets/comic-sample/midnight-parcel-page-1-1200.webp",
+          "width": 1200,
+          "height": 1800,
+          "bytes": 596078,
+          "sha256": "465cb947757514993783e06b81c7f715ed17973f5912755a9d7fd4a6162bffc7"
+        }
+      ]
+    },
+    {
+      "slug": "the-unclaimed-umbrella",
+      "source": {
+        "filename": "exec-a4ee1fb8-e3fc-4c0c-86ce-d4ee18b202be.png",
+        "sha256": "bc40daa5eb2c22e34828f92a8363ab82a765db11102b1eae6373f39b55baf6a7",
+        "width": 1086,
+        "height": 1448
+      },
+      "prompt": "Use case: illustration-story. Make an exquisitely composed noir ink single-page comic \"The Unclaimed Umbrella\". Actual complete3-panel wordless narrative for a Comic Studio sample Library, not a cover/UI. Portrait3:4 with three full-width cinematic panels stacked, bottom panel taller. Pure black and ivory, heavy brush ink, white rain hatching, chiaroscuro, mid-century detective graphic novel quality. Consistent middle-aged woman detective: short wavy dark hair, pale trench coat, dark fedora. Consistent tiny black kitten with white muzzle and white front paws. Panel1: long shot on rainy cobblestone alley, detective walking toward an abandoned open black umbrella on pavement, small cat eyes visible under umbrella near wall, wet reflection lighting. Panel2: intimate medium close shot at same alley: detective crouches and lifts edge of same umbrella, revealing wet kitten with white muzzle/front paws; mutual eye contact, tenderness. Panel3: warm quiet detective's home, coat hangs near rain-streaked window; kitten sleeps curled INSIDE detective's dark fedora on desk; detective now without hat smiles over a steaming mug, rescued umbrella drying at door. Causal complete beginning-discovery-home payoff, exact continuity. Cinematic black/ivory separation, luxurious clear panel gutters, safe margins. Wordless. Absolutely no text, bubbles, titles, signage, logos, page number or watermark.",
+      "variants": [
+        {
+          "path": "/assets/comic-sample/the-unclaimed-umbrella-page-1-480.webp",
+          "width": 480,
+          "height": 640,
+          "bytes": 137056,
+          "sha256": "3f5674a6dc3b3e75f684ec29f8fe9bb53a1df8782b984a37c529669d59be5609"
+        },
+        {
+          "path": "/assets/comic-sample/the-unclaimed-umbrella-page-1-768.webp",
+          "width": 768,
+          "height": 1024,
+          "bytes": 338442,
+          "sha256": "199eb6d01e1780b9414cefd57105a49eb8844b8630efe40bcbf1e8f03dbaad14"
+        },
+        {
+          "path": "/assets/comic-sample/the-unclaimed-umbrella-page-1-1200.webp",
+          "width": 1200,
+          "height": 1600,
+          "bytes": 664832,
+          "sha256": "c90479b457f4122877de9b288b46ee17c06ed487520b8f013a56c1137b80c255"
+        }
+      ]
+    },
+    {
+      "slug": "hello-europa",
+      "source": {
+        "filename": "exec-5ecf8d8d-44dc-4cf4-ae3e-4253fc7dc016.png",
+        "sha256": "d0bce8a179da3765f2a2b8948de35a70e2f438efeaea2761a9d8dc16469a5022",
+        "width": 1536,
+        "height": 1024
+      },
+      "prompt": "Use case: illustration-story. Create finished high-quality retro science fiction narrative comic page \"Hello, Europa\" for a public Comic Studio sample library. Actual complete comic art, not a cover, UI, or collage of unrelated images. Landscape3:2 page, exactly5 panels with deliberate story flow: wide establishing panel across top half, three smaller action panels across middle, wide shallow ending panel across bottom. Beautiful1960s space-age print graphic novel, crisp dark navy ink contours, subtle vintage halftone, orange space suit against ice blue Europa, cream highlights, magenta Jupiter sky; sophisticated limited palette. Protagonist consistent female astronaut with orange suit, rounded cream helmet transparent visor showing brown skin and curly black hair, blue backpack. Supporting consistent small six-wheeled cream rover with single blue round camera eye and orange antenna. Panel1: astronaut walking across fissured ice following handheld blinking signal, Jupiter huge on horizon. Panel2: discovers little rover with its two front wheels stuck in ice crack, camera eye dim. Panel3: astronaut uses tether to pull same rover safely free, all six wheels visible and no danger. Panel4: close shot plugs blue power cable from backpack into rover port, eye glows brightly again. Panel5: astronaut seated beside happy rover on ice ridge watching Jupiter above icy horizon, orange antenna upright, quiet companionship. No depiction of exposed human without suit. Preserve all designs and relative sizes in every panel; vary camera angles, believable actions, strong readability. Wordless story, no text/bubbles/title/page numbers/signage/logos/watermarks. All five panels complete inside safe page margins.",
+      "variants": [
+        {
+          "path": "/assets/comic-sample/hello-europa-page-1-480.webp",
+          "width": 480,
+          "height": 320,
+          "bytes": 76468,
+          "sha256": "5859f80d869b0791638713da2f97d4fb8d619b35fd61d3110421791c8a54af22"
+        },
+        {
+          "path": "/assets/comic-sample/hello-europa-page-1-768.webp",
+          "width": 768,
+          "height": 512,
+          "bytes": 202756,
+          "sha256": "e512caec4dc2173522658bbc9d0b42dfafcfce9d8881471a784e197cd0e2b293"
+        },
+        {
+          "path": "/assets/comic-sample/hello-europa-page-1-1200.webp",
+          "width": 1200,
+          "height": 800,
+          "bytes": 497550,
+          "sha256": "9f35f3dcd5c23b59fdb9728a24028b4595a5b2d3154c7ec06e576f08d468103a"
+        }
+      ]
+    },
+    {
+      "slug": "a-small-giant",
+      "source": {
+        "filename": "exec-d04ad887-65a6-439c-aca5-19925a665056.png",
+        "sha256": "65126df46b2fa4d0443fbbe83506939d2849944045e1fa399b9e34416f1d2a22",
+        "width": 1122,
+        "height": 1402
+      },
+      "prompt": "Use case: illustration-story. Generate a beautiful tactile cut-paper collage comic, complete one-page story \"A Small Giant\", for a public Comic Studio Library. Actual narrative comic artwork, no UI, no cover. Portrait4:5. Exactly4 panels, variable composition: wide first, two middle squares, wide expansive final. Handmade layered colored-paper picture-book style with visible paper fibers and subtle real cut-edge shadows, charming shapes, sophisticated autumn rust, sage green, warm cream, midnight blue palette. Consistent cast: tiny warm-gray mouse wearing a little red knitted cap; round brown hedgehog with cream face and stubby dark spines; tawny owl with cream heart-shaped face. Continuity prop: long mustard yellow wool scarf with dark green stripes and fringed ends, same throughout. Panel1: under rainy woodland ferns the tiny capped mouse discovers shivering hedgehog, fallen scarf visible nearby; sympathetic eye contact. Panel2: mouse strains pulling one fringed end of the large yellow striped scarf toward hedgehog, too heavy for one small mouse. Panel3: owl takes the middle of scarf gently in beak, mouse guides one end, together lift and carry it toward hedgehog. Panel4: cozy final scene, scarf now a small tent shelter against roots over all three friends, rain outside, mouse and hedgehog smile beside owl, simple shared little acorn cup. Clear sensible physical interaction, all cast recognizably identical, joyful warm ending. Thin natural gutters with generous outer margins, crisp handcrafted look suitable for children but editorial craft. Entire page stays readable. Wordless: no letters, dialogue, title, logos, page numbers or watermark.",
+      "variants": [
+        {
+          "path": "/assets/comic-sample/a-small-giant-page-1-480.webp",
+          "width": 480,
+          "height": 600,
+          "bytes": 123302,
+          "sha256": "2057bec06061db7986e650a2628c434bf24f2f3bfa72902c6e92c5874a14b3ec"
+        },
+        {
+          "path": "/assets/comic-sample/a-small-giant-page-1-768.webp",
+          "width": 768,
+          "height": 960,
+          "bytes": 289546,
+          "sha256": "26c7a9aa4fac2c647ee713aff9923605dcbaf6906bd5a78ee28fcf901d10dfa8"
+        },
+        {
+          "path": "/assets/comic-sample/a-small-giant-page-1-1200.webp",
+          "width": 1200,
+          "height": 1499,
+          "bytes": 558390,
+          "sha256": "4fc5e2b12053d9fbd6304aa09d2329d46d8b5df8a25c0ea24c225e24efa1e42c"
+        }
+      ]
+    }
+  ]
+}
