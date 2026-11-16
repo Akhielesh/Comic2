@@ -1149,6 +1149,19 @@ describe('refusals before anything is persisted', () => {
 });
 
 describe('message pipeline: screen → intent router → director', () => {
+  it('opening planning-only messages reach the Director but hold even explicitly requested art', async () => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'never';
+    seed(doc);
+    llm.script.director = [{ toolCalls: [{ id: 'r', name: 'render_cover', arguments: '{}' }] }, { text: 'Review the quote before drawing.' }];
+    const request = { kind: 'message', text: 'Draw my cover now', planningOnly: true };
+    expect(parseStreamRequest(request)).toEqual(request);
+    await stream('proj-1', request);
+    expect(vi.mocked(runDirectorTurn).mock.calls[0][0].planningOnly).toBe(true);
+    expect(images.calls).toHaveLength(0);
+    expect(store.docs.get('proj-1')!.doc.gate).toMatchObject({ status: 'open', reason: 'policy' });
+  });
+
   it('a blocked message gets the deterministic reply: hidden text, no model call, nothing of it kept', async () => {
     seed();
     screen = async () => ({ decision: 'block', categories: ['graphic_gore'], strike: 1, blockedAttachmentPaths: [] });

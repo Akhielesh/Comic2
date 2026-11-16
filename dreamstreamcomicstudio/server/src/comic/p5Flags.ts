@@ -1,5 +1,5 @@
 // Program 5 server flags (PROGRAM5 C-5): each is a stage, off | admins | all, read once per request from the server
-// env. Unset or unreadable = 'off' = today's behaviour byte for byte (the Ramayana golden suite pins that). The words
+// env. Scene chains default on; the explicit off switch restores paired scheduling. Other features default off. The words
 // follow the house parser (shared/comic/capabilities.ts parseFlagStage): case and spaces ignored, 'everyone' = 'all',
 // a bare switch ('on', 'true', '1', 'yes') admits admins only, and anything else reads as off.
 //
@@ -21,17 +21,13 @@ export const P5_FLAGS = Object.keys(P5_FLAG_ENV) as P5Flag[];
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-/**
- * The furthest stage a flag may reach in this build. Scene chains stop at 'admins' until three things hold: the owner
- * has accepted the longer wait (about +3 minutes for 10 pages in one scene with safety checks), and a colour check
- * shows that drawing each page from the one before does not drift. Setting COMIC_RUN_CHAINS=all alone admits admins only.
- */
-export const P5_FLAG_MAX: Readonly<Partial<Record<P5Flag, FlagStage>>> = Object.freeze({ runChains: 'admins' });
+/** No role cap: a verified all-stage rollout must also reach non-admin authors. */
+export const P5_FLAG_MAX: Readonly<Partial<Record<P5Flag, FlagStage>>> = Object.freeze({});
 
-/** One flag's stage. Unset, empty or unknown → 'off'; never past P5_FLAG_MAX. Pure; never throws. */
+/** Scene continuity is the default; explicit off/admins remain reversible rollout controls. */
 export const p5StageOf = (flag: P5Flag, env: Env = process.env): FlagStage => {
-  const stage = parseFlagStage(env?.[P5_FLAG_ENV[flag]], 'off');
-  return stage === 'all' && P5_FLAG_MAX[flag] === 'admins' ? 'admins' : stage;
+  const configured = env?.[P5_FLAG_ENV[flag]];
+  return configured?.trim() ? parseFlagStage(configured, 'off') : flag === 'runChains' ? 'all' : 'off';
 };
 
 /** Whether one flag is on for this user ('admins' needs isAdmin === true). */
@@ -44,5 +40,5 @@ export type P5Flags = Readonly<Record<P5Flag, boolean>>;
 export const p5FlagsFor = (isAdmin: boolean, env: Env = process.env): P5Flags =>
   Object.freeze(Object.fromEntries(P5_FLAGS.map((f) => [f, p5FlagOn(f, isAdmin, env)])) as Record<P5Flag, boolean>);
 
-/** All off: today's behaviour. The default wherever no request (and so no user) is known. */
+/** Explicit all-off baseline, used by callers that deliberately disable optional behaviour. */
 export const P5_FLAGS_OFF: P5Flags = Object.freeze(Object.fromEntries(P5_FLAGS.map((f) => [f, false])) as Record<P5Flag, boolean>);

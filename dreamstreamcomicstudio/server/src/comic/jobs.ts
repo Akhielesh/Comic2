@@ -1092,6 +1092,7 @@ export function gateDecision(
   confirmed: boolean,
   opts: {
     budgetApproved?: boolean;
+    planningOnly?: boolean;
     pendingUsd?: number;
     priorUsd?: number;
     forceGate?: Gate['reason'];
@@ -1102,6 +1103,7 @@ export function gateDecision(
 ): Gate['reason'] | null {
   const budget = budgetOf(doc.settings);
   if (budget !== undefined && !opts.budgetApproved && round4(doc.spend.totalUsd + (opts.pendingUsd || 0) + estimate.usd) > budget + 1e-9) return 'budget';
+  if (opts.planningOnly) return 'policy';
   if (confirmed) return null;
   const policy = doc.settings.confirm;
   if (opts.forceGate) {
@@ -1308,6 +1310,7 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(ctx.session.doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
@@ -1337,6 +1340,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
   }
+  if (ctx.planningOnly) return finished({ status: 'gated', gate, message: 'The plan is ready for review. Approve the quote in a later turn to start drawing.' });
   const gated = gate.action as StudioAction | ProPageAction;
   if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
@@ -1878,6 +1882,7 @@ function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOpti
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
@@ -2072,6 +2077,7 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
+    planningOnly: ctx.planningOnly,
     pendingUsd: pendingUsdOf(ctx.session),
     priorUsd: opts.priorUsd,
     forceGate: stale ? 'policy' : opts.forceGate,
@@ -2418,7 +2424,10 @@ class RenderRun {
     this.slots = slotsFor(ctx.session);
     this.inflight = inflightFor(ctx.session);
     this.cost = costOf(ctx);
-    this.p5 = p5FlagsFor(ctx.caps?.admin === true);
+    const flags = p5FlagsFor(ctx.caps?.admin === true);
+    const pageRefs = resolveJobFor(pinned, 'page').spec.refs;
+    // Keep character/style capacity on legacy models; serial continuity needs a spare object reference.
+    this.p5 = Object.freeze({ ...flags, runChains: flags.runChains && pageRefs.objects >= 2 && pageRefs.total > pageRefs.characters });
     this.signal.addEventListener('abort', this.onAbort, { once: true });
   }
 
@@ -2497,7 +2506,7 @@ class RenderRun {
     const pageJobs = pages.map((p) => this.pageJob(p, action));
     const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
     const jobs = [...sheetJobs, ...anchorJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
-    // Pages draw in pairs by default, or in full scene chains when enabled.
+    // Supported models continue each scene page by page; off/limited-reference models retain paired scheduling.
     const schedule = this.p5.runChains ? scheduleRun(doc, pages.map((p) => p.id), { chains: true }) : scheduleRun(doc, pages.map((p) => p.id));
     const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
     await this.run(jobs, label, async () => {
@@ -4699,6 +4708,9 @@ export async function planPages(
     for (const p of old) if (!kept.has(p.id) && hasArt(p) && !isBusy(p.render)) ops.push({ op: 'page_delete', id: p.id, deletedAt: Date.now() });
   }
   ops.push({ op: 'pages', pages });
+  if (!revising && doc.format.pageCountMode === 'auto' && pages.length) {
+    ops.push({ op: 'format', patch: { pageCount: pages.length, pageCountMode: 'auto' } });
+  }
   // A (re)written plan is a draft again until the user approves it (a revision of some pages keeps the status).
   if (!revising || rewroteAll || doc.planStatus === 'none') ops.push({ op: 'plan_status', status: 'draft' });
   commitAs(ctx, ops, origin, revising && !rewroteAll ? 'Revise pages' : 'Plan pages');
@@ -4925,6 +4937,7 @@ export const sanitizeFormatPatch = (raw: unknown): Partial<Format> =>
     raw,
     {
       kind: (v) => oneOf(v, COMIC_KINDS),
+      pageCountMode: (v) => oneOf(v, ['auto', 'fixed'] as const),
       pageCount: (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(40, Math.max(1, Math.round(v))) : undefined),
       pageAspect: (v) => oneOf(v, ASPECT_RATIOS),
       panelsPerPage: (v) => (v === 'auto' ? 'auto' : typeof v === 'number' && Number.isFinite(v) ? Math.min(9, Math.max(1, Math.round(v))) : undefined),
@@ -5579,6 +5592,7 @@ export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
 export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
   const usd = planPagesUsd(doc, byok);
+  if (doc.format.pageCountMode === 'auto') return `${cost.approx(usd)} at ${plural(pages, 'page')} as an estimate; the Director chooses the final length. Outline and any repair are billed by actual usage.`;
   return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;
 };
 

@@ -24,6 +24,7 @@ const reply = (action: string, text = ''): Partial<LlmResult> => {
 const doc = () => {
   const d = createEmptyDoc('d', 'Night Shift', 1);
   d.format.pageCount = 1;
+  d.format.pageCountMode = 'fixed';
   d.cast = [{ id: 'ch_a', name: 'Asha', tier: 'lead', look: { summary: 'a guard' }, refs: [], sheet: emptyRender() }];
   return d;
 };

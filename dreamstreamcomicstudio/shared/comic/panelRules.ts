@@ -8,7 +8,7 @@
 // The owner's provisional defaults (iter2 decisions PD-1, PD-2) each sit behind one named constant in
 // PLAN_POLICY, so changing one is a one-line edit.
 
-import type { ComicKind, Format, Panel, ShotType } from './doc.js';
+import type { Format, Panel, ShotType } from './doc.js';
 import { lineLengthRule } from './languages.js';
 import { graphemes } from './textLayout.js';
 
@@ -62,8 +62,8 @@ export const PANEL_LIMITS = {
 export const PLAN_POLICY = {
   /** PD-1: overfull pages are held back from "Render all" (free fixes + "Draw anyway"), never refused. */
   holdBackOverfull: true,
-  /** PD-2: a storybook set to more than 3 panels per page plans NEW pages with at most 3 (with a note). */
-  clampStorybook: true
+  /** Legacy policy marker: editorial panel clamps are disabled. */
+  clampStorybook: false
 } as const;
 
 /** "Recurring" being: on at least this many pages and in at least this many panels (plan §3 C7). */
@@ -83,7 +83,7 @@ export interface PanelCountRule {
   min: number;
   /** Most panels allowed without a reason. */
   max: number;
-  /** The author fixed the count (Format); pages should have exactly this many. */
+  /** Legacy shape retained for consumers; adaptive rules never set exact. */
   exact?: number;
   /** Auto only: the count allowed for a fast, near-silent sequence, and its page word limit. */
   fast?: { panels: number; maxWords: number };
@@ -91,55 +91,22 @@ export interface PanelCountRule {
   clampedFrom?: number;
 }
 
-const kindRule = (kind: ComicKind): PanelCountRule => {
-  switch (kind) {
-    case 'storybook':
-      return { typical: PANEL_LIMITS.storybookTypical, min: 1, max: PANEL_LIMITS.storybookMax };
-    case 'strip':
-      return { typical: 3, min: PANEL_LIMITS.stripMin, max: PANEL_LIMITS.stripMax };
-    case 'webtoon':
-      return { typical: 3, min: 2, max: PANEL_LIMITS.webtoonMax };
-    default:
-      return {
-        typical: PANEL_LIMITS.autoTypical,
-        min: PANEL_LIMITS.autoMin,
-        max: PANEL_LIMITS.autoUsualMax,
-        fast: { panels: PANEL_LIMITS.autoMax, maxWords: PANEL_LIMITS.fastSequenceWords }
-      };
-  }
-};
-
-/** The panel-count rule for a format (plan §4.1 table). */
+/** Density is a preference, never a uniform panel requirement. Nine is the renderer's technical limit. */
 export function panelCountRule(format: Pick<Format, 'kind' | 'panelsPerPage'>): PanelCountRule {
-  const ppp = format.panelsPerPage;
-  if (typeof ppp === 'number' && Number.isFinite(ppp) && ppp > 0) {
-    const asked = Math.min(PANEL_LIMITS.codeMax, Math.max(1, Math.round(ppp)));
-    if (format.kind === 'storybook' && PLAN_POLICY.clampStorybook && asked > PANEL_LIMITS.storybookMax) {
-      const n = PANEL_LIMITS.storybookMax;
-      return { typical: n, min: n, max: n, exact: n, clampedFrom: asked };
-    }
-    return { typical: asked, min: asked, max: asked, exact: asked };
-  }
-  return kindRule(format.kind);
+  const preferred = format.panelsPerPage;
+  const typical = typeof preferred === 'number' && Number.isFinite(preferred) && preferred > 0
+    ? Math.min(PANEL_LIMITS.codeMax, Math.max(1, Math.round(preferred)))
+    : format.kind === 'storybook' ? PANEL_LIMITS.storybookTypical : PANEL_LIMITS.autoTypical;
+  return { typical, min: 1, max: PANEL_LIMITS.codeMax };
 }
 
-/** The visible note when a storybook's fixed panel count is clamped for new pages (decision 4), else undefined. */
-export function panelCountNote(format: Pick<Format, 'kind' | 'panelsPerPage'>): string | undefined {
-  const rule = panelCountRule(format);
-  if (rule.clampedFrom === undefined) return undefined;
-  return `Storybook pages hold at most ${PANEL_LIMITS.storybookMax} large panels, so new pages are planned with ${rule.exact} (your format asks for ${rule.clampedFrom}). Pages already planned keep theirs.`;
+/** Kept for old callers; there is no editorial clamp to disclose. */
+export function panelCountNote(_format: Pick<Format, 'kind' | 'panelsPerPage'>): string | undefined {
+  return undefined;
 }
 
-/**
- * Most panels a re-planned EXISTING page may keep under a fixed count. The storybook clamp is for new pages only
- * (PD-2): a page planned before it keeps up to its own count (never more than the format asks for). Otherwise the
- * rule's own limit (for auto formats, the usual maximum; the fast-sequence exception is panelCountProblem's).
- */
-export function revisionPanelLimit(format: Pick<Format, 'kind' | 'panelsPerPage'>, existing?: number): number {
-  const rule = panelCountRule(format);
-  const limit = rule.exact ?? rule.max;
-  if (rule.clampedFrom === undefined || !(typeof existing === 'number' && existing > limit)) return limit;
-  return Math.min(rule.clampedFrom, Math.round(existing));
+export function revisionPanelLimit(_format: Pick<Format, 'kind' | 'panelsPerPage'>, _existing?: number): number {
+  return PANEL_LIMITS.codeMax;
 }
 
 // ── Word budget (the speech oracle; density.ts measures, this states) ────────
@@ -216,26 +183,12 @@ export function minAreaFor(panel: Pick<Panel, 'shot' | 'lines'>): number {
   return SMALL_OK_SHOTS.has(panel.shot) && panelWords(panel) === 0 ? PANEL_LIMITS.minInsertArea : PANEL_LIMITS.minArea;
 }
 
-/**
- * Is a panel count allowed for this format? Auto pages: 2–4, or 5 for a fast sequence with ≤ 12 words (in the
- * language's unit: `fastWords`); a single panel is a splash (the splash rule applies). Explicit counts: at most the
- * chosen number — or, re-planning an existing page (`existing` = its panel count), up to revisionPanelLimit.
- */
+/** Count checks protect the renderer's capacity; lettering and geometry checks handle readability separately. */
 export function panelCountProblem(
   format: Pick<Format, 'kind' | 'panelsPerPage'>,
   panels: Pick<Panel, 'lines'>[],
   opts: { unit?: TextUnit; existing?: number } = {}
 ): { max: number; words: number; rule: PanelCountRule; fastWords?: number } | undefined {
-  const rule = panelCountRule(format);
-  const unit = opts.unit ?? WORDS_UNIT;
-  const n = panels.length;
-  if (rule.exact !== undefined) {
-    const limit = revisionPanelLimit(format, opts.existing);
-    return n > limit ? { max: limit, words: pageWords(panels, unit), rule } : undefined;
-  }
-  if (n <= rule.max) return undefined;
-  const words = pageWords(panels, unit);
-  const fastWords = rule.fast ? scaledLimit(rule.fast.maxWords, unit) : undefined;
-  if (rule.fast && fastWords !== undefined && n <= rule.fast.panels && words <= fastWords) return undefined;
-  return { max: rule.fast && fastWords !== undefined && words <= fastWords ? rule.fast.panels : rule.max, words, rule, ...(fastWords !== undefined ? { fastWords } : {}) };
+  if (panels.length <= PANEL_LIMITS.codeMax) return undefined;
+  return { max: PANEL_LIMITS.codeMax, words: pageWords(panels, opts.unit), rule: panelCountRule(format) };
 }

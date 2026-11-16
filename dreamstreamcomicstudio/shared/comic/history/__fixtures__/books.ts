@@ -104,6 +104,8 @@ const balloonsOf = (page: Page): Balloon[] =>
 
 export const historyV5Doc = (): ComicDoc => {
   const doc = createEmptyDoc('proj-v5', 'The Saffron Thief', BOOK_NOW - 20_000_000);
+  // This fixture represents a stored book from before adaptive page-count intent existed.
+  delete doc.format.pageCountMode;
   doc.rev = 233;
   doc.brief = { title: 'The Saffron Thief', logline: 'A market thief steals the wrong tin.', genre: 'adventure', tone: 'playful', notes: ['ends on a cliffhanger'] };
   doc.format = { ...doc.format, kind: 'comic', pageCount: 6, pageAspect: '2:3', lettering: 'overlay', language: 'en' };

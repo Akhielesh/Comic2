@@ -1,5 +1,5 @@
 // useStudioMode: the Easy/Pro view — the user's pick persists (try/catch storage), falls back to
-// caps.defaultMode, never shows Pro without caps.proEditor, and follows other tabs.
+// Easy, never shows Pro without caps.proEditor, and follows other tabs.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
@@ -10,16 +10,16 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('useStudioMode', () => {
-  it('follows caps.defaultMode until the user picks, then remembers the pick', () => {
+  it('keeps Easy when paid capabilities arrive until the user explicitly picks Pro', () => {
     const { result, rerender } = renderHook(({ caps }) => useStudioMode(caps), { initialProps: { caps: DEFAULT_CAPS } });
     expect(result.current.mode).toBe('easy');
     expect(result.current.stored).toBeNull();
     rerender({ caps: { ...DEFAULT_CAPS, defaultMode: 'pro' } });
-    expect(result.current.mode).toBe('pro');
-    act(() => result.current.setMode('easy'));
     expect(result.current.mode).toBe('easy');
-    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('easy');
-    expect(readStoredMode()).toBe('easy');
+    act(() => result.current.setMode('pro'));
+    expect(result.current.mode).toBe('pro');
+    expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('pro');
+    expect(readStoredMode()).toBe('pro');
   });
 
   it('never shows Pro when the proEditor capability is off (mode is a view, not a permission)', () => {

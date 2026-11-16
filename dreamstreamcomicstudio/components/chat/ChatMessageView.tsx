@@ -1,3 +1,4 @@
+import { useComposerDraft } from '../../services/composerDrafts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
@@ -112,6 +113,7 @@ interface ChatMessageViewProps {
   turn: ChatTurn;
   /** Chat/session id, threaded to per-response feedback so ratings correlate to the chat. */
   sessionId?: string;
+  accountId?: string;
   /** True while a generation is in flight (disables regenerate/edit). */
   busy?: boolean;
   /** Whether this is the last turn in the conversation. */
@@ -121,20 +123,22 @@ interface ChatMessageViewProps {
   /** Regenerate this assistant turn (keeps prior answers as versions). */
   onRegenerate?: () => void;
   /** Edit + resend a user message. */
-  onEdit?: (newText: string) => void;
+  onEdit?: (newText: string) => void | boolean | Promise<void | boolean>;
   /** Switch which regenerated version is shown. */
   onSelectVariant?: (index: number) => void;
   /** An action on this turn's calm connected-data notice (only for notice turns). */
   onNoticeAction?: (action: ConnectedDataAction) => void;
 }
 
-export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant, onNoticeAction }) => {
+export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, accountId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant, onNoticeAction }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editDraft, setEditDraft] = useState(turn.content);
+  const draft = useComposerDraft(accountId && sessionId ? { accountId, surface: 'chat-edit', conversationId: `${sessionId}:${turn.id}` } : undefined);
+  const { text: editDraft, setText: setEditDraft } = draft;
+  const editPending = useRef(false);
   const branchRef = useRef<HTMLDivElement>(null);
   const openPanel = useChatPanel();
   const isUser = turn.role === 'user';
@@ -176,12 +180,21 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
     }
   };
 
-  const startEdit = () => { setEditDraft(turn.content); setEditing(true); };
-  const cancelEdit = () => { setEditing(false); setEditDraft(turn.content); };
-  const commitEdit = () => {
-    const next = editDraft.trim();
-    setEditing(false);
-    if (next && next !== turn.content) onEdit?.(next);
+  const startEdit = () => { if (!draft.capture().text) setEditDraft(turn.content); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); };
+  const commitEdit = async () => {
+    const submitted = draft.capture();
+    const next = submitted.text.trim();
+    if (!next || editPending.current || busy) return;
+    if (next === turn.content) { setEditing(false); return; }
+    editPending.current = true;
+    try {
+      const accepted = await onEdit?.(next);
+      if (accepted === false) return;
+      draft.clearIfCurrent(submitted);
+      if (!draft.capture().text) setEditing(false);
+    } catch { /* Keep the edit for retry. */ }
+    finally { editPending.current = false; }
   };
 
   const downloadMarkdown = () => downloadTextFile('dreamstream-answer.md', turn.content, 'text/markdown');

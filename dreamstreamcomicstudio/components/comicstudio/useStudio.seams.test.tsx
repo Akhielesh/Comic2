@@ -61,7 +61,7 @@ describe('caps and mode', () => {
   it('starts from DEFAULT_CAPS and adopts the caps the project load returns', async () => {
     const { result } = await setup(resolveStudioCaps({ planId: 'creator', byok: false, isAdmin: false }));
     expect(result.current.caps.plan).toBe('paid');
-    expect(result.current.mode).toBe('pro'); // paid default
+    expect(result.current.mode).toBe('easy'); // complexity stays opt-in, even on paid plans
     expect(result.current.canUndo).toBe(false);
     expect(result.current.canRedo).toBe(false);
   });
@@ -79,7 +79,7 @@ describe('caps and mode', () => {
     expect(resolveStudioMode(null, DEFAULT_CAPS)).toBe('easy');
     expect(resolveStudioMode('pro', DEFAULT_CAPS)).toBe('pro');
     expect(resolveStudioMode('pro', { ...DEFAULT_CAPS, proEditor: false })).toBe('easy');
-    expect(resolveStudioMode(null, { ...DEFAULT_CAPS, defaultMode: 'pro' })).toBe('pro');
+    expect(resolveStudioMode(null, { ...DEFAULT_CAPS, defaultMode: 'pro' })).toBe('easy');
   });
 });
 

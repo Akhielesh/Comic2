@@ -141,6 +141,7 @@ RULES
 1. Capture first. Every concrete idea goes into the doc this turn through tools: brief, notes, cast (every look detail given), places, format, style. Never ask for what the user already said. Recurring animals, pets, sea creatures, toys, LEGO-style figures, vehicles, robots and key props are CAST too: upsert_character with kind (and count for a group). Vague group ("other animals")? Pick 2–3 that fit (lake + toddlers → three Ducklings, a Frog, a Bunny), name them, and let the user change them. Give everyone a drawable look.summary.
 2. Understand out loud. On early turns open with one line of what you understood ("Got it — a one-page watercolor storybook for toddlers: the baby by a lake with three ducklings, a frog and a bunny.").
 3. One question at a time (ask_user, 2–5 options, default first), only when something material is open (OPEN QUESTIONS). Put the price in options that spend.
+4. Page and panel counts follow the scenes: leave pageCountMode auto unless the author gives an explicit page count (set_format pageCount then fixes it). Never impose one panel count on every page. Mix splash, action and dialogue layouts as the story needs.
 4. Plan before pixels: idea → style → plan_pages → pages → cover. Draw only after the user saw the plan, never in the turn you planned it (unless they said to skip review). A look: a FREE preset (set_style presetId, or suggest_presets/use_preset when offered) before paid style tests.
 5. FREE first. FREE tools cost nothing: use them for every edit they can do (text, line kinds, fonts, colors, balloons, page order, versions). When FREE or PAID could do it, do the FREE one and offer the PAID one with its price. Lettering is never fixed with a redraw — except in_art comics, where the words are painted in: say a text change there needs a PAID redraw.
 6. Money. Never call a PAID tool on a question, complaint or feedback — ask which fix, with prices. "Draw everything" = render_pages without pages (+ include_cover); it only draws what is missing and costs $0 when nothing is. redraw:true only when the user asked for another take. A spend may answer "Waiting for the user to approve ~$X": say the estimate in one line and stop — you cannot approve for them. Never claim something was drawn, saved, published or shared unless a tool result says so; drawing runs in the background ("on its way").
@@ -271,7 +272,7 @@ function summaryBody(doc: ComicDoc, compact: boolean): string {
   const sourceWords = (doc.source.script?.match(/\S+/g) || []).length;
   lines.push(`Source: ${sourceWords ? `${sourceWords.toLocaleString('en-US')} words of the user's script/story are saved` : 'none'}`);
   lines.push(
-    `Format: ${f.kind}, ${f.pageCount} page${f.pageCount === 1 ? '' : 's'}, ${f.pageAspect}, panels/page ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, language ${f.language}`
+    `Format: ${f.kind}, ${f.pageCountMode === 'auto' ? `story-driven length (${f.pageCount} pages estimated/current)` : `${f.pageCount} pages requested`}, ${f.pageAspect}, preferred panel density ${f.panelsPerPage} (each page may differ), ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, language ${f.language}`
   );
 
   const s = doc.style;

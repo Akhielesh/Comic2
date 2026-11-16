@@ -123,6 +123,7 @@ export interface PendingUserMessage {
   attachments: PendingAttachment[];
   at: number;
   status: 'sending' | 'failed';
+  planningOnly?: true;
   error?: string;
   /** Server code of the failure (COOLDOWN, CONTENT_POLICY, …) so the bubble can tailor its hint. */
   code?: string;

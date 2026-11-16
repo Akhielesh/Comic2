@@ -11,7 +11,8 @@
 // visual is a crop of the page around that balloon (or the line's words in a bubble while the page is not drawn), and a
 // `spot` visual is a page thumbnail with one of the nine cells of the page or of a panel highlighted.
 
-import React, { useState } from 'react';
+import React, { useContext, useRef, useState } from 'react';
+import { ComposerDraftAccountContext, useComposerDraft } from '../../../../services/composerDrafts';
 import { Check, CornerDownLeft } from 'lucide-react';
 import { POS9, findCharacter, type Box, type Card, type ComicDoc, type OptionChoice, type OptionVisual, type Pos9 } from '../../../../shared/comic/doc';
 import { LETTERING_PRESETS, type LetteringPresetId } from '../../../../shared/comic/lettering/style';
@@ -220,9 +221,15 @@ export const OptionVisualArt: React.FC<{ visual: OptionVisual; doc: ComicDoc | n
 };
 
 export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioController }> = ({ card, studio }) => {
-  const [picked, setPicked] = useState<string[]>([]);
+  const accountId = useContext(ComposerDraftAccountContext);
+  const scope = accountId && studio.doc?.id && card.id ? { accountId, surface: 'director-answer', conversationId: JSON.stringify([studio.doc.id, card.id]) } : undefined;
+  const customDraft = useComposerDraft(scope);
+  const picksDraft = useComposerDraft(scope ? { ...scope, surface: 'director-answer-picks' } : undefined);
+  const { text: custom, setText: setCustom } = customDraft;
+  let picked: string[] = [];
+  try { const saved: unknown = JSON.parse(picksDraft.text || '[]'); if (Array.isArray(saved)) picked = saved.filter((id): id is string => typeof id === 'string'); } catch { /* An invalid saved selection is empty. */ }
   const [localAnswer, setLocalAnswer] = useState<string[] | null>(null);
-  const [custom, setCustom] = useState('');
+  const pending = useRef(false);
   const choices = Array.isArray(card.choices) ? card.choices.filter((c) => c && typeof c.label === 'string') : [];
   const visual = choices.some((c) => isVisual(c.visual));
 
@@ -238,23 +245,33 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
 
   const answer = (ids: string[], text: string) => {
     const reply = text.trim();
-    if (!reply || disabled) return;
+    if (!reply || disabled || pending.current) return;
+    pending.current = true;
+    const customSnapshot = customDraft.capture();
+    const picksSnapshot = picksDraft.capture();
     setLocalAnswer(ids.length ? ids : [reply]);
-    // Name the card this answers (DIR-8): the server records it on THIS card — a typed answer
-    // too — instead of guessing from the text (two open cards can share a label).
-    const sent = studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
-    // Refused (the turn was locked after all; send() says why): the card opens again so the question can be answered,
-    // with a typed answer back in its box.
+    // Hold drafts until the real controller acknowledges this card's answer. The captured
+    // revisions protect another mounted copy or typing resumed before a late receipt.
+    const finish = (accepted: boolean) => {
+      pending.current = false;
+      if (accepted) {
+        if (!ids.length) customDraft.clearIfCurrent(customSnapshot);
+        picksDraft.clearIfCurrent(picksSnapshot);
+      } else setLocalAnswer(null);
+    };
+    const cardReply = typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined;
+    let sent: ReturnType<ComicStudioController['send']>;
+    try { sent = studio.send(reply, studio.confirmsMessages ? { ...cardReply, onAccepted: finish } : cardReply); }
+    catch { finish(false); return; }
     void Promise.resolve(sent)
       .then(sendOutcomeOf, () => 'refused' as const)
       .then((outcome) => {
-        if (outcome !== 'refused') return;
-        setLocalAnswer(null);
-        if (!ids.length) setCustom((prev) => (prev.trim() ? prev : reply));
+        if (outcome === 'refused') finish(false);
+        else if (!studio.confirmsMessages) finish(true);
       });
   };
 
-  const toggle = (c: OptionChoice) => setPicked((prev) => (prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]));
+  const toggle = (c: OptionChoice) => picksDraft.setText(JSON.stringify(picked.includes(c.id) ? picked.filter((id) => id !== c.id) : [...picked, c.id]));
   const onPick = (c: OptionChoice) => (card.multi ? toggle(c) : answer([c.id], replyFor(c)));
 
   return (
@@ -349,7 +366,6 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
           onSubmit={(e) => {
             e.preventDefault();
             answer([], custom);
-            setCustom('');
           }}
         >
           <input

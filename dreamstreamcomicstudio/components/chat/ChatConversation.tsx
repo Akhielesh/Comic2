@@ -22,6 +22,7 @@ import {
 
 interface ChatConversationProps {
   session: ChatSession;
+  accountId?: string;
   features: ChatModelFeatures;
   busy: boolean;
   sidebarOpen: boolean;
@@ -29,13 +30,13 @@ interface ChatConversationProps {
   /** Show the model picker button (Settings can hide it; default true). */
   showModelSelector?: boolean;
   onOpenModelPicker: () => void;
-  onSend: (text: string, attachments: ChatAttachment[]) => void;
+  onSend: (text: string, attachments: ChatAttachment[]) => void | boolean | Promise<void | boolean>;
   seedText?: string;
   onSeedConsumed?: () => void;
   onStop: () => void;
   onBranch: (turnId: string, chooseNewModel: boolean) => void;
   onRegenerate: (turnId: string) => void;
-  onEditUserMessage: (turnId: string, newText: string) => void;
+  onEditUserMessage: (turnId: string, newText: string) => void | boolean | Promise<void | boolean>;
   onSelectVariant: (turnId: string, index: number) => void;
   /** An action on a calm connected-data notice turn (components/chat/connectorPrivacy.ts). */
   onNoticeAction?: (turnId: string, action: ConnectedDataAction) => void;
@@ -137,6 +138,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
 
 export const ChatConversation: React.FC<ChatConversationProps> = ({
   session,
+  accountId,
   features,
   busy,
   sidebarOpen,
@@ -364,6 +366,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               key={turn.id}
               turn={turn}
               sessionId={session.id}
+              accountId={accountId}
               busy={busy}
               onBranch={turn.role === 'assistant' && !turn.error ? (chooseNew) => onBranch(turn.id, chooseNew) : undefined}
               onRegenerate={turn.role === 'assistant' ? () => onRegenerate(turn.id) : undefined}
@@ -397,6 +400,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
       </div>
 
       <ChatComposer
+        key={`${accountId ?? 'guest'}:${session.id}`}
+        draftScope={accountId ? { accountId, surface: 'chat', conversationId: session.id } : undefined}
         busy={busy}
         features={features}
         reasoningLevel={session.reasoningLevel}

@@ -437,6 +437,25 @@ describe('runAction render_pages', () => {
 // ── Gating ───────────────────────────────────────────────────────────────────
 
 describe('spend gating', () => {
+  it.each([false, true])('planning-only holds images despite confirmed=%s and confirm never; a later approval still works', async (confirmed) => {
+    const doc = plannedDoc();
+    doc.settings.confirm = 'never';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    ctx.planningOnly = true;
+    const started = await startAction(ctx, { type: 'render_cover' }, { confirmed });
+    expect(started.outcome.status).toBe('gated');
+    const gate = session.doc.gate!;
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy' });
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate).toEqual(gate);
+    ctx.planningOnly = false;
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: false });
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(session.doc.cover.render.status).toBe('ready');
+  });
+
   it('policy gate: no spend, a gate card; approving runs it', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';
@@ -1711,6 +1730,25 @@ describe('planPages (v5)', () => {
     expect(outcome.message).toContain('Also added to the cast so they stay consistent: Ducklings ×3, Frog.');
     expect(cards).toEqual([expect.objectContaining({ type: 'breakdown', view: 'plan' })]);
     expect(session.doc.pages[0].id).toBe('pg_lake_1'); // nothing drawn: identity by position is kept
+  });
+
+  it('stores the chosen adaptive count and reuses that unchanged plan without another paid writer call', async () => {
+    const doc = plannedDoc();
+    const chosen = doc.pages.slice(0, 2);
+    doc.pages = [];
+    doc.planStatus = 'none';
+    doc.format.pageCount = 6;
+    doc.format.pageCountMode = 'auto';
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    writerReturns(() => chosen);
+    await planPages(ctx, {});
+    expect(session.doc.pages).toHaveLength(2);
+    expect(session.doc.format).toMatchObject({ pageCount: 2, pageCountMode: 'auto' });
+    const again = await planPages(ctx, {});
+    expect(again.message).toContain('unchanged inputs');
+    expect(vi.mocked(writePagePlan)).toHaveBeenCalledTimes(1);
+    expect(ctx.imagesFake.calls).toHaveLength(0);
   });
 
   it('R5: re-planning with unchanged inputs and no instructions is free; instructions or a changed brief call the writer', async () => {

@@ -109,12 +109,11 @@ describe('K1: set_format 2–6, panel budgets, off-panel voices, lock-aware quot
     expect(await call('set_format', { panelsPerPage: 'auto' })).toContain('panels auto');
   });
 
-  it('a storybook set above 3 panels says what new plans will do (PD-2)', async () => {
+  it('retains a density preference without imposing a storybook clamp', async () => {
     const out = await call('set_format', { kind: 'storybook', panelsPerPage: '5' });
-    const note = panelCountNote({ kind: 'storybook', panelsPerPage: 5 });
-    expect(note).toBeTruthy();
-    expect(out).toContain(note!);
-    expect(await call('set_format', { kind: 'storybook', panelsPerPage: '2' })).not.toContain(note!);
+    expect(ctx.session.doc.format.panelsPerPage).toBe(5);
+    expect(panelCountNote(ctx.session.doc.format)).toBeUndefined();
+    expect(out).not.toContain('clamp');
   });
 
   it('edit_panel_text says when the words overfill the panel', async () => {
@@ -493,9 +492,11 @@ describe('save_source', () => {
     expect(analyzeSource).not.toHaveBeenCalled();
   });
 
-  it('analyzes long material (from the message) and fills only what is missing', async () => {
+  it.each(['auto', 'fixed'] as const)('analyzes source without replacing an explicit page constraint (%s)', async (mode) => {
     const long = 'PAGE 1\n' + 'Maya runs through the market. '.repeat(80);
     const doc = plannedDoc();
+    doc.format.pageCountMode = mode;
+    const requested = doc.format.pageCount;
     doc.brief = { title: 'Untitled comic', notes: [], genre: 'adventure' };
     doc.planStatus = 'none';
     doc.pages = [];
@@ -520,7 +521,7 @@ describe('save_source', () => {
     expect(out).toContain('title “Spice Run”');
     expect(out).toContain('Cast: MAYA (lead), NANI (support).');
     expect(out).toContain('Places: HARBOR.');
-    expect(out).toContain('page count set to 8');
+    expect(out).toContain(mode === 'auto' ? 'estimated 8 pages' : 'suggested 8 pages');
     expect(out).toContain('Style hint from the text: warm ink and watercolor');
     const after = ctx.session.doc;
     expect(after.source.script).toBe(long.trim());
@@ -528,7 +529,8 @@ describe('save_source', () => {
     expect(after.brief.notes).toEqual(['keep it PG']);
     expect(after.cast.find((c) => c.id === 'c_maya')?.look).toMatchObject({ summary: 'Young courier with a red scarf', eyes: 'green' });
     expect(after.cast.find((c) => c.name === 'Nani')).toBeTruthy();
-    expect(after.format.pageCount).toBe(8);
+    expect(after.format.pageCount).toBe(mode === 'auto' ? 8 : requested);
+    expect(after.format.pageCountMode).toBe(mode);
     expect(after.spend.entries[0]).toMatchObject({ kind: 'plan', label: 'Read the script' });
   });
 

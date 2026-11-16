@@ -1,5 +1,5 @@
-// Run order for "Render all". The default draws the first page, then works through pairs in parallel.
-// COMIC_RUN_CHAINS draws consecutive pages in a scene in order, while other scenes can run in parallel.
+// Run order for "Render all". Scene chains preserve the immediate previous page while independent scenes can run
+// in parallel. The paired schedule is retained for explicit off and models with limited reference capacity.
 // A dependent page waits for the full predecessor job so pending artwork never becomes a reference.
 
 import { crossesPageScene, runChains, sceneIndex } from '../../../../shared/comic/continuity.js';
@@ -27,8 +27,8 @@ export interface RunSchedule {
 export const runDrawsAnchors = (): boolean => false;
 
 /**
- * The first page establishes the look. The default gives later consecutive pages one dependency per pair, without
- * creating a long serial run. With the admin flag, every consecutive page in a scene waits for its predecessor.
+ * The first page establishes the look. The paired fallback gives later consecutive pages one dependency per pair.
+ * With chains enabled, every consecutive page in a scene waits for its predecessor.
  */
 export function scheduleRun(doc: ComicDoc, pageIds: readonly string[], opts: ScheduleOptions = {}): RunSchedule {
   if (opts.chains) {

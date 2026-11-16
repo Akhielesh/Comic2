@@ -73,36 +73,30 @@ afterEach(() => {
 });
 
 describe('StudioComposer — sending', () => {
-  it('prefills a new project idea once after loading and waits for explicit Send', async () => {
+  it('Start sends its opening idea once after loading, with image work gated', async () => {
     const studio = makeFakeStudio();
     const consumed = vi.fn();
     const initialIdea = { id: 'new-project-idea', text: 'A heist on the rooftops' };
     const { rerender } = render(<StudioComposer studio={{ ...studio, doc: null }} initialIdea={initialIdea} onInitialIdeaConsumed={consumed} />);
     expect(consumed).not.toHaveBeenCalled();
     rerender(<StudioComposer studio={studio} initialIdea={initialIdea} onInitialIdeaConsumed={consumed} />);
-    expect(textarea()).toHaveValue(initialIdea.text);
+    expect(studio.send).toHaveBeenCalledExactlyOnceWith(initialIdea.text, { attachments: [], planningOnly: true });
     expect(consumed).toHaveBeenCalledExactlyOnceWith(initialIdea.id);
-    expect(studio.send).not.toHaveBeenCalled();
-    fireEvent.change(textarea(), { target: { value: 'My revised rooftop idea' } });
+    fireEvent.change(textarea(), { target: { value: 'My next note' } });
     rerender(<StudioComposer studio={studio} initialIdea={{ ...initialIdea }} onInitialIdeaConsumed={consumed} />);
-    expect(textarea()).toHaveValue('My revised rooftop idea');
-    expect(consumed).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    expect(studio.send).toHaveBeenCalledExactlyOnceWith('My revised rooftop idea', []);
+    expect(textarea()).toHaveValue('My next note');
+    expect(studio.send).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves an existing draft and uses the normal long-script send path for a prepared idea', () => {
+  it('preserves an existing draft while Start sends only its captured long script', () => {
     const studio = makeFakeStudio();
     const { rerender } = render(<StudioComposer studio={studio} />);
     fireEvent.change(textarea(), { target: { value: 'Keep this note.' } });
-    const script = 'Scene: '.repeat(2000);
+    const script = 'Scene: '.repeat(12000);
     rerender(<StudioComposer studio={studio} initialIdea={{ id: 'long-script', text: script }} />);
-    const combined = `Keep this note.\n\n${script}`;
-    expect(textarea()).toHaveValue(combined);
-    expect(studio.send).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    const expected = buildOutgoing(combined, []);
-    expect(studio.send).toHaveBeenCalledWith(expected.text, expected.attachments);
+    expect(textarea()).toHaveValue('Keep this note.');
+    const expected = buildOutgoing(script, []);
+    expect(studio.send).toHaveBeenCalledExactlyOnceWith(expected.text, { attachments: expected.attachments, planningOnly: true });
   });
 
   it('Enter sends the trimmed message; Shift+Enter does not', () => {
@@ -139,15 +133,19 @@ describe('StudioComposer — sending', () => {
 });
 
 describe('StudioComposer — option chips', () => {
-  it('Format chip shows aspect and pages and opens the format panel; picking a kind patches instantly', () => {
+  it('Format chip shows aspect and story-led length and opens the format panel; picking a kind patches instantly', () => {
     const studio = makeFakeStudio();
-    render(<StudioComposer studio={studio} />);
+    const { rerender } = render(<StudioComposer studio={studio} />);
     const chip = screen.getByRole('button', { name: /Format/ });
-    expect(chip).toHaveTextContent('2:3 · 6p');
+    expect(chip).toHaveTextContent('2:3 · Story-led length');
     fireEvent.click(chip);
     const panel = screen.getByRole('dialog', { name: 'Format' });
     fireEvent.click(within(panel).getByRole('radio', { name: /Manga/ }));
     expect(studio.patch).toHaveBeenCalledWith([{ op: 'format', patch: { kind: 'manga', readingDirection: 'rtl' } }]);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Set page count' }));
+    expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { pageCountMode: 'fixed' } }]);
+    studio.doc = { ...studio.doc!, format: { ...studio.doc!.format, pageCountMode: 'fixed' } };
+    rerender(<StudioComposer studio={studio} />);
     fireEvent.click(within(panel).getByRole('button', { name: '12' }));
     expect(studio.patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { pageCount: 12 } }]);
   });

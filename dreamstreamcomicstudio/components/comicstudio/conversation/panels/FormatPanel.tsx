@@ -6,12 +6,7 @@
 // front that a new shape / lettering mode marks them out of date and what a redraw would cost;
 // after such a change it says how many are now out of date and offers "Switch back" (free).
 //
-// Panels per page (plan §4.1, §5.1): Auto — "3–4 big panels", the beats decide within the kind's range
-// (comics and manga 2–4, 5 only for a fast, nearly silent sequence; strips 3–4; webtoons 2–5; storybooks up to
-// 3) — or a fixed 2, 3, 4, 5 or 6 (PANEL_LIMITS.uiChoices; the free fit check still flags a panel with too many
-// words). A storybook set above 3 plans its NEW pages with at most 3 and says so (decision PD-2,
-// panelCountNote); the hint under the choice states the same number (panelCountRule). The choices are a
-// wrapping grid sized by the panel, never the viewport: this panel also opens inside the narrow recap card.
+// Panel density is a preference: every page follows its own scenes and readability needs.
 
 import React from 'react';
 import { BookHeart, BookOpen, ChevronDown, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
@@ -19,7 +14,7 @@ import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Form
 import type { DocOp } from '../../../../shared/comic/ops';
 import { nearestAspect, resolveImageJob, type ImageModelSpec } from '../../../../shared/comic/models';
 import { estimateDocJobs, quoteLockOf, unitPrice } from '../../../../shared/comic/plan';
-import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
+import { PANEL_LIMITS, panelCountNote } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
 import { useCostFormat } from '../cost';
@@ -69,37 +64,12 @@ export const MIN_PAGES = 1;
 export const MAX_PAGES = 40;
 /** Auto, then the fixed counts Format offers (plan §5.1 PANEL_LIMITS.uiChoices: 2–6). */
 export const PANEL_OPTIONS: Format['panelsPerPage'][] = ['auto', ...PANEL_LIMITS.uiChoices];
-/**
- * The Auto tile's words for a kind: what Auto usually plans, from the same rule the writer, the plan check and the
- * hint under the tiles use (panelRules.panelCountRule) — a comic "3–4 big panels", a storybook "2–3 large panels",
- * a webtoon "3–5 panels" — so the tile never promises a count the writer never plans for that kind.
- */
-export const autoPanelsLabel = (kind: ComicKind): string => {
-  const rule = panelCountRule({ kind, panelsPerPage: 'auto' });
-  const count = rule.typical >= rule.max ? `${rule.max}` : `${rule.typical}–${rule.max}`;
-  const size = kind === 'storybook' ? ' large' : kind === 'webtoon' || kind === 'strip' ? '' : ' big';
-  return `${count}${size} panels`;
-};
+/** Every format supports scene-driven page layouts. */
+export const autoPanelsLabel = (_kind: ComicKind): string => 'Scene-driven panels';
 
-/**
- * The words under the panel choice: what the current setting plans, from the same rule the writer and the plan
- * check use (panelRules.panelCountRule), so the hint never contradicts the storybook note or a kind's own range.
- */
-export const panelChoiceHint = (format: Pick<Format, 'kind' | 'panelsPerPage'>): string => {
-  const rule = panelCountRule(format);
-  if (rule.exact !== undefined) {
-    const n = rule.exact;
-    // A storybook set above its limit plans its new pages with the limit (PD-2): say that number, as the note does.
-    const count = `${n} panel${n === 1 ? '' : 's'} on every new page${rule.clampedFrom !== undefined ? ' (the storybook limit)' : ''}`;
-    return `${count}. Fewer, bigger panels leave more room for detail and words; a panel with too many words is flagged before anything is drawn.`;
-  }
-  if (format.kind === 'storybook') {
-    return `Auto: usually ${rule.typical} large panels a page (at most ${rule.max}), so every picture has room.`;
-  }
-  const range = rule.min === rule.max ? `${rule.max}` : `${rule.min}–${rule.max}`;
-  const fast = rule.fast ? `; ${rule.fast.panels} only for a fast, nearly silent moment` : '';
-  return `Auto: usually ${rule.typical} big panels a page (${range}${fast}), so the art and the words both fit.`;
-};
+export const panelChoiceHint = (format: Pick<Format, 'kind' | 'panelsPerPage'>): string =>
+  (typeof format.panelsPerPage === 'number' ? `Prefer around ${format.panelsPerPage} panels; ` : 'Auto: ') +
+  'the Director chooses each page’s panels and layout from its scenes. Splash, action and dialogue pages can differ. Crowded lettering is checked before drawing.';
 
 const clampPages = (n: number) => Math.min(MAX_PAGES, Math.max(MIN_PAGES, Math.round(n)));
 
@@ -204,7 +174,7 @@ const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; kind: ComicKi
             tabIndex={i === focusIndex ? 0 : -1}
             // The name starts with the visible words: "Auto · 3–4 big panels", "2 panels" (WCAG 2.5.3).
             aria-label={auto ? `Auto · ${autoLabel}` : `${v} panels${extra ? ' (current)' : ''}`}
-            title={auto ? `Auto · ${autoLabel} — the story's beats decide` : `${v} panels on every page${extra ? ' (current setting)' : ''}`}
+            title={auto ? `Auto · ${autoLabel} — the story's beats decide` : `Prefer around ${v} panels${extra ? ' (current setting)' : ''}`}
             onClick={() => onChange(v)}
             className={cx(
               `flex min-w-0 flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-center ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]`,
@@ -259,7 +229,7 @@ const StartingFormatPicker: React.FC<{
             const changes = startingFormatPatch(format, preset, pageModel);
             const matches = !unavailable && Object.keys(changes).length === 0;
             const kind = KIND_OPTIONS.find((option) => option.value === preset.kind)?.label;
-            const details = `${kind} · ${shape} · ${pagesWord(preset.pageCount)} · ${preset.panelsPerPage === 'auto' ? 'Auto panels' : `${preset.panelsPerPage} panels per page`}${preset.readingDirection ? ' · RTL' : ''}`;
+            const details = `${kind} · ${shape} · Story-driven length · ${preset.panelsPerPage === 'auto' ? 'Auto panels' : `Prefer ${preset.panelsPerPage} panels`}${preset.readingDirection ? ' · RTL' : ''}`;
             const caption = `${descriptionId}-${preset.id}`;
             return (
               <button
@@ -414,8 +384,12 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
       </div>
 
       <div>
-        <SectionLabel htmlFor={pageCountId}>Pages</SectionLabel>
-        <div className="flex flex-wrap items-center gap-3">
+        <SectionLabel htmlFor={format.pageCountMode === 'auto' ? undefined : pageCountId}>Pages</SectionLabel>
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Story length">
+          <button type="button" aria-pressed={format.pageCountMode === 'auto'} onClick={() => set({ pageCountMode: 'auto' })} className="tap-target rounded-xl border border-[var(--ds-hairline)] px-3 py-2 text-sm aria-pressed:border-[var(--ds-accent)] aria-pressed:bg-[var(--ds-accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]">Director chooses</button>
+          <button type="button" aria-pressed={format.pageCountMode !== 'auto'} onClick={() => set({ pageCountMode: 'fixed' })} className="tap-target rounded-xl border border-[var(--ds-hairline)] px-3 py-2 text-sm aria-pressed:border-[var(--ds-accent)] aria-pressed:bg-[var(--ds-accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]">Set page count</button>
+        </div>
+        {format.pageCountMode === 'auto' ? <p className="text-sm text-[var(--ds-muted)]">The story determines the page count. Review the plan and its drawing quote before approving images.</p> : <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]">
             <button
               type="button"
@@ -456,14 +430,15 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
             ))}
           </div>
         </div>
+        }
         <p className="mt-2 text-[11px] text-[var(--ds-muted)]">
-          {cost.approx(perPage * format.pageCount)} to draw {format.pageCount === 1 ? 'it' : `all ${format.pageCount}`} on{' '}
-          {pageModel.nickname} · planning is free until you approve.
+          {format.pageCountMode === 'auto' ? 'Current estimate: ' : ''}{cost.approx(perPage * format.pageCount)} to draw {format.pageCount === 1 ? 'it' : `all ${format.pageCount}`} on{' '}
+          {pageModel.nickname}. Text planning may use credits; images wait for approval.
         </p>
       </div>
 
       <div>
-        <SectionLabel>Panels per page</SectionLabel>
+        <SectionLabel>Panel density preference</SectionLabel>
         <PanelCountChoice value={format.panelsPerPage} kind={format.kind} onChange={(panelsPerPage) => set({ panelsPerPage })} />
         <p className="mt-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{panelChoiceHint(format)}</p>
         {panelCountNote(format) && (

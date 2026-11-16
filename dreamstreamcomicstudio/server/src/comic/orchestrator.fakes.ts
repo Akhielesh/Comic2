@@ -405,6 +405,7 @@ export const KEYS: StudioKeys = { openrouter: { key: 'sk-or-test', byok: false }
 /** A planned 3-page comic: MAYA (lead), ARJUN (support), a market, drafted style. */
 export function plannedDoc(id = 'proj-1'): ComicDoc {
   const doc = createEmptyDoc(id, 'Spice Run', 1_700_000_000_000);
+  doc.format.pageCountMode = 'fixed';
   doc.brief = { ...doc.brief, logline: 'A courier races through a spice market.', premise: 'Maya must deliver a stolen recipe.', genre: 'adventure', tone: 'fun' };
   doc.style = { ...doc.style, status: 'drafted', name: 'Ligne claire', spec: 'Clean even outlines, flat bright colors, detailed backgrounds.' };
   doc.cast = [
@@ -445,6 +446,7 @@ export function plannedDoc(id = 'proj-1'): ComicDoc {
  */
 export function lakeDoc(id = 'lake-1'): ComicDoc {
   const doc = createEmptyDoc(id, 'Playtime at the Lake', 1_792_670_000_000);
+  doc.format.pageCountMode = 'fixed';
   doc.brief = {
     ...doc.brief,
     logline: 'A baby plays by a lake with three ducklings, a frog and a bunny.',

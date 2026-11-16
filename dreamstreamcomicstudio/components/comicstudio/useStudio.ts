@@ -162,7 +162,7 @@ export interface OptionCardAnswer {
 }
 
 /** send()'s options: SendOptions plus the option card the message answers. */
-export type MessageSendOptions = SendOptions & { card?: OptionCardAnswer };
+export type MessageSendOptions = SendOptions & { card?: OptionCardAnswer; planningOnly?: true; onAccepted?: (accepted: boolean) => void };
 
 /** A message about to start a director turn (send(), a drained batch, Send now). */
 interface OutgoingMessage {
@@ -173,11 +173,15 @@ interface OutgoingMessage {
   focus?: StudioFocus;
   card?: OptionCardAnswer;
   /** The notes it carries, put back in Up next if the server answers BUSY (plan §3 A1). */
+  planningOnly?: true;
+  onAccepted?: (accepted: boolean) => void;
   requeue?: { notes: QueuedNote[]; at: 'head' | 'tail' };
 }
 
 /** Extra state the conversation pane uses on top of the shared StudioController contract. */
 export interface ComicStudioController extends StudioController {
+  /** Live controller acknowledges a durable user message before the composer clears. */
+  confirmsMessages?: boolean;
   /**
    * As StudioController's, plus the option card the message answers (MessageSendOptions.card). The live controller
    * resolves a SendOutcome as soon as it is decided (plan §3 A1); test fakes may resolve void (read it as 'sent').
@@ -419,6 +423,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const controllersRef = useRef(new Map<string, { ctrl: AbortController; kind: StreamKind }>());
   /** The message stream whose director reply is still awaited (null: the composer may send). */
   const messageInFlightRef = useRef<string | null>(null);
+  const pendingReceiptRef = useRef<((accepted: boolean) => void) | undefined>(undefined);
   const actionsInFlightRef = useRef(new Set<string>());
   const patchQueueRef = useRef<QueuedPatch[]>([]);
   const patchInFlightRef = useRef(false);
@@ -506,6 +511,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     const ctrl = new AbortController();
     abortStreams();
     messageInFlightRef.current = null;
+    pendingReceiptRef.current = undefined;
     queueReadyRef.current = null;
     actionsInFlightRef.current.clear();
     patchQueueRef.current.splice(0).forEach((p) => p.resolve());
@@ -892,12 +898,14 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     (m: OutgoingMessage): Promise<StreamOutcome> => {
       const streamId = localId('stream');
       messageInFlightRef.current = streamId;
+      pendingReceiptRef.current = m.onAccepted;
       const targets = m.targets && m.targets.length ? m.targets : undefined;
       dispatch({
         type: 'message_pending',
         message: {
           id: localId('pending'),
           text: m.text,
+          ...(m.planningOnly ? { planningOnly: true as const } : {}),
           attachments: m.files,
           // Kept so "Try again" re-sends exactly this message (uploads, targets, what it was about).
           ...(m.inbox.length ? { inboxPaths: m.inbox } : {}),
@@ -912,15 +920,20 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       });
       const attachments = [...m.files, ...m.inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
-      const request: StreamRequest & { card?: OptionCardAnswer } = {
+      const request: StreamRequest & { card?: OptionCardAnswer; planningOnly?: true } = {
         kind: 'message',
         text: m.text,
+        ...(m.planningOnly ? { planningOnly: true } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(targets ? { attachmentTargets: targets } : {}),
         ...(m.focus ? { focus: m.focus } : {}),
         ...(m.card ? { card: m.card } : {})
       };
-      return runStream('message', request, { streamId }).finally(() => {
+      let acknowledged = false;
+      const accept = (ok: boolean) => { if (!acknowledged) { acknowledged = true; m.onAccepted?.(ok); } };
+      return runStream('message', request, { streamId, onEvent: (event) => {
+        if (event.type === 'ops' && event.ops.some((op) => op.op === 'message' && op.msg.role === 'user')) accept(true);
+      } }).then((result) => { accept(result.ok); return result; }).finally(() => {
         // Only this stream's own marker: a later message may already be in flight (see below).
         if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
       });
@@ -980,19 +993,20 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       // A typed "undo" is the editor's job: instant, free, never sent to the director (contract §13.1).
       if (!files.length && !inbox.length && TYPED_UNDO_RE.test(clean)) {
         typedUndo();
+        o.onAccepted?.(true);
         return 'sent';
       }
       // Comic History typed intents ("show history", "undo the last AI change"): handled locally, free.
       if (!files.length && !inbox.length && historyEnabled(capsRef.current)) {
         const intent = matchHistoryIntent(clean);
-        if (intent && handleHistoryIntent(intent, historyHost())) return 'sent';
+        if (intent && handleHistoryIntent(intent, historyHost())) { o.onAccepted?.(true); return 'sent'; }
       }
       const s = stateRef.current;
       if (!s.base) return 'refused';
       const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
       const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
       const card = o.card && typeof o.card.id === 'string' && o.card.id ? o.card : undefined;
-      const message: OutgoingMessage = { text: clean, files, inbox, ...(targets ? { targets } : {}), ...(focus ? { focus } : {}), ...(card ? { card } : {}) };
+      const message: OutgoingMessage = { text: clean, files, inbox, onAccepted: o.onAccepted, ...(o.planningOnly ? { planningOnly: true } : {}), ...(targets ? { targets } : {}), ...(focus ? { focus } : {}), ...(card ? { card } : {}) };
 
       if (!liveQueueOn(capsRef.current)) {
         // Queue off: one turn at a time, as before — but say so ('refused'), so the composer keeps the draft, and tell
@@ -1014,7 +1028,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason(queueHoldInputOf(s)));
       // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
       const note: QueuedNote | null =
-        files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
+        files.length || card || o.planningOnly ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
       // An options-card answer belongs to the question on screen: on a free turn it goes now, even while notes wait to
       // drain. Only a locked turn refuses it (the server would answer BUSY).
       if (locked || (drainsNext && !card)) {
@@ -1028,6 +1042,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
           return 'refused';
         }
         dispatch({ type: 'queue_add', note });
+        o.onAccepted?.(true);
         return q.held ? 'held' : 'queued';
       }
       // A Stop hold left on an empty queue ends with the next turn the creator starts.
@@ -1045,6 +1060,8 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     dispatch({ type: 'message_dismiss' });
     void send(pending.text, {
       attachments: pending.attachments,
+      onAccepted: pendingReceiptRef.current,
+      ...(pending.planningOnly ? { planningOnly: true as const } : {}),
       ...(pending.inboxPaths?.length ? { inboxPaths: pending.inboxPaths } : {}),
       ...(pending.attachmentTargets?.length ? { attachmentTargets: pending.attachmentTargets } : {}),
       ...(pending.focus ? { focus: pending.focus } : {}),
@@ -1715,6 +1732,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
 
   return useMemo(
     () => ({
+      confirmsMessages: true,
       doc,
       loading: state.loading,
       loadError: state.loadError,

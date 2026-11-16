@@ -8,7 +8,7 @@ import type { AssetRef, ComicDoc } from '../../../shared/comic/doc.js';
 import { scheduleRun } from './consistency/schedule.js';
 import { JOB_TIMINGS, planPages, startAction } from './jobs.js';
 import { writePagePlan } from './writer.js';
-import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
+import { fakeImages, newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
 import { onRenderVerdict, checkRenderSafety } from './safety/index.js';
 import { analyzePageRender } from './vision.js';
 
@@ -64,8 +64,18 @@ const smilingDoc = (): ComicDoc => {
   return doc;
 };
 
-const renderAll = async (admin: boolean) => {
-  const session = newSession(smilingDoc());
+const continuityDoc = (count = 3): ComicDoc => {
+  const doc = smilingDoc();
+  for (let n = 4; n <= count; n += 1) {
+    const base = doc.pages[2];
+    doc.pages.push({ ...base, id: `pg_${n}`, n, summary: `Page ${n} beat`, panels: base.panels.map((p, i) => ({ ...p, id: `pn_${n}_${i + 1}`, action: `Action ${n}.${i + 1}`, lines: p.lines.map((line, k) => ({ ...line, id: `ln_${n}_${i}_${k}` })) })) });
+  }
+  doc.style.board = drawn('style-board');
+  return doc;
+};
+
+const renderAll = async (admin: boolean, count = 3) => {
+  const session = newSession(continuityDoc(count));
   const ctx = testContext(session, { caps: { ...DEFAULT_CAPS, admin } });
   const started = await startAction(ctx, { type: 'render_pages' }, { confirmed: true });
   await started.done;
@@ -89,6 +99,60 @@ describe('COMIC_STORY_FIXES in the job runner', () => {
 });
 
 describe('COMIC_RUN_CHAINS in the job runner', () => {
+  it('default non-admin runs continue all five pages from the immediate predecessor while keeping original sheet/style references and one call per page', async () => {
+    const { session, ctx, pageCall } = await renderAll(false, 5);
+    expect(ctx.imagesFake.calls).toHaveLength(5);
+    for (let n = 2; n <= 5; n += 1) {
+      const current = session.doc.pages[n - 1].render;
+      expect(current.continuityPath).toBe(session.doc.pages[n - 2].render.asset?.path);
+      expect(pageCall(n).references.some((ref) => ref.label === 'PREVIOUS PAGE')).toBe(true);
+      expect(pageCall(n).references.some((ref) => ref.label.includes('CHARACTER SHEET'))).toBe(true);
+      expect(pageCall(n).references.some((ref) => ref.label.includes('STYLE'))).toBe(true);
+    }
+    expect(session.doc.pages.every((page) => page.render.status === 'ready')).toBe(true);
+    expect(ctx.billingFake.reserves.filter((reservation) => reservation.stage === 'page')).toHaveLength(5);
+  });
+
+  it('keeps legacy limited-reference models on the existing schedule without removing their cast/style references', async () => {
+    const doc = continuityDoc();
+    doc.imageModel = { modelId: 'nano-banana-legacy', lockedAt: 1, origin: 'migrated' };
+    const session = newSession(doc);
+    const ctx = testContext(session, { caps: { ...DEFAULT_CAPS, admin: false, modelOverride: true } });
+    const started = await startAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(vi.mocked(scheduleRun).mock.calls[0]).toHaveLength(2);
+    expect(ctx.imagesFake.calls).toHaveLength(3);
+    expect(ctx.imagesFake.calls.every((call) => call.spec.id === 'nano-banana-legacy')).toBe(true);
+    expect(ctx.imagesFake.calls.every((call) => call.references.length <= 3)).toBe(true);
+    expect(ctx.imagesFake.calls[1].references.some((ref) => ref.label.includes('STYLE'))).toBe(true);
+  });
+
+  it('cancels a five-page chain without dispatching its queued pages or replacing existing artwork', async () => {
+    const doc = continuityDoc(5);
+    doc.pages[4].render = { status: 'ready', asset: drawn('original-page-five'), history: [] };
+    const original = structuredClone(doc.pages[4].render);
+    const session = newSession(doc);
+    let began!: () => void;
+    let release!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { began = resolve; });
+    const images = fakeImages(async () => {
+      began();
+      await new Promise<void>((resolve) => { release = resolve; });
+      return undefined;
+    });
+    const ctx = testContext(session, { images, caps: { ...DEFAULT_CAPS, admin: false } });
+    const started = await startAction(ctx, { type: 'render_pages', force: true }, { confirmed: true });
+    await firstStarted;
+    expect(session.doc.pages.slice(1).every((page) => page.render.status === 'queued')).toBe(true);
+    session.abort.abort();
+    release();
+    await started.done;
+    expect(images.calls).toHaveLength(1);
+    expect(session.doc.pages[4].render).toMatchObject(original);
+    expect(session.doc.pages.every((page) => !['queued', 'rendering'].includes(page.render.status))).toBe(true);
+  });
+
   it('admins: an admin\'s run is scheduled as scene chains and page 3 is drawn from page 2', async () => {
     process.env.COMIC_RUN_CHAINS = 'admins';
     const { session, pageCall } = await renderAll(true);
@@ -100,15 +164,16 @@ describe('COMIC_RUN_CHAINS in the job runner', () => {
     expect(page('pg_2').continuityPath).toBe(page('pg_1').asset?.path);
   });
 
-  it('all is capped at admins in this build: a non-admin still uses the default paired schedule', async () => {
+  it('all enables scene continuity for a non-admin author', async () => {
     process.env.COMIC_RUN_CHAINS = 'all';
     const { session } = await renderAll(false);
-    expect(vi.mocked(scheduleRun).mock.calls[0]).toHaveLength(2);
+    expect(vi.mocked(scheduleRun)).toHaveBeenCalledWith(expect.anything(), ['pg_1', 'pg_2', 'pg_3'], { chains: true });
     const page = (id: string) => session.doc.pages.find((p) => p.id === id)!.render;
     expect(page('pg_3').continuityPath).toBe(page('pg_2').asset?.path);
   });
 
-  it('off: the default pair carries page 2 artwork into page 3 with exactly one draw per page', async () => {
+  it('off: paired scheduling remains available with exactly one draw per page', async () => {
+    process.env.COMIC_RUN_CHAINS = 'off';
     const { session, ctx } = await renderAll(true);
     expect(vi.mocked(scheduleRun)).toHaveBeenCalledWith(expect.anything(), ['pg_1', 'pg_2', 'pg_3']);
     expect(vi.mocked(scheduleRun).mock.calls[0]).toHaveLength(2);

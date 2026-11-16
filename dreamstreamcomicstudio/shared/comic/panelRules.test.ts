@@ -46,49 +46,23 @@ describe('PANEL_LIMITS', () => {
       coverCapKids: 0.25
     });
     expect(PANEL_LIMITS.uiChoices).toEqual([2, 3, 4, 5, 6]);
-    expect(PLAN_POLICY).toEqual({ holdBackOverfull: true, clampStorybook: true });
+    expect(PLAN_POLICY).toEqual({ holdBackOverfull: true, clampStorybook: false });
     expect(RECURRING).toEqual({ minPages: 2, minPanels: 3 });
     expect([...OFF_PANEL_SHOTS].sort()).toEqual(['establishing', 'insert', 'pov']);
     expect([...QUIET_SHOTS].sort()).toEqual(['insert', 'pov']);
   });
 });
 
-describe('panelCountRule', () => {
-  it('auto comics plan 3 (2–4; 5 for a fast near-silent sequence); storybooks 1–3; strips 3–4; webtoons 2–5', () => {
-    expect(panelCountRule({ kind: 'comic', panelsPerPage: 'auto' })).toEqual({ typical: 3, min: 2, max: 4, fast: { panels: 5, maxWords: 12 } });
-    expect(panelCountRule({ kind: 'manga', panelsPerPage: 'auto' }).max).toBe(4);
-    expect(panelCountRule({ kind: 'storybook', panelsPerPage: 'auto' })).toEqual({ typical: 2, min: 1, max: 3 });
-    expect(panelCountRule({ kind: 'strip', panelsPerPage: 'auto' })).toEqual({ typical: 3, min: 3, max: 4 });
-    expect(panelCountRule({ kind: 'webtoon', panelsPerPage: 'auto' })).toEqual({ typical: 3, min: 2, max: 5 });
-  });
-
-  it('an explicit count is kept (2–6 in Format, up to 9 for old docs); a storybook above 3 is clamped to 3 with a note', () => {
-    expect(panelCountRule({ kind: 'comic', panelsPerPage: 2 })).toMatchObject({ exact: 2 });
-    expect(panelCountRule({ kind: 'comic', panelsPerPage: 6 })).toMatchObject({ exact: 6 });
-    expect(panelCountRule({ kind: 'comic', panelsPerPage: 12 })).toMatchObject({ exact: 9 });
-    expect(panelCountRule({ kind: 'storybook', panelsPerPage: 4 })).toEqual({ typical: 3, min: 3, max: 3, exact: 3, clampedFrom: 4 });
-    expect(panelCountRule({ kind: 'storybook', panelsPerPage: 2 })).toMatchObject({ exact: 2 });
-    expect(panelCountNote({ kind: 'storybook', panelsPerPage: 4 })).toBe(
-      'Storybook pages hold at most 3 large panels, so new pages are planned with 3 (your format asks for 4). Pages already planned keep theirs.'
-    );
-    expect(panelCountNote({ kind: 'storybook', panelsPerPage: 3 })).toBeUndefined();
-    expect(panelCountNote({ kind: 'comic', panelsPerPage: 6 })).toBeUndefined();
-  });
-});
-
-describe('panelCountProblem', () => {
-  it('flags 6 panels on auto, allows 5 only when the page carries ≤ 12 words', () => {
-    const auto = { kind: 'comic' as const, panelsPerPage: 'auto' as const };
-    expect(panelCountProblem(auto, panels(4, [line('a b c d e f g h i j k l m n o p')]))).toBeUndefined();
-    expect(panelCountProblem(auto, panels(6))).toMatchObject({ max: 5 });
-    expect(panelCountProblem(auto, panels(5, [line('Run!')]))).toBeUndefined();
-    expect(panelCountProblem(auto, panels(5, [line('one two three four five six seven eight nine ten eleven twelve thirteen')]))).toMatchObject({ max: 4, words: 13 });
-    // Sound effects are not words on the page.
-    expect(panelCountProblem(auto, panels(5, [line('KRAKA-THOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM BOOM', 'sfx')]))).toBeUndefined();
-    expect(panelCountProblem({ kind: 'storybook', panelsPerPage: 4 }, panels(4))).toMatchObject({ max: 3 });
-    expect(panelCountProblem({ kind: 'storybook', panelsPerPage: 4 }, panels(3))).toBeUndefined();
-    expect(panelCountProblem({ kind: 'comic', panelsPerPage: 4 }, panels(4))).toBeUndefined();
-    expect(panelCountProblem({ kind: 'comic', panelsPerPage: 4 }, panels(5))).toMatchObject({ max: 4 });
+describe('adaptive panel counts', () => {
+  it.each(['comic', 'manga', 'storybook', 'strip', 'webtoon'] as const)('allows scene-driven counts for %s, regardless of density preference', (kind) => {
+    for (const preferred of ['auto', 2, 6] as const) {
+      const format = { kind, panelsPerPage: preferred };
+      expect(panelCountRule(format)).toMatchObject({ min: 1, max: 9 });
+      expect(panelCountRule(format).exact).toBeUndefined();
+      expect(panelCountNote(format)).toBeUndefined();
+      for (const n of [1, 3, 6, 9]) expect(panelCountProblem(format, panels(n, [line('Dialogue follows the scene.')]))).toBeUndefined();
+      expect(panelCountProblem(format, panels(10))).toMatchObject({ max: 9 });
+    }
   });
 });
 
@@ -137,27 +111,14 @@ describe('text units (Japanese and Chinese count characters)', () => {
     expect(panelWords({ lines: [line(JA_27), line('ドン', 'sfx')] }, ja)).toBe(27);
   });
 
-  it('the fast-sequence exception binds in characters: 5 Japanese panels with 27 characters are flagged', () => {
-    const auto = { kind: 'comic' as const, panelsPerPage: 'auto' as const };
-    const ja = textUnitFor('ja');
-    // Before units: one "word" on the page, so 5 panels always passed.
-    expect(panelCountProblem(auto, panels(5, [line(JA_27)]))).toBeUndefined();
-    expect(panelCountProblem(auto, panels(5, [line(JA_27)]), { unit: ja })).toMatchObject({ max: 4, words: 27, fastWords: 19 });
-    expect(panelCountProblem(auto, panels(5, [line('走れ！')]), { unit: ja })).toBeUndefined();
-    expect(pageWords([{ lines: [line(JA_27)] }, { lines: [line('走れ！')] }], ja)).toBe(30);
+  it('does not impose a count cap based on script or word count', () => {
+    expect(panelCountProblem({ kind: 'comic', panelsPerPage: 'auto' }, panels(5, [line('あいうえお'.repeat(8))]), { unit: textUnitFor('ja') })).toBeUndefined();
   });
 });
 
 describe('revisionPanelLimit (PD-2: the storybook clamp is for new pages)', () => {
-  it('lets an existing storybook page keep up to its own count, never above the format', () => {
-    const story4 = { kind: 'storybook' as const, panelsPerPage: 4 };
-    expect(revisionPanelLimit(story4)).toBe(3);
-    expect(revisionPanelLimit(story4, 2)).toBe(3);
-    expect(revisionPanelLimit(story4, 4)).toBe(4);
-    expect(revisionPanelLimit(story4, 7)).toBe(4);
-    expect(revisionPanelLimit({ kind: 'comic', panelsPerPage: 4 }, 6)).toBe(4); // no clamp: the author's count holds
-    expect(panelCountProblem(story4, panels(4), { existing: 4 })).toBeUndefined();
-    expect(panelCountProblem(story4, panels(5), { existing: 4 })).toMatchObject({ max: 4 });
-    expect(panelCountProblem(story4, panels(4))).toMatchObject({ max: 3 }); // a new page is still clamped
+  it('keeps the same technical capacity for new and revised pages', () => {
+    expect(revisionPanelLimit({ kind: 'storybook', panelsPerPage: 2 }, 4)).toBe(9);
+    expect(revisionPanelLimit({ kind: 'comic', panelsPerPage: 'auto' })).toBe(9);
   });
 });

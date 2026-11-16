@@ -79,6 +79,8 @@ export type StreamRequest =
   | {
       kind: 'message';
       text: string;
+      /** Opening handoff: prepare text/plan, but hold every gated spend for a later user approval. */
+      planningOnly?: true;
       /** Legacy data-URL items (old tabs) OR inbox paths already uploaded via POST /refs (new composer). */
       attachments?: ({ name: string; mimeType: string; dataUrl: string } | { inboxPath: string })[];
       /** Optional quick-assign per IMAGE attachment, aligned by order. */

@@ -56,6 +56,8 @@ import {
   studioViewToUrlParam,
   type StudioDeepLinkView
 } from './services/studioDeepLink';
+import { setComposerDraftAccount } from './services/composerDrafts';
+import { prepareOpeningIdea, clearOtherOpeningIdeas } from './components/comicstudio/openingIdea';
 import { clearOtherComicIdeaDrafts } from './components/comicstudio/comicIdeaDraft';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
@@ -254,6 +256,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (authLoading) return;
     clearOtherComicIdeaDrafts(user?.id ?? null);
+    setComposerDraftAccount(user?.id ?? null);
+    clearOtherOpeningIdeas(user?.id ?? null);
     setFirstIdea((idea) => idea?.accountId === user?.id ? idea : null);
   }, [user?.id, authLoading]);
   const consumeFirstIdea = useCallback((id: string) => setFirstIdea((idea) => idea?.id === id ? null : idea), []);
@@ -906,7 +910,9 @@ const App: React.FC = () => {
       const { projectId } = await createStudioProject({ title: name.trim() || undefined });
       // An in-flight request from a previous account must not open its project for the next account.
       if (!accountId || accountRef.current !== accountId) return;
-      setFirstIdea(initialIdea?.trim() ? { accountId, projectId, id: crypto.randomUUID(), text: initialIdea } : null);
+      const opening = initialIdea?.trim() ? { accountId, projectId, id: crypto.randomUUID(), text: initialIdea } : null;
+      if (opening) prepareOpeningIdea(accountId, projectId, opening);
+      setFirstIdea(opening);
       openComicStudio(projectId);
       // The server created the listing row; pick it up in the background so every way
       // back to the dashboard lists the new comic.
@@ -1313,6 +1319,7 @@ const App: React.FC = () => {
             <div className="h-screen w-full overflow-hidden" style={{ height: 'var(--app-h, 100dvh)' }}>
               <StudioErrorBoundary onBack={leaveComicStudio}>
                 <ComicStudio key={`${user?.id}:${activeProjectId}`} projectId={activeProjectId} onBack={leaveComicStudio}
+                  draftAccountId={user?.id}
                   initialIdea={firstIdea && firstIdea.accountId === user?.id && firstIdea.projectId === activeProjectId ? firstIdea : undefined}
                   onInitialIdeaConsumed={consumeFirstIdea}
                   navigationFooter={<Suspense fallback={null}><ComicProjectNavigation projects={projects} activeProjectId={activeProjectId}
@@ -1323,6 +1330,8 @@ const App: React.FC = () => {
 
           {effectiveView === 'pagestudio' && activeProject && !isStudioV4Project(activeProject) && (
             <PageStudio
+              key={activeProject.id}
+              draftAccountId={user?.id}
               project={activeProject}
               onUpdate={(updater) => updateProject(activeProject.id, updater)}
               onBack={() => setCurrentView('dashboard')}

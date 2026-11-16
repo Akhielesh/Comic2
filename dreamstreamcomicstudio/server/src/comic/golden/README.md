@@ -153,4 +153,17 @@ Setu" (10 pages, 20 panels), kept as **text only** in `../__fixtures__/ramayana-
 (the paid renderer) renders every `.json` it finds. The golden test checks that no script here mentions the case.
 
 The Program 5 server flags are read by `../p5Flags.ts` (`COMIC_STORY_FIXES`, `COMIC_RUN_CHAINS`, `COMIC_QC_V2`; each
-off | admins | all, unset or unknown = off = today).
+off | admins | all). Scene chains now default to all authors on models with spare object-reference capacity;
+`COMIC_RUN_CHAINS=off` restores paired scheduling, and `admins` limits the rollout. Story fixes and QC v2 still
+default off; an unrecognized explicit value is off.
+
+Scene chaining changes dependency order, not the render quote or image-call count. Pages in the same scene wait
+for their predecessor's stored artwork and safety result; independent scenes may proceed in parallel. Existing
+per-provider deadlines, cancellation and retry limits still apply. A failed predecessor settles its dependency;
+unstarted pages stop on cancellation. Legacy models with only one object-reference slot retain their original
+schedule and cast/style reference capacity. Long single-scene books therefore take longer to finish.
+
+Offline tests verify predecessor references, original sheet/style attachment, exact call counts, rollback,
+limited-model behavior, cancellation, failed dependencies and provider deadlines. They do not establish the
+visual quality or color stability of a newly rendered full book; that still needs review on a reversible copy.
+Never regenerate or replace original production artwork as a test.

@@ -579,6 +579,7 @@ export function parseStreamRequest(body: unknown): StreamRequest {
     return {
       kind: 'message',
       text,
+      ...(body.planningOnly === true ? { planningOnly: true as const } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(attachmentTargets ? { attachmentTargets } : {}),
       ...(focus ? { focus } : {}),
@@ -1451,6 +1452,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           ...(access.ok === false ? { qualityDenied: access.message } : {}),
           ...(restricted ? { spendBlocked: RESTRICTED_SPEND_MESSAGE } : {})
         });
+        ctx.planningOnly = request.kind === 'message' && request.planningOnly === true;
         // History's director tools resolve "this morning" in the sender's zone (turnTimeZone of the history hooks).
         rememberTurnTimeZone(ctx, request.tz);
         // Attachments are validated (and legacy images stored) before the stream opens, so a

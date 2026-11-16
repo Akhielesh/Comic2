@@ -303,14 +303,14 @@ describe('RenderRun honours the schedule (schedule.ts → `after`)', () => {
   /** The pages in the order their images were paid for (the ledger keeps the newest entry first). */
   const paidOrder = (doc: ComicDoc) => doc.spend.entries.map((e) => e.label).filter((l) => /^Page \d+$/.test(l)).reverse();
 
-  it('draws the first page and then follows the default paired schedule', async () => {
+  it('draws consecutive scene pages in the default chain', async () => {
     const doc = plannedDoc();
     doc.cast = doc.cast.map((c) => ({ ...c, sheet: { status: 'ready', asset: drawn(`sheet-${c.id}`), history: [] } }));
     const session = newSession(doc);
     const ctx = testContext(session);
     const started = await startAction(ctx, { type: 'render_pages' }, { confirmed: true });
     await started.done;
-    expect(vi.mocked(scheduleRun)).toHaveBeenCalledWith(expect.anything(), ['pg_1', 'pg_2', 'pg_3']);
+    expect(vi.mocked(scheduleRun)).toHaveBeenCalledWith(expect.anything(), ['pg_1', 'pg_2', 'pg_3'], { chains: true });
     expect(paidOrder(session.doc)).toEqual(['Page 1', 'Page 2', 'Page 3']);
     expect(session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
   });

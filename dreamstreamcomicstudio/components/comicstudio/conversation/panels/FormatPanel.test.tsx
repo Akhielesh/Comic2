@@ -1,4 +1,4 @@
-// FormatPanel — panels per page (plan §4.1, §5.1; decision PD-2): Auto · 3–4 big panels, then 2–6.
+// FormatPanel — panels per page (plan §4.1, §5.1; decision PD-2): Auto · Scene-driven panels, then 2–6.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -27,9 +27,9 @@ describe('FormatPanel — starting formats', () => {
     expect(patch).not.toHaveBeenCalled();
     const options = openStartingFormats();
     const manga = options.getByRole('button', { name: 'Right-to-left manga' });
-    expect(manga).toHaveAccessibleDescription(/2:3 · 12 pages · Auto panels · RTL/);
+    expect(manga).toHaveAccessibleDescription(/2:3 · Story-driven length · Auto panels · RTL/);
     fireEvent.click(manga);
-    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'manga', pageCount: 12, readingDirection: 'rtl' } }]);
+    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'manga', readingDirection: 'rtl' } }]);
     const after = applyOps(doc, patch.mock.calls[0][0]);
     expect(after.format).toMatchObject({ language: 'ja', colorMode: 'bw', lettering: 'in_art', kind: 'manga' });
     rerender(<FormatPanel doc={after} patch={patch} />);
@@ -50,9 +50,9 @@ describe('FormatPanel — starting formats', () => {
     fireEvent.click(long);
     expect(patch).not.toHaveBeenCalled();
     const strip = options.getByRole('button', { name: 'Daily comic strip' });
-    expect(strip).toHaveAccessibleDescription(/21:9 · 1 page · 4 panels per page/);
+    expect(strip).toHaveAccessibleDescription(/21:9 · Story-driven length · Prefer 4 panels/);
     fireEvent.click(strip);
-    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'strip', pageAspect: '21:9', pageCount: 1, panelsPerPage: 4 } }]);
+    expect(patch).toHaveBeenCalledExactlyOnceWith([{ op: 'format', patch: { kind: 'strip', pageAspect: '21:9', panelsPerPage: 4 } }]);
   });
 
   it('keeps the manual settings available for an existing comic and does not offer structural presets', () => {
@@ -64,37 +64,24 @@ describe('FormatPanel — starting formats', () => {
 });
 
 describe('FormatPanel — panels per page', () => {
-  it('offers Auto (labelled "3–4 big panels") and 2, 3, 4, 5, 6 — 2 included', () => {
+  it('offers Auto (labelled "Scene-driven panels") and 2, 3, 4, 5, 6 — 2 included', () => {
     render(<FormatPanel doc={makeSampleDoc()} patch={vi.fn()} />);
     const radios = within(group()).getAllByRole('radio');
-    expect(radios.map((r) => r.getAttribute('aria-label'))).toEqual(['Auto · 3–4 big panels', '2 panels', '3 panels', '4 panels', '5 panels', '6 panels']);
-    expect(radios.map((r) => r.textContent)).toEqual(['Auto3–4 big panels', '2', '3', '4', '5', '6']);
-    expect(radios[0]).toHaveAccessibleName('Auto · 3–4 big panels');
+    expect(radios.map((r) => r.getAttribute('aria-label'))).toEqual(['Auto · Scene-driven panels', '2 panels', '3 panels', '4 panels', '5 panels', '6 panels']);
+    expect(radios.map((r) => r.textContent)).toEqual(['AutoScene-driven panels', '2', '3', '4', '5', '6']);
+    expect(radios[0]).toHaveAccessibleName('Auto · Scene-driven panels');
     expect(radios[0]).toHaveAttribute('aria-checked', 'true');
     expect(within(group()).getByRole('radio', { name: '2 panels' })).toBeInTheDocument();
     expect(PANEL_OPTIONS).toEqual(['auto', ...PANEL_LIMITS.uiChoices]);
     // What Auto plans, in words, under the choice.
-    expect(screen.getByText(/^Auto: usually 3 big panels a page \(2–4; 5 only for a fast, nearly silent moment\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^Auto: the Director chooses/)).toBeInTheDocument();
   });
 
-  it('the Auto tile says what Auto plans for THIS kind, from the same rule as the hint under it (one source)', () => {
-    const doc = makeSampleDoc();
-    const story = { ...doc, format: { ...doc.format, kind: 'storybook' as const, pageAspect: '4:3' as const, panelsPerPage: 'auto' as const } };
-    render(<FormatPanel doc={story} patch={vi.fn()} />);
-    const auto = within(group()).getAllByRole('radio')[0];
-    expect(auto).toHaveAccessibleName('Auto · 2–3 large panels');
-    expect(auto).toHaveAttribute('title', 'Auto · 2–3 large panels — the story’s beats decide'.replace('’', "'"));
-    expect(auto).toHaveTextContent('Auto2–3 large panels');
-    expect(screen.getByText(panelChoiceHint(story.format))).toHaveTextContent('Auto: usually 2 large panels a page (at most 3)');
-    // every kind's tile stays inside its own rule's range
+  it('offers scene-driven pacing for all comic kinds', () => {
     for (const kind of ['comic', 'manga', 'webtoon', 'strip', 'storybook'] as const) {
-      const rule = panelCountRule({ kind, panelsPerPage: 'auto' });
-      const nums = autoPanelsLabel(kind).match(/\d+/g)!.map(Number);
-      expect(Math.min(...nums), kind).toBeGreaterThanOrEqual(rule.min);
-      expect(Math.max(...nums), kind).toBe(rule.max);
+      expect(autoPanelsLabel(kind)).toBe('Scene-driven panels');
+      expect(panelChoiceHint({ kind, panelsPerPage: 'auto' })).toContain('each page’s panels and layout');
     }
-    expect(autoPanelsLabel('comic')).toBe('3–4 big panels');
-    expect(autoPanelsLabel('webtoon')).toBe('3–5 panels');
   });
 
   it('choosing 2 is an instant, free format patch; arrow keys move and choose like a radio group', () => {
@@ -107,7 +94,7 @@ describe('FormatPanel — panels per page', () => {
     rerender(<FormatPanel doc={two} patch={patch} />);
     expect(within(group()).getByRole('radio', { name: '2 panels' })).toHaveAttribute('aria-checked', 'true');
     expect(within(group()).getByRole('radio', { name: '2 panels' })).toHaveAttribute('tabindex', '0');
-    expect(screen.getByText(/^2 panels on every new page\./)).toBeInTheDocument();
+    expect(screen.getByText(/^Prefer around 2 panels;/)).toBeInTheDocument();
     fireEvent.keyDown(group(), { key: 'ArrowRight' });
     expect(patch).toHaveBeenLastCalledWith([{ op: 'format', patch: { panelsPerPage: 3 } }]);
     fireEvent.keyDown(group(), { key: 'ArrowLeft' });
@@ -118,8 +105,8 @@ describe('FormatPanel — panels per page', () => {
     const doc = makeSampleDoc();
     const story = { ...doc, format: { ...doc.format, kind: 'storybook' as const, pageAspect: '4:3' as const, panelsPerPage: 5 } };
     const { unmount } = render(<FormatPanel doc={story} patch={vi.fn()} />);
-    expect(screen.getByRole('note')).toHaveTextContent(panelCountNote(story.format)!);
-    expect(screen.getByRole('note')).toHaveTextContent('new pages are planned with 3');
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByText(panelChoiceHint(story.format))).toHaveTextContent('Prefer around 5 panels');
     unmount();
     const old = { ...doc, format: { ...doc.format, panelsPerPage: 9 } };
     render(<FormatPanel doc={old} patch={vi.fn()} />);
@@ -127,39 +114,28 @@ describe('FormatPanel — panels per page', () => {
     expect(within(group()).getByRole('radio', { name: '9 panels (current)' })).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('the hint never contradicts the storybook note: both name the number new pages are planned with (3)', () => {
+  it('treats numeric density as a preference and never shows a storybook clamp', () => {
     const doc = makeSampleDoc();
-    const story = { ...doc, format: { ...doc.format, kind: 'storybook' as const, pageAspect: '4:3' as const, panelsPerPage: 5 } };
-    render(<FormatPanel doc={story} patch={vi.fn()} />);
-    const note = screen.getByRole('note').textContent!;
-    const hint = panelChoiceHint(story.format);
-    expect(screen.getByText(hint)).toBeInTheDocument();
-    expect(hint).toMatch(/^3 panels on every new page \(the storybook limit\)\./);
-    expect(hint).not.toMatch(/\b5 panels\b/);
-    const numberIn = (text: string) => Number(/(\d+) panels on every new page|planned with (\d+)/.exec(text)!.slice(1).find(Boolean));
-    expect(numberIn(hint)).toBe(3);
-    expect(numberIn(note)).toBe(3);
-    expect(numberIn(hint)).toBe(panelCountRule(story.format).exact);
-    // a storybook at 3 or fewer is not clamped: its own number, no note
-    expect(panelChoiceHint({ kind: 'storybook', panelsPerPage: 2 })).toMatch(/^2 panels on every new page\. /);
+    doc.format = { ...doc.format, kind: 'storybook', panelsPerPage: 5 };
+    render(<FormatPanel doc={doc} patch={vi.fn()} />);
+    expect(screen.getByText(panelChoiceHint(doc.format))).toHaveTextContent('Prefer around 5 panels');
+    expect(screen.queryByRole('note')).toBeNull();
   });
 
-  it('the Auto hint states each kind’s own range: comic 2–4 (5 for a fast moment), webtoon 2–5, strip 3–4, storybook up to 3', () => {
-    expect(panelChoiceHint({ kind: 'comic', panelsPerPage: 'auto' })).toBe(
-      'Auto: usually 3 big panels a page (2–4; 5 only for a fast, nearly silent moment), so the art and the words both fit.'
-    );
-    expect(panelChoiceHint({ kind: 'manga', panelsPerPage: 'auto' })).toContain('(2–4; 5 only for a fast, nearly silent moment)');
-    const webtoon = panelChoiceHint({ kind: 'webtoon', panelsPerPage: 'auto' });
-    expect(webtoon).toBe('Auto: usually 3 big panels a page (2–5), so the art and the words both fit.');
-    expect(webtoon).not.toMatch(/fast/);
-    const strip = panelChoiceHint({ kind: 'strip', panelsPerPage: 'auto' });
-    expect(strip).toBe('Auto: usually 3 big panels a page (3–4), so the art and the words both fit.');
-    expect(strip).not.toMatch(/fast/);
-    expect(panelChoiceHint({ kind: 'storybook', panelsPerPage: 'auto' })).toBe('Auto: usually 2 large panels a page (at most 3), so every picture has room.');
-    // rendered under the choice for the doc's kind
-    const doc = makeSampleDoc();
-    render(<FormatPanel doc={{ ...doc, format: { ...doc.format, kind: 'webtoon', pageAspect: '9:16', panelsPerPage: 'auto' } }} patch={vi.fn()} />);
-    expect(screen.getByText(webtoon)).toBeInTheDocument();
+  it('starts new books with Director-chosen length and lets the author request a count', () => {
+    const doc = createEmptyDoc('adaptive');
+    const patch = vi.fn();
+    const { rerender } = render(<FormatPanel doc={doc} patch={patch} />);
+    expect(screen.getByRole('button', { name: 'Director chooses' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'More pages' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Set page count' }));
+    const fixed = applyOps(doc, patch.mock.calls.at(-1)![0]);
+    expect(fixed.format.pageCountMode).toBe('fixed');
+    rerender(<FormatPanel doc={fixed} patch={patch} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More pages' }));
+    expect(applyOps(fixed, patch.mock.calls.at(-1)![0]).format).toMatchObject({ pageCount: 7, pageCountMode: 'fixed' });
+    fireEvent.click(screen.getByRole('button', { name: 'Director chooses' }));
+    expect(applyOps(fixed, patch.mock.calls.at(-1)![0]).format.pageCountMode).toBe('auto');
   });
 
   it('fits 320 px and the narrow recap card: a wrapping grid sized by the panel, Auto spans two cells, 44 px targets', () => {

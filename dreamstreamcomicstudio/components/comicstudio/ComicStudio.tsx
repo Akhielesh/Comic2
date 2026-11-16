@@ -84,6 +84,7 @@ import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
 import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import { WorkspaceNavigation, WORKSPACE_NAVIGATION_ID, WORKSPACE_NAVIGATION_KEY, readNavigationExpanded } from './mobile/shell/WorkspaceNavigation';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
+import { readStoredMode } from './useStudioMode';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
 import { useOpenSettingsRequests } from './openSettings';
@@ -980,11 +981,12 @@ const KeyboardInsetMount: React.FC = () => {
 interface WorkspaceProps {
   onBack: () => void;
   navigationFooter?: React.ReactNode;
+  draftAccountId?: string;
   initialIdea?: { id: string; text: string };
   onInitialIdeaConsumed?: (id: string) => void;
 }
 
-export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioController }> = ({ studio, onBack, navigationFooter, draftAccountId, initialIdea, onInitialIdeaConsumed }) => {
   const ff = useFormFactor();
   useComicThemeScope(!isComicsHost());
   useThemeColor();
@@ -1002,7 +1004,8 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   };
   useEffect(() => { setNavigationOpen(false); }, [navigationOverlay]);
   const [view, setView] = useState<'chat' | 'board'>('chat');
-  const [paneModeState, setPaneModeState] = useState<PaneMode>(() => readPaneMode(ff.widthClass));
+  const startsCalm = !!studio.doc && studio.doc.pages.length === 0 && readStoredMode() !== 'pro';
+  const [paneModeState, setPaneModeState] = useState<PaneMode>(() => startsCalm ? 'chat' : readPaneMode(ff.widthClass));
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A "Raise the budget" chip (ClientAction open_settings) opens Comic settings at the budget cap.
   useOpenSettingsRequests(() => setSettingsOpen(true));
@@ -1011,9 +1014,15 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   const composerApi = useRef<StudioComposerHandle | null>(null);
   const askComposer = useRef<StudioComposerHandle | null>(null);
   const { doc } = studio;
+  const firstLoaded = useRef(false);
+  useEffect(() => {
+    if (!doc || firstLoaded.current) return;
+    firstLoaded.current = true;
+    if (!doc.pages.length && readStoredMode() !== 'pro') setPaneModeState('chat');
+  }, [doc]);
 
   // The pane switcher remembers its choice per window class (an iPad portrait and landscape can differ).
-  useEffect(() => setPaneModeState(readPaneMode(ff.widthClass)), [ff.widthClass]);
+  useEffect(() => { if (!startsCalm) setPaneModeState(readPaneMode(ff.widthClass)); }, [ff.widthClass]);
   const paneMode: PaneMode = showsPaneSwitcher(ff) ? paneModeState : 'both';
   const setPaneMode = useCallback(
     (mode: PaneMode) => {
@@ -1140,7 +1149,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
     if (studio.loadError) {
       return <FatalError message={studio.loadError} onRetry={() => void studio.refresh()} onBack={onBack} retrying={studio.refreshing} />;
     }
-    return <StudioSkeleton onBack={onBack} wide={!phone} chrome={phoneChromeVars(ff.layout)} />;
+    return <StudioSkeleton onBack={onBack} wide={!phone && !initialIdea} chrome={phoneChromeVars(ff.layout)} />;
   }
 
   const pagesRendering = renderingPageCount(doc);
@@ -1191,7 +1200,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
       : undefined;
 
   const chat = (
-    <ConversationPane studio={chatStudio} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
+    <ConversationPane draftAccountId={draftAccountId} studio={chatStudio} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} onViewActivity={viewRenders} insetBottom={!tabBar} composerApiRef={composerApi} className="min-w-0 flex-1" />
   );
 
   const board = (
@@ -1275,6 +1284,7 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
           <div className="px-3 pb-3">
             <StudioComposer
               studio={studio}
+              draftAccountId={draftAccountId}
               variant="sheet"
               apiRef={askComposer}
               onSent={() => setAskOpen(false)}
@@ -1301,10 +1311,10 @@ export const ComicStudioShell: React.FC<WorkspaceProps & { studio: ComicStudioCo
   );
 };
 
-export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, navigationFooter, initialIdea, onInitialIdeaConsumed }) => {
+export const ComicStudio: React.FC<WorkspaceProps & { projectId: string }> = ({ projectId, onBack, navigationFooter, draftAccountId, initialIdea, onInitialIdeaConsumed }) => {
   const studio = useStudio(projectId);
   // A new project starts with a fresh shell (chat view, closed sheets, empty composer).
-  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} navigationFooter={navigationFooter} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
+  return <ComicStudioShell key={projectId} studio={studio} onBack={onBack} navigationFooter={navigationFooter} draftAccountId={draftAccountId} initialIdea={initialIdea} onInitialIdeaConsumed={onInitialIdeaConsumed} />;
 };
 
 export default ComicStudio;

@@ -153,9 +153,9 @@ const FormatChips: React.FC<{ doc: ComicDoc; onLanguages?: () => void }> = ({ do
   return (
     <div className="flex flex-wrap gap-1.5" aria-label="Format summary" role="group">
       <Chip tone="accent">{KIND_LABEL[f.kind] || f.kind}</Chip>
-      <Chip>{plural(f.pageCount, 'page')}</Chip>
+      <Chip>{f.pageCountMode === 'auto' && !doc.pages.length ? 'Director chooses length' : plural(f.pageCount, 'page')}</Chip>
       <Chip title="Page aspect ratio">{f.pageAspect}</Chip>
-      <Chip>{f.panelsPerPage === 'auto' ? 'Auto panels' : `${f.panelsPerPage} panels/page`}</Chip>
+      <Chip>{f.panelsPerPage === 'auto' ? 'Auto panels' : `${f.panelsPerPage} panels preferred`}</Chip>
       <Chip title={f.lettering === 'overlay' ? 'Editable balloons placed over the art' : 'The image model letters the page'}>
         {f.lettering === 'overlay' ? 'Overlay lettering' : 'In-art lettering'}
       </Chip>

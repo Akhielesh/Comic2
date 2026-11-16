@@ -2,7 +2,7 @@
 //
 // Mode is a view, never a permission: every free edit works in both modes and the director is
 // not mode-aware. The user's pick lives in localStorage `comicstudio.mode` (try/catch: private
-// windows and blocked storage simply don't persist), else `caps.defaultMode`. Pro needs
+// windows and blocked storage simply don't persist), else Easy. Pro needs
 // `caps.proEditor` (decisions-final #1: true for everyone today; one flag makes it a paid perk).
 // Other tabs of the same browser follow a change through the `storage` event.
 
@@ -30,16 +30,16 @@ const writeStoredMode = (mode: StudioMode): void => {
   }
 };
 
-/** The view a user gets: their pick, else the plan default; Pro needs the proEditor capability. */
+/** The view a user gets: their pick, else Easy; Pro needs the proEditor capability. */
 export const resolveStudioMode = (stored: StudioMode | null, caps: StudioCaps): StudioMode => {
-  const mode = stored ?? caps.defaultMode;
+  const mode = stored ?? 'easy';
   return mode === 'pro' && !caps.proEditor ? 'easy' : mode;
 };
 
 export interface StudioModeState {
   /** The view to render (already gated by caps.proEditor). */
   mode: StudioMode;
-  /** The user's explicit pick, if any (null ⇒ following caps.defaultMode). */
+  /** The user's explicit pick, if any (null ⇒ Easy by default). */
   stored: StudioMode | null;
   setMode(mode: StudioMode): void;
 }

@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { lazy, Suspense, useId, useRef, useState } from 'react';
 import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Palette, Plus, Settings, X } from 'lucide-react';
 import type { Project } from '../../types';
 import { useFormFactor } from './mobile/useFormFactor';
@@ -10,6 +10,8 @@ import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
 import '../comicshost/comicsShell.css';
 import './comicCreationWorkspace.css';
+
+const ComicSampleExploreButton = lazy(() => import('../comicshost/ComicSampleDeck').then((module) => ({ default: module.ComicSampleExploreButton })));
 
 export interface ComicProjectNavigationProps {
   projects: Project[];
@@ -93,13 +95,12 @@ export interface ComicIdeaFormProps {
   onStart(): void; onStartBlank(): void; onClassic(): void; onLibrary(): void;
 }
 
-export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onStart, onStartBlank, onClassic, onLibrary }: ComicIdeaFormProps) {
+export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onStart, onStartBlank, onClassic }: ComicIdeaFormProps) {
   const id = useId();
   return <section className="comic-idea-entry" aria-labelledby={`${id}-heading`}>
-    <button type="button" className="comic-idea-preview" onClick={onLibrary} disabled={pending} aria-label="Explore sample comics in the Library">
-      <img src="/assets/comic-sample/last-tram-page-1-480.webp" alt="" width="480" height="400" />
-      <span>Explore sample comics <ArrowRight aria-hidden /></span>
-    </button>
+    <div className="comic-idea-samples" inert={pending || undefined}>
+      <Suspense fallback={<p className="comic-idea-help">Explore sample comics</p>}><ComicSampleExploreButton /></Suspense>
+    </div>
     <h1 id={`${id}-heading`}>What comic are you making?</h1>
     <p className="comic-idea-intro">Describe an idea or paste a script.</p>
     <form className="comic-idea-form" onSubmit={(event) => { event.preventDefault(); if (idea.trim() && !pending) onStart(); }}>
@@ -111,7 +112,7 @@ export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onSt
         <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start comics-primary-action" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
       </div>
       {error && <p className="comic-idea-error" role="alert">{error}</p>}
-      <p id={`${id}-help`} className="comic-idea-help">Start prepares the conversation. Send submits your idea.</p>
+      <p id={`${id}-help`} className="comic-idea-help">Start sends your idea to the Director. Review the plan before drawing.</p>
       <div className="comic-idea-alternatives"><button type="button" onClick={onStartBlank} disabled={pending}>Start blank</button><button type="button" onClick={onClassic} disabled={pending}>Use the classic editor</button></div>
     </form>
   </section>;

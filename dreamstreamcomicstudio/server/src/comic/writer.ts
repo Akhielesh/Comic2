@@ -35,8 +35,6 @@ import {
   PANEL_LIMITS,
   RECURRING,
   panelCountNote,
-  panelCountRule,
-  revisionPanelLimit,
   scaledLimit,
   textBudget,
   textUnitFor
@@ -279,19 +277,16 @@ const kindRules = (doc: ComicDoc): string[] => {
       break;
     case 'webtoon':
       rules.push(
-        `Webtoon: each "page" is one vertical-scroll segment of 2–${PANEL_LIMITS.webtoonMax} full-width panels stacked top to bottom (usually 3). layout is "Stacked vertically: N full-width panels." Use size "tall" for long vertical beats (falls, towers, reveals) and "wide" for short ones; one beat per panel; use vertical space between panels for timing.`
+        `Webtoon: each "page" is one vertical-scroll segment with as many full-width panels as its beats need (up to ${PANEL_LIMITS.codeMax}), stacked top to bottom. layout is "Stacked vertically: N full-width panels." Use size "tall" for long vertical beats (falls, towers, reveals) and "wide" for short ones; one beat per panel; use vertical space between panels for timing.`
       );
       break;
     case 'strip':
-      rules.push('Comic strip: each page is ONE strip of 3–4 panels in a single row (layout "Row 1: N equal panels."). The last panel lands the punchline or the beat.');
+      rules.push('Comic strip: each page is ONE strip with a story-driven number of panels in a single row (layout "Row 1: N equal panels."). The last panel lands the punchline or the beat.');
       break;
     case 'storybook':
       rules.push(
-        `Storybook: 1–${PANEL_LIMITS.storybookMax} large panels per page (usually ${PANEL_LIMITS.storybookTypical}). The narration is read aloud, so carry the story in short caption lines (2 sentences max each); dialogue is optional and sparing.`
+        `Storybook: favor large pictures, varying their count with each scene. The narration is read aloud, so carry the story in short caption lines (2 sentences max each); dialogue is optional and sparing.`
       );
-      if (panelCountRule(f).clampedFrom !== undefined) {
-        rules.push(`The format asks for ${panelCountRule(f).clampedFrom} panels per page, but a storybook page holds at most ${PANEL_LIMITS.storybookMax}: plan every page with exactly ${PANEL_LIMITS.storybookMax}.`);
-      }
       break;
     default:
       break;
@@ -342,31 +337,12 @@ const languageRule = (doc: ComicDoc, language: string): string => {
 
 /** The panel-count line of the writer prompt (shared/comic/panelRules.ts is the one table). */
 const panelsRule = (doc: ComicDoc): string => {
-  const rule = panelCountRule(doc.format);
-  if (rule.exact !== undefined) {
-    if (rule.clampedFrom !== undefined) {
-      return `Panels per page: exactly ${rule.exact} on every page — a storybook page holds at most ${PANEL_LIMITS.storybookMax} large panels (the format asks for ${rule.clampedFrom}).`;
-    }
-    return rule.exact === 1
-      ? 'Panels per page: exactly 1 on every page — the author chose single-panel pages, so every page is one full-page panel.'
-      : `Panels per page: exactly ${rule.exact} on every page (a splash page only if the author asks for one).`;
-  }
-  if (doc.format.kind === 'strip') return `Panels per page: ${rule.min}–${rule.max}.`;
-  if (doc.format.kind === 'storybook') return `Panels per page: ${rule.min}–${rule.max} large panels (usually ${rule.typical}).`;
-  if (doc.format.kind === 'webtoon') return `Panels per page: ${rule.min}–${rule.max} (usually ${rule.typical}).`;
-  const fast = rule.fast!;
-  const unit = textUnitFor(doc.format.language);
-  return (
-    `Panels per page: usually ${rule.typical} big panels (${rule.min}–${rule.max}) — fewer, larger panels give the art and the words room; let the dialogue and the beats decide. ` +
-    `Use ${fast.panels} only for a fast, nearly silent sequence (${scaledLimit(fast.maxWords, unit)} ${unit.noun}s or fewer on the whole page). Never more than ${fast.panels}. When the story needs more moments, compress the smaller ones.`
-  );
+  const preferred = doc.format.panelsPerPage;
+  return `Panels per page: choose independently from the scene's beats, dialogue and pacing. Mix single-panel splashes, action sequences and quieter dialogue pages; never force a uniform count or layout across the book. The renderer supports 1–${PANEL_LIMITS.codeMax} panels per page; this is a technical capacity, not an editorial target.` +
+    (typeof preferred === 'number' ? ` The author's preferred density is around ${preferred}; vary it when the scene benefits, and honor any explicit panel instructions for a particular page.` : ' Let the Director choose each page freely.');
 };
 
-/** The splash line of PAGES, or none when the author fixed one panel per page (every page is single-panel by choice). */
-const splashRule = (doc: ComicDoc): string[] =>
-  panelCountRule(doc.format).exact === 1
-    ? []
-    : [`- At most 1 splash (one dominant panel) per ${PANEL_LIMITS.splashEvery} pages, never on two pages in a row, saved for the biggest moment.`];
+const splashRule = (_doc: ComicDoc): string[] => ['- Use splash pages wherever the story earns them, including adjacent splashes. There is no splash quota.'];
 
 /**
  * The word-budget lines of the writer prompt: what a panel holds by its size (density.ts wordBudget, the speech
@@ -501,6 +477,8 @@ export const writerUserMessage = (
     outlineCast?: { name: string; role?: string; look?: string }[];
     /** Replaces the default TASK line. */
     task?: string;
+    /** Bounded closing state from the already written preceding chunk. */
+    previousPage?: Record<string, unknown>;
   }
 ): string => {
   const b = doc.brief;
@@ -523,7 +501,8 @@ export const writerUserMessage = (
   parts.push(
     `FORMAT\n${compactJson({
       kind: f.kind,
-      pageCount: clamp(f.pageCount || 1, 1, MAX_PAGES),
+      pageCount: f.pageCountMode === 'auto' ? 'Director chooses from the story' : clamp(f.pageCount || 1, 1, MAX_PAGES),
+      pageCountMode: f.pageCountMode ?? 'fixed',
       panelsPerPage: f.panelsPerPage,
       readingDirection: f.readingDirection,
       lettering: f.lettering,
@@ -563,7 +542,7 @@ export const writerUserMessage = (
   if (doc.places.length) {
     parts.push(`PLACES (ids for placeId)\n${doc.places.map((p) => compactJson({ id: p.id, name: clean(p.name), look: clip(clean(p.look), 200) })).join('\n')}`);
   }
-  if (clean(doc.style.name) || clean(doc.style.spec)) parts.push(`STYLE: ${clean(doc.style.name) || clip(clean(doc.style.spec), 160)}`);
+  if (clean(doc.style.name) || clean(doc.style.spec)) parts.push(`STYLE (keep consistent across pages): ${[clean(doc.style.name), clip(clean(doc.style.spec), 700)].filter(Boolean).join(' — ')}`);
 
   const script = doc.source.script || '';
   if (clean(script)) {
@@ -579,15 +558,8 @@ export const writerUserMessage = (
     const fixed = doc.pages.filter((p) => !targets.some((t) => t.id === p.id));
     if (fixed.length) parts.push(`FIXED PAGES (context only — do not return them; keep continuity with them)\n${fixed.map((p) => pageHeadline(doc, p)).join('\n')}`);
     parts.push(`PAGES TO REWRITE (current version)\n${targets.map((p) => pageDetail(doc, p)).join('\n\n')}`);
-    // PD-2: the storybook clamp is for new pages; a page planned before it may keep its own panel count.
-    const keep = targets.filter((t) => revisionPanelLimit(f, t.panels.length) > (panelCountRule(f).exact ?? Infinity));
-    if (keep.length) {
-      parts.push(
-        `PANEL COUNT FOR THESE PAGES (planned before storybook pages were limited to ${PANEL_LIMITS.storybookMax} panels): ${keep
-          .map((t) => `page ${t.n} may keep up to ${revisionPanelLimit(f, t.panels.length)} (it has ${t.panels.length})`)
-          .join('; ')}. Keep each page's panel count unless the author's instructions ask to change the panels; the ${PANEL_LIMITS.storybookMax}-panel rule is for new pages.`
-      );
-    }
+    const neighbors = fixed.filter((page) => targets.some((target) => Math.abs(target.n - page.n) === 1));
+    if (neighbors.length) parts.push(`ADJACENT PAGE HANDOFFS (preserve characters, props, location, time, screen direction and style; show any transition)\n${neighbors.map((page) => pageDetail(doc, page)).join('\n\n')}`);
   } else if (doc.pages.length) {
     parts.push(`PREVIOUS PLAN (headlines — revise per the instructions and keep what works)\n${doc.pages.map((p) => pageHeadline(doc, p)).join('\n')}`);
   }
@@ -604,6 +576,11 @@ export const writerUserMessage = (
     );
   }
 
+  if (opts.previousPage) {
+    const previous = opts.previousPage;
+    parts.push(`PREVIOUS PAGE CLOSING STATE (continue from these exact visible moments; do not repeat or reset them)\n${compactJson({ n: previous.n, summary: clip(clean(previous.summary), 600), turnHook: clip(clean(previous.turnHook), 300), panels: asArray(previous.panels).filter(isObject).slice(-2).map((panel) => ({ n: panel.n, shot: panel.shot, castIds: asArray(panel.castIds).slice(0, 12), placeId: panel.placeId, action: clip(clean(panel.action), 1000), lines: asArray(panel.lines).filter(isObject).slice(0, 4).map((line) => ({ kind: line.kind, speakerId: line.speakerId, text: clip(clean(line.text), 250) })) })) })}`);
+  }
+
   const instructions = clean(opts.instructions);
   if (instructions) parts.push(`AUTHOR'S INSTRUCTIONS (binding)\n${instructions}`);
 
@@ -613,6 +590,8 @@ export const writerUserMessage = (
       ? `TASK: ${opts.task}`
       : targets
       ? `TASK: Rewrite only page${targets.length > 1 ? 's' : ''} ${targets.map((t) => t.n).join(', ')}, applying the author's instructions and keeping everything else that works. Return exactly ${targets.length} page${targets.length > 1 ? 's' : ''} in "pages", each with its original n (${targets.map((t) => t.n).join(', ')}).`
+      : f.pageCountMode === 'auto'
+      ? `TASK: Choose the complete story's page count from its scenes and pacing (1–${MAX_PAGES} pages supported per plan). Do not pad to an arbitrary length or omit beats to fit a default. Number pages chronologically.`
       : `TASK: Write the complete plan: exactly ${pageCount} page${pageCount > 1 ? 's' : ''}, n = 1 to ${pageCount}.`
   );
   return parts.join('\n\n');
@@ -882,6 +861,8 @@ interface PlanNormalizeContext {
   /** Revision targets (pageIds mode), or null for a full plan. */
   targets: Page[] | null;
   pageCount: number;
+  /** Count mismatches must be repaired, never silently sliced, stretched or discarded. */
+  strictCount?: boolean;
   /** Effective content rating (post-plan pre-filter). */
   rating?: ContentRating;
   /** P5-TRUTH (COMIC_STORY_FIXES): crowd lines stay crowd lines; a line praising its own speaker gets a free note. */
@@ -998,6 +979,9 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
   const problems: string[] = [];
   if (!isObject(json) || !Array.isArray(json.pages)) return { problems: ['The reply must be a JSON object with a "pages" array.'] };
   const { doc, targets } = ctx;
+  if (ctx.strictCount && json.pages.length !== (targets?.length ?? ctx.pageCount)) return { problems: [`Return exactly ${targets?.length ?? ctx.pageCount} pages (you returned ${json.pages.length}); preserve all story beats and repace them.`] };
+  if (json.pages.length > MAX_PAGES) return { problems: [`A plan supports at most ${MAX_PAGES} pages. Repace the story or plan a chapter; do not drop scenes.`] };
+  if (json.pages.some((page) => isObject(page) && asArray(page.panels).length > MAX_PANELS_PER_PAGE)) return { problems: [`The renderer supports at most ${MAX_PANELS_PER_PAGE} panels per page. Repace without dropping story beats.`] };
   const resolver = new CastResolver(doc.cast);
   for (const entry of asArray(json.newCast)) if (isObject(entry)) resolver.addDraft(entry);
   const placeIds = new Map<string, string>();
@@ -1041,9 +1025,12 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
     if (targets && !target) continue;
     const label = `Page ${target?.n ?? (Number.isInteger(raw.n) ? raw.n : pages.length + 1)}`;
     const rawPanels = asArray(raw.panels).filter(isObject);
-    if (rawPanels.length > MAX_PANELS_PER_PAGE) problems.push(`${label} has ${rawPanels.length} panels; use at most ${MAX_PANELS_PER_PAGE}.`);
+    // A clean declared order takes precedence over provider array order, as it does for pages.
+    if (rawPanels.every((panel) => Number.isInteger(panel.n)) && new Set(rawPanels.map((panel) => panel.n)).size === rawPanels.length) {
+      rawPanels.sort((a, b) => (a.n as number) - (b.n as number));
+    }
     const panels: Panel[] = [];
-    for (const rp of rawPanels.slice(0, MAX_PANELS_PER_PAGE)) {
+    for (const rp of rawPanels) {
       const castIds: string[] = [];
       for (const token of asArray(rp.castIds)) {
         const id = typeof token === 'string' ? resolver.resolve(token, true) : undefined;
@@ -1140,13 +1127,14 @@ export const normalizePlan = (json: unknown, ctx: PlanNormalizeContext): Structu
   }
 
   if (!pages.length) return { problems: problems.length ? problems : ['No usable pages were returned.'] };
-  // Splash spacing across the book (a revision is checked against the pages it sits between).
+  // Cross-page checks see revised pages in their book context.
   const returned = new Set(pages.map((p) => p.id));
   const book = targets ? [...doc.pages.filter((p) => !returned.has(p.id)), ...pages] : pages;
   problems.push(...splashIssues(doc, book).filter((s) => returned.has(s.pageId)).map((s) => s.issue.text));
   problems.push(...ratingProblems(pages, ctx.rating ?? effectiveRating(doc).rating));
-  if (!targets && pages.length !== ctx.pageCount) {
+  if (pages.length !== (targets?.length ?? ctx.pageCount)) {
     problems.push(`Return exactly ${ctx.pageCount} page${ctx.pageCount > 1 ? 's' : ''} (you returned ${pages.length}).`);
+    if (ctx.strictCount) return { problems };
   }
 
   // New characters: keep only the ones actually used; promote frequent speakers and recurring extras
@@ -1223,11 +1211,8 @@ export const enforcePageCount = (pages: Page[], target: number, doc: ComicDoc): 
       out.splice(best, 2, merged);
       continue;
     }
-    // Nothing mergeable: drop the lightest middle page (keep the opening and the ending).
-    const weight = (p: Page) => p.panels.length + p.panels.reduce((n, panel) => n + panel.lines.length, 0);
-    let drop = out.length > 2 ? 1 : out.length - 1;
-    for (let i = 1; i < out.length - 1; i += 1) if (weight(out[i]) < weight(out[drop])) drop = i;
-    out.splice(drop, 1);
+    // No lossless merge fits: retain all pages rather than silently delete story content.
+    break;
   }
   return out.map((p, i) => ({ ...p, n: i + 1 }));
 };
@@ -1262,8 +1247,9 @@ interface OutlineResult {
   newCast: Record<string, unknown>[];
 }
 
-const normalizeOutline = (json: unknown, pageCount: number): StructuredCheck<OutlineResult> => {
+const normalizeOutline = (json: unknown, pageCount?: number): StructuredCheck<OutlineResult> => {
   if (!isObject(json) || !Array.isArray(json.pages)) return { problems: ['The reply must be a JSON object with a "pages" array.'] };
+  if (json.pages.some((page) => !isObject(page) || !clean(page.summary))) return { problems: ['Every outline page needs its story summary; do not omit a scene or leave a placeholder.'] };
   // Use declared chronology just as finished page replies do. Ambiguous (missing/duplicate)
   // labels retain encounter order; valid entries are still renumbered and count-checked below.
   const pages = orderedRawPages(json)
@@ -1277,28 +1263,9 @@ const normalizeOutline = (json: unknown, pageCount: number): StructuredCheck<Out
     .filter((p) => p.summary)
     .map((p, i) => ({ ...p, n: i + 1 }));
   if (!pages.length) return { problems: ['The outline has no pages with a summary.'] };
-  const problems = pages.length === pageCount ? [] : [`The outline must have exactly ${pageCount} pages (you returned ${pages.length}).`];
-  return { value: { pages, newCast: asArray(json.newCast).filter(isObject) }, problems };
-};
-
-/** Pad/trim an outline to exactly `count` entries (merging the tail, or noting continuation). */
-const fitOutline = (outline: OutlinePage[], count: number): OutlinePage[] => {
-  const out = outline.map((o) => ({ ...o, characters: [...o.characters] }));
-  while (out.length > count) {
-    const last = out.pop()!;
-    const prev = out[out.length - 1];
-    prev.summary = `${prev.summary} ${last.summary}`.trim();
-    prev.turnHook = last.turnHook || prev.turnHook;
-    prev.characters = [...new Set([...prev.characters, ...last.characters])];
-  }
-  // Stretch the densest beats rather than invent new ones.
-  let i = 0;
-  while (out.length < count && out.length) {
-    const src = out[i % out.length];
-    out.splice((i % out.length) + 1, 0, { ...src, summary: `${src.summary} (continued — let this beat breathe)`, characters: [...src.characters] });
-    i += 2;
-  }
-  return out.map((o, k) => ({ ...o, n: k + 1 }));
+  if (pages.length > MAX_PAGES) return { problems: [`The plan supports at most ${MAX_PAGES} pages. Repace the story or choose a chapter, preserving its sequence.`] };
+  if (pageCount !== undefined && pages.length !== pageCount) return { problems: [`The outline must have exactly ${pageCount} pages (you returned ${pages.length}). Repace all beats without omitting scenes.`] };
+  return { value: { pages, newCast: asArray(json.newCast).filter(isObject) }, problems: [] };
 };
 
 const chunk = <T,>(items: T[], size: number): T[][] => {
@@ -1343,7 +1310,7 @@ const alignToTargets = (pages: Record<string, unknown>[], targets: Page[]): Reco
 };
 
 /**
- * Write (or rewrite) the page plan. Full plan: exactly format.pageCount pages with fresh
+ * Write (or rewrite) the page plan. Full plans use story-driven length or the explicit requested count, with fresh
  * ids (long plans are outlined first, then written in chunks). With pageIds: only those
  * pages are rewritten (the rest are sent as fixed context) and returned with their
  * ORIGINAL ids and numbers; unchanged panels/lines keep their ids so overlay balloons
@@ -1374,7 +1341,8 @@ export async function writePagePlan(args: {
   const revising = Array.isArray(args.pageIds) && args.pageIds.length > 0;
   const targets = revising ? doc.pages.filter((p) => args.pageIds!.includes(p.id)).sort((a, b) => a.n - b.n) : null;
   if (revising && !targets!.length) throw new StudioError('BAD_REQUEST', 'Those pages are no longer in the plan.', { status: 400 });
-  const pageCount = clamp(Math.round(doc.format.pageCount || 1), 1, MAX_PAGES);
+  let pageCount = clamp(Math.round(doc.format.pageCount || 1), 1, MAX_PAGES);
+  const adaptive = !targets && doc.format.pageCountMode === 'auto';
   const system = writerSystemPrompt(doc, rating);
   const failure = "The writer couldn't produce a usable page plan this time. Please try again.";
   let costUsd: number | undefined;
@@ -1386,7 +1354,7 @@ export async function writePagePlan(args: {
 
   let normalized: NormalizedPlan;
   const pagesToWrite = targets ? targets.length : pageCount;
-  if (pagesToWrite <= SINGLE_CALL_PAGES) {
+  if (!adaptive && pagesToWrite <= SINGLE_CALL_PAGES) {
     const result = await completeStructured<NormalizedPlan>({
       llm: args.llm,
       role: 'writer',
@@ -1394,7 +1362,7 @@ export async function writePagePlan(args: {
       user: writerUserMessage(doc, { instructions: args.instructions, targets }),
       schemaName: 'comic_page_plan',
       schema: PAGE_PLAN_SCHEMA,
-      validate: (json) => normalizePlan(json, { doc, targets, pageCount, rating, storyFixes }),
+      validate: (json) => normalizePlan(json, { doc, targets, pageCount, strictCount: true, rating, storyFixes }),
       failure,
       temperature: 0.7,
       maxTokens: 2_500 + pagesToWrite * 1_400,
@@ -1413,7 +1381,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: group, pageCount, rating, storyFixes });
+          const check = normalizePlan(json, { doc, targets: group, pageCount, strictCount: true, rating, storyFixes });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: alignToTargets(orderedRawPages(json), group), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1426,11 +1394,11 @@ export async function writePagePlan(args: {
       return result.value;
     });
     const combined = { pages: parts.flatMap((p) => p.pages), newCast: parts.flatMap((p) => p.newCast) };
-    const check = normalizePlan(combined, { doc, targets, pageCount, rating, storyFixes });
+    const check = normalizePlan(combined, { doc, targets, pageCount, strictCount: true, rating, storyFixes });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   } else {
-    // Long plan: a binding outline first, then the pages in parallel chunks.
+    // Adaptive/long plan: bind the chronology once, then carry closing state forward between chunks.
     const outlineResult = await completeStructured<OutlineResult>({
       llm: args.llm,
       role: 'writer',
@@ -1438,25 +1406,29 @@ export async function writePagePlan(args: {
       user: writerUserMessage(doc, {
         instructions: args.instructions,
         task:
-          `Step 1 of 2 — OUTLINE ONLY. Pace the whole story across exactly ${pageCount} pages and return one entry per page (n = 1 to ${pageCount}): ` +
+          (adaptive
+            ? `Step 1 of 2 — OUTLINE ONLY. Choose the page count from the complete story's scenes, action and dialogue; no default count. Return 1–${MAX_PAGES} chronological pages, one entry per page. Preserve beginning, development and ending without padding or cutting scenes: `
+            : `Step 1 of 2 — OUTLINE ONLY. Pace the whole story across exactly ${pageCount} pages and return one entry per page (n = 1 to ${pageCount}): `) +
           'summary = the page\'s beats in order (2–3 sentences), turnHook, characters = names of the named characters on the page, place = where it happens. ' +
           'Introduce any new named character in newCast with a full look. Panels and dialogue are written in step 2.'
       }),
       schemaName: 'comic_page_outline',
       schema: OUTLINE_SCHEMA,
-      validate: (json) => normalizeOutline(json, pageCount),
+      validate: (json) => normalizeOutline(json, adaptive ? undefined : pageCount),
       failure,
       temperature: 0.7,
-      maxTokens: 2_000 + pageCount * 220,
+      maxTokens: 2_000 + (adaptive ? MAX_PAGES : pageCount) * 220,
       signal: args.signal
     });
     track(outlineResult);
-    const outline = fitOutline(outlineResult.value.pages, pageCount);
+    const outline = outlineResult.value.pages;
+    pageCount = outline.length;
     const outlineCast = outlineResult.value.newCast
       .filter((c) => clean(c.name))
       .map((c) => ({ name: clean(c.name), role: clean(c.role), look: isObject(c.look) ? clean(c.look.summary) : '' }));
     const groups = chunk(outline, CHUNK_PAGES);
-    const parts = await mapLimit(groups, CHUNK_CONCURRENCY, async (group) => {
+    let previousPage: Record<string, unknown> | undefined;
+    const parts = await mapLimit(groups, 1, async (group) => {
       const from = group[0].n;
       const to = group[group.length - 1].n;
       const result = await completeStructured<RawPlan>({
@@ -1467,6 +1439,7 @@ export async function writePagePlan(args: {
           instructions: args.instructions,
           outline,
           outlineCast,
+          previousPage,
           task:
             `Step 2 of 2 — write pages ${from}–${to} in full (panels, layout, dialogue), following the outline for those pages exactly ` +
             `and keeping continuity with the pages around them. Return exactly ${group.length} page${group.length > 1 ? 's' : ''}, n = ${from} to ${to}.`
@@ -1474,7 +1447,7 @@ export async function writePagePlan(args: {
         schemaName: 'comic_page_plan',
         schema: PAGE_PLAN_SCHEMA,
         validate: (json) => {
-          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, rating, storyFixes });
+          const check = normalizePlan(json, { doc, targets: null, pageCount: group.length, strictCount: true, rating, storyFixes });
           if (!check.value || !isObject(json)) return { problems: check.problems };
           return { value: { pages: orderedRawPages(json), newCast: asArray(json.newCast).filter(isObject) }, problems: check.problems };
         },
@@ -1484,19 +1457,21 @@ export async function writePagePlan(args: {
         signal: args.signal
       });
       track(result);
+      previousPage = result.value.pages.at(-1);
+      for (const c of result.value.newCast) if (clean(c.name)) outlineCast.push({ name: clean(c.name), role: clean(c.role), look: isObject(c.look) ? clean(c.look.summary) : '' });
       return result.value;
     });
     const combined = {
       pages: parts.flatMap((p) => p.pages).map((p, i) => ({ ...p, n: i + 1 })),
       newCast: [...outlineResult.value.newCast, ...parts.flatMap((p) => p.newCast)]
     };
-    const check = normalizePlan(combined, { doc, targets: null, pageCount, rating, storyFixes });
+    const check = normalizePlan(combined, { doc, targets: null, pageCount, strictCount: true, rating, storyFixes });
     if (!check.value) throw new StudioError('PROVIDER_ERROR', failure, { status: 502, retryable: true });
     normalized = check.value;
   }
 
-  const softened = softenPlanPages(targets ? normalized.pages : enforcePageCount(normalized.pages, pageCount, doc), rating);
-  // Pages that page-count enforcement re-made get the same free fit pass (never another writer call).
+  const softened = softenPlanPages(normalized.pages, rating);
+  // Recheck softened pages with the same free fit pass (never another writer call).
   const meter = planMeter(doc);
   const fixes = new Map(normalized.layoutFixes);
   const before = new Map((targets ?? []).map((t) => [t.id, t.panels.length]));
@@ -1508,14 +1483,14 @@ export async function writePagePlan(args: {
     if (fitted.fix) fixes.set(page.id, fitted.fix);
     return fitted.page;
   });
-  // The storybook clamp note is about new pages: only a full plan states it (revised pages keep their count).
+  // Preserve the optional count-note interface for existing consumers.
   const countNote = revising ? undefined : panelCountNote(doc.format);
   const notes = [
     ...(countNote ? [countNote] : []),
     ...pages.filter((p) => fixes.has(p.id)).map((p) => layoutFixNote(p, fixes.get(p.id)!)),
     ...(normalized.speakerNotes ?? [])
   ];
-  // Drop new characters that page-count enforcement removed from every page.
+  // Keep only characters actually used in the final pages.
   const stillUsed = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => [...panel.castIds, ...panel.lines.map((l) => l.speakerId || '')])));
   return {
     pages,
