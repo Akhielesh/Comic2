@@ -5,14 +5,31 @@ import { extractWorldDetails, checkConsistency } from '../../services/geminiServ
 import { generateImage } from '../../services/imageService';
 import { Scene, Character, Item, Location, ComicState, ContinuityState, ComicAgentSettings } from '../../types';
 import { getImageUrl, saveImage } from '../../services/db';
-import { Button } from '../Button';
+import { Button } from '../ds/Button';
+import { cn } from '../../lib/utils';
+import {
+  DENSITY,
+  FIELD,
+  FOCUS_RING,
+  HAIRLINE,
+  INK_TILE,
+  OVERLAY,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  SHADOW_SOFT,
+  TONE_TEXT,
+  TRANSITION,
+  WRAP_TEXT,
+  Z
+} from '../chat/studioDesign';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { buildContinuityFromWorld } from '../../services/continuity';
 import { saveCharacterToLibrary } from '../../services/characterLibrary';
 import { ExtractWorldResponse } from '../../apiTypes';
 import { syncCharacterDescription, syncItemDescription, syncLocationDescription } from '../../services/worldSchema';
-import { AgentStageShell } from '../AgentStageShell';
+import { AgentStageShell, STAGE_BOARD_HEADER, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_FRAME, UPLOAD_TILE } from '../AgentStageShell';
 import { shouldAutoRunComicAgent } from '../../services/comicAgentSettings';
 import { legacyPdfErrorMessage, loadHtml2Canvas, loadJsPdf, loadLegacyPdf } from '../../services/legacyPdfLoader';
 import { STATUS_INK, STATUS_SURFACE } from '../ds/recipes';
@@ -20,7 +37,7 @@ import { STATUS_INK, STATUS_SURFACE } from '../ds/recipes';
 const CharacterLibraryModal = React.lazy(() => import('../modals/CharacterLibraryModal').then(module => ({ default: module.CharacterLibraryModal })));
 
 const LoaderIcon = () => (
-  <svg className="animate-spin h-8 w-8 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+  <svg className="h-8 w-8 animate-spin text-[var(--ds-ink)] motion-reduce:animate-none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
   </svg>
@@ -537,43 +554,48 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       ? (entity.description || entity.bio || '')
       : (entity.description || '');
     return (
-      <div id={`card-${entity.id}`} key={entity.id} className="group relative flex flex-col overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic">
+      <div id={`card-${entity.id}`} key={entity.id} className={cn('group relative isolate flex min-w-0 flex-col overflow-hidden bg-[var(--ds-surface)]', RADIUS_PANEL, HAIRLINE, SHADOW_SOFT)}>
         {/* Selection Checkbox */}
-        <div
-          className="absolute left-3 top-3 z-20 cursor-pointer"
+        <button
+          type="button"
+          aria-pressed={isSelected}
+          aria-label={`Select ${entity.name || 'card'}`}
+          className={cn('absolute left-2 top-2 flex items-center justify-center', DENSITY.coarseSquare, RADIUS_CONTROL, Z.chrome, FOCUS_RING)}
           onClick={() => toggleSelection(entity.id)}
           data-export-ignore="true"
         >
-          {isSelected ? <CheckSquare className="h-7 w-7 rounded-md bg-brand-blue text-white ring-2 ring-black" /> : <Square className="h-7 w-7 rounded-md bg-white/70 text-slate-400 opacity-50 border-2 border-black group-hover:opacity-100" />}
-        </div>
+          {isSelected
+            ? <CheckSquare aria-hidden="true" className={cn('h-7 w-7 p-0.5', RADIUS_CONTROL, INK_TILE)} />
+            : <Square aria-hidden="true" className={cn('h-7 w-7 border border-[var(--ds-control-border)] bg-[var(--ds-raised)] p-0.5 text-[var(--ds-muted)] opacity-70 group-hover:opacity-100', RADIUS_CONTROL)} />}
+        </button>
 
         {/* Image Area */}
-        <div className="relative aspect-square cursor-pointer border-b-4 border-black bg-slate-100" onClick={() => entity.imageUrl && setPreviewImage({ url: entity.imageUrl, title: entity.name })}>
+        <div className="relative aspect-square cursor-pointer border-b border-[var(--ds-hairline)] bg-[var(--ds-well)]" onClick={() => entity.imageUrl && setPreviewImage({ url: entity.imageUrl, title: entity.name })}>
           {entity.imageUrl ? (
             <img src={entity.imageUrl} className="h-full w-full object-cover" />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] text-slate-400 [background-size:10px_10px]">
-              {type === 'characters' ? <Users size={40} /> : type === 'items' ? <Box size={40} /> : <MapPin size={40} />}
+            <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(var(--ds-grid-dot)_1px,transparent_1px)] text-[var(--ds-muted)] [background-size:10px_10px]">
+              {type === 'characters' ? <Users size={40} aria-hidden="true" /> : type === 'items' ? <Box size={40} aria-hidden="true" /> : <MapPin size={40} aria-hidden="true" />}
             </div>
           )}
-          {generatingIds.has(entity.id) && <div className="absolute inset-0 flex items-center justify-center bg-white/70 backdrop-blur-sm"><LoaderIcon /></div>}
+          {generatingIds.has(entity.id) && <div className="absolute inset-0 flex items-center justify-center bg-ds-canvas/70"><LoaderIcon /></div>}
         </div>
 
         {/* Content Area */}
         <div className="flex flex-1 flex-col gap-4 p-5">
           <div>
-            <div className="flex justify-between items-start gap-2">
+            <div className="flex items-start justify-between gap-2">
               <input
                 value={entity.name}
                 onChange={(e) => updateEntity(type, entity.id, { name: e.target.value })}
-                className="w-full border-b border-transparent bg-transparent text-xl font-display text-black outline-none hover:border-black focus:border-brand-blue"
+                className={cn('w-full min-w-0 border-b border-transparent bg-transparent text-[length:var(--ds-text-lg)] font-semibold text-[var(--ds-ink)] outline-none hover:border-[var(--ds-control-border)] focus-visible:border-[var(--ds-focus)]', 'rounded-[var(--ds-radius-sm)]', FOCUS_RING)}
               />
               {consistencyWarnings[entity.id] && consistencyWarnings[entity.id].length > 0 && (
-                <div className="group relative">
-                  <AlertCircle className="w-5 h-5 text-amber-500 cursor-help" />
-                  <div className="absolute right-0 top-6 z-30 hidden w-48 rounded border-2 border-black bg-amber-100 p-2 text-[10px] text-amber-800 shadow-lg group-hover:block">
+                <div className="group/warn relative">
+                  <AlertCircle className={cn('h-5 w-5 cursor-help', TONE_TEXT.warning)} aria-hidden="true" />
+                  <div className={cn('absolute right-0 top-6 hidden w-48 p-2 text-[11px] leading-4 group-hover/warn:block', Z.popover, OVERLAY)}>
                     <strong>AI Insight:</strong>
-                    <ul className="list-disc pl-3 mt-1 space-y-1">
+                    <ul className="mt-1 list-disc space-y-1 pl-3">
                       {consistencyWarnings[entity.id].map((w, i) => <li key={i}>{w}</li>)}
                     </ul>
                   </div>
@@ -590,18 +612,18 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                   updateEntity(type, entity.id, { description: value });
                 }
               }}
-              className="mt-2 w-full resize-none rounded border border-transparent bg-transparent p-1 text-sm leading-5 text-slate-600 font-comic outline-none hover:border-black focus:border-brand-blue focus:text-black"
+              className={cn('mt-2 w-full resize-none border border-transparent bg-transparent p-1 text-sm leading-5 text-[var(--ds-muted)] outline-none placeholder:text-[var(--ds-muted)] hover:border-[var(--ds-control-border)] focus-visible:border-[var(--ds-focus)] focus-visible:text-[var(--ds-ink)]', 'rounded-[var(--ds-radius-sm)]', FOCUS_RING)}
               rows={3}
               placeholder="Enter description..."
             />
           </div>
 
           <div className="space-y-2">
-            <div className="text-[10px] font-display uppercase text-black">Structured fields</div>
+            <div className={OVERLINE}>Structured fields</div>
             <div className="grid grid-cols-1 gap-2">
               {STRUCTURED_FIELDS[type].map((field) => (
                 <div key={field.key} className="space-y-1">
-                  <label className="text-[10px] font-semibold uppercase text-slate-600">{field.label}</label>
+                  <label className="text-xs font-medium text-[var(--ds-muted)]">{field.label}</label>
                   <input
                     value={entity.structured?.[field.key] || ''}
                     onChange={(e) => {
@@ -611,7 +633,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                       };
                       updateEntity(type, entity.id, { structured });
                     }}
-                    className="w-full rounded border-2 border-black bg-white px-2 py-1.5 text-xs text-black outline-none placeholder-slate-400 focus:border-brand-blue"
+                    className={cn(FIELD, 'w-full px-2 py-1.5 text-xs', DENSITY.coarse)}
                     placeholder={field.placeholder}
                   />
                 </div>
@@ -620,25 +642,25 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           </div>
 
           {/* Refs */}
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {(entity.referenceImageIds || []).map((id: string, i: number) => (
-              <img key={i} src={referenceUrlMap[id]} className="h-10 w-10 rounded border-2 border-black object-cover" />
+              <img key={i} src={referenceUrlMap[id]} className="h-10 w-10 rounded-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] object-cover" />
             ))}
-            <label className="flex h-10 w-10 cursor-pointer items-center justify-center rounded border-dashed border-2 border-black hover:bg-brand-yellow/20">
-              <UploadCloud size={16} className="text-slate-600" />
+            <label className={cn(UPLOAD_TILE, 'h-10 min-h-10 w-10 justify-center p-0', DENSITY.coarseSquare)}>
+              <UploadCloud size={16} aria-hidden="true" />
               <input type="file" hidden multiple onChange={(e) => handleRefUpload(type, entity.id, e.target.files)} />
             </label>
           </div>
 
-          {/* Img/PDF show busy with aria-busy + disabled, not the Button spinner: its 24 px icon would widen
+          {/* Img/PDF show busy with aria-busy + disabled, not the Button spinner: its icon would widen
               these ~75 px cells at 320 px while the PDF tools load. */}
-          <div className="grid grid-cols-3 gap-2 mt-auto">
-            <Button size="sm" variant="secondary" onClick={() => generateEntityImage(type, entity.id)} icon={<Wand2 size={14} />}>Gen</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:image`} icon={<ImageIcon size={14} />}>Img</Button>
-            <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:pdf`} icon={<Download size={14} />}>PDF</Button>
+          <div className="mt-auto grid grid-cols-3 gap-2">
+            <Button size="sm" variant="outline" onClick={() => generateEntityImage(type, entity.id)} className="min-w-0 px-2 has-[>svg]:px-2"><Wand2 size={14} />Gen</Button>
+            <Button size="sm" variant="outline" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:image`} className="min-w-0 px-2 has-[>svg]:px-2"><ImageIcon size={14} />Img</Button>
+            <Button size="sm" variant="outline" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} disabled={exportingKey !== null} aria-busy={exportingKey === `card-${entity.id}:pdf`} className="min-w-0 px-2 has-[>svg]:px-2"><Download size={14} />PDF</Button>
 
             {type === 'characters' && (
-              <Button size="sm" variant="secondary" onClick={() => handleSaveToLibrary(entity)} icon={<UploadCloud size={14} />}>Save</Button>
+              <Button size="sm" variant="outline" onClick={() => handleSaveToLibrary(entity)} className="min-w-0 px-2 has-[>svg]:px-2"><UploadCloud size={14} />Save</Button>
             )}
           </div>
         </div>
@@ -648,9 +670,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
   if (isLoading) {
     return (
-      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-6 rounded-xl border-4 border-black bg-white py-20 text-black shadow-comic">
-        <div className="h-12 w-12 animate-spin rounded-full border-2 border-slate-300 border-t-black"></div>
-        <p className="text-xl font-semibold">Scouting locations and casting characters...</p>
+      <div className={cn('mx-auto flex max-w-2xl flex-col items-center justify-center space-y-6 px-6 py-20 text-center text-[var(--ds-ink)]', STAGE_FRAME)}>
+        <div aria-hidden="true" className="h-12 w-12 animate-spin rounded-[var(--ds-radius-pill)] border-2 border-[var(--ds-hairline)] border-t-[var(--ds-ink)] motion-reduce:animate-none"></div>
+        <p className="text-[length:var(--ds-text-lg)] font-semibold">Scouting locations and casting characters...</p>
       </div>
     )
   }
@@ -659,15 +681,16 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   // dead screen — let them retry or skip straight to building the cast by hand.
   if (extractError && !hasAnyWorld) {
     return (
-      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-5 rounded-xl border-4 border-black bg-white px-6 py-16 text-center text-black shadow-comic">
-        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-red-100 text-red-700 border-2 border-black">
-          <AlertCircle className="h-7 w-7" />
+      <div className={cn('mx-auto flex max-w-2xl flex-col items-center justify-center space-y-5 px-6 py-16 text-center text-[var(--ds-ink)]', STAGE_FRAME)}>
+        <div className={cn('flex h-14 w-14 items-center justify-center border', RADIUS_CONTROL, STATUS_SURFACE.error, STATUS_INK.error)}>
+          <AlertCircle className="h-7 w-7" aria-hidden="true" />
         </div>
-        <p className="text-xl font-semibold">Couldn't auto-build your world</p>
-        <p className="max-w-md text-sm leading-6 text-slate-600 font-comic">{extractError}</p>
+        <p className="text-[length:var(--ds-text-lg)] font-semibold">Couldn't auto-build your world</p>
+        <p className={cn('max-w-md', STAGE_BODY)}>{extractError}</p>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <Button onClick={runExtraction} icon={<RefreshCw className="w-4 h-4" />}>Retry extraction</Button>
-          <Button variant="secondary" onClick={() => setExtractError(null)} icon={<Wand2 className="w-4 h-4" />}>
+          <Button onClick={runExtraction}><RefreshCw className="h-4 w-4" />Retry extraction</Button>
+          <Button variant="outline" onClick={() => setExtractError(null)}>
+            <Wand2 className="h-4 w-4" />
             Add cast manually
           </Button>
         </div>
@@ -691,14 +714,14 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         tabIndex={0}
         onClick={handleActivate}
         onKeyDown={handleKeyDown}
-        className="group flex min-h-[300px] cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-dashed border-2 border-black bg-slate-50 text-slate-600 transition-all hover:bg-brand-yellow/20 hover:text-black"
+        className={cn('group flex min-h-[300px] cursor-pointer flex-col items-center justify-center gap-4 border border-dashed border-[var(--ds-control-border)] bg-[var(--ds-well)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', RADIUS_PANEL, TRANSITION, FOCUS_RING)}
       >
-        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-white border-2 border-black transition-colors group-hover:bg-brand-yellow">
-          <Users className="w-8 h-8" />
+        <div className={cn('flex h-14 w-14 items-center justify-center bg-[var(--ds-raised)]', RADIUS_CONTROL, HAIRLINE)}>
+          <Users className="h-8 w-8" aria-hidden="true" />
         </div>
         <div className="text-sm font-semibold">Add {type === 'characters' ? 'character' : type === 'items' ? 'prop' : 'location'}</div>
         {type === 'characters' && (
-          <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setShowLibraryModal(true); }}>
+          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setShowLibraryModal(true); }}>
             Load from Library
           </Button>
         )}
@@ -714,19 +737,17 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       icon={<Users className="h-5 w-5" />}
       actions={(
         <Button
-          variant="secondary"
           onClick={onConfirm}
           disabled={!canConfirmWorld}
-          className="border-2 border-black"
-          icon={<Check className="h-4 w-4" />}
         >
+          <Check className="h-4 w-4" />
           {autoRunAgent && canConfirmWorld ? 'Autopilot locking' : 'Use world'}
         </Button>
       )}
       sidebar={(
         <div className="space-y-5">
           <div>
-            <div className="text-sm font-display text-black uppercase">Extracted</div>
+            <h3 className={STAGE_BOARD_TITLE}>Extracted</h3>
             <div className="mt-3 grid grid-cols-3 gap-2">
               {[
                 { key: 'characters', label: 'Cast', count: characters.length },
@@ -736,19 +757,28 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                 <button
                   key={item.key}
                   type="button"
+                  aria-pressed={activeTab === item.key}
                   onClick={() => { setActiveTab(item.key as Tab); setSelectedIds(new Set()); }}
-                  className={`rounded-xl px-3 py-2 text-left transition-colors ${activeTab === item.key ? 'bg-brand-yellow text-black border-2 border-black' : 'bg-white text-slate-600 border-2 border-black hover:bg-brand-yellow hover:text-black'}`}
+                  className={cn(
+                    'min-w-0 border px-3 py-2 text-left',
+                    RADIUS_CONTROL,
+                    TRANSITION,
+                    FOCUS_RING,
+                    activeTab === item.key
+                      ? 'border-[var(--ds-ink)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
+                      : 'border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                  )}
                 >
-                  <span className="block text-lg font-semibold">{item.count}</span>
-                  <span className="text-[10px] font-semibold uppercase">{item.label}</span>
+                  <span className="block text-[length:var(--ds-text-lg)] font-semibold tabular-nums">{item.count}</span>
+                  <span className="text-xs font-medium">{item.label}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="rounded-xl border-2 border-black bg-slate-50 p-4">
-            <div className="text-sm font-display text-black uppercase">Continuity</div>
-            <div className="mt-2 text-sm leading-6 text-slate-600 font-comic">
+          <div className={cn('p-4', STAGE_CARD)}>
+            <h3 className={STAGE_BOARD_TITLE}>Continuity</h3>
+            <div className={cn('mt-2', STAGE_BODY)}>
               {requiresContaminationAck
                 ? `${contaminationDrops.length} dropped item${contaminationDrops.length === 1 ? '' : 's'} need review.`
                 : 'World data is grounded and ready to lock.'}
@@ -758,30 +788,31 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           {script && (
             <Button
               onClick={handleCheckConsistency}
-              isLoading={isCheckingConsistency}
-              variant="secondary"
-              className="w-full border-2 border-black"
-              icon={<Zap className="w-4 h-4 text-amber-500" />}
+              loading={isCheckingConsistency}
+              disabled={isCheckingConsistency}
+              variant="outline"
+              className="w-full"
             >
+              {isCheckingConsistency ? null : <Zap className="h-4 w-4" />}
               Check continuity
             </Button>
           )}
           {selectedIds.size > 0 ? (
-            <Button variant="secondary" onClick={downloadSelectedAsPDF} disabled={exportingKey !== null} isLoading={exportingKey === 'selected'} className="w-full border-2 border-black" icon={<Download />}>Download {selectedIds.size}</Button>
+            <Button variant="outline" onClick={downloadSelectedAsPDF} disabled={exportingKey !== null} loading={exportingKey === 'selected'} className="w-full">{exportingKey === 'selected' ? null : <Download />}Download {selectedIds.size}</Button>
           ) : (
-            <Button variant="secondary" onClick={handleGenerateAll} isLoading={isBatchGenerating} className="w-full border-2 border-black" icon={<Wand2 />}>Generate refs</Button>
+            <Button variant="outline" onClick={handleGenerateAll} loading={isBatchGenerating} disabled={isBatchGenerating} className="w-full">{isBatchGenerating ? null : <Wand2 />}Generate refs</Button>
           )}
 
         </div>
       )}
     >
       <div className="flex min-h-[680px] flex-col">
-        <div className="flex items-center justify-between border-b-2 border-black px-5 py-4">
-          <div>
-            <div className="text-sm font-display text-black uppercase">
+        <div className={STAGE_BOARD_HEADER}>
+          <div className="min-w-0">
+            <h3 className={STAGE_BOARD_TITLE}>
               {activeTab === 'characters' ? 'Cast board' : activeTab === 'items' ? 'Props board' : 'Places board'}
-            </div>
-            <div className="mt-1 text-xs text-slate-600">
+            </h3>
+            <div className="mt-1 text-xs tabular-nums text-[var(--ds-muted)]">
               {activeList.length} {activeTab === 'characters' ? 'character' : activeTab === 'items' ? 'prop' : 'place'}{activeList.length === 1 ? '' : 's'}
             </div>
           </div>
@@ -789,46 +820,45 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             size="sm"
             variant="outline"
             onClick={() => addEntity(activeTab)}
-            className="border-2 border-black text-black hover:bg-brand-yellow"
           >
             Add
           </Button>
         </div>
 
         {exportNotice && (
-          <p role="status" className={`mx-5 mt-4 rounded-lg border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
+          <p role="status" className={`mx-5 mt-4 rounded-[var(--ds-radius-control)] border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
             {exportNotice}
           </p>
         )}
 
         <div className="flex-1 overflow-y-auto p-5">
           {requiresContaminationAck && (
-            <div className="mb-5 rounded-lg border-2 border-brand-red bg-red-100 p-4 text-red-700">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-brand-red" />
-                <div>
+            <div className={cn('mb-5 border p-4', RADIUS_CONTROL, STATUS_SURFACE.error)}>
+              <div className={cn('flex items-start gap-2', STATUS_INK.error)}>
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                <div className="min-w-0">
                   <div className="text-sm font-semibold">Script contamination block</div>
-                  <div className="mt-1 text-sm leading-6 text-red-700">
+                  <div className={cn('mt-1 text-sm leading-6', WRAP_TEXT)}>
                     Proposed entities not found in the source were dropped. Review before continuing.
                   </div>
                 </div>
               </div>
-              <div className="mt-3 max-h-40 overflow-auto rounded-lg border-2 border-black bg-white p-3 text-xs font-mono text-red-700">
+              <div className={cn('mt-3 max-h-40 overflow-auto bg-[var(--ds-canvas)] p-3 font-mono text-xs text-[var(--ds-ink)]', RADIUS_CONTROL, HAIRLINE, WRAP_TEXT)}>
                 {contaminationDrops.map((entry, index) => (
                   <div key={`${entry.kind}-${entry.name}-${index}`}>
                     [{entry.kind}] {entry.name} - {entry.reason}
                   </div>
                 ))}
               </div>
-              <div className="mt-3 flex items-center gap-2">
+              <div className={cn('mt-3 flex items-center gap-2', DENSITY.coarse)}>
                 <input
                   id="world-contamination-ack"
                   type="checkbox"
                   checked={worldDiagnosticsAcknowledged}
                   onChange={(event) => setWorldDiagnosticsAcknowledged(event.target.checked)}
-                  className="h-4 w-4"
+                  className={cn('h-4 w-4 shrink-0 accent-[var(--ds-ink)]', FOCUS_RING)}
                 />
-                <label htmlFor="world-contamination-ack" className="text-sm font-semibold text-red-700">
+                <label htmlFor="world-contamination-ack" className={cn('text-sm font-semibold', STATUS_INK.error)}>
                   I reviewed dropped entities.
                 </label>
               </div>

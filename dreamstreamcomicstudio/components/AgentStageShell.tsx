@@ -10,6 +10,7 @@ import {
   SHADOW_SOFT,
   SIDEBAR_BG,
   TEXT_XL,
+  TRANSITION,
   WRAP_TEXT
 } from './chat/studioDesign';
 
@@ -38,6 +39,8 @@ export const STAGE_BOARD_TITLE = 'm-0 text-[length:var(--ds-text-base)] font-sem
 export const STAGE_CARD = `${HAIRLINE} rounded-[var(--ds-radius-control)] bg-[var(--ds-surface)]`;
 /** A quiet well inside the frame (context lists, empty boards). */
 export const STAGE_WELL = `${HAIRLINE} rounded-[var(--ds-radius-control)] bg-[var(--ds-well)]`;
+/** A dashed drop / upload tile (a label wrapping a hidden file input): 44 px tall at least. */
+export const UPLOAD_TILE = `flex min-h-11 cursor-pointer items-center gap-3 rounded-[var(--ds-radius-control)] border border-dashed border-[var(--ds-control-border)] bg-[var(--ds-well)] px-4 py-3 text-sm text-[var(--ds-muted)] hover:border-[var(--ds-control-border-hover)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[color:var(--ds-focus)] ${TRANSITION}`;
 /** Body copy and its muted step. */
 export const STAGE_BODY = `text-sm leading-6 text-[var(--ds-muted)] ${WRAP_TEXT}`;
 

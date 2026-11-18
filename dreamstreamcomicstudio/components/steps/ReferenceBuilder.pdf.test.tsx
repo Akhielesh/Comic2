@@ -125,7 +125,7 @@ describe('ReferenceBuilder card downloads on the on-demand loader', () => {
     expect(busy).toBeDisabled();
     // Same 14 px icon as at rest: the legacy Button's 24 px spinner would push "PDF" over its neighbour at 320 px.
     expect(busy.querySelector('.animate-spin')).toBeNull();
-    expect(busy.querySelector('span > svg')).not.toBeNull();
+    expect(busy.querySelector(':scope > svg')).not.toBeNull();
     expect(cardButton('c1', /^Img$/)).toHaveAttribute('aria-busy', 'false');
     expect(cardButton('c1', /^Img$/)).toBeDisabled();
     expect(cardButton('c2', /^PDF$/)).toBeDisabled();

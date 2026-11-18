@@ -4,7 +4,29 @@ import { AgentOutputTarget, ComicExportTarget, ComicPanel, ComicState, ProjectRe
 import { PanelDialogue } from '../PanelDialogue';
 import { regenerateSinglePanel } from '../../services/generationManager';
 import { runContinuityAudit } from '../../services/geminiService';
-import { Button } from '../Button';
+import { Button } from '../ds/Button';
+import { IconButton } from '../ds/IconButton';
+import { cn } from '../../lib/utils';
+import {
+  DENSITY,
+  FOCUS_ITEM,
+  HAIRLINE,
+  OVERLAY,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  RADIUS_ROUND,
+  SCRIM,
+  SHADOW_SOFT,
+  STATUS_CHIP,
+  STATUS_CHIP_TONE,
+  STATUS_DOT,
+  TEXT_XL,
+  TONE_CHIP_ON_ART,
+  TRANSITION,
+  WRAP_TEXT,
+  Z
+} from '../chat/studioDesign';
 // Lazy loaded components
 const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal').then(module => ({ default: module.ImagePreviewModal })));
 const RegenerateModal = React.lazy(() => import('../modals/RegenerateModal').then(module => ({ default: module.RegenerateModal })));
@@ -30,7 +52,7 @@ import { useUsageAllowance } from '../usage/useUsageAllowance';
 import { aiUsageForExport, artifactsForExport, comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, projectForExport, type ComicCostResponse } from './comicCostDisplay';
 import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
 import { transitionAgentRun } from '../../services/comicAgentRun';
-import { AgentStageShell } from '../AgentStageShell';
+import { AgentStageShell, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_WELL } from '../AgentStageShell';
 import { buildComicExportManifest, buildComicHtmlDocument } from '../../services/comicDeliverables';
 
 import { legacyPdfErrorMessage, loadLegacyPdf } from '../../services/legacyPdfLoader';
@@ -645,37 +667,34 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const renderPanelCard = (panel: ComicPanel, displayIdx: number, slotStyle?: React.CSSProperties) => (
     <div
       key={panel.id}
-      className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${slotStyle ? '' : getPanelClass(displayIdx)}`}
+      className={`relative group border-4 ${panel.failureReason ? 'border-[var(--ds-danger-mark)]' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${slotStyle ? '' : getPanelClass(displayIdx)}`}
       style={slotStyle}
       onClick={() => setSelectedPanel(panel)}
     >
       {panel.imageUrl ? (
         <img src={panel.imageUrl} alt={`Panel ${displayIdx + 1}`} className="w-full h-full object-cover" />
       ) : (
-        <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
-          <RefreshCw size={24} className="mb-1" />
-          <span className="text-[10px] font-bold uppercase">Failed</span>
+        <div className="flex h-full min-h-[120px] w-full flex-col items-center justify-center bg-[var(--ds-well)] text-[var(--ds-muted)]">
+          <RefreshCw size={24} className="mb-1" aria-hidden="true" />
+          <span className={OVERLINE}>Failed</span>
         </div>
       )}
       <PanelDialogue panel={panel} layout={textLayout} />
       {panel.failureReason && (
-        <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
+        <div className={cn('absolute left-2 top-2 max-w-[80%] truncate', STATUS_CHIP, TONE_CHIP_ON_ART.danger)}>
           ⚠ {panel.failureReason}
         </div>
       )}
       {auditScoresByPanel[panel.id] && !panel.failureReason && (
-        <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
-          ? 'bg-red-100 text-red-700 border-red-300'
-          : 'bg-green-100 text-green-700 border-green-300'
-          }`}>
+        <div className={cn('absolute left-2 top-2 tabular-nums', STATUS_CHIP, auditScoresByPanel[panel.id].driftScore > 0.35 ? TONE_CHIP_ON_ART.danger : TONE_CHIP_ON_ART.success)}>
           Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
         </div>
       )}
-      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-        <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Regenerate panel"><RefreshCw size={16} /></button>
-        <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }} aria-label="Edit bubbles"><Edit2 size={16} /></button>
+      <div className={cn('absolute inset-0 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none', SCRIM)}>
+        <IconButton label="Regenerate panel" title={null} variant="outline" size="lg" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }}><RefreshCw size={16} /></IconButton>
+        <IconButton label="Edit bubbles" title={null} variant="outline" size="lg" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }}><Edit2 size={16} /></IconButton>
       </div>
-      {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
+      {selectedPanel?.id === panel.id && <div className="pointer-events-none absolute inset-0 ring-4 ring-inset ring-[var(--ds-ink)]" />}
     </div>
   );
 
@@ -709,60 +728,60 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
   const sidebar = (
     <div className="space-y-5">
-      <div className="rounded-xl border-2 border-black bg-white p-4">
-        <div className="text-xs font-display uppercase text-slate-600">Deliverables</div>
+      <div className={cn('p-4', STAGE_CARD)}>
+        <h3 className={STAGE_BOARD_TITLE}>Deliverables</h3>
         <div className="mt-3 space-y-2">
           {agentSettings.outputTargets.map((target) => (
-            <div key={target} className="flex items-center justify-between gap-3 rounded-lg border-2 border-black bg-slate-50 px-3 py-2">
-              <div>
-                <div className="text-sm font-bold text-black">{outputTargetLabel(target)}</div>
-                <div className="text-[11px] text-slate-600 font-comic">
+            <div key={target} className={cn('flex items-center justify-between gap-3 px-3 py-2', STAGE_WELL)}>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-[var(--ds-ink)]">{outputTargetLabel(target)}</div>
+                <div className="text-xs text-[var(--ds-muted)]">
                   {outputDelivered(target)
                     ? `Prepared ${new Date(exportedOutputs[target] || 0).toLocaleTimeString()}`
                     : 'Waiting'}
                 </div>
               </div>
-              <span className={`flex h-6 w-6 items-center justify-center rounded-full border-2 border-black ${outputDelivered(target) ? 'bg-green-100 text-green-700' : 'bg-white text-slate-400'}`}>
-                {outputDelivered(target) ? <Check className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+              <span className={cn('flex h-6 w-6 shrink-0 items-center justify-center border', RADIUS_ROUND, outputDelivered(target) ? STATUS_CHIP_TONE.healthy : STATUS_CHIP_TONE.waiting)}>
+                {outputDelivered(target) ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <span className={cn('h-1.5 w-1.5', RADIUS_ROUND, STATUS_DOT.waiting)} />}
               </span>
             </div>
           ))}
         </div>
-        <div className="mt-4 h-2 overflow-hidden rounded-full border-2 border-black bg-white">
-          <div className="h-full bg-brand-blue transition-all duration-500" style={{ width: `${exportProgress}%` }} />
+        <div className={cn('mt-4 h-2 overflow-hidden bg-[var(--ds-well-strong)]', RADIUS_ROUND)} aria-hidden="true">
+          <div className={cn('h-full bg-[var(--ds-ink)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none', RADIUS_ROUND)} style={{ width: `${exportProgress}%` }} />
         </div>
-        <div className="mt-2 text-xs text-slate-600 font-comic">{deliveredOutputCount} of {requestedOutputCount} requested outputs prepared</div>
+        <div className="mt-2 text-xs tabular-nums text-[var(--ds-muted)]">{deliveredOutputCount} of {requestedOutputCount} requested outputs prepared</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Panels</div>
-          <div className="mt-1 text-sm font-bold text-black">{renderedPanels} / {panels.length}</div>
+        <div className={cn('min-w-0 p-3', STAGE_CARD)}>
+          <div className={OVERLINE}>Panels</div>
+          <div className="mt-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]">{renderedPanels} / {panels.length}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Retries</div>
-          <div className="mt-1 text-sm font-bold text-black">{failedPanels}</div>
+        <div className={cn('min-w-0 p-3', STAGE_CARD)}>
+          <div className={OVERLINE}>Retries</div>
+          <div className="mt-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]">{failedPanels}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">{costCtx.governed ? 'Usage' : 'Cost'}</div>
-          <div className="mt-1 break-words text-sm font-bold text-black">{costLabel}</div>
+        <div className={cn('min-w-0 p-3', STAGE_CARD)}>
+          <div className={OVERLINE}>{costCtx.governed ? 'Usage' : 'Cost'}</div>
+          <div className={cn('mt-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]', WRAP_TEXT)}>{costLabel}</div>
         </div>
-        <div className="rounded-xl border-2 border-black bg-white p-3">
-          <div className="text-[11px] uppercase text-slate-600 font-bold">Model</div>
-          <div className="mt-1 truncate text-sm font-bold text-black">{activeModel?.label || 'Default'}</div>
+        <div className={cn('min-w-0 p-3', STAGE_CARD)}>
+          <div className={OVERLINE}>Model</div>
+          <div className="mt-1 truncate text-sm font-semibold text-[var(--ds-ink)]">{activeModel?.label || 'Default'}</div>
         </div>
       </div>
 
-      <div className="rounded-xl border-2 border-black bg-white">
-        <div className="flex items-center gap-2 border-b-2 border-black px-3 py-2 text-sm font-display uppercase text-black">
-          <Terminal className="h-4 w-4" /> Agent stream
-        </div>
+      <div className={STAGE_CARD}>
+        <h3 className={cn('flex items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2', STAGE_BOARD_TITLE)}>
+          <Terminal className="h-4 w-4" aria-hidden="true" /> Agent stream
+        </h3>
         <div className="max-h-52 overflow-y-auto px-3 py-2 font-mono text-xs custom-scrollbar">
           {recentAgentEvents.length === 0 ? (
-            <div className="py-2 text-slate-400">No export events yet.</div>
+            <div className="py-2 text-[var(--ds-muted)]">No export events yet.</div>
           ) : recentAgentEvents.map((event) => (
-            <div key={event.id} className="border-b border-slate-200 py-2 text-slate-600 last:border-0">
-              <span className="mr-2 text-slate-400">{new Date(event.timestamp).toLocaleTimeString()}</span>
+            <div key={event.id} className={cn('border-b border-[var(--ds-hairline-soft)] py-2 text-[var(--ds-ink)] last:border-0', WRAP_TEXT)}>
+              <span className="mr-2 text-[var(--ds-muted)]">{new Date(event.timestamp).toLocaleTimeString()}</span>
               {event.message}
             </div>
           ))}
@@ -773,20 +792,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
   const actions = (
     <div className="flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={handleShare}
-        className="inline-flex items-center gap-2 rounded-xl border-2 border-black bg-white px-3 py-2 text-sm font-bold text-black transition-colors hover:bg-brand-yellow"
-      >
+      <Button variant="outline" onClick={handleShare}>
         <Share2 className="h-4 w-4" /> Share
-      </button>
-      <button
-        type="button"
-        onClick={handleDownloadProjectData}
-        className="inline-flex items-center gap-2 rounded-xl border-2 border-black bg-brand-blue px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-brand-blue/80"
-      >
+      </Button>
+      <Button onClick={handleDownloadProjectData}>
         <Download className="h-4 w-4" /> ZIP
-      </button>
+      </Button>
     </div>
   );
 
@@ -802,8 +813,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         minHeightClassName="min-h-[760px]"
       >
         <div className="space-y-5 p-5">
-          <div className="max-h-[65vh] overflow-y-auto rounded-xl border-2 border-black bg-slate-100 p-3 custom-scrollbar sm:p-5">
-            <div id="comic-render-area" className="mx-auto max-w-5xl rounded-xl bg-white p-4 shadow-comic sm:p-6">
+          <div className={cn('max-h-[65vh] overflow-y-auto bg-[var(--ds-well-strong)] p-3 custom-scrollbar sm:p-5', RADIUS_PANEL, HAIRLINE)}>
+            {/* The page itself is comic paper (white, captured into the PDF); only its frame is chrome. */}
+            <div id="comic-render-area" className={cn('mx-auto max-w-5xl bg-white p-4 sm:p-6', RADIUS_PANEL, SHADOW_SOFT)}>
               {state.coverImageUrl && (
                 <div className="mb-6 overflow-hidden rounded-lg border-4 border-black">
                   <img src={state.coverImageUrl} alt={`${projectName} cover`} className="h-auto w-full object-cover" />
@@ -818,36 +830,36 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-            <div className="rounded-xl border-2 border-black bg-white p-4">
-              <div className="text-xs font-display uppercase text-slate-600">{costCtx.governed ? 'Usage so far' : 'Cost summary'}</div>
-              <div className="mt-1 break-words text-xl font-display text-black">
+            <div className={cn('min-w-0 p-4', STAGE_CARD)}>
+              <h3 className={STAGE_BOARD_TITLE}>{costCtx.governed ? 'Usage so far' : 'Cost summary'}</h3>
+              <div className={cn('mt-1 font-semibold tabular-nums text-[var(--ds-ink)]', TEXT_XL, WRAP_TEXT)}>
                 {isCostLoading ? "Updating..." : costLabel}
               </div>
-              {costView?.ownKeyNote && <div className="mt-1 text-[11px] text-slate-600">{costView.ownKeyNote}</div>}
-              <div className="mt-1 text-[11px] font-mono text-slate-600">
+              {costView?.ownKeyNote && <div className={cn('mt-1 text-xs text-[var(--ds-muted)]', WRAP_TEXT)}>{costView.ownKeyNote}</div>}
+              <div className="mt-1 font-mono text-xs text-[var(--ds-muted)]">
                 {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
               </div>
-              <div className="mt-2 select-all text-[11px] font-mono text-slate-400" title="Reference these when reporting an issue">
+              <div className={cn('mt-2 select-all font-mono text-xs text-[var(--ds-muted)]', WRAP_TEXT)} title="Reference these when reporting an issue">
                 Project {projectId} · Session {state.sessionId || "-"}
               </div>
               {regenError && (
-                <div className="mt-2 rounded-lg border-2 border-brand-red bg-red-100 px-3 py-2 text-xs font-bold text-red-700">{regenError}</div>
+                <div className={cn('mt-2 border px-3 py-2 text-xs font-medium', RADIUS_CONTROL, STATUS_SURFACE.error, STATUS_INK.error, WRAP_TEXT)}>{regenError}</div>
               )}
             </div>
 
-            <div className="rounded-xl border-2 border-black bg-white p-4">
-              <div className="text-xs font-display uppercase text-slate-600">Continuity</div>
+            <div className={cn('min-w-0 p-4', STAGE_CARD)}>
+              <h3 className={STAGE_BOARD_TITLE}>Continuity</h3>
               {auditSummary ? (
-                <div className="mt-2 text-sm leading-6 text-black font-comic">{auditSummary}</div>
+                <div className={cn('mt-2 text-sm leading-6 text-[var(--ds-ink)]', WRAP_TEXT)}>{auditSummary}</div>
               ) : (
-                <div className="mt-2 text-sm leading-6 text-slate-600 font-comic">No review audit has run for this build yet.</div>
+                <div className={cn('mt-2', STAGE_BODY)}>No review audit has run for this build yet.</div>
               )}
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button variant="secondary" size="sm" onClick={handleRunContinuityAudit} isLoading={auditLoading}>
+                <Button variant="outline" size="sm" onClick={handleRunContinuityAudit} loading={auditLoading} disabled={auditLoading}>
                   Audit
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="outline"
                   size="sm"
                   onClick={handleFixFlaggedPanels}
                   disabled={!Object.values(auditScoresByPanel).some((score) => score.driftScore > 0.35)}
@@ -859,51 +871,51 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           </div>
 
           {costView && (costView.byStage.length > 0 || costView.byModel.length > 0) && (
-            <div className="rounded-xl border-2 border-black bg-white p-4">
-              <div className="text-xs font-display uppercase text-slate-600">{costView.governed ? 'Usage breakdown' : 'Cost breakdown'}</div>
+            <div className={cn('p-4', STAGE_CARD)}>
+              <h3 className={STAGE_BOARD_TITLE}>{costView.governed ? 'Usage breakdown' : 'Cost breakdown'}</h3>
               <div className="mt-3 grid gap-4 text-xs sm:grid-cols-2">
                 <div className="min-w-0">
-                  <div className="mb-1 font-bold text-black">By stage</div>
+                  <div className="mb-1 font-semibold text-[var(--ds-ink)]">By stage</div>
                   {costView.byStage.slice(0, 6).map((line) => (
-                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-slate-600">{line.key}</span><span className="shrink-0 font-mono text-black">{line.value}</span></div>
+                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-[var(--ds-muted)]">{line.key}</span><span className="shrink-0 font-mono tabular-nums text-[var(--ds-ink)]">{line.value}</span></div>
                   ))}
                 </div>
                 <div className="min-w-0">
-                  <div className="mb-1 font-bold text-black">By model</div>
+                  <div className="mb-1 font-semibold text-[var(--ds-ink)]">By model</div>
                   {costView.byModel.slice(0, 6).map((line) => (
-                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-slate-600">{line.key}</span><span className="shrink-0 font-mono text-black">{line.value}</span></div>
+                    <div key={line.key} className="flex justify-between gap-2 py-0.5"><span className="min-w-0 truncate text-[var(--ds-muted)]">{line.key}</span><span className="shrink-0 font-mono tabular-nums text-[var(--ds-ink)]">{line.value}</span></div>
                   ))}
                 </div>
               </div>
             </div>
           )}
 
-          <div className="rounded-xl border-2 border-black bg-white px-4 py-3">
-            <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-600">
-              <div><span className="text-slate-400">Model:</span> {activeModel?.label || 'Default'}</div>
-              <div><span className="text-slate-400">Layout:</span> {gridTemplate?.title || state.layoutType}</div>
-              <div><span className="text-slate-400">Panels:</span> {panels.length}</div>
-              <div><span className="text-slate-400">Requested:</span> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
-              {costReport && <div><span className="text-slate-400">Artifacts:</span> {costReport.ai_usage.totalArtifacts}</div>}
+          <div className={cn('px-4 py-3', STAGE_CARD)}>
+            <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-[var(--ds-ink)]', WRAP_TEXT)}>
+              <div><span className="text-[var(--ds-muted)]">Model:</span> {activeModel?.label || 'Default'}</div>
+              <div><span className="text-[var(--ds-muted)]">Layout:</span> {gridTemplate?.title || state.layoutType}</div>
+              <div><span className="text-[var(--ds-muted)]">Panels:</span> {panels.length}</div>
+              <div><span className="text-[var(--ds-muted)]">Requested:</span> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
+              {costReport && <div><span className="text-[var(--ds-muted)]">Artifacts:</span> {costReport.ai_usage.totalArtifacts}</div>}
             </div>
           </div>
 
-          <div className="rounded-xl border-2 border-black bg-white p-4">
+          <div className={cn('p-4', STAGE_CARD)}>
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="h-4 w-4" />}>Edit Panel</Button>
-                <Button variant="secondary" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="h-4 w-4" />}>History</Button>
-                <Button variant="secondary" onClick={onReturnToPreview} icon={<ArrowLeftRight className="h-4 w-4" />}>Layout</Button>
+                <Button variant="outline" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel || isRegenerating} loading={isRegenerating}>{isRegenerating ? null : <RefreshCw className="h-4 w-4" />}Edit Panel</Button>
+                <Button variant="outline" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1}><History className="h-4 w-4" />History</Button>
+                <Button variant="outline" onClick={onReturnToPreview}><ArrowLeftRight className="h-4 w-4" />Layout</Button>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {versions.length > 0 && (
                   <div className="relative">
-                    <Button variant="secondary" onClick={() => setShowVersionPicker(!showVersionPicker)}>
+                    <Button variant="outline" aria-expanded={showVersionPicker} onClick={() => setShowVersionPicker(!showVersionPicker)}>
                       Versions ({versions.length})
                     </Button>
                     {showVersionPicker && (
-                      <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border-4 border-black bg-white p-2 shadow-comic">
-                        <div className="mb-2 px-2 text-xs font-display uppercase text-slate-600">Version History</div>
+                      <div className={cn('absolute bottom-full right-0 mb-2 max-h-56 w-72 max-w-[calc(100vw-4rem)] overflow-y-auto p-2', Z.popover, OVERLAY)}>
+                        <div className={cn('mb-2 px-2', OVERLINE)}>Version History</div>
                         {versions.map(v => (
                           <button
                             key={v.id}
@@ -911,26 +923,30 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                               onUpdateProject({ state: v.state });
                               setShowVersionPicker(false);
                             }}
-                            className="w-full rounded-lg p-2 text-left text-xs text-slate-600 transition-colors hover:bg-brand-yellow/30"
+                            type="button"
+                            className={cn('w-full p-2 text-left text-xs text-[var(--ds-muted)] hover:bg-[var(--ds-overlay-hover)]', RADIUS_CONTROL, DENSITY.coarse, TRANSITION, FOCUS_ITEM)}
                           >
-                            <div className="truncate font-bold text-black">{v.name}</div>
-                            <div className="text-slate-600">{new Date(v.createdAt).toLocaleString()}</div>
-                            {v.reason && <div className="text-[10px] italic text-slate-400">{v.reason}</div>}
+                            <div className="truncate font-semibold text-[var(--ds-ink)]">{v.name}</div>
+                            <div>{new Date(v.createdAt).toLocaleString()}</div>
+                            {v.reason && <div className={cn('italic', WRAP_TEXT)}>{v.reason}</div>}
                           </button>
                         ))}
                       </div>
                     )}
                   </div>
                 )}
-                <Button onClick={handleDownloadProjectData} variant={wantsComic ? 'primary' : 'secondary'}>Project ZIP</Button>
-                <Button onClick={handleDownloadHTML} variant={wantsHtml ? 'primary' : 'secondary'} icon={<FileCode className="h-4 w-4" />}>HTML</Button>
-                <Button onClick={handleDownloadPDF} isLoading={isBuildingPdf} icon={<Download className="h-4 w-4" />} variant={wantsBook ? 'primary' : 'secondary'}>
+                {/* A requested output reads as the filled secondary step, the rest as outlines; the one ink
+                    primary on this screen is the header's ZIP. */}
+                <Button onClick={handleDownloadProjectData} variant={wantsComic ? 'secondary' : 'outline'}>Project ZIP</Button>
+                <Button onClick={handleDownloadHTML} variant={wantsHtml ? 'secondary' : 'outline'}><FileCode className="h-4 w-4" />HTML</Button>
+                <Button onClick={handleDownloadPDF} loading={isBuildingPdf} disabled={isBuildingPdf} variant={wantsBook ? 'secondary' : 'outline'}>
+                  {isBuildingPdf ? null : <Download className="h-4 w-4" />}
                   {wantsBook ? 'Book/PDF' : 'PDF'}
                 </Button>
               </div>
             </div>
             {pdfNotice && (
-              <p role="status" className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
+              <p role="status" className={`mt-3 rounded-[var(--ds-radius-control)] border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
                 {pdfNotice}
               </p>
             )}
