@@ -54,14 +54,10 @@ describe('getPublicProjectsByUser — content_rating', () => {
     expect(sb.tables).toEqual(['projects', 'profiles']);
   });
 
-  it('ignores anything that is not a gate rating (absent, null, the wrong case, another word, a number)', async () => {
+  it('lists nothing without a gate rating (absent, null, the wrong case, another word, a number), even if the database returns it', async () => {
+    fakeSupabase.state.ignoredFilterColumns = new Set(['content_rating']);
     sb.rows = [row('none'), row('null', { content_rating: null }), row('lower', { content_rating: 'pg' }), row('r', { content_rating: 'R' }), row('num', { content_rating: 13 })];
-    const projects = await getPublicProjectsByUser('u1');
-    expect(projects).toHaveLength(5);
-    for (const p of projects) {
-      expect(p.contentRating).toBeUndefined();
-      expect('contentRating' in p).toBe(false);
-    }
+    expect(await getPublicProjectsByUser('u1')).toEqual([]);
   });
 });
 
@@ -79,7 +75,7 @@ describe('getPublicProjectsByUser — cards', () => {
     versions: [{ id: 'v1', state: { script: 'old draft' } }]
   };
 
-  it('selects no `*`, no bare `state` and no `versions`, and asks for unheld public comics of this creator', async () => {
+  it('selects no `*`, no bare `state` and no `versions`, and asks for this creator\'s listed comics only', async () => {
     sb.rows = [row('classic', { state: classic }), row('v4', { content_rating: 'PG', state: { studioVersion: 4, shareSlug: 'AbCdEfGhIjKlMnOpQ', publicCover: `pub/${'A'.repeat(22)}/cover.webp` } })];
     const projects = await getPublicProjectsByUser('u1');
     const [query] = fakeSupabase.queriesOn('projects');
@@ -89,12 +85,13 @@ describe('getPublicProjectsByUser — cards', () => {
     expect(items).not.toContain('state');
     expect(query.columns).not.toMatch(/versions|script|imageTags/);
     for (const item of items) if (columnsRead(item)[0] === 'state') expect(item).toMatch(/^[A-Za-z]+:state->[A-Za-z]+$/);
-    expect(query.filters).toEqual(['user_id=eq.u1', 'is_public=eq.true', 'is_forced_private=not.is.true', 'order=created_at.desc']);
-
-    // The card keeps every field the profile card and its cover fallbacks read.
-    const card = projects.find((p) => p.id === 'classic')!;
-    expect(card.state).toEqual({ coverImageUrl: classic.coverImageUrl, coverImageId: classic.coverImageId, panels: classic.panels, styleVariants: classic.styleVariants, publishedAt: classic.publishedAt });
-    expect(card.publishedAt).toBe(classic.publishedAt);
+    expect(query.filters).toEqual([
+      'user_id=eq.u1', 'is_public=eq.true', 'is_forced_private=not.is.true',
+      'state->>studioVersion=eq.4', 'state->>shareSlug=not.is.null', 'content_rating=in.(G,PG,PG-13)',
+      'order=created_at.desc'
+    ]);
+    // An older comic is not listed on a profile (services/publicListing.ts).
+    expect(projects.map((p) => p.id)).toEqual(['v4']);
     const v4 = projects.find((p) => p.id === 'v4')!;
     expect(v4.state).toMatchObject({ studioVersion: 4, shareSlug: 'AbCdEfGhIjKlMnOpQ', panels: [], styleVariants: [] });
     expect(v4.contentRating).toBe('PG');
@@ -103,14 +100,20 @@ describe('getPublicProjectsByUser — cards', () => {
 
   it('never returns a comic held by moderation, nor another creator\'s or a private one', async () => {
     sb.rows = [
-      row('mine', { state: classic }),
-      row('held', { is_forced_private: true, state: classic }),
-      row('unset', { is_forced_private: null, state: classic }),
-      row('private', { is_public: false, state: classic }),
-      row('theirs', { user_id: 'u2', state: classic })
+      row('mine', { content_rating: 'G' }),
+      row('held', { content_rating: 'G', is_forced_private: true }),
+      row('unset', { content_rating: 'G', is_forced_private: null }),
+      row('private', { content_rating: 'G', is_public: false }),
+      row('theirs', { content_rating: 'G', user_id: 'u2' })
     ];
     const projects = await getPublicProjectsByUser('u1');
     expect(projects.map((p) => p.id).sort()).toEqual(['mine', 'unset']);
+  });
+
+  it('drops an older comic the database returned anyway (the client backstop)', async () => {
+    fakeSupabase.state.ignoredFilterColumns = new Set(['state->>studioVersion', 'state->>shareSlug', 'content_rating']);
+    sb.rows = [row('classic', { state: classic }), row('copycat', { state: { studioVersion: 4, shareSlug: 'AbCdEfGhIjKlMnOpQ' } }), row('v4', { content_rating: 'PG' })];
+    expect((await getPublicProjectsByUser('u1')).map((p) => p.id)).toEqual(['v4']);
   });
 });
 

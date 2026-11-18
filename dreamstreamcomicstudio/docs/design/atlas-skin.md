@@ -815,10 +815,13 @@ on the header's paper in both themes. The page bodies:
   updated" card) is on the tokens too: a `FIELD_GROUP` email field, the ink submit, outline toggle chips, a `Textarea`
   and `STATUS_SURFACE` callouts; its running text inherits the surrounding ink, so it also reads in that fixed-white
   card in dark mode.
-- **Library** (`PublicGallery`): a `DISPLAY_SECTION` title, the search field (`FIELD_GROUP`), a `Segmented` sort and a
-  pressed "Kids-friendly" toggle, a calm sign-in note with an outline "Sign in", then 2 / 3 / 4 covers a row with the
-  title (`CARD_TITLE`), creator and counts under the art, in ink; the empty state is `EmptyState`. The rating pill on
-  a cover is DS-R1's opaque on-art `RatingBadge` (no terracotta literal).
+- **Library** (`PublicGallery`): a `DISPLAY_SECTION` title, then "New comics" (the current Comic Studio comics,
+  `services/publicListing.ts`) above the two Studio samples. 2 / 3 / 4 covers a row with the title (`CARD_TITLE`), date
+  and counts under the art, in ink; no maker line. The search field (`FIELD_GROUP`), the `Segmented` sort, the pressed
+  "Kids-friendly" toggle and the visible "N comics" line appear only when the Library lists more than
+  `LIBRARY_TOOLS_MIN` (6) comics; an empty Library shows the samples alone. No sign-in prompt: a visitor sees likes as
+  a count, a signed-in reader gets the like button. The rating pill on a cover is DS-R1's opaque on-art `RatingBadge`
+  (no terracotta literal). See `docs/features/public-library.md`.
 - **Privacy, Terms**: the `OVERLINE_DISPLAY` "Legal" eyebrow, a `DISPLAY_SECTION` title, the date as `OVERLINE`, then the
   text in a 3xl reading column on `SECTION_CARD`, styled by `LEGAL_PROSE` (the app ships no typography plugin). No
   Back button: the header's lockup goes home.

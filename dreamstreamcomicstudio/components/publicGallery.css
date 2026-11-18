@@ -45,7 +45,7 @@
 .library-sample-detail { font-size: .75rem; color: var(--ds-muted); margin-top: .75rem; line-height: 1.5; }
 .library-read-link { display: flex; align-items: center; gap: .5rem; color: var(--ds-accent-text); font-size: .875rem; font-weight: 600; margin-top: 1.25rem; }
 .library-read-link svg { width: 1rem; height: 1rem; }
-.library-community { border-top: 1px solid var(--ds-hairline); padding-top: 1.5rem; }
+.library-community { border-top: 1px solid var(--ds-hairline); padding-block: 1.5rem 2.5rem; }
 .library-search-form { display: flex; align-items: stretch; min-width: 0; border: 1px solid var(--ds-hairline); border-radius: var(--ds-radius-control); background: var(--ds-surface); }
 .library-search-form:focus-within { outline: 2px solid var(--ds-focus); outline-offset: 2px; }
 .library-search-kind { display: flex; flex-shrink: 0; padding: .5rem; }
@@ -138,7 +138,7 @@
   .library-kids { flex: 1; }
   .library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem .875rem; }
   .library-creator { font-size: .8125rem; }
-  .library-community { padding-top: 1.25rem; }
+  .library-community { padding-block: 1.25rem 1.75rem; }
   .library-reader-heading { margin-block: 1rem 1.5rem; }
 }
 @media (prefers-reduced-motion: reduce) {

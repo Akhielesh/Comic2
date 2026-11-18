@@ -58,6 +58,9 @@ const evalItem = (row: Row, item: string): [string, unknown, string] => {
   return [alias ?? lastKey, value === undefined ? null : structuredClone(value), column];
 };
 
+/** A filter's left side read from a row: a plain column, or a JSON path (`state->>key`) the way PostgREST reads it. */
+const cell = (row: Row, column: string): unknown => (/->/.test(column) ? evalItem(row, column)[1] : row[column]);
+
 /** A row as `select(columns)` returns it. */
 export const projectRow = (row: Row, columns: string): Row => {
   const items = splitTopLevel(columns);
@@ -156,6 +159,8 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
           return 0;
         });
       }
+      // An exact count is the whole match, before the page is cut (as PostgREST counts it).
+      const total = matched.length;
       if (range) matched = matched.slice(range[0], range[1] + 1);
       if (limit !== undefined) matched = matched.slice(0, limit);
       if (q.head) return { data: null, error: null, count: matched.length };
@@ -164,7 +169,7 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
         if (data.length !== 1) return { data: null, error: { code: 'PGRST116', message: 'not exactly one row' } };
         return { data: data[0], error: null };
       }
-      return { data, error: null, ...(q.count ? { count: matched.length } : {}) };
+      return { data, error: null, ...(q.count ? { count: total } : {}) };
     };
 
     const builder: Record<string, unknown> = {
@@ -176,17 +181,17 @@ export const createFakeSupabase = (options: FakeSupabaseOptions = {}) => {
       },
       eq: (column: string, value: unknown) => {
         q.filters.push(`${column}=eq.${String(value)}`);
-        predicates.push({ column, test: (r) => r[column] === value });
+        predicates.push({ column, test: (r) => cell(r, column) === value });
         return builder;
       },
       not: (column: string, op: string, value: unknown) => {
         q.filters.push(`${column}=not.${op}.${String(value)}`);
-        predicates.push({ column, test: (r) => r[column] !== value });
+        predicates.push({ column, test: (r) => cell(r, column) !== value });
         return builder;
       },
       in: (column: string, values: unknown[]) => {
         q.filters.push(`${column}=in.(${values.join(',')})`);
-        predicates.push({ column, test: (r) => values.includes(r[column]) });
+        predicates.push({ column, test: (r) => values.includes(cell(r, column)) });
         return builder;
       },
       ilike: (column: string, pattern: string) => {
