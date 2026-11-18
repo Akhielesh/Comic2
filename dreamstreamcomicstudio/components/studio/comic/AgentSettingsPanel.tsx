@@ -15,6 +15,35 @@ import {
   normalizeComicAgentSettings,
 } from '../../../services/comicAgentSettings';
 import { springSoft, usePrefersReducedMotion } from '../kit';
+import { X } from 'lucide-react';
+import { cn } from '../../../lib/utils';
+import { Button, IconButton, FILTER_CHIP, FILTER_CHIP_ON, SWITCH_HIT_AREA, SWITCH_THUMB, SWITCH_TRACK } from '../../ds';
+import {
+  ACCENT_SOFT_BG,
+  CHIP_VARIANT,
+  DENSITY,
+  FIELD_GROUP,
+  FIELD_EMBEDDED,
+  FOCUS_RING,
+  INK,
+  MUTED,
+  RADIUS_CONTROL,
+  RADIUS_ROUND,
+  SCRIM,
+  TRANSITION,
+  Z
+} from '../../chat/studioDesign';
+
+/** A choice row (confirm policy, consistency): the ink edge and the accent tint when chosen. */
+const choice = (on: boolean) =>
+  cn(
+    'border text-[13px]',
+    RADIUS_CONTROL,
+    TRANSITION,
+    DENSITY.touch,
+    FOCUS_RING,
+    on ? cn('border-[var(--ds-ink)]', ACCENT_SOFT_BG, INK) : cn('border-[var(--ds-hairline)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', MUTED)
+  );
 
 export interface AgentSettingsPanelProps {
   open: boolean;
@@ -55,7 +84,7 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
       {open && (
         <>
           <motion.div
-            className="fixed inset-0 z-40 bg-black/40"
+            className={cn('fixed inset-0', Z.scrim, SCRIM)}
             initial={reduced ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -65,15 +94,17 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
           <motion.aside
             role="dialog"
             aria-label="Agent settings"
-            className="fixed right-0 top-0 z-50 flex h-full w-[340px] max-w-[88vw] flex-col border-l border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-5 backdrop-blur-md"
+            className={cn('fixed right-0 top-0 flex h-full w-[340px] max-w-[88vw] flex-col border-l border-[var(--ds-overlay-edge)] bg-[var(--ds-raised)] p-5 shadow-[shadow:var(--ds-shadow-overlay)]', Z.sheet, INK)}
             initial={reduced ? false : { x: 360 }}
             animate={{ x: 0 }}
             exit={{ x: 360 }}
             transition={springSoft}
           >
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-[15px] font-semibold text-[var(--ds-ink)]">Agent settings</h2>
-              <button type="button" onClick={onClose} aria-label="Close" className="rounded-lg px-2 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">✕</button>
+              <IconButton label="Close" title={null} onClick={onClose} className={cn('-mr-2', MUTED)}>
+                <X className="h-4 w-4" />
+              </IconButton>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -83,14 +114,18 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                     <button
                       key={opt}
                       type="button"
+                      aria-pressed={s.confirmPolicy === opt}
                       onClick={() => patch({ confirmPolicy: opt })}
-                      className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-[13px] transition-colors ${
-                        s.confirmPolicy === opt
-                          ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-ink)]'
-                          : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
-                      }`}
+                      className={cn('flex items-center gap-2 px-3 py-2 text-left', choice(s.confirmPolicy === opt))}
                     >
-                      <span className={`h-3.5 w-3.5 rounded-full border ${s.confirmPolicy === opt ? 'border-[var(--ds-accent)] bg-[var(--ds-accent)]' : 'border-[var(--ds-hairline)]'}`} />
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'h-3.5 w-3.5 shrink-0 border',
+                          RADIUS_ROUND,
+                          s.confirmPolicy === opt ? 'border-[var(--ds-ink)] bg-[var(--ds-ink)]' : 'border-[var(--ds-control-border)]'
+                        )}
+                      />
                       {agentConfirmLabel(opt)}
                     </button>
                   ))}
@@ -107,9 +142,7 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                         type="button"
                         onClick={() => toggleOutput(t)}
                         aria-pressed={on}
-                        className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${
-                          on ? 'bg-[var(--ds-accent)] text-white' : 'bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
-                        }`}
+                        className={cn(FILTER_CHIP, FOCUS_RING, TRANSITION, on ? FILTER_CHIP_ON : cn(CHIP_VARIANT.outline, 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'))}
                       >
                         {t}
                       </button>
@@ -126,11 +159,7 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                       type="button"
                       onClick={() => patch({ consistencyPolicy: opt })}
                       aria-pressed={s.consistencyPolicy === opt}
-                      className={`flex-1 rounded-xl border px-3 py-2 text-[12px] font-medium transition-colors ${
-                        s.consistencyPolicy === opt
-                          ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-ink)]'
-                          : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
-                      }`}
+                      className={cn('min-w-0 flex-1 px-3 py-2 text-[12px] font-medium', choice(s.consistencyPolicy === opt))}
                     >
                       {consistencyLabel(opt)}
                     </button>
@@ -143,15 +172,17 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                   type="button"
                   onClick={() => patch({ autoPageCount: !s.autoPageCount })}
                   aria-pressed={s.autoPageCount}
-                  className={`relative h-6 w-11 rounded-full transition-colors ${s.autoPageCount ? 'bg-[var(--ds-accent)]' : 'bg-[var(--ds-well)]'}`}
+                  aria-label="Auto page count"
+                  data-state={s.autoPageCount ? 'checked' : 'unchecked'}
+                  className={cn(SWITCH_TRACK, SWITCH_HIT_AREA, FOCUS_RING)}
                 >
-                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${s.autoPageCount ? 'left-[22px]' : 'left-0.5'}`} />
+                  <span data-state={s.autoPageCount ? 'checked' : 'unchecked'} className={SWITCH_THUMB} />
                 </button>
               </Row>
 
               <Row label="Per-run budget cap" hint="The agent stops and asks before a run would exceed this.">
-                <div className="flex items-center gap-2">
-                  <span className="text-[14px] text-[var(--ds-muted)]">$</span>
+                <div className={cn(FIELD_GROUP, 'w-36 px-2.5', DENSITY.comfortable)}>
+                  <span aria-hidden className={cn('text-[14px]', MUTED)}>$</span>
                   <input
                     type="number"
                     min={0}
@@ -162,20 +193,17 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                       const v = parseFloat(e.target.value);
                       patch({ budgetCapUsd: Number.isFinite(v) && v > 0 ? v : undefined });
                     }}
-                    className="w-28 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-2 py-1.5 text-[13px] text-[var(--ds-ink)] focus:outline-none focus:ring-1 focus:ring-[var(--ds-accent)]"
+                    aria-label="Per-run budget cap in USD"
+                    className={cn(FIELD_EMBEDDED, 'py-1.5 text-[13px] tabular-nums', INK, 'placeholder:text-[var(--ds-muted)]')}
                   />
                 </div>
               </Row>
             </div>
 
             {onOpenDetailed && (
-              <button
-                type="button"
-                onClick={onOpenDetailed}
-                className="mt-3 w-full rounded-xl border border-[var(--ds-hairline)] py-2 text-[13px] font-semibold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
-              >
+              <Button type="button" variant="outline" onClick={onOpenDetailed} className="mt-3 w-full">
                 Switch to Detailed editor
-              </button>
+              </Button>
             )}
           </motion.aside>
         </>
