@@ -290,7 +290,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                             incompatible
                               ? `${HAIRLINE} bg-[var(--ds-well-strong)] opacity-60 cursor-not-allowed`
                               : isSelected
-                                ? `border border-[#D97757]/40 ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
+                                ? `border border-[color:color-mix(in_srgb,var(--ds-accent)_40%,transparent)] ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
                                 : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${SHADOW_SOFT} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`
                           }`}
                           title={needsKey ? `Add a ${sourceLabel(model.source)} key in Settings → API Configuration to use this model` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}

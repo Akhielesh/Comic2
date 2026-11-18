@@ -21,7 +21,7 @@ const mailtoUrl = (d: { to?: string; cc?: string; subject?: string; body?: strin
 };
 
 const fieldCls =
-  'w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1.5 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/40';
+  'w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1.5 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]';
 
 export const EmailCompose: React.FC<{ data: EmailComposeArtifact }> = ({ data }) => {
   const compact = useCompact();

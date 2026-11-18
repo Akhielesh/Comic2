@@ -40,7 +40,7 @@ const SkillCard: React.FC<{ skill: ChatSkill; onRun: (arg: string) => void }> = 
       <div className="flex items-start gap-3">
         <span
           aria-hidden
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#D97757]/10 text-[22px] leading-none"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--ds-accent-soft)] text-[22px] leading-none"
         >
           {skill.emoji}
         </span>
@@ -85,7 +85,7 @@ const SkillCard: React.FC<{ skill: ChatSkill; onRun: (arg: string) => void }> = 
           disabled={!canRun}
           className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-2 text-[12.5px] font-semibold ${TRANSITION} disabled:opacity-40 ${
             started
-              ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+              ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
               : 'bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]'
           }`}
           title={started ? 'Running in chat' : `Run /${skill.command}`}

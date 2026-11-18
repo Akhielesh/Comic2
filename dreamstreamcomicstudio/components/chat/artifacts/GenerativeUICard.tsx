@@ -439,7 +439,7 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
         <ol className="flex flex-col gap-2">
           {block.items.map((it, i) => (
             <li key={i} className="flex gap-2.5">
-              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#D97757]/12 text-[11px] font-bold text-[var(--ds-accent)]">{i + 1}</span>
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--ds-accent-soft)] text-[11px] font-bold text-[var(--ds-accent)]">{i + 1}</span>
               <div className="min-w-0">
                 {it.title && <div className="text-sm font-semibold text-[var(--ds-ink)]">{it.title}</div>}
                 {it.text && <p className="whitespace-pre-wrap break-words text-xs text-[var(--ds-muted)]">{it.text}</p>}

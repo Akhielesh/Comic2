@@ -112,7 +112,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                   onClick={() => setTab(id)}
                   className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                     tab === id
-                      ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                       : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                   }`}
                 >
@@ -132,7 +132,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                   onClick={() => setTab(id)}
                   className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                     tab === id
-                      ? 'bg-[#D97757]/10 font-medium text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] font-medium text-[var(--ds-accent)]'
                       : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                   }`}
                 >
@@ -180,7 +180,7 @@ const ThemePreviewSwatch: React.FC<{ value: ThemePreference }> = ({ value }) => 
     <div key={dark ? 'dark' : 'light'} className={`flex-1 p-2 ${dark ? 'bg-stone-800' : 'bg-stone-100'}`}>
       <div className={`h-1.5 w-8 rounded-full ${dark ? 'bg-stone-600' : 'bg-stone-300'}`} />
       <div className={`mt-1.5 h-1.5 w-12 rounded-full ${dark ? 'bg-stone-700' : 'bg-stone-200'}`} />
-      <div className="mt-1.5 h-1.5 w-6 rounded-full bg-[#D97757]/70" />
+      <div className={`mt-1.5 h-1.5 w-6 rounded-full ${dark ? 'bg-stone-200' : 'bg-stone-800'}`} />
     </div>
   );
   return (
@@ -318,7 +318,7 @@ const GeneralTab: React.FC = () => {
                     aria-pressed={active}
                     className={`rounded-xl border p-1.5 text-left transition-colors ${
                       active
-                        ? 'border-[var(--ds-accent)] bg-[#D97757]/10'
+                        ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]'
                         : 'border-[var(--ds-hairline)] hover:bg-[var(--ds-hover)]'
                     }`}
                   >
@@ -513,7 +513,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
                   onClick={() => setImportSource(s.id)}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     importSource === s.id
-                      ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                       : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                   }`}
                 >
@@ -658,7 +658,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
           <SectionLabel>Your agents ({custom.length})</SectionLabel>
           <button
             onClick={() => setEditing(newCustomAgent())}
-            className="flex items-center gap-1 rounded-full bg-[#D97757]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[#D97757]/20"
+            className="flex items-center gap-1 rounded-full bg-[var(--ds-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
           >
             <Plus className="h-3.5 w-3.5" /> New agent
           </button>
@@ -748,7 +748,7 @@ const AgentEditor: React.FC<{ agent: CustomAgentDef; onSave: (a: CustomAgentDef)
               aria-pressed={tools.includes(t.name)}
               className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 tools.includes(t.name)
-                  ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-accent)]'
+                  ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                   : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
               }`}
             >

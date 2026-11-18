@@ -252,7 +252,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   if (e.key === 'Escape') cancelEdit();
                 }}
                 rows={Math.min(10, Math.max(2, editDraft.split('\n').length))}
-                className={`w-full text-base sm:text-sm ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
+                className={`w-full text-base sm:text-sm ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] p-2 outline-none focus:ring-2 focus:ring-[var(--ds-focus)] resize-y`}
               />
               <div className="flex items-center justify-end gap-2 mt-1.5">
                 <button onClick={cancelEdit} className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[var(--ds-ink)]`}><X className="w-3.5 h-3.5" /> Cancel</button>

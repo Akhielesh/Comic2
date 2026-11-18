@@ -294,7 +294,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                   if (e.key === 'Enter') commitTitle();
                   if (e.key === 'Escape') setEditingTitle(false);
                 }}
-                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-2 py-1 outline-none focus:border-[#D97757]/40`}
+                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-2 py-1 outline-none focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]`}
               />
               <button onClick={commitTitle} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
               <button onClick={() => setEditingTitle(false)} className="text-[var(--ds-muted)] hover:scale-110"><X className="w-4 h-4" /></button>

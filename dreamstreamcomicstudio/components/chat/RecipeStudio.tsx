@@ -284,7 +284,7 @@ const ParamField: React.FC<{ param: RecipeParameterView; value: string | boolean
   if (param.input_type === 'boolean') {
     return (
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
         <code className="text-[12px] font-semibold text-[var(--ds-ink)]">{param.key}</code>
         {param.description && <span className="text-[11px] text-[var(--ds-muted)]">— {param.description}</span>}
       </label>
@@ -393,7 +393,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
       </div>
 
       <label className="flex items-center gap-2 text-sm text-[var(--ds-ink)]">
-        <input type="checkbox" checked={swarm} onChange={(e) => setSwarm(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+        <input type="checkbox" checked={swarm} onChange={(e) => setSwarm(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
         <Network className="h-4 w-4 text-[var(--ds-accent)]" /> Run through the agent <span className="font-semibold">swarm</span> (multi-agent)
       </label>
 

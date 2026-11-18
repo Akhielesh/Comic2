@@ -234,7 +234,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                               ? n! >= 0
                                 ? 'bg-emerald-500/45'
                                 : 'bg-rose-500/45'
-                              : 'bg-[#D97757]/35'
+                              : 'bg-[color:color-mix(in_srgb,var(--ds-accent)_35%,transparent)]'
                           }`}
                           style={
                             stat.diverging

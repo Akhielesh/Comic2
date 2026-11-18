@@ -19,7 +19,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 // so clicking opens a real new tab (rel=noopener). Height is reported back via postMessage
 // (validated by source + nonce) so the frame sizes to its content — no nested scrollbar.
 
-const ACCENT = '#c2643f'; // theme-invariant studio accent, for unstyled email links
+// Theme-invariant link ink for unstyled email links (the mail renders on its own white page, where
+// the app's tokens do not reach): the default info text token's value.
+const LINK_INK = '#404040';
 
 /** base64url → base64 (padded) for data: URLs. */
 export const b64urlToDataUrl = (data: string, mimeType: string): string => {
@@ -58,7 +60,7 @@ const buildSrcDoc = (html: string, opts: { cidMap: Record<string, string>; showR
     `word-break:break-word;overflow-wrap:anywhere;}` +
     `img{max-width:100%!important;height:auto;}table{max-width:100%!important;}` +
     `*{max-width:100%;box-sizing:border-box;}` +
-    `a{color:${ACCENT};}</style>`;
+    `a{color:${LINK_INK};}</style>`;
   // The reporter: report height + force every link to open in a new tab. Email scripts
   // can't forge the nonce (random per render), so only this runs.
   const reporter =

@@ -77,7 +77,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
           className="w-full max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-xl backdrop-blur-xl"
         >
           <div className="flex items-start gap-3 p-5 border-b border-[var(--ds-hairline-soft)]">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
               <Plug className="h-5 w-5" aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
@@ -112,7 +112,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                       aria-checked={isOn}
                       onClick={() => toggle(s.id)}
                       disabled={submitting}
-                      className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left hover:bg-[var(--ds-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/30 disabled:opacity-60"
+                      className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left hover:bg-[var(--ds-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-60"
                     >
                       <span
                         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
@@ -173,7 +173,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                   type="button"
                   onClick={() => onSubmit(selectedIds, toDisconnect)}
                   disabled={submitting || !changed}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-60"
                 >
                   {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {connectedIds.size ? 'Save changes' : `Connect ${selectedIds.length || ''}`.trim()}

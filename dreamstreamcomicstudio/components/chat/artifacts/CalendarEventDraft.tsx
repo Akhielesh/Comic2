@@ -474,7 +474,7 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
       <div className="space-y-3 px-3.5 py-3">
         {/* Event summary */}
         <div className="flex items-start gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]"><Icon className="h-4 w-4" /></span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]"><Icon className="h-4 w-4" /></span>
           <div className="min-w-0 flex-1 space-y-1">
             {ev.title ? <p className="break-words text-[14px] font-semibold text-[var(--ds-ink)]">{ev.title}</p> : <p className="text-[13px] italic text-[var(--ds-muted)]">(this event)</p>}
             {ev.start && (

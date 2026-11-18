@@ -44,7 +44,7 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) suggest(); }}
         rows={2}
         placeholder="e.g. debug a React component / research the latest on a topic / read a screenshot"
-        className={`w-full resize-none ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-3 py-2 text-sm outline-none focus:border-[#D97757]/40 ${TRANSITION}`}
+        className={`w-full resize-none ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-3 py-2 text-sm outline-none focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)] ${TRANSITION}`}
       />
       <div className="flex justify-between items-center mt-2">
         <button onClick={() => { setOpen(false); setSuggestions(null); }} className={`text-[11px] font-semibold ${MUTED} hover:text-[var(--ds-ink)]`}>Cancel</button>

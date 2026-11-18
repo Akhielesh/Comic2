@@ -258,7 +258,7 @@ export const ChatHome: React.FC<ChatHomeProps> = ({
                 className={`${CARD} group flex flex-col items-start p-4 text-left hover:-translate-y-px hover:bg-[var(--ds-surface-strong)]`}
               >
                 <div className="flex w-full items-center gap-2">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
                     <Library className="h-4 w-4" />
                   </span>
                   <span className="flex-1 text-sm font-semibold text-[var(--ds-ink)]">Library</span>
@@ -274,7 +274,7 @@ export const ChatHome: React.FC<ChatHomeProps> = ({
                 className={`${CARD} group flex flex-col items-start p-4 text-left hover:-translate-y-px hover:bg-[var(--ds-surface-strong)]`}
               >
                 <div className="flex w-full items-center gap-2">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
                     <LayoutDashboard className="h-4 w-4" />
                   </span>
                   <span className="flex-1 text-sm font-semibold text-[var(--ds-ink)]">Dashboards</span>

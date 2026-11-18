@@ -581,7 +581,7 @@ export const EmailTerminal: React.FC<{ data: EmailInboxArtifact }> = ({ data }) 
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search all mail (from:, subject:, has:attachment…)"
-          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/40"
+          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
         />
         {query && (
           <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ds-faint)] hover:text-[var(--ds-ink)]" aria-label="Clear search">

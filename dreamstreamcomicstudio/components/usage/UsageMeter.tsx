@@ -50,7 +50,7 @@ export const usageExhaustedCopy = (status: Pick<AllowanceStatus, 'resetsAt' | 'b
 };
 
 const CTA_CLASS =
-  'inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50 coarse:h-11';
+  'inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-50 coarse:h-11';
 
 const TONE_STROKE: Record<ReturnType<typeof usageTone>, string> = {
   ok: 'text-emerald-600 dark:text-emerald-400',
@@ -139,7 +139,7 @@ export const UsageMeterPill = React.forwardRef<
       title={status.friendlyUnits?.label || 'Usage left'}
       className={cx(
         'inline-flex shrink-0 items-center rounded-full border text-[12px] font-medium tabular-nums transition-colors',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
+        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)]',
         status.exhausted
           ? 'border-rose-500/30 bg-rose-500/[0.07] text-rose-700 hover:bg-rose-500/[0.12] dark:text-rose-300'
           : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]',
@@ -202,7 +202,7 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
             {ownKey !== null && (
               <a
                 href={API_KEYS_HREF}
-                className="inline-flex h-9 items-center text-[12.5px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-colors hover:text-[var(--ds-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11"
+                className="inline-flex h-9 items-center text-[12.5px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-colors hover:text-[var(--ds-ink)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] coarse:h-11"
               >
                 API keys
               </a>

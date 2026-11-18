@@ -178,7 +178,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
         }}
         title={KIND_LABEL[e.kind]}
         className={`group/item relative mb-0.5 flex w-full items-start gap-2.5 rounded-xl py-2 pl-3 pr-2.5 text-left ${TRANSITION} ${
-          active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'
+          active ? 'bg-[var(--ds-accent-soft)]' : 'hover:bg-[var(--ds-hover)]'
         }`}
       >
         {/* kind accent rail */}
@@ -234,7 +234,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search widgets, tools, tags…"
-                  className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/40"
+                  className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
                 />
                 {query && (
                   <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label="Clear search">

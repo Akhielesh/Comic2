@@ -38,7 +38,7 @@ const read = (el: HTMLElement | null): GameColors => {
     hairline: v('--ds-hairline', 'rgba(0,0,0,0.10)'),
     well: v('--ds-well', 'rgba(0,0,0,0.03)'),
     raised: v('--ds-raised', '#ffffff'),
-    accent: v('--ds-accent', '#D97757'),
+    accent: v('--ds-accent', '#1a1915'),
     up: BULL,
     down: BEAR,
     ramp: RAMP

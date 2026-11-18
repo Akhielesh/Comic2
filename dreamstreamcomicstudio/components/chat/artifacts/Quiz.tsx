@@ -112,7 +112,6 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
 
   return (
     <Surface
-      accent="#D97757"
       header={
         <div className="flex items-start gap-2">
           <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
@@ -173,7 +172,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                     const isAnswer = (q.correct || []).includes(c.id);
                     const tone = showResult
                       ? isAnswer ? 'border-emerald-300 bg-emerald-50' : selected ? 'border-red-300 bg-red-50' : 'border-[var(--ds-hairline-soft)] bg-white/50'
-                      : selected ? 'border-[#D97757]/50 bg-[#D97757]/[0.08]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-well)]';
+                      : selected ? 'border-[color:color-mix(in_srgb,var(--ds-accent)_50%,transparent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-well)]';
                     return (
                       <button
                         key={c.id}
@@ -182,7 +181,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                         onClick={() => (q.type === 'multi' ? toggleMulti(q.id, c.id) : setSingle(q.id, c.id))}
                         className={`w-full text-left flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm text-[var(--ds-ink)] transition-colors duration-200 ${tone} disabled:cursor-default`}
                       >
-                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[#D97757]' : 'bg-[var(--ds-raised)] border-[var(--ds-faint)]'}`} />
+                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[var(--ds-accent)]' : 'bg-[var(--ds-raised)] border-[var(--ds-faint)]'}`} />
                         <span className="flex-1">{c.text}</span>
                         {showResult && isAnswer && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
                       </button>

@@ -81,7 +81,7 @@ export const IconsBrowser: React.FC = () => {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search icons…"
-              className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/40"
+              className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
             />
             {query && (
               <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label="Clear search">
@@ -116,7 +116,7 @@ export const IconsBrowser: React.FC = () => {
                 key={e.key}
                 onClick={() => copy(e.name)}
                 title={`${e.name} · ${e.category} — click to copy name`}
-                className={`group/icon flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-2 text-[var(--ds-ink)] ${TRANSITION} hover:border-[#D97757]/40 hover:bg-[var(--ds-hover)]`}
+                className={`group/icon flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-2 text-[var(--ds-ink)] ${TRANSITION} hover:border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)] hover:bg-[var(--ds-hover)]`}
               >
                 <span className="relative text-[var(--ds-ink)] transition-colors duration-200 group-hover/icon:text-[var(--ds-accent)]">
                   {e.render(30)}

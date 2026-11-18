@@ -23,7 +23,7 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
 
   const header = (
     <div className="flex items-start gap-2">
-      <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[#D97757]">
+      <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-accent-text)]">
         <Plane className="h-4 w-4" />
       </span>
       <div className="min-w-0">
@@ -46,7 +46,7 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
   if (!offers.length) {
     if (!data?.searchUrl) return null;
     return (
-      <Surface accent="#D97757" header={header}>
+      <Surface header={header}>
         <div className="px-3 pb-3 pt-1">
           <a
             href={data.searchUrl}
@@ -54,7 +54,7 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] px-3 py-2 text-[13px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
           >
-            <Plane className="h-4 w-4 text-[#D97757]" /> See live fares on Google Flights
+            <Plane className="h-4 w-4 text-[var(--ds-accent-text)]" /> See live fares on Google Flights
             <ExternalLink className="h-3.5 w-3.5 text-[var(--ds-muted)]" />
           </a>
           <p className="mt-2 text-[11px] text-[var(--ds-faint)]">
@@ -84,12 +84,12 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
     const isCheapest = o === cheapest;
     const isFastest = o === fastest && offers.length > 1 && fastest !== cheapest;
     if (isCheapest) return <span className="rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-700">Cheapest</span>;
-    if (isFastest) return <span className="inline-flex items-center gap-0.5 rounded-full bg-[#D97757]/10 px-1.5 py-px text-[10px] font-semibold text-[#D97757]"><Zap className="h-2.5 w-2.5" />Fastest</span>;
+    if (isFastest) return <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--ds-accent-soft)] px-1.5 py-px text-[10px] font-semibold text-[var(--ds-accent-text)]"><Zap className="h-2.5 w-2.5" />Fastest</span>;
     return null;
   };
 
   return (
-    <Surface accent="#D97757" header={header} right={right}>
+    <Surface header={header} right={right}>
       <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
         {rows.map((o, i) => (
           <li key={i} className="flex items-center gap-3 px-3 py-2.5">
