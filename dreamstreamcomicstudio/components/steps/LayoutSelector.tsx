@@ -481,7 +481,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                 <label className={cn(UPLOAD_TILE, 'flex-1 flex-col justify-center gap-0 text-center')}>
                                     <UploadCloud size={28} aria-hidden="true" />
                                     <span className="mt-2 text-xs font-medium">Upload layout refs</span>
-                                    <input type="file" multiple accept="image/*" className="hidden" onChange={handleFileChange} />
+                                    <input type="file" multiple accept="image/*" className="sr-only" onChange={handleFileChange} />
                                 </label>
                                 {customImages.length > 0 && (
                                     <div className="grid h-1/2 grid-cols-2 gap-2">

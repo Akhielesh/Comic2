@@ -29,7 +29,7 @@ import { buildContinuityFromWorld } from '../../services/continuity';
 import { saveCharacterToLibrary } from '../../services/characterLibrary';
 import { ExtractWorldResponse } from '../../apiTypes';
 import { syncCharacterDescription, syncItemDescription, syncLocationDescription } from '../../services/worldSchema';
-import { AgentStageShell, STAGE_BOARD_HEADER, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_FRAME, UPLOAD_TILE } from '../AgentStageShell';
+import { AgentStageShell, STAGE_BOARD_HEADER, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_FRAME, UPLOAD_TILE, LIGHT_CAPTURE } from '../AgentStageShell';
 import { shouldAutoRunComicAgent } from '../../services/comicAgentSettings';
 import { legacyPdfErrorMessage, loadHtml2Canvas, loadJsPdf, loadLegacyPdf } from '../../services/legacyPdfLoader';
 import { STATUS_INK, STATUS_SURFACE } from '../ds/recipes';
@@ -431,6 +431,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       const canvas = await html2canvas(element, {
         scale: 2,
         backgroundColor: '#ffffff',
+        ...LIGHT_CAPTURE,
         ignoreElements: (el: HTMLElement) => el.dataset.exportIgnore === 'true'
       });
       if (!jsPDF) {
@@ -496,6 +497,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           const canvas = await html2canvas(element, {
             scale: 2,
             backgroundColor: '#ffffff',
+            ...LIGHT_CAPTURE,
             ignoreElements: (el: HTMLElement) => el.dataset.exportIgnore === 'true'
           });
           const imgData = canvas.toDataURL('image/png');
@@ -648,7 +650,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             ))}
             <label className={cn(UPLOAD_TILE, 'h-10 min-h-10 w-10 justify-center p-0', DENSITY.coarseSquare)}>
               <UploadCloud size={16} aria-hidden="true" />
-              <input type="file" hidden multiple onChange={(e) => handleRefUpload(type, entity.id, e.target.files)} />
+              <input type="file" multiple className="sr-only" aria-label={`Upload references for ${entity.name}`} onChange={(e) => handleRefUpload(type, entity.id, e.target.files)} />
             </label>
           </div>
 

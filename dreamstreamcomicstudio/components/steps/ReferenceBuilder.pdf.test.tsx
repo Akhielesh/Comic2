@@ -91,6 +91,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+
+/** Runs the capture's onclone on a dark-theme clone and returns whether the clone is still dark. */
+function cloneStaysDark(options: { onclone?: (doc: Document) => void }): boolean {
+  const doc = document.implementation.createHTMLDocument('clone');
+  doc.documentElement.classList.add('dark');
+  expect(options.onclone).toBeTypeOf('function');
+  options.onclone!(doc);
+  return doc.documentElement.classList.contains('dark');
+}
+
 describe('ReferenceBuilder card downloads on the on-demand loader', () => {
   it('rendering the board loads nothing', async () => {
     renderBoard();
@@ -108,6 +118,8 @@ describe('ReferenceBuilder card downloads on the on-demand loader', () => {
     expect(loadHtml2CanvasMock).toHaveBeenCalledTimes(1);
     expect(loadJsPdfMock).toHaveBeenCalledTimes(1);
     expect(html2canvasMock).toHaveBeenCalledWith(document.getElementById('card-c1'), expect.objectContaining({ scale: 2 }));
+    // The card is captured in the light theme: a dark screen never darkens the exported card.
+    expect(cloneStaysDark(html2canvasMock.mock.calls[0][1])).toBe(false);
     expect(jsPdfInstances[0].args).toEqual(['p', 'mm', 'a5']);
     // The busy state clears after a successful download too, not only after a failure.
     await waitFor(() => expect(cardButton('c1', /^PDF$/)).toBeEnabled());
@@ -155,6 +167,7 @@ describe('ReferenceBuilder card downloads on the on-demand loader', () => {
     await waitFor(() => expect(jsPdfInstances[0]?.save).toHaveBeenCalledWith('DreamStream_Collection.pdf'));
     expect(loadLegacyPdfMock).toHaveBeenCalledTimes(1);
     expect(html2canvasMock).toHaveBeenCalledTimes(2);
+    for (const call of html2canvasMock.mock.calls) expect(cloneStaysDark(call[1])).toBe(false);
     expect(jsPdfInstances[0].addPage).toHaveBeenCalledTimes(1);
     // The busy state clears: the collection button and every card button work again.
     await waitFor(() => expect(screen.getByRole('button', { name: /Download 2/ })).toBeEnabled());

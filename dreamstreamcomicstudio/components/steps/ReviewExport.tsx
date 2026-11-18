@@ -52,7 +52,7 @@ import { useUsageAllowance } from '../usage/useUsageAllowance';
 import { aiUsageForExport, artifactsForExport, comicCostView, costSummaryForExport, isGovernedComicCost, localCostLabel, projectForExport, type ComicCostResponse } from './comicCostDisplay';
 import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
 import { transitionAgentRun } from '../../services/comicAgentRun';
-import { AgentStageShell, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_WELL } from '../AgentStageShell';
+import { AgentStageShell, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_WELL, LIGHT_CAPTURE } from '../AgentStageShell';
 import { buildComicExportManifest, buildComicHtmlDocument } from '../../services/comicDeliverables';
 
 import { legacyPdfErrorMessage, loadLegacyPdf } from '../../services/legacyPdfLoader';
@@ -404,7 +404,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       comicEl.style.overflow = 'visible';
 
       try {
-        const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF' });
+        const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF', ...LIGHT_CAPTURE });
         const imgData = canvas.toDataURL('image/png');
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = (canvas.height * pdfWidth) / canvas.width;

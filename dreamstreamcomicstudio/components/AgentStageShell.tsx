@@ -39,8 +39,23 @@ export const STAGE_BOARD_TITLE = 'm-0 text-[length:var(--ds-text-base)] font-sem
 export const STAGE_CARD = `${HAIRLINE} rounded-[var(--ds-radius-control)] bg-[var(--ds-surface)]`;
 /** A quiet well inside the frame (context lists, empty boards). */
 export const STAGE_WELL = `${HAIRLINE} rounded-[var(--ds-radius-control)] bg-[var(--ds-well)]`;
-/** A dashed drop / upload tile (a label wrapping a hidden file input): 44 px tall at least. */
-export const UPLOAD_TILE = `flex min-h-11 cursor-pointer items-center gap-3 rounded-[var(--ds-radius-control)] border border-dashed border-[var(--ds-control-border)] bg-[var(--ds-well)] px-4 py-3 text-sm text-[var(--ds-muted)] hover:border-[var(--ds-control-border-hover)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[color:var(--ds-focus)] ${TRANSITION}`;
+/** A dashed drop / upload tile: a label wrapping a visually hidden (`sr-only`, still focusable) file input, so the
+ *  focus-within ring shows when the keyboard reaches the picker. 44 px tall at least. */
+export const UPLOAD_TILE = `relative flex min-h-11 cursor-pointer items-center gap-3 rounded-[var(--ds-radius-control)] border border-dashed border-[var(--ds-control-border)] bg-[var(--ds-well)] px-4 py-3 text-sm text-[var(--ds-muted)] hover:border-[var(--ds-control-border-hover)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[color:var(--ds-focus)] ${TRANSITION}`;
+/**
+ * html2canvas `onclone` for the classic downloads (reference card PNG / PDF, the comic PDF): the capture is taken in
+ * the light theme, so the exported file is the same light paper whatever theme the screen shows. Transitions are
+ * held in the clone so no colour is read mid-fade.
+ */
+export function captureInLightTheme(doc: Document): void {
+  const hold = doc.createElement('style');
+  hold.textContent = '*,*::before,*::after{transition:none !important}';
+  doc.head.appendChild(hold);
+  doc.documentElement.classList.remove('dark');
+}
+/** Spread into an html2canvas options object (the loader's option type does not list `onclone`; html2canvas takes it). */
+export const LIGHT_CAPTURE: { onclone: (doc: Document) => void } = { onclone: captureInLightTheme };
+
 /** Body copy and its muted step. */
 export const STAGE_BODY = `text-sm leading-6 text-[var(--ds-muted)] ${WRAP_TEXT}`;
 

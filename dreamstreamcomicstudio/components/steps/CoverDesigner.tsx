@@ -327,7 +327,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
               <label className={UPLOAD_TILE}>
                 <UploadCloud className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span className={WRAP_TEXT}>Upload cover layout or mood reference</span>
-                <input type="file" hidden accept="image/*" onChange={(e) => handleUpload(e.target.files)} />
+                <input type="file" accept="image/*" className="sr-only" onChange={(e) => handleUpload(e.target.files)} />
               </label>
               {state.coverTemplateImageUrl && (
                 <Button
