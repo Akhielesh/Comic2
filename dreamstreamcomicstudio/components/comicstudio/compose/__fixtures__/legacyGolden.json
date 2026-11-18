@@ -1,5 +1,5 @@
 {
- "note": "The renderers before PE-COMPOSE (756b5a70): hashString of ComicPageView innerHTML (board props; reader props: paper, letteringAriaHidden, eager, develop off; useId tokens renumbered by first appearance), of JSON.stringify of every canvas call renderPageToBlob makes (JPEG, estimateMeasure, fakeCanvas), per page, and of buildPrintHtml per book. Every QA fixture and its rtl edition, and the sample doc. Re-recorded at the S2b integration on the merged tree just before PE-COMPOSE (22084f2c: dev 99b870c4 + PE-MOTION-ENGINE, PE-SERVER, PE-FX, PE-LETTER): its legacy DOM equals dev 99b870c4's page for page, and dev's S2a changes moved the board and reader DOM hashes of 152 pages from 756b5a70 (the raster and print hashes did not move); the chat-14 fixture (S2a) is new. Print hashes re-recorded at the S2b integration (M9, the merged tree just before PE-FONTS) with each @font-face URL's node_modules prefix made canonical (the test's stableFontUrls): the URL depended on where node_modules lives, not on the renderers. With it canonical, PE-FONTS leaves every print document byte-identical.",
+ "note": "The renderers before PE-COMPOSE (756b5a70): hashString of ComicPageView innerHTML (board props; reader props: paper, letteringAriaHidden, eager, develop off; useId tokens renumbered by first appearance), of JSON.stringify of every canvas call renderPageToBlob makes (JPEG, estimateMeasure, fakeCanvas), per page, and of buildPrintHtml per book. Every QA fixture and its rtl edition, and the sample doc. Re-recorded at the S2b integration on the merged tree just before PE-COMPOSE (22084f2c: dev 99b870c4 + PE-MOTION-ENGINE, PE-SERVER, PE-FX, PE-LETTER): its legacy DOM equals dev 99b870c4's page for page, and dev's S2a changes moved the board and reader DOM hashes of 152 pages from 756b5a70 (the raster and print hashes did not move); the chat-14 fixture (S2a) is new. Print hashes re-recorded at the S2b integration (M9, the merged tree just before PE-FONTS) with each @font-face URL's node_modules prefix made canonical (the test's stableFontUrls): the URL depended on where node_modules lives, not on the renderers. With it canonical, PE-FONTS leaves every print document byte-identical. Print hashes re-recorded at the Atlas conversion integration: the print document's screen-only bar button moved from the terracotta fill to the ink (export/printView.ts); every page, raster and printed sheet is unchanged.",
  "pages": {
   "lake-1p|pg_1": {
    "board": "2e0168f7",
@@ -911,20 +911,20 @@
   }
  },
  "print": {
-  "lake-1p": "250cfb4a",
-  "lake-1p|rtl": "250cfb4a",
-  "heist-12p": "a30a2d13",
-  "heist-12p|rtl": "3122792d",
-  "deep-40p": "761998e9",
-  "deep-40p|rtl": "d3ab171f",
-  "webtoon-20p": "4f891f0a",
-  "webtoon-20p|rtl": "4f891f0a",
-  "stress": "2b07e3ea",
-  "stress|rtl": "4a3942dc",
-  "empty": "3f29cf7d",
-  "empty|rtl": "3f29cf7d",
-  "chat-14": "0c7af6d2",
-  "chat-14|rtl": "2e88db52",
-  "sample": "db5d322f"
+  "lake-1p": "601aa4f3",
+  "lake-1p|rtl": "601aa4f3",
+  "heist-12p": "98009b9e",
+  "heist-12p|rtl": "60bb9662",
+  "deep-40p": "c0b02546",
+  "deep-40p|rtl": "3feda234",
+  "webtoon-20p": "a8614aa1",
+  "webtoon-20p|rtl": "a8614aa1",
+  "stress": "e53988ed",
+  "stress|rtl": "31f2d4c7",
+  "empty": "46d38798",
+  "empty|rtl": "46d38798",
+  "chat-14": "0fad7a61",
+  "chat-14|rtl": "77749535",
+  "sample": "ec226ea6"
  }
 }
