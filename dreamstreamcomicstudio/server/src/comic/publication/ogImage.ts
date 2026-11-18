@@ -7,7 +7,7 @@
 //   cover card: the art fit to 530 px high, rounded 18 px, soft shadow, at x=88;
 //   text column x=560…1130: title (Bangers + per-script Noto, auto-fit 64→40 px, ≤ 3 lines,
 //   dark outline), description (Noto Sans SemiBold 26 px, ≤ 3 lines), meta row;
-//   mark: "DreamStream Studio", bottom right.
+//   mark: the Comic Studio mark in ink + "DreamStream Studio", bottom right.
 //   The meta row carries the publish-time content rating ("Rated PG") when there is one, so a
 //   parent sees it in the WhatsApp/iMessage preview before opening the link.
 //
@@ -32,6 +32,8 @@ import { SHARP_INPUT, withSharpSlot } from '../imageMeasure.js';
 export const OG_W = 1200;
 export const OG_H = 630;
 export const OG_MAX_BYTES = 300 * 1024;
+/** Bumped when the drawn card changes without an OG_TEMPLATE_VERSION bump (2: the ink mark). */
+export const OG_RENDER_REV = 'r2-ink-mark';
 const DEFAULT_THEME = '#3B5B8C';
 
 export interface OgRenderInput {
@@ -160,7 +162,10 @@ export function ogHash(input: Omit<OgRenderInput, 'coverBuf' | 'fallbackPageBuf'
     input.fallbackTitle || '',
     input.coverPath || '',
     // Appended only when set, so a card without a rating keeps its exact earlier hash (and URL).
-    ...(isContentRating(input.rating) ? [input.rating] : [])
+    ...(isContentRating(input.rating) ? [input.rating] : []),
+    // The drawn template's own revision (the ink mark), so a card made with the old orange mark
+    // gets a new file name the next time its publication is written, instead of being reused.
+    OG_RENDER_REV
   ]);
   return crypto.createHash('sha1').update(material).digest('hex').slice(0, 12);
 }
@@ -256,11 +261,21 @@ async function renderClamped(text: string, opts: { size: number; alpha: number; 
 const roundedMask = (w: number, h: number, r: number) =>
   Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="${r}" ry="${r}" fill="#fff"/></svg>`);
 
-const markSvg = (): Buffer =>
+/**
+ * The Comic Studio mark (components/comicshost/ComicsMark.tsx, viewBox 48) drawn in ink, as the
+ * product shows it on dark paper: a light ink tile with the turning page cut out in the dark
+ * paper. The card's backdrop is always dark (blurred, darkened art or a dark gradient), so the
+ * light tile reads on every cover. No hue: the old orange bubble tile is gone (Atlas ink look).
+ */
+export const OG_MARK_INK = '#FAFAFA';
+export const OG_MARK_PAPER = '#0A0A0A';
+export const markSvg = (size = 36): Buffer =>
   Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">` +
-      `<rect x="1" y="1" width="34" height="34" rx="9" fill="#D97757"/>` +
-      `<path d="M10 11.5h16a3 3 0 0 1 3 3v6.5a3 3 0 0 1-3 3h-8.5l-4.5 4v-4H10a3 3 0 0 1-3-3v-6.5a3 3 0 0 1 3-3z" fill="#FDFBF7"/>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 48 48">` +
+      `<rect x="2" y="2" width="44" height="44" rx="12" fill="${OG_MARK_INK}"/>` +
+      `<path d="M15 13h18l4 4v20H15z" fill="none" stroke="${OG_MARK_PAPER}" stroke-width="2" stroke-linejoin="round" opacity=".55"/>` +
+      `<path d="M11 10h17l6 6v19H11z" fill="${OG_MARK_PAPER}"/>` +
+      `<path d="M27 10v7h7M15 20h15v11H15zM15 25h15M22 25v6" fill="none" stroke="${OG_MARK_INK}" stroke-width="1.8" stroke-linejoin="round"/>` +
       `</svg>`
   );
 
