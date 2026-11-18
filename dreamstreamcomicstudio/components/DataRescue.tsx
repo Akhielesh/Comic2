@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Project } from '../types';
 import { saveProject } from '../services/db';
 import { Loader2, Database, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Button } from './ds';
+import { RADIUS_PANEL, STATUS_INK, STATUS_SURFACE } from './chat/studioDesign';
+import { cn } from '../lib/utils';
 
 export const DataRescue: React.FC = () => {
     const [localCount, setLocalCount] = useState<number>(0);
@@ -103,27 +106,28 @@ export const DataRescue: React.FC = () => {
     if (localCount === 0 && legacyDbCount === 0) return null;
 
     return (
-        <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-md my-4">
-            <div className="flex items-center gap-3">
-                <Database className="text-amber-600" />
-                <div>
-                    <h3 className="font-bold text-amber-800">Local Data Detected</h3>
-                    <p className="text-sm text-amber-700">
+        <div className={cn('my-4 border p-4', STATUS_SURFACE.attention, RADIUS_PANEL)}>
+            <div className="flex flex-wrap items-center gap-3">
+                <Database className={cn('shrink-0', STATUS_INK.attention)} aria-hidden />
+                <div className="min-w-0 flex-1 basis-48">
+                    <h3 className="text-[length:var(--ds-text-base)] font-semibold leading-5 text-[var(--ds-ink)]">Local Data Detected</h3>
+                    <p className="text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">
                         Found {localCount + legacyDbCount} projects on this device that might not be synced.
                     </p>
                 </div>
-                <button
+                <Button
+                    variant="outline"
                     onClick={performMigration}
                     disabled={migrating}
-                    className="ml-auto bg-amber-600 text-white px-4 py-2 rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
+                    className="ml-auto"
                 >
-                    {migrating ? <Loader2 className="animate-spin w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                    {migrating ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <AlertTriangle aria-hidden />}
                     {migrating ? 'Syncing...' : 'Rescue Data'}
-                </button>
+                </Button>
             </div>
             {result && (
-                <div className="mt-2 text-sm font-medium flex items-center gap-2 text-green-700">
-                    <CheckCircle className="w-4 h-4" />
+                <div className={cn('mt-2 flex items-center gap-2 text-[length:var(--ds-text-base)] font-medium', STATUS_INK.healthy)}>
+                    <CheckCircle className="w-4 h-4 shrink-0" aria-hidden />
                     {result}
                 </div>
             )}

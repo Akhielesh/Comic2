@@ -36,7 +36,7 @@ vi.mock('./common/SmartImage', () => ({
 vi.mock('./modals/ProjectInfoModal', () => ({ ProjectInfoModal: () => null }));
 vi.mock('../services/supabase', async () => ({ supabase: (await import('../services/projectRows.testkit')).fakeSupabase.client }));
 
-import { Button } from './Button';
+import { Button } from './ds';
 import { ProjectDashboard } from './ProjectDashboard';
 
 /** The variant that holds every touch-only class: any screen that is not a mouse. */
@@ -44,7 +44,7 @@ const TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:';
 /** The class that shows the row when the keyboard reaches one of its buttons. */
 const KEYBOARD = 'has-[:focus-visible]:opacity-100';
 /** The row as it was before AH-5, and as it must stay with a mouse: centred on a dimmed cover, shown on hover. */
-const MOUSE_ROW = ['absolute', 'inset-0', 'bg-black/50', 'flex', 'items-center', 'justify-center', 'opacity-0', 'group-hover:opacity-100', 'transition-opacity', 'gap-2'];
+const MOUSE_ROW = ['absolute', 'inset-0', 'bg-[var(--ds-scrim)]', 'flex', 'items-center', 'justify-center', 'opacity-0', 'group-hover:opacity-100', 'transition-opacity', 'gap-2'];
 
 const baseState = (): ComicState => ({
   step: 0,
@@ -182,7 +182,9 @@ interface BuiltRule {
 const ruleFor = (root: postcss.Root, className: string): BuiltRule => {
   const found: BuiltRule[] = [];
   root.walkRules((rule) => {
-    if (rule.selector.replace(/\\/g, '') !== `.${className}`) return;
+    // A class written with `has-[>svg]:` builds `.class:has(>svg)`: the rule for that class all the same.
+    const selector = rule.selector.replace(/\\/g, '');
+    if (selector !== `.${className}` && selector !== `.${className}:has(>svg)`) return;
     const decls: Record<string, string> = {};
     rule.walkDecls((d) => {
       decls[d.prop] = d.value;
@@ -317,18 +319,19 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
       return ruleFor(root, found[0]);
     };
 
-    // Measured in Chromium with the app's fonts: at 320 px a cover is 248 px wide, and the widest label
-    // (icon 16 + gap 8 + "Open") is 54.4 px. These two numbers come from the offline probe on the real app bundle
-    // (AH-5's app3 probe, after p5/pb-scripts/nav-app.cjs), which is the source of truth: this test proves the
-    // arithmetic, not the layout. Re-measure them if the page padding, the card border or the Button font changes.
-    const COVER = 248;
-    const WIDEST_LABEL = 54.4;
+    // At 320 px a cover is 286 px wide (the page's 16 px side padding, the card's 1 px hairline). The widest label is
+    // "Open": icon 16 + gap 6 (the small Button's gap-1.5) + 34.1 px of IBM Plex Sans 500 at 14 px, measured in
+    // Chromium with the app's own font file; 56.2 px. This test proves the arithmetic, not the layout: re-measure if
+    // the page padding, the card border or the Button font changes.
+    const COVER = 286;
+    const WIDEST_LABEL = 56.2;
     const rowPadding = px(touchPadding(row).decls['padding-left']);
     const gap = px(ruleFor(root, 'gap-2').decls.gap);
-    const border = px(ruleFor(root, 'border-2').decls['border-width']);
+    const border = px(ruleFor(root, 'border').decls['border-width']);
     const buttonPadding = touchPadding(buttons[0]);
-    // Later in the stylesheet than the small Button's own padding (px-4), so it wins on a touch screen.
-    expect(root.index(ruleFor(root, 'px-4').top)).toBeLessThan(root.index(buttonPadding.top));
+    // Later in the stylesheet than the small Button's own padding with an icon (has-[>svg]:px-2.5), and as specific,
+    // so it wins on a touch screen.
+    expect(root.index(ruleFor(root, 'has-[>svg]:px-2.5').top)).toBeLessThan(root.index(buttonPadding.top));
 
     // Three equal buttons (flex-1) share the row.
     const button = (COVER - 2 * rowPadding - 2 * gap) / 3;
@@ -397,7 +400,7 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     // Same specificity as the mouse rules, so the touch rules must come later in the stylesheet to win.
     const order = (cls: string) => root.index(ruleFor(root, cls).top);
     const touchAt = order(`${TOUCH}opacity-100`);
-    for (const base of ['opacity-0', 'inset-0', 'bg-black/50', 'px-4']) expect(order(base), base).toBeLessThan(touchAt);
+    for (const base of ['opacity-0', 'inset-0', 'bg-[var(--ds-scrim)]', 'has-[>svg]:px-2.5']) expect(order(base), base).toBeLessThan(touchAt);
   });
 });
 
