@@ -139,6 +139,18 @@ const compile = async (classes: string[]): Promise<postcss.Root> => {
 
 const squeeze = (text: string): string => text.replace(/\s+/g, '');
 
+/** The small Button's own border and icon padding classes, read from what it renders (components/ds Button). */
+const buttonBorderClass = (el: Element): string => {
+  const found = tokens(el).filter((t) => /^border(?:-\d+)?$/.test(t));
+  expect(found, el.textContent ?? '').toHaveLength(1);
+  return found[0];
+};
+const buttonIconPaddingClass = (el: Element): string => {
+  const found = tokens(el).filter((t) => /^has-\[>svg\]:px-[\d.]+$/.test(t));
+  expect(found, el.textContent ?? '').toHaveLength(1);
+  return found[0];
+};
+
 /** The app's own words for "a mouse": the `can-hover` screen, `(hover: hover) and (pointer: fine)`. */
 const CAN_HOVER = (tailwindConfig.theme.screens['can-hover'] as { raw: string }).raw;
 /** The touch rules' media query: every screen `can-hover` leaves out. */
@@ -327,11 +339,11 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     const WIDEST_LABEL = 56.2;
     const rowPadding = px(touchPadding(row).decls['padding-left']);
     const gap = px(ruleFor(root, 'gap-2').decls.gap);
-    const border = px(ruleFor(root, 'border').decls['border-width']);
+    const border = px(ruleFor(root, buttonBorderClass(buttons[0])).decls['border-width']);
     const buttonPadding = touchPadding(buttons[0]);
-    // Later in the stylesheet than the small Button's own padding with an icon (has-[>svg]:px-2.5), and as specific,
-    // so it wins on a touch screen.
-    expect(root.index(ruleFor(root, 'has-[>svg]:px-2.5').top)).toBeLessThan(root.index(buttonPadding.top));
+    // Later in the stylesheet than the small Button's own padding with an icon (its has-[>svg]:px-* class), and as
+    // specific, so it wins on a touch screen.
+    expect(root.index(ruleFor(root, buttonIconPaddingClass(buttons[0])).top)).toBeLessThan(root.index(buttonPadding.top));
 
     // Three equal buttons (flex-1) share the row.
     const button = (COVER - 2 * rowPadding - 2 * gap) / 3;
@@ -400,7 +412,7 @@ describe('My comics on a touch screen: Read / Open / Info', () => {
     // Same specificity as the mouse rules, so the touch rules must come later in the stylesheet to win.
     const order = (cls: string) => root.index(ruleFor(root, cls).top);
     const touchAt = order(`${TOUCH}opacity-100`);
-    for (const base of ['opacity-0', 'inset-0', 'bg-[var(--ds-scrim)]', 'has-[>svg]:px-2.5']) expect(order(base), base).toBeLessThan(touchAt);
+    for (const base of ['opacity-0', 'inset-0', 'bg-[var(--ds-scrim)]', buttonIconPaddingClass(buttons[0])]) expect(order(base), base).toBeLessThan(touchAt);
   });
 });
 
