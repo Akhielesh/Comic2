@@ -64,6 +64,10 @@ import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
+
+/** Security and session buttons sit in narrow cards: their labels wrap onto a second line instead of being cut. */
+const WRAP_BUTTON = 'h-auto min-h-9 whitespace-normal py-2 text-left';
+const WRAP_LABEL = 'min-w-0 whitespace-normal';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
 
@@ -710,7 +714,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             aria-readonly="true"
                             aria-labelledby="account-email-label"
                             tabIndex={0}
-                            className={cn(FIELD, 'mt-1.5 min-h-10 w-full select-text bg-[var(--ds-well)] px-3 py-2 text-[var(--ds-muted)]', WRAP_TEXT, FOCUS_RING)}
+                            className={cn(FIELD, 'mt-1.5 min-h-10 w-full select-text bg-[var(--ds-well)] px-3 py-2', WRAP_TEXT, FOCUS_RING)}
                         >
                             {user?.email || ''}
                         </div>
@@ -864,8 +868,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </div>
                     {!isVerified && (
                         <div>
-                            <Button onClick={handleResendVerification} disabled={securityBusy}>
-                                <Mail size={16} /> {securityBusy ? 'Sending...' : 'Resend Verification Email'}
+                            <Button onClick={handleResendVerification} disabled={securityBusy} className={WRAP_BUTTON}>
+                                <Mail size={16} /> <span className={WRAP_LABEL}>{securityBusy ? 'Sending...' : 'Resend Verification Email'}</span>
                             </Button>
                         </div>
                     )}
@@ -983,8 +987,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 onClick={() => void handleSignOutOthers()}
                                 disabled={sessionBusy}
                                 variant="outline"
+                                className={WRAP_BUTTON}
                             >
-                                <LogOut size={16} /> {sessionBusy ? 'Working…' : 'Sign Out Other Devices'}
+                                <LogOut size={16} /> <span className={WRAP_LABEL}>{sessionBusy ? 'Working…' : 'Sign Out Other Devices'}</span>
                             </Button>
                         </div>
 
@@ -995,8 +1000,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 onClick={() => void handleSignOutAll()}
                                 disabled={sessionBusy}
                                 variant="destructive"
+                                className={WRAP_BUTTON}
                             >
-                                <LogOut size={16} /> {sessionBusy ? 'Signing out…' : 'Sign Out Everywhere'}
+                                <LogOut size={16} /> <span className={WRAP_LABEL}>{sessionBusy ? 'Signing out…' : 'Sign Out Everywhere'}</span>
                             </Button>
                         </div>
                     </div>

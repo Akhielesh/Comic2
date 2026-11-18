@@ -338,7 +338,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
             type="button"
             {...pop}
             onClick={() => setIsOpen(true)}
-            className={cn(buttonClasses({ variant: 'default', size: 'icon' }), 'fixed bottom-6 left-6 size-14 shadow-[shadow:var(--ds-shadow-lift)]', RADIUS_ROUND, Z.chrome)}
+            className={cn(buttonClasses({ variant: 'default', size: 'icon' }), 'transition-[color,background-color,border-color,box-shadow] fixed bottom-6 left-6 size-14 shadow-[shadow:var(--ds-shadow-lift)]', RADIUS_ROUND, Z.chrome)}
             aria-label="Open assistant"
           >
             <Sparkles className="size-6" aria-hidden="true" />

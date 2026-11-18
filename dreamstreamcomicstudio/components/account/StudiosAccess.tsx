@@ -65,7 +65,7 @@ export const StudiosAccess: React.FC = () => {
             const href = s.status === 'open' ? s.href : s.action?.href;
             return (
               <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-                <span className={cn(SECTION_ICON_TILE, 'size-10', s.status === 'open' ? '' : MUTED)} aria-hidden="true">
+                <span className={cn(SECTION_ICON_TILE, 'size-10')} aria-hidden="true">
                   <I size={18} />
                 </span>
                 <span className="min-w-0 flex-1 basis-40">
