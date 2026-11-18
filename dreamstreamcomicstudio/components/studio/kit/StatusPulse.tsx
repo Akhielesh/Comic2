@@ -19,11 +19,13 @@ interface StatusStyle {
   animate: boolean;
 }
 
-// One status vocabulary (studioDesign STATUS_*): idle and starting are "waiting", live is
-// "healthy", error is "error". Always beside the label (or its aria-label).
+// One status vocabulary (studioDesign STATUS_*): idle is "waiting", starting is "active" (ink, so
+// it stays distinct from idle without the label or motion), live is "healthy", error is "error".
+// Always beside the label (or its aria-label). The ink comes from the app tokens, so place it on an
+// app-token surface; a host with its own fixed dark panel sets its own text shade via className.
 const STATUS_STYLES: Record<RunStatus, StatusStyle> = {
   idle: { dot: STATUS_DOT.waiting, ring: STATUS_DOT.waiting, text: STATUS_INK.waiting, label: 'Idle', animate: false },
-  starting: { dot: STATUS_DOT.waiting, ring: STATUS_DOT.waiting, text: STATUS_INK.waiting, label: 'Starting', animate: true },
+  starting: { dot: STATUS_DOT.active, ring: STATUS_DOT.active, text: STATUS_INK.active, label: 'Starting', animate: true },
   live: { dot: STATUS_DOT.healthy, ring: STATUS_DOT.healthy, text: STATUS_INK.healthy, label: 'Live', animate: true },
   error: { dot: STATUS_DOT.error, ring: STATUS_DOT.error, text: STATUS_INK.error, label: 'Error', animate: false },
 };

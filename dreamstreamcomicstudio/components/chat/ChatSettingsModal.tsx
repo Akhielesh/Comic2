@@ -16,7 +16,7 @@ import {
   MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent, memoryImportNothingFoundNotice,
   type MemoryImportSource
 } from '../../services/memoryImport';
-import { TONE_TEXT } from './studioDesign';
+import { FOCUS_RING, RADIUS_CONTROL, TONE_TEXT } from './studioDesign';
 import { useTheme, type ThemePreference } from '../../services/theme';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import {
@@ -468,7 +468,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
         <div>
           <div className="mb-2 flex items-center justify-between px-1">
             <SectionLabel>{items.length} {items.length === 1 ? 'memory' : 'memories'}</SectionLabel>
-            <button onClick={() => commit([])} className="text-[11px] font-medium text-[var(--ds-danger-text)] hover:text-[var(--ds-danger-text)]">
+            <button onClick={() => commit([])} className={`${RADIUS_CONTROL} px-1 text-[11px] font-medium text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)] hover:underline underline-offset-2 ${FOCUS_RING}`}>
               Clear all
             </button>
           </div>
@@ -658,7 +658,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
           <SectionLabel>Your agents ({custom.length})</SectionLabel>
           <button
             onClick={() => setEditing(newCustomAgent())}
-            className="flex items-center gap-1 rounded-full bg-[var(--ds-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
+            className="flex items-center gap-1 rounded-full bg-[var(--ds-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-active)]"
           >
             <Plus className="h-3.5 w-3.5" /> New agent
           </button>

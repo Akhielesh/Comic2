@@ -232,8 +232,8 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                           className={`pointer-events-none absolute bottom-0 h-[3px] rounded-full ${
                             signed
                               ? n! >= 0
-                                ? 'bg-emerald-500/45'
-                                : 'bg-rose-500/45'
+                                ? 'bg-[color:color-mix(in_srgb,var(--ds-success)_45%,transparent)]'
+                                : 'bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_45%,transparent)]'
                               : 'bg-[color:color-mix(in_srgb,var(--ds-accent)_35%,transparent)]'
                           }`}
                           style={

@@ -171,7 +171,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                     const selected = (answers[q.id] || []).includes(c.id);
                     const isAnswer = (q.correct || []).includes(c.id);
                     const tone = showResult
-                      ? isAnswer ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' : selected ? 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]' : 'border-[var(--ds-hairline-soft)] bg-white/50'
+                      ? isAnswer ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' : selected ? 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)]' : 'border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)]'
                       : selected ? 'border-[color:color-mix(in_srgb,var(--ds-accent)_50%,transparent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-well)]';
                     return (
                       <button

@@ -174,7 +174,7 @@ const Detail: React.FC<{
         </div>
       )}
       {event.hangoutLink && (
-        <a href={event.hangoutLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent-soft)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]">
+        <a href={event.hangoutLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent-soft)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-active)]">
           <Video className="h-3.5 w-3.5" /> Join video call
         </a>
       )}
