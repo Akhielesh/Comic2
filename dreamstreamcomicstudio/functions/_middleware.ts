@@ -24,6 +24,10 @@
  * door (comics-edge Worker, comics.dreamstreamstudio.ai) proxies to the Pages origin carry
  * X-Forwarded-Host: comics.dreamstreamstudio.ai and are served, not redirected.
  *
+ * While MAIN_FRONT_PAGE_TO_COMICS is on (services/productHost.ts), the main site's bare front page (`/`, no query
+ * but tracking keys, no member hint cookie) answers a 302 to https://comics.dreamstreamstudio.ai/. Every other
+ * page, query, host and preview deploy is served as before (docs/infrastructure/main-front-page.md).
+ *
  * Legacy reader links (`/?view=read&id=<uuid>`) of PUBLIC published comics get the comic's
  * preview head with canonical /c/<slug> (the anon RPC only answers for public publications,
  * so an id can never reveal an unlisted slug). Everything else passes through untouched.
@@ -73,6 +77,7 @@ import {
   pyodideContentType,
   pyodideRuntimeFileAt,
 } from '../services/pyodideRuntime';
+import { MAIN_FRONT_PAGE_TO_COMICS, frontPageToComicsUrl } from '../services/productHost';
 
 /** The Pages asset server (`context.env.ASSETS`). */
 interface AssetFetcher {
@@ -625,9 +630,14 @@ export interface MiddlewareOptions {
   streamHostOn: boolean;
   /** ENFORCE_LIVE — likewise, so tests can check the enforced policy before the flip. */
   enforceLive?: boolean;
+  /**
+   * MAIN_FRONT_PAGE_TO_COMICS (services/productHost.ts): the main site's bare front page sends visitors to
+   * Comic Studio. Off unless passed, so tests choose a side; production passes the switch (onRequest below).
+   */
+  frontPageToComics?: boolean;
 }
 
-export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: MiddlewareOptions) {
+export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE, frontPageToComics = false }: MiddlewareOptions) {
   return async ({ request, next, env }: PagesContext): Promise<Response> => {
     const url = new URL(request.url);
     const host = url.hostname.toLowerCase();
@@ -688,6 +698,16 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
       });
     }
 
+    // The main site's bare front page → Comic Studio (services/productHost.ts frontPageToComicsUrl has every
+    // condition). After the agent gate, so AI agents still check in as before; link-preview bots and search
+    // engines follow it like people. www has already been sent to the apex above (where the member hint cookie
+    // lives), and requests the comics front door proxies here are never moved (no loop). A 302 that is never
+    // stored, so switching it off takes effect at once.
+    if (frontPageToComics && !PROXIED_HOSTS.has(forwardedHost)) {
+      const comics = frontPageToComicsUrl({ url: request.url, method: request.method, cookie: request.headers.get('cookie') }, true);
+      if (comics) return new Response(null, { status: 302, headers: { location: comics, 'cache-control': 'no-store', vary: 'cookie' } });
+    }
+
     // Stream Studio's host: every page is the live app (its screens are #routes).
     // Pages sign-in links land on are never shown in a frame: the security headers first, then the
     // frame block merged into whatever policy they set (so an enforced CSP is never replaced).
@@ -702,4 +722,4 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
   };
 }
 
-export const onRequest = createOnRequest({ streamHostOn: STREAM_HOST_ON });
+export const onRequest = createOnRequest({ streamHostOn: STREAM_HOST_ON, frontPageToComics: MAIN_FRONT_PAGE_TO_COMICS });

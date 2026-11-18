@@ -83,7 +83,7 @@ import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from '
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
-import { mainAppUrl } from './services/productHost';
+import { mainAppUrl, syncMemberHint } from './services/productHost';
 import { safeNext } from './services/safeNext';
 import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
@@ -224,6 +224,11 @@ export const appRootClass = (view: string, gated: boolean, comicsChrome = false)
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
+  // The main site's member hint cookie follows the session (set while signed in, removed on sign-out) so the
+  // edge serves members their own front page instead of sending them to Comic Studio. It only observes auth state.
+  useEffect(() => {
+    if (!authLoading) syncMemberHint(!!user);
+  }, [authLoading, user]);
   const isAdmin = useIsAdmin();
   // Diagnostics are admin-only: gated on the server's answer for THIS account (bound to the
   // user id, so an account switch never runs the check on the previous account's answer).
