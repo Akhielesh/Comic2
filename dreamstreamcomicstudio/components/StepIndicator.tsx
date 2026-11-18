@@ -1,6 +1,17 @@
 import React from 'react';
 import { Check } from 'lucide-react';
 import { AppStep } from '../types';
+import { cn } from '../lib/utils';
+import {
+  CANVAS_BG,
+  DENSITY,
+  FOCUS_RING_FLUSH,
+  HAIRLINE,
+  RADIUS_ROUND,
+  SEGMENTED_ACTIVE,
+  SEGMENTED_TRACK,
+  Z
+} from './chat/studioDesign';
 
 interface StepIndicatorProps {
   currentStep: AppStep;
@@ -22,45 +33,60 @@ const steps = [
   { id: AppStep.REVIEW_EXPORT, label: 'Done' },
 ];
 
+// The step track in the Atlas language: one segmented track, the current step on the raised pill with its
+// label, done steps ticked, steps not reached yet quiet and not pressable. Labels of the other steps show
+// from `sm` up, so all seven fit a 320 px phone.
+const STEP_ITEM = `relative inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--ds-radius-control)-2px)] px-2 text-[13px] font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${DENSITY.touch} ${FOCUS_RING_FLUSH}`;
+const STEP_MARK = `grid size-5 shrink-0 place-items-center ${RADIUS_ROUND} text-[11px] font-semibold tabular-nums`;
+
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
-    <div className="w-full py-6 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-4 border-black">
-      <div className="max-w-6xl mx-auto px-4">
-        <div className="flex items-center justify-between relative">
-          {/* Connecting line */}
-          <div className="absolute left-0 top-1/2 w-full h-2 bg-black/30 -z-10 rounded-full" />
-
+    <nav aria-label="Comic steps" className={cn('sticky top-0 w-full border-b border-[var(--ds-hairline)] py-3', CANVAS_BG, Z.chrome)}>
+      <div className="mx-auto max-w-6xl px-4">
+        <ol className={cn(SEGMENTED_TRACK, 'flex w-full')}>
           {steps.map((step, index) => {
             const isCompleted = currentStep > step.id;
             const isCurrent = currentStep === step.id;
             const isReachable = step.id <= maxStepReached;
 
             return (
-              <div
-                key={step.id}
-                className={`flex flex-col items-center relative group ${isReachable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
-                onClick={() => isReachable && onStepClick(step.id)}
-              >
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center border-2 border-black transition-all duration-300 z-10 ${
-                    isCompleted ? 'bg-brand-yellow text-black shadow-comic' :
-                    isCurrent ? 'bg-white text-black scale-125 shadow-comic' :
-                    'bg-slate-800 text-white/50 border-slate-600'}`}
+              <li key={step.id} className={cn('flex min-w-0', isCurrent ? 'shrink-0' : 'flex-1')}>
+                <button
+                  type="button"
+                  aria-current={isCurrent ? 'step' : undefined}
+                  aria-disabled={isReachable ? undefined : true}
+                  aria-label={`Step ${index + 1}: ${step.label}${isCompleted ? ' (done)' : ''}`}
+                  onClick={() => isReachable && onStepClick(step.id)}
+                  className={cn(
+                    STEP_ITEM,
+                    'w-full',
+                    isCurrent
+                      ? SEGMENTED_ACTIVE
+                      : isReachable
+                        ? 'cursor-pointer text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                        : 'cursor-not-allowed text-[var(--ds-faint)]'
+                  )}
                 >
-                  {isCompleted ? <Check size={20} strokeWidth={4} /> : <span className="text-sm font-display">{index + 1}</span>}
-                </div>
-                <div
-                  className={`absolute top-12 px-2 py-1 rounded border-2 border-black text-xs font-bold uppercase tracking-wider shadow-comic transition-all whitespace-nowrap ${
-                    isCurrent ? 'bg-brand-yellow text-black rotate-2 opacity-100' :
-                    (isReachable ? 'bg-white text-black -rotate-1 opacity-0 group-hover:opacity-100' : 'opacity-0')}`}
-                >
-                  {step.label}
-                </div>
-              </div>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      STEP_MARK,
+                      isCurrent || isCompleted
+                        ? 'bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
+                        : cn(HAIRLINE, 'bg-[var(--ds-canvas)]')
+                    )}
+                  >
+                    {isCompleted ? <Check className="size-3" strokeWidth={3} /> : index + 1}
+                  </span>
+                  <span aria-hidden className={cn('min-w-0 truncate', isCurrent ? 'inline' : 'hidden sm:inline')}>
+                    {step.label}
+                  </span>
+                </button>
+              </li>
             );
           })}
-        </div>
+        </ol>
       </div>
-    </div>
+    </nav>
   );
 };
