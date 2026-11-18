@@ -22,7 +22,7 @@ export const RegenerateModal: React.FC<RegenerateModalProps> = ({ currentImageUr
       <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center overflow-y-auto p-4`} onClick={onClose}>
         <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} max-h-[calc(var(--app-h,100dvh)-2rem)] w-full max-w-2xl overflow-y-auto`} onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] px-4 py-3 sm:px-6">
-              <h3 id={titleId} className={`flex min-w-0 items-center gap-2 ${DIALOG_TITLE}`}><Wand2 className="size-5 shrink-0" aria-hidden="true"/> Regenerate Panel</h3>
+              <h2 id={titleId} className={`flex min-w-0 items-center gap-2 ${DIALOG_TITLE}`}><Wand2 className="size-5 shrink-0" aria-hidden="true"/> Regenerate Panel</h2>
               <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}><X className="size-5"/></button>
           </div>
           

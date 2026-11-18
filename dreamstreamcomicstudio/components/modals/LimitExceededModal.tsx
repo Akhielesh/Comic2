@@ -61,7 +61,7 @@ export const LimitExceededModal: React.FC<LimitExceededModalProps> = ({
             <AlertTriangle size={18} aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <h3 id={titleId} className={DIALOG_TITLE}>Token Limit Reached</h3>
+            <h2 id={titleId} className={DIALOG_TITLE}>Token Limit Reached</h2>
             <p className={`mt-1 text-sm ${MUTED}`}>
               This action needs more Comic Tokens (CT) than your current allowance.
             </p>

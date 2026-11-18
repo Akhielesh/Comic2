@@ -419,7 +419,7 @@ const NewCheckModal: React.FC<{
     <div className={cn('fixed inset-0 flex items-center justify-center p-4', Z.dialog, SCRIM)} onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn(OVERLAY, 'max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-5')} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-2">
-          <h3 id={titleId} className={cn(DIALOG_TITLE, 'm-0')}>New verification check</h3>
+          <h2 id={titleId} className={cn(DIALOG_TITLE, 'm-0')}>New verification check</h2>
           <IconButton label="Close" onClick={onClose} className={MUTED}><X className="w-4 h-4" /></IconButton>
         </div>
         {err && <div className={cn('text-sm [overflow-wrap:anywhere]', TONE_TEXT.danger)}>{err}</div>}

@@ -54,7 +54,18 @@ const CENTRED: Record<string, 'DIALOG_TITLE' | 'DIALOG_TITLE_FROM_SM'> = {
   // Centred on the scrim at every width (DS-3).
   'components/modals/ProjectInfoModal.tsx': 'DIALOG_TITLE',
   // The image lightbox over Project info, a layer above it (Z.sheet).
-  'components/modals/MasterGalleryModal.tsx': 'DIALOG_TITLE'
+  'components/modals/MasterGalleryModal.tsx': 'DIALOG_TITLE',
+  // The classic editor's and reader's modals, centred on the scrim at every width (Atlas conversion wave).
+  'components/modals/BubbleEditorModal.tsx': 'DIALOG_TITLE',
+  'components/modals/CharacterLibraryModal.tsx': 'DIALOG_TITLE',
+  'components/modals/HistoryModal.tsx': 'DIALOG_TITLE',
+  'components/modals/LimitExceededModal.tsx': 'DIALOG_TITLE',
+  'components/modals/RegenerateModal.tsx': 'DIALOG_TITLE',
+  'components/modals/ReviewModal.tsx': 'DIALOG_TITLE',
+  'components/modals/ShareModal.tsx': 'DIALOG_TITLE',
+  'components/modals/VersionHistoryModal.tsx': 'DIALOG_TITLE',
+  // The admin "New verification check" form, centred on the scrim.
+  'components/VerificationCenter.tsx': 'DIALOG_TITLE'
 };
 /** Modal (or modal-capable) surfaces that are not a centred dialog with a title, and why. */
 const NOT_CENTRED: Record<string, string> = {
@@ -64,7 +75,8 @@ const NOT_CENTRED: Record<string, string> = {
   'components/comicstudio/immersive/ReaderSettingsSheet.tsx': 'a non-modal settings sheet in the reader (aria-modal="false")',
   'components/comicstudio/conversation/PopSheet.tsx': 'popover / side sheet (15 px header)',
   'components/comicstudio/mobile/sheets/BottomSheet.tsx': 'bottom sheet (15 px header)',
-  'components/comicstudio/mobile/sheets/SideSheet.tsx': 'side sheet (15 px header)'
+  'components/comicstudio/mobile/sheets/SideSheet.tsx': 'side sheet (15 px header)',
+  'components/admin/AdminAnalytics.tsx': 'admin session-flow viewer: a data panel whose header bar carries a compact one-line title (the truncated session id), not a dialog title'
 };
 const SHEET_HEADERS = ['components/comicstudio/mobile/sheets/BottomSheet.tsx', 'components/comicstudio/mobile/sheets/SideSheet.tsx', 'components/comicstudio/conversation/PopSheet.tsx'];
 
