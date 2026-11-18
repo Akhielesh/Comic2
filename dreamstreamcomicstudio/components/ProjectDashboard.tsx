@@ -1,8 +1,27 @@
 import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
-import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2, MessageSquare, Pencil, X } from 'lucide-react';
+import { Plus, BookOpen, Edit, Trash2, Copy, Sparkles, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2, MessageSquare, Pencil, X } from 'lucide-react';
 import { AppStep, Project } from '../types';
-import { Button } from './Button';
-import { HEADING } from './chat/studioDesign';
+import { Badge, Button, IconButton, Input, INPUT_CLASSES, Select } from './ds';
+import { FIELD_LABEL } from './ds/Field';
+import { FILTER_CHIP, FILTER_CHIP_ON } from './ds/FilterChips';
+import {
+  CHIP,
+  FOCUS_RING,
+  HEADING,
+  LIFT,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  RISE_IN,
+  SCRIM,
+  SHADOW_SOFT,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TEXT_3XL,
+  INVERSE_SURFACE,
+  OVERLAY,
+  Z
+} from './chat/studioDesign';
+import { cn } from '../lib/utils';
 // Lazy load ProjectInfoModal
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
@@ -37,13 +56,20 @@ export const DUPLICATE_UNAVAILABLE_FOR_STUDIO = "Duplicate isn't available for s
  * What a cover centres (the empty-cover marks, the Generating notice) moves up by the row's height there
  * (`CARD_COVER_TOUCH`), so the row never sits on it; on the smallest phones that leaves the notice short of room, so
  * its progress bar keeps its height (`shrink-0`). On a 320 px phone a button is 72 px wide, so its side padding
- * drops to 4 px to keep the label inside. The classes are written out in full because Tailwind reads them from this
+ * drops to 4 px to keep the label inside (written against the small Button's own `has-[>svg]:` padding, which it
+ * must outrank). The classes are written out in full because Tailwind reads them from this
  * file.
  */
 const CARD_ACTIONS_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:top-auto [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-transparent [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:bg-gradient-to-t [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:from-[var(--ds-scrim)] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-2 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pt-6 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:opacity-100';
-const CARD_ACTION_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-h-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-w-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:flex-1 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:px-1';
+const CARD_ACTION_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-h-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:min-w-[44px] [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:flex-1 [@media_not_all_and_(hover:hover)_and_(pointer:fine)]:has-[>svg]:px-1';
 const CARD_COVER_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:pb-16';
 const CARD_BAR_TOUCH = '[@media_not_all_and_(hover:hover)_and_(pointer:fine)]:shrink-0';
+
+/** A filter toggle in the search bar (Featured, Recent Changes, Has Cover, Has Comments): an outline chip, ink while on. */
+const filterToggle = (on: boolean): string =>
+  cn(FILTER_CHIP, on ? FILTER_CHIP_ON : 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING);
+/** A quiet text action under a card (Duplicate, Delete): muted, ink on hover, 44 px on touch. */
+const CARD_FOOT_ACTION = `inline-flex min-h-8 items-center gap-1 ${RADIUS_CONTROL} px-1 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] ${FOCUS_RING} coarse:min-h-[var(--ds-density-touch)]`;
 
 /** Creation failures from the studio API carry user-safe messages; anything else gets ours. */
 const friendlyCreateError = (err: unknown): string => {
@@ -96,7 +122,7 @@ const TitleRenameInput: React.FC<{ initial: string; onDone: (value: string | nul
         if (e.key === 'Enter') finish(draft);
         else if (e.key === 'Escape') finish(null);
       }}
-      className="min-w-0 flex-1 border-2 border-black rounded-lg px-2 py-0.5 font-display text-xl outline-none focus:shadow-comic"
+      className={cn(INPUT_CLASSES, 'h-9 flex-1 px-2 text-[length:var(--ds-text-lg)] font-semibold')}
     />
   );
 };
@@ -304,36 +330,31 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   };
 
   const renderLanding = () => (
-    <div className="text-center py-20 space-y-8 animate-fade-in">
-      <div className="space-y-4 max-w-2xl mx-auto">
-        <h1 className="text-5xl font-display text-black leading-tight">No comics yet</h1>
-        <p className="text-lg font-comic text-slate-600">Describe your idea and the studio plans, draws and letters it with you.</p>
+    <div className={cn('text-center py-20 space-y-8', RISE_IN)}>
+      <div className="space-y-3 max-w-2xl mx-auto">
+        <h1 className={cn(TEXT_3XL, HEADING)}>No comics yet</h1>
+        <p className="text-[length:var(--ds-text-lg)] leading-7 text-[var(--ds-muted)]">Describe your idea and the studio plans, draws and letters it with you.</p>
       </div>
       <div className="flex justify-center gap-6">
-        <Button onClick={beginNewComic} className="text-xl px-12 py-6" icon={<Sparkles />}>Create New Comic</Button>
+        <Button size="lg" onClick={beginNewComic}><Sparkles aria-hidden /> Create New Comic</Button>
       </div>
 
     </div>
   );
 
   const dashboard = (
-    <div className={`max-w-7xl mx-auto ${comicWorkspace ? 'p-4 medium:p-8' : 'p-8'} animate-fade-in`}>
+    <div className={cn('max-w-7xl mx-auto', comicWorkspace ? 'p-4 medium:p-8' : 'p-4 medium:p-8', RISE_IN)}>
       <DataRescue />
       <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-brand-yellow border-4 border-black rounded-xl flex items-center justify-center shadow-comic transform -rotate-3">
-                <LayoutGrid className="w-8 h-8 text-black" />
-              </div>
-              <div>
-                <h1 className={`text-4xl ${HEADING}`}>My comics</h1>
-                <p className="text-slate-600 font-comic font-bold">Manage your studio projects</p>
-              </div>
+            <div className="min-w-0">
+              <h1 className={cn(TEXT_3XL, HEADING)}>My comics</h1>
+              <p className="mt-1 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Manage your studio projects</p>
             </div>
             <div className="flex items-center gap-4">
-              <Button onClick={beginNewComic} icon={<Plus />}>New Comic</Button>
+              <Button onClick={beginNewComic}><Plus aria-hidden /> New Comic</Button>
             </div>
           </div>
 
@@ -341,19 +362,19 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       )}
 
       {notice && (
-        <div role="status" className="mb-6 flex items-start gap-2 rounded-xl border-2 border-black bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span className="flex-1">{notice}</span>
-          <button onClick={() => setNotice(null)} aria-label="Dismiss" className="opacity-60 hover:opacity-100">
-            <X className="h-4 w-4" />
-          </button>
+        <div role="status" className={cn('mb-6 flex items-start gap-2 border px-4 py-3 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-ink)]', STATUS_SURFACE.attention, RADIUS_PANEL)}>
+          <AlertTriangle className={cn('mt-1 h-4 w-4 shrink-0', STATUS_INK.attention)} aria-hidden />
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
+          <IconButton label="Dismiss" size="sm" className="-my-1" onClick={() => setNotice(null)}>
+            <X />
+          </IconButton>
         </div>
       )}
 
       {isCreating && (
-        <div className="mb-12 mx-auto bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-2xl relative z-50">
-          <label htmlFor="new-comic-title" className="block text-lg font-display mb-2 text-black">Comic Title</label>
-          <input
+        <div className={cn('mb-12 mx-auto max-w-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6 text-[var(--ds-ink)]', RADIUS_PANEL, SHADOW_SOFT)}>
+          <label htmlFor="new-comic-title" className={cn(FIELD_LABEL, 'mb-2 block')}>Comic Title</label>
+          <Input
             id="new-comic-title"
             autoFocus
             type="text"
@@ -362,34 +383,34 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             disabled={!!createPending}
             onChange={(e) => setNewProjectName(e.target.value)}
             placeholder="The Amazing Adventures of..."
-            className="w-full border-2 border-black bg-white text-black rounded-lg px-4 py-2 font-comic text-lg focus:shadow-comic outline-none transition-all placeholder-slate-400 disabled:opacity-60"
             onKeyDown={(e) => e.key === 'Enter' && void handleCreate(formMode)}
           />
 
-          <div className="mt-5 rounded-lg border-2 border-black bg-slate-50 p-4">
-            <div className="flex items-center gap-2 font-display text-black"><MessageSquare className="w-5 h-5" /> {formMode === 'classic' ? 'Classic editor' : 'Comic Studio'}</div>
-            <p className="mt-1 text-xs font-comic text-slate-600">
+          <div className={cn('mt-5 border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-4', RADIUS_CONTROL)}>
+            <div className="flex items-center gap-2 text-[length:var(--ds-text-base)] font-semibold leading-5 text-[var(--ds-ink)]"><MessageSquare className="w-4 h-4 shrink-0" aria-hidden /> {formMode === 'classic' ? 'Classic editor' : 'Comic Studio'}</div>
+            <p className="mt-1 text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
               {formMode === 'classic' ? 'Open the step-by-step editor to add your script, choose a style and build your pages.' : 'Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon. You see the page plan and the cost before anything is drawn.'}
             </p>
           </div>
 
           {createError && (
-            <div role="alert" className="mt-4 flex items-start gap-2 rounded-lg border-2 border-black bg-red-50 px-3 py-2 text-sm font-bold text-red-700">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{createError}</span>
+            <div role="alert" className={cn('mt-4 flex items-start gap-2 border px-3 py-2 text-[length:var(--ds-text-base)] font-medium leading-6', STATUS_SURFACE.error, STATUS_INK.error, RADIUS_CONTROL)}>
+              <AlertTriangle className="mt-1 h-4 w-4 shrink-0" aria-hidden />
+              <span className="min-w-0">{createError}</span>
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-4 mt-5">
-            <Button onClick={() => void handleCreate(formMode)} isLoading={createPending === formMode} disabled={!!createPending}>
+          <div className="flex flex-wrap items-center gap-3 mt-5">
+            <Button onClick={() => void handleCreate(formMode)} disabled={!!createPending}>
+              {createPending === formMode ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
               {createPending === formMode ? 'Creating…' : 'Create'}
             </Button>
-            <Button variant="secondary" onClick={() => { if (comicWorkspace && classicForm) setClassicForm(false); else setIsCreating(false); setCreateError(null); }} disabled={!!createPending}>Cancel</Button>
+            <Button variant="outline" onClick={() => { if (comicWorkspace && classicForm) setClassicForm(false); else setIsCreating(false); setCreateError(null); }} disabled={!!createPending}>Cancel</Button>
             {formMode !== 'classic' && <button
               type="button"
               onClick={() => void handleCreate('classic')}
               disabled={!!createPending}
-              className="ml-auto text-xs font-bold text-slate-500 underline-offset-2 hover:text-black hover:underline disabled:opacity-50"
+              className={cn('ml-auto inline-flex min-h-8 items-center px-1 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] underline-offset-2 hover:text-[var(--ds-ink)] hover:underline disabled:opacity-50 coarse:min-h-[var(--ds-density-touch)]', RADIUS_CONTROL, FOCUS_RING)}
             >
               Use the classic editor instead
             </button>}
@@ -399,71 +420,84 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {projects.length === 0 ? (!projectsLoaded ? <LoadingState title="Loading your comics…" /> : renderLanding()) : (
         <>
-          <div className="bg-white border-4 border-black rounded-xl shadow-comic p-4 mb-6">
+          <div className={cn('mb-6 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4', RADIUS_PANEL, SHADOW_SOFT)}>
             <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-              <input
+              <Input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search projects..."
-                className="flex-1 border-2 border-black rounded-lg px-3 py-2 text-sm font-bold"
+                aria-label="Search projects"
+                className="lg:flex-1"
               />
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
+                  type="button"
+                  aria-pressed={filterFeatured}
                   onClick={() => setFilterFeatured((prev) => !prev)}
-                  className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterFeatured ? 'bg-brand-yellow' : 'bg-white'}`}
+                  className={filterToggle(filterFeatured)}
                 >
-                  <Star className="w-4 h-4" /> Featured
+                  <Star className="w-4 h-4" aria-hidden /> Featured
                 </button>
                 <button
+                  type="button"
+                  aria-pressed={filterRecent}
                   onClick={() => setFilterRecent((prev) => !prev)}
-                  className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterRecent ? 'bg-brand-yellow' : 'bg-white'}`}
+                  className={filterToggle(filterRecent)}
                 >
-                  <Clock className="w-4 h-4" /> Recent Changes
+                  <Clock className="w-4 h-4" aria-hidden /> Recent Changes
                 </button>
-                <select
+                <Select
+                  size="sm"
+                  aria-label="Date range"
+                  wrapperClassName="w-auto"
                   value={dateRange}
                   onChange={(e) => setDateRange(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold"
                 >
                   <option value="all">All Dates</option>
                   <option value="7">Last 7 Days</option>
                   <option value="30">Last 30 Days</option>
                   <option value="90">Last 90 Days</option>
-                </select>
-                <select
+                </Select>
+                <Select
+                  size="sm"
+                  aria-label="Sort by"
+                  wrapperClassName="w-auto"
                   value={sortOption}
                   onChange={(e) => setSortOption(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold"
                 >
                   <option value="updated">Recent Updated</option>
                   <option value="created">Recent Created</option>
                   <option value="az">A–Z</option>
                   <option value="za">Z–A</option>
-                </select>
-                <button
+                </Select>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-expanded={advancedOpen}
                   onClick={() => setAdvancedOpen((prev) => !prev)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1"
                 >
-                  <Filter className="w-4 h-4" /> More Filters
-                </button>
+                  <Filter aria-hidden /> More Filters
+                </Button>
               </div>
             </div>
             {advancedOpen && (
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-bold">
-                <select
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Select
+                  size="sm"
+                  aria-label="Status"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg"
                 >
                   <option value="all">All Statuses</option>
                   <option value="generating">Generating</option>
                   <option value="completed">Completed</option>
                   <option value="draft">Draft</option>
-                </select>
-                <select
+                </Select>
+                <Select
+                  size="sm"
+                  aria-label="Step"
                   value={stepFilter}
                   onChange={(e) => setStepFilter(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg"
                 >
                   <option value="all">All Steps</option>
                   <option value="script">Script</option>
@@ -473,22 +507,28 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                   <option value="layout">Layout</option>
                   <option value="build">Build</option>
                   <option value="done">Done</option>
-                </select>
+                </Select>
                 <div className="flex gap-2">
                   <button
+                    type="button"
+                    aria-pressed={hasCoverFilter}
                     onClick={() => setHasCoverFilter((prev) => !prev)}
-                    className={`flex-1 px-3 py-2 border-2 border-black rounded-lg ${hasCoverFilter ? 'bg-brand-yellow' : 'bg-white'}`}
+                    className={cn(filterToggle(hasCoverFilter), 'flex-1 justify-center')}
                   >
                     Has Cover
                   </button>
                   <button
+                    type="button"
+                    aria-pressed={hasCommentsFilter}
                     onClick={() => setHasCommentsFilter((prev) => !prev)}
-                    className={`flex-1 px-3 py-2 border-2 border-black rounded-lg ${hasCommentsFilter ? 'bg-brand-yellow' : 'bg-white'}`}
+                    className={cn(filterToggle(hasCommentsFilter), 'flex-1 justify-center')}
                   >
                     Has Comments
                   </button>
                 </div>
-                <button
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() => {
                     setSearchTerm('');
                     setSortOption('updated');
@@ -500,17 +540,16 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                     setHasCommentsFilter(false);
                     setStepFilter('all');
                   }}
-                  className="px-3 py-2 border-2 border-black rounded-lg bg-white"
                 >
                   Reset Filters
-                </button>
+                </Button>
               </div>
             )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-8">
             {filteredProjects.length === 0 && (
-              <div className="col-span-full text-center text-slate-500 font-comic text-lg">
+              <div className="col-span-full text-center text-[length:var(--ds-text-lg)] text-[var(--ds-muted)]">
                 No projects match the current filters.
               </div>
             )}
@@ -534,8 +573,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 	              const studioProgress = studioPageProgress(project);
 
               return (
-                <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
-                  <div className="aspect-video bg-neutral-100 border-b-4 border-black relative overflow-hidden">
+                <div key={project.id} className={cn('group flex flex-col overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)]', RADIUS_PANEL, SHADOW_SOFT, LIFT)}>
+                  <div className="aspect-video bg-[var(--ds-well-strong)] border-b border-[var(--ds-hairline)] relative overflow-hidden">
                     {primaryPreview ? (
                       <SmartImage
                         src={primaryPreview}
@@ -543,42 +582,42 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         alt={`${project.name} cover`}
 	                        className={`w-full h-full object-cover ${isStudio ? 'object-top' : ''} ${!hasCoverPreview && !hasPanelPreview && !hasPageStudioPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
                         loadingComponent={<LoadingState variant="inline" title="Loading cover…" className="h-full w-full justify-center bg-[var(--ds-canvas)]" />}
-                        fallbackIcon={<BookOpen className="size-8 text-neutral-500" aria-hidden />}
+                        fallbackIcon={<BookOpen className="size-8 text-[var(--ds-muted)]" aria-hidden />}
                         containerClassName="w-full h-full"
                       />
                     ) : isStudio ? (
-                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-neutral-50 text-neutral-600 ${CARD_COVER_TOUCH}`}>
+                      <div className={`w-full h-full flex flex-col items-center justify-center gap-1 bg-[var(--ds-well)] text-[var(--ds-muted)] ${CARD_COVER_TOUCH}`}>
                         <MessageSquare className="h-9 w-9" aria-hidden />
-                        <span className="text-xs font-bold">Nothing drawn yet</span>
+                        <span className="text-[length:var(--ds-text-sm)] font-medium">Nothing drawn yet</span>
                       </div>
                     ) : (
-                      <div className={`w-full h-full flex items-center justify-center bg-neutral-100 text-neutral-500 ${CARD_COVER_TOUCH}`} role="img" aria-label="No cover yet"><BookOpen className="size-9" aria-hidden /></div>
+                      <div className={`w-full h-full flex items-center justify-center bg-[var(--ds-well)] text-[var(--ds-muted)] ${CARD_COVER_TOUCH}`} role="img" aria-label="No cover yet"><BookOpen className="size-9" aria-hidden /></div>
                     )}
 
                     {isStudio && (
                       <span
                         data-testid="studio-badge"
                         title="Made in the conversational Comic Studio"
-                        className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border-2 border-black bg-white px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-black shadow-[2px_2px_0px_0px_#000]"
+                        className={cn(CHIP, 'absolute left-2 top-2 border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)]')}
                       >
                         <Sparkles className="h-3 w-3" aria-hidden /> Studio
                       </span>
                     )}
 
                     {project.state.generationStatus?.isActive && (
-                      <div className={`absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white p-4 ${CARD_COVER_TOUCH}`}>
-                        <div className="text-brand-yellow font-display text-2xl animate-pulse mb-2">Generating...</div>
-                        <div className={`w-full h-2 bg-white/20 rounded-full mb-2 overflow-hidden ${CARD_BAR_TOUCH}`}>
-                          <div className="h-full bg-brand-yellow transition-all duration-500" style={{ width: `${project.state.generationStatus.progress}%` }} />
+                      <div className={`absolute inset-0 ${INVERSE_SURFACE} flex flex-col items-center justify-center p-4 ${CARD_COVER_TOUCH}`}>
+                        <div className="mb-2 text-[length:var(--ds-text-xl)] font-semibold leading-7 animate-pulse motion-reduce:animate-none">Generating...</div>
+                        <div className={`w-full h-2 mb-2 overflow-hidden rounded-[var(--ds-radius-pill)] bg-[color:color-mix(in_srgb,var(--ds-canvas)_20%,transparent)] ${CARD_BAR_TOUCH}`}>
+                          <div className="h-full bg-[var(--ds-canvas)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none" style={{ width: `${project.state.generationStatus.progress}%` }} />
                         </div>
-                        <div className="font-mono text-xs text-slate-300">Est: {project.state.generationStatus.estimatedTimeRemaining}</div>
+                        <div className="text-[length:var(--ds-text-sm)] tabular-nums text-[color:color-mix(in_srgb,var(--ds-canvas)_75%,transparent)]">Est: {project.state.generationStatus.estimatedTimeRemaining}</div>
                       </div>
                     )}
 
-                    <div className={`absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity gap-2 ${CARD_ACTIONS_TOUCH}`}>
-                      <Button size="sm" className={CARD_ACTION_TOUCH} onClick={() => onReadProject(project.id)} icon={<BookOpen size={16} />}>Read</Button>
-                      <Button size="sm" variant="secondary" className={CARD_ACTION_TOUCH} onClick={() => onOpenProject(project.id)} icon={<Edit size={16} />}>{isStudio ? 'Open' : 'Edit'}</Button>
-                      <Button size="sm" variant="outline" className={CARD_ACTION_TOUCH} onClick={() => setInfoProjectId(project.id)} icon={<Info size={16} />}>Info</Button>
+                    <div className={`absolute inset-0 ${SCRIM} flex items-center justify-center opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity gap-2 ${CARD_ACTIONS_TOUCH}`}>
+                      <Button size="sm" className={CARD_ACTION_TOUCH} onClick={() => onReadProject(project.id)}><BookOpen aria-hidden />Read</Button>
+                      <Button size="sm" variant="secondary" className={CARD_ACTION_TOUCH} onClick={() => onOpenProject(project.id)}><Edit aria-hidden />{isStudio ? 'Open' : 'Edit'}</Button>
+                      <Button size="sm" variant="outline" className={CARD_ACTION_TOUCH} onClick={() => setInfoProjectId(project.id)}><Info aria-hidden />Info</Button>
                     </div>
                   </div>
                   <div className="p-5">
@@ -587,57 +626,58 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         <TitleRenameInput initial={project.name} onDone={(value) => commitRename(project, value)} />
                       ) : (
                         <div className="group/title flex min-w-0 items-center gap-1">
-                          <h3 className="text-2xl font-display truncate">{project.name}</h3>
-                          <button
-                            onClick={() => setRenamingId(project.id)}
-                            className="shrink-0 rounded-full p-1 text-slate-400 opacity-60 hover:bg-slate-100 hover:text-black group-hover/title:opacity-100 focus:opacity-100"
+                          <h3 className="truncate text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em]">{project.name}</h3>
+                          <IconButton
+                            size="sm"
+                            label={`Rename ${project.name}`}
                             title="Rename"
-                            aria-label={`Rename ${project.name}`}
+                            className="text-[var(--ds-muted)] hover:text-[var(--ds-ink)]"
+                            onClick={() => setRenamingId(project.id)}
                           >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
+                            <Pencil />
+                          </IconButton>
                         </div>
                       )}
-                      <button
+                      <IconButton
                         onClick={() => onUpdateProject(project.id, (prev) => ({
                           state: { ...prev.state, isFeatured: !prev.state.isFeatured }
                         }))}
-                        className={`p-1 border-2 border-black rounded-full ${project.state.isFeatured ? 'bg-brand-yellow' : 'bg-white'}`}
+                        className={project.state.isFeatured ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'}
                         title="Toggle Featured"
-                        aria-label={project.state.isFeatured ? "Unmark as featured" : "Mark as featured"}
+                        label={project.state.isFeatured ? "Unmark as featured" : "Mark as featured"}
                       >
-                        <Star className={`w-4 h-4 ${project.state.isFeatured ? 'fill-black' : ''}`} />
-                      </button>
+                        <Star className={cn(project.state.isFeatured && 'fill-current')} />
+                      </IconButton>
                     </div>
                     <div className="flex justify-between items-center mb-4">
-                      <p className="text-xs text-slate-500 font-mono">Updated: {new Date(project.updatedAt).toLocaleDateString()}</p>
-                      {project.state.generationStatus?.isActive && <span className="text-xs font-bold bg-brand-yellow px-2 py-0.5 rounded border border-black animate-pulse">BUILDING</span>}
+                      <p className="text-[length:var(--ds-text-sm)] tabular-nums text-[var(--ds-muted)]">Updated: {new Date(project.updatedAt).toLocaleDateString()}</p>
+                      {project.state.generationStatus?.isActive && <Badge variant="secondary">BUILDING</Badge>}
                     </div>
 
                     {studioProgress && (
                       <div className="-mt-2 mb-4" data-testid="studio-progress">
-                        <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                        <div className="flex items-center justify-between gap-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]">
                           <span>{formatStudioProgress(studioProgress)}</span>
                           {studioProgress.pages > 0 && studioProgress.rendered >= studioProgress.pages && (
-                            <span className="inline-flex items-center gap-1 text-green-700"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Drawn</span>
+                            <span className={cn('inline-flex items-center gap-1', STATUS_INK.healthy)}><CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Drawn</span>
                           )}
                         </div>
                         {studioProgress.pages > 0 && (
                           <div
-                            className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100"
+                            className="mt-1 h-1.5 overflow-hidden rounded-[var(--ds-radius-pill)] bg-[var(--ds-well-strong)]"
                             role="progressbar"
                             aria-label="Pages drawn"
                             aria-valuemin={0}
                             aria-valuemax={studioProgress.pages}
                             aria-valuenow={studioProgress.rendered}
                           >
-                            <div className="h-full bg-brand-yellow transition-all duration-500" style={{ width: `${(studioProgress.rendered / studioProgress.pages) * 100}%` }} />
+                            <div className="h-full bg-[var(--ds-ink)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none" style={{ width: `${(studioProgress.rendered / studioProgress.pages) * 100}%` }} />
                           </div>
                         )}
                       </div>
                     )}
 
-                    <div className="flex justify-between border-t-2 border-slate-100 pt-4">
+                    <div className="flex justify-between border-t border-[var(--ds-hairline)] pt-3">
                       {isStudio ? (
                         // A studio comic's content lives server-side (comic_docs); copying the
                         // listing row would make a comic with no document — so not yet.
@@ -646,14 +686,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                             disabled
                             aria-disabled="true"
                             aria-label={DUPLICATE_UNAVAILABLE_FOR_STUDIO}
-                            className="text-slate-300 flex items-center gap-1 text-xs font-bold uppercase cursor-not-allowed"
+                            className={cn(CARD_FOOT_ACTION, 'cursor-not-allowed opacity-50')}
                           >
-                            <Copy size={14} /> Duplicate
+                            <Copy size={14} aria-hidden /> Duplicate
                           </button>
                         </span>
                       ) : (
-                        <button onClick={() => onDuplicateProject(project.id)} className="text-slate-500 hover:text-brand-blue flex items-center gap-1 text-xs font-bold uppercase">
-                          <Copy size={14} /> Duplicate
+                        <button type="button" onClick={() => onDuplicateProject(project.id)} className={cn(CARD_FOOT_ACTION, 'hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')}>
+                          <Copy size={14} aria-hidden /> Duplicate
                         </button>
                       )}
                       <button
@@ -666,9 +706,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                           }
                           if (confirmed) onDeleteProject(project.id);
                         }}
-                        className="text-slate-500 hover:text-brand-red flex items-center gap-1 text-xs font-bold uppercase"
+                        className={cn(CARD_FOOT_ACTION, 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]')}
                       >
-                        <Trash2 size={14} /> Delete
+                        <Trash2 size={14} aria-hidden /> Delete
                       </button>
                     </div>
                   </div>
@@ -690,7 +730,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         </>
       )}
       {infoProject && (
-        <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"><div className="bg-white p-4 rounded-xl border-4 border-black"><Loader2 className="animate-spin w-8 h-8" /></div></div>}>
+        <Suspense fallback={<div className={cn('fixed inset-0 flex items-center justify-center', SCRIM, Z.dialog)}><div className={cn(OVERLAY, 'p-4')}><Loader2 className="animate-spin motion-reduce:animate-none w-8 h-8" aria-hidden /></div></div>}>
           <ProjectInfoModal
             project={infoProject}
             onClose={() => setInfoProjectId(null)}
