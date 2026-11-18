@@ -226,12 +226,11 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect([...restated].sort()).toEqual(derived.sort());
   });
 
-  it('legacy-kit form controls keep the light scheme in dark (dark applies on every page since D5; their ink stays slate-900)', () => {
-    const shim = rules.filter((r) => r.parents.length === 0 && r.selector === '.dark :is(input, select, textarea).border-black');
-    expect(shim).toHaveLength(1);
-    expect(shim[0].body.trim()).toBe('color-scheme: light;');
-    // Only the kit's marked controls: a DS Field (token edge, no border-black) still takes the dark scheme.
-    expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector) && r.selector !== shim[0].selector)).toBe(false);
+  it('form controls take the dark scheme in dark: no legacy-kit control is left to pin to light', () => {
+    // The kit's `border-black` fields kept the light scheme while they existed; every field is now the DS Field (token
+    // edge), so no rule pins a control's scheme and none styles bare controls under .dark.
+    expect(rules.filter((r) => /\.border-black\b/.test(r.selector))).toEqual([]);
+    expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector))).toBe(false);
   });
 
   it('the assistant answer bubble is a token surface: its markdown reads the theme, with no light pin', () => {
@@ -780,7 +779,8 @@ describe('Atlas skin — base rules and the cross-fade', () => {
       .filter((r) => r.selector !== '@font-face' && !r.parents.some((p) => p.startsWith('@keyframes')))
       .flatMap((r) => topLevelSplit(r.selector).filter((item) => !item.includes('[data-ds-skin="atlas"]')).map((item) => `${item} (${r.parents.join(' / ') || 'top level'})`));
     expect(unscoped).toEqual([]);
-    expect(section.length).toBeGreaterThan(80);
+    // (The transitional shim at its end shrank to a few rules once the literal terracotta utilities left the tree.)
+    expect(section.length).toBeGreaterThan(40);
   });
 
   it('nothing in the skin section targets html by element, and the reader room stays content', () => {

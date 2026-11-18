@@ -12,13 +12,18 @@
  *
  * Scope: every source file under `components/**`, `App.tsx` and `qa/**` (tests, specs and `live/**` are
  * not scanned; tests/config/classLists.ts SCANNED_ROOTS / EXCLUDED). Only literals count — class strings,
- * attribute values, templates — so a comment or a sentence that names a token is never a use. The app
- * still carries the kit in 74 files (1,719 uses at the base commit; the totals line of
- * tests/config/baselines/legacyKit.json has today's numbers), so this RATCHETS against that baseline: a
- * file or token not listed must count 0, a count above its entry fails, and a count below fails until the
- * entry is lowered (`UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts`).
+ * attribute values, templates — so a comment or a sentence that names a token is never a use.
+ *
+ * Since the Atlas conversion wave this is a plain NEVER rule: the kit carried 1,719 uses in 74 files at the DS-0
+ * base commit, and the interface now carries none. tests/config/baselines/legacyKit.json lists no file (the
+ * ratchet machinery below still runs, so a new use anywhere fails as "baseline 0"), and the only uses left are
+ * comic content pinned one by one in ALLOWLIST with the reason. tailwind.config.cjs keeps only the theme entries
+ * that content reads (the comic shadow, the Comic Neue face); the brand colours, the Bangers display family and
+ * the hover shadow are gone, and the theme test below fails if one comes back or a kept entry loses its content.
  */
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   type Allowlist,
@@ -67,11 +72,45 @@ export const findLegacyKit = (source: string, fileName?: string) => findInLitera
 
 /**
  * Content exemptions, keyed by app-relative path; each pins the exact uses it permits (token and trimmed
- * source line) with a one-line reason. None today: comic lettering and art take their faces and colours
- * from the lettering fonts and the reader tokens, never these utilities, so every use is chrome to
- * migrate (and DS-10 deletes the utilities themselves).
+ * source line) with a one-line reason. Only comic content: lettering and the comic page as it is drawn and
+ * exported. A pin that matches nothing is stale and fails; a second use beside a pin is counted (and fails).
  */
-const ALLOWLIST: Allowlist = {};
+export const ALLOWLIST: Allowlist = {
+  'components/PanelDialogue.tsx': {
+    uses: [
+      { token: 'border-black', line: '<div className="w-2 h-2 bg-white border border-black rounded-full" />' },
+      { token: 'border-black', line: '<div className="w-1.5 h-1.5 bg-white border border-black rounded-full ml-1" />' },
+      { token: 'border-black', line: 'bg-amber-50 border-2 border-black rounded-sm shadow-[2px_2px_0px_0px_#000]' },
+      { token: 'border-black', line: 'bg-white border-2 border-black' },
+      { token: 'font-comic', line: 'font-comic font-bold text-black leading-snug overflow-hidden' },
+      { token: 'border-black', line: 'bg-white/95 border-2 border-black rounded' },
+      { token: 'font-comic', line: 'font-comic font-bold text-black text-center' },
+      {
+        token: 'border-black',
+        line: "<div className={`bg-white/95 border-2 border-black rounded font-comic font-bold text-black text-center leading-snug ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-3 py-2 text-sm'}`}>"
+      },
+      {
+        token: 'font-comic',
+        line: "<div className={`bg-white/95 border-2 border-black rounded font-comic font-bold text-black text-center leading-snug ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-3 py-2 text-sm'}`}>"
+      }
+    ],
+    reason: 'comic lettering drawn over the classic reader\'s art: speech balloons, thought-tail bubbles and narration boxes in their inked outline and Comic Neue face'
+  },
+  'components/steps/ReviewExport.tsx': {
+    uses: [
+      {
+        token: 'border-black',
+        line: "className={`relative group border-4 ${panel.failureReason ? 'border-[var(--ds-danger-mark)]' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${slotStyle ? '' : getPanelClass(displayIdx)}`}"
+      },
+      {
+        token: 'shadow-comic',
+        line: "className={`relative group border-4 ${panel.failureReason ? 'border-[var(--ds-danger-mark)]' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${slotStyle ? '' : getPanelClass(displayIdx)}`}"
+      },
+      { token: 'border-black', line: '<div className="mb-6 overflow-hidden rounded-lg border-4 border-black">' }
+    ],
+    reason: 'the comic page itself inside #comic-render-area (panel frames and the cover frame), captured into the exported PDF'
+  }
+};
 
 /** The guard's scan of an app tree (the real-tree test runs exactly this), each file read in its own language. */
 export function legacyKitScan(root = APP_ROOT) {
@@ -162,9 +201,16 @@ describe('legacy kit guard — the ratchet', () => {
     }
   });
 
-  it('one use more than a file’s baseline fails; one use fewer fails until the baseline is lowered', () => {
-    const [rel, tokens] = Object.entries(baseline)[0];
-    const [token, n] = Object.entries(tokens)[0];
+  it('the baseline lists no file: the interface carries no legacy kit, so any new use is "baseline 0"', () => {
+    expect(baseline).toEqual({});
+  });
+
+  it('the ratchet mechanics still hold for a listed file: one use more fails, one fewer fails until lowered', () => {
+    const rel = 'components/__planted__/Listed.tsx';
+    const token = 'border-black';
+    const n = 3;
+    const tokens = { [token]: n };
+    const baseline: Counts = { [rel]: tokens };
     const bumped: Counts = { ...baseline, [rel]: { ...tokens, [token]: n + 1 } };
     expect(compareToBaseline(bumped, baseline, TEST_FILE)).toEqual({ over: [`${rel}  ${token}: ${n + 1}, baseline ${n} — 1 new use`], under: [] });
     const lowered: Counts = { ...baseline, [rel]: { ...tokens, [token]: n - 1 } };
@@ -196,5 +242,46 @@ describe('legacy kit guard — the ratchet', () => {
       'A new legacy-kit use: build new chrome from the --ds-* tokens, the studioDesign recipes and components/ds (no border-black, shadow-comic, font-comic, brand-* or font-display).'
     ).toEqual([]);
     expect(under, 'The legacy kit shrank: lower the baseline so it cannot creep back.').toEqual([]);
+  });
+});
+
+describe('legacy kit guard — the theme and the content pins', () => {
+  type Theme = { theme: { extend: { fontFamily?: Record<string, unknown>; colors?: Record<string, unknown>; boxShadow?: Record<string, unknown> } } };
+  const config = createRequire(import.meta.url)(path.join(APP_ROOT, 'tailwind.config.cjs')) as Theme;
+  const pinnedTokens = new Set(Object.values(ALLOWLIST).flatMap((e) => e.uses.map((u) => u.token)));
+
+  it('tailwind.config.cjs defines no brand colours, no Bangers display family and no hover comic shadow', () => {
+    const ext = config.theme.extend;
+    expect(ext.colors?.brand, 'the brand-* colours are gone from the interface; do not bring them back').toBeUndefined();
+    expect(ext.fontFamily?.display, 'Tailwind font-display (Bangers) is gone; the chrome display face is FONT_DISPLAY').toBeUndefined();
+    expect(Object.keys(ext.boxShadow ?? {})).toEqual(['comic']);
+  });
+
+  it('the kit entries it keeps are read by pinned comic content only (drop the entry when its last pin goes)', () => {
+    const ext = config.theme.extend;
+    expect(ext.fontFamily?.comic).toBeDefined();
+    expect(pinnedTokens.has('font-comic'), 'fontFamily.comic is kept for the classic lettering (PanelDialogue)').toBe(true);
+    expect(ext.boxShadow?.comic).toBeDefined();
+    expect(pinnedTokens.has('shadow-comic'), 'boxShadow.comic is kept for the exported comic page (ReviewExport)').toBe(true);
+    expect([...pinnedTokens].sort()).toEqual(['border-black', 'font-comic', 'shadow-comic']);
+  });
+
+  it('a new kit use fails even in a file with content pins: only the pinned lines are exempt', () => {
+    const rel = 'components/PanelDialogue.tsx';
+    const source = readFileSync(path.join(APP_ROOT, rel), 'utf8');
+    const pins: Allowlist = { [rel]: ALLOWLIST[rel] };
+    expect(scanTree([rel], () => findLegacyKit(source, rel), pins)).toMatchObject({ counts: {}, stale: [] });
+    for (const [cls, token] of [
+      ['bg-brand-yellow', 'brand-yellow'],
+      ['text-brand-blue', 'brand-blue'],
+      ['border-brand-red', 'brand-red'],
+      ['shadow-comic', 'shadow-comic'],
+      ['font-display', 'font-display'],
+      ['font-comic', 'font-comic'],
+      ['border-2 border-black', 'border-black']
+    ] as const) {
+      const planted = `${source}\nexport const CHROME = 'px-2 ${cls}';\n`;
+      expect(scanTree([rel], () => findLegacyKit(planted, rel), pins).counts, cls).toEqual({ [rel]: { [token]: 1 } });
+    }
   });
 });
