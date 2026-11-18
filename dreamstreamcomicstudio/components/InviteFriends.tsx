@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useId, useState } from 'react';
-import { Loader2, Copy, Check, Send, Gift } from 'lucide-react';
+import { AlertTriangle, Loader2, Copy, Check, Send, Gift } from 'lucide-react';
 import { getReferral, sendReferral, type ReferralInfo } from '../services/invites';
+import { cn } from '../lib/utils';
+import { Button, FIELD_LABEL, Input, Textarea } from './ds';
+import { MUTED, OVERLINE, RADIUS_CONTROL, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, WRAP_TEXT } from './chat/studioDesign';
 
-const inputCls =
-  'w-full rounded-lg border-2 border-black bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue';
-const btnCls =
-  'inline-flex items-center justify-center gap-2 rounded-lg border-2 border-black px-4 py-2 text-sm font-bold shadow-comic transition-all hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none disabled:cursor-not-allowed disabled:opacity-60';
+const NOTE = cn('flex items-start gap-2 border px-3 py-2 text-[length:var(--ds-text-base)]', RADIUS_CONTROL);
 
 /** Lets any signed-in user share their personal referral link or email it to friends. */
 export const InviteFriends: React.FC = () => {
@@ -80,28 +80,33 @@ export const InviteFriends: React.FC = () => {
 
   return (
     <div className="p-4 space-y-4">
-      <p className="text-sm text-slate-600 flex items-center gap-2">
-        <Gift size={16} className="text-brand-blue" /> Share DreamStream with friends — they skip the waitlist when they use your link.
+      <p className={cn('flex items-center gap-2 text-[length:var(--ds-text-base)]', MUTED)}>
+        <Gift size={16} className="shrink-0 text-[var(--ds-ink)]" aria-hidden="true" /> Share DreamStream with friends — they skip the waitlist when they use your link.
       </p>
 
-      {error && <div className="rounded-lg border-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {error && (
+        <div className={cn(NOTE, STATUS_SURFACE.error, STATUS_INK.error)}>
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span className={WRAP_TEXT}>{error}</span>
+        </div>
+      )}
 
       <div>
-        <label htmlFor={linkId} className="block text-xs font-bold uppercase tracking-wide text-slate-600 mb-1">Your invite link</label>
+        <label htmlFor={linkId} className={cn('mb-1.5 block', FIELD_LABEL)}>Your invite link</label>
         <div className="flex items-center gap-2">
-          <input id={linkId} readOnly className={`${inputCls} min-w-0 font-mono text-xs`} value={loading ? 'Loading…' : ref?.url || ''} />
-          <button className={`${btnCls} bg-brand-yellow shrink-0`} onClick={copy} disabled={!ref} aria-describedby={ref ? undefined : copyWhyId}>
+          <Input id={linkId} readOnly className="min-w-0 font-mono md:text-[length:var(--ds-text-sm)]" value={loading ? 'Loading…' : ref?.url || ''} />
+          <Button variant="outline" className="h-10" onClick={copy} disabled={!ref} aria-describedby={ref ? undefined : copyWhyId}>
             {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
-          </button>
+          </Button>
         </div>
         {/* A disabled Copy says why: the link is still loading, or it could not be loaded. */}
         {!ref && (
-          <div id={copyWhyId} className="mt-1 text-xs text-slate-500">
+          <div id={copyWhyId} className={cn('mt-1 text-[length:var(--ds-text-sm)]', MUTED)}>
             {loading ? 'No link to copy yet: it is still loading.' : 'No link to copy: your invite link could not be loaded.'}
           </div>
         )}
         {ref && (
-          <div className="mt-1 text-xs text-slate-500">
+          <div className={cn('mt-1 text-[length:var(--ds-text-sm)] tabular-nums', MUTED)}>
             Used {ref.used} of {ref.max}.
           </div>
         )}
@@ -109,25 +114,25 @@ export const InviteFriends: React.FC = () => {
 
       {/* What happened to the invites you sent: invited or joined, nothing more. */}
       {ref && ((ref.invited?.length ?? 0) > 0 || (ref.joinedViaLink ?? 0) > 0) && (
-        <div className="border-t-2 border-dashed border-slate-300 pt-3">
-          <div className="text-xs font-bold uppercase tracking-wide text-slate-600 mb-1.5">Your invites</div>
-          <div className="rounded-lg border-2 border-black bg-white divide-y divide-slate-100 max-h-44 overflow-y-auto">
+        <div className="border-t border-[var(--ds-hairline)] pt-3">
+          <div className={cn('mb-1.5', OVERLINE)}>Your invites</div>
+          <div className={cn('max-h-44 divide-y divide-[var(--ds-hairline)] overflow-y-auto border border-[var(--ds-hairline)] bg-[var(--ds-canvas)]', RADIUS_CONTROL)}>
             {(ref.invited ?? []).map((inv) => (
-              <div key={inv.email} className="flex items-center gap-2 px-3 py-1.5 text-xs">
-                <span className="font-mono truncate flex-1">{inv.email}</span>
+              <div key={inv.email} className="flex items-center gap-2 px-3 py-1.5 text-[length:var(--ds-text-sm)] text-[var(--ds-ink)]">
+                <span className="min-w-0 flex-1 truncate font-mono">{inv.email}</span>
                 {inv.joined ? (
-                  <span className="rounded-full bg-green-100 px-2 py-0.5 font-bold text-green-700">
+                  <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.healthy, 'shrink-0')}>
                     Joined{inv.joinedAt ? ` ${new Date(inv.joinedAt).toLocaleDateString()}` : ''}
                   </span>
                 ) : (
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 font-bold text-slate-500" title={`Invited ${new Date(inv.lastSentAt).toLocaleDateString()}${inv.sendCount > 1 ? ` · sent ${inv.sendCount}×` : ''}`}>
+                  <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.waiting, 'shrink-0')} title={`Invited ${new Date(inv.lastSentAt).toLocaleDateString()}${inv.sendCount > 1 ? ` · sent ${inv.sendCount}×` : ''}`}>
                     Invited
                   </span>
                 )}
               </div>
             ))}
             {(ref.joinedViaLink ?? 0) > 0 && (
-              <div className="px-3 py-1.5 text-xs text-slate-500">
+              <div className={cn('px-3 py-1.5 text-[length:var(--ds-text-sm)]', MUTED)}>
                 +{ref.joinedViaLink} joined via your link
               </div>
             )}
@@ -135,31 +140,30 @@ export const InviteFriends: React.FC = () => {
         </div>
       )}
 
-      <div className="border-t-2 border-dashed border-slate-300 pt-3 space-y-2">
-        <label htmlFor={emailsId} className="block text-xs font-bold uppercase tracking-wide text-slate-600">Or email them directly (up to 10)</label>
-        <textarea
+      <div className="space-y-2 border-t border-[var(--ds-hairline)] pt-3">
+        <label htmlFor={emailsId} className={cn('block', FIELD_LABEL)}>Or email them directly (up to 10)</label>
+        <Textarea
           id={emailsId}
-          className={`${inputCls} min-h-[60px] font-mono text-xs`}
+          className="font-mono md:text-[length:var(--ds-text-sm)]"
           value={emails}
           onChange={(e) => setEmails(e.target.value)}
           placeholder="Email addresses, separated by commas"
         />
-        <input
-          className={inputCls}
+        <Input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           aria-label="A short personal note (optional)"
           placeholder="Add a short personal note (optional)"
           maxLength={240}
         />
-        <button className={`${btnCls} bg-brand-blue text-white`} onClick={handleSend} disabled={busy || !emails.trim()}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send invites
-        </button>
+        <Button onClick={handleSend} disabled={busy || !emails.trim()}>
+          {busy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Send size={14} />} Send invites
+        </Button>
         {msg && (
-          <div className="rounded-lg border-2 border-black bg-green-50 px-3 py-2 text-sm">
-            <div>{msg}</div>
+          <div className={cn(NOTE, 'flex-col gap-0', STATUS_SURFACE.healthy, 'text-[var(--ds-ink)]')}>
+            <div className="flex items-center gap-2"><Check size={16} className={cn('shrink-0', STATUS_INK.healthy)} aria-hidden="true" /><span className={WRAP_TEXT}>{msg}</span></div>
             {details.length > 0 && (
-              <ul className="mt-1 space-y-0.5 text-xs text-slate-600 font-mono">
+              <ul className={cn('mt-1 space-y-0.5 font-mono text-[length:var(--ds-text-sm)]', MUTED, WRAP_TEXT)}>
                 {details.map((line) => <li key={line}>{line}</li>)}
               </ul>
             )}

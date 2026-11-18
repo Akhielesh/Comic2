@@ -2,6 +2,9 @@ import React, { useRef, useState, useEffect } from 'react';
 import { ThumbsUp, ThumbsDown, Check } from 'lucide-react';
 import { submitFeedback } from '../../services/feedback';
 import type { FeedbackTargetType, FeedbackVoteValue, TelemetrySource } from '../../apiTypes';
+import { cn } from '../../lib/utils';
+import { Button } from '../ds';
+import { DENSITY, FIELD, FOCUS_RING, MUTED, RADIUS_CONTROL, TONE_TEXT } from '../chat/studioDesign';
 
 interface FeedbackButtonsProps {
   /** What is being rated (a chat response, an error, a crash, …). */
@@ -96,17 +99,24 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
   };
 
   const iconSize = compact ? 'w-3 h-3' : 'w-3.5 h-3.5';
+  // A 24 px target on a fine pointer (the dense row under a message), 44 × 44 under a coarse one.
   const btn = (active: boolean, activeClass: string) =>
-    `flex items-center gap-0.5 font-bold transition-colors ${active ? activeClass : 'text-slate-400 hover:text-black'}`;
+    cn(
+      'inline-flex min-h-6 min-w-6 items-center justify-center gap-0.5 font-medium transition-colors duration-[var(--ds-motion-fast)] ease-[var(--ds-ease)] hover:bg-[var(--ds-hover)]',
+      RADIUS_CONTROL,
+      DENSITY.coarseSquare,
+      FOCUS_RING,
+      active ? activeClass : `${MUTED} hover:text-[var(--ds-ink)]`
+    );
 
   return (
-    <div className={`flex flex-col gap-1 ${className || ''}`}>
+    <div className={cn('flex flex-col gap-1', className)}>
       <div className={`flex items-center gap-2 ${compact ? 'text-[11px]' : 'text-xs'}`}>
-        <span className="text-slate-400">{done ? 'Thanks!' : 'Helpful?'}</span>
+        <span className={MUTED}>{done ? 'Thanks!' : 'Helpful?'}</span>
         <button
           type="button"
           onClick={handleLike}
-          className={btn(vote === 'like', 'text-green-600')}
+          className={btn(vote === 'like', TONE_TEXT.success)}
           aria-pressed={vote === 'like'}
           title="This was helpful"
         >
@@ -115,14 +125,14 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
         <button
           type="button"
           onClick={handleDislike}
-          className={btn(vote === 'dislike', 'text-brand-red')}
+          className={btn(vote === 'dislike', TONE_TEXT.danger)}
           aria-pressed={vote === 'dislike'}
           title="This wasn't helpful"
         >
           <ThumbsDown className={iconSize} />
         </button>
         {done && (
-          <span className="flex items-center gap-0.5 text-green-600 font-bold">
+          <span className={cn('flex items-center gap-0.5 font-medium', TONE_TEXT.success)}>
             <Check className={iconSize} /> Sent
           </span>
         )}
@@ -137,23 +147,15 @@ export const FeedbackButtons: React.FC<FeedbackButtonsProps> = ({
             placeholder="What went wrong? (optional)"
             rows={2}
             autoFocus
-            className="flex-1 text-[11px] border-2 border-black rounded-md px-2 py-1 bg-white focus:outline-none resize-none"
+            className={cn(FIELD, 'min-w-0 flex-1 resize-none px-2 py-1 text-[length:var(--ds-text-sm)]')}
           />
           <div className="flex flex-col gap-1">
-            <button
-              type="button"
-              onClick={handleSend}
-              className="text-[11px] font-bold border-2 border-black rounded-md px-2 py-0.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors"
-            >
+            <Button type="button" size="sm" onClick={handleSend}>
               Send
-            </button>
-            <button
-              type="button"
-              onClick={handleSkip}
-              className="text-[10px] font-bold text-slate-400 hover:text-black"
-            >
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={handleSkip} className={MUTED}>
               Skip
-            </button>
+            </Button>
           </div>
         </div>
       )}

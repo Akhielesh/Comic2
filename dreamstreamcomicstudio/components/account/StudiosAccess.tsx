@@ -6,6 +6,18 @@ import { ArrowRight, BookOpen, Check, Lock, MessageSquare, Radio, Baby } from 'l
 import { fetchAccountAccess, onAccountAccessChange, type AccountAccess, type StudioAccess } from '../../services/studioAccessApi';
 import { followLiveLink } from '../../services/liveLink';
 import { isStreamUrl } from '../../shared/streamHost';
+import { cn } from '../../lib/utils';
+import {
+  DENSITY,
+  FOCUS_RING,
+  MUTED,
+  RADIUS_CONTROL,
+  SECTION_CARD,
+  SECTION_ICON_TILE,
+  STATUS_CHIP,
+  STATUS_CHIP_TONE,
+  type StatusState
+} from '../chat/studioDesign';
 
 const ICON: Record<StudioAccess['id'], React.ComponentType<{ size?: number }>> = {
   comic_studio: BookOpen,
@@ -14,10 +26,11 @@ const ICON: Record<StudioAccess['id'], React.ComponentType<{ size?: number }>> =
   baby_monitor: Baby,
 };
 
-const BADGE: Record<StudioAccess['status'], { text: string; cls: string; Icon: React.ComponentType<{ size?: number }> }> = {
-  open: { text: 'Yours', cls: 'bg-emerald-50 text-emerald-700 border-emerald-300', Icon: Check },
-  needs_code: { text: 'One step', cls: 'bg-amber-50 text-amber-800 border-amber-300', Icon: Lock },
-  locked: { text: 'Locked', cls: 'bg-slate-100 text-slate-600 border-slate-300', Icon: Lock },
+// The one status vocabulary (studioDesign STATUS_*): the word and the icon always say it, the hue only repeats it.
+const BADGE: Record<StudioAccess['status'], { text: string; state: StatusState; Icon: React.ComponentType<{ size?: number }> }> = {
+  open: { text: 'Yours', state: 'healthy', Icon: Check },
+  needs_code: { text: 'One step', state: 'attention', Icon: Lock },
+  locked: { text: 'Locked', state: 'waiting', Icon: Lock },
 };
 
 export const StudiosAccess: React.FC = () => {
@@ -35,31 +48,31 @@ export const StudiosAccess: React.FC = () => {
   }, []);
 
   return (
-    <div className="border-2 border-black rounded-xl bg-white" data-testid="studios-access">
-      <div className="px-4 py-3 border-b-2 border-black flex items-baseline gap-3 flex-wrap">
-        <span className="font-display text-lg">Your studios</span>
-        <span className="text-xs text-slate-500">One account for every DreamStream studio</span>
+    <div className={SECTION_CARD} data-testid="studios-access">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-[var(--ds-hairline)] px-4 py-3">
+        <span className="text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">Your studios</span>
+        <span className={cn('text-[length:var(--ds-text-sm)]', MUTED)}>One account for every DreamStream studio</span>
       </div>
       {data === undefined ? (
-        <div className="p-4 text-sm text-slate-500">Loading…</div>
+        <div className={cn('p-4 text-[length:var(--ds-text-base)]', MUTED)}>Loading…</div>
       ) : data === null ? (
-        <div className="p-4 text-sm text-slate-500">Couldn’t load your studios right now.</div>
+        <div className={cn('p-4 text-[length:var(--ds-text-base)]', MUTED)}>Couldn’t load your studios right now.</div>
       ) : (
-        <ul className="divide-y divide-slate-200">
+        <ul className="divide-y divide-[var(--ds-hairline)]">
           {data.studios.map((s) => {
             const I = ICON[s.id];
             const b = BADGE[s.status];
             const href = s.status === 'open' ? s.href : s.action?.href;
             return (
-              <li key={s.id} className="flex items-center gap-3 px-4 py-3">
-                <span className={`w-10 h-10 rounded-xl grid place-items-center border-2 ${s.status === 'open' ? 'border-black bg-brand-yellow' : 'border-slate-300 bg-slate-50 text-slate-500'}`}>
+              <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                <span className={cn(SECTION_ICON_TILE, 'size-10', s.status === 'open' ? '' : MUTED)} aria-hidden="true">
                   <I size={18} />
                 </span>
-                <span className="flex-1 min-w-0">
-                  <span className="block font-bold">{s.label}</span>
-                  <span className="block text-xs text-slate-600">{s.status === 'open' ? `${s.tagline} · ${s.detail}` : s.detail}</span>
+                <span className="min-w-0 flex-1 basis-40">
+                  <span className="block font-semibold text-[var(--ds-ink)]">{s.label}</span>
+                  <span className={cn('block text-[length:var(--ds-text-sm)] [overflow-wrap:anywhere]', MUTED)}>{s.status === 'open' ? `${s.tagline} · ${s.detail}` : s.detail}</span>
                 </span>
-                <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${b.cls}`}>
+                <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[b.state])}>
                   <b.Icon size={11} />{b.text}
                 </span>
                 {href && (
@@ -67,7 +80,7 @@ export const StudiosAccess: React.FC = () => {
                     href={href}
                     // Stream Studio on its own host: arrive there signed in (one-time handoff link).
                     onClick={isStreamUrl(href) ? (e) => followLiveLink(e, href) : undefined}
-                    className="inline-flex items-center gap-1 text-sm font-bold underline-offset-2 hover:underline" aria-label={s.status === 'open' ? `Open ${s.label}` : s.action?.label}>
+                    className={cn('inline-flex min-h-8 min-w-8 items-center justify-center gap-1 px-1.5 text-[length:var(--ds-text-base)] font-medium text-[var(--ds-ink)] underline-offset-2 hover:underline', RADIUS_CONTROL, DENSITY.coarseSquare, FOCUS_RING)} aria-label={s.status === 'open' ? `Open ${s.label}` : s.action?.label}>
                     {s.status === 'open' ? <ArrowRight size={16} /> : s.action?.label}
                   </a>
                 )}
@@ -76,7 +89,7 @@ export const StudiosAccess: React.FC = () => {
           })}
         </ul>
       )}
-      {data?.confined && <div className="px-4 pb-3 text-xs text-slate-500">An admin set which studios this account can use.</div>}
+      {data?.confined && <div className={cn('px-4 pb-3 text-[length:var(--ds-text-sm)]', MUTED)}>An admin set which studios this account can use.</div>}
     </div>
   );
 };
