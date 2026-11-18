@@ -83,7 +83,7 @@ import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from '
 import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
-import { mainAppUrl, syncMemberHint } from './services/productHost';
+import { FRONT_PAGE_STAY_PARAM, mainAppUrl, syncMemberHint } from './services/productHost';
 import { safeNext } from './services/safeNext';
 import { useAuthLinkCallback } from './hooks/useAuthLinkCallback';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
@@ -436,10 +436,12 @@ const App: React.FC = () => {
     setCurrentView('settings');
   };
 
-  // The FAQ lives on the main site's home page.
+  // The FAQ lives on the main site's home page. From the comics host it is opened through the front page's
+  // escape hatch (?home=1): the bare front page sends visitors without the member hint back to Comic Studio
+  // (services/productHost.ts frontPageToComicsUrl), so they would never reach the FAQ.
   const handleOpenFaq = () => {
     if (comicsHost.active) {
-      window.location.assign(mainAppUrl('/#home-faq'));
+      window.location.assign(mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`));
       return;
     }
     handleBackToHome();

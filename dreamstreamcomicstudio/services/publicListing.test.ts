@@ -106,9 +106,8 @@ describe('the listing rule in the query', () => {
 
 describe('every public list uses the rule', () => {
   // A query that asks for public projects on its own would list (or count) the hidden older comics again.
-  // Allowed: the rule itself; getPublicProject (a lookup by id behind a direct link, not a list); and
-  // services/stats.ts, which no screen uses today and must adopt filterPublicListing before one does.
-  const ALLOWED: Record<string, number> = { 'services/publicListing.ts': 1, 'services/db.ts': 1, 'services/stats.ts': 2 };
+  // Allowed: the rule itself, and getPublicProject (a lookup by id behind a direct link, not a list).
+  const ALLOWED: Record<string, number> = { 'services/publicListing.ts': 1, 'services/db.ts': 1 };
 
   it('no other client file asks for public projects directly', () => {
     const found: Record<string, number> = {};
@@ -129,5 +128,6 @@ describe('every public list uses the rule', () => {
   it('the Library and a public profile go through the rule', () => {
     expect(readFileSync(path.join(ROOT, 'components/PublicGallery.tsx'), 'utf8')).toMatch(/filterPublicListing\(supabase\.from\('projects'\)/);
     expect(readFileSync(path.join(ROOT, 'services/db.ts'), 'utf8')).toMatch(/getPublicProjectsByUser[\s\S]{0,400}filterPublicListing\(supabase/);
+    expect(readFileSync(path.join(ROOT, 'services/stats.ts'), 'utf8').match(/filterPublicListing\(\s*supabase\.from\('projects'\)/g)).toHaveLength(2);
   });
 });

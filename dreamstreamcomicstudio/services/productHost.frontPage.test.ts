@@ -1,12 +1,16 @@
 // @vitest-environment node
 // The main site's front page → Comic Studio: every condition of frontPageToComicsUrl, the member hint cookie
 // and its browser-side sync.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  FRONT_PAGE_STAY_PARAM,
   MAIN_FRONT_PAGE_TO_COMICS,
   MEMBER_HINT_COOKIE,
   frontPageToComicsUrl,
   hasMemberHint,
+  mainAppUrl,
   memberHintCookie,
   syncMemberHint,
 } from './productHost';
@@ -178,5 +182,18 @@ describe('member hint cookie', () => {
     }
     vi.unstubAllGlobals();
     expect(() => syncMemberHint(true)).not.toThrow();
+  });
+});
+
+describe('links from the comics host into the main front page', () => {
+  it('the FAQ link goes through the escape hatch, so a visitor without the hint reaches the FAQ', () => {
+    const faq = mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`);
+    expect(go(faq)).toBeNull();
+    // The bare address would bounce the same visitor back to Comic Studio.
+    expect(go(mainAppUrl('/#home-faq'))).toBe(COMICS);
+    const app = readFileSync(path.join(__dirname, '..', 'App.tsx'), 'utf8');
+    const handler = app.slice(app.indexOf('const handleOpenFaq'), app.indexOf('const navigateToReader'));
+    expect(handler).toContain('mainAppUrl(`/?${FRONT_PAGE_STAY_PARAM}=1#home-faq`)');
+    expect(handler).not.toContain("mainAppUrl('/#home-faq')");
   });
 });

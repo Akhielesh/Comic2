@@ -117,14 +117,29 @@ describe('getPublicProjectsByUser — cards', () => {
   });
 });
 
-// EGRESS-DB E3: the landing stats count public comics with a HEAD request on one column (no `*`).
+// EGRESS-DB E3: the landing stats count public comics with a HEAD request on one column (no `*`), and only the
+// comics the Library lists (services/publicListing.ts), so hidden older comics never reach a number.
 describe('getStudioStats', () => {
-  it('counts public comics with a HEAD on id, then reads only user ids', async () => {
+  const LISTING = [
+    'is_public=eq.true',
+    'is_forced_private=not.is.true',
+    'state->>studioVersion=eq.4',
+    'state->>shareSlug=not.is.null',
+    'content_rating=in.(G,PG,PG-13)'
+  ];
+
+  it('counts listed comics with a HEAD on id, then reads only user ids', async () => {
     const { getStudioStats } = await import('./stats');
-    sb.rows = [row('a', { state: {} }), row('b', { state: {}, user_id: 'u2' }), row('c', { state: {}, is_public: false })];
+    sb.rows = [
+      row('a', { content_rating: 'G' }),
+      row('b', { content_rating: 'PG', user_id: 'u2' }),
+      row('c', { content_rating: 'G', is_public: false }),
+      row('classic', { state: {} }),
+      row('held', { content_rating: 'G', is_forced_private: true, user_id: 'u3' })
+    ];
     expect(await getStudioStats()).toEqual({ comicCount: 2, userCount: 2 });
     const [count, users] = fakeSupabase.queriesOn('projects');
-    expect(count).toMatchObject({ columns: 'id', head: true, count: 'exact', filters: ['is_public=eq.true'] });
-    expect(users).toMatchObject({ columns: 'user_id', head: false, filters: ['is_public=eq.true'] });
+    expect(count).toMatchObject({ columns: 'id', head: true, count: 'exact', filters: LISTING });
+    expect(users).toMatchObject({ columns: 'user_id', head: false, filters: LISTING });
   });
 });

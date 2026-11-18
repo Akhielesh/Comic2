@@ -39,6 +39,8 @@ Order in the middleware: after the host redirects, the runtime files, `/csp-repo
 
 `https://dreamstreamstudio.ai/?home=1` is never redirected (`home` is not a tracking key). A member whose
 browser has no hint yet opens it, or any existing sign-in route on the main site, and signs in there.
+The comics host's FAQ links (`App.tsx` `handleOpenFaq`, used by the readers there) open the main front page's FAQ
+through it (`/?home=1#home-faq`), since the bare front page would send a visitor straight back to Comic Studio.
 
 ## Member hint cookie
 

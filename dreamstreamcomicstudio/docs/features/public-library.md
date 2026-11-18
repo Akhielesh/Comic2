@@ -1,13 +1,13 @@
 # Public Library: what a visitor sees listed
 
 Code: `services/publicListing.ts` (the rule), `components/PublicGallery.tsx` (the Library on both hosts),
-`services/db.ts` `getPublicProjectsByUser` (a public profile's comics). Tests: `services/publicListing.test.ts`,
+`services/db.ts` `getPublicProjectsByUser` (a public profile's comics), `services/stats.ts` (public counts). Tests: `services/publicListing.test.ts`,
 `components/PublicGallery.test.tsx`, `services/db.publicProjects.test.ts`.
 
 ## The rule
 
 Every public list a signed-out visitor can reach (the Library grid, its search and its count, a public profile's grid
-and its count) shows the same comics: the current Comic Studio publications that passed the publish check. On a
+and its count, and the studio counts in `services/stats.ts` `getStudioStats`) shows the same comics: the current Comic Studio publications that passed the publish check. On a
 `projects` row that is all of:
 
 | Part | Who writes it |
