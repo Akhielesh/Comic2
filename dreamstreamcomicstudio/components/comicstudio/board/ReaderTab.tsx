@@ -519,6 +519,8 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           // height) opens the immersive reader; the inline reader's own browser full-screen icon stays off.
           fullscreenControl={false}
           overlay={overlay}
+          // The owner's working status ("6 of 12 pages drawn · 1 out of date"): here only, never on a shared reader.
+          showDrawnStatus
         />
       </div>
 
