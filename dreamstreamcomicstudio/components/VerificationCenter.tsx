@@ -8,7 +8,7 @@
 // Wire-up of "Confirm → file GitHub issue → Claude Code PR → auto-merge" lives in
 // Phase 3 (auto-resolve bridge); the dashboard already exposes the Confirm action.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -36,23 +36,49 @@ import {
   type VerificationFinding,
   type VerificationHealth
 } from '../services/verificationApi';
-import { Button } from './Button';
+import { cn } from '../lib/utils';
+import { Button, IconButton } from './ds';
+import {
+  DENSITY,
+  DIALOG_TITLE,
+  FIELD,
+  FOCUS_RING,
+  MUTED,
+  OVERLAY,
+  OVERLINE,
+  SCRIM,
+  SECTION_CARD,
+  STATUS_CHIP,
+  STATUS_CHIP_TONE,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TEXT_XL,
+  TONE_TEXT,
+  Z,
+  type StatusState
+} from './chat/studioDesign';
 
-const SEVERITY_COLOR: Record<VerificationFinding['severity'], string> = {
-  low: 'bg-slate-100 text-slate-700',
-  med: 'bg-brand-yellow text-black',
-  high: 'bg-orange-500 text-white',
-  critical: 'bg-brand-red text-white'
+// One status vocabulary (the word always rides with the tint).
+const SEVERITY_STATE: Record<VerificationFinding['severity'], StatusState> = {
+  low: 'waiting',
+  med: 'attention',
+  high: 'error',
+  critical: 'error'
 };
 
-const STATUS_COLOR: Record<VerificationFinding['status'], string> = {
-  open: 'bg-amber-100 text-amber-800',
-  confirmed: 'bg-orange-500 text-white',
-  fixing: 'bg-indigo-500 text-white',
-  resolved: 'bg-green-500 text-white',
-  dismissed: 'bg-slate-200 text-slate-600',
-  wontfix: 'bg-slate-200 text-slate-600'
+const STATUS_STATE: Record<VerificationFinding['status'], StatusState> = {
+  open: 'attention',
+  confirmed: 'error',
+  fixing: 'active',
+  resolved: 'healthy',
+  dismissed: 'waiting',
+  wontfix: 'waiting'
 };
+
+const FIELD_CLS = cn(FIELD, 'h-9 w-full px-2 text-sm', DENSITY.coarse);
+const FIELD_LABEL = cn(OVERLINE, 'mb-1 block');
+const SECTION = cn(SECTION_CARD, 'space-y-4 p-4 sm:p-5');
+const SECTION_TITLE = 'text-[length:var(--ds-text-lg)] font-semibold leading-6';
 
 export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
   const [loading, setLoading] = useState(true);
@@ -141,17 +167,17 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-4 md:p-6">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Shield className="w-6 h-6" />
-          <h2 className="font-display text-2xl">Verification Center</h2>
+          <Shield className="w-6 h-6" aria-hidden />
+          <h2 className={cn(TEXT_XL, 'm-0 font-semibold tracking-tight text-[var(--ds-ink)]')}>Verification Center</h2>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />} onClick={() => void refresh()}>
-            Refresh
+          <Button variant="outline" onClick={() => void refresh()}>
+            <RefreshCw className="w-4 h-4" /> Refresh
           </Button>
           {onBack && (
-            <Button variant="secondary" onClick={onBack}>
+            <Button variant="outline" onClick={onBack}>
               Back
             </Button>
           )}
@@ -159,26 +185,22 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
       </div>
 
       {error && (
-        <div className="border-2 border-red-500 bg-red-50 text-red-800 rounded-xl px-4 py-3 text-sm font-semibold flex items-start gap-2">
-          <AlertTriangle size={16} className="mt-0.5" /> {error}
+        <div className={cn('flex items-start gap-2 rounded-[var(--ds-radius-panel)] border px-4 py-3 text-sm font-medium [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden /> {error}
         </div>
       )}
 
       <HealthBar health={health} loading={loading} />
 
-      <section className="border-2 border-black rounded-xl p-5 space-y-4">
+      <section className={SECTION}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h3 className="font-display text-xl">Checks</h3>
-          <Button
-            variant="secondary"
-            icon={<Plus className="w-4 h-4" />}
-            onClick={() => setCreating(true)}
-          >
-            New check
+          <h3 className={SECTION_TITLE}>Checks</h3>
+          <Button variant="outline" onClick={() => setCreating(true)}>
+            <Plus className="w-4 h-4" /> New check
           </Button>
         </div>
         {checks.length === 0 && (
-          <p className="text-sm text-slate-500">
+          <p className={cn('text-sm', MUTED)}>
             No checks yet. Create one from a built-in template to seed the dashboard.
           </p>
         )}
@@ -197,15 +219,15 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
         </div>
       </section>
 
-      <section className="border-2 border-black rounded-xl p-5 space-y-4">
+      <section className={SECTION}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h3 className="font-display text-xl">Findings</h3>
+          <h3 className={SECTION_TITLE}>Findings</h3>
           <div className="flex items-center gap-2">
-            <label className="text-xs font-bold text-slate-500 uppercase">Status</label>
+            <label className={OVERLINE}>Status</label>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as VerificationFinding['status'] | 'all')}
-              className="border-2 border-black rounded px-2 py-1 text-sm"
+              className={cn(FIELD, 'h-9 px-2 text-sm', DENSITY.coarse)}
             >
               <option value="all">All</option>
               <option value="open">Open</option>
@@ -218,7 +240,7 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
           </div>
         </div>
         {findings.length === 0 && (
-          <p className="text-sm text-slate-500">No findings for this filter.</p>
+          <p className={cn('text-sm', MUTED)}>No findings for this filter.</p>
         )}
         <div className="space-y-2">
           {findings.map((f) => (
@@ -249,18 +271,18 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
 
 const HealthBar: React.FC<{ health: VerificationHealth | null; loading: boolean }> = ({ health, loading }) => (
   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-    <Stat icon={<AlertTriangle className="w-4 h-4 text-amber-600" />} label="Open findings" value={loading ? '…' : String(health?.open_findings ?? 0)} />
-    <Stat icon={<AlertTriangle className="w-4 h-4 text-red-600" />} label="Critical open" value={loading ? '…' : String(health?.critical_open ?? 0)} />
-    <Stat icon={<Activity className="w-4 h-4 text-indigo-600" />} label="Runs (24h)" value={loading ? '…' : String(health?.runs_last_24h ?? 0)} />
+    <Stat icon={<AlertTriangle className={cn('w-4 h-4', TONE_TEXT.warning)} aria-hidden />} label="Open findings" value={loading ? '…' : String(health?.open_findings ?? 0)} />
+    <Stat icon={<AlertTriangle className={cn('w-4 h-4', TONE_TEXT.danger)} aria-hidden />} label="Critical open" value={loading ? '…' : String(health?.critical_open ?? 0)} />
+    <Stat icon={<Activity className="w-4 h-4" aria-hidden />} label="Runs (24h)" value={loading ? '…' : String(health?.runs_last_24h ?? 0)} />
   </div>
 );
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string }> = ({ icon, label, value }) => (
-  <div className="border-2 border-black rounded-xl p-4 flex items-center justify-between">
-    <div className="flex items-center gap-2 text-xs uppercase font-bold text-slate-500">
+  <div className={cn(SECTION_CARD, 'flex items-center justify-between gap-3 p-4')}>
+    <div className={cn(OVERLINE, 'flex items-center gap-2')}>
       {icon} {label}
     </div>
-    <div className="font-display text-2xl">{value}</div>
+    <div className={cn(TEXT_XL, 'font-semibold tabular-nums')}>{value}</div>
   </div>
 );
 
@@ -272,27 +294,27 @@ const CheckRow: React.FC<{
   onDelete: () => void;
   running: boolean;
 }> = ({ check, onToggleEnabled, onToggleAutoFix, onRun, onDelete, running }) => (
-  <div className="border-2 border-black rounded-lg p-3 flex flex-wrap items-center gap-3">
-    <div className="flex-1 min-w-[200px]">
-      <div className="font-bold">{check.name}</div>
-      <div className="text-xs text-slate-500 font-mono">
+  <div className="flex flex-wrap items-center gap-3 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3">
+    <div className="min-w-0 flex-1 basis-[200px]">
+      <div className="font-semibold [overflow-wrap:anywhere]">{check.name}</div>
+      <div className={cn('font-mono text-xs [overflow-wrap:anywhere]', MUTED)}>
         {check.target_feature} · {check.kind} · floor: {check.severity_floor}
         {check.schedule ? ` · ${check.schedule}` : ' · manual only'}
       </div>
     </div>
-    <label className="text-xs flex items-center gap-1 cursor-pointer">
-      <input type="checkbox" checked={check.enabled} onChange={onToggleEnabled} className="accent-black" />
+    <label className={cn('flex cursor-pointer items-center gap-1 text-xs', DENSITY.coarse)}>
+      <input type="checkbox" checked={check.enabled} onChange={onToggleEnabled} className="accent-[var(--ds-accent)]" />
       Enabled
     </label>
-    <label className="text-xs flex items-center gap-1 cursor-pointer" title="When on, confirmed findings of this check are eligible for the Phase-3 auto-fix bridge.">
-      <input type="checkbox" checked={check.auto_fix_enabled} onChange={onToggleAutoFix} className="accent-black" />
+    <label className={cn('flex cursor-pointer items-center gap-1 text-xs', DENSITY.coarse)} title="When on, confirmed findings of this check are eligible for the Phase-3 auto-fix bridge.">
+      <input type="checkbox" checked={check.auto_fix_enabled} onChange={onToggleAutoFix} className="accent-[var(--ds-accent)]" />
       Auto-fix
     </label>
-    <Button variant="secondary" icon={<Play className="w-4 h-4" />} onClick={onRun} isLoading={running}>
-      Run now
+    <Button variant="outline" size="sm" onClick={onRun} loading={running}>
+      <Play className="w-4 h-4" /> Run now
     </Button>
-    <Button variant="secondary" icon={<Trash2 className="w-4 h-4" />} onClick={onDelete} title="Delete check">
-      Delete
+    <Button variant="outline" size="sm" onClick={onDelete} title="Delete check">
+      <Trash2 className="w-4 h-4" /> Delete
     </Button>
   </div>
 );
@@ -303,41 +325,42 @@ const FindingRow: React.FC<{
   onToggleExpand: () => void;
   onUpdate: (status: VerificationFinding['status']) => void;
 }> = ({ finding, expanded, onToggleExpand, onUpdate }) => (
-  <div className="border-2 border-black rounded-lg">
+  <div className="overflow-hidden rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
     <button
       onClick={onToggleExpand}
-      className="w-full text-left p-3 flex items-center gap-2 hover:bg-slate-50"
+      aria-expanded={expanded}
+      className={cn('flex w-full flex-wrap items-center gap-2 p-3 text-left transition-colors duration-[var(--ds-motion-fast)] ease-[var(--ds-ease)] hover:bg-[var(--ds-hover)]', FOCUS_RING, 'focus-visible:outline-offset-[-2px]')}
     >
-      {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${SEVERITY_COLOR[finding.severity]}`}>
+      {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+      <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[SEVERITY_STATE[finding.severity]])}>
         {finding.severity}
       </span>
-      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${STATUS_COLOR[finding.status]}`}>
+      <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[STATUS_STATE[finding.status]])}>
         {finding.status}
       </span>
-      <span className="text-xs text-slate-500 font-mono">conf {(finding.confidence * 100).toFixed(0)}%</span>
-      <span className="font-bold truncate">{finding.title}</span>
+      <span className={cn('font-mono text-xs', MUTED)}>conf {(finding.confidence * 100).toFixed(0)}%</span>
+      <span className="min-w-0 truncate font-semibold">{finding.title}</span>
     </button>
     {expanded && (
-      <div className="border-t-2 border-black p-3 space-y-3 bg-slate-50">
+      <div className="space-y-3 border-t border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">
         <pre className="text-[11px] font-mono whitespace-pre-wrap overflow-x-auto">{JSON.stringify(finding.detail, null, 2)}</pre>
         {finding.github_issue_number && (
-          <div className="text-xs text-slate-600">GitHub issue #{finding.github_issue_number}</div>
+          <div className={cn('text-xs', MUTED)}>GitHub issue #{finding.github_issue_number}</div>
         )}
         {finding.github_pr_number && (
-          <div className="text-xs text-slate-600">GitHub PR #{finding.github_pr_number}</div>
+          <div className={cn('text-xs', MUTED)}>GitHub PR #{finding.github_pr_number}</div>
         )}
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => onUpdate('confirmed')} disabled={finding.status === 'confirmed' || finding.status === 'fixing'}>
+          <Button variant="outline" size="sm" onClick={() => onUpdate('confirmed')} disabled={finding.status === 'confirmed' || finding.status === 'fixing'}>
             Confirm
           </Button>
-          <Button variant="secondary" onClick={() => onUpdate('dismissed')}>
+          <Button variant="outline" size="sm" onClick={() => onUpdate('dismissed')}>
             Dismiss
           </Button>
-          <Button variant="secondary" onClick={() => onUpdate('wontfix')}>
+          <Button variant="outline" size="sm" onClick={() => onUpdate('wontfix')}>
             Won't fix
           </Button>
-          <Button variant="secondary" onClick={() => onUpdate('resolved')}>
+          <Button variant="outline" size="sm" onClick={() => onUpdate('resolved')}>
             Resolved
           </Button>
         </div>
@@ -351,6 +374,7 @@ const NewCheckModal: React.FC<{
   onClose: () => void;
   onCreated: () => Promise<void>;
 }> = ({ builtins, onClose, onCreated }) => {
+  const titleId = useId();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [builtinId, setBuiltinId] = useState(builtins[0]?.id || '');
@@ -392,38 +416,38 @@ const NewCheckModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-lg w-full p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h3 className="font-display text-xl">New verification check</h3>
-          <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+    <div className={cn('fixed inset-0 flex items-center justify-center p-4', Z.dialog, SCRIM)} onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn(OVERLAY, 'max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-5')} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-2">
+          <h3 id={titleId} className={cn(DIALOG_TITLE, 'm-0')}>New verification check</h3>
+          <IconButton label="Close" onClick={onClose} className={MUTED}><X className="w-4 h-4" /></IconButton>
         </div>
-        {err && <div className="text-sm text-red-700">{err}</div>}
+        {err && <div className={cn('text-sm [overflow-wrap:anywhere]', TONE_TEXT.danger)}>{err}</div>}
         <div>
-          <label className="text-xs font-bold uppercase">Built-in template</label>
-          <select value={builtinId} onChange={(e) => setBuiltinId(e.target.value)} className="w-full border-2 border-black rounded px-2 py-1">
+          <label className={FIELD_LABEL}>Built-in template</label>
+          <select value={builtinId} onChange={(e) => setBuiltinId(e.target.value)} className={FIELD_CLS}>
             {builtins.map((b) => (
               <option key={b.id} value={b.id}>{b.id} — {b.target}</option>
             ))}
           </select>
-          {builtin && <p className="text-xs text-slate-600 mt-1">{builtin.description}</p>}
+          {builtin && <p className={cn('mt-1 text-xs', MUTED)}>{builtin.description}</p>}
         </div>
         <div>
-          <label className="text-xs font-bold uppercase">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border-2 border-black rounded px-2 py-1" />
+          <label className={FIELD_LABEL}>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} className={FIELD_CLS} />
         </div>
         <div>
-          <label className="text-xs font-bold uppercase">Description</label>
-          <input value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border-2 border-black rounded px-2 py-1" />
+          <label className={FIELD_LABEL}>Description</label>
+          <input value={description} onChange={(e) => setDescription(e.target.value)} className={FIELD_CLS} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="text-xs font-bold uppercase">Schedule (cron)</label>
-            <input value={schedule} onChange={(e) => setSchedule(e.target.value)} className="w-full border-2 border-black rounded px-2 py-1 font-mono" placeholder="0 3 * * * or empty for manual" />
+            <label className={FIELD_LABEL}>Schedule (cron)</label>
+            <input value={schedule} onChange={(e) => setSchedule(e.target.value)} className={cn(FIELD_CLS, 'font-mono')} placeholder="0 3 * * * or empty for manual" />
           </div>
           <div>
-            <label className="text-xs font-bold uppercase">Severity floor</label>
-            <select value={severityFloor} onChange={(e) => setSeverityFloor(e.target.value as VerificationCheck['severity_floor'])} className="w-full border-2 border-black rounded px-2 py-1">
+            <label className={FIELD_LABEL}>Severity floor</label>
+            <select value={severityFloor} onChange={(e) => setSeverityFloor(e.target.value as VerificationCheck['severity_floor'])} className={FIELD_CLS}>
               <option value="low">low</option>
               <option value="med">med</option>
               <option value="high">high</option>
@@ -432,8 +456,8 @@ const NewCheckModal: React.FC<{
           </div>
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} isLoading={busy}>Create</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} loading={busy}>Create</Button>
         </div>
       </div>
     </div>

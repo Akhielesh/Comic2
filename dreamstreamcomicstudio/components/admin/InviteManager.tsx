@@ -1,11 +1,15 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Loader2, RefreshCw, Plus, Copy, Check, Ban, Ticket } from 'lucide-react';
 import { generateInvites, listInvites, revokeInvite, type InviteRecord } from '../../services/invites';
+import { cn } from '../../lib/utils';
+import { Button, IconButton } from '../ds';
+import { DENSITY, FIELD, MUTED, OVERLINE, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, type StatusState } from '../chat/studioDesign';
 
-const statusTone = (s: string) =>
-  s === 'active' ? 'bg-green-100 text-green-700'
-    : s === 'redeemed' ? 'bg-slate-200 text-slate-600'
-      : 'bg-red-100 text-red-700';
+// One status vocabulary: active is healthy, redeemed is done (waiting ink), revoked is an error.
+const statusTone = (s: string): StatusState => (s === 'active' ? 'healthy' : s === 'redeemed' ? 'waiting' : 'error');
+
+const FIELD_LABEL = 'text-xs font-medium text-[var(--ds-muted)]';
+const INPUT = cn(FIELD, 'mt-1 block h-9 px-2 text-sm tabular-nums', DENSITY.coarse);
 
 export const InviteManager: React.FC = () => {
   const [invites, setInvites] = useState<InviteRecord[]>([]);
@@ -63,85 +67,84 @@ export const InviteManager: React.FC = () => {
 
   return (
     <div className="space-y-4 p-4">
-      <p className="text-xs text-slate-500">
+      <p className={cn('text-xs', MUTED)}>
         Generate invite codes and share them with testers out-of-band (email/DM). A signed-in user redeems a code in
         Settings; redemptions are tracked here. BYOK already works for any signed-in user.
       </p>
 
-      <div className="border-2 border-black rounded-xl bg-slate-50 p-3 flex flex-wrap items-end gap-3">
-        <label className="text-xs font-bold">How many
+      <div className="flex flex-wrap items-end gap-3 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">
+        <label className={FIELD_LABEL}>How many
           <input type="number" min={1} max={100} value={count} onChange={(e) => setCount(Number(e.target.value))}
-            className="block mt-1 w-20 border-2 border-black rounded-md px-2 py-1 bg-white" />
+            className={cn(INPUT, 'w-20')} />
         </label>
-        <label className="text-xs font-bold">Label
+        <label className={FIELD_LABEL}>Label
           <input value={label} onChange={(e) => setLabel(e.target.value)}
-            className="block mt-1 w-40 border-2 border-black rounded-md px-2 py-1 bg-white" />
+            className={cn(INPUT, 'w-40 max-w-full')} />
         </label>
-        <label className="text-xs font-bold">Uses each
+        <label className={FIELD_LABEL}>Uses each
           <input type="number" min={1} value={maxUses} onChange={(e) => setMaxUses(Number(e.target.value))}
-            className="block mt-1 w-20 border-2 border-black rounded-md px-2 py-1 bg-white" />
+            className={cn(INPUT, 'w-20')} />
         </label>
-        <label className="text-xs font-bold">Expires (days)
+        <label className={FIELD_LABEL}>Expires (days)
           <input type="number" min={0} value={expiresInDays} onChange={(e) => setExpiresInDays(Number(e.target.value))}
-            className="block mt-1 w-24 border-2 border-black rounded-md px-2 py-1 bg-white" />
+            className={cn(INPUT, 'w-24')} />
         </label>
-        <button onClick={() => void handleGenerate()} disabled={busy}
-          className="flex items-center gap-1 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40">
-          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Generate
-        </button>
+        <Button onClick={() => void handleGenerate()} disabled={busy}>
+          {busy ? <Loader2 className="w-4 h-4 motion-safe:animate-spin" /> : <Plus className="w-4 h-4" />} Generate
+        </Button>
       </div>
 
-      {error && <div className="border-2 border-red-400 bg-red-50 text-red-700 rounded-lg px-3 py-2 text-xs font-bold">{error}</div>}
+      {error && <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-xs font-medium [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>{error}</div>}
 
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-bold uppercase tracking-wide text-slate-500 flex items-center gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className={cn(OVERLINE, 'flex items-center gap-1')}>
           <Ticket className="w-3.5 h-3.5" /> Invites ({invites.length})
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => void copyAllActive()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
-            {copied === 'ALL' ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />} Copy active
-          </button>
-          <button onClick={() => void load()} className="text-xs font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100 flex items-center gap-1">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
-          </button>
+          <Button variant="outline" size="sm" onClick={() => void copyAllActive()}>
+            {copied === 'ALL' ? <Check className={cn('w-3.5 h-3.5', STATUS_INK.healthy)} /> : <Copy className="w-3.5 h-3.5" />} Copy active
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 motion-safe:animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
+          </Button>
         </div>
       </div>
 
-      <div className="border-2 border-black rounded-xl bg-white divide-y-2 divide-slate-100 max-h-96 overflow-y-auto">
-        {invites.length === 0 && !loading && <div className="p-3 text-xs text-slate-400">No invites yet — generate a batch above.</div>}
+      <div className={cn('max-h-96 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto')}>
+        {invites.length === 0 && !loading && <div className={cn('p-3 text-xs', MUTED)}>No invites yet — generate a batch above.</div>}
         {invites.map((i) => (
           <div key={i.id} className="p-2.5 text-xs">
-            <div className="flex items-center gap-2">
-              <code className="font-mono font-bold">{i.code}</code>
-              <button onClick={() => void copy(i.code)} title="Copy code" className="text-slate-400 hover:text-black">
-                {copied === i.code ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-              <span className={`px-1.5 py-0.5 rounded font-bold ${statusTone(i.status)}`}>{i.status}</span>
-              <span className="text-slate-500 tabular-nums">{i.use_count}/{i.max_uses} used</span>
-              {i.label && <span className="text-slate-400 truncate">{i.label}</span>}
-              <span className="ml-auto text-slate-300 tabular-nums">{new Date(i.created_at).toLocaleDateString()}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="font-mono font-semibold [overflow-wrap:anywhere]">{i.code}</code>
+              <IconButton label="Copy code" size="sm" onClick={() => void copy(i.code)} className={MUTED}>
+                {copied === i.code ? <Check className={cn('w-3.5 h-3.5', STATUS_INK.healthy)} /> : <Copy className="w-3.5 h-3.5" />}
+              </IconButton>
+              <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[statusTone(i.status)])}>{i.status}</span>
+              <span className={cn('tabular-nums', MUTED)}>{i.use_count}/{i.max_uses} used</span>
+              {i.label && <span className={cn('min-w-0 truncate', MUTED)}>{i.label}</span>}
+              <span className={cn('ml-auto tabular-nums', MUTED)}>{new Date(i.created_at).toLocaleDateString()}</span>
               {i.status !== 'revoked' && (
-                <button onClick={() => void handleRevoke(i.id)} disabled={busy} title="Revoke" className="text-slate-400 hover:text-brand-red disabled:opacity-40">
+                <IconButton label="Revoke" size="sm" onClick={() => void handleRevoke(i.id)} disabled={busy} className={cn(MUTED, 'hover:text-[var(--ds-danger-text)]')}>
                   <Ban className="w-3.5 h-3.5" />
-                </button>
+                </IconButton>
               )}
             </div>
             {/* Delivery + redemption timeline: sent to whom/when → who joined when. */}
             {((i.recipients?.length ?? 0) > 0 || (i.redeemedBy?.length ?? 0) > 0) && (
-              <div className="mt-1.5 ml-1 space-y-0.5 border-l-2 border-slate-100 pl-2">
+              <div className="mt-1.5 ml-1 space-y-0.5 border-l-2 border-[var(--ds-hairline)] pl-2">
                 {(i.recipients ?? []).map((r) => {
                   const joined = (i.redeemedBy ?? []).find((d) => d.email && d.email.toLowerCase() === r.email.toLowerCase());
                   return (
-                    <div key={r.email} className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
-                      <span className="font-mono">{r.email}</span>
+                    <div key={r.email} className={cn('flex flex-wrap items-center gap-x-2 text-[11px]', MUTED)}>
+                      <span className="font-mono [overflow-wrap:anywhere]">{r.email}</span>
                       <span>
                         sent {new Date(r.last_sent_at).toLocaleDateString()}
                         {r.send_count > 1 ? ` (${r.send_count}×)` : ''} via {r.kind}
                       </span>
                       {joined ? (
-                        <span className="font-bold text-green-700">joined {new Date(joined.redeemed_at).toLocaleDateString()}</span>
+                        <span className={cn('font-semibold', STATUS_INK.healthy)}>joined {new Date(joined.redeemed_at).toLocaleDateString()}</span>
                       ) : (
-                        <span className="text-slate-400">not joined yet</span>
+                        <span>not joined yet</span>
                       )}
                     </div>
                   );
@@ -149,10 +152,10 @@ export const InviteManager: React.FC = () => {
                 {(i.redeemedBy ?? [])
                   .filter((d) => !d.email || !(i.recipients ?? []).some((r) => r.email.toLowerCase() === d.email!.toLowerCase()))
                   .map((d, idx) => (
-                    <div key={`${d.user_id || d.email || idx}`} className="text-[11px] text-slate-500">
-                      <span className="font-mono">{d.email || d.user_id || 'unknown user'}</span>{' '}
-                      <span className="font-bold text-green-700">joined {new Date(d.redeemed_at).toLocaleDateString()}</span>{' '}
-                      <span className="text-slate-400">via code/link</span>
+                    <div key={`${d.user_id || d.email || idx}`} className={cn('text-[11px]', MUTED)}>
+                      <span className="font-mono [overflow-wrap:anywhere]">{d.email || d.user_id || 'unknown user'}</span>{' '}
+                      <span className={cn('font-semibold', STATUS_INK.healthy)}>joined {new Date(d.redeemed_at).toLocaleDateString()}</span>{' '}
+                      <span>via code/link</span>
                     </div>
                   ))}
               </div>

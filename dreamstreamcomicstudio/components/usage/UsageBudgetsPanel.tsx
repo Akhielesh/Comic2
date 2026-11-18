@@ -3,8 +3,8 @@
 // admin sees each user's usage in percent AND dollars, tops someone up, exempts them, allows Pro
 // quality, or starts a fresh window — every change is audited server-side (audit_log).
 //
-// Users never see this; the server serves it only behind requireAdmin. Calm-studio glass, --ds-*
-// tokens, rows reflow into cards on phones (no horizontal scroll from 320 px), 44 px targets.
+// Users never see this; the server serves it only behind requireAdmin. Atlas surfaces, --ds-*
+// tokens and recipes, rows reflow into cards on phones (no horizontal scroll from 320 px), 44 px targets.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, ShieldCheck, TriangleAlert, Wallet } from 'lucide-react';
@@ -16,8 +16,8 @@ import {
   type UsageBudgetUpdate,
   type UsageBudgetsReport
 } from '../../services/usageAllowance';
-
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+import { cn } from '../../lib/utils';
+import { FIELD, FOCUS_RING, ON_ACCENT_TEXT, RADIUS_CONTROL, STATUS_CHIP, STATUS_CHIP_TONE, TONE_FILL, TONE_TEXT } from '../chat/studioDesign';
 
 /** "$10" · "$4.27" · "$0.0031" — admins see honest small numbers. */
 export const fmtBudgetUsd = (n: number): string => {
@@ -36,17 +36,17 @@ const fmtWhen = (iso: string | null): string => {
 
 const stateOf = (row: UsageBudgetRow): { label: string; cls: string } =>
   row.admin
-    ? { label: 'Admin · no limit', cls: 'bg-[#D97757]/10 text-[var(--ds-ink)]' }
+    ? { label: 'Admin · no limit', cls: STATUS_CHIP_TONE.active }
     : row.exempt
-      ? { label: 'Exempt', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
+      ? { label: 'Exempt', cls: STATUS_CHIP_TONE.healthy }
       : row.exhausted
-        ? { label: 'Used up', cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-300' }
-        : { label: row.hasRow ? 'Custom' : 'Default', cls: 'bg-[var(--ds-surface-soft)] text-[var(--ds-muted)]' };
+        ? { label: 'Used up', cls: STATUS_CHIP_TONE.error }
+        : { label: row.hasRow ? 'Custom' : 'Default', cls: STATUS_CHIP_TONE.waiting };
 
-const INPUT =
-  'h-11 w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 text-[13px] text-[var(--ds-ink)] tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 sm:h-9';
-const BTN =
-  'inline-flex h-11 items-center justify-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50 sm:h-9';
+const INPUT = `${FIELD} h-11 w-full px-3 text-[13px] tabular-nums sm:h-9`;
+const BTN = `inline-flex h-11 items-center justify-center gap-1.5 ${RADIUS_CONTROL} px-3.5 text-[13px] font-semibold transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] disabled:opacity-50 sm:h-9 ${FOCUS_RING}`;
+/** The ghost icon button (refresh, edit): 44 px on phones. */
+const ICON_BTN = `inline-flex h-11 w-11 shrink-0 items-center justify-center ${RADIUS_CONTROL} text-[var(--ds-muted)] transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50 ${FOCUS_RING}`;
 
 type Draft = { budgetUsd: string; exempt: boolean; allowPro: boolean; resetPeriod: boolean; note: string };
 
@@ -75,7 +75,7 @@ export const buildBudgetUpdate = (draft: Draft, row?: UsageBudgetRow): UsageBudg
 
 const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }> = ({ label, hint, checked, onChange }) => (
   <label className="flex min-h-11 cursor-pointer items-start gap-2 text-[13px] text-[var(--ds-ink)] sm:min-h-0">
-    <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[#D97757]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--ds-accent)]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
     <span className="min-w-0">
       {label}
       {hint && <span className="block text-[11.5px] text-[var(--ds-muted)]">{hint}</span>}
@@ -113,34 +113,34 @@ const BudgetEditor: React.FC<{
   };
 
   return (
-    <div className="space-y-2.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3">
+    <div className="space-y-2.5 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">
       {!row && (
         <label className="block text-[12px] font-medium text-[var(--ds-muted)]">
           Email or user id
-          <input className={cx(INPUT, 'mt-1')} value={who} onChange={(e) => setWho(e.target.value)} placeholder="tester@example.com" autoComplete="off" />
+          <input className={cn(INPUT, 'mt-1')} value={who} onChange={(e) => setWho(e.target.value)} placeholder="tester@example.com" autoComplete="off" />
         </label>
       )}
       <label className="block text-[12px] font-medium text-[var(--ds-muted)]">
         Budget (USD, real provider cost)
-        <input className={cx(INPUT, 'mt-1')} type="number" inputMode="decimal" min={0} max={1000} step={0.5} value={draft.budgetUsd} onChange={(e) => set({ budgetUsd: e.target.value })} />
+        <input className={cn(INPUT, 'mt-1')} type="number" inputMode="decimal" min={0} max={1000} step={0.5} value={draft.budgetUsd} onChange={(e) => set({ budgetUsd: e.target.value })} />
       </label>
       <Toggle label="Exempt (no limit)" checked={draft.exempt} onChange={(v) => set({ exempt: v })} />
       <Toggle label="Allow Pro quality and the model picker" hint="Pro pages cost ~2.6× a Standard page." checked={draft.allowPro} onChange={(v) => set({ allowPro: v })} />
       <Toggle label="Start a fresh window now" hint="Spend so far stops counting. Leave off to top up on top of what they used." checked={draft.resetPeriod} onChange={(v) => set({ resetPeriod: v })} />
       <label className="block text-[12px] font-medium text-[var(--ds-muted)]">
         Note (audit log)
-        <input className={cx(INPUT, 'mt-1')} value={draft.note} maxLength={500} onChange={(e) => set({ note: e.target.value })} placeholder="e.g. beta top-up, week 2" />
+        <input className={cn(INPUT, 'mt-1')} value={draft.note} maxLength={500} onChange={(e) => set({ note: e.target.value })} placeholder="e.g. beta top-up, week 2" />
       </label>
       {error && (
-        <p role="alert" className="flex items-start gap-1.5 text-[12.5px] text-rose-700 dark:text-rose-300">
+        <p role="alert" className={cn('flex items-start gap-1.5 text-[12.5px]', TONE_TEXT.danger)}>
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> {error}
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        <button type="button" className={cx(BTN, 'bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]')} onClick={() => void save()} disabled={saving}>
+        <button type="button" className={cn(BTN, 'bg-[var(--ds-accent)] hover:bg-[var(--ds-accent-hover)]', ON_ACCENT_TEXT)} onClick={() => void save()} disabled={saving}>
           {saving ? 'Saving…' : row ? 'Save' : 'Add'}
         </button>
-        <button type="button" className={cx(BTN, 'border border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')} onClick={onCancel} disabled={saving}>
+        <button type="button" className={cn(BTN, 'border border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')} onClick={onCancel} disabled={saving}>
           Cancel
         </button>
       </div>
@@ -159,13 +159,13 @@ const BudgetRowView: React.FC<{ row: UsageBudgetRow; onEdit: () => void }> = ({ 
           <span className="min-w-0 truncate text-[13px] font-medium text-[var(--ds-ink)]" title={row.email || row.userId}>
             {row.email || row.userId}
           </span>
-          <span className={cx('shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-semibold', state.cls)}>{state.label}</span>
-          {row.allowPro && <span className="shrink-0 rounded-full bg-[var(--ds-surface-soft)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--ds-muted)]">Pro</span>}
+          <span className={cn(STATUS_CHIP, 'shrink-0', state.cls)}>{state.label}</span>
+          {row.allowPro && <span className={cn(STATUS_CHIP, 'shrink-0', STATUS_CHIP_TONE.waiting)}>Pro</span>}
         </div>
         <div className="mt-1 flex items-center gap-2">
           <div className="h-1.5 w-full max-w-[14rem] overflow-hidden rounded-full bg-[var(--ds-well)]" aria-hidden>
             <div
-              className={cx('h-full rounded-full', !limited ? 'bg-[var(--ds-hairline)]' : left < 10 ? 'bg-rose-500' : left < 30 ? 'bg-amber-500' : 'bg-emerald-500')}
+              className={cn('h-full rounded-full', !limited ? 'bg-[var(--ds-hairline)]' : left < 10 ? TONE_FILL.danger : left < 30 ? TONE_FILL.warning : TONE_FILL.success)}
               style={{ width: `${limited ? Math.min(100, row.pctUsed) : 0}%` }}
             />
           </div>
@@ -183,7 +183,7 @@ const BudgetRowView: React.FC<{ row: UsageBudgetRow; onEdit: () => void }> = ({ 
           type="button"
           onClick={onEdit}
           aria-label={`Edit usage budget for ${row.email || row.userId}`}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 sm:h-8 sm:w-8"
+          className={cn(ICON_BTN, 'sm:h-8 sm:w-8')}
         >
           <Pencil className="h-3.5 w-3.5" aria-hidden />
         </button>
@@ -236,7 +236,7 @@ export const UsageBudgetsPanel: React.FC = () => {
         <div>
           <SurfaceTitle>
             <span className="inline-flex items-center gap-1.5">
-              <Wallet className="h-4 w-4 text-[var(--ds-accent)]" aria-hidden /> Usage budgets
+              <Wallet className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden /> Usage budgets
             </span>
           </SurfaceTitle>
           <SurfaceSubtitle>
@@ -251,7 +251,7 @@ export const UsageBudgetsPanel: React.FC = () => {
           <button
             type="button"
             onClick={() => setEditing('new')}
-            className={cx(BTN, 'border border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')}
+            className={cn(BTN, 'border border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]')}
           >
             <Plus className="h-3.5 w-3.5" aria-hidden /> Add
           </button>
@@ -260,9 +260,9 @@ export const UsageBudgetsPanel: React.FC = () => {
             onClick={() => void load()}
             aria-label="Refresh usage budgets"
             disabled={loading}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50 sm:h-9 sm:w-9"
+            className={cn(ICON_BTN, 'sm:h-9 sm:w-9')}
           >
-            <RefreshCw className={cx('h-4 w-4', loading && 'motion-safe:animate-spin')} aria-hidden />
+            <RefreshCw className={cn('h-4 w-4', loading && 'motion-safe:animate-spin')} aria-hidden />
           </button>
         </div>
       }
@@ -277,7 +277,7 @@ export const UsageBudgetsPanel: React.FC = () => {
               <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{fmtBudgetUsd(totals.spent)}</span> used by limited users
             </span>
             {totals.usedUp > 0 && (
-              <span className="text-rose-700 dark:text-rose-300">
+              <span className={TONE_TEXT.danger}>
                 <span className="font-semibold tabular-nums">{totals.usedUp}</span> used up
               </span>
             )}
@@ -292,7 +292,7 @@ export const UsageBudgetsPanel: React.FC = () => {
         )}
 
         {error && (
-          <p role="alert" className="flex items-start gap-1.5 text-[12.5px] text-rose-700 dark:text-rose-300">
+          <p role="alert" className={cn('flex items-start gap-1.5 text-[12.5px]', TONE_TEXT.danger)}>
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> {error}
             <span className="text-[var(--ds-muted)]"> If this is the first deploy, the user_usage_budgets migration may not be applied yet.</span>
           </p>

@@ -3,6 +3,7 @@ import { useMeasure } from '../../chat/artifacts/kit/Chart';
 import type { CostCategoryId, CostDailyRow } from '../../../shared/types/costCentre';
 import { CATEGORY_COLOR, CATEGORY_SHORT_LABEL, STACK_ORDER } from './costPalette';
 import { fmtDay, fmtUsd, fmtUsdAxis } from './costFormat';
+import { FOCUS_RING, OVERLAY, Z } from '../../chat/studioDesign';
 
 // Stacked daily cost columns (inline SVG, no chart library), following the dataviz method:
 // thin columns (≤ 24px) on one baseline, a 2px surface gap between stacked segments, a 4px
@@ -121,7 +122,7 @@ export const StackedDailyChart: React.FC<StackedDailyChartProps> = ({ daily, hei
         role="img"
         aria-label={summary}
         tabIndex={0}
-        className="relative w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+        className={`relative w-full rounded-[var(--ds-radius-control)] ${FOCUS_RING}`}
         style={{ height: H }}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
@@ -213,10 +214,10 @@ export const StackedDailyChart: React.FC<StackedDailyChartProps> = ({ daily, hei
           ))}
         </svg>
 
-        {/* Frosted tooltip: every category for the hovered day, values first */}
+        {/* Tooltip (the overlay recipe): every category for the hovered day, values first */}
         {hovered && (
           <div
-            className="pointer-events-none absolute top-0 z-10 w-44 -translate-x-1/2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 py-2 text-[11px] shadow-[0_2px_10px_rgba(0,0,0,0.10)] backdrop-blur-md"
+            className={`pointer-events-none absolute top-0 ${Z.popover} w-44 -translate-x-1/2 ${OVERLAY} px-2.5 py-2 text-[11px]`}
             style={{ left: tooltipLeft }}
             role="status"
           >

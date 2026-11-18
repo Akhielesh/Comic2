@@ -5,6 +5,7 @@ import type { CloudflareSection, CloudflareWorkerRow } from '../../../shared/typ
 import { SortableTable, type Column } from './SortableTable';
 import { fmtCount } from './costFormat';
 import { STATUS } from './costPalette';
+import { FOCUS_RING } from '../../chat/studioDesign';
 
 // Live Cloudflare usage (Workers invocations + R2 storage) when the read-only analytics token
 // is configured; otherwise a short, exact setup card. Token values never reach the browser —
@@ -52,15 +53,15 @@ export const CloudflareCard: React.FC<{ cloudflare: CloudflareSection; days: num
               href="https://dash.cloudflare.com/profile/api-tokens"
               target="_blank"
               rel="noreferrer noopener"
-              className="inline-flex items-center gap-0.5 text-[#D97757] hover:underline"
+              className={`inline-flex items-center gap-0.5 rounded-[var(--ds-radius-sm)] text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${FOCUS_RING}`}
             >
               (API tokens <ExternalLink className="h-3 w-3" aria-hidden />)
             </a>
             .
           </li>
           <li>
-            Set <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
-            <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> as secrets on the{' '}
+            Set <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
+            <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> as secrets on the{' '}
             <span className="font-mono text-[11px]">dreamstream-api</span> Worker (or rows in D1 <span className="font-mono text-[11px]">backend_env</span>).
           </li>
           <li>The backend container picks them up on its next start; this card then shows per-Worker requests, errors and CPU.</li>

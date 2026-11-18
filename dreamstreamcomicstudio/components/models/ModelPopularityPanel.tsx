@@ -17,7 +17,6 @@ const LABEL_TO_WINDOW: Record<WindowLabel, PopularityWindow> = {
   'All-time': 'all'
 };
 
-const ACCENT = '#D97757'; // theme-invariant terracotta accent (see studioDesign.ts)
 
 /** The ranked horizontal bar list — rank #, model (provider as muted suffix), share bar, counts. */
 export const ModelPopularityList: React.FC<{ data: ModelPopularity; limit?: number }> = ({ data, limit = 10 }) => {
@@ -35,7 +34,7 @@ export const ModelPopularityList: React.FC<{ data: ModelPopularity; limit?: numb
             <div className="flex items-baseline justify-between gap-2">
               <span className="min-w-0 truncate text-[12px] font-medium text-[var(--ds-ink)]">
                 {row.model}
-                {row.provider && <span className="ml-1.5 text-[10px] text-[var(--ds-muted)]">{row.provider}</span>}
+                {row.provider && <span className="ml-1.5 text-[11px] text-[var(--ds-muted)]">{row.provider}</span>}
               </span>
               <span
                 className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]"
@@ -46,8 +45,8 @@ export const ModelPopularityList: React.FC<{ data: ModelPopularity; limit?: numb
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--ds-well)]">
               <div
-                className="h-full rounded-full transition-all duration-300"
-                style={{ width: `${Math.max(1.5, (row.sharePct / maxShare) * 100)}%`, background: ACCENT }}
+                className="h-full rounded-full bg-[var(--ds-chart-1)] transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none"
+                style={{ width: `${Math.max(1.5, (row.sharePct / maxShare) * 100)}%` }}
               />
             </div>
           </div>
@@ -67,12 +66,11 @@ export const ModelPopularityCard: React.FC<{
   right?: React.ReactNode;
 }> = ({ data, loading = false, right }) => (
   <Surface
-    accent={ACCENT}
     header={
       <>
         <SurfaceTitle>
           <span className="inline-flex items-center gap-1.5">
-            <BarChart3 className="h-3.5 w-3.5" style={{ color: ACCENT }} />
+            <BarChart3 className="h-3.5 w-3.5 text-[var(--ds-muted)]" aria-hidden />
             What DreamStream users run
           </span>
         </SurfaceTitle>
@@ -85,12 +83,12 @@ export const ModelPopularityCard: React.FC<{
     right={right}
   >
     {loading ? (
-      <div className="animate-pulse space-y-2.5 px-3 pb-3 pt-1" aria-label="Loading model rankings">
+      <div className="motion-safe:animate-pulse space-y-2.5 px-3 pb-3 pt-1" aria-label="Loading model rankings">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex items-center gap-2.5">
-            <div className="h-3 w-6 rounded bg-[var(--ds-well)]" />
-            <div className="h-6 flex-1 rounded-lg bg-[var(--ds-well)]" />
-            <div className="h-3 w-12 rounded bg-[var(--ds-well)]" />
+            <div className="h-3 w-6 rounded-[var(--ds-radius-sm)] bg-[var(--ds-well)]" />
+            <div className="h-6 flex-1 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)]" />
+            <div className="h-3 w-12 rounded-[var(--ds-radius-sm)] bg-[var(--ds-well)]" />
           </div>
         ))}
       </div>
@@ -133,7 +131,7 @@ export const ModelPopularityPanel: React.FC = () => {
     <ModelPopularityCard
       data={data}
       loading={loading}
-      right={<RangeTabs<WindowLabel> options={WINDOW_LABELS} value={label} accent={ACCENT} onChange={setLabel} />}
+      right={<RangeTabs<WindowLabel> options={WINDOW_LABELS} value={label} accent="var(--ds-ink)" onChange={setLabel} />}
     />
   );
 };
