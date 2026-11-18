@@ -3,6 +3,9 @@ import { Check, AlertTriangle, Circle, ChevronDown, ChevronUp, ArrowRight, X, Ro
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_PROVIDERS, getActiveKey, isOverLimit, PROVIDER_META } from '../services/apiKeys';
 import { getModelSelection } from '../services/modelSelection';
+import { Badge, Button, IconButton } from './ds';
+import { DENSITY, FOCUS_RING, RADIUS_CONTROL, SECTION_CARD, STATUS_INK, TRANSITION, WRAP_TEXT } from './chat/studioDesign';
+import { cn } from '../lib/utils';
 
 type Status = 'done' | 'todo' | 'warn';
 
@@ -20,9 +23,9 @@ interface ReadinessChecklistProps {
 }
 
 const STATUS_ICON: Record<Status, React.ReactNode> = {
-  done: <Check className="w-4 h-4 text-green-600" />,
-  todo: <Circle className="w-4 h-4 text-slate-400" />,
-  warn: <AlertTriangle className="w-4 h-4 text-amber-600" />
+  done: <Check className={cn('w-4 h-4', STATUS_INK.healthy)} aria-hidden />,
+  todo: <Circle className={cn('w-4 h-4', STATUS_INK.waiting)} aria-hidden />,
+  warn: <AlertTriangle className={cn('w-4 h-4', STATUS_INK.attention)} aria-hidden />
 };
 
 const buildItems = (hasUser: boolean): CheckItem[] => {
@@ -82,32 +85,34 @@ export const ReadinessChecklist: React.FC<ReadinessChecklistProps> = ({ onNaviga
   const doneCount = items.length - remaining;
 
   return (
-    <div className="mb-6 bg-white border-2 border-black rounded-xl shadow-comic overflow-hidden">
-      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-brand-yellow/30 border-b-2 border-black">
-        <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 font-display text-lg">
-          <Rocket className="w-5 h-5" /> Get set up
-          <span className="text-xs font-bold uppercase bg-white border-2 border-black rounded-full px-2 py-0.5">{doneCount}/{items.length} ready</span>
-          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+    <div className={cn('mb-6 overflow-hidden', SECTION_CARD)}>
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] px-4 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className={cn('-ml-2 flex min-w-0 flex-wrap items-center gap-2 px-2 py-1.5 text-left text-[length:var(--ds-text-lg)] font-semibold leading-6 hover:bg-[var(--ds-hover)]', DENSITY.coarse, RADIUS_CONTROL, TRANSITION, FOCUS_RING)}
+        >
+          <Rocket className="w-5 h-5 shrink-0" aria-hidden /> Get set up
+          <Badge variant="secondary" className="tabular-nums">{doneCount}/{items.length} ready</Badge>
+          {open ? <ChevronUp className="w-4 h-4 shrink-0" aria-hidden /> : <ChevronDown className="w-4 h-4 shrink-0" aria-hidden />}
         </button>
-        <button onClick={() => setDismissed(true)} title="Dismiss" className="p-1 border-2 border-black rounded hover:bg-white"><X className="w-3.5 h-3.5" /></button>
+        <IconButton label="Dismiss" onClick={() => setDismissed(true)}><X /></IconButton>
       </div>
 
       {open && (
-        <ul className="divide-y divide-slate-200">
+        <ul className="divide-y divide-[var(--ds-hairline)]">
           {items.map((item) => (
-            <li key={item.id} className="flex items-start gap-3 px-4 py-3">
+            <li key={item.id} className="flex flex-wrap items-start gap-3 px-4 py-3">
               <span className="mt-0.5 shrink-0">{STATUS_ICON[item.status]}</span>
-              <div className="flex-1 min-w-0">
-                <div className={`text-sm font-bold ${item.status === 'done' ? 'text-slate-500' : 'text-slate-900'}`}>{item.label}</div>
-                {item.status !== 'done' && <div className="text-xs text-slate-600 mt-0.5">{item.help}</div>}
+              <div className="flex-1 min-w-0 basis-40">
+                <div className={cn('text-[length:var(--ds-text-base)] font-semibold leading-5', item.status === 'done' ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]')}>{item.label}</div>
+                {item.status !== 'done' && <div className={cn('mt-0.5 text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]', WRAP_TEXT)}>{item.help}</div>}
               </div>
               {item.action && item.status !== 'done' && (
-                <button
-                  onClick={() => onNavigate?.(item.action!.view)}
-                  className="shrink-0 text-xs font-bold px-2.5 py-1 rounded border-2 border-black bg-brand-blue text-white hover:bg-brand-blue/90 flex items-center gap-1"
-                >
-                  {item.action.label} <ArrowRight className="w-3 h-3" />
-                </button>
+                <Button size="sm" variant="outline" className="ml-auto" onClick={() => onNavigate?.(item.action!.view)}>
+                  {item.action.label} <ArrowRight aria-hidden />
+                </Button>
               )}
             </li>
           ))}
