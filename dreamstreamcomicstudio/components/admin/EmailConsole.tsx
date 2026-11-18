@@ -15,23 +15,18 @@ import {
   type SendOutcome
 } from '../../services/adminEmail';
 import { PRODUCT_IDS, PRODUCT_LABELS, type ProductId } from '../../services/productAccess';
+import { cn } from '../../lib/utils';
+import { Button, IconButton } from '../ds';
+import { DENSITY, FIELD, MUTED, OVERLINE, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, TONE_TEXT, type StatusState } from '../chat/studioDesign';
 
-const inputCls =
-  'w-full rounded-lg border-2 border-black bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue';
-const labelCls = 'block text-xs font-bold uppercase tracking-wide text-slate-600 mb-1';
-const btnCls =
-  'inline-flex items-center justify-center gap-2 rounded-lg border-2 border-black px-4 py-2 text-sm font-bold shadow-comic transition-all hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none disabled:cursor-not-allowed disabled:opacity-60';
+const inputCls = cn(FIELD, 'w-full px-3 py-2 text-sm', DENSITY.coarse);
+const labelCls = cn(OVERLINE, 'mb-1 block');
 
 type Tab = 'compose' | 'invite' | 'log';
 
-const statusTone = (s: string) =>
-  s === 'sent'
-    ? 'bg-green-100 text-green-700'
-    : s === 'failed' || s === 'rate_limited'
-      ? 'bg-red-100 text-red-700'
-      : s === 'suppressed' || s === 'skipped'
-        ? 'bg-amber-100 text-amber-700'
-        : 'bg-slate-200 text-slate-600';
+// One status vocabulary for the delivery log (always beside the word).
+const statusTone = (s: string): StatusState =>
+  s === 'sent' ? 'healthy' : s === 'failed' || s === 'rate_limited' ? 'error' : s === 'suppressed' || s === 'skipped' ? 'attention' : 'waiting';
 
 export const EmailConsole: React.FC = () => {
   const [tab, setTab] = useState<Tab>('compose');
@@ -199,35 +194,37 @@ export const EmailConsole: React.FC = () => {
     <div className="p-4 space-y-4">
       {/* Usage / config banner */}
       {!configured ? (
-        <div className="flex items-center gap-2 rounded-lg border-2 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <AlertTriangle size={16} /> Email isn't configured yet (EMAIL_WORKER_URL / EMAIL_HMAC_SECRET unset). Composing works; sends are skipped. See docs/email/SETUP.md.
+        <div className={cn('flex items-center gap-2 rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm', STATUS_SURFACE.attention, 'text-[var(--ds-ink)]')}>
+          <AlertTriangle size={16} className={cn('shrink-0', STATUS_INK.attention)} aria-hidden /> Email isn't configured yet (EMAIL_WORKER_URL / EMAIL_HMAC_SECRET unset). Composing works; sends are skipped. See docs/email/SETUP.md.
         </div>
       ) : (
         usage && (
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-black bg-slate-50 px-3 py-2 text-xs font-bold">
+          <div className="flex flex-wrap items-center gap-3 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs font-medium tabular-nums">
             <span>This month: {usage.month}/{usage.maxPerMonth} ({usage.monthPct}%)</span>
             <span>Today: {usage.day}/{usage.maxPerDay}</span>
-            <span className={usage.freeTierRemaining > 0 ? 'text-green-700' : 'text-red-700'}>
+            <span className={usage.freeTierRemaining > 0 ? TONE_TEXT.success : TONE_TEXT.danger}>
               Free tier left: {usage.freeTierRemaining}
             </span>
-            {usage.monthPct >= 80 && <span className="text-red-700">⚠ near monthly cap</span>}
+            {usage.monthPct >= 80 && <span className={TONE_TEXT.danger}>⚠ near monthly cap</span>}
           </div>
         )
       )}
 
-      {error && <div className="rounded-lg border-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+      {error && <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm [overflow-wrap:anywhere]', STATUS_SURFACE.error, STATUS_INK.error)}>{error}</div>}
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-1">
         {([['compose', 'Compose', Mail], ['invite', 'Invite by email', Ticket], ['log', 'Activity log', RefreshCw]] as const).map(
           ([id, label, Icon]) => (
-            <button
+            <Button
               key={id}
+              variant="ghost"
+              aria-pressed={tab === id}
               onClick={() => setTab(id)}
-              className={`${btnCls} ${tab === id ? 'bg-brand-yellow' : 'bg-white'}`}
+              className={tab === id ? 'bg-[var(--ds-active)] text-[var(--ds-ink)]' : MUTED}
             >
-              <Icon size={14} /> {label}
-            </button>
+              <Icon size={14} aria-hidden /> {label}
+            </Button>
           )
         )}
       </div>
@@ -255,7 +252,7 @@ export const EmailConsole: React.FC = () => {
             </div>
             <div>
               <label className={labelCls}>Body</label>
-              <textarea className={`${inputCls} min-h-[120px]`} value={fields.body} onChange={(e) => setFields({ ...fields, body: e.target.value })} />
+              <textarea className={cn(inputCls, 'min-h-[120px]')} value={fields.body} onChange={(e) => setFields({ ...fields, body: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -268,36 +265,36 @@ export const EmailConsole: React.FC = () => {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className={`${btnCls} bg-white`} onClick={doPreview} disabled={busy === 'preview'}>
-                {busy === 'preview' ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
-              </button>
-              <button className={`${btnCls} bg-brand-blue text-white`} onClick={doTest} disabled={busy === 'test'}>
-                {busy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send test to me
-              </button>
+              <Button variant="outline" onClick={doPreview} disabled={busy === 'preview'}>
+                {busy === 'preview' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Eye size={14} />} Preview
+              </Button>
+              <Button variant="outline" onClick={doTest} disabled={busy === 'test'}>
+                {busy === 'test' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Send size={14} />} Send test to me
+              </Button>
             </div>
             <div>
               <label className={labelCls}>Recipients (comma / newline separated, ≤100)</label>
               <textarea
-                className={`${inputCls} min-h-[60px] font-mono text-xs`}
+                className={cn(inputCls, 'min-h-[60px] font-mono text-xs')}
                 value={recipients}
                 onChange={(e) => setRecipients(e.target.value)}
                 placeholder="a@example.com, b@example.com"
               />
-              <button className={`${btnCls} bg-brand-yellow mt-2`} onClick={doSend} disabled={busy === 'send' || !recipients.trim()}>
-                {busy === 'send' ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send to recipients
-              </button>
+              <Button className="mt-2" onClick={doSend} disabled={busy === 'send' || !recipients.trim()}>
+                {busy === 'send' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Send size={14} />} Send to recipients
+              </Button>
             </div>
-            {result && <div className="rounded-lg border-2 border-black bg-green-50 px-3 py-2 text-sm">{result}</div>}
+            {result && <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm text-[var(--ds-ink)] [overflow-wrap:anywhere]', STATUS_SURFACE.healthy)}>{result}</div>}
           </div>
 
           {/* Live preview */}
           <div>
             <label className={labelCls}>Preview {preview ? `— ${preview.subject}` : ''}</label>
-            <div className="rounded-lg border-2 border-black overflow-hidden bg-white" style={{ height: 520 }}>
+            <div className="overflow-hidden rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)]" style={{ height: 520 }}>
               {preview ? (
                 <iframe title="email preview" sandbox="" srcDoc={preview.html} className="w-full h-full" />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-400">Click “Preview” to render</div>
+                <div className={cn('flex h-full items-center justify-center text-sm', MUTED)}>Click “Preview” to render</div>
               )}
             </div>
           </div>
@@ -322,7 +319,7 @@ export const EmailConsole: React.FC = () => {
           </div>
           <div>
             <label className={labelCls}>Personal note (optional)</label>
-            <textarea className={`${inputCls} min-h-[60px]`} value={inv.personalNote} onChange={(e) => setInv({ ...inv, personalNote: e.target.value })} />
+            <textarea className={cn(inputCls, 'min-h-[60px]')} value={inv.personalNote} onChange={(e) => setInv({ ...inv, personalNote: e.target.value })} />
           </div>
           <div>
             <label className={labelCls}>Studios this invite unlocks</label>
@@ -332,15 +329,19 @@ export const EmailConsole: React.FC = () => {
                 return (
                   <label
                     key={product}
-                    className={`flex cursor-pointer items-center gap-1.5 rounded-lg border-2 border-black px-2.5 py-1.5 text-xs font-bold transition-colors ${on ? 'bg-brand-yellow' : 'bg-white text-slate-400'}`}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-1.5 rounded-[var(--ds-radius-control)] border px-2.5 py-1.5 text-xs font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]',
+                      DENSITY.coarse,
+                      on ? 'border-[var(--ds-control-border)] bg-[var(--ds-active)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
+                    )}
                   >
-                    <input type="checkbox" checked={on} onChange={() => toggleInvProduct(product)} className="h-3.5 w-3.5 accent-black" />
+                    <input type="checkbox" checked={on} onChange={() => toggleInvProduct(product)} className="h-3.5 w-3.5 accent-[var(--ds-accent)]" />
                     {PRODUCT_LABELS[product]}
                   </label>
                 );
               })}
             </div>
-            <p className="mt-1 text-[11px] text-slate-500">
+            <p className={cn('mt-1 text-[11px]', MUTED)}>
               {invProducts.length === PRODUCT_IDS.length
                 ? 'All studios — full account access; the email features everything.'
                 : invProducts.length === 0
@@ -348,24 +349,24 @@ export const EmailConsole: React.FC = () => {
                   : `On redeem the account gets exactly ${invProducts.map((p) => PRODUCT_LABELS[p]).join(' + ')}; the email features ${invProducts.length === 1 ? 'it' : 'them'} and marks the rest "coming soon".`}
             </p>
           </div>
-          <button className={`${btnCls} bg-brand-yellow`} onClick={doInvite} disabled={busy === 'invite' || !inv.email.trim() || invProducts.length === 0}>
-            {busy === 'invite' ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create &amp; send invite
-          </button>
+          <Button onClick={doInvite} disabled={busy === 'invite' || !inv.email.trim() || invProducts.length === 0}>
+            {busy === 'invite' ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <Ticket size={14} />} Create &amp; send invite
+          </Button>
           {invResult && (
-            <div className="space-y-2 rounded-lg border-2 border-black bg-green-50 p-3 text-sm">
+            <div className={cn('space-y-2 rounded-[var(--ds-radius-panel)] border p-3 text-sm text-[var(--ds-ink)]', STATUS_SURFACE.healthy)}>
               <div>Invite <strong>{invResult.code}</strong> created &amp; emailed.</div>
               {invResult.products && (
-                <div className="text-xs text-slate-600">
+                <div className={cn('text-xs', MUTED)}>
                   {invResult.confined
                     ? `Unlocks only: ${invResult.products.map((p) => PRODUCT_LABELS[p as ProductId] ?? p).join(', ')} (account is confined to these on redeem).`
                     : 'Unlocks the full account (all studios).'}
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <input readOnly className={`${inputCls} font-mono text-xs`} value={invResult.inviteUrl} />
-                <button className={`${btnCls} bg-white`} onClick={() => copy(invResult.inviteUrl)}>
+                <input readOnly className={cn(inputCls, 'min-w-0 font-mono text-xs')} value={invResult.inviteUrl} />
+                <IconButton variant="outline" size="lg" label="Copy invite link" onClick={() => copy(invResult.inviteUrl)}>
                   {copied ? <Check size={14} /> : <Copy size={14} />}
-                </button>
+                </IconButton>
               </div>
             </div>
           )}
@@ -374,12 +375,12 @@ export const EmailConsole: React.FC = () => {
 
       {tab === 'log' && (
         <div className="space-y-2">
-          <button className={`${btnCls} bg-white`} onClick={refreshLog} disabled={logLoading}>
-            {logLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh
-          </button>
-          <div className="overflow-x-auto rounded-lg border-2 border-black">
+          <Button variant="outline" onClick={refreshLog} disabled={logLoading}>
+            {logLoading ? <Loader2 size={14} className="motion-safe:animate-spin" /> : <RefreshCw size={14} />} Refresh
+          </Button>
+          <div className="overflow-x-auto rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-100 font-bold">
+              <thead className="bg-[var(--ds-well)] font-semibold text-[var(--ds-muted)]">
                 <tr>
                   <th className="px-2 py-1">When</th>
                   <th className="px-2 py-1">To</th>
@@ -390,20 +391,20 @@ export const EmailConsole: React.FC = () => {
               </thead>
               <tbody>
                 {log.map((r) => (
-                  <tr key={r.id} className="border-t border-slate-200">
+                  <tr key={r.id} className="border-t border-[var(--ds-hairline-soft)]">
                     <td className="px-2 py-1 whitespace-nowrap">{new Date(r.created_at).toLocaleString()}</td>
                     <td className="px-2 py-1 font-mono">{r.to_email}</td>
                     <td className="px-2 py-1">{r.template}</td>
                     <td className="px-2 py-1">
-                      <span className={`rounded-full px-2 py-0.5 font-bold ${statusTone(r.status)}`}>{r.status}</span>
-                      {r.error && <span className="ml-1 text-red-600" title={r.error}>!</span>}
+                      <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE[statusTone(r.status)])}>{r.status}</span>
+                      {r.error && <span className={cn('ml-1', TONE_TEXT.danger)} title={r.error}>!</span>}
                     </td>
                     <td className="px-2 py-1">{r.opened_at ? '✓' : '—'}</td>
                   </tr>
                 ))}
                 {!log.length && (
                   <tr>
-                    <td colSpan={5} className="px-2 py-4 text-center text-slate-400">
+                    <td colSpan={5} className={cn('px-2 py-4 text-center', MUTED)}>
                       No email activity yet.
                     </td>
                   </tr>
