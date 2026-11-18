@@ -83,12 +83,12 @@ export const ModelPopularityCard: React.FC<{
     right={right}
   >
     {loading ? (
-      <div className="animate-pulse space-y-2.5 px-3 pb-3 pt-1" aria-label="Loading model rankings">
+      <div className="motion-safe:animate-pulse space-y-2.5 px-3 pb-3 pt-1" aria-label="Loading model rankings">
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex items-center gap-2.5">
-            <div className="h-3 w-6 rounded bg-[var(--ds-well)]" />
+            <div className="h-3 w-6 rounded-[var(--ds-radius-sm)] bg-[var(--ds-well)]" />
             <div className="h-6 flex-1 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)]" />
-            <div className="h-3 w-12 rounded bg-[var(--ds-well)]" />
+            <div className="h-3 w-12 rounded-[var(--ds-radius-sm)] bg-[var(--ds-well)]" />
           </div>
         ))}
       </div>
