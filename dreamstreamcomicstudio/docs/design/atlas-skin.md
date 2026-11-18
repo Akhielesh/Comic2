@@ -395,7 +395,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   against `tests/config/baselines/<guard>.json` (DS-0): `statusInk.json`, `overline.json`,
   `dialogTitle.json`. The rules are in `tests/config/baselines/README.md`.
 - `tests/config/legacyKitGuard.test.ts` (DS-0) — `border-black`, `shadow-comic`, `font-comic`, the
-  `brand-*` colours and Tailwind's `font-display` (Bangers), ratcheted per file against `legacyKit.json`.
+  `brand-*` colours and Tailwind's `font-display` (Bangers). A never rule since the Atlas conversion wave:
+  `legacyKit.json` lists no file, the comic content that keeps the kit (the classic reader's lettering, the
+  exported comic page) is pinned line by line in its `ALLOWLIST`, and `tailwind.config.cjs` keeps only the comic
+  shadow and the Comic Neue face that this content reads (the brand colours, Bangers and the hover shadow are gone).
 - `tests/config/terracottaGuard.test.ts` (DS-0) — the `#D97757` / `#c2643f` literals, against
   `terracotta.json`; the third-party Anthropic logo fill is its one allowlisted use.
 - `tests/config/localCxGuard.test.ts` (DS-0) — no local `cx` class joiner (it joins, it does not merge:
