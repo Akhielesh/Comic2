@@ -234,28 +234,25 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector) && r.selector !== shim[0].selector)).toBe(false);
   });
 
-  it('the legacy assistant bubble pins light markdown tokens in dark (white bubble on every legacy view since D5)', () => {
-    // UniversalAssistant renders each answer (MessageCard → .message-body) in a hard-coded white bubble.
+  it('the assistant answer bubble is a token surface: its markdown reads the theme, with no light pin', () => {
+    // UniversalAssistant renders each answer (MessageCard → .message-body) on the canvas with a hairline edge, so the
+    // markdown follows the theme like the chat's own bubbles; the old white comic bubble and its light pin are gone.
     const assistant = readFileSync(path.join(ROOT, 'components/UniversalAssistant.tsx'), 'utf8');
-    expect(assistant).toMatch(/className="[^"]*\bbg-white\b[^"]*\bborder-black\b[^"]*"[^>]*>[\s\S]{0,400}<MessageCard\b/);
-    const sel = '.dark .bg-white.border-black .message-body';
-    const pin = rules.filter((r) => r.parents.length === 0 && r.selector === sel);
-    expect(pin).toHaveLength(1);
-    const pinned = new Map([...pin[0].body.matchAll(/(--ds-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as const));
-    // Every colour token a .message-body rule reads is pinned, so a new markdown rule cannot escape the pin.
+    expect(assistant).toMatch(/className=\{[^}]*\bborder-\[var\(--ds-hairline\)\][^}]*\bbg-\[var\(--ds-canvas\)\][^}]*\}[^>]*>[\s\S]{0,400}<MessageCard\b/);
+    expect(assistant).not.toMatch(/\bborder-black\b/);
+    expect(rules.filter((r) => /\.bg-white\.border-black\b/.test(r.selector))).toEqual([]);
+    // Every colour token a .message-body rule reads is readable on that canvas in both Atlas themes.
     const read = new Set(rules.filter((r) => r.parents.length === 0 && /^\.message-body\b/.test(r.selector))
       .flatMap((r) => [...r.body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1])));
-    const colourTokens = [...read].filter((t) => !t.startsWith('--ds-radius-'));
-    expect(colourTokens.length).toBeGreaterThanOrEqual(5);
-    for (const t of colourTokens) expect([...pinned.keys()], t).toContain(t);
-    const white = resolveColor('#ffffff');
-    const tok = (n: string) => resolveColor(pinned.get(n)!);
-    // Measured as painted: the link on the bubble, code-block ink on its well, the slate-800 header text on its fill.
-    expect(ratio(tok('--ds-info-text'), white)).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(tok('--ds-ink'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(tok('--ds-ink'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(tok('--ds-muted'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(resolveColor('#1e293b'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
+    expect([...read]).toEqual(expect.arrayContaining(['--ds-ink', '--ds-info-text', '--ds-well', '--ds-well-strong']));
+    for (const theme of ['light', 'dark'] as const) {
+      const canvas = atlasColor('--ds-canvas', theme);
+      const tok = (n: string) => atlasColor(n, theme);
+      expect(ratio(tok('--ds-info-text'), canvas), `${theme}: link`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tok('--ds-ink'), over(tok('--ds-well-strong'), canvas)), `${theme}: code block`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tok('--ds-ink'), over(tok('--ds-well'), canvas)), `${theme}: inline code`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tok('--ds-muted'), over(tok('--ds-well'), canvas)), `${theme}: muted on a well`).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('every .dark token exists in :root, and a NEW token is only redefined in .dark when its dark value differs', () => {
