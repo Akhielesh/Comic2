@@ -12,6 +12,7 @@ import {
   RADIUS_CONTROL,
   RADIUS_PANEL,
   RISE_IN,
+  CANVAS_BG,
   SCRIM,
   SHADOW_SOFT,
   STATUS_INK,
@@ -343,7 +344,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   );
 
   const dashboard = (
-    <div className={cn('max-w-7xl mx-auto', comicWorkspace ? 'p-4 medium:p-8' : 'p-4 medium:p-8', RISE_IN)}>
+    <div className={cn('max-w-7xl mx-auto p-4 medium:p-8', RISE_IN)}>
       <DataRescue />
       <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
@@ -401,8 +402,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           )}
 
           <div className="flex flex-wrap items-center gap-3 mt-5">
-            <Button onClick={() => void handleCreate(formMode)} disabled={!!createPending}>
-              {createPending === formMode ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+            <Button onClick={() => void handleCreate(formMode)} loading={createPending === formMode} disabled={!!createPending}>
               {createPending === formMode ? 'Creating…' : 'Create'}
             </Button>
             <Button variant="outline" onClick={() => { if (comicWorkspace && classicForm) setClassicForm(false); else setIsCreating(false); setCreateError(null); }} disabled={!!createPending}>Cancel</Button>
@@ -740,7 +740,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       )}
     </div>
   );
-  if (!comicWorkspace) return dashboard;
+  // The apex dashboard paints its own canvas and ink across the full width, so the page reads in both themes.
+  if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
     onHome={() => onNavigate?.('home')} onAccount={() => onNavigate?.('settings')}
     navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,

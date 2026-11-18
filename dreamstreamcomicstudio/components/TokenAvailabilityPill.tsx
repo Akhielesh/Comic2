@@ -140,7 +140,7 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
               <>
                 <div className="h-1.5 w-full overflow-hidden rounded-[var(--ds-radius-pill)] bg-[var(--ds-well-strong)]">
                   <div
-                    className={cn('h-full', STATUS_DOT[usageState(frac) ?? 'active'])}
+                    className={cn('h-full', STATUS_DOT[usageState(frac) ?? 'healthy'])}
                     style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
                   />
                 </div>

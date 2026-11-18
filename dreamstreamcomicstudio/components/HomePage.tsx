@@ -366,7 +366,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                   <div className={cn('min-w-0 flex-1 truncate border border-[var(--ds-control-border)] bg-[var(--ds-canvas)] px-3 py-2 text-[length:var(--ds-text-base)] text-[var(--ds-muted)]', RADIUS_CONTROL)}>
                     Ask anything about your story...
                   </div>
-                  <Button size="icon" aria-label={user ? 'Open Chat Studio' : 'Try Chat Studio'} onClick={() => onNavigate?.('chat')}>
+                  <Button size="icon" variant="outline" aria-label={user ? 'Open Chat Studio' : 'Try Chat Studio'} onClick={() => onNavigate?.('chat')}>
                     <ArrowRight aria-hidden />
                   </Button>
                 </div>
@@ -507,7 +507,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               { q: "Is this a full webinar or enterprise streaming platform?", a: "Not for this beta. The focus is intimate, creator-led events and workshops, not enterprise webinars, massive streams, or gaming-grade ultra-low latency." },
               { q: "When will paid subscriptions start?", a: "Subscription packaging is still being evaluated. We will not activate paid plans until the beta workflow, costs, and user value are proven." }
             ].map((faq, i) => (
-              <div key={i} className={cn('overflow-hidden bg-[var(--ds-surface)]', HAIRLINE, RADIUS_CONTROL)}>
+              <div key={i} className={cn('bg-[var(--ds-surface)]', HAIRLINE, RADIUS_CONTROL)}>
                 <button
                   type="button"
                   onClick={() => toggleFaq(i)}
