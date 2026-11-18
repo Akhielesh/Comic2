@@ -5,6 +5,12 @@ import { addComment, getComments, deleteComment, likeComment, unlikeComment, cre
 import { UserAvatar } from './UserAvatar';
 import { Send, Trash2, MessageSquare, Heart, Edit2, Save, X } from 'lucide-react';
 import { Button } from './Button';
+import { buttonClasses } from './ds/Button';
+import { FIELD, FOCUS_RING, INK, MUTED, RADIUS_PANEL } from './chat/studioDesign';
+
+const COMMENT_FIELD = `${FIELD} block w-full resize-none text-sm`;
+const ROW_ACTION = buttonClasses({ variant: 'ghost', size: 'icon', className: `size-8 ${MUTED}` });
+const ROW_DELETE = buttonClasses({ variant: 'ghost', size: 'icon', className: `size-8 ${MUTED} hover:text-[var(--ds-danger-text)]` });
 
 interface CommentSectionProps {
     projectId: string;
@@ -100,8 +106,8 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
     };
 
     return (
-        <div className="bg-white border-t-2 border-slate-200 p-6">
-            <h3 className="font-display text-xl mb-6 flex items-center gap-2">
+        <div className="border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-6">
+            <h3 className="mb-6 flex items-center gap-2 text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">
                 <MessageSquare className="w-5 h-5" />
                 Comments ({comments.length})
             </h3>
@@ -109,9 +115,9 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
             {/* List */}
             <div className="space-y-6 mb-8 max-h-[500px] overflow-y-auto">
                 {loading ? (
-                    <p className="text-slate-400 italic">Loading comments...</p>
+                    <p className={`text-sm ${MUTED}`} role="status">Loading comments...</p>
                 ) : comments.length === 0 ? (
-                    <p className="text-slate-400 italic">No comments yet. Be the first!</p>
+                    <p className={`text-sm ${MUTED}`}>No comments yet. Be the first!</p>
                 ) : (
                     comments.map(c => (
                         <div key={c.id} className="flex gap-4 group">
@@ -123,15 +129,15 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                     onClick={() => c.user?.username && onNavigate?.('profile', c.user.username)}
                                 />
                             </div>
-                            <div className="flex-1">
-                                <div className="flex items-baseline justify-between mb-1">
+                            <div className="min-w-0 flex-1">
+                                <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2">
                                     <span
                                         onClick={() => c.user?.username && onNavigate?.('profile', c.user.username)}
-                                        className="font-bold text-sm hover:underline cursor-pointer"
+                                        className={`cursor-pointer text-sm font-semibold hover:underline ${INK}`}
                                     >
                                         {c.user?.username || 'Anonymous'}
                                     </span>
-                                    <span className="text-xs text-slate-400">
+                                    <span className={`text-xs ${MUTED}`}>
                                         {formatTime(c.created_at)}
                                         {c.updated_at ? ' (edited)' : ''}
                                     </span>
@@ -141,7 +147,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                         <textarea
                                             value={editingText}
                                             onChange={(e) => setEditingText(e.target.value)}
-                                            className="w-full border-2 border-slate-300 rounded-lg p-2 text-sm focus:border-black focus:outline-none resize-none h-20"
+                                            className={`${COMMENT_FIELD} h-20 p-2`}
                                         />
                                         <div className="flex items-center gap-2">
                                             <Button
@@ -150,7 +156,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                                 disabled={savingEdit || !editingText.trim()}
                                                 isLoading={savingEdit}
                                             >
-                                                <Save className="w-3 h-3 mr-1" />
+                                                <Save className="size-3.5" />
                                                 Save
                                             </Button>
                                             <Button
@@ -158,18 +164,18 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                                 variant="secondary"
                                                 onClick={handleCancelEdit}
                                             >
-                                                <X className="w-3 h-3 mr-1" />
+                                                <X className="size-3.5" />
                                                 Cancel
                                             </Button>
                                         </div>
                                     </div>
                                 ) : (
-                                    <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">{c.text}</p>
+                                    <p className={`whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere] ${INK}`}>{c.text}</p>
                                 )}
                                 <div className="mt-2 flex items-center gap-4">
                                     <button
                                         onClick={() => handleLike(c)}
-                                        className={`flex items-center gap-1 text-xs transition-colors ${c.isLiked ? 'text-red-500' : 'text-slate-400 hover:text-red-500'}`}
+                                        className={`inline-flex min-h-8 items-center gap-1 rounded-[var(--ds-radius-control)] px-1.5 text-xs tabular-nums transition-colors duration-[var(--ds-motion-medium)] coarse:min-h-[var(--ds-density-touch)] disabled:cursor-not-allowed ${FOCUS_RING} ${c.isLiked ? INK : `${MUTED} hover:text-[var(--ds-ink)]`}`}
                                         disabled={!user}
                                     >
                                         <Heart className={`w-3 h-3 ${c.isLiked ? 'fill-current' : ''}`} />
@@ -178,10 +184,10 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                 </div>
                             </div>
                             {user?.id === c.user_id && (
-                                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity self-start">
+                                <div className="flex items-center gap-1 self-start opacity-0 transition-opacity duration-[var(--ds-motion-medium)] focus-within:opacity-100 group-hover:opacity-100">
                                     <button
                                         onClick={() => handleStartEdit(c)}
-                                        className="text-slate-300 hover:text-black"
+                                        className={ROW_ACTION}
                                         disabled={editingCommentId === c.id}
                                         title="Edit comment"
                                     >
@@ -189,7 +195,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                     </button>
                                     <button
                                         onClick={() => handleDelete(c.id)}
-                                        className="text-slate-300 hover:text-red-500"
+                                        className={ROW_DELETE}
                                         title="Delete comment"
                                     >
                                         <Trash2 className="w-4 h-4" />
@@ -215,7 +221,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                             value={newComment}
                             onChange={(e) => setNewComment(e.target.value)}
                             placeholder="Write a comment..."
-                            className="w-full border-2 border-slate-200 rounded-lg p-3 text-sm focus:border-black focus:outline-none resize-none h-20"
+                            className={`${COMMENT_FIELD} h-20 p-3`}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
@@ -230,15 +236,15 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                 disabled={submitting || !newComment.trim()}
                                 isLoading={submitting}
                             >
-                                <Send className="w-4 h-4 mr-2" />
+                                <Send className="size-4" />
                                 Post
                             </Button>
                         </div>
                     </div>
                 </div>
             ) : (
-                <div className="bg-slate-50 p-4 rounded-lg text-center text-sm text-slate-500">
-                    Please <button onClick={() => onNavigate?.('auth')} className="text-black font-bold underline">log in</button> to comment.
+                <div className={`bg-[var(--ds-well)] p-4 text-center text-sm ${RADIUS_PANEL} ${MUTED}`}>
+                    Please <button onClick={() => onNavigate?.('auth')} className={`font-semibold underline underline-offset-4 ${INK} ${FOCUS_RING}`}>log in</button> to comment.
                 </div>
             )}
         </div>

@@ -25,17 +25,6 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes floatSlow {
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-  100% { transform: translateY(0px); }
-}
-
-@keyframes progressLoop {
-  0% { transform: translateX(-40%); }
-  100% { transform: translateX(140%); }
-}
-
 /* The NEW page swings in from the turning edge and settles flat — reads as a real
    page turn instead of the old 8deg wobble. Origin is the spine (set per-direction).
    Transform and opacity only (reader RD-0 F7): the old filter: brightness() stops repainted the page every
@@ -196,21 +185,6 @@
   .wx-drift, .wx-drift2, .wx-spin, .wx-fall, .wx-twinkle, .wx-flash { animation: none; }
 }
 
-.animate-float-slow {
-  animation: floatSlow 6s ease-in-out infinite;
-}
-
-.animate-progress {
-  animation: progressLoop 2.5s linear infinite;
-}
-
-/* Moving diagonal stripes for the generation/build progress bar (ComicGenerator). */
-@keyframes comicBarberpole { from { background-position: 0 0; } to { background-position: 40px 0; } }
-.animate-barberpole { animation: comicBarberpole 0.8s linear infinite; }
-@media (prefers-reduced-motion: reduce) {
-  .animate-barberpole { animation: none; }
-}
-
 .animate-page-flip-next {
   animation: pageFlipNext 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: left center;
@@ -231,14 +205,6 @@
 .comic-reveal.is-visible { animation: comicPanelReveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
 @media (prefers-reduced-motion: reduce) {
   .comic-reveal, .comic-reveal.is-visible { opacity: 1; animation: none; }
-}
-
-/* Optional halftone print texture overlay for that comic-page feel. */
-.comic-halftone { position: relative; }
-.comic-halftone::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background-image: radial-gradient(rgba(0,0,0,0.55) 1px, transparent 1.4px);
-  background-size: 4px 4px; mix-blend-mode: multiply; opacity: 0.16;
 }
 
 .message-body {

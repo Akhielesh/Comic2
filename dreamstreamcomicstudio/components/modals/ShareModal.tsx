@@ -1,7 +1,34 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { X, Copy, Globe, Lock, Trash2, Clock, Download, Share2 } from 'lucide-react';
 import { ModalPortal } from './ModalPortal';
 import { post, get, ApiError } from '../../services/apiClient';
+import { buttonClasses } from '../ds/Button';
+import {
+    DENSITY,
+    DIALOG_TITLE,
+    FIELD,
+    HAIRLINE,
+    INK,
+    MUTED,
+    OVERLAY,
+    OVERLINE,
+    RADIUS_PANEL,
+    SCRIM,
+    SEGMENTED_ACTIVE_FILL,
+    SEGMENTED_ITEM,
+    SEGMENTED_TRACK,
+    STATUS_SURFACE,
+    TONE_TEXT,
+    Z
+} from '../chat/studioDesign';
+
+/** A two-way choice (the tabs, the share type): the Atlas segmented track, the chosen one on the raised pill. */
+const SEGMENT_TRACK = `${SEGMENTED_TRACK} flex w-full`;
+const segment = (on: boolean) => `${SEGMENTED_ITEM} min-h-9 ${DENSITY.coarse} aria-pressed:text-[var(--ds-ink)] ${on ? SEGMENTED_ACTIVE_FILL : ''}`;
+const FIELD_LABEL = `mb-1 block text-sm font-medium ${INK}`;
+const HELP = `mt-1 text-xs ${MUTED}`;
+const TEXT_FIELD = `${FIELD} block h-10 w-full px-3 text-sm`;
+const ROW_ICON = buttonClasses({ variant: 'ghost', size: 'icon', className: 'size-8' });
 
 interface ShareModalProps {
     projectId: string;
@@ -44,6 +71,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
     const [shares, setShares] = useState<ShareRecord[]>([]);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const titleId = useId();
+    const emailsId = useId();
+    const expiryId = useId();
 
     const loadShares = async () => {
         try {
@@ -102,40 +132,45 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
 
     return (
         <ModalPortal>
-            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+            <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4`} onClick={onClose}>
                 <div
-                    className="bg-white rounded-2xl border-4 border-black shadow-comic max-w-lg w-full max-h-[80vh] overflow-y-auto"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={titleId}
+                    className={`${OVERLAY} max-h-[80vh] w-full max-w-lg overflow-y-auto`}
                     onClick={(e) => e.stopPropagation()}
                 >
                     {/* Header */}
-                    <div className="flex items-center justify-between p-4 border-b-4 border-black bg-brand-blue text-white rounded-t-xl">
-                        <div className="flex items-center gap-2">
-                            <Share2 size={20} />
-                            <h2 className="text-xl font-display">Share Comic</h2>
+                    <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
+                        <div className="flex min-w-0 items-center gap-2">
+                            <Share2 size={20} aria-hidden="true" />
+                            <h2 id={titleId} className={DIALOG_TITLE}>Share Comic</h2>
                         </div>
-                        <button onClick={onClose} className="hover:bg-white/20 rounded-full p-1 transition-colors">
+                        <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}>
                             <X size={20} />
                         </button>
                     </div>
 
                     {/* Tabs */}
-                    <div className="flex border-b-2 border-black">
+                    <div className="px-4 pt-4">
+                      <div className={SEGMENT_TRACK}>
                         {(['create', 'active'] as Tab[]).map(t => (
                             <button
                                 key={t}
                                 onClick={() => setTab(t)}
-                                className={`flex-1 py-2 text-sm font-bold uppercase transition-colors ${tab === t ? 'bg-brand-yellow text-black' : 'bg-white text-slate-600 hover:bg-slate-50'
-                                    }`}
+                                aria-pressed={tab === t}
+                                className={segment(tab === t)}
                             >
                                 {t === 'create' ? 'Create Share' : `Active (${activeShares.length})`}
                             </button>
                         ))}
+                      </div>
                     </div>
 
                     <div className="p-4 space-y-4">
                         {tab === 'create' && studioOnly ? (
                             <div
-                                className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-4 text-sm text-[var(--ds-ink)]"
+                                className={`${RADIUS_PANEL} ${HAIRLINE} bg-[var(--ds-surface-soft)] p-4 text-sm text-[var(--ds-ink)]`}
                                 role="status"
                                 data-testid="share-use-studio"
                             >
@@ -151,24 +186,24 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
                             <>
                                 {/* Share Type */}
                                 <div>
-                                    <label className="text-sm font-display text-black block mb-2">Share Type</label>
-                                    <div className="flex gap-2">
+                                    <div className={FIELD_LABEL}>Share Type</div>
+                                    <div className={SEGMENT_TRACK}>
                                         <button
                                             onClick={() => setShareType('public')}
-                                            className={`flex-1 flex items-center justify-center gap-2 border-2 border-black rounded-lg py-2 text-sm font-bold transition-all ${shareType === 'public' ? 'bg-brand-blue text-white' : 'bg-white'
-                                                }`}
+                                            aria-pressed={shareType === 'public'}
+                                            className={segment(shareType === 'public')}
                                         >
                                             <Globe size={16} /> Public
                                         </button>
                                         <button
                                             onClick={() => setShareType('private')}
-                                            className={`flex-1 flex items-center justify-center gap-2 border-2 border-black rounded-lg py-2 text-sm font-bold transition-all ${shareType === 'private' ? 'bg-brand-blue text-white' : 'bg-white'
-                                                }`}
+                                            aria-pressed={shareType === 'private'}
+                                            className={segment(shareType === 'private')}
                                         >
                                             <Lock size={16} /> Private
                                         </button>
                                     </div>
-                                    <p className="text-[10px] text-slate-500 mt-1">
+                                    <p className={HELP}>
                                         {shareType === 'public'
                                             ? 'Anyone with the link can view (login required).'
                                             : 'Only specified email addresses can view.'}
@@ -178,22 +213,23 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
                                 {/* Private: Emails */}
                                 {shareType === 'private' && (
                                     <div>
-                                        <label className="text-sm font-display text-black block mb-1">Allowed Emails</label>
+                                        <label htmlFor={emailsId} className={FIELD_LABEL}>Allowed Emails</label>
                                         <input
                                             type="text"
                                             value={emails}
                                             onChange={e => setEmails(e.target.value)}
                                             placeholder="user@example.com, friend@example.com"
-                                            className="w-full border-2 border-black rounded-lg px-3 py-2 text-sm"
+                                            id={emailsId}
+                                            className={TEXT_FIELD}
                                         />
-                                        <p className="text-[10px] text-slate-500 mt-1">Comma-separated email addresses</p>
+                                        <p className={HELP}>Comma-separated email addresses</p>
                                     </div>
                                 )}
 
                                 {/* Expiry */}
                                 <div>
-                                    <label className="text-sm font-display text-black block mb-1 flex items-center gap-1">
-                                        <Clock size={14} /> Expires After (hours)
+                                    <label htmlFor={expiryId} className={`${FIELD_LABEL} flex items-center gap-1`}>
+                                        <Clock size={14} aria-hidden="true" /> Expires After (hours)
                                     </label>
                                     <input
                                         type="number"
@@ -201,34 +237,35 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
                                         onChange={e => setExpiresInHours(e.target.value)}
                                         placeholder="Leave empty for no expiration"
                                         min={1}
-                                        className="w-full border-2 border-black rounded-lg px-3 py-2 text-sm"
+                                        id={expiryId}
+                                        className={TEXT_FIELD}
                                     />
                                 </div>
 
                                 {/* Permissions */}
-                                <div className="flex gap-4">
-                                    <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
+                                <div className="flex flex-wrap gap-x-4">
+                                    <label className={`flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium ${INK}`}>
                                         <input
                                             type="checkbox"
                                             checked={allowDownload}
                                             onChange={e => setAllowDownload(e.target.checked)}
-                                            className="w-4 h-4"
+                                            className="size-4 accent-[var(--ds-ink)]"
                                         />
                                         <Download size={14} /> Allow Download
                                     </label>
-                                    <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
+                                    <label className={`flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium ${INK}`}>
                                         <input
                                             type="checkbox"
                                             checked={allowReshare}
                                             onChange={e => setAllowReshare(e.target.checked)}
-                                            className="w-4 h-4"
+                                            className="size-4 accent-[var(--ds-ink)]"
                                         />
                                         <Share2 size={14} /> Allow Reshare
                                     </label>
                                 </div>
 
                                 {error && (
-                                    <div className="bg-red-50 border-2 border-red-300 rounded-lg p-2 text-xs text-red-700 font-bold">
+                                    <div className={`border p-2 text-xs font-semibold [overflow-wrap:anywhere] ${RADIUS_PANEL} ${STATUS_SURFACE.error} ${TONE_TEXT.danger}`}>
                                         {error}
                                     </div>
                                 )}
@@ -236,7 +273,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
                                 <button
                                     onClick={handleCreate}
                                     disabled={isCreating}
-                                    className="w-full py-3 bg-brand-blue text-white font-display text-lg rounded-xl border-4 border-black shadow-comic hover:shadow-[6px_6px_0px_0px_#000] transition-all disabled:opacity-50"
+                                    className={buttonClasses({ size: 'lg', className: 'w-full' })}
                                 >
                                     {isCreating ? 'Creating...' : 'Create Share Link'}
                                 </button>
@@ -245,33 +282,35 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
                             /* Active Shares List */
                             <div className="space-y-3">
                                 {activeShares.length === 0 ? (
-                                    <p className="text-center text-slate-500 text-sm py-6">No active shares yet</p>
+                                    <p className={`py-6 text-center text-sm ${MUTED}`}>No active shares yet</p>
                                 ) : (
                                     activeShares.map(share => (
-                                        <div key={share.id} className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                                            <div className="flex items-center justify-between mb-2">
+                                        <div key={share.id} className={`bg-[var(--ds-well)] p-3 ${RADIUS_PANEL} ${HAIRLINE}`}>
+                                            <div className="mb-2 flex items-center justify-between gap-2">
                                                 <div className="flex items-center gap-2">
-                                                    {share.share_type === 'public' ? <Globe size={14} className="text-brand-blue" /> : <Lock size={14} className="text-orange-500" />}
-                                                    <span className="text-xs font-bold uppercase">{share.share_type}</span>
+                                                    {share.share_type === 'public' ? <Globe size={14} className={INK} aria-hidden="true" /> : <Lock size={14} className={INK} aria-hidden="true" />}
+                                                    <span className={OVERLINE}>{share.share_type}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1">
                                                     <button
                                                         onClick={() => copyLink(share.share_token, share.id)}
-                                                        className="p-1 hover:bg-brand-blue/10 rounded"
+                                                        className={ROW_ICON}
                                                         title="Copy link"
+                                                        aria-label="Copy link"
                                                     >
-                                                        <Copy size={14} className={copiedId === share.id ? 'text-green-600' : ''} />
+                                                        <Copy size={14} className={copiedId === share.id ? TONE_TEXT.success : ''} />
                                                     </button>
                                                     <button
                                                         onClick={() => handleRevoke(share.id)}
-                                                        className="p-1 hover:bg-red-100 rounded text-red-500"
+                                                        className={`${ROW_ICON} text-[var(--ds-danger-text)]`}
                                                         title="Revoke"
+                                                        aria-label="Revoke"
                                                     >
                                                         <Trash2 size={14} />
                                                     </button>
                                                 </div>
                                             </div>
-                                            <div className="text-[10px] text-slate-500 space-y-0.5">
+                                            <div className={`space-y-0.5 text-xs [overflow-wrap:anywhere] ${MUTED}`}>
                                                 {share.expires_at && <p>⏳ Expires: {new Date(share.expires_at).toLocaleDateString()}</p>}
                                                 {share.allowed_emails.length > 0 && <p>📧 {share.allowed_emails.join(', ')}</p>}
                                                 <p>📅 Created: {new Date(share.created_at).toLocaleDateString()}</p>

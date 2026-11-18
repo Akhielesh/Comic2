@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { X, RefreshCw, Wand2 } from 'lucide-react';
 import { Button } from '../Button';
 import { ModalPortal } from './ModalPortal';
+import { buttonClasses } from '../ds/Button';
+import { DIALOG_TITLE, FIELD, HAIRLINE, MUTED, OVERLAY, RADIUS_CONTROL, SCRIM, Z } from '../chat/studioDesign';
 
 interface RegenerateModalProps {
   currentImageUrl: string;
@@ -12,34 +14,37 @@ interface RegenerateModalProps {
 
 export const RegenerateModal: React.FC<RegenerateModalProps> = ({ currentImageUrl, onConfirm, onClose, isLoading }) => {
   const [instructions, setInstructions] = useState('');
+  const titleId = useId();
+  const fieldId = useId();
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm" onClick={onClose}>
-        <div className="bg-white rounded-xl border-4 border-black shadow-comic max-w-2xl w-full overflow-hidden" onClick={e => e.stopPropagation()}>
-          <div className="bg-brand-yellow p-4 border-b-4 border-black flex justify-between items-center">
-              <h3 className="font-display text-2xl flex items-center gap-2"><Wand2 className="w-6 h-6"/> Regenerate Panel</h3>
-              <button onClick={onClose}><X className="w-6 h-6 hover:scale-110 transition-transform"/></button>
+      <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center overflow-y-auto p-4`} onClick={onClose}>
+        <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} max-h-[calc(var(--app-h,100dvh)-2rem)] w-full max-w-2xl overflow-y-auto`} onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] px-4 py-3 sm:px-6">
+              <h3 id={titleId} className={`flex min-w-0 items-center gap-2 ${DIALOG_TITLE}`}><Wand2 className="size-5 shrink-0" aria-hidden="true"/> Regenerate Panel</h3>
+              <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}><X className="size-5"/></button>
           </div>
           
-          <div className="p-6 space-y-6">
-              <div className="flex gap-6">
-                  <div className="w-1/2 aspect-square bg-slate-100 rounded-lg border-2 border-black overflow-hidden">
+          <div className="space-y-6 p-4 sm:p-6">
+              <div className="flex flex-col gap-6 sm:flex-row">
+                  <div className={`aspect-square w-full overflow-hidden bg-[var(--ds-well-strong)] sm:w-1/2 ${RADIUS_CONTROL} ${HAIRLINE}`}>
                       <img src={currentImageUrl} className="w-full h-full object-cover opacity-75" />
                   </div>
-                  <div className="w-1/2 space-y-4">
-                      <label className="font-bold font-comic block">What should be different?</label>
+                  <div className="w-full space-y-2 sm:w-1/2">
+                      <label htmlFor={fieldId} className="block text-sm font-medium text-[var(--ds-ink)]">What should be different?</label>
                       <textarea 
                           value={instructions}
                           onChange={(e) => setInstructions(e.target.value)}
                           placeholder="e.g. Make the lighting darker, zoom in on the face, change the background to red..."
-                          className="w-full h-32 bg-slate-50 border-2 border-black rounded-lg p-3 text-sm resize-none focus:ring-0 focus:shadow-comic transition-all"
+                          id={fieldId}
+                          className={`${FIELD} block h-32 w-full resize-none p-3 text-sm`}
                       />
-                      <p className="text-xs text-slate-500">The AI will use the original style and characters but apply your changes.</p>
+                      <p className={`text-xs ${MUTED}`}>The AI will use the original style and characters but apply your changes.</p>
                   </div>
               </div>
               
-              <div className="flex justify-end gap-3">
+              <div className="flex flex-wrap justify-end gap-3">
                   <Button variant="outline" onClick={onClose}>Cancel</Button>
                   <Button 
                       onClick={() => onConfirm(instructions)} 
