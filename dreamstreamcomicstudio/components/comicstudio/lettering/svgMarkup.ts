@@ -84,7 +84,8 @@ const KIND_LABEL: Record<LineKind, string> = {
   caption: 'Caption',
   sfx: 'Sound effect'
 };
-const ACCENT = '#D97757';
+/** The editor's selection outline: the focus colour (the ink under the Atlas skin). Drawn inline in the page, so the token resolves. */
+const ACCENT = 'var(--ds-focus)';
 const INK = '#111111';
 const r2 = (n: number) => Math.round(n * 100) / 100;
 

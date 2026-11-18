@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { Loader2 } from 'lucide-react';
-import { ACCENT_BG, ACCENT_BG_HOVER, FOCUS_RING, HAIRLINE, INK, MUTED, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_FILL, ACCENT_FILL_HOVER, FOCUS_RING, HAIRLINE, INK, MUTED, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 import { ARIA_DISABLED, busyButtonProps } from '../board/busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -55,7 +55,7 @@ export const PrimaryButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy,
     {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} ${FOCUS_RING}`,
+      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold ${ACCENT_FILL} ${ACCENT_FILL_HOVER} ${ON_ACCENT_TEXT} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} ${FOCUS_RING}`,
       sizeCls(size),
       className
     )}

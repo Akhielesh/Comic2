@@ -12,8 +12,8 @@ import { useSheetBehaviour } from '../../conversation/PopSheet';
 import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
+import { cn } from '../../../../lib/utils';
 export interface SideSheetProps {
   open: boolean;
   onClose: () => void;
@@ -60,7 +60,7 @@ export const SideSheet: React.FC<SideSheetProps> = ({
       aria-label={label}
       tabIndex={-1}
       data-sheet="side"
-      className={cx(
+      className={cn(
         `${inViewport ? 'fixed' : 'absolute'} inset-y-0 z-[86] flex w-full flex-col ${HAIRLINE} border-y-0 bg-[var(--ds-surface-strong)] shadow-[0_0_48px_rgba(0,0,0,0.16)] backdrop-blur-xl focus:outline-none`,
         side === 'right' ? 'right-0 border-r-0' : 'left-0 border-l-0',
         ff.reducedMotion ? 'animate-fade-in' : 'studio-reveal',
@@ -96,7 +96,7 @@ export const SideSheet: React.FC<SideSheetProps> = ({
 
   const tree = modal ? (
     <>
-      <div className={cx(inViewport ? 'fixed' : 'absolute', 'inset-0 z-[85] bg-black/30 animate-fade-in')} aria-hidden onClick={onClose} data-sheet-scrim />
+      <div className={cn(inViewport ? 'fixed' : 'absolute', 'inset-0 z-[85] bg-black/30 animate-fade-in')} aria-hidden onClick={onClose} data-sheet-scrim />
       {panel}
     </>
   ) : (

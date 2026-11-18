@@ -26,7 +26,7 @@ import {
 } from './bookModel';
 import { MediaPreview } from './MediaPreview';
 import { UndoToast, useTimelineEdit } from './UndoToast';
-import { OVERLINE } from '../../chat/studioDesign';
+import { OVERLINE, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
@@ -61,7 +61,7 @@ const MediaTile: React.FC<{ item: MediaItem; studio: StudioController; onOpen():
       )}
       <span className="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1 bg-gradient-to-t from-black/65 to-transparent px-1.5 pb-1 pt-3 text-left">
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-white">{item.versionLabel ?? item.owner.label}</span>
-        {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-amber-300" aria-hidden />}
+        {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-[var(--ds-warning)]" aria-hidden />}
       </span>
       {(item.archived || item.role === 'deleted_page' || item.stale) && (
         <span className="absolute left-1 top-1 flex gap-0.5">

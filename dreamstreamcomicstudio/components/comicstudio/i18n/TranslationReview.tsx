@@ -20,7 +20,7 @@ import { isProviderEnabled } from '../../../services/sourceGovernance';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, translationBudget } from '../../../shared/comic/translationPlan';
 import { textSourceHash } from '../../../shared/comic/i18n';
 import { ComicPageView } from '../board/ComicPageView';
-import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { OVERLINE, STATUS_EDGE, STATUS_INK, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { GhostButton, Segmented, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { LanguageSwitch } from './LanguageSwitch';
@@ -45,9 +45,9 @@ const STATUS_LABEL: Partial<Record<DerivedStatus, string>> = {
 };
 
 const STATUS_TONE: Partial<Record<DerivedStatus, string>> = {
-  missing: 'border-ds-accent/40 text-[var(--ds-ink)]',
-  stale: 'border-ds-accent/40 text-[var(--ds-ink)]',
-  stale_edited: 'border-ds-accent/40 text-[var(--ds-ink)]',
+  missing: `${STATUS_EDGE.attention} text-[var(--ds-ink)]`,
+  stale: `${STATUS_EDGE.attention} text-[var(--ds-ink)]`,
+  stale_edited: `${STATUS_EDGE.attention} text-[var(--ds-ink)]`,
   machine: 'border-[var(--ds-hairline)] text-[var(--ds-muted)]',
   reviewed: `${STATUS_EDGE.healthy} ${TONE_TEXT.success}`,
   edited: 'border-[var(--ds-hairline)] text-[var(--ds-ink)]'
@@ -204,11 +204,11 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
           </span>
         )}
         {fit && (
-          <span className={cx('ml-auto shrink-0 tabular-nums', fit.tone === 'ok' ? 'text-[var(--ds-muted)]' : fit.tone === 'tight' ? 'text-[var(--ds-ink)]' : 'font-semibold text-[#c2643f]')}>{fit.label}</span>
+          <span className={cx('ml-auto shrink-0 tabular-nums', fit.tone === 'ok' ? 'text-[var(--ds-muted)]' : fit.tone === 'tight' ? 'text-[var(--ds-ink)]' : `font-semibold ${STATUS_INK.attention}`)}>{fit.label}</span>
         )}
       </div>
       {issue && (
-        <div className={cx('mt-2 rounded-lg border px-2.5 py-2 text-[12.5px]', issue.severity === 'major' ? 'border-ds-accent/45 bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
+        <div className={cx('mt-2 rounded-lg border px-2.5 py-2 text-[12.5px]', issue.severity === 'major' ? STATUS_SURFACE.attention : 'border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
           <p className="flex items-start gap-1.5 leading-snug">
             <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
             <span className="min-w-0 break-words">
@@ -244,7 +244,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         </div>
       )}
       {status === 'stale_edited' && (
-        <div className="mt-2 rounded-lg border border-ds-accent/45 bg-[var(--ds-accent-soft)] px-2.5 py-2 text-[12.5px]">
+        <div className={`mt-2 rounded-lg border px-2.5 py-2 text-[12.5px] ${STATUS_SURFACE.attention}`}>
           <p className="leading-snug">The original changed after you wrote this. If your wording still fits, keep it — a translation run never touches your edits — or change it above.</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <GhostButton size="xs" busy={busy} onClick={keepWording} className="coarse:h-11">
@@ -333,7 +333,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
         </h3>
         {editionOptions.length > 1 && <LanguageSwitch options={editionOptions} value={lang} onChange={onLangChange} label="Review language" className="ml-auto" />}
       </div>
-      <div className={cx('mb-3 rounded-xl border px-3 py-2 text-[12.5px] leading-snug', readiness.publishable ? 'border-emerald-600/25 bg-emerald-500/[0.06]' : 'border-ds-accent/35 bg-[var(--ds-accent-soft)]')} role="status">
+      <div className={cx('mb-3 rounded-xl border px-3 py-2 text-[12.5px] leading-snug', readiness.publishable ? STATUS_SURFACE.healthy : STATUS_SURFACE.attention)} role="status">
         {readiness.publishable ? (
           <span>Translated and reviewed — ready to publish{readiness.issues.length ? `. ${readiness.issues.map((i) => i.text).join(' ')}` : '.'}</span>
         ) : (

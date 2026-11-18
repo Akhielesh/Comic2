@@ -29,7 +29,7 @@ export interface SafetyVeilProps {
 
 const BUTTON =
   `inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full px-3 text-[12px] font-medium transition-colors motion-reduce:transition-none ${FOCUS_RING}`;
-const PRIMARY = `${BUTTON} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+const PRIMARY = `${BUTTON} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 const QUIET = `${BUTTON} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 
 const Actions: React.FC<{ items: { label: string; onClick?: () => void; primary?: boolean }[] }> = ({ items }) => {

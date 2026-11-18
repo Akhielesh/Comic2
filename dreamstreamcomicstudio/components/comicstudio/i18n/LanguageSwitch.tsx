@@ -8,6 +8,7 @@ import { editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { dirOf, languageSpec, sameLanguage } from '../../../shared/comic/languages';
 
 import { FOCUS_RING } from '../../chat/studioDesign';
+import { cn } from '../../../lib/utils';
 export interface LanguageSwitchOption {
   code: string;
   /** Short visible label (the endonym; the source shows its code in capitals when Latin). */
@@ -41,7 +42,6 @@ export interface LanguageSwitchProps {
   className?: string;
 }
 
-const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(' ');
 
 export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ options, value, onChange, label = 'Edition language', className }) => {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -56,7 +56,7 @@ export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ options, value, 
     <div
       role="radiogroup"
       aria-label={label}
-      className={cx(
+      className={cn(
         'flex min-w-0 max-w-full items-center gap-0.5 overflow-x-auto overscroll-x-contain rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-0.5 [scrollbar-width:none]',
         className
       )}
@@ -84,7 +84,7 @@ export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ options, value, 
                 move(i - 1);
               }
             }}
-            className={cx(
+            className={cn(
               `relative inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2.5 text-[12.5px] font-medium transition-colors duration-150 coarse:h-11 ${FOCUS_RING} motion-reduce:transition-none`,
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
             )}
@@ -92,7 +92,7 @@ export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ options, value, 
             <span lang={o.code} dir={dirOf(o.code)}>
               {o.label}
             </span>
-            {o.draft && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#D97757]/70" />}
+            {o.draft && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-ds-accent/70" />}
             <span className="sr-only">{o.draft ? ' (draft)' : ''}</span>
           </button>
         );

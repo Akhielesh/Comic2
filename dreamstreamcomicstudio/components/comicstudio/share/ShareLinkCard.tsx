@@ -60,7 +60,7 @@ export const ShareLinkCard: React.FC<ShareLinkCardProps> = ({ view, title, descr
           {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button type="button" onClick={share} className={cx(btn, 'bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]')}>
+        <button type="button" onClick={share} className={cx(btn, 'bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]')}>
           <Share2 className="h-4 w-4" aria-hidden /> Share…
         </button>
       </div>

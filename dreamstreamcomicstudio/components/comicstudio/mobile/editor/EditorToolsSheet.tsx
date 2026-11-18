@@ -18,7 +18,7 @@ import { ChevronRight, PanelRightOpen, X } from 'lucide-react';
 import { cycleToolsDetent, nextToolsDetent, toolsSheetHeights, type ToolsDetent } from './editorModel';
 
 import { FOCUS_RING } from '../../../chat/studioDesign';
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+import { cn } from '../../../../lib/utils';
 const FOCUS = FOCUS_RING;
 
 export interface EditorToolsSheetProps {
@@ -48,7 +48,7 @@ const DETENT_LABEL: Record<ToolsDetent, string> = { peek: 'Edit with AI', half: 
 const DRAG_SLOP = 6;
 
 const ToolsAside: React.FC<{ className?: string; style?: React.CSSProperties; children: React.ReactNode }> = ({ className, style, children }) => (
-  <aside aria-label="Page tools" className={cx('min-h-0 min-w-0 space-y-5 overflow-y-auto overscroll-contain bg-[var(--ds-surface)]', className)} style={style} data-testid="page-tools">
+  <aside aria-label="Page tools" className={cn('min-h-0 min-w-0 space-y-5 overflow-y-auto overscroll-contain bg-[var(--ds-surface)]', className)} style={style} data-testid="page-tools">
     {children}
   </aside>
 );
@@ -74,7 +74,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
   if (presentation === 'aside' || presentation === 'segment') {
     return (
       <div
-        className={cx('flex min-h-0 min-w-0 flex-col bg-[var(--ds-surface)]', presentation === 'aside' ? 'shrink-0 border-l border-[var(--ds-hairline)]' : stacked ? 'flex-1' : 'h-full flex-1', stacked && 'border-t border-[var(--ds-hairline)]')}
+        className={cn('flex min-h-0 min-w-0 flex-col bg-[var(--ds-surface)]', presentation === 'aside' ? 'shrink-0 border-l border-[var(--ds-hairline)]' : stacked ? 'flex-1' : 'h-full flex-1', stacked && 'border-t border-[var(--ds-hairline)]')}
         style={presentation === 'aside' && width ? { width } : undefined}
         data-tools="aside"
       >
@@ -93,7 +93,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
           aria-expanded={false}
           onClick={() => onOpenChange(true)}
           data-tools="side-tab"
-          className={cx('press flex h-full w-11 shrink-0 flex-col items-center justify-center gap-2 border-l border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', FOCUS)}
+          className={cn('press flex h-full w-11 shrink-0 flex-col items-center justify-center gap-2 border-l border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', FOCUS)}
           style={{ boxSizing: 'content-box', paddingRight: 'var(--sa-right, 0px)' }}
         >
           <PanelRightOpen className="h-4 w-4" aria-hidden />
@@ -114,7 +114,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
             aria-label="Hide page tools"
             aria-expanded
             onClick={() => onOpenChange(false)}
-            className={cx('grid h-11 w-11 place-items-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', FOCUS)}
+            className={cn('grid h-11 w-11 place-items-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', FOCUS)}
           >
             <ChevronRight className="h-4 w-4" aria-hidden />
           </button>
@@ -188,7 +188,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
       aria-label="Page tools sheet"
       data-tools="sheet"
       data-detent={detent}
-      className={cx(
+      className={cn(
         'absolute inset-x-0 bottom-0 z-[6] mx-auto flex w-full max-w-[720px] flex-col overflow-hidden overflow-clip rounded-t-[var(--sheet-radius,20px)] border border-b-0 border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_-8px_30px_rgba(0,0,0,0.14)]',
         dragH === null && 'transition-[height] duration-200 ease-out motion-reduce:transition-none'
       )}
@@ -224,7 +224,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
             if (suppressClick.current) return;
             onDetentChange(cycleToolsDetent(detent));
           }}
-          className={cx('absolute left-1/2 top-0 flex h-6 w-20 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5', FOCUS)}
+          className={cn('absolute left-1/2 top-0 flex h-6 w-20 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5', FOCUS)}
           data-hit-exempt="grabber: the whole 44 px header is its drag zone"
         >
           <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
@@ -235,7 +235,7 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
             type="button"
             aria-label="Close page tools"
             onClick={() => onOpenChange(false)}
-            className={cx('mt-1 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', FOCUS)}
+            className={cn('mt-1 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', FOCUS)}
           >
             <X className="h-4 w-4" aria-hidden />
           </button>

@@ -15,7 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CircleCheck, Coffee, Info, PenLine, RefreshCw, Redo2, ShieldCheck, Undo2, X } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { useCostFormat } from './cost';
-import { FOCUS_RING, STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, FOCUS_RING, STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 /** How long a notice / savings line stays before fading on its own. */
@@ -63,7 +63,7 @@ export const errorPresentation = (code: string | null | undefined): ErrorPresent
 
 const TONE_CLS: Record<ErrorTone, string> = {
   pause: TONE_SURFACE.info,
-  care: 'border-ds-accent/30 bg-[var(--ds-accent-soft)]',
+  care: `border-[var(--ds-hairline)] ${ACCENT_SOFT_BG}`,
   info: 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
   problem: STATUS_SURFACE.attention
 };

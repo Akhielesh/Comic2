@@ -38,7 +38,7 @@ import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
 import { tileSources, type IsUnsignable, type TileSources } from './cards/renderTile';
 import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
-import { FOCUS_RING, RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, INK_TILE, RISE_IN, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 const CLAMP_CHARS = 700;
@@ -48,7 +48,7 @@ export const DirectorMark: React.FC<{ className?: string }> = ({ className }) =>
   <span
     aria-hidden
     className={cx(
-      'grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[linear-gradient(135deg,#E8916F_0%,#D97757_55%,#B8573A_100%)] text-white shadow-[0_1px_3px_rgba(217,119,87,0.35)]',
+      `grid h-7 w-7 shrink-0 place-items-center rounded-full ${INK_TILE}`,
       className
     )}
   >

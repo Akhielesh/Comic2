@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, FOCUS_RING as RECIPE_FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_FILL, ACCENT_FILL_HOVER, ACCENT_SOFT_BG, DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING as RECIPE_FOCUS_RING, HAIRLINE, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, STATUS_DOT, STATUS_SURFACE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 import { ARIA_DISABLED, busyButtonProps } from './busyButton';
@@ -75,7 +75,7 @@ export const PrimaryButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy,
     {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED}`,
+      `inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl font-semibold ${ACCENT_FILL} ${ACCENT_FILL_HOVER} ${ON_ACCENT_TEXT} ${TRANSITION} ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED}`,
       sizeCls(size),
       className
     )}
@@ -670,7 +670,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
             compact ? 'text-[10.5px]' : 'text-[11px]'
           )}
         >
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT.attention}`} aria-hidden />
           <span className="truncate">{staleLabel}</span>
           {onRerender && (
             <button
@@ -765,7 +765,7 @@ export const ConfirmStrip: React.FC<{
     aria-label={typeof message === 'string' ? message : confirmLabel}
     className={cx(
       'rounded-xl border p-2.5 text-[12px] text-[var(--ds-ink)]',
-      tone === 'danger' ? 'border-red-500/25 bg-red-500/[0.06]' : 'border-ds-accent/35 bg-[var(--ds-accent-soft)]'
+      tone === 'danger' ? STATUS_SURFACE.error : `border-[var(--ds-hairline)] ${ACCENT_SOFT_BG}`
     )}
   >
     <p className="leading-snug">{message}</p>
@@ -774,8 +774,8 @@ export const ConfirmStrip: React.FC<{
         type="button"
         onClick={onConfirm}
         className={cx(
-          `inline-flex h-7 items-center rounded-lg px-2.5 text-[12px] font-semibold text-white coarse:h-10 ${FOCUS_RING}`,
-          tone === 'danger' ? 'bg-red-600 hover:bg-red-700' : `${ACCENT_BG} ${ACCENT_BG_HOVER}`
+          `inline-flex h-7 items-center rounded-lg px-2.5 text-[12px] font-semibold coarse:h-10 ${FOCUS_RING}`,
+          tone === 'danger' ? `${DANGER_FILL} ${DANGER_FILL_HOVER}` : `${ACCENT_FILL} ${ACCENT_FILL_HOVER} ${ON_ACCENT_TEXT}`
         )}
       >
         {confirmLabel}

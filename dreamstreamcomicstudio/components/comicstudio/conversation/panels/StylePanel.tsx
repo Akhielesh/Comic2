@@ -120,7 +120,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
       </div>
 
       {confirming && (
-        <div role="alertdialog" aria-label="Replace locked style" className="rounded-xl border border-ds-accent/35 bg-[var(--ds-accent-soft)] p-3 text-[12px] text-[var(--ds-ink)]">
+        <div role="alertdialog" aria-label="Replace locked style" className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3 text-[12px] text-[var(--ds-ink)]">
           <p>
             Replace your locked style with <strong>{confirming.name}</strong>? Pages already drawn will be marked out of date (nothing is redrawn
             until you ask).
@@ -144,7 +144,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
       )}
 
       {custom && (
-        <div className="flex items-start gap-2 rounded-xl border border-ds-accent/40 bg-[var(--ds-accent-soft)] px-3 py-2.5">
+        <div className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] px-3 py-2.5">
           {locked ? <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden /> : <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
           <div className="min-w-0">
             <div className="text-[13px] font-semibold text-[var(--ds-ink)]">

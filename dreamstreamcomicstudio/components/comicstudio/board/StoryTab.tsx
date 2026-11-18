@@ -121,7 +121,7 @@ const NotesList: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ stud
           type="submit"
           disabled={!draft.trim()}
           aria-label="Add note"
-          className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING} disabled:opacity-40 coarse:h-11 coarse:w-11`}
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING} disabled:opacity-40 coarse:h-11 coarse:w-11`}
         >
           <Plus className="h-4 w-4" aria-hidden />
         </button>

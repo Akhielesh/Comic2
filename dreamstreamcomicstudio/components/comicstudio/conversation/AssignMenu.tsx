@@ -148,7 +148,7 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
           <button
             type="submit"
             disabled={!name.trim()}
-            className="inline-flex h-10 shrink-0 items-center rounded-xl bg-[var(--ds-accent)] px-3 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11"
+            className="inline-flex h-10 shrink-0 items-center rounded-xl bg-[var(--ds-accent-fill)] px-3 text-[13px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11"
           >
             Add
           </button>

@@ -281,7 +281,7 @@ const HeaderSlots: React.FC<{ slots: readonly HeaderSlotRegistration[]; from: nu
   </>
 );
 
-const QUALITY_DOT: Record<string, string> = { draft: 'bg-sky-500', standard: 'bg-emerald-500', pro: 'bg-[var(--ds-accent)]' };
+const QUALITY_DOT: Record<string, string> = { draft: 'bg-[var(--ds-chart-3)]', standard: 'bg-[var(--ds-chart-2)]', pro: 'bg-[var(--ds-accent)]' };
 
 // Fine pointers keep the calm 32 px pill; touch gets a real 44 px target (mobile.md §2.4).
 const headerBtn = `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:px-3.5 press`;

@@ -14,7 +14,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-[var(--ds-accent)] text-white shadow-sm hover:bg-[var(--ds-accent-hover)]',
+        primary: 'bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow-sm hover:bg-[var(--ds-accent-fill-hover)]',
         outline: 'border border-[var(--ds-hairline)] bg-transparent text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]',
         ghost: 'bg-transparent text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         destructive: 'bg-transparent text-rose-600 hover:bg-rose-500/10'

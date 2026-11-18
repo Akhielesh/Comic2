@@ -280,7 +280,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           disabled={busy || !!check || drawn === 0 || blocked.length > 0}
           aria-busy={busy || check === 'loading' || undefined}
           onClick={() => onPublish(request())}
-          className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-5 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+          className="min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-5 text-[14px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45"
         >
           {busy ? 'Publishing…' : check === 'loading' ? 'Checking your comic…' : live ? 'Update published version' : 'Publish'}
         </button>

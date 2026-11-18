@@ -23,8 +23,8 @@ import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
 import { detentHeights, rubber, snapDetent, type SheetDetent } from './snap';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
+import { cn } from '../../../../lib/utils';
 export interface BottomSheetProps {
   open: boolean;
   onClose: () => void;
@@ -273,7 +273,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
       data-sheet="bottom"
       data-detent={typeof current === 'number' ? String(current) : current}
       onFocusCapture={onFocusCapture}
-      className={cx(
+      className={cn(
         `fixed inset-x-0 z-[86] mx-auto flex w-full max-w-[640px] flex-col overflow-hidden rounded-t-[var(--sheet-radius,20px)] ${HAIRLINE} border-b-0 bg-[var(--ds-surface-strong)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none`,
         ff.reducedMotion ? 'animate-fade-in' : 'studio-reveal',
         motion,

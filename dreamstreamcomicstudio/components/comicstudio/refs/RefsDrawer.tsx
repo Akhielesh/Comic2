@@ -40,7 +40,7 @@ export interface RefsDrawerInternalProps extends RefsDrawerProps {
 
 const BTN =
   `inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-3.5 text-[13px] font-semibold transition-colors motion-reduce:transition-none ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`;
-const PRIMARY = `${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+const PRIMARY = `${BTN} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 const QUIET = `${BTN} border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 
 const imageFiles = (list: FileList | File[] | null | undefined): File[] =>
@@ -343,7 +343,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       )}
 
       {hint && (hint.missing || hint.changed) && character && (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-ds-accent/30 bg-[var(--ds-accent-soft)] p-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3">
           {/* A real flex basis (not flex-1's 0) so a long button wraps below the sentence instead of
               squeezing it into a sliver — the CI smoke caught the text spilling at 768–1440 px. */}
           <p className="min-w-0 grow basis-56 text-[13px] text-[var(--ds-ink)]">

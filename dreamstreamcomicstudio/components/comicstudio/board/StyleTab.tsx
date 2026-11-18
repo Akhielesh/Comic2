@@ -419,7 +419,7 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
                   <span className="relative block">
                     <PresetArt preset={p} className="h-20" />
                     {on && (
-                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent)] text-white" aria-hidden>
+                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)]" aria-hidden>
                         <Check className="h-3 w-3" />
                       </span>
                     )}

@@ -193,6 +193,8 @@ export const buildPrintHtml = (doc: ComicDoc, sheets: PrintSheet[], opts: PrintH
   const faceCss = origin
     ? [fontFaceCss(ids.filter((id) => !isScriptFace(id)), origin), fontFaceCss(ids.filter(isScriptFace), origin, PRINT_SCRIPT_WEIGHTS)].filter(Boolean).join('\n')
     : '';
+  // A standalone print document: the app's --ds-* tokens do not exist here, so the bar's print button
+  // spells the Atlas light ink (#0a0a0a, --ds-ink) and the 8 px control radius (--ds-radius-control).
   const css = `
 @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
 * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -200,7 +202,7 @@ html, body { margin: 0; padding: 0; background: #e9e7e1; }
 body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1a1915; }
 .bar { position: sticky; top: 0; z-index: 10; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: rgba(250,249,245,0.96); border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 13px; }
 .bar strong { font-weight: 600; overflow-wrap: anywhere; }
-.bar button { font: inherit; font-weight: 600; color: #fff; background: #D97757; border: 0; border-radius: 10px; min-height: 44px; padding: 7px 16px; cursor: pointer; }
+.bar button { font: inherit; font-weight: 600; color: #fff; background: #0a0a0a; border: 0; border-radius: 8px; min-height: 44px; padding: 7px 16px; cursor: pointer; }
 .bar .muted { color: #6e6a60; overflow-wrap: anywhere; }
 .sheet { position: relative; width: ${widthIn}in; height: ${heightIn}in; margin: 18px auto; overflow: hidden; background: #fff; box-shadow: 0 4px 24px rgba(0,0,0,0.18); break-after: page; page-break-after: always; }
 .sheet:last-of-type { break-after: auto; page-break-after: auto; }

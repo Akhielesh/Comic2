@@ -14,7 +14,7 @@ import { GripVertical, Star, Trash2, Crop, Undo2, ArrowRightLeft } from 'lucide-
 import type { ContentRating } from '../../../shared/comic/safety';
 import type { RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { REF_LIMITS, refOwnerKey } from '../../../shared/comic/refs';
-import { FOCUS_RING, TONE_TEXT } from '../../chat/studioDesign';
+import { ACCENT_FILL, FOCUS_RING, ON_ACCENT_TEXT, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { labelText, labelsFor, type RefUsage } from './refsModel';
@@ -137,9 +137,9 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
           so the visible words read as words. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-[60%] min-w-0 flex-wrap content-end gap-1 overflow-hidden bg-gradient-to-t from-black/60 to-transparent p-1.5 pr-10 pt-4">
         {ref.label && <span className="max-w-full truncate rounded-full bg-white/85 px-1.5 py-0.5 text-[10px] font-medium text-zinc-900">{labelText(ref.label)}</span>}{' '}
-        {usage?.sheet && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Sheet</span>}{' '}
-        {usage?.pages && <span className="max-w-full truncate rounded-full bg-[#D97757]/85 px-1.5 py-0.5 text-[10px] font-medium text-white">Pages</span>}{' '}
-        {usage?.style && <span className="max-w-full truncate rounded-full bg-[#D97757] px-1.5 py-0.5 text-[10px] font-medium text-white">Style</span>}{' '}
+        {usage?.sheet && <span className={`max-w-full truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${ACCENT_FILL} ${ON_ACCENT_TEXT}`}>Sheet</span>}{' '}
+        {usage?.pages && <span className={`max-w-full truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${ACCENT_FILL} ${ON_ACCENT_TEXT}`}>Pages</span>}{' '}
+        {usage?.style && <span className={`max-w-full truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${ACCENT_FILL} ${ON_ACCENT_TEXT}`}>Style</span>}{' '}
         {quality.map((q) => (
           <React.Fragment key={q}>
             <span className="max-w-full truncate rounded-full bg-black/55 px-1.5 py-0.5 text-[10px] text-white" title={`${q} — we'll prefer your other photos`}>

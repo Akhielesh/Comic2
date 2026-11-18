@@ -12,7 +12,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Copy, Loader2, RotateCw, ShieldAlert, X } from 'lucide-react';
-import { FOCUS_RING, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, STATUS_INK, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { UploadItem } from './useRefUpload';
 import { isActiveUpload } from './useRefUpload';
@@ -95,7 +95,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                 rejected
                   ? STATUS_SURFACE.error
                   : warn
-                    ? 'border-ds-accent/35 bg-[var(--ds-accent-soft)]'
+                    ? STATUS_SURFACE.attention
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
               )}
               data-state={item.state}
@@ -138,7 +138,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                 )}
                 {(warn || rejected) && (
                   <p className={cx('mt-0.5 text-[12px] leading-snug', rejected ? TONE_TEXT.danger : 'text-[var(--ds-ink)]')} role="status">
-                    {warn && <AlertTriangle className="mr-1 inline h-3 w-3 align-[-1px] text-[#D97757]" aria-hidden />}
+                    {warn && <AlertTriangle className={`mr-1 inline h-3 w-3 align-[-1px] ${STATUS_INK.attention}`} aria-hidden />}
                     {item.message}
                     {rejected && (
                       <>

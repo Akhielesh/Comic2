@@ -24,6 +24,7 @@ import { IDENTITY, RUBBER, clampState, isDoubleTap, overscrollX, panBy, pinch, s
 import { doubleTapMs, doubleTapPx, exceedsSlop, ownsGesture } from './pointerPolicy';
 
 import { FOCUS_RING } from '../../../chat/studioDesign';
+import { cn } from '../../../../lib/utils';
 export interface ZoomState {
   /** Current zoom (1 = fit). Handles divide their visual and hit sizes by it. */
   scale: number;
@@ -62,7 +63,6 @@ const EDGE_TURN_PX = 56;
 const WILL_CHANGE_LINGER_MS = 150;
 const SETTLE_MS = 220;
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
 export const TouchCanvas: React.FC<TouchCanvasProps> = ({
   children,
@@ -339,7 +339,7 @@ export const TouchCanvas: React.FC<TouchCanvasProps> = ({
           tabIndex={disabled ? -1 : 0}
           onKeyDown={onKeyDown}
           data-zoom={scale.toFixed(2)}
-          className={cx('relative h-full w-full overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/40', !disabled && 'no-callout', className)}
+          className={cn('relative h-full w-full overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-focus)]', !disabled && 'no-callout', className)}
           style={disabled ? undefined : { touchAction: 'none' }}
         >
           <div ref={innerRef} className="h-full w-full" style={{ transformOrigin: '0 0' }}>
@@ -355,7 +355,7 @@ export const TouchCanvas: React.FC<TouchCanvasProps> = ({
               </button>
               <button
                 type="button"
-                className={cx(btn, 'w-auto min-w-[3.25rem] px-2 text-[12px] font-semibold tabular-nums coarse:w-auto')}
+                className={cn(btn, 'w-auto min-w-[3.25rem] px-2 text-[12px] font-semibold tabular-nums coarse:w-auto')}
                 aria-label={`Zoom ${pct}%. Reset to fit`}
                 onClick={() => commit(IDENTITY)}
               >

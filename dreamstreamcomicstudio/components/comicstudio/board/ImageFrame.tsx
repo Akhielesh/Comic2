@@ -352,7 +352,7 @@ export const VersionStrip: React.FC<{
                 style={{ aspectRatio: typeof aspect === 'number' ? String(aspect) : aspect }}
               >
                 {u ? <img src={u} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-contain" /> : <span className={cx('absolute inset-0', !v.blocked && 'studio-shimmer')} aria-hidden />}
-                {v.current && <span className="absolute inset-x-0 bottom-0 bg-[var(--ds-accent)] py-px text-center text-[9px] font-semibold text-white">Current</span>}
+                {v.current && <span className="absolute inset-x-0 bottom-0 bg-[var(--ds-accent-fill)] py-px text-center text-[9px] font-semibold text-[var(--ds-on-accent)]">Current</span>}
               </button>
             </li>
           );

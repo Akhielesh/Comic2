@@ -104,7 +104,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
             <button
               type="button"
               onClick={onClose}
-              className={`mt-4 inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent)] px-5 text-[14px] font-medium text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING}`}
+              className={`mt-4 inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent-fill)] px-5 text-[14px] font-medium text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING}`}
             >
               Done
             </button>
@@ -130,7 +130,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
                       key={o.value}
                       className={[
                         'inline-flex min-h-[44px] max-w-full cursor-pointer items-center rounded-full border px-3 text-[13px] transition-colors motion-reduce:transition-none',
-                        'focus-within:ring-2 focus-within:ring-[#D97757]/45',
+                        'has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[color:var(--ds-focus)]',
                         checked ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                       ].join(' ')}
                     >
@@ -189,7 +189,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               <button
                 type="submit"
                 disabled={!canSend}
-                className={`inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent)] px-5 text-[14px] font-medium text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`}
+                className={`inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent-fill)] px-5 text-[14px] font-medium text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`}
               >
                 {state === 'sending' ? 'Sending…' : 'Send report'}
               </button>

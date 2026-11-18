@@ -128,7 +128,7 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
                 type="button"
                 disabled={useDisabled || v.blocked}
                 onClick={() => onUse(v)}
-                className={`tap-target inline-flex h-9 items-center rounded-xl bg-[var(--ds-accent)] px-4 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`}
+                className={`tap-target inline-flex h-9 items-center rounded-xl bg-[var(--ds-accent-fill)] px-4 text-[13px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`}
               >
                 Use v{v.n} · Free
               </button>

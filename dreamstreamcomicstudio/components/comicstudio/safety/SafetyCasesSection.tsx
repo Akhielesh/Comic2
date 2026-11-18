@@ -42,7 +42,7 @@ const REASON_LABEL: Record<string, string> = {
 const BTN =
   `inline-flex min-h-[44px] items-center justify-center rounded-full px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-50`;
 const QUIET = `${BTN} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
-const PRIMARY = `${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+const PRIMARY = `${BTN} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 
 const when = (t: number) => {
   try {

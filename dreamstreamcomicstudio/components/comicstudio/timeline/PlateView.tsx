@@ -143,7 +143,7 @@ export const PlateEditor: React.FC<{
                 onSave(kind === 'end' ? { credits: creditLines } : { blurb: blurb.trim() ? blurb.trim() : null });
                 onClose();
               }}
-              className={`tap-target h-9 rounded-xl bg-[var(--ds-accent)] px-4 font-semibold text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING} disabled:opacity-45`}
+              className={`tap-target h-9 rounded-xl bg-[var(--ds-accent-fill)] px-4 font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING} disabled:opacity-45`}
             >
               Save · Free
             </button>

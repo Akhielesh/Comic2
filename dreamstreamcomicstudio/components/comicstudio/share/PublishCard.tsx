@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Globe2, Link2, Loader2, Share2 } from 'lucide-react';
 import type { Card } from '../../../shared/comic/doc';
 import type { CardProps } from '../extensions';
-import { TONE_TEXT } from '../../chat/studioDesign';
+import { STATUS_DOT, TONE_TEXT } from '../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { readinessRows } from './PublishPanel';
@@ -72,7 +72,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
         <ul className="m-0 mb-3 list-none space-y-1 p-0 text-[13px] text-[var(--ds-ink)]">
           {readinessRows(studio.publication?.readiness, doc!).map((r, i) => (
             <li key={i} className="flex min-w-0 items-start gap-2">
-              <span aria-hidden className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', r.ok === true ? 'bg-emerald-500' : r.ok === 'warn' ? 'bg-amber-500' : 'bg-[var(--ds-hairline)]')} />
+              <span aria-hidden className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', r.ok === true ? STATUS_DOT.healthy : r.ok === 'warn' ? STATUS_DOT.attention : 'bg-[var(--ds-hairline)]')} />
               <span className="min-w-0">{r.text}</span>
             </li>
           ))}

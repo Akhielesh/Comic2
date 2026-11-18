@@ -1459,7 +1459,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         ref={composerBoxRef}
         data-composer-box
         className={cx(
-          `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[var(--ds-focus)] focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
+          `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-[var(--ds-motion-slow)] focus-within:border-[var(--ds-focus)] focus-within:shadow-[shadow:var(--ds-shadow-panel)]`,
           dragOver && 'border-ds-accent/60 ring-2 ring-ds-accent/30'
         )}
       >
@@ -1847,7 +1847,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 disabled={!canSend}
                 aria-label="Send"
                 title={uploadsBusy ? 'Waiting for your photos to finish uploading' : coarse ? 'Send' : 'Send (Enter)'}
-                className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
+                className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] ${TRANSITION} hover:bg-[var(--ds-accent-fill-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
               >
                 <ArrowUp className="h-4 w-4" />
               </button>

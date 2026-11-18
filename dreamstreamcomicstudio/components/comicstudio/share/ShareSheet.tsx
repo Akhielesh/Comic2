@@ -379,7 +379,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             type="button"
             disabled={busy}
             onClick={() => void run(() => updatePublication(doc.id, { visibility: 'public' }))}
-            className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-4 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
+            className="min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-4 text-[14px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:opacity-50"
           >
             {busy ? 'Working…' : 'List it in the Library'}
           </button>
@@ -480,7 +480,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       {visibilityControl}
       {visibilityHints}
       {suspended && view?.suspendedReason && (
-        <p className="m-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">{view.suspendedReason}</p>
+        <p className={`m-0 rounded-xl border px-3 py-2 text-[13px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>{view.suspendedReason}</p>
       )}
       {(confirm === 'unpublish' || confirm === 'public') && confirmBox}
       {publishAs ? (
@@ -499,7 +499,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       ) : (
         <>
           {live && view?.behind && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+            <div className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[13px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
               <span className="min-w-0">You’ve made changes since publishing. Readers still see the published version.</span>
               <ChangesSincePublishLink studio={studio} />
               <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -530,7 +530,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                   disabled={busy}
                   onClick={updateNow}
                   aria-describedby={readyLangs.length > 0 ? `${hintId}-update` : undefined}
-                  className={readyLangs.length > 0 ? PLAIN_UPDATE_BTN : 'min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50'}
+                  className={readyLangs.length > 0 ? PLAIN_UPDATE_BTN : 'min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-3 font-semibold text-[var(--ds-on-accent)] disabled:opacity-50'}
                 >
                   {busy && !adding ? 'Updating…' : 'Update'}
                 </button>

@@ -297,7 +297,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
   }
   if (!notices.length) return null;
   return (
-    <div className="space-y-3 rounded-2xl border border-ds-accent/35 bg-[var(--ds-accent-soft)] p-3 text-[13px] leading-snug text-[var(--ds-ink)]" role="region" aria-label="Lettering for translations">
+    <div className="space-y-3 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3 text-[13px] leading-snug text-[var(--ds-ink)]" role="region" aria-label="Lettering for translations">
       {notices}
     </div>
   );

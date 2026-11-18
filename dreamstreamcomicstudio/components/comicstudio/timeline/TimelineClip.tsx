@@ -20,6 +20,7 @@ import { PlateView } from './PlateView';
 import type { PlateKind } from './plates';
 import { BlockedTile, cx, FOCUS_RING } from './ui';
 
+import { TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 /** Thumbnail box height (px) per mode; widths follow the art's aspect within bounds. */
 export const CLIP_THUMB_H = { full: 64, compact: 52 } as const;
 const CLIP_W = { full: [44, 116], compact: [34, 76] } as const;
@@ -34,9 +35,9 @@ export const clipThumbWidth = (ratio: number, compact: boolean, height?: number)
 const ringFor = (clip: ClipVM): string => {
   switch (clip.status) {
     case 'stale':
-      return 'ring-2 ring-amber-500/70';
+      return 'ring-2 ring-[var(--ds-warning)]';
     case 'failed':
-      return 'ring-2 ring-red-500/70';
+      return 'ring-2 ring-[var(--ds-danger-mark)]';
     case 'queued':
     case 'rendering':
       return 'ring-2 ring-ds-accent/60';
@@ -182,13 +183,13 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
           </span>
         )}
         {clip.mismatch && !compact && (
-          <span className="absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded bg-amber-700 px-1 text-[9px] font-semibold leading-[14px] text-white" aria-hidden>
+          <span className={`absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded border px-1 text-[9px] font-semibold leading-[14px] ${TONE_CHIP_ON_ART.warning}`} aria-hidden>
             <AlertTriangle className="h-2.5 w-2.5" />
             {clip.mismatch.got}
           </span>
         )}
         {clip.status === 'stale' && (
-          <span className="absolute inset-x-0 bottom-0 bg-amber-700 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
+          <span className={`absolute inset-x-0 bottom-0 border-t text-center text-[8.5px] font-semibold leading-[13px] ${TONE_CHIP_ON_ART.warning}`} aria-hidden>
             Out of date
           </span>
         )}

@@ -96,7 +96,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 compact
                 badge={
                   selected ? (
-                    <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent)] text-white shadow" aria-hidden>
+                    <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow" aria-hidden>
                       <Lock className="h-3 w-3" />
                     </span>
                   ) : undefined

@@ -1207,7 +1207,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
               )}
               {p.overflow && (
                 // Visible "text doesn't fit" marker in the editor (the inspector offers the free fix).
-                <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white" />
+                <span aria-hidden data-testid="overflow-badge" className="pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-[var(--ds-warning)] ring-2 ring-[var(--ds-canvas)]" />
               )}
             </div>
           );
