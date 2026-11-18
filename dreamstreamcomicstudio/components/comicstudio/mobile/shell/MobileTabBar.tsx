@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FOCUS_RING, RADIUS_PILL, STATUS_DOT } from '../../../chat/studioDesign';
+import { FOCUS_RING_FLUSH, RADIUS_PILL, STATUS_DOT } from '../../../chat/studioDesign';
 import { navItemName } from '../../../ds/TabBar';
 
 
@@ -99,7 +99,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
       title={item.disabled ? item.disabledReason : undefined}
       data-nav={item.id}
       className={cn(
-        `press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors ${FOCUS_RING}`,
+        `press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors ${FOCUS_RING_FLUSH}`,
         orientation === 'bar' ? 'flex-1' : 'w-14 py-1.5',
         item.disabled ? 'cursor-not-allowed opacity-40' : '',
         item.current ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
@@ -117,7 +117,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
       </span>
       {/* The rail is 56 px wide: the badge goes under the label there instead of squeezing it to "B…".
           The space between label and badge keeps them two words for the accessible-name check. */}
-      <span aria-hidden className={cn('flex max-w-full items-center gap-1', orientation === 'rail' && 'flex-col gap-0.5 [html.kb-open_&]:hidden')}>
+      <span aria-hidden className={cn('flex max-w-full items-center gap-1', orientation === 'rail' && 'flex-col [html.kb-open_&]:hidden')}>
         <span className="max-w-full truncate">{item.label}</span>{' '}
         {item.badge && (
           <span className={`whitespace-nowrap ${RADIUS_PILL} bg-[var(--ds-well-strong)] px-1 py-px text-[9.5px] font-semibold tabular-nums text-[var(--ds-muted)]`}>{item.badge}</span>

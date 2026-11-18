@@ -113,7 +113,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 aria-busy={isPending(`pick:${o.id}`) || undefined}
                 aria-label={`Use the ${o.name} style`}
                 title={o.spec}
-                className={`block rounded-xl text-left transition-transform duration-200 hover:-translate-y-0.5 ${FOCUS_RING} disabled:opacity-60`}
+                className={`block rounded-xl text-left transition-transform duration-[var(--ds-motion-medium)] hover:-translate-y-0.5 ${FOCUS_RING} disabled:opacity-60`}
               >
                 {thumb}
               </button>

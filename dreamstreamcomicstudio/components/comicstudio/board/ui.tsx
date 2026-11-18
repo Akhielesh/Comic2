@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_FILL, ACCENT_FILL_HOVER, ACCENT_SOFT_BG, DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING as RECIPE_FOCUS_RING, HAIRLINE, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, STATUS_DOT, STATUS_SURFACE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_FILL, ACCENT_FILL_HOVER, ACCENT_SOFT_BG, DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING as RECIPE_FOCUS_RING, FOCUS_RING_FLUSH, HAIRLINE, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, STATUS_DOT, STATUS_SURFACE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 import { ARIA_DISABLED, busyButtonProps } from './busyButton';
@@ -209,7 +209,8 @@ export function Segmented<T extends string>({
               // full-width track. `flex-1` split the track EQUALLY, so the longer label of an inline track was cut
               // ("Com…" beside "Large", "Sup…" beside "Lead"); now a label is cut only when the parent squeezes the
               // whole track below its content (min-w-0) — FX-15.
-              `flex min-w-0 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING} disabled:opacity-40`,
+              // A segment inside the track: the flush outline (FOCUS_RING_FLUSH), as the ds Segmented.
+              `flex min-w-0 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-[10px] font-medium ${TRANSITION} ${FOCUS_RING_FLUSH} disabled:opacity-40`,
               // Touch: every segment is a full 44×44 target, icon-only ones too (the header pane switcher).
               size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[44px] coarse:min-w-[44px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px] coarse:min-w-[44px]',
               // Unselected segments read in ink at 80 %: muted on the well measured 4.39:1 (axe, under

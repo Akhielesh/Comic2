@@ -59,7 +59,7 @@ import {
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 import { pageProgress, pageVisualStatus } from '../board/boardModel';
 
-import { FOCUS_RING } from '../../chat/studioDesign';
+import { FOCUS_ITEM, FOCUS_RING } from '../../chat/studioDesign';
 /**
  * One "drawn" definition (declutter F7; PROGRAM3 B25): the board's — drawn and current (`pageProgress`) —
  * plus how many drawn pages are out of date. The reader used to count every page with art, so the board
@@ -296,7 +296,7 @@ export const ReaderMenu: React.FC<{ label: string; items: ReaderMenuItem[]; icon
                 setOpen(false);
                 it.onSelect();
               }}
-              className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} disabled:opacity-50 [&>svg]:shrink-0`}
+              className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_ITEM} disabled:opacity-50 [&>svg]:shrink-0`}
             >
               {it.icon}
               {/* Long labels wrap instead of hiding their end: at 320 px "Download page images (.zip) (Telugu)"

@@ -254,7 +254,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         <Toggle label="Show my username" hint="Off keeps you anonymous to readers" checked={showCreator} onChange={setShowCreator} />
       </div>
       {error && (
-        <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="alert" className={`rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
           {error}
         </p>
       )}

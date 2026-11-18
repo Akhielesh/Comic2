@@ -59,7 +59,7 @@ export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disab
           type="button"
           disabled={disabled}
           onClick={() => (s.mode === 'send' ? onSend(s.text) : composeInStudio({ text: s.text, hint: s.hint }))}
-          className={`group flex min-h-[44px] items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-200 hover:-translate-y-px hover:border-ds-accent/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 ${FOCUS_RING} coarse:text-[14px]`}
+          className={`group flex min-h-[44px] items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-[var(--ds-motion-medium)] hover:-translate-y-px hover:border-ds-accent/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 ${FOCUS_RING} coarse:text-[14px]`}
         >
           <span>{s.label}</span>
           <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-colors group-hover:text-[var(--ds-accent)]" aria-hidden />

@@ -54,7 +54,7 @@ import { useFormFactor } from '../mobile/useFormFactor';
 import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
-import { FOCUS_RING, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT, STATUS_SURFACE } from '../../chat/studioDesign';
+import { FOCUS_ITEM, FOCUS_RING, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT, STATUS_SURFACE } from '../../chat/studioDesign';
 import { CLEAR } from './boardModel';
 import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
@@ -110,7 +110,7 @@ export const liveShareUrl = (studio: Pick<StudioController, 'doc' | 'publication
 };
 
 const SHEET_ROW =
-  `flex min-h-[44px] w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 ${FOCUS_RING}`;
+  `flex min-h-[44px] w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 ${FOCUS_ITEM}`;
 
 const SheetRow: React.FC<{ icon: React.ReactNode; label: React.ReactNode; hint?: React.ReactNode; onClick: () => void; disabled?: boolean }> = ({ icon, label, hint, onClick, disabled }) => (
   <button type="button" className={SHEET_ROW} onClick={onClick} disabled={disabled}>

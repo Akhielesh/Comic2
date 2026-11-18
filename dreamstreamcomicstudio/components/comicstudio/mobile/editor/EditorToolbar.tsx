@@ -94,8 +94,10 @@ const BarButton: React.FC<{
       data-testid={testId}
       onClick={onClick}
       className={cn(
-        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
-        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5',
+        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-[var(--ds-motion-medium)] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
+        // The horizontal buttons share the spare width (flex-auto) but never shrink below their own width. cn drops a
+        // shrink-0 that comes before flex-auto (flex covers shrink), so the horizontal run restates it after flex-auto.
+        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5 shrink-0',
         on ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         FOCUS
       )}

@@ -15,7 +15,7 @@ import { capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { effectiveRating } from '../../../shared/comic/safety';
 import { byokFromDoc } from '../board/boardModel';
 import { SlideOver } from '../conversation/PopSheet';
-import { FOCUS_RING, OVERLINE } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE, STATUS_SURFACE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { StudioController } from '../types';
 import { ACCEPT_ATTR, isSvgFile } from './downscale';
@@ -313,7 +313,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       )}
 
       {error && (
-        <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="alert" className={`rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
           {error}
         </p>
       )}

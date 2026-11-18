@@ -168,7 +168,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                 aria-checked={on}
                 onClick={() => choose(preset)}
                 className={cx(
-                  `group relative overflow-hidden rounded-xl border text-left transition-all duration-200 ${FOCUS_RING}`,
+                  `group relative overflow-hidden rounded-xl border text-left transition-all duration-[var(--ds-motion-medium)] ${FOCUS_RING}`,
                   on ? 'border-ds-accent/60 ring-2 ring-ds-accent/30' : 'border-[var(--ds-hairline)] hover:-translate-y-px hover:border-ds-accent/35'
                 )}
               >

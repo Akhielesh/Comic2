@@ -7,7 +7,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { dirOf, languageSpec, sameLanguage } from '../../../shared/comic/languages';
 
-import { FOCUS_RING } from '../../chat/studioDesign';
+import { FOCUS_RING_FLUSH } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
 export interface LanguageSwitchOption {
   code: string;
@@ -85,7 +85,8 @@ export const LanguageSwitch: React.FC<LanguageSwitchProps> = ({ options, value, 
               }
             }}
             className={cn(
-              `relative inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2.5 text-[12.5px] font-medium transition-colors duration-150 coarse:h-11 ${FOCUS_RING} motion-reduce:transition-none`,
+              // A segment inside the scrolling track: the flush outline fits its 2 px padding (FOCUS_RING_FLUSH).
+              `relative inline-flex h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2.5 text-[12.5px] font-medium transition-colors duration-[var(--ds-motion-medium)] coarse:h-11 ${FOCUS_RING_FLUSH} motion-reduce:transition-none`,
               on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
             )}
           >

@@ -26,7 +26,7 @@ import {
 } from './bookModel';
 import { MediaPreview } from './MediaPreview';
 import { UndoToast, useTimelineEdit } from './UndoToast';
-import { OVERLINE, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
+import { OVERLINE } from '../../chat/studioDesign';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';

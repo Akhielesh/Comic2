@@ -6,11 +6,13 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { DIALOG_TITLE_FROM_SM, FOCUS_RING as RECIPE_FOCUS_RING, TONE_CHIP, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
+import { DIALOG_TITLE_FROM_SM, FOCUS_RING as RECIPE_FOCUS_RING, FOCUS_RING_FLUSH as RECIPE_FOCUS_RING_FLUSH, TONE_CHIP, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { useFocusTrap } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 export const FOCUS_RING = RECIPE_FOCUS_RING;
+/** Flush with the element, for tiles in a scroller with little padding (the timeline track's 2 px top). */
+export const FOCUS_RING_FLUSH = RECIPE_FOCUS_RING_FLUSH;
 
 /** prefers-reduced-motion (live). */
 export function useReducedMotion(): boolean {

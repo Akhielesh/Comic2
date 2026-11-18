@@ -334,7 +334,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
             setAssigning(unassigned);
           }}
           aria-haspopup="menu"
-          className={`inline-flex min-h-[28px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[12px] text-[var(--ds-ink)] transition-colors duration-150 hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] coarse:px-3.5`}
+          className={`inline-flex min-h-[28px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 text-[12px] text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] coarse:px-3.5`}
         >
           <UserRound className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
           <span className="min-w-0 truncate">

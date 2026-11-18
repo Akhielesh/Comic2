@@ -181,17 +181,18 @@ export const EditorToolsSheet: React.FC<EditorToolsSheetProps> = ({
   // focus() deep in the tools can't scroll it the way it can an `overflow: hidden` box (gate:
   // editor-tools-sheet-header-scrolled-away). Tailwind emits .overflow-clip after .overflow-hidden, so
   // `hidden` is only the fallback where `clip` is unsupported (Safari < 16); there, onScroll undoes any
-  // programmatic scroll that reaches the root.
+  // programmatic scroll that reaches the root. Both overflow classes are joined after cn, which would keep only the
+  // last of two conflicting utilities and drop the fallback.
   return (
     <div
       role="region"
       aria-label="Page tools sheet"
       data-tools="sheet"
       data-detent={detent}
-      className={cn(
-        'absolute inset-x-0 bottom-0 z-[6] mx-auto flex w-full max-w-[720px] flex-col overflow-hidden overflow-clip rounded-t-[var(--sheet-radius,20px)] border border-b-0 border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_-8px_30px_rgba(0,0,0,0.14)]',
-        dragH === null && 'transition-[height] duration-200 ease-out motion-reduce:transition-none'
-      )}
+      className={`${cn(
+        'absolute inset-x-0 bottom-0 z-[6] mx-auto flex w-full max-w-[720px] flex-col rounded-t-[var(--sheet-radius,20px)] border border-b-0 border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_-8px_30px_rgba(0,0,0,0.14)]',
+        dragH === null && 'transition-[height] duration-[var(--ds-motion-slow)] ease-out motion-reduce:transition-none'
+      )} overflow-hidden overflow-clip`}
       style={{ height }}
       onScroll={(e) => {
         // Only the root's own scroll (React's onScroll doesn't bubble; the aside scrolls freely).

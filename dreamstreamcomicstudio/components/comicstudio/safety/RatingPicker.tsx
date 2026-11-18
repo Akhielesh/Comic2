@@ -19,7 +19,7 @@ import {
 } from '../../../shared/comic/safety';
 import type { StudioController } from '../types';
 
-import { FOCUS_RING } from '../../chat/studioDesign';
+import { FOCUS_RING_FLUSH } from '../../chat/studioDesign';
 export interface RatingPickerProps {
   /** The effective rating now (what the comic is drawn and checked at). */
   value: ContentRating;
@@ -103,7 +103,7 @@ export const RatingPicker: React.FC<RatingPickerProps> = ({ value, ceiling, ceil
               }}
               className={[
                 'flex min-h-[44px] min-w-0 flex-col items-center justify-center rounded-lg px-1.5 py-1 text-center transition-colors motion-reduce:transition-none',
-                FOCUS_RING,
+                FOCUS_RING_FLUSH,
                 selected ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]',
                 off ? 'cursor-not-allowed opacity-45 hover:bg-transparent' : ''
               ].join(' ')}

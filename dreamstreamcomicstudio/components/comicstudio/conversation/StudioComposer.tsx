@@ -66,7 +66,7 @@ import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { loadDictationSettings, voiceInputSupported, webSpeechSupported, type DictationEngine, type FinalInfo } from '../../../hooks/useDictation';
 import { isEnglish, voiceAutoSend } from '../../../services/dictation/autoSend';
-import { CONTROL_BTN, FOCUS_RING, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
+import { CONTROL_BTN, FOCUS_RING, FOCUS_RING_FLUSH, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
 import { sendOutcomeOf } from '../messageQueue';
 import { QueuedMessages } from './QueuedMessages';
@@ -1273,7 +1273,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       disabled={!ready}
       onClick={() => setPanel((p) => (p === id ? null : id))}
       className={cx(
-        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 ${FOCUS_RING} coarse:h-11 coarse:px-3.5 coarse:text-[13px]`,
+        // Flush focus: the chips scroll inside a 2 px padded strip, which would clip an outline set 2 px off.
+        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 ${FOCUS_RING_FLUSH} coarse:h-11 coarse:px-3.5 coarse:text-[13px]`,
         panel === id
           ? 'border-ds-accent/45 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
           : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',

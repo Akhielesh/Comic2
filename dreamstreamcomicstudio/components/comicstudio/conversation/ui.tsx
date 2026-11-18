@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { Loader2 } from 'lucide-react';
-import { ACCENT_FILL, ACCENT_FILL_HOVER, FOCUS_RING, HAIRLINE, INK, MUTED, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_FILL, ACCENT_FILL_HOVER, FOCUS_RING, FOCUS_RING_FLUSH, HAIRLINE, INK, MUTED, ON_ACCENT_TEXT, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 import { ARIA_DISABLED, busyButtonProps } from '../board/busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -175,7 +175,7 @@ export function Segmented<T extends string | number>({
             className={cx(
               // Sized to its own label and sharing the spare width (flex-auto), never an equal split that cuts the
               // longer label while the track still has room (FX-15, as board/ui Segmented).
-              `flex min-w-0 flex-auto items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} ${FOCUS_RING} coarse:min-h-[44px]`,
+              `flex min-w-0 flex-auto items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} ${FOCUS_RING_FLUSH} coarse:min-h-[44px]`,
               on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >

@@ -7,7 +7,7 @@
 import React, { useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { FOCUS_RING, HAIRLINE } from '../../../chat/studioDesign';
+import { FOCUS_RING, HAIRLINE, Z } from '../../../chat/studioDesign';
 import { useSheetBehaviour } from '../../conversation/PopSheet';
 import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
@@ -61,7 +61,7 @@ export const SideSheet: React.FC<SideSheetProps> = ({
       tabIndex={-1}
       data-sheet="side"
       className={cn(
-        `${inViewport ? 'fixed' : 'absolute'} inset-y-0 z-[86] flex w-full flex-col ${HAIRLINE} border-y-0 bg-[var(--ds-surface-strong)] shadow-[0_0_48px_rgba(0,0,0,0.16)] backdrop-blur-xl focus:outline-none`,
+        `${inViewport ? 'fixed' : 'absolute'} inset-y-0 ${Z.sheet} flex w-full flex-col ${HAIRLINE} border-y-0 bg-[var(--ds-surface-strong)] shadow-[0_0_48px_rgba(0,0,0,0.16)] backdrop-blur-xl focus:outline-none`,
         side === 'right' ? 'right-0 border-r-0' : 'left-0 border-l-0',
         ff.reducedMotion ? 'animate-fade-in' : 'studio-reveal',
         className
@@ -96,7 +96,7 @@ export const SideSheet: React.FC<SideSheetProps> = ({
 
   const tree = modal ? (
     <>
-      <div className={cn(inViewport ? 'fixed' : 'absolute', 'inset-0 z-[85] bg-black/30 animate-fade-in')} aria-hidden onClick={onClose} data-sheet-scrim />
+      <div className={cn(inViewport ? 'fixed' : 'absolute', 'inset-0 bg-black/30 animate-fade-in', Z.scrim)} aria-hidden onClick={onClose} data-sheet-scrim />
       {panel}
     </>
   ) : (

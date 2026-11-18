@@ -84,8 +84,14 @@ const KIND_LABEL: Record<LineKind, string> = {
   caption: 'Caption',
   sfx: 'Sound effect'
 };
-/** The editor's selection outline: the focus colour (the ink under the Atlas skin). Drawn inline in the page, so the token resolves. */
-const ACCENT = 'var(--ds-focus)';
+/**
+ * The editor's selection outline is drawn on the art, so it takes the spark (selection on art, as SPARK_RING_ON_ART),
+ * never the ink, which vanishes on art of its own tone. Under it runs a wider halo in the page colour, which the spark
+ * clears by 3:1 in both themes, so the pair reads on light and dark art alike. Drawn inline in the page, so the tokens
+ * resolve.
+ */
+const ACCENT = 'var(--ds-spark)';
+const SELECTION_HALO = 'var(--ds-canvas)';
 const INK = '#111111';
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -612,10 +618,11 @@ export function letteringNodes(plans: readonly LetterPlan[], opts: LetteringDraw
       }
       if (opts.selectedLineIds?.has(p.lineId)) {
         const o = planOutline(p);
-        extra.push({
-          tag: 'rect',
-          attrs: { x: r2(o.x - 4), y: r2(o.y - 4), width: r2(o.w + 8), height: r2(o.h + 8), rx: 6, fill: 'none', stroke: ACCENT, 'stroke-width': 1.5, 'stroke-dasharray': '4 3', 'vector-effect': 'non-scaling-stroke', 'data-selection': 'true' }
-        });
+        const box = { x: r2(o.x - 4), y: r2(o.y - 4), width: r2(o.w + 8), height: r2(o.h + 8), rx: 6, fill: 'none', 'stroke-dasharray': '4 3', 'vector-effect': 'non-scaling-stroke' };
+        extra.push(
+          { tag: 'rect', attrs: { ...box, stroke: SELECTION_HALO, 'stroke-width': 3.5, 'data-selection-halo': 'true' } },
+          { tag: 'rect', attrs: { ...box, stroke: ACCENT, 'stroke-width': 1.5, 'data-selection': 'true' } }
+        );
       }
       return {
         tag: 'g',

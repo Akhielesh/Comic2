@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Globe2, Link2, Loader2, Share2 } from 'lucide-react';
 import type { Card } from '../../../shared/comic/doc';
 import type { CardProps } from '../extensions';
-import { STATUS_DOT, TONE_TEXT } from '../../chat/studioDesign';
+import { DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING, STATUS_DOT, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { readinessRows } from './PublishPanel';
@@ -125,7 +125,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
         </div>
       )}
       {card.status === 'failed' && (
-        <p role="alert" className="m-0 mb-3 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="alert" className={`m-0 mb-3 rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
           {card.result?.error || 'That didn’t work. Nothing changed.'}
         </p>
       )}
@@ -141,7 +141,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
             <button
               type="button"
               onClick={() => go()}
-              className={cx(big, 'inline-flex items-center justify-center rounded-xl bg-red-600 text-[13px] font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/50')}
+              className={cx(big, 'inline-flex items-center justify-center rounded-xl text-[13px] font-semibold', DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING)}
             >
               {armed ? 'Tap again to confirm' : card.status === 'failed' ? 'Retry' : card.mode === 'unpublish' ? 'Unpublish' : 'Get new link'}
             </button>
