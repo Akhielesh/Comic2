@@ -272,7 +272,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
         <div className={OVERLINE}>Outputs</div>
         <div className="flex flex-wrap gap-2">
           {outputTargets.map((target) => (
-            <span key={target} className={cn(CHIP, CHIP_VARIANT.outline, INK)}>
+            <span key={target} className={cn(CHIP, CHIP_VARIANT.outline)}>
               {outputTargetLabel(target)}
             </span>
           ))}

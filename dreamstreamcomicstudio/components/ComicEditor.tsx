@@ -886,7 +886,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         />
 
         {state.generationStatus?.isActive && (
-          <div className={cn(CHIP, CHIP_VARIANT.outline, 'hidden sm:inline-flex gap-1.5 shrink-0', INK)}>
+          <div className={cn(CHIP, CHIP_VARIANT.filled, 'hidden sm:inline-flex gap-1.5 shrink-0')}>
             <LiveDot /> Building…
           </div>
         )}

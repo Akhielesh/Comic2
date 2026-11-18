@@ -16,6 +16,23 @@ import {
   PanelPop,
   SelectPop,
 } from '../kit';
+import { cn } from '../../../lib/utils';
+import { Button, Progress } from '../../ds';
+import {
+  CHIP,
+  CHIP_VARIANT,
+  FOCUS_RING,
+  HAIRLINE,
+  INK,
+  MUTED,
+  RADIUS_CONTROL,
+  RADIUS_FEATURE,
+  RADIUS_PANEL,
+  RADIUS_ROUND,
+  SHADOW_SOFT,
+  STATUS_INK,
+  STATUS_SURFACE
+} from '../../chat/studioDesign';
 
 export interface StreamCardHandlers {
   onApprovePlan?: () => void;
@@ -31,14 +48,21 @@ export interface StreamCardHandlers {
   onPublish?: () => void;
 }
 
-const TIER_TINTS: Record<string, string> = { lead: '#2A2030', support: '#202A30', extra: '#1E1E22' };
+/** The placeholder behind a cast sheet that is not drawn yet: one well step per tier, deepest for the lead. */
+const TIER_TINTS: Record<string, string> = {
+  lead: 'bg-[var(--ds-well-strong)]',
+  support: 'bg-[var(--ds-well)]',
+  extra: 'bg-[var(--ds-surface-soft)]'
+};
+/** The small radius (4 px under the skin). */
+const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
 
 // ---- shared shell ---------------------------------------------------------------------
 
 const Surface: React.FC<{ title: string; right?: React.ReactNode; children?: React.ReactNode }> = ({ title, right, children }) => (
-  <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.18)]">
+  <div className={cn('bg-[var(--ds-surface)] p-5', HAIRLINE, SHADOW_SOFT, RADIUS_PANEL)}>
     <div className="mb-3 flex items-center justify-between gap-3">
-      <span className="text-[15px] font-semibold text-[var(--ds-ink)]">{title}</span>
+      <span className="min-w-0 text-[15px] font-semibold text-[var(--ds-ink)]">{title}</span>
       {right}
     </div>
     {children}
@@ -46,21 +70,21 @@ const Surface: React.FC<{ title: string; right?: React.ReactNode; children?: Rea
 );
 
 const Pill: React.FC<{ children: React.ReactNode; accent?: boolean }> = ({ children, accent }) => (
-  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] ${accent ? 'bg-[#D97757]/10 text-[var(--ds-accent)]' : 'bg-[var(--ds-surface-soft)] text-[var(--ds-muted)]'}`}>
+  <span className={cn(CHIP, 'gap-1.5 px-2.5 py-1 text-[12px]', accent ? CHIP_VARIANT.filled : CHIP_VARIANT.outline)}>
     {children}
   </span>
 );
 
 const PrimaryBtn: React.FC<{ children: React.ReactNode; onClick?: () => void }> = ({ children, onClick }) => (
-  <button type="button" onClick={onClick} className="rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)]">
+  <Button type="button" onClick={onClick}>
     {children}
-  </button>
+  </Button>
 );
 
 const GhostBtn: React.FC<{ children: React.ReactNode; onClick?: () => void }> = ({ children, onClick }) => (
-  <button type="button" onClick={onClick} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 py-2 text-[13px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]">
+  <Button type="button" variant="outline" onClick={onClick}>
     {children}
-  </button>
+  </Button>
 );
 
 // ---- cards ----------------------------------------------------------------------------
@@ -74,18 +98,18 @@ const PlanCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCar
   if (scenes.length === 0) {
     return (
       <div className="flex items-center gap-2 text-[13px] text-[var(--ds-muted)]">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" />
+        <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 bg-[var(--ds-ink)]', RADIUS_ROUND)} />
         Paste or type your story in the bar below — I’ll plan the comic before anything spends.
       </div>
     );
   }
   return (
-    <Surface title="Plan" right={<Pill accent>Estimate · <CountUp value={Math.max(0.05, panelTotal * 0.025)} prefix="$" /></Pill>}>
+    <Surface title="Plan" right={<Pill>Estimate · <CountUp value={Math.max(0.05, panelTotal * 0.025)} prefix="$" /></Pill>}>
       <div className="space-y-1.5">
         {plan.beats.slice(0, 6).map((b, i) => (
           <div key={b.id} className="flex items-center justify-between text-[13px]">
             <span className="flex items-center gap-2 truncate">
-              <span className="rounded-md bg-[var(--ds-surface-soft)] px-2 py-0.5 text-[12px] text-[var(--ds-ink)]">Beat {i + 1}</span>
+              <span className={cn('shrink-0 bg-[var(--ds-surface-soft)] px-2 py-0.5 text-[12px]', RADIUS_SM, INK)}>Beat {i + 1}</span>
               <span className="truncate text-[var(--ds-muted)]">{b.synopsis}</span>
             </span>
             <span className="shrink-0 text-[12px] text-[var(--ds-muted)]">{b.panelCount} panel{b.panelCount === 1 ? '' : 's'}</span>
@@ -94,7 +118,7 @@ const PlanCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCar
       </div>
       <div className="mt-3 text-[12px] text-[var(--ds-muted)]">{pages} page{pages === 1 ? '' : 's'} · ~{panelTotal} panels · beat-based plan</div>
       {!done && (
-        <div className="mt-4 flex gap-2">
+        <div className="mt-4 flex flex-wrap gap-2">
           <PrimaryBtn onClick={h.onApprovePlan}>Approve plan</PrimaryBtn>
           <GhostBtn onClick={h.onAdjust}>Adjust</GhostBtn>
         </div>
@@ -112,8 +136,8 @@ const StyleCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCa
       ) : (
         <div className="grid grid-cols-2 gap-3">
           {variants.slice(0, 4).map((v) => (
-            <SelectPop key={v.id} selected={state.selectedStyleId === (v.styleId || v.id)} onClick={() => h.onSelectStyle?.(v.styleId || v.id)} ariaLabel={v.prompt?.slice(0, 40)}>
-              <ImageDevelop src={v.imageUrl} active={false} className="h-28 w-full">
+            <SelectPop key={v.id} selected={state.selectedStyleId === (v.styleId || v.id)} onClick={() => h.onSelectStyle?.(v.styleId || v.id)} ariaLabel={v.prompt?.slice(0, 40)} rounded={RADIUS_PANEL}>
+              <ImageDevelop src={v.imageUrl} active={false} className="h-28 w-full" rounded={RADIUS_PANEL}>
                 <div className="h-28 w-full bg-[var(--ds-well)]" />
               </ImageDevelop>
             </SelectPop>
@@ -141,9 +165,9 @@ const CastCard: React.FC<{ state: ComicState; h: StreamCardHandlers }> = ({ stat
       ) : (
         <div className="flex flex-wrap gap-4">
           {entities.map((e) => (
-            <button key={e.id} type="button" onClick={() => h.onEditEntity?.(e.id)} className="flex w-20 flex-col items-center gap-1.5 text-center">
-              <ImageDevelop src={e.imageUrl} active={e.ready} className="h-16 w-16" rounded="rounded-2xl">
-                <div className="h-16 w-16 rounded-2xl" style={{ background: TIER_TINTS[e.tier] }} />
+            <button key={e.id} type="button" onClick={() => h.onEditEntity?.(e.id)} className={cn('flex w-20 flex-col items-center gap-1.5 text-center', RADIUS_CONTROL, FOCUS_RING)}>
+              <ImageDevelop src={e.imageUrl} active={e.ready} className="h-16 w-16" rounded={RADIUS_FEATURE}>
+                <div className={cn('h-16 w-16', RADIUS_FEATURE, TIER_TINTS[e.tier])} />
               </ImageDevelop>
               <span className="w-full truncate text-[12px] font-semibold text-[var(--ds-ink)]">{e.name}</span>
               <Pill accent={e.tier === 'lead'}>{e.ready ? castTierLabel(e.tier) : 'queued'}</Pill>
@@ -158,8 +182,8 @@ const CastCard: React.FC<{ state: ComicState; h: StreamCardHandlers }> = ({ stat
 const CoverCard: React.FC<{ state: ComicState; h: StreamCardHandlers }> = ({ state, h }) => (
   <Surface title="Cover" right={<span className="text-[12px] text-[var(--ds-muted)]">{state.coverImageUrl ? 'cover ready' : ''}</span>}>
     {state.coverImageUrl ? (
-      <SelectPop selected onClick={h.onSelectCover} ariaLabel="Cover">
-        <ImageDevelop src={state.coverImageUrl} className="aspect-[3/4] w-40" rounded="rounded-xl" />
+      <SelectPop selected onClick={h.onSelectCover} ariaLabel="Cover" rounded={RADIUS_PANEL}>
+        <ImageDevelop src={state.coverImageUrl} className="aspect-[3/4] w-40" rounded={RADIUS_PANEL} />
       </SelectPop>
     ) : (
       <AgentThinking label="Designing a cover direction…" />
@@ -175,9 +199,7 @@ const BuildCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCa
   return (
     <Surface title={card.status === 'done' ? 'Pages' : 'Building'} right={<span className="text-[12px] text-[var(--ds-muted)]">{rendered} of {total || '…'} panels</span>}>
       {card.status !== 'done' && (
-        <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-[var(--ds-well)]">
-          <div className="h-full rounded-full bg-[var(--ds-accent)] transition-[width] duration-500" style={{ width: `${pct}%` }} />
-        </div>
+        <Progress className="mb-3" size="sm" label="Building pages" value={pct} valueText={`${rendered} of ${total || '…'} panels`} tone="making" />
       )}
       {panels.length === 0 ? (
         <AgentThinking label="Rendering pages…" />
@@ -186,11 +208,11 @@ const BuildCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCa
           {panels.slice(0, 12).map((p) => (
             <PanelPop key={p.id}>
               {p.imageUrl ? (
-                <ImageDevelop src={p.imageUrl} className="aspect-square w-full" />
+                <ImageDevelop src={p.imageUrl} className="aspect-square w-full" rounded={RADIUS_PANEL} />
               ) : p.failureReason ? (
-                <button type="button" onClick={() => h.onRetryPanel?.(p.id)} className="grid aspect-square w-full place-items-center rounded-xl border border-red-500/40 bg-red-500/5 text-[11px] text-red-300">retry</button>
+                <button type="button" onClick={() => h.onRetryPanel?.(p.id)} className={cn('grid aspect-square w-full place-items-center border text-[11px] font-medium', RADIUS_PANEL, STATUS_SURFACE.error, STATUS_INK.error, FOCUS_RING)}>retry</button>
               ) : (
-                <div className="studio-shimmer aspect-square w-full rounded-xl" />
+                <div className={cn('studio-shimmer aspect-square w-full', RADIUS_PANEL)} />
               )}
             </PanelPop>
           ))}
