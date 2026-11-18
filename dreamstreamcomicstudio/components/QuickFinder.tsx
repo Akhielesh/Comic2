@@ -7,6 +7,11 @@ import {
 import { sendChatMessageStream } from '../services/chatApi';
 import type { ChatClientContext } from '../apiTypes';
 import { DetailPopover, type PopoverAnchor } from './chat/artifacts/kit';
+import { cn } from '../lib/utils';
+import { ACCENT_SOFT_BG, DENSITY, FOCUS_RING, MUTED, OVERLAY, RADIUS_CONTROL, TONE_TEXT, WRAP_TEXT, Z } from './chat/studioDesign';
+
+/** A quiet text button inside the finder: ink on hover, the 44 px floor under a coarse pointer, the ink focus ring. */
+const QF_BUTTON = cn('inline-flex items-center transition-colors duration-[var(--ds-motion-fast)] ease-[var(--ds-ease)] hover:bg-[var(--ds-hover)] disabled:opacity-40', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING);
 
 // ============================================================================
 // QuickFinder — the global "Ask the AI about this" quick-finder
@@ -114,20 +119,20 @@ const ResultPanel: React.FC<{ prompt: string; onAskInChat: () => void }> = ({ pr
   return (
     <div className="w-[22rem] max-w-full">
       {status === 'loading' && !text ? (
-        <div className="flex items-center gap-2 py-2 text-[13px] text-[var(--ds-muted)]">
-          <Loader2 className="h-4 w-4 animate-spin text-[var(--ds-accent)]" /> Thinking…
+        <div className={cn('flex items-center gap-2 py-2 text-[13px]', MUTED)}>
+          <Loader2 className="h-4 w-4 animate-spin text-[var(--ds-ink)] motion-reduce:animate-none" /> Thinking…
         </div>
       ) : (
-        <div className={`whitespace-pre-wrap break-words text-[13px] leading-relaxed ${status === 'error' ? 'text-rose-600' : 'text-[var(--ds-ink)]'}`}>
+        <div className={cn('whitespace-pre-wrap text-[13px] leading-relaxed', WRAP_TEXT, status === 'error' ? TONE_TEXT.danger : 'text-[var(--ds-ink)]')}>
           {text}
-          {status === 'loading' && <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-[var(--ds-accent)] align-middle" />}
+          {status === 'loading' && <span className="ml-0.5 inline-block h-3.5 w-[2px] bg-[var(--ds-ink)] align-middle motion-safe:animate-pulse" />}
         </div>
       )}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--ds-hairline-soft)] pt-2.5">
-        <button onClick={copy} disabled={!text} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-40">
-          {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
+        <button onClick={copy} disabled={!text} className={cn(QF_BUTTON, 'gap-1.5 px-2 py-1 text-[12px] font-medium hover:text-[var(--ds-ink)]', MUTED)}>
+          {copied ? <Check className={cn('h-3.5 w-3.5', TONE_TEXT.success)} /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
         </button>
-        <button onClick={onAskInChat} className="inline-flex items-center gap-1.5 rounded-lg bg-[#D97757]/10 px-2.5 py-1 text-[12px] font-semibold text-[var(--ds-accent)] transition-colors hover:bg-[#D97757]/20">
+        <button onClick={onAskInChat} className={cn(QF_BUTTON, ACCENT_SOFT_BG, 'gap-1.5 px-2.5 py-1 text-[12px] font-semibold text-[var(--ds-ink)]')}>
           Open in full chat <ArrowUpRight className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -142,7 +147,7 @@ const MenuList: React.FC<{ onPick: (a: QFAction) => void }> = ({ onPick }) => (
       <button
         key={a.id}
         onClick={() => onPick(a)}
-        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+        className={cn(QF_BUTTON, 'flex w-full gap-2.5 px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)]')}
       >
         <a.Icon className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
         <span className="flex-1">{a.label}</span>
@@ -235,7 +240,8 @@ export const QuickFinder: React.FC<{ onAskInChat: (prompt: string) => void }> = 
       {pill && createPortal(
         <div
           data-quickfinder
-          className="fixed z-[115] flex items-center gap-0.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1 shadow-[0_6px_24px_rgba(0,0,0,0.16)] backdrop-blur-xl"
+          // Top of the ladder (Z.tooltip), as before: the toolbar floats over whatever the selection sits in.
+          className={cn(OVERLAY, 'fixed flex items-center gap-0.5 p-1', Z.tooltip)}
           style={{
             top: Math.max(8, pill.anchor.top - 44),
             left: Math.min(Math.max(8, (pill.anchor.left + pill.anchor.right) / 2 - 90), (typeof window !== 'undefined' ? window.innerWidth : 360) - 196)
@@ -246,15 +252,15 @@ export const QuickFinder: React.FC<{ onAskInChat: (prompt: string) => void }> = 
             <button
               key={a.id}
               onClick={() => run(a, pill.text, pill.anchor)}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+              className={cn(QF_BUTTON, 'gap-1 px-2 py-1 text-[12px] font-medium text-[var(--ds-ink)]')}
             >
-              <a.Icon className="h-3.5 w-3.5 text-[var(--ds-accent)]" /> {a.label}
+              <a.Icon className={cn('h-3.5 w-3.5', MUTED)} /> {a.label}
             </button>
           ))}
           <button
             onClick={() => { setMenu({ text: pill.text, anchor: pill.anchor }); setPill(null); }}
             aria-label="More actions"
-            className="inline-flex items-center rounded-lg px-1.5 py-1 text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)]"
+            className={cn(QF_BUTTON, 'px-1.5 py-1 hover:text-[var(--ds-ink)]', MUTED)}
           >
             <ChevronDown className="h-4 w-4" />
           </button>

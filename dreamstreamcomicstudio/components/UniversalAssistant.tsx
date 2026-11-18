@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, BookmarkPlus, Check, RotateCcw, Send, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Bot, BookmarkPlus, Check, RotateCcw, Send, Sparkles, X } from 'lucide-react';
 import { AssistantMessage, AssistantLimitInfo, UniversalAssistantContext } from '../apiTypes';
 import { MessageCard } from './MessageCard';
 import { queryUniversalAssistant } from '../services/geminiService';
@@ -12,6 +12,28 @@ import { useAuth } from '../contexts/AuthContext';
 import { captureError, captureEvent } from '../services/telemetry';
 import { detectSentiment, submitFeedback } from '../services/feedback';
 import { FeedbackButtons } from './feedback/FeedbackButtons';
+import { cn } from '../lib/utils';
+import { Button, IconButton, buttonClasses, useReducedMotion } from './ds';
+import {
+  DENSITY,
+  FADE_IN,
+  FIELD,
+  FOCUS_RING,
+  MUTED,
+  OVERLAY,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  RADIUS_ROUND,
+  RISE_IN,
+  SECTION_ICON_TILE,
+  STATUS_DOT,
+  TONE_TEXT,
+  WRAP_TEXT,
+  Z
+} from './chat/studioDesign';
+
+/** A chat bubble: the panel radius with the corner nearest its speaker tucked to the small radius. */
+const BUBBLE = `${RADIUS_PANEL} px-3.5 py-2.5`;
 
 type ChatItem = {
   id: string;
@@ -79,14 +101,14 @@ const SUGGESTIONS: Array<{ label: string; prompt: string }> = [
   { label: 'Fix my API keys', prompt: 'Help me check and fix my API key configuration.' }
 ];
 
-/** Three-dot typing indicator (chat-native, replaces the old "Processing..." chip). */
+/** Three-dot typing indicator (chat-native, replaces the old "Processing..." chip). Holds still under reduced motion. */
 const TypingDots: React.FC = () => (
-  <div className="flex items-center gap-1 px-3.5 py-2.5 bg-white border-2 border-black rounded-2xl rounded-bl-md w-fit" aria-label="Assistant is typing">
+  <div className={cn(BUBBLE, 'flex w-fit items-center gap-1 rounded-bl-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-canvas)]')} aria-label="Assistant is typing">
     {[0, 1, 2].map((i) => (
       <span
         key={i}
-        className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce"
-        style={{ animationDelay: `${i * 0.15}s`, animationDuration: '0.9s' }}
+        className="size-1.5 rounded-full bg-[var(--ds-muted)] motion-safe:animate-bounce"
+        style={{ animationDelay: `calc(${i} * var(--ds-motion-medium))` }}
       />
     ))}
   </div>
@@ -100,6 +122,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   hideLauncher = false
 }) => {
   const { user } = useAuth();
+  const reducedMotion = useReducedMotion();
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -294,9 +317,18 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
   const showEmptyState = messages.length === 0 && !isSending;
 
+  // Opaque Atlas panel (OVERLAY: the raised step, the overlay edge and shadow). Phones: a bottom sheet on the sheet
+  // layer; from sm a floating panel bottom-left on the same layer, above the page chrome.
   const containerClassName = isMobile
-    ? 'fixed inset-x-0 bottom-0 z-50 h-[78vh] bg-slate-50 border-t-4 border-black rounded-t-2xl shadow-2xl flex flex-col overflow-hidden'
-    : 'fixed bottom-6 left-6 z-50 w-[400px] h-[600px] max-h-[calc(100vh-3rem)] bg-slate-50 border-4 border-black rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,0.45)] flex flex-col overflow-hidden';
+    ? cn(OVERLAY, 'fixed inset-x-0 bottom-0 flex h-[78vh] flex-col overflow-hidden rounded-b-none', Z.sheet)
+    : cn(OVERLAY, 'fixed bottom-6 left-6 flex h-[600px] max-h-[calc(100vh-3rem)] w-[400px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden', Z.sheet);
+  // Reduced motion: the launcher and the panel appear and leave without travelling or scaling.
+  const pop = reducedMotion
+    ? { initial: false as const, animate: { opacity: 1, scale: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
+    : { initial: { opacity: 0, scale: 0.6 }, animate: { opacity: 1, scale: 1 }, exit: { opacity: 0, scale: 0.6 }, transition: { type: 'spring' as const, stiffness: 420, damping: 28 } };
+  const rise = reducedMotion
+    ? { initial: false as const, animate: { opacity: 1, y: 0, scale: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
+    : { initial: { opacity: 0, y: 24, scale: 0.96 }, animate: { opacity: 1, y: 0, scale: 1 }, exit: { opacity: 0, y: 24, scale: 0.96 }, transition: { type: 'spring' as const, stiffness: 380, damping: 32 } };
 
   return (
     <>
@@ -304,15 +336,12 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         {!isOpen && !hideLauncher && (
           <motion.button
             type="button"
-            initial={{ opacity: 0, scale: 0.6 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.6 }}
-            transition={{ type: 'spring', stiffness: 420, damping: 28 }}
+            {...pop}
             onClick={() => setIsOpen(true)}
-            className="fixed bottom-6 left-6 z-50 w-14 h-14 bg-black text-brand-yellow border-4 border-white rounded-full shadow-comic hover:scale-105 active:scale-95 transition-transform flex items-center justify-center"
+            className={cn(buttonClasses({ variant: 'default', size: 'icon' }), 'fixed bottom-6 left-6 size-14 shadow-[shadow:var(--ds-shadow-lift)]', RADIUS_ROUND, Z.chrome)}
             aria-label="Open assistant"
           >
-            <Sparkles className="w-6 h-6" />
+            <Sparkles className="size-6" aria-hidden="true" />
           </motion.button>
         )}
       </AnimatePresence>
@@ -320,105 +349,89 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ opacity: 0, y: 24, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 24, scale: 0.96 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+            {...rise}
             className={containerClassName}
             role="dialog"
             aria-label="DreamStream assistant"
           >
             {/* Header: identity + two quiet actions. Status lives here, not in the footer. */}
-            <div className="bg-black text-white px-4 py-3 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="relative w-9 h-9 rounded-full bg-brand-yellow text-black border-2 border-white flex items-center justify-center shrink-0">
-                  <Bot size={18} />
-                  <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-400 border-2 border-black" aria-hidden />
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--ds-hairline)] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className={cn(SECTION_ICON_TILE, 'relative')}>
+                  <Bot size={18} aria-hidden="true" />
+                  <span className={cn('absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[var(--ds-raised)]', STATUS_DOT.healthy)} aria-hidden />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-display text-lg leading-none truncate">Assistant</p>
-                  <p className="text-[10px] text-white/60 truncate">
+                  <p className="truncate text-[15px] font-semibold leading-5 text-[var(--ds-ink)]">Assistant</p>
+                  <p className={cn('truncate text-[11px] leading-4', MUTED)}>
                     {isAuthenticated ? 'Knows your projects & account' : 'Guest mode'}
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex shrink-0 items-center gap-1">
                 {messages.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={clearConversation}
-                    title="New conversation"
-                    aria-label="New conversation"
-                    className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-                  >
+                  <IconButton label="New conversation" onClick={clearConversation} className={MUTED}>
                     <RotateCcw size={16} />
-                  </button>
+                  </IconButton>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setIsOpen(false)}
-                  aria-label="Close assistant"
-                  className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-                >
+                <IconButton label="Close assistant" title={null} onClick={() => setIsOpen(false)} className={MUTED}>
                   <X size={18} />
-                </button>
+                </IconButton>
               </div>
             </div>
 
             {/* Conversation */}
             <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
               {showEmptyState && (
-                <div className="h-full flex flex-col items-center justify-center text-center px-4 animate-fade-in">
-                  <div className="w-14 h-14 rounded-2xl bg-brand-yellow border-2 border-black shadow-comic flex items-center justify-center mb-4">
-                    <Sparkles size={24} />
+                <div className={cn("flex h-full flex-col items-center justify-center px-4 text-center", FADE_IN)}>
+                  <div className={cn(SECTION_ICON_TILE, 'mb-4 size-12')}>
+                    <Sparkles size={22} aria-hidden="true" />
                   </div>
-                  <p className="font-display text-2xl">How can I help?</p>
-                  <p className="text-xs text-slate-500 mt-1 mb-5 max-w-[15rem]">
+                  <p className="text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">How can I help?</p>
+                  <p className={cn('mb-5 mt-1 max-w-[15rem] text-[length:var(--ds-text-sm)]', MUTED)}>
                     Ask about your projects, account, generation setup, or anything DreamStream.
                   </p>
                   <div className="flex flex-col gap-2 w-full max-w-[16rem]">
                     {SUGGESTIONS.map((suggestion) => (
-                      <button
+                      <Button
                         key={suggestion.label}
+                        variant="outline"
                         onClick={() => void handleSend(suggestion.prompt)}
-                        className="w-full text-left text-sm font-bold border-2 border-black rounded-xl px-3.5 py-2.5 bg-white hover:bg-brand-yellow hover:-translate-y-0.5 transition-all shadow-comic-hover"
+                        className="h-auto min-h-10 w-full justify-start px-3.5 py-2.5 text-left"
                       >
                         {suggestion.label}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 </div>
               )}
 
               {messages.map((message) => (
-                <motion.div
+                <div
                   key={message.id}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.16, ease: 'easeOut' }}
-                  className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+                  className={cn(RISE_IN, message.role === 'user' ? 'flex justify-end' : 'flex justify-start')}
                 >
                   {message.role === 'user' ? (
-                    <div className="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-black text-white text-sm font-medium whitespace-pre-wrap">
+                    <div className={cn(BUBBLE, 'max-w-[85%] whitespace-pre-wrap rounded-br-[var(--ds-radius-sm)] bg-[var(--ds-ink)] text-[length:var(--ds-text-base)] text-[var(--ds-canvas)]', WRAP_TEXT)}>
                       {message.text}
                     </div>
                   ) : (
                     <div className="max-w-[90%] group">
-                      <div className="bg-white border-2 border-black rounded-2xl rounded-bl-md px-1 py-0.5">
+                      <div className={cn(RADIUS_PANEL, 'rounded-bl-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] px-1 py-0.5')}>
                         {message.offTopicBlocked && (
-                          <div className="text-[10px] font-bold uppercase tracking-wide text-brand-red px-2.5 pt-2">
-                            Platform scope enforced
+                          <div className={cn('flex items-center gap-1 px-2.5 pt-2 text-[11px] font-semibold leading-4', TONE_TEXT.danger)}>
+                            <AlertTriangle size={12} aria-hidden="true" /> Platform scope enforced
                           </div>
                         )}
                         <MessageCard text={message.text} />
                       </div>
                       {/* Actions: always visible on touch screens (no hover there); on
                           pointer devices they reveal on hover/focus to keep the thread clean. */}
-                      <div className="flex items-center gap-2 mt-1 px-1 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 px-1 transition-opacity duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                         {onSaveCreativeDirection && message.text.trim() && (
                           <button
                             onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
-                            className="inline-flex items-center gap-1 text-[11px] font-bold text-brand-blue hover:underline"
+                            className={cn('inline-flex min-h-6 items-center gap-1 px-1 text-[11px] font-medium text-[var(--ds-ink)] underline-offset-2 hover:underline', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING)}
                           >
                             {savedMsgIds.has(message.id)
                               ? <><Check size={12} /> Saved to story</>
@@ -436,19 +449,19 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                       </div>
                     </div>
                   )}
-                </motion.div>
+                </div>
               ))}
 
               {isSending && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
+                <div className={cn(FADE_IN, 'flex justify-start')}>
                   <TypingDots />
-                </motion.div>
+                </div>
               )}
               <div ref={messagesEndRef} />
             </div>
 
             {/* Composer: one calm row; meta only when it matters. */}
-            <div className="border-t-2 border-black p-3 bg-white shrink-0">
+            <div className="shrink-0 border-t border-[var(--ds-hairline)] p-3">
               <div className="flex items-center gap-2">
                 <input
                   ref={inputRef}
@@ -462,24 +475,25 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                     }
                   }}
                   placeholder="Ask anything about DreamStream…"
-                  className="flex-1 border-2 border-black rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-yellow transition-shadow"
+                  className={cn(FIELD, 'h-11 min-w-0 flex-1 px-3.5 text-base md:text-[length:var(--ds-text-base)]')}
                 />
-                <button
+                <Button
                   type="button"
+                  size="icon"
                   onClick={() => void handleSend()}
                   disabled={isSending || !input.trim()}
                   aria-label="Send message"
-                  className="h-11 w-11 shrink-0 rounded-xl border-2 border-black bg-brand-yellow hover:bg-black hover:text-brand-yellow active:scale-95 transition-all disabled:opacity-40 disabled:hover:bg-brand-yellow disabled:hover:text-black flex items-center justify-center"
+                  className="size-11"
                 >
-                  <Send size={16} />
-                </button>
+                  <Send size={16} aria-hidden="true" />
+                </Button>
               </div>
 
               {(statusMessage || (lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number')) && (
                 <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px]">
-                  <span className="text-brand-red truncate">{statusMessage}</span>
+                  <span className={cn('min-w-0 truncate', TONE_TEXT.danger)}>{statusMessage}</span>
                   {lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number' && (
-                    <span className={`shrink-0 ${lastLimitInfo.remaining <= 5 ? 'text-brand-red font-bold' : 'text-slate-400'}`}>
+                    <span className={cn('shrink-0 tabular-nums', lastLimitInfo.remaining <= 5 ? `font-semibold ${TONE_TEXT.danger}` : MUTED)}>
                       {lastLimitInfo.remaining}/{lastLimitInfo.limit} left
                     </span>
                   )}
