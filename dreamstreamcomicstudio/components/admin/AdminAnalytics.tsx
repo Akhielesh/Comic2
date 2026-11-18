@@ -21,7 +21,6 @@ import {
   OVERLINE,
   SCRIM,
   SECTION_CARD,
-  SECTION_ICON_TILE,
   STATUS_CHIP,
   STATUS_CHIP_TONE,
   STATUS_INK,
@@ -50,10 +49,12 @@ const LIST = cn(SECTION_CARD, 'divide-y divide-[var(--ds-hairline-soft)]');
 const ROW_META = 'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]';
 const ROW_TEXT = cn('mt-0.5 text-[11px] [overflow-wrap:anywhere]', MUTED);
 const EMPTY = cn('p-3 text-xs', MUTED);
+/** SECTION_ICON_TILE's shape without its ink, so a tone is chosen against the ink, never stacked on it. */
+const ICON_TILE = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-well)]';
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: number; tone?: StatusTone }> = ({ icon, label, value, tone }) => (
   <div className={cn(SECTION_CARD, 'flex items-center gap-3 p-3')}>
-    <div className={cn(SECTION_ICON_TILE, tone && TONE_TEXT[tone])}>{icon}</div>
+    <div className={cn(ICON_TILE, tone ? TONE_TEXT[tone] : 'text-[var(--ds-ink)]')}>{icon}</div>
     <div className="min-w-0">
       <div className={cn(TEXT_XL, 'font-semibold tabular-nums')}>{value.toLocaleString()}</div>
       <div className={OVERLINE}>{label}</div>
