@@ -18,12 +18,19 @@ import { useModelSourceScope } from '../hooks/useModelSourceScope';
 import { PROVIDERS_ORDERED, getProviderDef } from '../shared/providers';
 import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import {
-  GLASS, HAIRLINE, SHADOW_SOFT, INK, MUTED, HEADING, TRANSITION, ACCENT_TEXT, ACCENT_SOFT_BG, MENU
+  HAIRLINE, INK, MUTED, TRANSITION, ACCENT_SOFT_BG, CHIP as CHIP_BASE, CHIP_VARIANT, DENSITY, FIELD, FOCUS_ITEM, FOCUS_RING,
+  OVERLAY, OVERLINE, RADIUS_CONTROL, SECTION_CARD, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, TONE_TEXT
 } from './chat/studioDesign';
+import { cn } from '../lib/utils';
 
-const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl`;
-const SELECT = `${HAIRLINE} rounded-lg px-2 py-1 text-xs bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] outline-none ${TRANSITION}`;
-const CHIP = `text-[9px] font-semibold uppercase px-1 py-0.5 rounded ${HAIRLINE} bg-[var(--ds-well)] ${MUTED} shrink-0`;
+/** An opaque settings card (SECTION_CARD: the surface, a hairline, the soft shadow, the panel radius). */
+const PANEL = SECTION_CARD;
+/** A compact native select on the FIELD recipe (16 px on phones so iOS does not zoom). */
+const SELECT = `${FIELD} min-w-0 max-w-full px-2 py-1 text-base md:text-xs ${DENSITY.coarse}`;
+/** A neutral source / count chip (no hue: hue only carries status). */
+const CHIP = cn(CHIP_BASE, CHIP_VARIANT.outline, 'shrink-0 px-1.5 text-[10px]');
+/** An inline callout that asks for a look (the attention status), always with its icon. */
+const ATTENTION_NOTE = cn('flex gap-1.5 border p-2 text-[11px] text-[var(--ds-ink)]', RADIUS_CONTROL, STATUS_SURFACE.attention);
 
 // Planning stages that need structured (JSON) output.
 const STRUCTURED_TEXT_STAGES: { stage: string; label: string }[] = [
@@ -48,7 +55,7 @@ const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) => {
 
 const DownloadOnlyBadge: React.FC = () => (
   <span
-    className="text-[9px] font-semibold uppercase px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-600 shrink-0"
+    className={cn(STATUS_CHIP, STATUS_CHIP_TONE.attention, 'shrink-0 px-1.5 text-[10px]')}
     title="Listed on NVIDIA Build but download-only — not callable via the hosted API"
   >
     Download-only
@@ -68,7 +75,7 @@ const CapBadges: React.FC<{ model?: CatalogModel }> = ({ model }) => {
   if (c.isPremium) tags.push('Premium');
   return (
     <div className="flex flex-wrap gap-1 mt-1">
-      {tags.map((t) => <span key={t} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well)] ${MUTED}`}>{t}</span>)}
+      {tags.map((t) => <span key={t} className={cn(CHIP_BASE, CHIP_VARIANT.outline, 'text-[10px]')}>{t}</span>)}
     </div>
   );
 };
@@ -102,48 +109,49 @@ const Slot: React.FC<{
   };
 
   const rowClass = (id: string) =>
-    `w-full text-left px-2 py-1.5 text-sm hover:bg-[var(--ds-hover)] border-b border-[var(--ds-hairline)] flex items-center gap-1.5 flex-wrap ${TRANSITION} ${id === selectedId ? ACCENT_SOFT_BG : ''}`;
+    cn('flex w-full flex-wrap items-center gap-1.5 border-b border-[var(--ds-hairline)] px-2 py-1.5 text-left text-sm hover:bg-[var(--ds-overlay-hover)]', TRANSITION, DENSITY.coarse, FOCUS_ITEM, id === selectedId && ACCENT_SOFT_BG);
 
   return (
-    <div className={`${HAIRLINE} rounded-xl p-3 bg-[var(--ds-surface-soft)]`}>
+    <div className={cn('min-w-0 bg-[var(--ds-surface-soft)] p-3', HAIRLINE, RADIUS_CONTROL)}>
       <div className={`flex items-center gap-2 text-sm font-semibold mb-2 ${INK}`}>{icon} {label}</div>
 
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`w-full flex items-center justify-between gap-2 ${HAIRLINE} rounded-lg px-2 py-1.5 text-sm bg-[var(--ds-surface)] text-left ${TRANSITION}`}
+        aria-expanded={open}
+        className={cn(FIELD, 'flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left text-sm', DENSITY.coarse)}
       >
-        <span className="truncate flex items-center gap-1.5">
+        <span className="flex min-w-0 items-center gap-1.5 truncate">
           {selected ? (
             <>
               <SourceBadge source={selected.source} />
               <span className={`truncate ${INK}`}>{selected.name}</span>
-              {selected.isFree && <span className="text-[10px] font-semibold text-green-600">· free</span>}
+              {selected.isFree && <span className={cn('shrink-0 text-[10px] font-semibold', MUTED)}>· free</span>}
             </>
           ) : (
             <span className={MUTED}>Auto — best model, free-first (recommended)</span>
           )}
         </span>
-        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${MUTED} ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${MUTED} ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
-        <div className={`mt-2 ${MENU} overflow-hidden`}>
+        <div className={cn(OVERLAY, 'mt-2 overflow-hidden')}>
           <div className="relative border-b border-[var(--ds-hairline)]">
-            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--ds-muted)]" />
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--ds-muted)]" aria-hidden="true" />
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${label.toLowerCase()} models or source…`}
-              className="w-full pl-7 pr-2 py-1.5 text-sm bg-transparent focus:outline-none text-[var(--ds-ink)]"
+              className="w-full bg-transparent py-1.5 pl-7 pr-2 text-base text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] focus:outline-none md:text-sm"
             />
           </div>
           <div className="max-h-60 overflow-y-auto">
             <button
               type="button"
               onClick={() => choose(null)}
-              className={`w-full text-left px-2 py-1.5 text-sm hover:bg-[var(--ds-hover)] border-b border-[var(--ds-hairline)] ${TRANSITION} ${selectedId ? '' : `${ACCENT_SOFT_BG} font-semibold`}`}
+              className={cn('w-full border-b border-[var(--ds-hairline)] px-2 py-1.5 text-left text-sm hover:bg-[var(--ds-overlay-hover)]', TRANSITION, DENSITY.coarse, FOCUS_ITEM, !selectedId && `${ACCENT_SOFT_BG} font-semibold`)}
             >
               Auto — best model, free-first
             </button>
@@ -166,8 +174,8 @@ const Slot: React.FC<{
                       <SourceBadge source={m.source} />
                       <span className={`truncate flex-1 min-w-0 ${INK}`}>{m.name}</span>
                       {dl && <DownloadOnlyBadge />}
-                      {m.isFree && !dl && <span className="text-[10px] font-semibold text-green-600">free</span>}
-                      {m.id === selectedId && <Check className={`w-3.5 h-3.5 ${ACCENT_TEXT} shrink-0`} />}
+                      {m.isFree && !dl && <span className={cn('text-[10px] font-semibold', MUTED)}>free</span>}
+                      {m.id === selectedId && <Check className="w-3.5 h-3.5 shrink-0 text-[var(--ds-ink)]" />}
                     </button>
                   );
                 }
@@ -199,13 +207,13 @@ const Slot: React.FC<{
                           <SourceBadge source={m.source} />
                           <span className={`font-semibold shrink-0 ${INK}`}>{sourceShortLabel(m.source)}</span>
                           {dl && <DownloadOnlyBadge />}
-                          {m.isFree && !dl && <span className="text-[10px] font-semibold text-green-600">free</span>}
+                          {m.isFree && !dl && <span className={cn('text-[10px] font-semibold', MUTED)}>free</span>}
                           {g.differences.map((axis) => (
-                            <span key={axis} className={`text-[9px] px-1 py-0.5 rounded ${HAIRLINE} bg-[var(--ds-surface)] ${MUTED}`}>
+                            <span key={axis} className={cn(CHIP_BASE, CHIP_VARIANT.outline, 'px-1.5 text-[10px]')}>
                               {axisDisplay(m, axis)}
                             </span>
                           ))}
-                          {m.id === selectedId && <Check className={`w-3.5 h-3.5 ${ACCENT_TEXT} shrink-0 ml-auto`} />}
+                          {m.id === selectedId && <Check className="ml-auto w-3.5 h-3.5 shrink-0 text-[var(--ds-ink)]" />}
                         </button>
                       );
                     })}
@@ -223,13 +231,13 @@ const Slot: React.FC<{
         <div className={`text-[11px] ${MUTED} mt-1`}>Auto-selected (prefers free when available).</div>
       )}
       {selected && slot === 'image' && !getCapabilities(selected).multiImageRefs && (
-        <div className="text-[11px] text-amber-600 mt-1 flex items-start gap-1">
+        <div className={cn('mt-1 flex items-start gap-1 text-[11px]', TONE_TEXT.warning)}>
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           {featureSupport(getCapabilities(selected), 'character-consistency').reason}
         </div>
       )}
       {selected && slot === 'text' && !getCapabilities(selected).structuredJson && (
-        <div className="text-[11px] text-amber-600 mt-1 flex items-start gap-1">
+        <div className={cn('mt-1 flex items-start gap-1 text-[11px]', TONE_TEXT.warning)}>
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           No structured-output mode — planning steps (script, world, panels, audit) will use a JSON-capable model instead.
         </div>
@@ -286,7 +294,7 @@ export const ModelSelectionPanel: React.FC = () => {
   return (
     <div className={`${PANEL} p-4 space-y-3`}>
       <div>
-        <h4 className={`${HEADING} text-base flex items-center gap-2`}><Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} /> Default models</h4>
+        <h4 className="flex items-center gap-2 text-[length:var(--ds-text-base)] font-semibold leading-5 text-[var(--ds-ink)]"><Sparkles className={`w-4 h-4 shrink-0 ${MUTED}`} aria-hidden="true" /> Default models</h4>
         <p className={`text-[11px] ${MUTED}`}>Search and pick the image and text models, or leave on Auto. Each model shows its provider — the source you pick is the one billed and used.</p>
         {sourceScope.reason === 'connected' && (
           <p className={`text-[11px] ${MUTED} mt-1`}>
@@ -297,7 +305,7 @@ export const ModelSelectionPanel: React.FC = () => {
           </p>
         )}
         {sourceScope.reason === 'none' && (
-          <p className="text-[11px] text-red-600 font-semibold mt-1 flex items-start gap-1">
+          <p className={cn('mt-1 flex items-start gap-1 text-[11px] font-semibold', TONE_TEXT.danger)}>
             <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
             All model sources are off in Settings → Providers, so there are no models to pick.
           </p>
@@ -305,8 +313,8 @@ export const ModelSelectionPanel: React.FC = () => {
       </div>
 
       {/* Hard source lock — restrict the whole library AND all routing to one source. */}
-      <div className={`${HAIRLINE} rounded-xl p-2.5 ${locked ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]'}`}>
-        <label className={`flex items-center gap-2 text-xs font-semibold ${INK}`}>
+      <div className={cn('p-2.5', HAIRLINE, RADIUS_CONTROL, locked ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]')}>
+        <label className={`flex flex-wrap items-center gap-2 text-xs font-semibold ${INK}`}>
           <Lock className="w-3.5 h-3.5 shrink-0" />
           Lock to one provider
           <select
@@ -330,15 +338,15 @@ export const ModelSelectionPanel: React.FC = () => {
       </div>
 
       {noConnectedKey && (
-        <div className={`text-[11px] bg-amber-500/10 ${HAIRLINE} rounded-xl p-2 flex gap-1.5 ${INK}`}>
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+        <div className={ATTENTION_NOTE}>
+          <AlertTriangle className={cn('w-3.5 h-3.5 shrink-0 mt-0.5', STATUS_INK.attention)} />
           Add a provider key above to use these models for generation. Platform-served providers (OpenRouter, NVIDIA, Gemini) also work on the shared allowance.
         </div>
       )}
 
       {!loading && !degraded && (
-        <div className={`${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] p-2.5 text-xs space-y-1.5`}>
-          <div className={`text-[10px] font-semibold uppercase ${MUTED}`}>Active generation sources</div>
+        <div className={cn('space-y-1.5 bg-[var(--ds-surface-soft)] p-2.5 text-xs', HAIRLINE, RADIUS_CONTROL)}>
+          <div className={OVERLINE}>Active generation sources</div>
           {[
             { slot: 'text' as const, label: 'Text', model: textModelObj, source: sel.textSource ?? sel.preferredTextSource },
             { slot: 'image' as const, label: 'Image', model: imageModelObj, source: sel.imageSource ?? sel.preferredImageSource }
@@ -354,18 +362,18 @@ export const ModelSelectionPanel: React.FC = () => {
                 ) : (
                   <>
                     <SourceBadge source={src} />
-                    <span className={`truncate max-w-[11rem] ${INK}`}>{pinned ? model!.name : 'Auto (default source)'}</span>
+                    <span className={`min-w-0 truncate max-w-[11rem] ${INK}`}>{pinned ? model!.name : 'Auto (default source)'}</span>
                     {!sourceAvailable(src as ModelSourceId) ? (
-                      <span className="text-amber-600 font-semibold flex items-center gap-0.5">
-                        <AlertTriangle className="w-3 h-3" /> {SOURCE_LABEL[src]}{sourceUnavailableNote(src as ModelSourceId)} — pick another model or fix it in Settings
+                      <span className={cn('flex items-center gap-0.5 font-semibold', TONE_TEXT.warning)}>
+                        <AlertTriangle className="w-3 h-3 shrink-0" /> {SOURCE_LABEL[src]}{sourceUnavailableNote(src as ModelSourceId)} — pick another model or fix it in Settings
                       </span>
                     ) : key ? (
-                      <span className="text-green-600 font-semibold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
+                      <span className={cn('flex min-w-0 items-center gap-0.5 font-semibold', TONE_TEXT.success)}><Check className="w-3 h-3 shrink-0" /> <span className="truncate">{key.label}</span></span>
                     ) : getProviderDef(src)?.platformServed ? (
                       <span className={`${MUTED} flex items-center gap-0.5`}>platform-served</span>
                     ) : (
-                      <span className="text-amber-600 font-semibold flex items-center gap-0.5">
-                        <AlertTriangle className="w-3 h-3" /> No {SOURCE_LABEL[src]} key — add one above
+                      <span className={cn('flex items-center gap-0.5 font-semibold', TONE_TEXT.warning)}>
+                        <AlertTriangle className="w-3 h-3 shrink-0" /> No {SOURCE_LABEL[src]} key — add one above
                       </span>
                     )}
                   </>
@@ -375,17 +383,17 @@ export const ModelSelectionPanel: React.FC = () => {
           })}
 
           <div className="pt-1.5 mt-0.5 border-t border-dashed border-[var(--ds-hairline)]">
-            <div className={`text-[10px] font-semibold uppercase ${MUTED} mb-1`}>
-              Preferred default source <span className="font-normal normal-case opacity-70">
+            <div className={cn('mb-1', OVERLINE)}>
+              Preferred default source <span className="font-normal normal-case tracking-normal">
                 {locked ? `— overridden while locked to ${SOURCE_LABEL[locked]}` : '— used for Auto, when no model is pinned'}
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {([
                 { slot: 'text' as ModelSlot, label: 'Text', value: sel.preferredTextSource },
                 { slot: 'image' as ModelSlot, label: 'Image', value: sel.preferredImageSource }
               ]).map(({ slot, label, value }) => (
-                <label key={slot} className={`flex flex-col gap-0.5 ${locked ? 'opacity-50' : ''}`}>
+                <label key={slot} className={`flex min-w-0 flex-col gap-0.5 ${locked ? 'opacity-50' : ''}`}>
                   <span className={`font-semibold ${INK}`}>{label}</span>
                   <select
                     value={locked ? '' : (value || '')}
@@ -406,9 +414,9 @@ export const ModelSelectionPanel: React.FC = () => {
       )}
 
       {loading ? (
-        <div className={`flex items-center gap-2 ${MUTED} text-sm py-4`}><Loader2 className="w-4 h-4 animate-spin" /> Loading live model catalog…</div>
+        <div className={`flex items-center gap-2 ${MUTED} text-sm py-4`}><Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> Loading live model catalog…</div>
       ) : degraded ? (
-        <div className={`text-[11px] bg-amber-500/10 ${HAIRLINE} rounded-xl p-2 ${INK}`}>Live catalog unavailable — Auto will be used. Add an OpenRouter key or set OPENROUTER_API_KEY.</div>
+        <div className={ATTENTION_NOTE}><AlertTriangle className={cn('w-3.5 h-3.5 shrink-0 mt-0.5', STATUS_INK.attention)} />Live catalog unavailable — Auto will be used. Add an OpenRouter key or set OPENROUTER_API_KEY.</div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
           <Slot slot="image" icon={<ImageIcon className="w-4 h-4" />} label="Image" models={imageModels} selectedId={sel.imageModel} />
@@ -421,7 +429,8 @@ export const ModelSelectionPanel: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
-            className={`text-[11px] font-semibold uppercase tracking-wide ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION}`}
+            aria-expanded={showAdvanced}
+            className={cn(OVERLINE, 'hover:text-[var(--ds-ink)]', RADIUS_CONTROL, TRANSITION, DENSITY.coarse, FOCUS_RING)}
           >
             {showAdvanced ? '▾' : '▸'} Advanced — per-stage text model
           </button>
@@ -455,7 +464,7 @@ export const ModelSelectionPanel: React.FC = () => {
                       ))}
                     </select>
                     {lacksJson && (
-                      <div className="text-[11px] text-amber-600 flex items-start gap-1">
+                      <div className={cn('flex items-start gap-1 text-[11px]', TONE_TEXT.warning)}>
                         <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
                         No structured-output mode — the server will use a JSON-capable model instead.
                       </div>

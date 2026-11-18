@@ -45,36 +45,49 @@ import {
   type ByokFallbackMode
 } from '../services/usageAllowance';
 import {
-  GLASS, HAIRLINE, SHADOW_SOFT, INK, MUTED, HEADING, LABEL, TRANSITION,
-  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, CONTROL_BTN, TONE_TEXT, TONE_SURFACE
+  HAIRLINE, INK, MUTED, TRANSITION, ACCENT_BG, ACCENT_SOFT_BG, CHIP, CHIP_VARIANT, DENSITY, FIELD, FOCUS_RING, OVERLINE,
+  RADIUS_CONTROL, RADIUS_PILL, SECTION_CARD, SEGMENTED_ACTIVE_FILL, SEGMENTED_ITEM, SEGMENTED_TRACK, STATUS_CHIP,
+  STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, TONE_FILL, TONE_TEXT, WRAP_TEXT, type StatusState
 } from './chat/studioDesign';
+import { cn } from '../lib/utils';
+import { Button, IconButton } from './ds';
 
 // ── Shared bits ─────────────────────────────────────────────────────────────
 
-const SECTION_LABEL = `${LABEL} px-0.5`;
-const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl`;
-const INPUT = `w-full ${HAIRLINE} rounded-xl px-3 py-2 text-sm bg-[var(--ds-surface-soft)] outline-none focus:border-[var(--ds-accent)] ${TRANSITION} text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)]`;
+const SECTION_LABEL = `${OVERLINE} px-0.5`;
+/** An opaque settings card: the surface, a hairline, the soft shadow, the panel radius (SECTION_CARD). */
+const PANEL = SECTION_CARD;
+/** A card's own title: the body face, semibold (Atlas card titles are never the display face). */
+const CARD_HEAD = 'text-[length:var(--ds-text-base)] font-semibold leading-5 text-[var(--ds-ink)]';
+/** A text field on the FIELD recipe: 16 px on phones (no iOS zoom), 14 px from md. */
+const INPUT = `${FIELD} w-full min-w-0 px-3 py-2 text-base md:text-[length:var(--ds-text-base)] ${DENSITY.coarse}`;
+/** A status chip with its words: the one status vocabulary, the hue only repeats the word. */
+const statusChip = (state: StatusState) => cn(STATUS_CHIP, STATUS_CHIP_TONE[state]);
 
 const LinkPill: React.FC<{ href: string; icon: React.ReactNode; children: React.ReactNode; accent?: boolean }> = ({ href, icon, children, accent }) => (
   <a
     href={href}
     target="_blank"
     rel="noreferrer"
-    className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-full ${HAIRLINE} ${TRANSITION} ${
-      accent ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} hover:bg-[#D97757]/20` : `bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`
-    }`}
+    className={cn(
+      'inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold hover:bg-[var(--ds-hover)]',
+      HAIRLINE,
+      RADIUS_PILL,
+      TRANSITION,
+      DENSITY.coarse,
+      FOCUS_RING,
+      accent ? `${ACCENT_SOFT_BG} text-[var(--ds-ink)]` : `bg-[var(--ds-surface-soft)] ${MUTED}`
+    )}
   >
     {icon}{children}<ExternalLink className="w-3 h-3 opacity-60" />
   </a>
 );
 
-const PrimaryBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', children, ...rest }) => (
-  <button
-    {...rest}
-    className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION} disabled:opacity-40 ${className}`}
-  >
+/** The card's one primary action: the ink Button, small. */
+const PrimaryBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className, children, type, ...rest }) => (
+  <Button {...rest} type={type ?? 'button'} size="sm" className={className}>
     {children}
-  </button>
+  </Button>
 );
 
 // ── MCP servers (custom connectors) ──────────────────────────────────────────
@@ -105,8 +118,8 @@ const McpServersPanel: React.FC = () => {
   return (
     <div className={`${PANEL} p-4`}>
       <div className="flex items-center gap-2">
-        <Server className={`w-4 h-4 ${ACCENT_TEXT}`} />
-        <h4 className={`${HEADING} text-sm`}>Custom MCP servers</h4>
+        <Server className={`w-4 h-4 shrink-0 ${MUTED}`} aria-hidden="true" />
+        <h4 className={CARD_HEAD}>Custom MCP servers</h4>
       </div>
       <p className={`text-[11px] ${MUTED} mt-1 mb-3`}>
         Add your own remote MCP servers (https). Their tools appear as connectors in the chat composer.
@@ -114,13 +127,13 @@ const McpServersPanel: React.FC = () => {
       </p>
 
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">Recommended</span>
+        <span className={OVERLINE}>Recommended</span>
         {RECOMMENDED_MCP.map((m) => (
           <button
             key={m.url}
             type="button"
             onClick={() => { setName(m.name); setUrl(m.url); }}
-            className={`inline-flex items-center gap-1 ${HAIRLINE} rounded-full px-2.5 py-1 text-[11px] font-medium bg-[var(--ds-surface-soft)] ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}
+            className={cn(CHIP, CHIP_VARIANT.outline, 'px-2.5 py-1 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', TRANSITION, DENSITY.coarse, FOCUS_RING)}
             title={`Prefill ${m.name} — then paste your API token below`}
           >
             <Plus className="w-3 h-3" /> {m.name}
@@ -132,13 +145,13 @@ const McpServersPanel: React.FC = () => {
       {servers.length > 0 && (
         <div className="space-y-1.5 mb-3">
           {servers.map((s) => (
-            <div key={s.id} className={`flex items-center gap-2 ${HAIRLINE} rounded-xl px-2.5 py-1.5 bg-[var(--ds-surface-soft)]`}>
-              <Server className="w-3.5 h-3.5 shrink-0 text-violet-500" />
+            <div key={s.id} className={cn('flex items-center gap-2 bg-[var(--ds-surface-soft)] px-2.5 py-1.5', HAIRLINE, RADIUS_CONTROL)}>
+              <Server className={`w-3.5 h-3.5 shrink-0 ${MUTED}`} aria-hidden="true" />
               <span className="min-w-0 flex-1">
                 <span className={`block text-sm font-semibold truncate ${INK}`}>{s.name}</span>
                 <span className={`block text-[10px] ${MUTED} truncate`}>{s.url}{s.headers?.Authorization ? ' · auth' : ''}</span>
               </span>
-              <button onClick={() => { removeMcpServer(s.id); refresh(); }} className={`${CONTROL_BTN} p-1.5 text-red-500 hover:text-red-600`} title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+              <IconButton label="Remove" size="sm" onClick={() => { removeMcpServer(s.id); refresh(); }} className={TONE_TEXT.danger}><Trash2 className="w-3.5 h-3.5" /></IconButton>
             </div>
           ))}
         </div>
@@ -146,10 +159,10 @@ const McpServersPanel: React.FC = () => {
 
       <div className="grid sm:grid-cols-2 gap-2">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. My Tools)" className={INPUT} />
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://server.example.com/mcp" className={`${INPUT} font-mono ${urlValid ? '' : 'border-red-500'}`} />
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://server.example.com/mcp" aria-invalid={urlValid ? undefined : true} className={`${INPUT} font-mono aria-[invalid=true]:border-[var(--ds-danger-mark)]`} />
         <input value={auth} onChange={(e) => setAuth(e.target.value)} placeholder="Authorization header (optional, e.g. Bearer …)" className={`${INPUT} font-mono sm:col-span-2`} />
       </div>
-      {!urlValid && <p className="text-[11px] text-red-500 font-semibold mt-1">MCP server URL must start with https://</p>}
+      {!urlValid && <p className={cn('mt-1 flex items-center gap-1 text-[11px] font-medium', TONE_TEXT.danger)}><AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />MCP server URL must start with https://</p>}
       <div className="flex justify-end mt-2">
         <PrimaryBtn onClick={add} disabled={!url.trim() || !urlValid}><Plus className="w-3.5 h-3.5" /> Add server</PrimaryBtn>
       </div>
@@ -201,20 +214,18 @@ const runValidation = async (k: ManagedApiKey): Promise<string | null> => {
   return null;
 };
 
-const BADGE_BASE = `text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${HAIRLINE} flex items-center gap-1`;
-
 const ValidationBadge: React.FC<{ k: ManagedApiKey; checking: boolean }> = ({ k, checking }) => {
-  if (checking) return <span className={`${BADGE_BASE} bg-[var(--ds-well)] ${MUTED}`}><Loader2 className="w-3 h-3 animate-spin" /> Checking</span>;
+  if (checking) return <span className={statusChip('waiting')}><Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none" /> Checking</span>;
   const state = storedVerdict(k);
   const title = state === 'unknown' ? '' : k.validationMessage || '';
-  if (state === 'valid') return <span title={title} className={`${BADGE_BASE} bg-green-500/10 text-green-600`}><ShieldCheck className="w-3 h-3" /> Valid</span>;
-  if (state === 'invalid') return <span title={title} className={`${BADGE_BASE} bg-red-500/10 text-red-600`}><ShieldX className="w-3 h-3" /> Invalid</span>;
-  if (state === 'unsupported') return <span title={title} className={`${BADGE_BASE} bg-[var(--ds-well)] ${MUTED}`}><ShieldQuestion className="w-3 h-3" /> Not verifiable</span>;
-  return <span title={title} className={`${BADGE_BASE} bg-[var(--ds-well)] ${MUTED}`}><ShieldQuestion className="w-3 h-3" /> Unchecked</span>;
+  if (state === 'valid') return <span title={title} className={statusChip('healthy')}><ShieldCheck className="w-3 h-3" /> Valid</span>;
+  if (state === 'invalid') return <span title={title} className={statusChip('error')}><ShieldX className="w-3 h-3" /> Invalid</span>;
+  if (state === 'unsupported') return <span title={title} className={statusChip('waiting')}><ShieldQuestion className="w-3 h-3" /> Not verifiable</span>;
+  return <span title={title} className={statusChip('waiting')}><ShieldQuestion className="w-3 h-3" /> Unchecked</span>;
 };
 
 const mask = (key: string) => (key.length > 8 ? `${key.slice(0, 3)}••••${key.slice(-4)}` : '••••');
-const usageColor = (frac: number) => (frac >= 1 ? 'bg-red-500' : frac >= 0.8 ? 'bg-amber-500' : 'bg-green-500');
+const usageColor = (frac: number) => (frac >= 1 ? TONE_FILL.danger : frac >= 0.8 ? TONE_FILL.warning : TONE_FILL.success);
 
 const UsageMeter: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null }> = ({ k, fundsUrl }) => {
   if (!k.limitUsd || k.limitUsd <= 0) {
@@ -224,15 +235,15 @@ const UsageMeter: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null }> = ({ 
   const pct = Math.min(100, Math.round(frac * 100));
   return (
     <div className="space-y-1" title={`$${k.usedUsd.toFixed(4)} of $${k.limitUsd.toFixed(2)} used this month (${Math.round(frac * 100)}%)`}>
-      <div className="h-1.5 w-full bg-[var(--ds-well)] rounded-full overflow-hidden">
+      <div className="h-1.5 w-full bg-[var(--ds-well-strong)] rounded-full overflow-hidden">
         <div className={`h-full ${usageColor(frac)}`} style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
       <div className={`flex items-center justify-between text-[11px] ${MUTED}`}>
-        <span>${k.usedUsd.toFixed(2)} / ${k.limitUsd.toFixed(2)}</span>
+        <span className="tabular-nums">${k.usedUsd.toFixed(2)} / ${k.limitUsd.toFixed(2)}</span>
         <span className="flex items-center gap-1.5">
-          <span className={frac >= 1 ? 'font-semibold text-red-600' : ''}>{Math.round(frac * 100)}%{frac >= 1 ? ' · blocked' : ''}</span>
+          <span className={cn('tabular-nums', frac >= 1 && `font-semibold ${TONE_TEXT.danger}`)}>{Math.round(frac * 100)}%{frac >= 1 ? ' · blocked' : ''}</span>
           {frac >= 0.8 && fundsUrl && (
-            <a href={fundsUrl} target="_blank" rel="noreferrer" className={`${ACCENT_TEXT} font-semibold inline-flex items-center gap-0.5 hover:underline`}>
+            <a href={fundsUrl} target="_blank" rel="noreferrer" className={cn('inline-flex items-center gap-0.5 font-semibold text-[var(--ds-ink)] underline-offset-2 hover:underline', RADIUS_CONTROL, FOCUS_RING)}>
               <Wallet className="w-3 h-3" /> Add funds
             </a>
           )}
@@ -301,14 +312,16 @@ const KeyRow: React.FC<{
   };
 
   return (
-    <div className={`${HAIRLINE} rounded-xl p-3 ${k.active ? `${ACCENT_SOFT_BG} border-[#D97757]/30` : 'bg-[var(--ds-surface-soft)]'}`}>
+    <div className={cn('p-3', HAIRLINE, RADIUS_CONTROL, k.active ? `${ACCENT_SOFT_BG} border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)]` : 'bg-[var(--ds-surface-soft)]')}>
       <div className="flex items-start gap-3">
         <button
           onClick={activate}
           title={k.active ? 'Active key' : 'Set as active'}
-          className={`mt-0.5 w-5 h-5 shrink-0 rounded-full border flex items-center justify-center ${TRANSITION} ${k.active ? `${ACCENT_BG} border-transparent text-white` : 'border-[var(--ds-hairline)] bg-[var(--ds-surface)]'}`}
+          className={cn('-m-0.5 grid size-6 shrink-0 place-items-center', RADIUS_CONTROL, DENSITY.coarseSquare, FOCUS_RING)}
         >
-          {k.active && <Check className="w-3 h-3" />}
+          <span className={cn('grid size-5 place-items-center rounded-full border', TRANSITION, k.active ? `${ACCENT_BG} border-transparent text-[var(--ds-on-accent)]` : 'border-[var(--ds-control-border)] bg-[var(--ds-canvas)]')}>
+            {k.active && <Check className="w-3 h-3" />}
+          </span>
         </button>
 
         <div className="min-w-0 flex-1">
@@ -316,10 +329,10 @@ const KeyRow: React.FC<{
             <input value={label} onChange={(e) => setLabel(e.target.value)} className={`${INPUT} text-sm font-semibold mb-2`} placeholder="Key label" />
           ) : (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={`font-semibold text-sm truncate ${INK}`}>{k.label}</span>
-              {k.active && <span className={`${BADGE_BASE} ${ACCENT_SOFT_BG} ${ACCENT_TEXT}`}>Active</span>}
+              <span className={`min-w-0 font-semibold text-sm truncate ${INK}`}>{k.label}</span>
+              {k.active && <span className={statusChip('active')}>Active</span>}
               <ValidationBadge k={k} checking={checking} />
-              {isOverLimit(k) && <span className={`${BADGE_BASE} bg-red-500/10 text-red-600`}><AlertTriangle className="w-3 h-3" />Limit reached</span>}
+              {isOverLimit(k) && <span className={statusChip('error')}><AlertTriangle className="w-3 h-3" />Limit reached</span>}
             </div>
           )}
           <div className={`text-[11px] font-mono ${MUTED} mt-0.5`}>{mask(k.key)}</div>
@@ -330,7 +343,7 @@ const KeyRow: React.FC<{
             </label>
           )}
           {!editing && !checking && storedVerdict(k) === 'invalid' && k.validationMessage && (
-            <div className="text-[11px] text-red-600 font-medium mt-0.5 flex items-start gap-1">
+            <div className={cn('mt-0.5 flex items-start gap-1 text-[11px] font-medium', TONE_TEXT.danger, WRAP_TEXT)}>
               <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{k.validationMessage}
             </div>
           )}
@@ -342,9 +355,9 @@ const KeyRow: React.FC<{
 
           <div className="mt-2">
             {editing ? (
-              <label className={`text-[11px] font-semibold ${MUTED} flex items-center gap-2`}>
+              <label className={`text-[11px] font-semibold ${MUTED} flex flex-wrap items-center gap-2`}>
                 Monthly limit (USD)
-                <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="none" className={`w-24 ${HAIRLINE} rounded-lg px-2 py-1 text-sm font-mono bg-[var(--ds-surface-soft)] outline-none`} />
+                <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="none" className={`${FIELD} w-24 px-2 py-1 font-mono text-base md:text-[length:var(--ds-text-base)] ${DENSITY.coarse}`} />
               </label>
             ) : (
               <UsageMeter k={k} fundsUrl={fundsUrl} />
@@ -352,17 +365,17 @@ const KeyRow: React.FC<{
           </div>
         </div>
 
-        <div className="flex gap-1 shrink-0">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
           {editing ? (
             <>
-              <button onClick={save} title="Save" className={`${CONTROL_BTN} p-1.5`}><Check className="w-3.5 h-3.5" /></button>
-              <button onClick={() => { setEditing(false); setReplacement(''); setLabel(k.label); setLimit(k.limitUsd != null ? String(k.limitUsd) : ''); }} title="Cancel" className={`${CONTROL_BTN} p-1.5`}><X className="w-3.5 h-3.5" /></button>
+              <IconButton label="Save" size="sm" variant="outline" onClick={save}><Check className="w-3.5 h-3.5" /></IconButton>
+              <IconButton label="Cancel" size="sm" variant="outline" onClick={() => { setEditing(false); setReplacement(''); setLabel(k.label); setLimit(k.limitUsd != null ? String(k.limitUsd) : ''); }}><X className="w-3.5 h-3.5" /></IconButton>
             </>
           ) : (
             <>
-              <button onClick={verify} disabled={checking} title="Verify key is valid" className={`${CONTROL_BTN} p-1.5 disabled:opacity-40`}><RefreshCw className={`w-3.5 h-3.5 ${checking ? 'animate-spin' : ''}`} /></button>
-              <button onClick={() => setEditing(true)} title="Edit label / limit" className={`${CONTROL_BTN} p-1.5`}><Pencil className="w-3.5 h-3.5" /></button>
-              <button onClick={remove} title="Delete key" className={`${CONTROL_BTN} p-1.5 text-red-500 hover:text-red-600`}><Trash2 className="w-3.5 h-3.5" /></button>
+              <IconButton label="Verify key is valid" size="sm" variant="outline" onClick={verify} disabled={checking}><RefreshCw className={`w-3.5 h-3.5 ${checking ? 'animate-spin motion-reduce:animate-none' : ''}`} /></IconButton>
+              <IconButton label="Edit label / limit" size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil className="w-3.5 h-3.5" /></IconButton>
+              <IconButton label="Delete key" size="sm" variant="outline" onClick={remove} className={TONE_TEXT.danger}><Trash2 className="w-3.5 h-3.5" /></IconButton>
             </>
           )}
         </div>
@@ -389,17 +402,17 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void; onA
   const prefixMismatch = Boolean(prefix && key.trim() && !key.trim().startsWith(prefix));
 
   return (
-    <div className={`border border-dashed border-[var(--ds-hairline)] rounded-xl p-3 space-y-2 bg-[var(--ds-well)]`}>
+    <div className={cn('space-y-2 border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3', RADIUS_CONTROL)}>
       <div className="flex flex-col sm:flex-row gap-2">
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Personal)" className={INPUT} />
         <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Limit $/mo (optional)" className={`${INPUT} sm:w-44 font-mono`} />
       </div>
       <div className="flex gap-2">
-        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key${prefix ? ` (${prefix}…)` : ''}`} className={`${INPUT} font-mono ${prefixMismatch ? 'border-amber-500' : ''}`} />
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key${prefix ? ` (${prefix}…)` : ''}`} className={cn(INPUT, 'font-mono', prefixMismatch && 'border-[var(--ds-warning)] hover:border-[var(--ds-warning)]')} />
         <PrimaryBtn onClick={add} disabled={!key.trim()}><Plus className="w-3.5 h-3.5" /> Add</PrimaryBtn>
       </div>
       {prefixMismatch && (
-        <p className="text-[11px] text-amber-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> Most {PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span> — double-check you pasted the right one.</p>
+        <p className={cn('flex items-start gap-1 text-[11px]', TONE_TEXT.warning, WRAP_TEXT)}><AlertTriangle className="mt-0.5 w-3 h-3 shrink-0" /> Most {PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span> — double-check you pasted the right one.</p>
       )}
     </div>
   );
@@ -412,8 +425,9 @@ const FALLBACK_OPTIONS: { mode: ByokFallbackMode; label: string }[] = [
   { mode: 'auto', label: 'Switch to my key' },
   { mode: 'never', label: 'Just stop' }
 ];
-// Colour by usage LEFT: plenty → emerald, under 30% → amber, under 10% → red.
-const usageLeftColor = (pctLeft: number) => (pctLeft < 10 ? 'bg-red-500' : pctLeft < 30 ? 'bg-amber-500' : 'bg-emerald-500');
+// Colour by usage LEFT (the status tones, beside the percentage in words): plenty → success, under 30% → warning,
+// under 10% → danger.
+const usageLeftColor = (pctLeft: number) => (pctLeft < 10 ? TONE_FILL.danger : pctLeft < 30 ? TONE_FILL.warning : TONE_FILL.success);
 
 const DreamStreamAllowancePanel: React.FC = () => {
   const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
@@ -452,15 +466,15 @@ const DreamStreamAllowancePanel: React.FC = () => {
     <div className={`${PANEL} p-4`}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
-          <Gauge className={`w-4 h-4 ${ACCENT_TEXT}`} />
-          <h4 className={`${HEADING} text-sm`}>DreamStream usage left</h4>
+          <Gauge className={`w-4 h-4 shrink-0 ${MUTED}`} aria-hidden="true" />
+          <h4 className={CARD_HEAD}>DreamStream usage left</h4>
         </div>
         <button
           role="switch"
           aria-checked={status.usePlatformAllowance}
           disabled={saving}
           onClick={() => void applyPrefs({ usePlatformAllowance: !status.usePlatformAllowance })}
-          className={`flex items-center gap-1.5 ${HAIRLINE} rounded-full px-3 py-1 text-[11px] font-semibold shrink-0 ${TRANSITION} disabled:opacity-50 ${status.usePlatformAllowance ? 'bg-emerald-500/10 text-emerald-600' : `bg-[var(--ds-surface-soft)] ${MUTED}`}`}
+          className={cn('flex shrink-0 items-center gap-1.5 border px-3 py-1 text-[11px] font-semibold disabled:opacity-50', RADIUS_PILL, TRANSITION, DENSITY.coarse, FOCUS_RING, status.usePlatformAllowance ? `${STATUS_SURFACE.healthy} ${STATUS_INK.healthy}` : `border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] ${MUTED}`)}
         >
           <Power className="w-3.5 h-3.5" /> {status.usePlatformAllowance ? 'On' : 'Off'}
         </button>
@@ -472,7 +486,7 @@ const DreamStreamAllowancePanel: React.FC = () => {
       {status.governed ? (
         <div className="mt-3">
           <div
-            className="relative h-2 w-full bg-[var(--ds-well)] rounded-full overflow-hidden"
+            className="relative h-2 w-full overflow-hidden rounded-full bg-[var(--ds-well-strong)]"
             role="meter"
             aria-valuemin={0}
             aria-valuemax={100}
@@ -482,7 +496,7 @@ const DreamStreamAllowancePanel: React.FC = () => {
             <div className={`h-full ${usageLeftColor(pctLeft)}`} style={{ width: `${pctLeft > 0 ? Math.max(2, pctLeft) : 0}%` }} />
           </div>
           <div className={`mt-1 text-[11px] ${MUTED}`}>
-            <span className={`font-semibold tabular-nums ${pctLeft < 10 ? 'text-red-600' : INK}`}>{status.exhausted ? '0%' : formatPctLeft(pctLeft)}</span> of your usage left
+            <span className={`font-semibold tabular-nums ${pctLeft < 10 ? TONE_TEXT.danger : INK}`}>{status.exhausted ? '0%' : formatPctLeft(pctLeft)}</span> of your usage left
             {status.friendlyUnits && !status.exhausted && <> · {status.friendlyUnits.label}</>}
             {reset ? <> · comes back {reset}</> : <> · doesn't reset on its own</>}
           </div>
@@ -493,8 +507,8 @@ const DreamStreamAllowancePanel: React.FC = () => {
 
       <div className="mt-3">
         <div className={SECTION_LABEL}>When my usage runs out</div>
-        <div className={`mt-1.5 inline-flex flex-wrap rounded-xl ${HAIRLINE} overflow-hidden`} role="radiogroup">
-          {FALLBACK_OPTIONS.map((opt, i) => {
+        <div className={cn(SEGMENTED_TRACK, 'mt-1.5 flex-wrap')} role="radiogroup">
+          {FALLBACK_OPTIONS.map((opt) => {
             const active = status.byokFallbackMode === opt.mode;
             return (
               <button
@@ -503,7 +517,7 @@ const DreamStreamAllowancePanel: React.FC = () => {
                 aria-checked={active}
                 disabled={saving}
                 onClick={() => void applyPrefs({ byokFallbackMode: opt.mode })}
-                className={`px-3 py-1.5 text-xs font-semibold ${TRANSITION} disabled:opacity-50 ${i > 0 ? 'border-l border-[var(--ds-hairline)]' : ''} ${active ? `${ACCENT_BG} text-white` : `bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
+                className={cn(SEGMENTED_ITEM, 'min-h-8 flex-none py-1 disabled:opacity-50', DENSITY.coarse, active && SEGMENTED_ACTIVE_FILL)}
               >
                 {opt.label}
               </button>
@@ -517,19 +531,19 @@ const DreamStreamAllowancePanel: React.FC = () => {
 
       {(crossed90 || status.exhausted) && (
         showConsent ? (
-          <div className={`mt-3 ${HAIRLINE} rounded-xl bg-red-500/5 p-3`}>
+          <div className={cn('mt-3 border p-3', RADIUS_CONTROL, STATUS_SURFACE.error)}>
             <div className="flex items-start gap-2 flex-wrap sm:flex-nowrap">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+              <AlertTriangle className={cn('w-4 h-4 shrink-0 mt-0.5', STATUS_INK.error)} />
               <div className="flex-1 min-w-[12rem]">
-                <div className="text-sm font-semibold text-red-600">You've used all of your DreamStream usage. Continue with your own key?</div>
+                <div className={cn('text-sm font-semibold', STATUS_INK.error)}>You've used all of your DreamStream usage. Continue with your own key?</div>
                 <p className={`text-[11px] ${MUTED} mt-0.5`}>Your key's own limits still apply.</p>
               </div>
               <PrimaryBtn onClick={() => void applyPrefs({ byokFallbackMode: 'auto' })} disabled={saving}>Continue with my key</PrimaryBtn>
             </div>
           </div>
         ) : (
-          <div className={`mt-3 ${HAIRLINE} rounded-xl p-3 flex items-start gap-2 ${status.exhausted ? 'bg-red-500/5' : 'bg-amber-500/5'}`}>
-            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${status.exhausted ? 'text-red-500' : 'text-amber-500'}`} />
+          <div className={cn('mt-3 flex items-start gap-2 border p-3', RADIUS_CONTROL, status.exhausted ? STATUS_SURFACE.error : STATUS_SURFACE.attention)}>
+            <AlertTriangle className={cn('w-4 h-4 shrink-0 mt-0.5', status.exhausted ? STATUS_INK.error : STATUS_INK.attention)} />
             <div className={`text-xs ${INK}`}>
               {status.exhausted ? (
                 status.byokFallbackMode === 'auto' && status.byokAvailable ? (
@@ -595,22 +609,22 @@ const ProviderCard: React.FC<{
   };
 
   // A stored secret is not a verified connection. Keep these states distinct.
-  const status: { label: string; cls: string } = !enabled
-    ? { label: 'Off', cls: `bg-[var(--ds-well)] ${MUTED}` }
+  const status: { label: string; state: StatusState } = !enabled
+    ? { label: 'Off', state: 'waiting' }
     : overLimit
-      ? { label: 'Limit reached', cls: `${TONE_SURFACE.danger} ${TONE_TEXT.danger}` }
+      ? { label: 'Limit reached', state: 'error' }
       : active && storedVerdict(active) === 'invalid'
-        ? { label: 'Key rejected', cls: `${TONE_SURFACE.danger} ${TONE_TEXT.danger}` }
+        ? { label: 'Key rejected', state: 'error' }
         : active && storedVerdict(active) === 'valid'
-          ? { label: 'Verified', cls: `${TONE_SURFACE.success} ${TONE_TEXT.success}` }
-          : { label: hasKey ? 'Key saved' : 'No key', cls: `bg-[var(--ds-well)] ${MUTED}` };
+          ? { label: 'Verified', state: 'healthy' }
+          : { label: hasKey ? 'Key saved' : 'No key', state: 'waiting' };
 
   return (
     <div className={`${PANEL} overflow-hidden ${!enabled ? 'opacity-70' : ''}`}>
       <div className="w-full flex items-center gap-3 px-3.5 py-3">
-        <button onClick={onToggleOpen} className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+        <button onClick={onToggleOpen} aria-expanded={open} className={cn('-my-1 flex min-w-0 flex-1 items-center gap-2.5 py-1 text-left', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING)}>
           {open ? <ChevronDown className={`w-4 h-4 shrink-0 ${MUTED}`} /> : <ChevronRight className={`w-4 h-4 shrink-0 ${MUTED}`} />}
-          <span className="shrink-0 grid place-items-center w-6 h-6 rounded-lg bg-[var(--ds-well)]" style={{ color: def?.accent || 'var(--ds-muted)' }}>
+          <span className={cn('grid size-6 shrink-0 place-items-center bg-[var(--ds-well)]', RADIUS_CONTROL)} style={{ color: def?.accent || 'var(--ds-muted)' }}>
             {hasProviderLogo(provider)
               ? <ProviderLogo provider={provider} className="w-4 h-4" title={meta.label} />
               : <span className="w-2.5 h-2.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />}
@@ -618,7 +632,7 @@ const ProviderCard: React.FC<{
           <span className="min-w-0">
             <span className="flex items-center gap-2">
               <span className={`font-semibold text-sm truncate ${INK}`}>{meta.label}</span>
-              {def?.freeTier && <span className={`${BADGE_BASE} bg-green-500/10 text-green-600`}>Free tier</span>}
+              {def?.freeTier && <span className={cn(CHIP, CHIP_VARIANT.filled)}>Free tier</span>}
             </span>
             <span className={`block text-[11px] ${MUTED} truncate`}>
               {active ? `Active: ${active.label}` : meta.hint}
@@ -629,7 +643,7 @@ const ProviderCard: React.FC<{
         {typeof count === 'number' && count > 0 && (
           <span className={`text-[11px] ${MUTED} shrink-0 hidden sm:inline tabular-nums`}>{count} model{count === 1 ? '' : 's'}</span>
         )}
-        <span className={`${BADGE_BASE} ${status.cls} shrink-0`}>{status.label}</span>
+        <span className={cn(statusChip(status.state), 'shrink-0')}>{status.label}</span>
 
         {/* Governance on/off toggle */}
         <button
@@ -638,9 +652,15 @@ const ProviderCard: React.FC<{
           aria-checked={enabled}
           onClick={() => { setProviderEnabled(provider, !enabled); onChange(); }}
           title={enabled ? 'Source is on — turn off to ignore its keys everywhere' : 'Source is off — turn on to use it'}
-          className={`shrink-0 w-9 h-5 rounded-full ${TRANSITION} relative ${enabled ? ACCENT_BG : 'bg-[var(--ds-well)]'}`}
+          className={cn(
+            'relative h-5 w-9 shrink-0 rounded-full motion-reduce:transition-none',
+            "coarse:after:absolute coarse:after:left-1/2 coarse:after:top-1/2 coarse:after:h-[var(--ds-density-touch)] coarse:after:w-[var(--ds-density-touch)] coarse:after:-translate-x-1/2 coarse:after:-translate-y-1/2 coarse:after:content-['']",
+            TRANSITION,
+            FOCUS_RING,
+            enabled ? 'bg-[var(--ds-accent-fill)]' : 'bg-[color:color-mix(in_srgb,var(--ds-ink)_18%,var(--ds-canvas))]'
+          )}
         >
-          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm ${TRANSITION} ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
+          <span className={`absolute top-0.5 w-4 h-4 rounded-full shadow-[shadow:var(--ds-shadow-segment)] motion-reduce:transition-none ${enabled ? 'bg-[var(--ds-on-accent)]' : 'bg-[var(--ds-raised)] dark:bg-[var(--ds-ink)]'} ${TRANSITION} ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
         </button>
       </div>
 
@@ -655,8 +675,8 @@ const ProviderCard: React.FC<{
             </div>
           </div>
           {!hasKey && (
-            <div className={`flex items-center gap-2 text-[11px] ${MUTED} ${HAIRLINE} rounded-xl px-3 py-2 bg-[var(--ds-well)]`}>
-              <Sparkles className={`w-3.5 h-3.5 ${ACCENT_TEXT}`} />
+            <div className={cn('flex items-center gap-2 bg-[var(--ds-well)] px-3 py-2 text-[11px]', MUTED, HAIRLINE, RADIUS_CONTROL)}>
+              <Sparkles className="w-3.5 h-3.5 shrink-0 text-[var(--ds-ink)]" aria-hidden="true" />
               Add a {meta.label} key to unlock its models. {def?.freeTier ? 'This provider has a free tier.' : 'Usage is billed to your key.'}
             </div>
           )}
@@ -664,14 +684,14 @@ const ProviderCard: React.FC<{
           {!active && accountSuffix && (
             <div className={`space-y-2 text-xs ${MUTED}`}>
               <p>Your account has a saved key ending in {accountSuffix}. Each studio shows the models it supports.</p>
-              <button type="button" className={CONTROL_BTN} disabled={checkingAccount || !user || !enabled} onClick={async () => {
+              <Button type="button" size="sm" variant="outline" disabled={checkingAccount || !user || !enabled} onClick={async () => {
                 const id = ++accountValidationRun.current;
                 setCheckingAccount(true);
                 const { status } = await validateApiKey(provider);
                 if (accountValidationRun.current !== id) return;
                 setAccountCheck(ACCOUNT_CHECK_COPY[status] || KEY_CHECK_UNAVAILABLE_COPY);
                 setCheckingAccount(false);
-              }}>{checkingAccount ? 'Checking account key…' : 'Verify account key'}</button>
+              }}>{checkingAccount ? 'Checking account key…' : 'Verify account key'}</Button>
               {accountCheck && <p role="status">{accountCheck}</p>}
             </div>
           )}
@@ -680,7 +700,7 @@ const ProviderCard: React.FC<{
           {syncStatus === 'failed' && (
             <div className="flex flex-wrap items-center gap-2">
               <p role="status" className={`text-xs ${MUTED}`}>This device is updated. Your account key could not sync.</p>
-              <button type="button" onClick={() => void syncActiveKey()} className={`text-xs underline ${INK}`}>Retry sync</button>
+              <button type="button" onClick={() => void syncActiveKey()} className={cn('text-xs underline underline-offset-2', INK, RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING)}>Retry sync</button>
             </div>
           )}
         </div>
@@ -732,9 +752,7 @@ export const ApiConfiguration: React.FC = () => {
   const validKeys = keys.filter((k) => k.validation === 'valid').length;
 
   const chip = (label: string, tone: 'ok' | 'muted' | 'bad') =>
-    `text-[11px] font-semibold px-2.5 py-1 rounded-full ${HAIRLINE} ${
-      tone === 'ok' ? 'bg-green-500/10 text-green-600' : tone === 'bad' ? 'bg-red-500/10 text-red-600' : `bg-[var(--ds-surface-soft)] ${MUTED}`
-    }`;
+    tone === 'ok' ? statusChip('healthy') : tone === 'bad' ? statusChip('error') : cn(CHIP, CHIP_VARIANT.outline);
 
   return (
     <div className="space-y-4">
@@ -743,7 +761,7 @@ export const ApiConfiguration: React.FC = () => {
           Connect a provider to use its models. Bring your own key — pick the <span className={`font-semibold ${INK}`}>active</span> one,
           set an optional monthly limit, and turn any source on or off. Keys stay on this device (and sync to your account, encrypted).
         </p>
-        <div className="flex items-center gap-1.5 shrink-0" aria-label="Configuration summary">
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Configuration summary">
           <span className={chip(`${connected} saved`, 'muted')}>{connected} providers with keys</span>
           <span className={chip(`${enabledProviders} on`, 'muted')}>{enabledProviders} on</span>
           <span className={chip(`${validKeys} valid`, validKeys > 0 ? 'ok' : 'muted')}>{validKeys} valid</span>
