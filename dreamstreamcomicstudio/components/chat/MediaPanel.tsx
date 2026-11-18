@@ -24,7 +24,7 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   if (data.kind === 'video') {
     return (
       <div className="w-full h-full flex flex-col bg-black">
-        <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-[var(--ds-raised)]">
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-[var(--ds-hairline)] bg-[var(--ds-raised)]">
           {data.title && <span className="text-[11px] font-bold text-[var(--ds-ink)] truncate mr-auto">{data.title}</span>}
           <a
             href={data.sourceUrl || data.url}
@@ -50,7 +50,7 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   // image
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-[var(--ds-raised)]">
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-[var(--ds-hairline)] bg-[var(--ds-raised)]">
         <button onClick={() => setZoom((z) => Math.min(5, z + 0.25))} className="p-1.5 border border-[var(--ds-hairline)] rounded-lg bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] transition-colors duration-200" title="Zoom in"><ZoomIn className="w-3.5 h-3.5" /></button>
         <button onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} className="p-1.5 border border-[var(--ds-hairline)] rounded-lg bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] transition-colors duration-200" title="Zoom out"><ZoomOut className="w-3.5 h-3.5" /></button>
         <button onClick={() => setZoom(1)} className="p-1.5 border border-[var(--ds-hairline)] rounded-lg bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] transition-colors duration-200" title="Reset"><Maximize className="w-3.5 h-3.5" /></button>

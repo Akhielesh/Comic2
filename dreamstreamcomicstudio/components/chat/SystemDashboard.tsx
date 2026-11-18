@@ -4,9 +4,9 @@ import type { SystemDashboard as Dash } from '../../apiTypes';
 import { getSystemDashboard } from '../../services/chatApi';
 
 const StatusDot: React.FC<{ status: 'ok' | 'degraded' | 'unavailable' }> = ({ status }) => {
-  if (status === 'ok') return <CheckCircle2 className="w-4 h-4 text-emerald-600" />;
-  if (status === 'degraded') return <AlertTriangle className="w-4 h-4 text-amber-600" />;
-  return <XCircle className="w-4 h-4 text-red-600" />;
+  if (status === 'ok') return <CheckCircle2 className="w-4 h-4 text-[var(--ds-success-text)]" />;
+  if (status === 'degraded') return <AlertTriangle className="w-4 h-4 text-[var(--ds-warning-text)]" />;
+  return <XCircle className="w-4 h-4 text-[var(--ds-danger-text)]" />;
 };
 
 const Section: React.FC<{ icon: React.ReactNode; title: string; children: React.ReactNode }> = ({ icon, title, children }) => (
@@ -67,7 +67,7 @@ export const SystemDashboard: React.FC = () => {
         <div className="grid sm:grid-cols-2 gap-1.5">
           {data.toolHealth.map((t) => (
             <div key={t.id} className="flex items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-1.5 text-sm">
-              {t.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 shrink-0" />}
+              {t.ok ? <CheckCircle2 className="w-4 h-4 text-[var(--ds-success-text)] shrink-0" /> : <XCircle className="w-4 h-4 text-[var(--ds-danger-text)] shrink-0" />}
               <span className="font-semibold text-[var(--ds-ink)] truncate flex-1">{t.label}</span>
               <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">{t.ok ? `${t.latencyMs}ms` : (t.error || `HTTP ${t.status}`)}</span>
             </div>
@@ -81,7 +81,7 @@ export const SystemDashboard: React.FC = () => {
             <li key={d.id} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-1.5">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-sm text-[var(--ds-ink)] flex-1">{d.label}</span>
-                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border ${d.connected ? 'border-emerald-500/20 text-emerald-700 bg-emerald-50' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] bg-[var(--ds-well)]'}`}>
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border ${d.connected ? 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] text-[var(--ds-success-text)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] bg-[var(--ds-well)]'}`}>
                   {d.connected ? 'connected' : 'not connected'}
                 </span>
               </div>
@@ -91,7 +91,7 @@ export const SystemDashboard: React.FC = () => {
                   {d.live.label}: {d.live.used ?? '—'}{d.live.limit ? ` / ${d.live.limit}` : ''} {d.live.detail || ''}
                 </div>
               ) : d.envVar && !d.connected ? (
-                <div className="text-[11px] text-amber-700 mt-0.5 flex items-center gap-1"><Info className="w-3 h-3" /> Add <span className="font-semibold">{d.envVar}</span> for live usage.</div>
+                <div className="text-[11px] text-[var(--ds-warning-text)] mt-0.5 flex items-center gap-1"><Info className="w-3 h-3" /> Add <span className="font-semibold">{d.envVar}</span> for live usage.</div>
               ) : null}
             </li>
           ))}
@@ -113,7 +113,7 @@ export const SystemDashboard: React.FC = () => {
           <ul className="space-y-1">
             {data.recentNotices.slice(0, 15).map((n, i) => (
               <li key={i} className="text-[11px] text-[var(--ds-muted)] flex items-start gap-1.5">
-                <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${n.level === 'error' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${n.level === 'error' ? 'bg-[var(--ds-danger-mark)]' : 'bg-[var(--ds-warning)]'}`} />
                 <span><span className="font-semibold text-[var(--ds-ink)]">{n.tool || 'system'}</span>: {n.message}{n.at ? ` · ${new Date(n.at).toLocaleTimeString()}` : ''}</span>
               </li>
             ))}

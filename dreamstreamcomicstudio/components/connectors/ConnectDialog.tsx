@@ -51,7 +51,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
           className="w-full max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-xl backdrop-blur-xl"
         >
           <div className="flex items-start gap-3 p-5 border-b border-[var(--ds-hairline-soft)]">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
               <ConnectorIcon name={entry.icon} className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
@@ -84,7 +84,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={entry.userProvidesKey ? 'Paste your API key' : 'Optional — uses the platform key'}
-                  className="w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none focus:border-[var(--ds-accent)] focus-visible:ring-2 focus-visible:ring-[#D97757]/30"
+                  className="w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none focus:border-[var(--ds-accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)]"
                 />
                 <p className="text-xs text-[var(--ds-muted)]">
                   Stored encrypted at rest (AES-256-GCM). The key is validated before it is saved.
@@ -93,7 +93,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
             ) : (
               <div className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-medium text-[var(--ds-ink)]">
-                  <ShieldCheck className="h-4 w-4 text-emerald-600" /> You'll grant least-privilege access to:
+                  <ShieldCheck className="h-4 w-4 text-[var(--ds-success-text)]" /> You'll grant least-privilege access to:
                 </p>
                 <ul className="space-y-1.5 rounded-xl bg-[var(--ds-well)] p-3">
                   {entry.requiredScopes
@@ -113,7 +113,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
             )}
 
             {!entry.configured && (
-              <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+              <p className="rounded-lg bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--ds-warning-text)]">
                 This connector isn't configured on the server yet, so connecting may fail. {entry.docsUrl ? 'See the connector docs.' : ''}
               </p>
             )}
@@ -132,7 +132,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
               type="button"
               onClick={() => onSubmit(isApiKey ? apiKey.trim() || undefined : undefined)}
               disabled={submitting}
-              className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-60"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
               {isApiKey ? 'Save & connect' : `Connect ${entry.displayName}`}

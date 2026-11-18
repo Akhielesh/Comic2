@@ -40,13 +40,13 @@ const Chip: React.FC<{ active: boolean; onClick: () => void; children: React.Rea
     aria-pressed={active}
     className={`group inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[12px] font-medium transition-all duration-150 ${
       active
-        ? 'border-[#D97757] bg-[#D97757]/10 text-[var(--ds-ink)]'
+        ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
         : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-muted)] hover:border-[var(--ds-faint)] hover:text-[var(--ds-ink)]'
     }`}
   >
     <span
       className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-colors ${
-        active ? 'border-[#D97757] bg-[var(--ds-accent)] text-white' : 'border-[var(--ds-faint)]'
+        active ? 'border-[var(--ds-accent)] bg-[var(--ds-accent)] text-white' : 'border-[var(--ds-faint)]'
       }`}
     >
       {active && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
@@ -197,7 +197,7 @@ const ClarifyForm: React.FC<{ data: ClarifyArtifact; turn?: ArtifactTurn }> = ({
   );
 
   return (
-    <Surface accent="#D97757" header={header}>
+    <Surface header={header}>
       <div className="space-y-3 border-t border-[var(--ds-hairline-soft)] px-3 py-3">
         {questions.map((q, i) => (
           <div key={q.id || i}>

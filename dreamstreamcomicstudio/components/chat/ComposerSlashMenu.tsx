@@ -107,7 +107,7 @@ export const ComposerSlashMenu: React.FC<{
                   active ? 'bg-[var(--ds-hover)]' : 'hover:bg-[var(--ds-hover)]'
                 }`}
               >
-                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--ds-hairline)] ${active ? 'bg-[#D97757]/10 text-[var(--ds-accent)]' : 'bg-[var(--ds-surface-soft)] text-[var(--ds-muted)]'}`}>
+                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--ds-hairline)] ${active ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]' : 'bg-[var(--ds-surface-soft)] text-[var(--ds-muted)]'}`}>
                   <Icon className="h-3.5 w-3.5" />
                 </span>
                 <span className="min-w-0 flex-1">

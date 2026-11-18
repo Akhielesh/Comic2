@@ -172,7 +172,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
               title="Copy as CSV"
               className="flex items-center gap-1 rounded-md border border-[var(--ds-hairline)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]"
             >
-              {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+              {copied ? <Check className="h-3 w-3 text-[var(--ds-success-text)]" /> : <Copy className="h-3 w-3" />}
               {copied ? 'Copied' : 'CSV'}
             </button>
           </div>
@@ -218,7 +218,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                   const barLeft = stat.diverging ? Math.min(zeroPos, pct) : undefined;
                   const barWidth = stat.diverging ? Math.abs(pct - zeroPos) : pct;
                   const signed = stat.diverging && n !== null;
-                  const tone = signed ? (n! > 0 ? 'text-emerald-600' : n! < 0 ? 'text-rose-600' : 'text-[var(--ds-ink)]') : '';
+                  const tone = signed ? (n! > 0 ? 'text-[var(--ds-success-text)]' : n! < 0 ? 'text-[var(--ds-danger-text)]' : 'text-[var(--ds-ink)]') : '';
                   return (
                     <td
                       key={ci}
@@ -232,9 +232,9 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                           className={`pointer-events-none absolute bottom-0 h-[3px] rounded-full ${
                             signed
                               ? n! >= 0
-                                ? 'bg-emerald-500/45'
-                                : 'bg-rose-500/45'
-                              : 'bg-[#D97757]/35'
+                                ? 'bg-[color:color-mix(in_srgb,var(--ds-success)_45%,transparent)]'
+                                : 'bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_45%,transparent)]'
+                              : 'bg-[color:color-mix(in_srgb,var(--ds-accent)_35%,transparent)]'
                           }`}
                           style={
                             stat.diverging

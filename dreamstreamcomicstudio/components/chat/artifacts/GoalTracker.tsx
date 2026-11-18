@@ -14,7 +14,7 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, RadialGauge, useCompact, shortD
 // artifact id → array of completed milestone ids. No server round-trip.
 
 const STORE_KEY = 'ds.goal.v1';
-const ACCENT = '#D97757';
+const ACCENT = 'var(--ds-accent)';
 
 const loadDone = (goalId: string): Set<string> => {
   try {

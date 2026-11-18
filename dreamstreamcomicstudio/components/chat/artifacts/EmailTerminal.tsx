@@ -283,7 +283,7 @@ const ReaderPane: React.FC<{ connectionId: string; email: EmailMessage; onBack?:
           <Reply className="h-3.5 w-3.5" /> Reply
         </a>
         <button onClick={copy} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
-          {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
+          {copied ? <Check className="h-3.5 w-3.5 text-[var(--ds-success-text)]" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
     </div>
@@ -581,7 +581,7 @@ export const EmailTerminal: React.FC<{ data: EmailInboxArtifact }> = ({ data }) 
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search all mail (from:, subject:, has:attachment…)"
-          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/40"
+          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
         />
         {query && (
           <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ds-faint)] hover:text-[var(--ds-ink)]" aria-label="Clear search">

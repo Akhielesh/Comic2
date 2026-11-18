@@ -66,19 +66,20 @@ const CATEGORY_COUNT: Record<string, number> = ENTRIES.reduce<Record<string, num
 }, {});
 
 const KIND_BADGE: Record<WidgetKind, string> = {
-  api: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/25',
-  mcp: 'text-violet-600 bg-violet-500/10 border-violet-500/25',
-  builtin: 'text-sky-600 bg-sky-500/10 border-sky-500/25',
-  'model-authored': 'text-amber-600 bg-amber-500/10 border-amber-500/25',
+  api: 'text-[var(--ds-ink)] bg-[var(--ds-surface-soft)] border-[var(--ds-hairline)]',
+  mcp: 'text-[var(--ds-ink)] bg-[var(--ds-surface-soft)] border-[var(--ds-hairline)]',
+  builtin: 'text-[var(--ds-ink)] bg-[var(--ds-surface-soft)] border-[var(--ds-hairline)]',
+  'model-authored': 'text-[var(--ds-warning-text)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)]',
   static: 'text-[var(--ds-muted)] bg-[var(--ds-well-strong)] border-[var(--ds-hairline)]'
 };
 
-// Per-kind accent color for the list rail (dot + left bar) — quick visual scanning.
+// Per-kind mark for the list rail (dot + left bar): ink for live sources, the attention mark for
+// model-authored widgets, faint for static ones (the badge names the kind).
 const KIND_DOT: Record<WidgetKind, string> = {
-  api: 'bg-emerald-500',
-  mcp: 'bg-violet-500',
-  builtin: 'bg-sky-500',
-  'model-authored': 'bg-amber-500',
+  api: 'bg-[var(--ds-ink)]',
+  mcp: 'bg-[var(--ds-ink)]',
+  builtin: 'bg-[var(--ds-ink)]',
+  'model-authored': 'bg-[var(--ds-warning)]',
   static: 'bg-[var(--ds-faint)]'
 };
 
@@ -178,7 +179,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
         }}
         title={KIND_LABEL[e.kind]}
         className={`group/item relative mb-0.5 flex w-full items-start gap-2.5 rounded-xl py-2 pl-3 pr-2.5 text-left ${TRANSITION} ${
-          active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'
+          active ? 'bg-[var(--ds-accent-soft)]' : 'hover:bg-[var(--ds-hover)]'
         }`}
       >
         {/* kind accent rail */}
@@ -234,7 +235,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search widgets, tools, tags…"
-                  className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/40"
+                  className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
                 />
                 {query && (
                   <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label="Clear search">
@@ -352,7 +353,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
               {tab === 'preview' ? (
                 <div className="mt-3 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] p-3 sm:p-5">
                   {liveForSelected?.error && (
-                    <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-600">
+                    <p className="mb-2 rounded-lg border border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-2 py-1 text-[11px] text-[var(--ds-warning-text)]">
                       Live fetch failed ({liveForSelected.error}) — showing the sample. Live providers may need API keys configured on the server.
                     </p>
                   )}
@@ -433,7 +434,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">Data payload (JSON)</span>
                       {selected.data !== undefined && (
                         <button onClick={copyJson} className="inline-flex items-center gap-1 rounded-md border border-[var(--ds-hairline)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">
-                          {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />} {copied ? 'Copied' : 'Copy'}
+                          {copied ? <Check className="h-3 w-3 text-[var(--ds-success-text)]" /> : <Copy className="h-3 w-3" />} {copied ? 'Copied' : 'Copy'}
                         </button>
                       )}
                     </div>

@@ -12,6 +12,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Home, LayoutDashboard, Library, MessageSquare, Search, Sparkles } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
+import { cn } from '../../lib/utils';
+import { OVERLAY, OVERLINE, SCRIM, Z } from './studioDesign';
 
 type NavView = 'home' | 'library' | 'dashboards';
 
@@ -40,8 +42,6 @@ const NAV_ACTIONS: { view: NavView; label: string; keywords: string }[] = [
   { view: 'library', label: 'Open Library', keywords: 'library files images uploads media assets gallery' },
   { view: 'dashboards', label: 'Open Dashboards', keywords: 'dashboards boards charts analytics pulse' }
 ];
-
-const SOFT_SHADOW = 'shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]';
 
 // Fuzzy-ish ranking: startsWith on a primary string beats substring on a
 // primary, which beats substring on the secondary haystack. 0 = no match.
@@ -202,16 +202,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center px-3 pb-6 pt-[max(4rem,env(safe-area-inset-top))] sm:pt-[16vh]"
+      className={cn('fixed inset-0 flex items-start', Z.dialog, 'justify-center px-3 pb-6 pt-[max(4rem,env(safe-area-inset-top))] sm:pt-[16vh]')}
       role="dialog"
       aria-modal="true"
       aria-label="Command palette"
     >
       {/* Backdrop: click to close */}
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className={cn('absolute inset-0', SCRIM)} onClick={onClose} aria-hidden="true" />
 
       <div
-        className={`relative flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md ${SOFT_SHADOW} transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.30),0_2px_10px_rgba(217,119,87,0.12),0_22px_60px_rgba(217,119,87,0.12)]`}
+        className={cn('relative flex w-full max-w-lg flex-col overflow-hidden', OVERLAY, 'transition-[border-color] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] focus-within:border-[var(--ds-focus)]')}
       >
         {/* Search input */}
         <div className="flex items-center gap-2.5 border-b border-[var(--ds-hairline-soft)] px-4 py-3">
@@ -243,7 +243,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           ) : (
             groups.map((group) => (
               <div key={group.label} className="px-1.5 pb-1">
-                <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+                <div className={cn('px-2.5 pb-1 pt-2', OVERLINE)}>
                   {group.label}
                 </div>
                 {group.items.map((item) => {
@@ -252,7 +252,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   const isActive = i === active;
                   const key = item.kind === 'session' ? `s:${item.session.id}` : item.kind === 'ask' ? 'ask' : `n:${item.view}`;
                   const rowClass = `flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors duration-100 ${
-                    isActive ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+                    isActive ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                   }`;
                   if (item.kind === 'session') {
                     return (

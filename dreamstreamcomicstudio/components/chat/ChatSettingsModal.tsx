@@ -16,7 +16,7 @@ import {
   MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent, memoryImportNothingFoundNotice,
   type MemoryImportSource
 } from '../../services/memoryImport';
-import { TONE_TEXT } from './studioDesign';
+import { FOCUS_RING, RADIUS_CONTROL, TONE_TEXT } from './studioDesign';
 import { useTheme, type ThemePreference } from '../../services/theme';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import {
@@ -112,7 +112,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                   onClick={() => setTab(id)}
                   className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                     tab === id
-                      ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                       : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                   }`}
                 >
@@ -132,7 +132,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                   onClick={() => setTab(id)}
                   className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                     tab === id
-                      ? 'bg-[#D97757]/10 font-medium text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] font-medium text-[var(--ds-accent)]'
                       : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                   }`}
                 >
@@ -180,7 +180,7 @@ const ThemePreviewSwatch: React.FC<{ value: ThemePreference }> = ({ value }) => 
     <div key={dark ? 'dark' : 'light'} className={`flex-1 p-2 ${dark ? 'bg-stone-800' : 'bg-stone-100'}`}>
       <div className={`h-1.5 w-8 rounded-full ${dark ? 'bg-stone-600' : 'bg-stone-300'}`} />
       <div className={`mt-1.5 h-1.5 w-12 rounded-full ${dark ? 'bg-stone-700' : 'bg-stone-200'}`} />
-      <div className="mt-1.5 h-1.5 w-6 rounded-full bg-[#D97757]/70" />
+      <div className={`mt-1.5 h-1.5 w-6 rounded-full ${dark ? 'bg-stone-200' : 'bg-stone-800'}`} />
     </div>
   );
   return (
@@ -318,7 +318,7 @@ const GeneralTab: React.FC = () => {
                     aria-pressed={active}
                     className={`rounded-xl border p-1.5 text-left transition-colors ${
                       active
-                        ? 'border-[var(--ds-accent)] bg-[#D97757]/10'
+                        ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]'
                         : 'border-[var(--ds-hairline)] hover:bg-[var(--ds-hover)]'
                     }`}
                   >
@@ -468,7 +468,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
         <div>
           <div className="mb-2 flex items-center justify-between px-1">
             <SectionLabel>{items.length} {items.length === 1 ? 'memory' : 'memories'}</SectionLabel>
-            <button onClick={() => commit([])} className="text-[11px] font-medium text-red-500 hover:text-red-600">
+            <button onClick={() => commit([])} className={`${RADIUS_CONTROL} px-1 text-[11px] font-medium text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)] hover:underline underline-offset-2 ${FOCUS_RING}`}>
               Clear all
             </button>
           </div>
@@ -484,7 +484,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
                 <button
                   onClick={() => remove(i)}
                   aria-label="Remove memory"
-                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] opacity-0 hover:bg-[var(--ds-hover)] hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
+                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] opacity-0 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)] focus-visible:opacity-100 group-hover:opacity-100"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -513,7 +513,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
                   onClick={() => setImportSource(s.id)}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     importSource === s.id
-                      ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+                      ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                       : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                   }`}
                 >
@@ -536,7 +536,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
               className="hidden"
               onChange={(e) => { void onPickFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
             />
-            {importError && <p className="text-xs text-red-500">{importError}</p>}
+            {importError && <p className="text-xs text-[var(--ds-danger-text)]">{importError}</p>}
             {/* Always mounted (empty until needed) so the notice is announced when its words arrive. */}
             <p role="status" aria-live="polite" className="flex items-start gap-1.5 text-xs leading-5 text-[var(--ds-ink)] empty:hidden">
               {importNotice && (
@@ -658,7 +658,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
           <SectionLabel>Your agents ({custom.length})</SectionLabel>
           <button
             onClick={() => setEditing(newCustomAgent())}
-            className="flex items-center gap-1 rounded-full bg-[#D97757]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[#D97757]/20"
+            className="flex items-center gap-1 rounded-full bg-[var(--ds-accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-active)]"
           >
             <Plus className="h-3.5 w-3.5" /> New agent
           </button>
@@ -691,7 +691,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
                 <button
                   onClick={() => remove(a.id)}
                   aria-label={`Delete ${a.name}`}
-                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-red-500"
+                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -748,7 +748,7 @@ const AgentEditor: React.FC<{ agent: CustomAgentDef; onSave: (a: CustomAgentDef)
               aria-pressed={tools.includes(t.name)}
               className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 tools.includes(t.name)
-                  ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-accent)]'
+                  ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                   : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
               }`}
             >

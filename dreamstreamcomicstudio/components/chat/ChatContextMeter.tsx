@@ -1,6 +1,6 @@
 import React from 'react';
 import { Gauge, AlertTriangle } from 'lucide-react';
-import { HAIRLINE, MENU, MUTED } from './studioDesign';
+import { MENU, MUTED, STATUS_DOT, STATUS_INK, STATUS_SURFACE } from './studioDesign';
 
 interface ChatContextMeterProps {
   usedTokens: number;
@@ -16,7 +16,7 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
   const warn = known && pct >= 75;
   const critical = known && pct >= 90;
 
-  const barColor = critical ? 'bg-red-500' : warn ? 'bg-amber-400' : 'bg-[var(--ds-accent)]';
+  const barColor = critical ? STATUS_DOT.error : warn ? STATUS_DOT.attention : 'bg-[var(--ds-accent)]';
 
   const tooltip = [
     known
@@ -37,12 +37,12 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
 
   return (
     <div
-      className={`group relative hidden md:flex items-center gap-1.5 text-[11px] font-semibold ${HAIRLINE} rounded-full px-2.5 py-1 cursor-default transition-all duration-200 ${
-        critical ? 'bg-red-500/10 text-red-600' : warn ? 'bg-amber-500/10 text-amber-600' : `bg-[var(--ds-surface-soft)] ${MUTED}`
+      className={`group relative hidden md:flex items-center gap-1.5 text-[11px] font-semibold border rounded-full px-2.5 py-1 cursor-default transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] ${
+        critical ? `${STATUS_SURFACE.error} ${STATUS_INK.error}` : warn ? `${STATUS_SURFACE.attention} ${STATUS_INK.attention}` : `border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] ${MUTED}`
       }`}
       title={tooltip}
     >
-      {critical ? <AlertTriangle className="w-3.5 h-3.5 text-red-500" /> : <Gauge className="w-3.5 h-3.5" />}
+      {critical ? <AlertTriangle className="w-3.5 h-3.5" /> : <Gauge className="w-3.5 h-3.5" />}
       <span className="tabular-nums">
         {known ? `${fmt(usedTokens)}/${fmt(contextLength)}` : `~${fmt(usedTokens)}`}
       </span>

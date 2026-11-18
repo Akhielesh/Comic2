@@ -77,7 +77,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
           className="w-full max-w-md rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-xl backdrop-blur-xl"
         >
           <div className="flex items-start gap-3 p-5 border-b border-[var(--ds-hairline-soft)]">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
               <Plug className="h-5 w-5" aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
@@ -112,7 +112,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                       aria-checked={isOn}
                       onClick={() => toggle(s.id)}
                       disabled={submitting}
-                      className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left hover:bg-[var(--ds-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/30 disabled:opacity-60"
+                      className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left hover:bg-[var(--ds-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-60"
                     >
                       <span
                         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
@@ -128,7 +128,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                         <span className="flex items-center gap-2">
                           <span className="text-sm font-medium text-[var(--ds-ink)]">{s.displayName}</span>
                           {isConnected && (
-                            <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                            <span className="rounded-full bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ds-success-text)]">
                               Connected
                             </span>
                           )}
@@ -145,13 +145,13 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
           <div className="border-t border-[var(--ds-hairline-soft)] p-5 pt-4">
             {willConsent && (
               <p className="mb-3 flex items-start gap-2 text-xs text-[var(--ds-muted)]">
-                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-success-text)]" />
                 Review the permissions for each service on Google’s consent screen. You can change
                 what is connected at any time.
               </p>
             )}
             {!configured && (
-              <p className="mb-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+              <p className="mb-3 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--ds-warning-text)]">
                 Google isn't configured on the server yet, so connecting may fail until the admin sets the OAuth client.
               </p>
             )}
@@ -173,7 +173,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                   type="button"
                   onClick={() => onSubmit(selectedIds, toDisconnect)}
                   disabled={submitting || !changed}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-60"
                 >
                   {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                   {connectedIds.size ? 'Save changes' : `Connect ${selectedIds.length || ''}`.trim()}

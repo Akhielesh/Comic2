@@ -101,7 +101,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         aria-label="Copy chat ID"
         className={`hidden sm:flex items-center gap-1 rounded-l-xl border border-r-0 border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
-        {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Hash className="h-3.5 w-3.5" />}
+        {done === 'id' ? <Check className="h-3.5 w-3.5 text-[var(--ds-success-text)]" /> : <Hash className="h-3.5 w-3.5" />}
         {done === 'id' ? 'Copied' : 'ID'}
       </button>
       {/* Secondary: the full debug bundle */}
@@ -114,7 +114,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         aria-expanded={open}
         className={`tap-target flex items-center gap-0.5 rounded-xl sm:rounded-l-none sm:rounded-r-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
-        {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600 sm:hidden" /> : <Hash className="h-3.5 w-3.5 sm:hidden" />}
+        {done === 'id' ? <Check className="h-3.5 w-3.5 text-[var(--ds-success-text)] sm:hidden" /> : <Hash className="h-3.5 w-3.5 sm:hidden" />}
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open && (
@@ -294,9 +294,9 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                   if (e.key === 'Enter') commitTitle();
                   if (e.key === 'Escape') setEditingTitle(false);
                 }}
-                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-2 py-1 outline-none focus:border-[#D97757]/40`}
+                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-2 py-1 outline-none focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]`}
               />
-              <button onClick={commitTitle} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
+              <button onClick={commitTitle} className="text-[var(--ds-success-text)] hover:scale-110"><Check className="w-4 h-4" /></button>
               <button onClick={() => setEditingTitle(false)} className="text-[var(--ds-muted)] hover:scale-110"><X className="w-4 h-4" /></button>
             </div>
           ) : (

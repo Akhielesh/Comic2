@@ -272,7 +272,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ sessions, onOpenSource
                   key={value}
                   onClick={() => setOrigin(value)}
                   className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${
-                    active ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`
+                    active ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[color:color-mix(in_srgb,var(--ds-accent)_30%,transparent)]` : `${MUTED} hover:bg-[var(--ds-hover)]`
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" /> {label}
