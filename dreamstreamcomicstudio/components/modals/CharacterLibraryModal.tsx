@@ -46,7 +46,7 @@ export const CharacterLibraryModal: React.FC<CharacterLibraryModalProps> = ({ on
 
     return (
         <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4 animate-fade-in motion-reduce:animate-none`}>
-            <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden`}>
+            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden`}>
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
                     <h2 id={titleId} className={`flex min-w-0 items-center gap-2 ${DIALOG_TITLE}`}>
                         <User className="size-5 shrink-0" aria-hidden="true" /> Character Library

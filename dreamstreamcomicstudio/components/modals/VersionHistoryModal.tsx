@@ -17,7 +17,7 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
     const titleId = useId();
     return (
         <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4 animate-fade-in motion-reduce:animate-none`}>
-            <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[80vh] w-full max-w-lg flex-col`}>
+            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[80vh] w-full max-w-lg flex-col`}>
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
                     <div className="flex min-w-0 items-center gap-2">
                         <Clock className="size-5 shrink-0" aria-hidden="true" />

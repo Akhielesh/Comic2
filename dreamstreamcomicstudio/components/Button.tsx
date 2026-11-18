@@ -1,6 +1,6 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
-import { buttonClasses, type ButtonSize, type ButtonVariant } from './ds/Button';
+import { buttonClasses, labelChildren, type ButtonSize, type ButtonVariant } from './ds/Button';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'danger';
@@ -51,7 +51,7 @@ export const Button: React.FC<ButtonProps> = ({
       ) : icon ? (
         <span className="inline-flex shrink-0 items-center">{icon}</span>
       ) : null}
-      {children}
+      {labelChildren(children)}
     </button>
   );
 };

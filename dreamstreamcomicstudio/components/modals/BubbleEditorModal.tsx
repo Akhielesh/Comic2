@@ -136,7 +136,7 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
 
     return (
         <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4`} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}>
-            <div role="dialog" aria-label="Dialogue Editor" className={`${OVERLAY} flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden md:flex-row`}>
+            <div role="dialog" aria-modal="true" aria-label="Dialogue Editor" className={`${OVERLAY} flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden md:flex-row`}>
 
                 {/* Editor Area (Left/Top) */}
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--ds-well)]">

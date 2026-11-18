@@ -46,7 +46,7 @@ export const LimitExceededModal: React.FC<LimitExceededModalProps> = ({
   const titleId = useId();
   return (
     <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center overflow-y-auto p-4`}>
-      <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} relative w-full max-w-lg p-6`}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} relative w-full max-w-lg p-6`}>
         <button
           type="button"
           className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'absolute right-3 top-3 text-[var(--ds-muted)]' })}

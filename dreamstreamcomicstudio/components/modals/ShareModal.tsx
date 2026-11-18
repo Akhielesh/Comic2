@@ -135,6 +135,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose, isSt
             <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4`} onClick={onClose}>
                 <div
                     role="dialog"
+                    aria-modal="true"
                     aria-labelledby={titleId}
                     className={`${OVERLAY} max-h-[80vh] w-full max-w-lg overflow-y-auto`}
                     onClick={(e) => e.stopPropagation()}

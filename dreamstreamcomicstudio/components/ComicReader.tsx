@@ -807,7 +807,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     >
       {phoneUi && (
         // Screen readers and keyboards can always bring the chrome back, even while it is hidden.
-        <button type="button" className={`sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:${Z.dialog} focus:${RADIUS_CONTROL} focus:bg-[var(--ds-raised)] focus:px-3 focus:py-2 focus:text-[var(--ds-ink)] ${FOCUS_RING}`} onClick={showChrome}>
+        <button type="button" className={`sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 ${Z.dialog} ${RADIUS_CONTROL} focus:bg-[var(--ds-raised)] focus:px-3 focus:py-2 focus:text-[var(--ds-ink)] ${FOCUS_RING}`} onClick={showChrome}>
           Show reader controls
         </button>
       )}
@@ -936,7 +936,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         <div className="flex items-center gap-3 min-w-0">
           <h1 className={`truncate text-lg sm:text-xl ${HEADING}`}>{project.name}</h1>
         </div>
-        <div className="flex items-center gap-1.5 overflow-x-auto p-0.5 [scrollbar-width:none] sm:gap-2 [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center gap-1.5 overflow-x-auto p-1 [scrollbar-width:none] sm:gap-2 [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => navigate('gallery')}
             className={TOOL_BTN}

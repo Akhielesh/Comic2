@@ -58,7 +58,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
 
     return (
         <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center overflow-y-auto p-4 animate-fade-in motion-reduce:animate-none`}>
-            <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} relative max-h-[calc(var(--app-h,100dvh)-2rem)] w-full max-w-md overflow-y-auto animate-slide-up motion-reduce:animate-none`}>
+            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} relative max-h-[calc(var(--app-h,100dvh)-2rem)] w-full max-w-md overflow-y-auto animate-slide-up motion-reduce:animate-none`}>
                 <button
                     onClick={onClose}
                     aria-label="Close"
@@ -92,7 +92,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
                     </div>
 
                     {/* Sub Scores Input */}
-                    <div className={`grid grid-cols-2 gap-4 bg-[var(--ds-well)] p-4 ${RADIUS_PANEL} ${HAIRLINE}`}>
+                    <div className={`grid grid-cols-1 gap-4 bg-[var(--ds-well)] sm:grid-cols-2 p-4 ${RADIUS_PANEL} ${HAIRLINE}`}>
                         {(Object.keys(scores) as Array<keyof typeof scores>).map(key => (
                             <div key={key} className="flex flex-col gap-1">
                                 <div className={`flex justify-between ${OVERLINE}`}>
@@ -106,7 +106,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
                                             onClick={() => handleScoreChange(key, v)}
                                             aria-label={`${key} ${v} of 5`}
                                             aria-pressed={v <= scores[key]}
-                                            className={`group/score flex h-6 w-full items-center coarse:h-11 ${FOCUS_RING}`}
+                                            className={`group/score flex h-6 w-full items-center coarse:h-11 coarse:min-w-11 ${FOCUS_RING}`}
                                         >
                                             <span aria-hidden="true" className={`h-2 w-full rounded-[var(--ds-radius-pill)] transition-colors duration-[var(--ds-motion-medium)] ${v <= scores[key] ? 'bg-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] group-hover/score:bg-[var(--ds-hairline)]'}`} />
                                         </button>

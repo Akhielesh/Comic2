@@ -17,7 +17,7 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({ onClose, selectedPan
     return (
         <ModalPortal>
             <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4`} onClick={onClose}>
-                <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[80vh] w-full max-w-4xl flex-col p-4 sm:p-6`} onClick={e => e.stopPropagation()}>
+                <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[80vh] w-full max-w-4xl flex-col p-4 sm:p-6`} onClick={e => e.stopPropagation()}>
                     <div className="mb-4 flex items-center justify-between gap-3">
                         <h3 id={titleId} className={`min-w-0 ${DIALOG_TITLE}`}>Version History for Panel</h3>
                         <button onClick={onClose} className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })} aria-label="Close"><X /></button>
