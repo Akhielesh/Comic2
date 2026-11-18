@@ -1,7 +1,9 @@
 
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { X, Star, MessageSquare } from 'lucide-react';
 import { Review } from '../../types';
+import { buttonClasses } from '../ds/Button';
+import { DIALOG_TITLE, FIELD, FOCUS_RING, HAIRLINE, INK, MUTED, OVERLAY, OVERLINE, RADIUS_PANEL, SCRIM, Z } from '../chat/studioDesign';
 
 interface ReviewModalProps {
     isOpen: boolean;
@@ -20,6 +22,7 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
     });
     const [comment, setComment] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const titleId = useId();
 
     if (!isOpen) return null;
 
@@ -54,18 +57,19 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
     };
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-            <div className="bg-white rounded-xl shadow-2xl border-4 border-black w-full max-w-md overflow-hidden animate-slide-up relative">
+        <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center overflow-y-auto p-4 animate-fade-in motion-reduce:animate-none`}>
+            <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} relative max-h-[calc(var(--app-h,100dvh)-2rem)] w-full max-w-md overflow-y-auto animate-slide-up motion-reduce:animate-none`}>
                 <button
                     onClick={onClose}
-                    className="absolute top-4 right-4 p-2 hover:bg-slate-100 rounded-full"
+                    aria-label="Close"
+                    className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'absolute right-3 top-3 text-[var(--ds-muted)]' })}
                 >
-                    <X className="w-5 h-5 text-slate-500" />
+                    <X className="size-5" />
                 </button>
 
-                <div className="p-6 text-center border-b-2 border-slate-100">
-                    <h2 className="font-display text-2xl mb-1">Rate "{projectName}"</h2>
-                    <p className="text-slate-500 text-sm font-comic">How was it? Be honest!</p>
+                <div className="border-b border-[var(--ds-hairline)] px-12 py-6 text-center">
+                    <h2 id={titleId} className={`mb-1 [overflow-wrap:anywhere] ${DIALOG_TITLE}`}>Rate "{projectName}"</h2>
+                    <p className={`text-sm ${MUTED}`}>How was it? Be honest!</p>
                 </div>
 
                 <div className="p-6 space-y-6">
@@ -75,33 +79,37 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
                             const fill = Math.max(0, Math.min(1, rating - starIdx + 1));
                             return (
                                 <div key={starIdx} className="relative w-10 h-10">
-                                    <Star className="w-full h-full text-slate-200 fill-slate-200" />
+                                    <Star className="h-full w-full fill-[var(--ds-well-strong)] text-[var(--ds-well-strong)]" aria-hidden="true" />
                                     <div className="absolute inset-0 overflow-hidden" style={{ width: `${fill * 100}%` }}>
-                                        <Star className="w-full h-full text-brand-yellow fill-brand-yellow drop-shadow-sm" />
+                                        <Star className="h-full w-full fill-[var(--ds-ink)] text-[var(--ds-ink)]" aria-hidden="true" />
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
-                    <div className="text-center font-bold text-xl text-brand-yellow">
+                    <div className={`text-center text-xl font-semibold tabular-nums ${INK}`}>
                         {rating > 0 ? rating.toFixed(1) : "Rate the categories below!"}
                     </div>
 
                     {/* Sub Scores Input */}
-                    <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg border-2 border-slate-200 animate-fade-in">
+                    <div className={`grid grid-cols-2 gap-4 bg-[var(--ds-well)] p-4 ${RADIUS_PANEL} ${HAIRLINE}`}>
                         {(Object.keys(scores) as Array<keyof typeof scores>).map(key => (
                             <div key={key} className="flex flex-col gap-1">
-                                <div className="flex justify-between text-xs font-bold uppercase text-slate-500">
-                                    {key} <span className={scores[key] > 0 ? "text-black" : "text-slate-300"}>{scores[key] || '-'}/5</span>
+                                <div className={`flex justify-between ${OVERLINE}`}>
+                                    {key} <span className={`tabular-nums ${scores[key] > 0 ? INK : MUTED}`}>{scores[key] || '-'}/5</span>
                                 </div>
                                 {/* Custom Star Input for Sub-categories or Range? Range is easier for now, Stars are nicer. Let's use Stars for sub-cats too? Space is tight. Range is fine. */}
-                                <div className="flex items-center gap-1 h-6">
+                                <div className="flex items-center gap-1">
                                     {[1, 2, 3, 4, 5].map(v => (
                                         <button
                                             key={v}
                                             onClick={() => handleScoreChange(key, v)}
-                                            className={`w-full h-2 rounded-full transition-all ${v <= scores[key] ? 'bg-brand-blue' : 'bg-slate-200 hover:bg-slate-300'}`}
-                                        />
+                                            aria-label={`${key} ${v} of 5`}
+                                            aria-pressed={v <= scores[key]}
+                                            className={`group/score flex h-6 w-full items-center coarse:h-11 ${FOCUS_RING}`}
+                                        >
+                                            <span aria-hidden="true" className={`h-2 w-full rounded-[var(--ds-radius-pill)] transition-colors duration-[var(--ds-motion-medium)] ${v <= scores[key] ? 'bg-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] group-hover/score:bg-[var(--ds-hairline)]'}`} />
+                                        </button>
                                     ))}
                                 </div>
                             </div>
@@ -114,22 +122,23 @@ export const ReviewModal: React.FC<ReviewModalProps> = ({ isOpen, onClose, onSub
                             value={comment}
                             onChange={(e) => setComment(e.target.value)}
                             placeholder="Write a review (optional)..."
-                            className="w-full h-24 p-3 border-2 border-slate-300 rounded-lg focus:border-black focus:outline-none resize-none font-comic text-sm"
+                            aria-label="Review"
+                            className={`${FIELD} block h-24 w-full resize-none p-3 text-sm`}
                         />
-                        <MessageSquare className="absolute bottom-3 right-3 text-slate-300 w-4 h-4" />
+                        <MessageSquare className={`pointer-events-none absolute bottom-3 right-3 size-4 ${MUTED}`} aria-hidden="true" />
                     </div>
 
                     <div className="flex gap-3">
                         <button
                             onClick={onClose}
-                            className="flex-1 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-lg transition-colors border-2 border-transparent hover:border-slate-200"
+                            className={buttonClasses({ variant: 'ghost', size: 'lg', className: 'flex-1' })}
                         >
                             Skip
                         </button>
                         <button
                             onClick={submit}
                             disabled={rating === 0 || isSubmitting}
-                            className={`flex-1 py-3 font-bold text-white rounded-lg border-2 border-black shadow-comic transition-all ${rating > 0 && !isSubmitting ? 'bg-brand-blue hover:-translate-y-1 hover:shadow-lg' : 'bg-slate-300 cursor-not-allowed border-slate-300'}`}
+                            className={buttonClasses({ size: 'lg', className: 'flex-1 disabled:cursor-not-allowed' })}
                         >
                             {isSubmitting ? 'Posting...' : 'Post Review'}
                         </button>

@@ -134,7 +134,7 @@ const PublicComicReader = lazyImportWithRetry(() =>
 );
 
 // The FX toggle's halftone screen: the library's seamless dot tile (no seams on any screen size), laid
-// over the art like the old .comic-halftone (multiply at 16%), never catching taps.
+// over the art as a multiply screen at 16%, never catching taps.
 const HALFTONE_TILE = halftone({ cell: 4, angle: 45, color: '#000000', opacity: 0.55, radius: 0.3 });
 const HalftoneOverlay: React.FC = () => (
   <span
