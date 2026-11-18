@@ -142,7 +142,7 @@ const AvoidEditor: React.FC<{ avoid: string[]; onChange: (next: string[]) => voi
         maxLength={120}
         aria-label="Add something to avoid"
         placeholder="Add a never…"
-        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11 coarse:text-base"
+        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-base"
       />
     </div>
   );

@@ -39,9 +39,9 @@ const ringFor = (clip: ClipVM): string => {
       return 'ring-2 ring-red-500/70';
     case 'queued':
     case 'rendering':
-      return 'ring-2 ring-[#D97757]/60';
+      return 'ring-2 ring-ds-accent/60';
     case 'custom':
-      return 'ring-1 ring-[#D97757]/50';
+      return 'ring-1 ring-ds-accent/50';
     case 'planned':
     case 'empty':
       return 'border border-dashed border-[var(--ds-hairline)]';
@@ -167,7 +167,7 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
       className={cx(
         'no-callout group relative flex shrink-0 cursor-pointer select-none flex-col items-center gap-0.5 rounded-xl p-1',
         FOCUS_RING,
-        selected ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]',
+        selected ? 'bg-[var(--ds-accent-soft)]' : 'hover:bg-[var(--ds-hover)]',
         lifted && 'z-10 bg-[var(--ds-surface-strong)] shadow-[0_8px_24px_rgba(0,0,0,0.22)]',
         animate && !lifted && 'transition-transform duration-150'
       )}
@@ -267,7 +267,7 @@ export const AddClip: React.FC<{
         aria-hidden
         className={cx(
           'flex items-center justify-center rounded-lg border border-dashed',
-          ghost ? 'border-[var(--ds-hairline)] bg-transparent text-[var(--ds-muted)]' : 'border-[#D97757]/45 bg-[#D97757]/5 text-[var(--ds-accent)]'
+          ghost ? 'border-[var(--ds-hairline)] bg-transparent text-[var(--ds-muted)]' : 'border-ds-accent/45 bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
         )}
         style={{ width: compact ? 36 : ghost ? 56 : 44, height: h }}
       >

@@ -12,6 +12,7 @@ import { ShareSheet } from './ShareSheet';
 import { CHANNEL_LABEL, INTENT_CHANNELS, intentUrl } from './shareModel';
 import { useShareCapabilities } from './useShareCapabilities';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 export interface ShareTarget {
   url: string;
   title: string;
@@ -34,7 +35,7 @@ export const openShareSheet = (): void => {
 
 const buttonCls = (compact?: boolean) =>
   cx(
-    'relative inline-flex h-11 items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 touch-manipulation',
+    `relative inline-flex h-11 items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} touch-manipulation`,
     compact ? 'w-11' : 'px-3'
   );
 

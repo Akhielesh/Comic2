@@ -96,7 +96,7 @@ const ROLE_LABEL: Record<MediaItem['role'], string> = {
 
 const btn = cx('tap-target inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45', FOCUS_RING);
 const primary = cx('tap-target inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-[var(--ds-accent)] px-3 text-[12.5px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45', FOCUS_RING);
-const select = 'h-9 min-w-0 max-w-full flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] sm:text-[12.5px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const select = `h-9 min-w-0 max-w-full flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] sm:text-[12.5px] focus:outline-none ${FOCUS_RING}`;
 
 type RefChoice = { key: string; label: string; owner: RefOwner };
 

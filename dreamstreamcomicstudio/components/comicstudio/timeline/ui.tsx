@@ -6,11 +6,11 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { DIALOG_TITLE_FROM_SM, TONE_CHIP, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
+import { DIALOG_TITLE_FROM_SM, FOCUS_RING as RECIPE_FOCUS_RING, TONE_CHIP, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { useFocusTrap } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
-export const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+export const FOCUS_RING = RECIPE_FOCUS_RING;
 
 /** prefers-reduced-motion (live). */
 export function useReducedMotion(): boolean {
@@ -195,7 +195,7 @@ export const Badge: React.FC<{
       data-on-art={onArt ? '' : undefined}
       className={cx(
         'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
-        tone === 'accent' && (onArt ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)]' : 'bg-[#D97757]/15 text-[var(--ds-ink)]'),
+        tone === 'accent' && (onArt ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)]' : 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'),
         tone === 'warn' && chip.warning,
         tone === 'danger' && chip.danger,
         tone === 'ok' && chip.success,

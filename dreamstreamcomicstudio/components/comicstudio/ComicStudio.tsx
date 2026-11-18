@@ -50,7 +50,7 @@ import { deriveLock } from '../../shared/comic/modelLock';
 import { historyEnabled, type StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN, isComicsHost } from '../../services/productHost';
 import { useComicTheme, useComicThemeScope } from './useComicTheme';
@@ -145,7 +145,7 @@ const TitleField: React.FC<{ title: string; onCommit: (title: string) => void }>
       spellCheck={false}
       enterKeyHint="done"
       // 16 px on touch so focusing the title never zooms the page (iOS); ellipsis when it doesn't fit.
-      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[#D97757]/45 focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px] coarse:text-base`}
+      className={`min-w-0 max-w-[28rem] flex-1 truncate rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)] outline-none ${TRANSITION} hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-soft)] coarse:min-h-[44px] coarse:text-base`}
     />
   );
 };
@@ -284,8 +284,8 @@ const HeaderSlots: React.FC<{ slots: readonly HeaderSlotRegistration[]; from: nu
 const QUALITY_DOT: Record<string, string> = { draft: 'bg-sky-500', standard: 'bg-emerald-500', pro: 'bg-[var(--ds-accent)]' };
 
 // Fine pointers keep the calm 32 px pill; touch gets a real 44 px target (mobile.md §2.4).
-const headerBtn = `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5 press`;
-const headerIconBtn = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:w-11 press`;
+const headerBtn = `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:px-3.5 press`;
+const headerIconBtn = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING} coarse:h-11 coarse:w-11 press`;
 /**
  * headerIconBtn's family (borderless, no fill) for a phone control that also shows a short figure: the wallet's
  * "≈4%" or "$0.42" (declutter F4: a filled pill between two flat icons read as pressed).
@@ -660,7 +660,7 @@ const UsdField: React.FC<{
     setDraft(n > 0 ? String(n) : '');
   };
   return (
-    <span className="inline-flex items-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-2 focus-within:border-[#D97757]/45">
+    <span className="inline-flex items-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-2 focus-within:border-[var(--ds-focus)]">
       <span className="text-[13px] text-[var(--ds-muted)]">$</span>
       <input
         id={id}
@@ -746,7 +746,7 @@ const PctField: React.FC<{
     setDraft(n > 0 ? String(n) : '');
   };
   return (
-    <span className="inline-flex items-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pr-2 focus-within:border-[#D97757]/45">
+    <span className="inline-flex items-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pr-2 focus-within:border-[var(--ds-focus)]">
       <input
         id={id}
         aria-label={`${label} (% of your usage)`}

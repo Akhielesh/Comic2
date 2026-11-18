@@ -14,6 +14,7 @@ import { useAction } from '../conversation/cards/useAction';
 import { LibraryImage } from './LibraryImage';
 import { PresetThumb } from './procedural/PresetThumb';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 type StylePresetsData = Extract<Card, { type: 'style_presets' }>;
 
 /** The "saved by software" line (decisions-final #6). */
@@ -54,7 +55,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
     <CardShell
       title="Styles that fit"
       icon={<Palette className="h-4 w-4" />}
-      right={<span className="rounded-full bg-[#D97757]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-accent)]">Free</span>}
+      right={<span className="rounded-full bg-[var(--ds-accent-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-accent)]">Free</span>}
       aria-label="Style presets"
     >
       {card.note && <p className="mb-3 text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{card.note}</p>}
@@ -82,9 +83,9 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
                 if (!on && !anyPending) void run(`use:${p.id}`, { type: 'use_preset', presetId: p.id });
               }}
               className={cx(
-                'group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 aria-disabled:cursor-wait',
+                `group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left ${FOCUS_RING} aria-disabled:cursor-wait`,
                 'motion-safe:transition-[transform,border-color,box-shadow] motion-safe:duration-200',
-                on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/25' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/35 motion-safe:hover:-translate-y-px'
+                on ? 'border-ds-accent/60 ring-2 ring-ds-accent/25' : 'border-[var(--ds-hairline)] hover:border-ds-accent/35 motion-safe:hover:-translate-y-px'
               )}
             >
               <span className="relative block aspect-[4/5] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>

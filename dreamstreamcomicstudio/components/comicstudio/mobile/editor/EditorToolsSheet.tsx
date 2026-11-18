@@ -17,8 +17,9 @@ import React, { useRef, useState } from 'react';
 import { ChevronRight, PanelRightOpen, X } from 'lucide-react';
 import { cycleToolsDetent, nextToolsDetent, toolsSheetHeights, type ToolsDetent } from './editorModel';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
-const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const FOCUS = FOCUS_RING;
 
 export interface EditorToolsSheetProps {
   presentation: 'sheet' | 'side' | 'aside' | 'segment';

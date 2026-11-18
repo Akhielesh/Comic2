@@ -4,19 +4,7 @@
 
 import React from 'react';
 import { Loader2 } from 'lucide-react';
-import {
-  ACCENT_BG,
-  ACCENT_BG_HOVER,
-  HAIRLINE,
-  INK,
-  MUTED,
-  OVERLINE,
-  RADIUS_PANEL,
-  SEGMENTED_ACTIVE,
-  SHADOW_SOFT,
-  TONE_CHIP,
-  TRANSITION
-} from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, FOCUS_RING, HAIRLINE, INK, MUTED, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 import { ARIA_DISABLED, busyButtonProps } from '../board/busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -67,7 +55,7 @@ export const PrimaryButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy,
     {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50`,
+      `inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold text-white ${ACCENT_BG} ${ACCENT_BG_HOVER} ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} ${FOCUS_RING}`,
       sizeCls(size),
       className
     )}
@@ -84,7 +72,7 @@ export const GhostButton: React.FC<ButtonProps> = ({ busy, keepFocusWhileBusy, s
     {...busyButtonProps({ busy, keepFocusWhileBusy, disabled, onClick, onKeyDown })}
     aria-busy={busy || undefined}
     className={cx(
-      `inline-flex items-center justify-center gap-1.5 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] font-medium ${INK} hover:bg-[var(--ds-hover)] ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+      `inline-flex items-center justify-center gap-1.5 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] font-medium ${INK} hover:bg-[var(--ds-hover)] ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-45 ${ARIA_DISABLED} ${FOCUS_RING}`,
       sizeCls(size),
       className
     )}
@@ -106,11 +94,11 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     {...rest}
     aria-pressed={selected === undefined ? undefined : selected}
     className={cx(
-      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:text-[14px]`,
+      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING} coarse:min-h-[44px] coarse:text-[14px]`,
       selected
         ? // An answered card keeps the chosen chip at full strength; only the others fade.
-          'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)] disabled:opacity-100'
-        : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)]',
+          'border-ds-accent/45 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)] disabled:opacity-100'
+        : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:border-ds-accent/35 hover:bg-[var(--ds-hover)]',
       className
     )}
   >
@@ -187,7 +175,7 @@ export function Segmented<T extends string | number>({
             className={cx(
               // Sized to its own label and sharing the spare width (flex-auto), never an equal split that cuts the
               // longer label while the track still has room (FX-15, as board/ui Segmented).
-              `flex min-w-0 flex-auto items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]`,
+              `flex min-w-0 flex-auto items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} ${FOCUS_RING} coarse:min-h-[44px]`,
               on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >

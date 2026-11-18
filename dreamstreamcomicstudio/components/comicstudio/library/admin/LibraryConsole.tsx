@@ -32,7 +32,7 @@ import {
   type LibraryStepView
 } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
-import { ACCENT_TEXT, OVERLINE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+import { ACCENT_TEXT, FOCUS_RING, OVERLINE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import {
   cancelLibraryRun,
   getLibraryManifest,
@@ -76,8 +76,8 @@ const STATUS_LABEL: Record<LibraryAssetStatus, string> = {
 };
 const STATUS_CLASS: Record<LibraryAssetStatus, string> = {
   pending: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
-  generating: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
-  analyzing: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
+  generating: 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]',
+  analyzing: 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]',
   needs_review: TONE_CHIP.warning,
   published: TONE_CHIP.success,
   rejected: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
@@ -99,7 +99,7 @@ const STATUS_ON_ART: Record<LibraryAssetStatus, string> = {
 };
 
 const btn =
-  'inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-xl px-3 text-[13px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]';
+  `inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-xl px-3 text-[13px] font-medium ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]`;
 const primary = `${btn} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
 const ghost = `${btn} border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 const panel = 'rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3 sm:p-4';
@@ -572,11 +572,11 @@ export const LibraryConsole: React.FC = () => {
             />
           </label>
           <label className="flex min-h-[36px] items-center gap-2 text-[12.5px]">
-            <input type="checkbox" checked={includeOptional} onChange={(e) => setIncludeOptional(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+            <input type="checkbox" checked={includeOptional} onChange={(e) => setIncludeOptional(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
             Include optional style anchors
           </label>
           <label className="flex min-h-[36px] items-center gap-2 text-[12.5px]">
-            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
             Force rebuild {selected.size ? 'selected' : 'everything'}
           </label>
         </div>
@@ -650,7 +650,7 @@ export const LibraryConsole: React.FC = () => {
         )}
 
         {confirming && quote && (
-          <div role="dialog" aria-label="Confirm the build" className="mt-3 rounded-xl border border-[#D97757]/40 bg-[#D97757]/5 p-3">
+          <div role="dialog" aria-label="Confirm the build" className="mt-3 rounded-xl border border-ds-accent/40 bg-[var(--ds-accent-soft)] p-3">
             <p className="text-[13px] font-semibold">
               Draw {quote.images} image{quote.images === 1 ? '' : 's'} for about {usd(quote.usd)}?
             </p>
@@ -685,7 +685,7 @@ export const LibraryConsole: React.FC = () => {
               const status: LibraryAssetStatus = row?.status ?? 'pending';
               const isSel = selected.has(e.id);
               return (
-                <li key={e.id} className={cx('min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)]', openId === e.id ? 'border-[#D97757]/55' : 'border-[var(--ds-hairline)]')}>
+                <li key={e.id} className={cx('min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)]', openId === e.id ? 'border-ds-accent/55' : 'border-[var(--ds-hairline)]')}>
                   <button type="button" onClick={() => setOpenId(openId === e.id ? null : e.id)} className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/45" aria-expanded={openId === e.id}>
                     <span className="relative block aspect-[4/3] w-full overflow-hidden bg-[var(--ds-well)] text-[var(--ds-muted)]">
                       <EntryArt entry={e} url={row?.thumb || row?.published?.thumb} />
@@ -706,7 +706,7 @@ export const LibraryConsole: React.FC = () => {
                     </span>
                   </button>
                   <label className="flex min-h-[32px] cursor-pointer items-center gap-1.5 border-t border-[var(--ds-hairline-soft)] px-2 text-[11px] text-[var(--ds-muted)] coarse:min-h-[44px]">
-                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} aria-label={`Select ${e.id}`} className="h-3.5 w-3.5 accent-[#D97757]" /> Select
+                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} aria-label={`Select ${e.id}`} className="h-3.5 w-3.5 accent-[var(--ds-accent)]" /> Select
                   </label>
                 </li>
               );

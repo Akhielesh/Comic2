@@ -348,7 +348,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             disabled={busy || (suspended && v !== 'private')}
             onClick={() => choose(v)}
             className={cx(
-              'min-h-[44px] min-w-0 rounded-[10px] px-1.5 text-[12px] font-medium leading-tight touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50',
+              `min-h-[44px] min-w-0 rounded-[10px] px-1.5 text-[12px] font-medium leading-tight touch-manipulation ${FOCUS_RING} disabled:opacity-50`,
               on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
@@ -710,7 +710,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             onClick={onClose}
             data-autofocus
             aria-label="Close"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
           >
             <X className="h-5 w-5" aria-hidden />
           </button>

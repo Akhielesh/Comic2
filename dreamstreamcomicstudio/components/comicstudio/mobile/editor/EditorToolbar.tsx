@@ -17,7 +17,7 @@ import React from 'react';
 import { Cloud, Eye, EyeOff, Layers, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../../shared/comic/doc';
 
-import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -64,7 +64,7 @@ const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
   { kind: 'sfx', label: 'SFX', icon: <Zap className="h-4 w-4" aria-hidden /> }
 ];
 
-const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const FOCUS = FOCUS_RING;
 
 const BarButton: React.FC<{
   label: string;
@@ -96,7 +96,7 @@ const BarButton: React.FC<{
       className={cx(
         'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
         vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5',
-        on ? 'bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
+        on ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         FOCUS
       )}
     >
@@ -132,7 +132,7 @@ const TrayButton: React.FC<{ label: string; short: string; icon: React.ReactNode
     className={cx(
       'press inline-flex h-11 shrink-0 items-center justify-center gap-1 rounded-xl border text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
       vertical ? 'w-11' : 'px-3',
-      pressed ? 'border-[#D97757]/50 bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
+      pressed ? 'border-ds-accent/50 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
       tone === 'warn' ? TONE_TEXT.warning : 'text-[var(--ds-ink)]',
       FOCUS
     )}

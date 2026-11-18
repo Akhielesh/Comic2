@@ -7,7 +7,7 @@
 import React, { useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { HAIRLINE } from '../../../chat/studioDesign';
+import { FOCUS_RING, HAIRLINE } from '../../../chat/studioDesign';
 import { useSheetBehaviour } from '../../conversation/PopSheet';
 import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
@@ -85,7 +85,7 @@ export const SideSheet: React.FC<SideSheetProps> = ({
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING} coarse:h-11 coarse:w-11`}
         >
           <X className="h-4 w-4" />
         </button>

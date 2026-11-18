@@ -9,6 +9,7 @@ import { ORIGIN_LABEL, versionCostLabel, type VersionItem } from './bookModel';
 import { Badge, BlockedTile, cx, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 export interface CompareViewProps {
   studio: StudioController;
   doc: ComicDoc;
@@ -90,7 +91,7 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
           max={100}
           value={pos}
           onChange={(e) => setPos(Number(e.target.value))}
-          className="mt-2 h-11 w-full accent-[#D97757]"
+          className="mt-2 h-11 w-full accent-[var(--ds-accent)]"
           aria-valuetext={`${pos}% v${a.n}`}
         />
       </div>
@@ -107,7 +108,7 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.label} className={cx('border-t border-[var(--ds-hairline-soft)]', r.differs && 'bg-[#D97757]/5')}>
+            <tr key={r.label} className={cx('border-t border-[var(--ds-hairline-soft)]', r.differs && 'bg-[var(--ds-accent-soft)]')}>
               <th scope="row" className="py-1.5 pr-2 text-left font-medium text-[var(--ds-muted)]">
                 {r.label}
               </th>
@@ -127,7 +128,7 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
                 type="button"
                 disabled={useDisabled || v.blocked}
                 onClick={() => onUse(v)}
-                className="tap-target inline-flex h-9 items-center rounded-xl bg-[var(--ds-accent)] px-4 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-45"
+                className={`tap-target inline-flex h-9 items-center rounded-xl bg-[var(--ds-accent)] px-4 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`}
               >
                 Use v{v.n} · Free
               </button>

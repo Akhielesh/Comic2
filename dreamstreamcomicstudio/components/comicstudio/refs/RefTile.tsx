@@ -14,7 +14,7 @@ import { GripVertical, Star, Trash2, Crop, Undo2, ArrowRightLeft } from 'lucide-
 import type { ContentRating } from '../../../shared/comic/safety';
 import type { RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { REF_LIMITS, refOwnerKey } from '../../../shared/comic/refs';
-import { TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { labelText, labelsFor, type RefUsage } from './refsModel';
@@ -97,9 +97,9 @@ export const RefTile: React.FC<RefTileProps> = ({ refAsset: ref, index, count, o
       onClick={onSelect}
       onKeyDown={onKeyDown}
       className={cx(
-        'group relative aspect-square min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-well)] outline-none transition-shadow motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60',
-        selected ? 'border-[#D97757] ring-2 ring-[#D97757]/40' : 'border-[var(--ds-hairline)]',
-        dropTarget && 'ring-2 ring-[#D97757]/70'
+        `group relative aspect-square min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-well)] outline-none transition-shadow motion-reduce:transition-none ${FOCUS_RING}`,
+        selected ? 'border-[var(--ds-accent)] ring-2 ring-ds-accent/40' : 'border-[var(--ds-hairline)]',
+        dropTarget && 'ring-2 ring-ds-accent/70'
       )}
     >
       <SafetyVeil asset={ref} rating={rating}>
@@ -169,10 +169,10 @@ export interface RefActionsProps {
 // The action button's shape without an ink (`cx` does not merge: a tone stacked on the neutral ink
 // loses to it). ACTION_BTN is the neutral action; Remove is ACTION_BTN_SHAPE + TONE_TEXT.danger.
 const ACTION_BTN_SHAPE =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-45';
+  `inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none hover:bg-[var(--ds-hover)] ${FOCUS_RING} disabled:opacity-45`;
 const ACTION_BTN = `${ACTION_BTN_SHAPE} text-[var(--ds-ink)]`;
 const FIELD =
-  'min-h-[44px] w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 text-[16px] sm:text-[13px] text-[var(--ds-ink)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+  `min-h-[44px] w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 text-[16px] sm:text-[13px] text-[var(--ds-ink)] focus:outline-none ${FOCUS_RING}`;
 
 /** The selected photo's actions (full width under the grid). */
 export const RefActions: React.FC<RefActionsProps> = ({ refAsset: ref, index, owner, moveTargets, onMakeMain, onLabel, onNote, onCrop, onTransfer, onRemove, busy }) => {

@@ -19,6 +19,7 @@ import { useCostFormat } from '../cost';
 import type { StudioActOutcome } from '../../types';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
 export const presetOps = (doc: ComicDoc, preset: StylePreset): DocOp[] => {
   const patch: Partial<Omit<StyleBible, 'options'>> & { board?: null } = {
@@ -119,7 +120,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
       </div>
 
       {confirming && (
-        <div role="alertdialog" aria-label="Replace locked style" className="rounded-xl border border-[#D97757]/35 bg-[#D97757]/10 p-3 text-[12px] text-[var(--ds-ink)]">
+        <div role="alertdialog" aria-label="Replace locked style" className="rounded-xl border border-ds-accent/35 bg-[var(--ds-accent-soft)] p-3 text-[12px] text-[var(--ds-ink)]">
           <p>
             Replace your locked style with <strong>{confirming.name}</strong>? Pages already drawn will be marked out of date (nothing is redrawn
             until you ask).
@@ -143,7 +144,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
       )}
 
       {custom && (
-        <div className="flex items-start gap-2 rounded-xl border border-[#D97757]/40 bg-[#D97757]/10 px-3 py-2.5">
+        <div className="flex items-start gap-2 rounded-xl border border-ds-accent/40 bg-[var(--ds-accent-soft)] px-3 py-2.5">
           {locked ? <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden /> : <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
           <div className="min-w-0">
             <div className="text-[13px] font-semibold text-[var(--ds-ink)]">
@@ -167,8 +168,8 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                 aria-checked={on}
                 onClick={() => choose(preset)}
                 className={cx(
-                  'group relative overflow-hidden rounded-xl border text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50',
-                  on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/30' : 'border-[var(--ds-hairline)] hover:-translate-y-px hover:border-[#D97757]/35'
+                  `group relative overflow-hidden rounded-xl border text-left transition-all duration-200 ${FOCUS_RING}`,
+                  on ? 'border-ds-accent/60 ring-2 ring-ds-accent/30' : 'border-[var(--ds-hairline)] hover:-translate-y-px hover:border-ds-accent/35'
                 )}
               >
                 <span data-preset-art="" className="relative block aspect-[16/9] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>

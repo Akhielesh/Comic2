@@ -11,6 +11,7 @@ import { Check, ChevronDown, Globe } from 'lucide-react';
 import { dirOf, sameLanguage } from '../../../shared/comic/languages';
 import { readerString } from './readerStrings';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 /** What a reader surface needs to offer a language switch (also ImmersiveReader's `language`). */
 export interface ReaderLanguageSlot {
   current: string;
@@ -150,7 +151,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
         title={strings.choose}
         onClick={() => (open ? close(false) : openList())}
         onKeyDown={onButtonKey}
-        className="inline-flex min-h-[44px] min-w-[44px] max-w-[12rem] items-center justify-center gap-1.5 rounded-xl px-2.5 text-[13px] font-medium text-inherit transition-colors duration-150 hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none"
+        className={`inline-flex min-h-[44px] min-w-[44px] max-w-[12rem] items-center justify-center gap-1.5 rounded-xl px-2.5 text-[13px] font-medium text-inherit transition-colors duration-150 hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] ${FOCUS_RING} motion-reduce:transition-none`}
       >
         <Globe className="h-[18px] w-[18px] shrink-0" aria-hidden />
         {!compact && (

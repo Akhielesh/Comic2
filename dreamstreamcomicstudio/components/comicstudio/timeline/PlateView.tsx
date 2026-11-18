@@ -4,7 +4,7 @@
 
 import React, { useId, useMemo } from 'react';
 import { DEFAULT_BOOK, type ComicDoc } from '../../../shared/comic/doc';
-import { TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, TONE_TEXT } from '../../chat/studioDesign';
 import { PLATE_COLORS, PLATE_FONTS, plateLayout, type PlateKind, type PlateLayout } from './plates';
 
 export interface PlateViewProps {
@@ -103,7 +103,7 @@ export const PlateEditor: React.FC<{
     .filter(Boolean);
   const tooMany = creditLines.length > 8 || creditLines.some((l) => l.length > 120);
   const tooLong = blurb.length > 600;
-  const field = 'mt-1 w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[16px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none sm:text-[13px]';
+  const field = 'mt-1 w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[16px] text-[var(--ds-ink)] focus:border-[var(--ds-focus)] focus:outline-none sm:text-[13px]';
   const preview = { ...doc, book: { ...(doc.book ?? DEFAULT_BOOK), credits: creditLines.slice(0, 8), blurb } };
   return (
     <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
@@ -114,7 +114,7 @@ export const PlateEditor: React.FC<{
         {kind === 'title' && (
           <>
             <p className="text-[var(--ds-muted)]">The title page shows the cover title and tagline (or the comic’s title and logline). Edit them where they live — free.</p>
-            <button type="button" onClick={onEditCover} className="tap-target h-9 rounded-xl border border-[var(--ds-hairline)] px-3 font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45">
+            <button type="button" onClick={onEditCover} className={`tap-target h-9 rounded-xl border border-[var(--ds-hairline)] px-3 font-medium hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}>
               Edit cover text
             </button>
           </>
@@ -143,11 +143,11 @@ export const PlateEditor: React.FC<{
                 onSave(kind === 'end' ? { credits: creditLines } : { blurb: blurb.trim() ? blurb.trim() : null });
                 onClose();
               }}
-              className="tap-target h-9 rounded-xl bg-[var(--ds-accent)] px-4 font-semibold text-white hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-45"
+              className={`tap-target h-9 rounded-xl bg-[var(--ds-accent)] px-4 font-semibold text-white hover:bg-[var(--ds-accent-hover)] ${FOCUS_RING} disabled:opacity-45`}
             >
               Save · Free
             </button>
-            <button type="button" onClick={onClose} className="tap-target h-9 rounded-xl border border-[var(--ds-hairline)] px-3 font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45">
+            <button type="button" onClick={onClose} className={`tap-target h-9 rounded-xl border border-[var(--ds-hairline)] px-3 font-medium hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}>
               Cancel
             </button>
           </div>

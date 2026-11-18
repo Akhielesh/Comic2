@@ -45,9 +45,9 @@ const STATUS_LABEL: Partial<Record<DerivedStatus, string>> = {
 };
 
 const STATUS_TONE: Partial<Record<DerivedStatus, string>> = {
-  missing: 'border-[#D97757]/40 text-[var(--ds-ink)]',
-  stale: 'border-[#D97757]/40 text-[var(--ds-ink)]',
-  stale_edited: 'border-[#D97757]/40 text-[var(--ds-ink)]',
+  missing: 'border-ds-accent/40 text-[var(--ds-ink)]',
+  stale: 'border-ds-accent/40 text-[var(--ds-ink)]',
+  stale_edited: 'border-ds-accent/40 text-[var(--ds-ink)]',
   machine: 'border-[var(--ds-hairline)] text-[var(--ds-muted)]',
   reviewed: `${STATUS_EDGE.healthy} ${TONE_TEXT.success}`,
   edited: 'border-[var(--ds-hairline)] text-[var(--ds-ink)]'
@@ -190,7 +190,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         placeholder={`Not translated yet — type the ${spec?.english || lang} line`}
         aria-label={`${spec?.english || lang} translation of: ${source}${where ? ` (${where})` : ''}`}
         style={{ fontFamily: cssFontFamily(lang, 'legible') }}
-        className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] coarse:text-[16px] focus:border-[#D97757]/60 focus:outline-none focus:ring-2 focus:ring-[#D97757]/25"
+        className="mt-1.5 block w-full min-w-0 resize-y rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-2 text-[15px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] coarse:text-[16px] focus:border-[var(--ds-focus)] focus:outline-none focus:ring-2 focus:ring-ds-focus/15"
       />
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
         {sarvam && !draft.trim() && <GhostButton size="xs" title="Sends this line to Sarvam using your API key" busy={sarvamState === 'working'} onClick={() => void suggestWithSarvam()}>
@@ -208,7 +208,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         )}
       </div>
       {issue && (
-        <div className={cx('mt-2 rounded-lg border px-2.5 py-2 text-[12.5px]', issue.severity === 'major' ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
+        <div className={cx('mt-2 rounded-lg border px-2.5 py-2 text-[12.5px]', issue.severity === 'major' ? 'border-ds-accent/45 bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)]')}>
           <p className="flex items-start gap-1.5 leading-snug">
             <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
             <span className="min-w-0 break-words">
@@ -244,7 +244,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         </div>
       )}
       {status === 'stale_edited' && (
-        <div className="mt-2 rounded-lg border border-[#D97757]/45 bg-[#D97757]/10 px-2.5 py-2 text-[12.5px]">
+        <div className="mt-2 rounded-lg border border-ds-accent/45 bg-[var(--ds-accent-soft)] px-2.5 py-2 text-[12.5px]">
           <p className="leading-snug">The original changed after you wrote this. If your wording still fits, keep it — a translation run never touches your edits — or change it above.</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <GhostButton size="xs" busy={busy} onClick={keepWording} className="coarse:h-11">
@@ -333,7 +333,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
         </h3>
         {editionOptions.length > 1 && <LanguageSwitch options={editionOptions} value={lang} onChange={onLangChange} label="Review language" className="ml-auto" />}
       </div>
-      <div className={cx('mb-3 rounded-xl border px-3 py-2 text-[12.5px] leading-snug', readiness.publishable ? 'border-emerald-600/25 bg-emerald-500/[0.06]' : 'border-[#D97757]/35 bg-[#D97757]/10')} role="status">
+      <div className={cx('mb-3 rounded-xl border px-3 py-2 text-[12.5px] leading-snug', readiness.publishable ? 'border-emerald-600/25 bg-emerald-500/[0.06]' : 'border-ds-accent/35 bg-[var(--ds-accent-soft)]')} role="status">
         {readiness.publishable ? (
           <span>Translated and reviewed — ready to publish{readiness.issues.length ? `. ${readiness.issues.map((i) => i.text).join(' ')}` : '.'}</span>
         ) : (

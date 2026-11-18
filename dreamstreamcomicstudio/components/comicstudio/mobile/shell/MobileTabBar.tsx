@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { RADIUS_PILL } from '../../../chat/studioDesign';
+import { FOCUS_RING, RADIUS_PILL } from '../../../chat/studioDesign';
 import { navItemName } from '../../../ds/TabBar';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -99,7 +99,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
       title={item.disabled ? item.disabledReason : undefined}
       data-nav={item.id}
       className={cx(
-        'press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
+        `press group relative flex min-h-[44px] min-w-[64px] flex-col items-center justify-center gap-0.5 rounded-2xl px-2 text-[11px] font-medium leading-none transition-colors ${FOCUS_RING}`,
         orientation === 'bar' ? 'flex-1' : 'w-14 py-1.5',
         item.disabled ? 'cursor-not-allowed opacity-40' : '',
         item.current ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
@@ -109,7 +109,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
         aria-hidden
         className={cx(
           'relative grid h-7 w-14 place-items-center rounded-full transition-colors',
-          item.current ? 'bg-[#D97757]/[0.14]' : !item.disabled && 'group-hover:bg-[var(--ds-hover)]'
+          item.current ? 'bg-[var(--ds-accent-soft)]' : !item.disabled && 'group-hover:bg-[var(--ds-hover)]'
         )}
       >
         {item.icon}

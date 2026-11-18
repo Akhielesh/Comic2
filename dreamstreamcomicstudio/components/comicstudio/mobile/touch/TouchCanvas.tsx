@@ -23,6 +23,7 @@ import { GestureArbiterContext, createGestureArbiter } from './GestureArbiter';
 import { IDENTITY, RUBBER, clampState, isDoubleTap, overscrollX, panBy, pinch, sameZoom, zoomAt, type Pt, type Size, type Tap, type ZoomXY } from './gestureMath';
 import { doubleTapMs, doubleTapPx, exceedsSlop, ownsGesture } from './pointerPolicy';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 export interface ZoomState {
   /** Current zoom (1 = fit). Handles divide their visual and hit sizes by it. */
   scale: number;
@@ -325,7 +326,7 @@ export const TouchCanvas: React.FC<TouchCanvasProps> = ({
   const ctx = useMemo<ZoomState>(() => (Math.abs(scale - 1) < 0.001 ? UNZOOMED : { scale }), [scale]);
   const pct = Math.round(scale * 100);
   const btn =
-    'grid h-9 w-9 place-items-center rounded-full text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11';
+    `grid h-9 w-9 place-items-center rounded-full text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] disabled:opacity-40 ${FOCUS_RING} coarse:h-11 coarse:w-11`;
 
   return (
     <GestureArbiterContext.Provider value={arbiter}>

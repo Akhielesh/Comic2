@@ -105,7 +105,7 @@ const LIKENESS: { value: NonNullable<Character['likeness']>; label: string }[] =
 const groupLabel = (n: number) => (n <= 1 ? 'Just one' : `A group of ${n}`);
 
 const SELECT =
-  'h-8 w-full min-w-0 truncate rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12.5px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11';
+  'h-8 w-full min-w-0 truncate rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12.5px] text-[var(--ds-ink)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11';
 
 /** A labelled native select (the platform picker on phones; 44 px on touch), laid out like an InlineField. */
 const DetailSelect = <T extends string>({
@@ -196,7 +196,7 @@ export const CastKindLine: React.FC<{ character: Character }> = ({ character: c 
       <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
       <span>{KIND_TEXT[kind]}</span>
       {isCompanion(c) && (
-        <span className="rounded-full bg-[#D97757]/10 px-1.5 py-px text-[10.5px] font-semibold text-[var(--ds-ink)]" title="A recurring non-human character with its own model sheet">
+        <span className="rounded-full bg-[var(--ds-accent-soft)] px-1.5 py-px text-[10.5px] font-semibold text-[var(--ds-ink)]" title="A recurring non-human character with its own model sheet">
           Companion
         </span>
       )}
@@ -406,7 +406,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
         <RefStrip studio={studio} owner={{ kind: 'character', id: c.id }} hideSheetHint />
       </div>
       {olderPhotos && !busy && (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-[#D97757]/[0.07] px-2.5 py-1.5" data-testid="older-photos-hint">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-[var(--ds-accent-soft)] px-2.5 py-1.5" data-testid="older-photos-hint">
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
           <span className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Drawn from older photos — redraw to use your new ones?</span>
           <GhostButton size="xs" busy={busyKey === 'sheet'} onClick={renderSheet} aria-describedby={`${priceId}-hint`}>

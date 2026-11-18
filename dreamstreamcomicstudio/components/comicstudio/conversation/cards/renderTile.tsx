@@ -427,7 +427,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
             }}
             disabled={retryBusy || retryDisabled}
             aria-label={`Retry ${label}`}
-            className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50"
+            className={`tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} disabled:opacity-50`}
           >
             <RotateCcw className={cx('h-3 w-3', retryBusy && 'animate-spin motion-reduce:animate-none')} aria-hidden /> Retry
           </button>
@@ -548,7 +548,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
               }}
               aria-expanded={detailsOpen}
               aria-controls={detailsId}
-              className="tap-target shrink-0 font-medium text-[var(--ds-ink)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+              className={`tap-target shrink-0 font-medium text-[var(--ds-ink)] underline decoration-dotted underline-offset-2 hover:text-[var(--ds-accent)] ${FOCUS_RING}`}
             >
               {detailsOpen ? 'Hide' : 'Details'}
             </button>
@@ -581,7 +581,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
     <button
       type="button"
       onClick={onOpen}
-      className={cx('block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40', className)}
+      className={cx(`block w-full rounded-xl text-left ${FOCUS_RING}`, className)}
       aria-label={namedByContent ? undefined : `Open ${label}`}
     >
       {namedByContent && <span className="sr-only">Open </span>}

@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, FOCUS_RING as RECIPE_FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 import { ARIA_DISABLED, busyButtonProps } from './busyButton';
@@ -15,7 +15,7 @@ export { busyButtonProps } from './busyButton';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
-const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const FOCUS_RING = RECIPE_FOCUS_RING;
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
 
@@ -141,7 +141,7 @@ export const Chip: React.FC<{ children: React.ReactNode; className?: string; tit
     className={cx(
       'inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] leading-none',
       tone === 'accent'
-        ? 'border-[#D97757]/35 bg-[#D97757]/10 text-[var(--ds-ink)]'
+        ? 'border-ds-accent/35 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
         : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)]',
       className
     )}
@@ -234,7 +234,7 @@ export function Segmented<T extends string>({
 const HAS_TEXT_SIZE = /(^|\s)([a-z]+:)?text-(\[\d|xs\b|sm\b|base\b|lg\b|[2-9]?xl\b)/;
 
 // coarse: every field is a real 44 px target on touch (P1-QA: Story/Style/Cast fields measured ~30 px).
-const FIELD_BASE = `w-full rounded-lg border border-transparent bg-transparent px-2 py-1 coarse:min-h-[44px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] hover:border-[var(--ds-hairline)] focus:border-[#D97757]/50 focus:bg-[var(--ds-surface-strong)] focus:outline-none ${TRANSITION}`;
+const FIELD_BASE = `w-full rounded-lg border border-transparent bg-transparent px-2 py-1 coarse:min-h-[44px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] hover:border-[var(--ds-hairline)] focus:border-[var(--ds-focus)] focus:bg-[var(--ds-surface-strong)] focus:outline-none ${TRANSITION}`;
 
 export interface InlineFieldProps {
   value: string;
@@ -426,7 +426,7 @@ export const StatusChip: React.FC<{ status: VisualStatus; className?: string; la
         : status === 'failed'
           ? TONE_CHIP.danger
           : status === 'rendering' || status === 'queued'
-            ? 'border-[#D97757]/30 bg-[#D97757]/10 text-[var(--ds-ink)]'
+            ? 'border-ds-accent/30 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
             : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-muted)]';
   return (
     <span className={cx('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold', tone, className)}>
@@ -765,7 +765,7 @@ export const ConfirmStrip: React.FC<{
     aria-label={typeof message === 'string' ? message : confirmLabel}
     className={cx(
       'rounded-xl border p-2.5 text-[12px] text-[var(--ds-ink)]',
-      tone === 'danger' ? 'border-red-500/25 bg-red-500/[0.06]' : 'border-[#D97757]/35 bg-[#D97757]/10'
+      tone === 'danger' ? 'border-red-500/25 bg-red-500/[0.06]' : 'border-ds-accent/35 bg-[var(--ds-accent-soft)]'
     )}
   >
     <p className="leading-snug">{message}</p>

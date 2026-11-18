@@ -12,7 +12,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Copy, Loader2, RotateCw, ShieldAlert, X } from 'lucide-react';
-import { STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { UploadItem } from './useRefUpload';
 import { isActiveUpload } from './useRefUpload';
@@ -30,7 +30,7 @@ export interface UploadQueueProps {
 // Rows wrap: on a 320 px phone the actions drop under the text (basis-32) instead of squeezing it.
 const ROW = 'flex min-h-[52px] flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2';
 const BTN =
-  'inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded-full px-3 text-[12px] font-medium transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+  `inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded-full px-3 text-[12px] font-medium transition-colors motion-reduce:transition-none ${FOCUS_RING}`;
 const QUIET = `${BTN} text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 
 /** Short-lived rows dismiss themselves once each (UI only; nothing here talks to the server). */
@@ -95,7 +95,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                 rejected
                   ? STATUS_SURFACE.error
                   : warn
-                    ? 'border-[#D97757]/35 bg-[#D97757]/[0.06]'
+                    ? 'border-ds-accent/35 bg-[var(--ds-accent-soft)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
               )}
               data-state={item.state}
@@ -145,7 +145,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                         {' '}
                         <button
                           type="button"
-                          className="-my-[14px] inline-flex min-h-[44px] items-center py-[14px] underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                          className={`-my-[14px] inline-flex min-h-[44px] items-center py-[14px] underline underline-offset-2 ${FOCUS_RING}`}
                           onClick={() => setPolicyOpen((v) => !v)}
                           aria-expanded={policyOpen}
                         >

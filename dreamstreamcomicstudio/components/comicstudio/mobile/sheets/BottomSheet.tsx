@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { HAIRLINE } from '../../../chat/studioDesign';
+import { FOCUS_RING, HAIRLINE } from '../../../chat/studioDesign';
 import { useSheetBehaviour } from '../../conversation/PopSheet';
 import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
@@ -302,7 +302,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             onClick={cycle}
             aria-label="Resize sheet"
             data-hit-exempt="grabber: the whole 52 px header is its drag zone"
-            className="absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 ${FOCUS_RING}`}
           >
             <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
           </button>
@@ -324,7 +324,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="mt-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`mt-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
           >
             <X className="h-4 w-4" />
           </button>

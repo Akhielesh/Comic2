@@ -131,7 +131,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
             className={cx(
               'tap-target relative shrink-0 overflow-hidden rounded-lg border bg-[var(--ds-well)]',
               FOCUS_RING,
-              on ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/50'
+              on ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-ds-accent/50'
             )}
             style={{ width: compact ? 44 : 52, aspectRatio: String(assetRatio(doc, v.asset)), maxHeight: compact ? 66 : 80 }}
           >

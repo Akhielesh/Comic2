@@ -16,6 +16,7 @@ import { RenderThumb, tileModel, tileSources, unsignableOf } from './renderTile'
 import { failureSummary, retryAllFailed } from './RendersCard';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 type StyleChoiceData = Extract<Card, { type: 'style_choice' }>;
 
 const isBusy = (o: StyleOption) => o.render.status === 'queued' || o.render.status === 'rendering';
@@ -112,7 +113,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 aria-busy={isPending(`pick:${o.id}`) || undefined}
                 aria-label={`Use the ${o.name} style`}
                 title={o.spec}
-                className="block rounded-xl text-left transition-transform duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 disabled:opacity-60"
+                className={`block rounded-xl text-left transition-transform duration-200 hover:-translate-y-0.5 ${FOCUS_RING} disabled:opacity-60`}
               >
                 {thumb}
               </button>

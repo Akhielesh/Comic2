@@ -59,6 +59,7 @@ import {
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 import { pageProgress, pageVisualStatus } from '../board/boardModel';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 /**
  * One "drawn" definition (declutter F7; PROGRAM3 B25): the board's — drawn and current (`pageProgress`) —
  * plus how many drawn pages are out of date. The reader used to count every page with art, so the board
@@ -295,7 +296,7 @@ export const ReaderMenu: React.FC<{ label: string; items: ReaderMenuItem[]; icon
                 setOpen(false);
                 it.onSelect();
               }}
-              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-50 [&>svg]:shrink-0"
+              className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} disabled:opacity-50 [&>svg]:shrink-0`}
             >
               {it.icon}
               {/* Long labels wrap instead of hiding their end: at 320 px "Download page images (.zip) (Telugu)"
@@ -996,7 +997,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             type="button"
             onClick={openImmersive}
             data-action="read"
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-[44px]"
+            className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:min-w-[44px]`}
           >
             <Expand className="h-4 w-4" aria-hidden />
             <span className={cx(narrow && 'sr-only')}>{t('fullScreen')}</span>
@@ -1029,7 +1030,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
               setPos({ key: resume.key, end: false });
               setResume(null);
             }}
-            className="min-h-8 rounded-full px-2.5 font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-11"
+            className={`min-h-8 rounded-full px-2.5 font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-11`}
           >
             {resume.n ? `Continue from page ${resume.n}` : 'Continue reading'}
           </button>
@@ -1203,7 +1204,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowIosNote(false)}
-              className="min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+              className={`min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
             >
               Got it
             </button>

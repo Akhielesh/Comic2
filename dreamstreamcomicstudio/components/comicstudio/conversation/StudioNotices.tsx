@@ -15,7 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CircleCheck, Coffee, Info, PenLine, RefreshCw, Redo2, ShieldCheck, Undo2, X } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { useCostFormat } from './cost';
-import { STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 /** How long a notice / savings line stays before fading on its own. */
@@ -63,7 +63,7 @@ export const errorPresentation = (code: string | null | undefined): ErrorPresent
 
 const TONE_CLS: Record<ErrorTone, string> = {
   pause: TONE_SURFACE.info,
-  care: 'border-[#D97757]/30 bg-[#D97757]/[0.07]',
+  care: 'border-ds-accent/30 bg-[var(--ds-accent-soft)]',
   info: 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
   problem: STATUS_SURFACE.attention
 };
@@ -76,9 +76,9 @@ const TONE_ICON: Record<ErrorTone, React.ReactNode> = {
 };
 
 const SMALL_BTN =
-  'inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full px-2 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3';
+  `inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full px-2 text-[12px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] coarse:px-3`;
 const CLOSE_BTN =
-  'grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:w-11';
+  `grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING} coarse:h-11 coarse:w-11`;
 
 export const StudioErrorBanner: React.FC<{ studio: Pick<ComicStudioController, 'error' | 'errorCode' | 'clearError' | 'refresh'>; className?: string }> = ({
   studio,
