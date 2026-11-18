@@ -19,7 +19,9 @@ import { cn } from '../../lib/utils';
 import { Button, IconButton } from '../ds';
 import { DENSITY, FIELD, MUTED, OVERLINE, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, TONE_TEXT, type StatusState } from '../chat/studioDesign';
 
-const inputCls = cn(FIELD, 'w-full px-3 py-2 text-sm', DENSITY.coarse);
+// Textareas keep their own minimum height; only single-line controls take the touch floor.
+const fieldBase = cn(FIELD, 'w-full px-3 py-2 text-sm');
+const inputCls = cn(fieldBase, DENSITY.coarse);
 const labelCls = cn(OVERLINE, 'mb-1 block');
 
 type Tab = 'compose' | 'invite' | 'log';
@@ -252,7 +254,7 @@ export const EmailConsole: React.FC = () => {
             </div>
             <div>
               <label className={labelCls}>Body</label>
-              <textarea className={cn(inputCls, 'min-h-[120px]')} value={fields.body} onChange={(e) => setFields({ ...fields, body: e.target.value })} />
+              <textarea className={cn(fieldBase, 'min-h-[120px]')} value={fields.body} onChange={(e) => setFields({ ...fields, body: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -275,7 +277,7 @@ export const EmailConsole: React.FC = () => {
             <div>
               <label className={labelCls}>Recipients (comma / newline separated, ≤100)</label>
               <textarea
-                className={cn(inputCls, 'min-h-[60px] font-mono text-xs')}
+                className={cn(fieldBase, 'min-h-[60px] font-mono text-xs')}
                 value={recipients}
                 onChange={(e) => setRecipients(e.target.value)}
                 placeholder="a@example.com, b@example.com"
@@ -319,7 +321,7 @@ export const EmailConsole: React.FC = () => {
           </div>
           <div>
             <label className={labelCls}>Personal note (optional)</label>
-            <textarea className={cn(inputCls, 'min-h-[60px]')} value={inv.personalNote} onChange={(e) => setInv({ ...inv, personalNote: e.target.value })} />
+            <textarea className={cn(fieldBase, 'min-h-[60px]')} value={inv.personalNote} onChange={(e) => setInv({ ...inv, personalNote: e.target.value })} />
           </div>
           <div>
             <label className={labelCls}>Studios this invite unlocks</label>

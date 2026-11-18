@@ -3,7 +3,7 @@ import { Loader2, RefreshCw, Plus, Copy, Check, Ban, Ticket } from 'lucide-react
 import { generateInvites, listInvites, revokeInvite, type InviteRecord } from '../../services/invites';
 import { cn } from '../../lib/utils';
 import { Button, IconButton } from '../ds';
-import { DENSITY, FIELD, MUTED, OVERLINE, SECTION_CARD, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, type StatusState } from '../chat/studioDesign';
+import { DENSITY, FIELD, MUTED, OVERLINE, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, type StatusState } from '../chat/studioDesign';
 
 // One status vocabulary: active is healthy, redeemed is done (waiting ink), revoked is an error.
 const statusTone = (s: string): StatusState => (s === 'active' ? 'healthy' : s === 'redeemed' ? 'waiting' : 'error');
@@ -110,7 +110,7 @@ export const InviteManager: React.FC = () => {
         </div>
       </div>
 
-      <div className={cn(SECTION_CARD, 'max-h-96 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto')}>
+      <div className={cn('max-h-96 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto')}>
         {invites.length === 0 && !loading && <div className={cn('p-3 text-xs', MUTED)}>No invites yet — generate a batch above.</div>}
         {invites.map((i) => (
           <div key={i.id} className="p-2.5 text-xs">

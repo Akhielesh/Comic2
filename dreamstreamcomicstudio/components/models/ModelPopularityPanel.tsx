@@ -34,7 +34,7 @@ export const ModelPopularityList: React.FC<{ data: ModelPopularity; limit?: numb
             <div className="flex items-baseline justify-between gap-2">
               <span className="min-w-0 truncate text-[12px] font-medium text-[var(--ds-ink)]">
                 {row.model}
-                {row.provider && <span className="ml-1.5 text-[10px] text-[var(--ds-muted)]">{row.provider}</span>}
+                {row.provider && <span className="ml-1.5 text-[11px] text-[var(--ds-muted)]">{row.provider}</span>}
               </span>
               <span
                 className="shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]"

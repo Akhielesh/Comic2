@@ -626,6 +626,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                                         <div className="flex gap-1 shrink-0">
                                             <Button
                                                 size="sm"
+                                                variant="secondary"
                                                 disabled={studioBusy || state === 'granted'}
                                                 onClick={() => void toggleStudioAccess(adminUser, product, true)}
                                             >
@@ -889,11 +890,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                         <div className={SECTION_CARD}><EmailConsole /></div>
                     )}
                     {section === 'analytics' && (
-                        <div className={SECTION_CARD}><AdminAnalytics /></div>
+                        <AdminAnalytics />
                     )}
                     {section === 'costs' && isAdmin && <CostCentre />}
                     {section === 'verification' && isAdmin && (
-                        <div className={SECTION_CARD}><VerificationCenter /></div>
+                        <VerificationCenter />
                     )}
                     {(() => {
                         const feature = activeFeatureSection(section);

@@ -11,7 +11,7 @@ import { Check, Loader2, Mail, MonitorPlay, Search, ShieldOff } from 'lucide-rea
 import { cn } from '../../lib/utils';
 import { Button } from '../ds';
 import { CARD_TITLE } from '../ds/Card';
-import { DENSITY, FIELD, MUTED, SECTION_CARD, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE } from '../chat/studioDesign';
+import { DENSITY, FIELD, MUTED, STATUS_CHIP, STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE } from '../chat/studioDesign';
 import {
   adminGetProductAccess,
   adminResetProductAccess,
@@ -180,7 +180,7 @@ export const ProductAccessPanel: React.FC = () => {
           </div>
 
           {/* Invite email options (used when granting) */}
-          <div className={cn(SECTION_CARD, 'space-y-2 p-3')}>
+          <div className={cn('space-y-2 rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] p-3')}>
             <label className={cn('flex cursor-pointer items-center gap-2 text-sm font-medium', DENSITY.coarse)}>
               <input
                 type="checkbox"
@@ -225,7 +225,7 @@ export const ProductAccessPanel: React.FC = () => {
               const stateTone = STATUS_CHIP_TONE[state === 'granted' ? 'healthy' : state === 'revoked' ? 'error' : isDefault ? 'healthy' : 'error'];
               const busy = busyProduct === product;
               return (
-                <div key={product} className={cn(SECTION_CARD, 'flex flex-col space-y-2 p-3')}>
+                <div key={product} className={cn('flex flex-col space-y-2 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] p-3')}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className={cn(CARD_TITLE, 'flex items-center gap-1.5')}>
                       <MonitorPlay size={16} aria-hidden /> {PRODUCT_LABELS[product]}

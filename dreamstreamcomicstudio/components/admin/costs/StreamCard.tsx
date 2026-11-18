@@ -125,7 +125,7 @@ const PathMix: React.FC<{ mix: StreamCostSection['pathMix'] }> = ({ mix }) => {
           <li key={p} className="inline-flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: PATH_COLOR[p] }} aria-hidden />
             {PATH_LABEL[p]}
-            {(p === 'lan' || p === 'direct') && <span className="text-[10px]">· free</span>}
+            {(p === 'lan' || p === 'direct') && <span className="text-[11px]">· free</span>}
           </li>
         ))}
       </ul>
@@ -192,7 +192,7 @@ const HealthTile: React.FC<{ label: string; value: string; sub: string; warn?: b
       {warn && <TriangleAlert className="h-3.5 w-3.5" style={{ color: STATUS.warning }} aria-label="over budget" />}
       {value}
     </div>
-    <div className="text-[10px] text-[var(--ds-muted)]">{sub}</div>
+    <div className="text-[11px] text-[var(--ds-muted)]">{sub}</div>
   </li>
 );
 
@@ -283,12 +283,12 @@ const Setup: React.FC<{ s: StreamCostSection }> = ({ s }) => (
         Engine).
       </li>
       <li>
-        Set <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
-        <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> on the backend (Worker secrets or D1{' '}
+        Set <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
+        <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> on the backend (Worker secrets or D1{' '}
         <span className="font-mono text-[11px]">backend_env</span>).
       </li>
       <li>
-        Optional: <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">STREAM_DO_NAMESPACES</code> ={' '}
+        Optional: <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">STREAM_DO_NAMESPACES</code> ={' '}
         <span className="font-mono text-[11px]">MonitorRoom=&lt;id&gt;,EventRoom=&lt;id&gt;,…</span> for per-room figures.
       </li>
       <li>Set a Cloudflare account budget alert (Billing → budget alerts) at $10 — the backstop if metering ever breaks.</li>
@@ -335,7 +335,7 @@ const NoAnswer: React.FC<{ s: StreamCostSection }> = ({ s }) => (
       <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--ds-muted)]">
         <li>
           Check the token still exists and has <span className="font-semibold">Account › Account Analytics › Read</span> on the account in{' '}
-          <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code>.
+          <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code>.
         </li>
         <li>The in-room counters (Analytics Engine) appear after the live Worker has written its first usage point.</li>
         <li>Until it answers, rely on the Cloudflare account budget alert (Billing → budget alerts) as the backstop.</li>

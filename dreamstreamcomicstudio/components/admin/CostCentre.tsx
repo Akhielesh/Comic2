@@ -384,7 +384,7 @@ export const CostCentre: React.FC = () => {
           className={`inline-flex items-center gap-1.5 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50 ${DENSITY.coarse} ${FOCUS_RING}`}
           aria-label="Refresh costs"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden /> Refresh
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'motion-safe:animate-spin' : ''}`} aria-hidden /> Refresh
         </button>
       </div>
     </div>

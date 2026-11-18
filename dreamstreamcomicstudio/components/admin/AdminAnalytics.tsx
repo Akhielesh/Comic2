@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useId, useState, useCallback } from 'react';
 import { Loader2, RefreshCw, AlertTriangle, ThumbsDown, ThumbsUp, Activity, Users, Layers, X } from 'lucide-react';
 import {
   getAnalyticsOverview,
@@ -93,6 +93,7 @@ export const AdminAnalytics: React.FC = () => {
   const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
   const [feedbackVote, setFeedbackVote] = useState('');
   const [listLoading, setListLoading] = useState(false);
+  const sessionTitleId = useId();
   const [session, setSession] = useState<{ id: string; events: TelemetryEventRow[]; feedback: FeedbackRow[] } | null>(null);
 
   const loadOverview = useCallback(async () => {
@@ -332,9 +333,9 @@ export const AdminAnalytics: React.FC = () => {
 
       {session && (
         <div className={cn('fixed inset-0 flex items-center justify-center p-4', Z.dialog, SCRIM)} onClick={() => setSession(null)}>
-          <div className={cn(OVERLAY, 'flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden')} onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-labelledby={sessionTitleId} className={cn(OVERLAY, 'flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden')} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between gap-2 border-b border-[var(--ds-hairline)] py-2 pl-4 pr-2">
-              <span className="min-w-0 truncate text-sm font-semibold">Session flow · {session.id}</span>
+              <h3 id={sessionTitleId} className="m-0 min-w-0 truncate text-sm font-semibold">Session flow · {session.id}</h3>
               <IconButton label="Close" onClick={() => setSession(null)} className={MUTED}><X className="w-5 h-5" /></IconButton>
             </div>
             <div className="p-3 overflow-y-auto space-y-1.5">

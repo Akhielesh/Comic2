@@ -224,7 +224,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
             placeholder="Describe a product idea to plan…"
             className={cn(FIELD, 'h-20 w-full resize-none p-2 text-sm')}
           />
-          <Button onClick={draft} disabled={!idea.trim() || busy === 'draft'} className="w-full">
+          <Button variant="secondary" onClick={draft} disabled={!idea.trim() || busy === 'draft'} className="w-full">
             {busy === 'draft' ? 'Drafting roadmap…' : 'Draft a venture'}
           </Button>
         </div>
@@ -305,7 +305,7 @@ export const OperatorConsole: React.FC<{ isAdmin?: boolean; onBack?: () => void 
                       <div className={cn('text-xs [overflow-wrap:anywhere]', MUTED)}>{c.kind.replace(/_/g, ' ')}{c.detail ? ` — ${c.detail}` : ''}</div>
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      <Button size="sm" onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'approve'))} disabled={busy === 'cp-' + c.id}>
+                      <Button size="sm" variant="secondary" onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'approve'))} disabled={busy === 'cp-' + c.id}>
                         Approve
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => act('cp-' + c.id, () => api.resolveCheckpoint(detail.venture.id, c.id, 'deny'))} disabled={busy === 'cp-' + c.id}>

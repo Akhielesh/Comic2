@@ -60,8 +60,8 @@ export const CloudflareCard: React.FC<{ cloudflare: CloudflareSection; days: num
             .
           </li>
           <li>
-            Set <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
-            <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> as secrets on the{' '}
+            Set <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
+            <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> as secrets on the{' '}
             <span className="font-mono text-[11px]">dreamstream-api</span> Worker (or rows in D1 <span className="font-mono text-[11px]">backend_env</span>).
           </li>
           <li>The backend container picks them up on its next start; this card then shows per-Worker requests, errors and CPU.</li>

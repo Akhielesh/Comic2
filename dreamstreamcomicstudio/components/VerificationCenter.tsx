@@ -8,7 +8,7 @@
 // Wire-up of "Confirm → file GitHub issue → Claude Code PR → auto-merge" lives in
 // Phase 3 (auto-resolve bridge); the dashboard already exposes the Confirm action.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -40,9 +40,9 @@ import { cn } from '../lib/utils';
 import { Button, IconButton } from './ds';
 import {
   DENSITY,
+  DIALOG_TITLE,
   FIELD,
   FOCUS_RING,
-  HEADING,
   MUTED,
   OVERLAY,
   OVERLINE,
@@ -52,7 +52,6 @@ import {
   STATUS_CHIP_TONE,
   STATUS_INK,
   STATUS_SURFACE,
-  TEXT_2XL,
   TEXT_XL,
   TONE_TEXT,
   Z,
@@ -171,7 +170,7 @@ export const VerificationCenter: React.FC<{ onBack?: () => void }> = ({ onBack }
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Shield className="w-6 h-6" aria-hidden />
-          <h2 className={cn(HEADING, TEXT_2XL)}>Verification Center</h2>
+          <h2 className={cn(TEXT_XL, 'm-0 font-semibold tracking-tight text-[var(--ds-ink)]')}>Verification Center</h2>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => void refresh()}>
@@ -375,6 +374,7 @@ const NewCheckModal: React.FC<{
   onClose: () => void;
   onCreated: () => Promise<void>;
 }> = ({ builtins, onClose, onCreated }) => {
+  const titleId = useId();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [builtinId, setBuiltinId] = useState(builtins[0]?.id || '');
@@ -417,9 +417,9 @@ const NewCheckModal: React.FC<{
 
   return (
     <div className={cn('fixed inset-0 flex items-center justify-center p-4', Z.dialog, SCRIM)} onClick={onClose}>
-      <div className={cn(OVERLAY, 'max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-5')} onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={cn(OVERLAY, 'max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-5')} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xl font-semibold leading-7">New verification check</h3>
+          <h3 id={titleId} className={cn(DIALOG_TITLE, 'm-0')}>New verification check</h3>
           <IconButton label="Close" onClick={onClose} className={MUTED}><X className="w-4 h-4" /></IconButton>
         </div>
         {err && <div className={cn('text-sm [overflow-wrap:anywhere]', TONE_TEXT.danger)}>{err}</div>}
