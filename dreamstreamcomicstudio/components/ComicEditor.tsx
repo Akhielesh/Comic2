@@ -26,7 +26,6 @@ import { analyzeScriptDetailed, checkDeploymentParity, DeploymentParityStatus } 
 import { confirmGateNeeded } from '../services/comicAgentSettings';
 import { estimateComicCostUsd, planBeats } from '../services/beatPlanner';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
-import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, getSelectedImageSource, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { API_KEYS_CHANGED, getActiveKeyForUse } from '../services/apiKeys';
 import { isProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';

@@ -73,6 +73,8 @@ export interface LegacyHtml2CanvasOptions {
   backgroundColor?: string | null;
   ignoreElements?: (element: HTMLElement) => boolean;
   useCORS?: boolean;
+  /** Called with the cloned document before it is drawn (the classic steps capture their cards in the light theme). */
+  onclone?: (doc: Document) => void;
 }
 export type LegacyHtml2Canvas = (element: HTMLElement, options?: LegacyHtml2CanvasOptions) => Promise<HTMLCanvasElement>;
 
