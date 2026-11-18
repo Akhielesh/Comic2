@@ -145,7 +145,7 @@ export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
     hover: 'hover:bg-[var(--ds-hover)]',
     text: 'text-[var(--ds-ink)]',
     textDim: 'text-[var(--ds-muted)]',
-    textFaint: 'text-[var(--ds-faint)]',
+    textFaint: 'text-[var(--ds-muted)]',
     accent: 'text-[var(--ds-accent-text)]',
     accentSoft: 'bg-[var(--ds-accent-soft)]',
     accentBg: 'bg-[var(--ds-accent-fill)]',
