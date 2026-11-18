@@ -29,7 +29,10 @@ reader tokens is in `docs/design/design-system.md` ("Reader tokens").
 - `window.__comicReaderPerf.blankTurns` counts blank turns (the QA log, `leafEngine.ts`).
 - Room-side focus and progress use `--ds-reader-hud-focus` / `--ds-reader-accent` (Night `#fafafa`, Day `#3b3026`).
   The fit:width ring is two-tone.
-- "Drawn" means drawn and current, plus "· N out of date", in the reader and the board.
+- "Drawn" means drawn and current, plus "· N out of date", in the board and in the studio's Read tab: that line is the
+  author's working status, so only the owner sees it (`ComicReaderView` `showDrawnStatus`); a shared or public reader
+  never renders it. Below 560 px the inline toolbar keeps one row (the leading controls scroll sideways), so the menus
+  and Full screen stay on it at 360 px.
 
 Proof: `components/comicstudio/immersive/*.test.*` (the combined suite), `tests/config/tokenContrast.test.ts` ("the
 reader rooms"), and the e2e `tests/e2e/reader.turns.spec.ts`. The e2e delays every fixture image through the public
