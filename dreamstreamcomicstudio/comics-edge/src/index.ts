@@ -15,6 +15,8 @@
  *   /live*, /models, /share/*, /studio.html → 302 to the main site (other products, own session)
  *   AI agents asking a page   → 302 /api/agent-gate (the page half of the gate; the Pages
  *                               middleware cannot see request.cf through this proxy)
+ *   /library (GET, HEAD)      → 302 /?view=gallery, the Library (the SPA has no /library route);
+ *                               that page carries the Library's own head (brand.ts headFor)
  *   everything else (GET, HEAD, OPTIONS)
  *                             → the Pages origin, same path + query, X-Forwarded-Host set (the
  *                               Pages middleware serves instead of redirecting to the apex),
@@ -26,7 +28,7 @@
  * framing — /c/<slug>/embed may be framed when the author allows embedding).
  */
 import { detectAgent } from '../../api-proxy/src/agent-gate';
-import { brandHtml, type RewriterCtor } from './brand';
+import { brandHtml, headFor, type RewriterCtor } from './brand';
 import {
   ALIAS_HOSTS,
   HEALTH_PATH,
@@ -34,7 +36,9 @@ import {
   applySecurityHeaders,
   isApiPath,
   isHtmlResponse,
+  isLibraryShortLink,
   isMainProductPath,
+  libraryLocation,
   pathAndQuery,
   resolveConfig,
   rewriteLocation,
@@ -110,9 +114,10 @@ const health = (cfg: EdgeConfig, env: Env, pathname: string): Response => {
   return new Response(JSON.stringify(body), { status: 200, headers });
 };
 
-/** Calm, honest failure page when the Pages origin cannot be reached (never a blank screen). */
+/** Calm, honest failure page when the Pages origin cannot be reached (never a blank screen). Atlas ink
+ *  on paper (index.css [data-ds-skin="atlas"] canvas, ink, muted), light and dark. */
 const unavailable = (pathname: string, cfg: EdgeConfig): Response => {
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Comic Studio — DreamStream</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FAF9F5;color:#1a1915;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;box-sizing:border-box}@media (prefers-color-scheme:dark){body{background:#262624;color:#eeece8}}main{max-width:28rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0 0 1rem;opacity:.8}a{display:inline-block;min-height:44px;line-height:44px;padding:0 1.25rem;border-radius:999px;background:#D97757;color:#fff;text-decoration:none;font-weight:600}</style></head><body><main><h1>Comic Studio can’t load right now</h1><p>We couldn’t reach the Comic Studio pages. Your comics are safe — nothing was changed. Please try again in a moment.</p><a href="https://${cfg.publicHost}/">Try again</a></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Comic Studio — DreamStream</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#ffffff;color:#0a0a0a;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;box-sizing:border-box}main{max-width:28rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0 0 1rem;color:#5c5c5c}a{display:inline-block;min-height:44px;line-height:44px;padding:0 1.25rem;border-radius:8px;background:#0a0a0a;color:#ffffff;text-decoration:none;font-weight:600}@media (prefers-color-scheme:dark){body{background:#0a0a0a;color:#fafafa}p{color:#a3a3a3}a{background:#fafafa;color:#0a0a0a}}</style></head><body><main><h1>Comic Studio can’t load right now</h1><p>We couldn’t reach the Comic Studio pages. Your comics are safe — nothing was changed. Please try again in a moment.</p><a href="https://${cfg.publicHost}/">Try again</a></main></body></html>`;
   const headers = new Headers({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '10' });
   applySecurityHeaders(headers, pathname);
   return new Response(html, { status: 502, headers });
@@ -207,7 +212,7 @@ const proxyToPages = async (request: Request, url: URL, cfg: EdgeConfig, deps: E
     // The branded bytes differ from the Pages origin's, so its validators no longer describe them.
     response.headers.delete('etag');
     response.headers.delete('last-modified');
-    response = brandHtml(response, cfg, deps.HTMLRewriter);
+    response = brandHtml(response, cfg, deps.HTMLRewriter, headFor(url));
   }
   return finish(response, url.pathname);
 };
@@ -244,6 +249,11 @@ export const createEdge = (deps: EdgeDeps) => ({
     // The Pages middleware cannot see the visitor's verified-bot category through this proxy
     // (its request.cf describes the edge's subrequest), so the page gate runs here first.
     if (shouldGatePage(url.pathname) && detectAgent(request, 'page')) return agentGate(url, cfg);
+
+    // The Library's short link. People and preview bots get the same 302 (no cloaking); the page it
+    // lands on names itself as canonical, so a preview never points back at the redirect.
+    const method = request.method.toUpperCase();
+    if (isLibraryShortLink(url.pathname) && (method === 'GET' || method === 'HEAD')) return redirect(libraryLocation(url, cfg), 302, url.pathname);
 
     return proxyToPages(request, url, cfg, deps);
   }

@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { COMICS_ALIAS_HOSTS, COMICS_HOST, MAIN_ORIGIN } from '../../services/productHost';
-import { BRAND } from './brand';
+import { createHash } from 'node:crypto';
+import { BRAND, HOME_HEAD, LIBRARY_HEAD, OG_IMAGE_REV, headFor } from './brand';
 import { createEdge, type Env } from './index';
-import { ALIAS_HOSTS, DEFAULT_CONFIG, HSTS_VALUE, isEmbedPath, resolveConfig, rewriteLocation } from './policy';
+import { ALIAS_HOSTS, DEFAULT_CONFIG, HSTS_VALUE, isEmbedPath, isLibraryShortLink, isLibraryView, libraryLocation, resolveConfig, rewriteLocation } from './policy';
 import { FakeHtmlRewriter } from './testing/fakeHtmlRewriter';
 
 const PUBLIC = 'https://comics.dreamstreamstudio.ai';
@@ -199,7 +200,8 @@ describe('Pages proxy', () => {
     expect(body).toContain('<meta name="ds-product" content="comics">');
     expect(body).toContain('<meta property="og:site_name" content="DreamStream Comic Studio">');
     expect(body).toContain(`<meta property="og:url" content="${PUBLIC}/">`);
-    expect(body).toContain(`<meta property="og:image" content="${PUBLIC}/icons/comics-og.png">`);
+    expect(body).toContain(`<meta property="og:image" content="${PUBLIC}/icons/comics-og.png?v=${OG_IMAGE_REV.home}">`);
+    expect(body).toContain(`<link rel="canonical" href="${PUBLIC}/">`);
     expect(body).toContain('<meta name="twitter:card" content="summary_large_image">');
     expect(body).not.toContain('Old suite title');
     expect(body.match(/property="og:title"/g)).toHaveLength(1);
@@ -308,6 +310,9 @@ describe('Pages proxy', () => {
     const body = await res.text();
     expect(body).toContain('Comic Studio can’t load right now');
     expect(body).toContain('Your comics are safe');
+    // Atlas ink, no orange brand.
+    expect(body).not.toMatch(/#d97757|#faf9f5/i);
+    for (const hex of body.match(/#[0-9a-f]{6}\b/gi) || []) expect(new Set([hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)]).size, hex).toBe(1);
     expectSecurityHeaders(res);
   });
 
@@ -316,6 +321,103 @@ describe('Pages proxy', () => {
     const res = await call(`${PUBLIC}/`, { method: 'HEAD' });
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-cache');
+  });
+});
+
+describe('the Library: its own link preview', () => {
+  const tag = (body: string, re: RegExp) => body.match(re)?.[1];
+
+  it('sends /library (and /library/) to the Library view with a 302, without touching Pages', async () => {
+    const { call, pagesFetch } = setup();
+    for (const path of ['/library', '/library/']) {
+      for (const method of ['GET', 'HEAD']) {
+        const res = await call(`${PUBLIC}${path}`, { method });
+        expect(res.status, `${method} ${path}`).toBe(302);
+        expect(res.headers.get('location')).toBe(`${PUBLIC}/?view=gallery`);
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expectSecurityHeaders(res);
+      }
+    }
+    expect(pagesFetch).not.toHaveBeenCalled();
+  });
+
+  it('gives a link preview bot exactly the redirect a person gets (no cloaking)', async () => {
+    const { call } = setup();
+    const ua = 'LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)';
+    const bot = await call(`${PUBLIC}/library`, { headers: { 'user-agent': ua } });
+    const person = await call(`${PUBLIC}/library`, { headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' } });
+    expect([bot.status, bot.headers.get('location')]).toEqual([person.status, person.headers.get('location')]);
+  });
+
+  it('keeps the short link’s other params behind view=gallery, encoded, and never two views', () => {
+    const at = (path: string) => libraryLocation(new URL(`${PUBLIC}${path}`), DEFAULT_CONFIG);
+    expect(at('/library?utm_source=linkedin&utm_medium=social')).toBe(`${PUBLIC}/?view=gallery&utm_source=linkedin&utm_medium=social`);
+    expect(at('/library?view=studio&id=x')).toBe(`${PUBLIC}/?view=gallery&id=x`);
+    expect(at('/library?q=%22%3E%3Cscript%3E')).toBe(`${PUBLIC}/?view=gallery&q=%22%3E%3Cscript%3E`);
+  });
+
+  it('leaves files under /library/… (sticker packs) and other methods alone', async () => {
+    const { call, pagesCalls } = setup(() => new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } }));
+    const file = await call(`${PUBLIC}/library/fluent-flat/1/star.svg`);
+    expect(file.status).toBe(200);
+    expect(pagesCalls.map((c) => new URL(c.url).pathname)).toEqual(['/library/fluent-flat/1/star.svg']);
+    const post = await call(`${PUBLIC}/library`, { method: 'POST', body: 'x' });
+    expect(post.status).toBe(405);
+    for (const path of ['/library/fluent-flat/1/star.svg', '/libraryx', '/Library', '/c/library']) expect(isLibraryShortLink(path), path).toBe(false);
+  });
+
+  it('brands the Library view with its own title, description, canonical, og:url, image and twitter card', async () => {
+    const { call } = setup();
+    const res = await call(`${PUBLIC}/?view=gallery`);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const url = `${PUBLIC}/?view=gallery`;
+    const image = `${PUBLIC}/icons/comics-library-og.png?v=${OG_IMAGE_REV.library}`;
+    expect(tag(body, /<title>([^<]*)<\/title>/)).toBe('Library · Comic Studio');
+    expect(tag(body, /<meta name="description" content="([^"]*)"/)).toBe(LIBRARY_HEAD.description);
+    expect(tag(body, /<link rel="canonical" href="([^"]*)"/)).toBe(url);
+    expect(tag(body, /<meta property="og:url" content="([^"]*)"/)).toBe(url);
+    expect(tag(body, /<meta property="og:title" content="([^"]*)"/)).toBe('Library · Comic Studio');
+    expect(tag(body, /<meta property="og:description" content="([^"]*)"/)).toBe(LIBRARY_HEAD.description);
+    expect(tag(body, /<meta property="og:image" content="([^"]*)"/)).toBe(image);
+    expect(tag(body, /<meta property="og:image:width" content="([^"]*)"/)).toBe('1200');
+    expect(tag(body, /<meta property="og:image:height" content="([^"]*)"/)).toBe('630');
+    expect(tag(body, /<meta property="og:image:alt" content="([^"]*)"/)).toBe(LIBRARY_HEAD.ogImageAlt);
+    expect(tag(body, /<meta name="twitter:card" content="([^"]*)"/)).toBe('summary_large_image');
+    expect(tag(body, /<meta name="twitter:title" content="([^"]*)"/)).toBe('Library · Comic Studio');
+    expect(tag(body, /<meta name="twitter:image" content="([^"]*)"/)).toBe(image);
+    expect(body).not.toContain(BRAND.title);
+    expect(body).not.toContain(`content="${PUBLIC}/"`);
+    for (const re of [/property="og:title"/g, /property="og:url"/g, /rel="canonical"/g, /<title>/g, /name="description"/g]) expect(body.match(re), String(re)).toHaveLength(1);
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+  });
+
+  it('keeps the Library head on a sample opened inside the Library, and the home head on every other page', async () => {
+    const { call } = setup();
+    const sample = await (await call(`${PUBLIC}/?view=gallery&sample=paper-boat`)).text();
+    expect(tag(sample, /<link rel="canonical" href="([^"]*)"/)).toBe(`${PUBLIC}/?view=gallery`);
+    for (const path of ['/', '/?view=dashboard', '/?view=gallery2', '/auth/callback', '/gallery', '/x?view=gallery']) {
+      const body = await (await call(`${PUBLIC}${path}`)).text();
+      expect(tag(body, /<title>([^<]*)<\/title>/), path).toBe(BRAND.title);
+      expect(tag(body, /<link rel="canonical" href="([^"]*)"/), path).toBe(`${PUBLIC}/`);
+      expect(tag(body, /<meta property="og:image" content="([^"]*)"/), path).toBe(`${PUBLIC}${HOME_HEAD.ogImage}`);
+    }
+    expect(headFor(new URL(`${PUBLIC}/?view=gallery`))).toBe(LIBRARY_HEAD);
+    expect(isLibraryView(new URL(`${PUBLIC}/library`))).toBe(false);
+  });
+
+  it('names each preview image by its content hash (a new picture is a new URL for preview caches)', () => {
+    const icons = fileURLToPath(new URL('../../public/icons/', import.meta.url));
+    for (const [key, file] of [['home', 'comics-og.png'], ['library', 'comics-library-og.png']] as const) {
+      const buf = readFileSync(`${icons}${file}`);
+      expect(createHash('sha256').update(buf).digest('hex').slice(0, 10), `${file}: run node scripts/og-cards.mjs and copy its OG_IMAGE_REV`).toBe(OG_IMAGE_REV[key]);
+      // PNG, 1200×630 (IHDR), under 200 KB.
+      expect(buf.subarray(1, 4).toString('latin1')).toBe('PNG');
+      expect([buf.readUInt32BE(16), buf.readUInt32BE(20)]).toEqual([1200, 630]);
+      expect(buf.byteLength).toBeLessThan(200 * 1024);
+    }
+    expect(HOME_HEAD.ogImage).toBe(`/icons/comics-og.png?v=${OG_IMAGE_REV.home}`);
+    expect(LIBRARY_HEAD.ogImage).toBe(`/icons/comics-library-og.png?v=${OG_IMAGE_REV.library}`);
   });
 });
 
