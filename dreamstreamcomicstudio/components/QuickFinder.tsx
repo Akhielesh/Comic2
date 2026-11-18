@@ -125,7 +125,7 @@ const ResultPanel: React.FC<{ prompt: string; onAskInChat: () => void }> = ({ pr
       ) : (
         <div className={cn('whitespace-pre-wrap text-[13px] leading-relaxed', WRAP_TEXT, status === 'error' ? TONE_TEXT.danger : 'text-[var(--ds-ink)]')}>
           {text}
-          {status === 'loading' && <span className="ml-0.5 inline-block h-3.5 w-[2px] bg-[var(--ds-ink)] align-middle motion-safe:animate-pulse" />}
+          {status === 'loading' && <span className="ds-caret ml-0.5" aria-hidden="true" />}
         </div>
       )}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--ds-hairline-soft)] pt-2.5">

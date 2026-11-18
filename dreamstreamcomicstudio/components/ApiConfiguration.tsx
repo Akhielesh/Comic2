@@ -313,7 +313,7 @@ const KeyRow: React.FC<{
 
   return (
     <div className={cn('p-3', HAIRLINE, RADIUS_CONTROL, k.active ? `${ACCENT_SOFT_BG} border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)]` : 'bg-[var(--ds-surface-soft)]')}>
-      <div className="flex items-start gap-3">
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <button
           onClick={activate}
           title={k.active ? 'Active key' : 'Set as active'}
@@ -324,9 +324,9 @@ const KeyRow: React.FC<{
           </span>
         </button>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-40">
           {editing ? (
-            <input value={label} onChange={(e) => setLabel(e.target.value)} className={`${INPUT} text-sm font-semibold mb-2`} placeholder="Key label" />
+            <input value={label} onChange={(e) => setLabel(e.target.value)} className={cn(INPUT, 'mb-2 font-semibold')} placeholder="Key label" />
           ) : (
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`min-w-0 font-semibold text-sm truncate ${INK}`}>{k.label}</span>
@@ -365,7 +365,7 @@ const KeyRow: React.FC<{
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+        <div className="ml-auto flex shrink-0 gap-1">
           {editing ? (
             <>
               <IconButton label="Save" size="sm" variant="outline" onClick={save}><Check className="w-3.5 h-3.5" /></IconButton>
