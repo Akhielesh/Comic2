@@ -12,7 +12,7 @@ import { syncAgentRunWithState } from '../../../services/comicAgentRun';
 import { costContextFromAllowance, formatCostForUser, type CostDisplayContext } from '../../../services/costDisplay';
 import { useUsageAllowance } from '../../usage/useUsageAllowance';
 import { AgentThinking, StreamItem, StreamList } from '../kit';
-import { CardForKind, type StreamCardHandlers } from './streamCards';
+import { CardForKind, RADIUS_SM, type StreamCardHandlers } from './streamCards';
 import { ArrowUp, ChevronLeft, Loader2, Plus, Settings } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { Button, IconButton } from '../../ds';
@@ -56,9 +56,6 @@ export interface ComicStreamViewProps {
   onCancelGate?: () => void;
   handlers?: StreamCardHandlers;
 }
-
-/** The small radius (4 px under the skin): the rail marks and the brand tile. */
-const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
 
 const RAIL = ['Project', 'Pages', 'Cast', 'Styles', 'Assets', 'Trash'];
 
@@ -170,7 +167,7 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
     <div className="flex h-full w-full flex-col bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
       {/* Header */}
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3 sm:gap-3 sm:px-4">
-        <IconButton label="Back" title={null} size="lg" onClick={onBack} className={cn('size-11 sm:size-9', MUTED)}>
+        <IconButton label="Back" title={null} size="lg" onClick={onBack} className={cn('size-11', MUTED)}>
           <ChevronLeft className="h-5 w-5" />
         </IconButton>
         <span className="min-w-0 truncate text-[14px] font-semibold">{projectTitle}</span>

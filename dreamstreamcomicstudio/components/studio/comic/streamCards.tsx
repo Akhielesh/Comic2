@@ -48,14 +48,17 @@ export interface StreamCardHandlers {
   onPublish?: () => void;
 }
 
-/** The placeholder behind a cast sheet that is not drawn yet: one well step per tier, deepest for the lead. */
+/**
+ * The placeholder behind a cast sheet that is not drawn yet: one step per tier that keeps its order in every
+ * skin and theme (well-strong, then well, then the canvas with a hairline for extras).
+ */
 const TIER_TINTS: Record<string, string> = {
   lead: 'bg-[var(--ds-well-strong)]',
   support: 'bg-[var(--ds-well)]',
-  extra: 'bg-[var(--ds-surface-soft)]'
+  extra: 'border border-[var(--ds-hairline)] bg-[var(--ds-canvas)]'
 };
-/** The small radius (4 px under the skin). */
-const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
+/** The small radius (4 px under the skin); ComicStreamView uses it too. */
+export const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
 
 // ---- shared shell ---------------------------------------------------------------------
 

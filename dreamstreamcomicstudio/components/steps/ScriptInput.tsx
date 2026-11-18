@@ -42,7 +42,8 @@ import {
   OVERLINE,
   RADIUS_CONTROL,
   RADIUS_PANEL,
-  SEGMENTED_ACTIVE,
+  SEGMENTED_ACTIVE_FILL,
+  SEGMENTED_ITEM,
   SEGMENTED_TRACK,
   SHADOW_SOFT,
   SIDEBAR_BG,
@@ -51,6 +52,7 @@ import {
   STATUS_SURFACE,
   TEXT_2XL,
   TEXT_XL,
+  TRANSITION,
   WRAP_TEXT
 } from '../chat/studioDesign';
 
@@ -58,9 +60,13 @@ import {
 const SURFACE = 'bg-[var(--ds-surface)]';
 const CARD_BOX = cn(SURFACE, HAIRLINE, RADIUS_PANEL);
 // One row of the confirm list: a segment of a vertical track (44 px, the focus ring flush).
-const OPTION_ROW = `flex w-full items-center rounded-[calc(var(--ds-radius-control)-2px)] px-3 text-sm font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${DENSITY.touch} ${FOCUS_RING}`;
+const OPTION_ROW = cn(
+  SEGMENTED_ITEM,
+  'flex w-full flex-none justify-start text-left motion-reduce:transition-none aria-pressed:text-[var(--ds-ink)]',
+  DENSITY.touch
+);
 // An on / off tile (outputs, auto pages): ink edge and the accent tint when on, a hairline when off.
-const TOGGLE_TILE = `flex min-w-0 items-center border px-3 text-sm font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${RADIUS_CONTROL} ${DENSITY.touch} ${FOCUS_RING}`;
+const TOGGLE_TILE = `flex min-w-0 items-center border px-3 text-sm font-medium ${TRANSITION} motion-reduce:transition-none ${RADIUS_CONTROL} ${DENSITY.touch} ${FOCUS_RING}`;
 const TOGGLE_ON = cn(ACCENT_SOFT_BG, 'border-[var(--ds-ink)]', INK);
 const TOGGLE_OFF = cn('border-[var(--ds-hairline)] bg-[var(--ds-canvas)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]', MUTED);
 
@@ -506,8 +512,7 @@ K: "I'm just looking for dinner."`;
                         onClick={() => updateAgentSettings({ confirmPolicy: option.value })}
                         className={cn(
                           OPTION_ROW,
-                          'justify-start text-left',
-                          selected ? SEGMENTED_ACTIVE : cn(MUTED, 'hover:text-[var(--ds-ink)]')
+                          selected && SEGMENTED_ACTIVE_FILL
                         )}
                       >
                         {option.label}

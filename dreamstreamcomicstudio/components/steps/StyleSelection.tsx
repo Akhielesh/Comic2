@@ -851,6 +851,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       icon={<Sparkles className="h-5 w-5" />}
       actions={(
         <Button
+          variant="outline"
           onClick={handleGenerateSelected}
           loading={isBatchGenerating}
           disabled={generatableCount === 0 || autoRunAgent}

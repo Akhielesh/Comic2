@@ -1,14 +1,14 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Check } from 'lucide-react';
 import { AppStep } from '../types';
 import { cn } from '../lib/utils';
 import {
   CANVAS_BG,
   DENSITY,
-  FOCUS_RING_FLUSH,
   HAIRLINE,
   RADIUS_ROUND,
-  SEGMENTED_ACTIVE,
+  SEGMENTED_ACTIVE_FILL,
+  SEGMENTED_ITEM,
   SEGMENTED_TRACK,
   Z
 } from './chat/studioDesign';
@@ -34,23 +34,38 @@ const steps = [
 ];
 
 // The step track in the Atlas language: one segmented track, the current step on the raised pill with its
-// label, done steps ticked, steps not reached yet quiet and not pressable. Labels of the other steps show
-// from `sm` up, so all seven fit a 320 px phone.
-const STEP_ITEM = `relative inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--ds-radius-control)-2px)] px-2 text-[13px] font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${DENSITY.touch} ${FOCUS_RING_FLUSH}`;
+// label, done steps ticked, steps not reached yet quiet and not pressable. Every step is at least 44 px wide;
+// labels of the other steps show from `sm` up, and on a narrow phone the track scrolls sideways and keeps the
+// current step in view.
+const STEP_ITEM = cn(
+  SEGMENTED_ITEM,
+  'min-w-[var(--ds-density-touch)] snap-center px-2 motion-reduce:transition-none aria-[current=step]:text-[var(--ds-ink)]',
+  DENSITY.touch
+);
 const STEP_MARK = `grid size-5 shrink-0 place-items-center ${RADIUS_ROUND} text-[11px] font-semibold tabular-nums`;
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
+  const listRef = useRef<HTMLOListElement>(null);
+
+  // When the track overflows (a narrow phone), bring the current step into view without moving the page.
+  useEffect(() => {
+    const list = listRef.current;
+    const current = list?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!list || !current || list.scrollWidth <= list.clientWidth) return;
+    list.scrollLeft = current.offsetLeft - (list.clientWidth - current.offsetWidth) / 2;
+  }, [currentStep]);
+
   return (
     <nav aria-label="Comic steps" className={cn('sticky top-0 w-full border-b border-[var(--ds-hairline)] py-3', CANVAS_BG, Z.chrome)}>
       <div className="mx-auto max-w-6xl px-4">
-        <ol className={cn(SEGMENTED_TRACK, 'flex w-full')}>
+        <ol ref={listRef} className={cn(SEGMENTED_TRACK, 'flex w-full snap-x overflow-x-auto overscroll-x-contain')}>
           {steps.map((step, index) => {
             const isCompleted = currentStep > step.id;
             const isCurrent = currentStep === step.id;
             const isReachable = step.id <= maxStepReached;
 
             return (
-              <li key={step.id} className={cn('flex min-w-0', isCurrent ? 'shrink-0' : 'flex-1')}>
+              <li key={step.id} className={cn('flex', isCurrent ? 'shrink-0' : 'flex-1')}>
                 <button
                   type="button"
                   aria-current={isCurrent ? 'step' : undefined}
@@ -61,10 +76,10 @@ export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxSt
                     STEP_ITEM,
                     'w-full',
                     isCurrent
-                      ? SEGMENTED_ACTIVE
+                      ? SEGMENTED_ACTIVE_FILL
                       : isReachable
-                        ? 'cursor-pointer text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
-                        : 'cursor-not-allowed text-[var(--ds-faint)]'
+                        ? 'cursor-pointer'
+                        : 'cursor-not-allowed opacity-60 hover:text-[var(--ds-muted)]'
                   )}
                 >
                   <span

@@ -466,7 +466,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
             ) : (
               recentLogs.map((log) => (
                 <div key={`${log.timestamp}-${log.message}`} className={cn('border-b border-[var(--ds-hairline-soft)] py-2 last:border-0', MUTED, WRAP_TEXT)}>
-                  <span className="mr-2 text-[var(--ds-faint)]">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                  <span className="mr-2">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   {log.message}
                 </div>
               ))
