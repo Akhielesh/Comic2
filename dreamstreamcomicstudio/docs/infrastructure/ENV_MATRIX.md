@@ -95,6 +95,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | billing | ✅ when `BILLING_ENABLED=true` 🔐 | — | **missing from .env.example** |
 | `STRIPE_PRICE_ID*` (×10) | billing | ⭕ | — | Fall back to DB configs |
 | `TURNSTILE_SECRET_KEY` / `VITE_TURNSTILE_SITE_KEY` | bot protection | ⭕ 🔐 | — | No-op until both set. The same Turnstile widget's secret also goes into Supabase → Attack Protection (ADR 0006 owner action #3) |
+| `INTEREST_EMAILS` | `routes/newsletter.ts` | ⭕ | — | **Off unless exactly `on`; leave unset.** Governs only the register-interest and product-updates emails (`access-requested`, `newsletter-confirm`, `newsletter-welcome`). Never governs admin invites, auth emails or member notifications. Not in `wrangler.jsonc` on purpose ([register interest](../features/register-interest.md)) |
 | `PWNED_PASSWORDS_CHECK` | `routes/authEmail.ts` (sign-up) | ⭕ | — | k-anonymity Pwned Passwords check at sign-up (first 5 SHA-1 hex characters only, padded; 2.5 s timeout, fails open). On unless `off` (ADR 0006 WS-4) |
 | `ADMIN_EMAILS` | `middleware/rbac.ts` | ✅ 🔐 | — | **Security-critical; missing from .env.example** — controls bootstrap admin |
 | `MCP_OUTBOUND_TOKEN` | `/api/connect` | ⭕ 🔐 | — | **missing from .env.example** |
