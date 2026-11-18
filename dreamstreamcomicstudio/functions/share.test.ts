@@ -206,6 +206,40 @@ describe('/c/<slug> share HTML', () => {
     expect(meta(xx, 'og:locale')).toBe('en_US');
   });
 
+  it('#6b a comic whose default edition is Telugu: ?lang=en gives the English title, text, locale, image and URL', async () => {
+    const teDefault = card(
+      { visibility: 'public', languages: ['en', 'te'], defaultLang: 'te' },
+      {
+        og: { en: { path: `pub/${KEY}/og-en-0123456789ab.jpg`, w: 1200, h: 630, alt: 'Cover of Brick Bridge' }, te: { path: `pub/${KEY}/og-te-ba9876543210.jpg`, w: 1200, h: 630, alt: 'కవర్' } },
+        i18n: { en: { title: 'Brick Bridge', description: 'An English logline.' }, te: { title: 'ఇటుక వంతెన', description: 'తెలుగు కథ.' } }
+      }
+    );
+    const viaComics = (path: string) =>
+      new Request(`https://comic2.pages.dev${path}`, { headers: { 'user-agent': 'LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)', 'x-forwarded-host': 'comics.dreamstreamstudio.ai' } });
+    const base = `https://comics.dreamstreamstudio.ai/c/${SLUG}`;
+
+    const te = await (await handleShare(viaComics(`/c/${SLUG}`), env(teDefault))).text();
+    expect([meta(te, 'og:title'), meta(te, 'og:locale'), meta(te, 'og:url')]).toEqual(['ఇటుక వంతెన', 'te_IN', base]);
+    expect(meta(te, 'og:image')).toBe(`https://comics.dreamstreamstudio.ai/og/${KEY}/og-te-ba9876543210.jpg`);
+
+    const en = await (await handleShare(viaComics(`/c/${SLUG}?lang=en`), env(teDefault))).text();
+    expect(meta(en, 'og:title')).toBe('Brick Bridge');
+    expect(meta(en, 'twitter:title')).toBe('Brick Bridge');
+    expect(meta(en, 'og:description')).toBe('An English logline.');
+    expect(meta(en, 'description')).toBe('An English logline.');
+    expect(en).toContain('<title>Brick Bridge · DreamStream Studio</title>');
+    expect(meta(en, 'og:locale')).toBe('en_US');
+    expect(meta(en, 'og:locale:alternate')).toBe('te_IN');
+    expect(meta(en, 'og:image')).toBe(`https://comics.dreamstreamstudio.ai/og/${KEY}/og-en-0123456789ab.jpg`);
+    expect(meta(en, 'twitter:image')).toBe(`https://comics.dreamstreamstudio.ai/og/${KEY}/og-en-0123456789ab.jpg`);
+    expect(meta(en, 'og:image:alt')).toBe('Cover of Brick Bridge');
+    // The preview service records the English page: og:url and canonical keep ?lang=en.
+    expect(meta(en, 'og:url')).toBe(`${base}?lang=en`);
+    expect(en).toContain(`<link rel="canonical" href="${base}?lang=en">`);
+    expect(en).not.toContain('ఇటుక వంతెన</title>');
+    expect(JSON.parse(/<script type="application\/json" id="ds-share-boot">([\s\S]*?)<\/script>/.exec(en)![1])).toMatchObject({ lang: 'en', card: { title: 'Brick Bridge' } });
+  });
+
   it('#7 AI agents are sent to the gate before the share function runs', async () => {
     const next = vi.fn(async () => new Response('share'));
     const res = await middleware({ request: get(`/c/${SLUG}`, 'Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)'), next });
