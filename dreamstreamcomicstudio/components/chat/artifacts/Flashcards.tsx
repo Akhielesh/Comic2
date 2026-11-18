@@ -49,7 +49,6 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
   if (compact) {
     return (
       <Surface
-        accent="#8b5cf6"
         header={
           <div className="flex items-start gap-2">
             <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
@@ -126,7 +125,6 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
       className="focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/50 rounded-2xl"
     >
       <Surface
-        accent="#8b5cf6"
         header={
           <div className="flex items-start gap-2">
             <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
@@ -146,13 +144,13 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
       >
         {/* Mastery bar: green = known, amber = flagged for review, quiet track = remaining. */}
         <div className="mx-3 flex h-1 overflow-hidden rounded-full bg-[var(--ds-well-strong)]" aria-hidden="true">
-          <div className="bg-emerald-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
-          <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
+          <div className="bg-[var(--ds-success)] transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
+          <div className="bg-[var(--ds-warning)] transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
         </div>
 
         {/* Resumed-progress hint (only when there was saved progress to restore). */}
         {resumed && (
-          <div className="mx-3 mt-2 rounded-lg bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700">
+          <div className="mx-3 mt-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-ink)]">
             Resumed your saved progress{review.size ? ` · ${review.size} flagged for review` : ''}.
           </div>
         )}
@@ -163,7 +161,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
             role="button"
             onClick={() => setFlipped((f) => !f)}
             className={`w-full min-h-[150px] rounded-xl border flex items-center justify-center text-center p-5 transition-colors duration-200 cursor-pointer ${
-              flipped ? 'border-violet-200 bg-violet-50/70' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] hover:bg-[var(--ds-hover)]'
+              flipped ? 'border-[color:color-mix(in_srgb,var(--ds-accent)_30%,transparent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] hover:bg-[var(--ds-hover)]'
             }`}
           >
             <div>
@@ -186,13 +184,13 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
 
           {/* Mark known / review + deck controls */}
           <div className="flex items-center gap-2 mt-3 flex-wrap">
-            <button onClick={() => mark(true)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700 transition-colors duration-200 hover:bg-emerald-100"><Check className="w-3.5 h-3.5" /> Got it</button>
-            <button onClick={() => mark(false)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700 transition-colors duration-200 hover:bg-amber-100"><RefreshCw className="w-3.5 h-3.5" /> Review</button>
+            <button onClick={() => mark(true)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] px-2.5 py-1 text-[var(--ds-success-text)] transition-colors duration-200 hover:bg-[color:color-mix(in_srgb,var(--ds-success)_16%,transparent)]"><Check className="w-3.5 h-3.5" /> Got it</button>
+            <button onClick={() => mark(false)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-2.5 py-1 text-[var(--ds-warning-text)] transition-colors duration-200 hover:bg-[color:color-mix(in_srgb,var(--ds-warning)_16%,transparent)]"><RefreshCw className="w-3.5 h-3.5" /> Review</button>
             {/* Spaced-repetition: drill just the not-yet-known cards (toggle back to all). */}
             {unknownOnly ? (
-              <button onClick={studyAll} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 transition-colors duration-200 hover:bg-violet-100"><Layers className="w-3.5 h-3.5" /> All cards</button>
+              <button onClick={studyAll} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-1 text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"><Layers className="w-3.5 h-3.5" /> All cards</button>
             ) : (
-              <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 transition-colors duration-200 hover:bg-violet-100 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
+              <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-1 text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)] disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
             )}
             <button onClick={exportCsv} title="Download as CSV (import into Anki / Quizlet)" className={`ml-auto ${secondaryBtn}`}><Download className="w-3.5 h-3.5" /> CSV</button>
             <button onClick={reshuffle} className={secondaryBtn}><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>

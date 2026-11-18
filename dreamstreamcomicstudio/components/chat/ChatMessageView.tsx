@@ -19,7 +19,7 @@ import { FeedbackButtons } from '../feedback/FeedbackButtons';
 import {
   GLASS, HAIRLINE, MENU, MUTED, TRANSITION, PILL,
   ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT,
-  CONTROL_BTN, FOCUS_RING, PRESS, PRIMARY_BTN, RADIUS_CONTROL, RADIUS_PANEL, TONE_SURFACE, TONE_TEXT
+  CONTROL_BTN, FOCUS_RING, OVERLINE, PRESS, PRIMARY_BTN, RADIUS_CONTROL, RADIUS_PANEL, STATUS_DOT, STATUS_INK, STATUS_SURFACE, TONE_SURFACE, TONE_TEXT
 } from './studioDesign';
 import { cn } from '../../lib/utils';
 import { CONNECTED_DATA_ACTIONS, type ConnectedDataAction, type ConnectedDataNoticeKind } from './connectorPrivacy';
@@ -197,10 +197,10 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
     <div className={`group flex gap-2 sm:gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
         className={`shrink-0 w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center ${
-          isUser ? `${ACCENT_BG} text-white` : turn.error ? 'bg-red-500/10 border border-red-500/30' : `${GLASS} ${HAIRLINE}`
+          isUser ? `${ACCENT_BG} text-white` : turn.error ? `border ${STATUS_SURFACE.error}` : `${GLASS} ${HAIRLINE}`
         }`}
       >
-        {isUser ? <User className="w-4 h-4" /> : turn.error ? <AlertTriangle className="w-4 h-4 text-red-500" /> : <Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} />}
+        {isUser ? <User className="w-4 h-4" /> : turn.error ? <AlertTriangle className={`w-4 h-4 ${STATUS_INK.error}`} /> : <Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} />}
       </div>
 
       {/* On phones the bubble takes nearly the full width (assistant turns especially,
@@ -211,7 +211,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
             isUser
               ? 'bg-[var(--ds-well-strong)] rounded-2xl px-4 py-2.5'
               : turn.error
-                ? 'bg-red-500/10 border border-red-500/30 rounded-2xl px-4 py-2.5'
+                ? `border ${STATUS_SURFACE.error} rounded-2xl px-4 py-2.5`
                 : 'px-0.5 py-1'
           }`}
         >
@@ -302,10 +302,10 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               so showing them in one spot — the end — is the logical order). */}
           {liveReasoning && (
             <details open className="mt-2">
-              <summary className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-500 cursor-pointer select-none">
+              <summary className={`flex items-center gap-1.5 text-[11px] font-bold cursor-pointer select-none ${MUTED}`}>
                 <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
               </summary>
-              <pre className="mt-1 text-[11px] whitespace-pre-wrap break-words text-[var(--ds-muted)] max-h-40 overflow-y-auto font-sans border-l-2 border-indigo-400/40 pl-2">{turn.reasoning}</pre>
+              <pre className="mt-1 text-[11px] whitespace-pre-wrap break-words text-[var(--ds-muted)] max-h-40 overflow-y-auto font-sans border-l-2 border-[var(--ds-hairline)] pl-2">{turn.reasoning}</pre>
             </details>
           )}
         </div>
@@ -322,7 +322,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {isUser && !editing && (
           <div className="flex items-center gap-3 sm:gap-2 mt-1 px-1 text-[11px] text-[var(--ds-muted)] hover-reveal">
             <button onClick={handleCopy} className="tap-target flex items-center gap-0.5 hover:text-[var(--ds-ink)] font-bold" title="Copy message">
-              {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+              {copied ? <Check className={`w-3 h-3 ${STATUS_INK.healthy}`} /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
             {onEdit && (
@@ -336,7 +336,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {/* Retry for a failed assistant turn. */}
         {!isUser && turn.error && onRegenerate && (
           <div className="flex items-center gap-2 mt-1 px-1">
-            <button onClick={onRegenerate} disabled={busy} className="tap-target flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[var(--ds-ink)] disabled:opacity-40" title="Try again">
+            <button onClick={onRegenerate} disabled={busy} className={`tap-target flex items-center gap-0.5 text-[11px] font-semibold hover:text-[var(--ds-ink)] disabled:opacity-40 ${TONE_TEXT.danger}`} title="Try again">
               <RefreshCw className="w-3 h-3" /> Try again
             </button>
           </div>
@@ -358,7 +358,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           const Banner: React.FC<{ n: (typeof turn.notices)[number]; count: number }> = ({ n, count }) => (
             <div
               className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
-                n.level === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+                n.level === 'error' ? `${STATUS_SURFACE.error} ${STATUS_INK.error}` : `${STATUS_SURFACE.attention} ${STATUS_INK.attention}`
               }`}
             >
               {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
@@ -383,7 +383,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               <button
                 onClick={() => setNoticesOpen((v) => !v)}
                 className={`flex w-full items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
-                  hasError ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+                  hasError ? `${STATUS_SURFACE.error} ${STATUS_INK.error}` : `${STATUS_SURFACE.attention} ${STATUS_INK.attention}`
                 }`}
               >
                 {hasError ? <AlertTriangle className="w-3 h-3 shrink-0" /> : <Info className="w-3 h-3 shrink-0" />}
@@ -429,11 +429,11 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               <div className={`mt-1.5 ${GLASS} ${HAIRLINE} rounded-2xl p-3 space-y-3`}>
                 {turn.toolEvents && turn.toolEvents.length > 0 && (
                   <div>
-                    <div className="text-[11px] font-bold uppercase text-emerald-600 flex items-center gap-1 mb-1"><Search className="w-3.5 h-3.5" /> Tools used</div>
+                    <div className={`${OVERLINE} flex items-center gap-1 mb-1`}><Search className="w-3.5 h-3.5" /> Tools used</div>
                     <ul className="space-y-1">
                       {turn.toolEvents.map((ev, i) => (
                         <li key={i} className="text-[11px] flex items-start gap-1.5">
-                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${ev.ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${ev.ok ? STATUS_DOT.healthy : STATUS_DOT.error}`} />
                           <span><span className="font-bold">{ev.tool}</span>{ev.query ? `: “${ev.query}”` : ''}{!ev.ok && ev.summary ? ` — ${ev.summary}` : ''}</span>
                         </li>
                       ))}
@@ -442,13 +442,13 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                 )}
                 {turn.reasoning && (
                   <div>
-                    <div className="text-[11px] font-bold uppercase text-indigo-500 flex items-center gap-1 mb-1"><Brain className="w-3.5 h-3.5" /> Reasoning</div>
+                    <div className={`${OVERLINE} flex items-center gap-1 mb-1`}><Brain className="w-3.5 h-3.5" /> Reasoning</div>
                     <pre className="text-[11px] whitespace-pre-wrap break-words bg-[var(--ds-well)] border border-[var(--ds-hairline)] rounded p-2 max-h-60 overflow-y-auto font-sans">{turn.reasoning}</pre>
                   </div>
                 )}
                 {turn.citations && turn.citations.length > 0 && (
                   <div>
-                    <div className="text-[11px] font-bold uppercase text-sky-600 flex items-center gap-1 mb-1.5"><Globe className="w-3.5 h-3.5" /> Web sources ({turn.citations.length})</div>
+                    <div className={`${OVERLINE} flex items-center gap-1 mb-1.5`}><Globe className="w-3.5 h-3.5" /> Web sources ({turn.citations.length})</div>
                     <div className="grid gap-1.5 sm:grid-cols-2">
                       {turn.citations.map((c, i) => (
                         <SourceCard key={`${c.url}-${i}`} index={i + 1} url={c.url} title={c.title} />
@@ -495,7 +495,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               </button>
             )}
             <button onClick={handleCopy} className="tap-target flex items-center gap-0.5 hover:text-[var(--ds-ink)] font-bold" title="Copy answer">
-              {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+              {copied ? <Check className={`w-3 h-3 ${STATUS_INK.healthy}`} /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
             <button onClick={downloadMarkdown} className="tap-target flex items-center gap-0.5 hover:text-[var(--ds-ink)] font-bold" title="Download answer as Markdown">

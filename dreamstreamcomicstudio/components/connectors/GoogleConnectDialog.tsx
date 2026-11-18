@@ -128,7 +128,7 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
                         <span className="flex items-center gap-2">
                           <span className="text-sm font-medium text-[var(--ds-ink)]">{s.displayName}</span>
                           {isConnected && (
-                            <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                            <span className="rounded-full bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--ds-success-text)]">
                               Connected
                             </span>
                           )}
@@ -145,13 +145,13 @@ export const GoogleConnectDialog: React.FC<GoogleConnectDialogProps> = ({
           <div className="border-t border-[var(--ds-hairline-soft)] p-5 pt-4">
             {willConsent && (
               <p className="mb-3 flex items-start gap-2 text-xs text-[var(--ds-muted)]">
-                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-success-text)]" />
                 Review the permissions for each service on Google’s consent screen. You can change
                 what is connected at any time.
               </p>
             )}
             {!configured && (
-              <p className="mb-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+              <p className="mb-3 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--ds-warning-text)]">
                 Google isn't configured on the server yet, so connecting may fail until the admin sets the OAuth client.
               </p>
             )}

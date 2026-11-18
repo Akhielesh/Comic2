@@ -172,7 +172,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
               title="Copy as CSV"
               className="flex items-center gap-1 rounded-md border border-[var(--ds-hairline)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]"
             >
-              {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+              {copied ? <Check className="h-3 w-3 text-[var(--ds-success-text)]" /> : <Copy className="h-3 w-3" />}
               {copied ? 'Copied' : 'CSV'}
             </button>
           </div>
@@ -218,7 +218,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                   const barLeft = stat.diverging ? Math.min(zeroPos, pct) : undefined;
                   const barWidth = stat.diverging ? Math.abs(pct - zeroPos) : pct;
                   const signed = stat.diverging && n !== null;
-                  const tone = signed ? (n! > 0 ? 'text-emerald-600' : n! < 0 ? 'text-rose-600' : 'text-[var(--ds-ink)]') : '';
+                  const tone = signed ? (n! > 0 ? 'text-[var(--ds-success-text)]' : n! < 0 ? 'text-[var(--ds-danger-text)]' : 'text-[var(--ds-ink)]') : '';
                   return (
                     <td
                       key={ci}

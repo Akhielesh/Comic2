@@ -125,7 +125,7 @@ const SessionRow: React.FC<{
           }}
           className={`flex-1 min-w-0 text-base sm:text-[13px] outline-none bg-transparent font-medium ${INK}`}
         />
-        <button onClick={commitRename} className="tap-target p-1 text-green-600 hover:scale-110"><Check className="w-3.5 h-3.5" /></button>
+        <button onClick={commitRename} className="tap-target p-1 text-[var(--ds-success-text)] hover:scale-110"><Check className="w-3.5 h-3.5" /></button>
         <button onClick={() => setEditing(false)} className={`tap-target p-1 ${MUTED} hover:scale-110`}><X className="w-3.5 h-3.5" /></button>
       </div>
     );
@@ -168,7 +168,7 @@ const SessionRow: React.FC<{
             <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setDraft(session.title); setEditing(true); }} className={MENU_ITEM}>
               <Pencil className="w-3.5 h-3.5" /> Rename
             </button>
-            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-red-600 hover:bg-red-500/10`}>
+            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)]`}>
               <Trash2 className="w-3.5 h-3.5" /> Delete
             </button>
             <div className="border-t border-[var(--ds-hairline)] my-1" />
@@ -243,7 +243,7 @@ const ProjectGroup: React.FC<{
                 setMenuOpen(false);
                 onEdit();
               }} className={MENU_ITEM}><Pencil className="w-3.5 h-3.5" /> Edit</button>
-              <button onClick={() => { setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-red-600 hover:bg-red-500/10`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
+              <button onClick={() => { setMenuOpen(false); onDelete(); }} className={`${MENU_ITEM} text-[var(--ds-danger-text)] hover:bg-[var(--ds-status-error-tint)]`}><Trash2 className="w-3.5 h-3.5" /> Delete</button>
             </div>
           )}
         </div>

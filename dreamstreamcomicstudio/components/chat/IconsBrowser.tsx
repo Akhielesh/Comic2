@@ -120,7 +120,7 @@ export const IconsBrowser: React.FC = () => {
               >
                 <span className="relative text-[var(--ds-ink)] transition-colors duration-200 group-hover/icon:text-[var(--ds-accent)]">
                   {e.render(30)}
-                  <span className="pointer-events-none absolute -right-2 -top-2 text-emerald-600 opacity-0 transition-opacity duration-200" style={{ opacity: copied === e.name ? 1 : 0 }}>
+                  <span className="pointer-events-none absolute -right-2 -top-2 text-[var(--ds-success-text)] opacity-0 transition-opacity duration-200" style={{ opacity: copied === e.name ? 1 : 0 }}>
                     <Check className="h-3.5 w-3.5" />
                   </span>
                 </span>

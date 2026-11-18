@@ -93,7 +93,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
             ) : (
               <div className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-medium text-[var(--ds-ink)]">
-                  <ShieldCheck className="h-4 w-4 text-emerald-600" /> You'll grant least-privilege access to:
+                  <ShieldCheck className="h-4 w-4 text-[var(--ds-success-text)]" /> You'll grant least-privilege access to:
                 </p>
                 <ul className="space-y-1.5 rounded-xl bg-[var(--ds-well)] p-3">
                   {entry.requiredScopes
@@ -113,7 +113,7 @@ export const ConnectDialog: React.FC<ConnectDialogProps> = ({ entry, submitting,
             )}
 
             {!entry.configured && (
-              <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+              <p className="rounded-lg bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--ds-warning-text)]">
                 This connector isn't configured on the server yet, so connecting may fail. {entry.docsUrl ? 'See the connector docs.' : ''}
               </p>
             )}

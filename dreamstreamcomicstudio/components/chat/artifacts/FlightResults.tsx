@@ -83,7 +83,7 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
   const badge = (o: FlightOffer): React.ReactNode => {
     const isCheapest = o === cheapest;
     const isFastest = o === fastest && offers.length > 1 && fastest !== cheapest;
-    if (isCheapest) return <span className="rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-700">Cheapest</span>;
+    if (isCheapest) return <span className="rounded-full bg-[var(--ds-well-strong)] px-1.5 py-px text-[10px] font-semibold text-[var(--ds-ink)]">Cheapest</span>;
     if (isFastest) return <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--ds-accent-soft)] px-1.5 py-px text-[10px] font-semibold text-[var(--ds-accent-text)]"><Zap className="h-2.5 w-2.5" />Fastest</span>;
     return null;
   };

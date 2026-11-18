@@ -28,9 +28,9 @@ const statusIcon = (status: AgentActivityStatus) => {
     case 'running':
       return <Loader2 className="w-3.5 h-3.5 text-[var(--ds-accent-text)] animate-spin" />;
     case 'done':
-      return <Check className="w-3.5 h-3.5 text-emerald-600" />;
+      return <Check className="w-3.5 h-3.5 text-[var(--ds-success-text)]" />;
     case 'error':
-      return <AlertTriangle className="w-3.5 h-3.5 text-red-500" />;
+      return <AlertTriangle className="w-3.5 h-3.5 text-[var(--ds-danger-text)]" />;
     default:
       return <Circle className="w-3.5 h-3.5 text-[var(--ds-faint)]" />;
   }

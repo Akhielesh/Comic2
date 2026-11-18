@@ -132,7 +132,7 @@ const EventForm: React.FC<FormProps> = ({ initial, busy, error, onCancel, onSubm
       </div>
       <input className={inputCls} placeholder="Location (optional)" value={location} onChange={(e) => setLocation(e.target.value)} />
       <input className={inputCls} placeholder="Guests — emails, comma-separated (optional)" value={attendees} onChange={(e) => setAttendees(e.target.value)} />
-      {error && <p className="text-[11px] text-rose-600">{error}</p>}
+      {error && <p className="text-[11px] text-[var(--ds-danger-text)]">{error}</p>}
       <div className="flex items-center justify-end gap-2 pt-0.5">
         <button onClick={onCancel} className="rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]">Cancel</button>
         <button
@@ -185,7 +185,7 @@ const Detail: React.FC<{
           <span>{event.attendees.length} guest{event.attendees.length === 1 ? '' : 's'}{event.organizer?.name ? ` · ${event.organizer.name}` : ''}</span>
         </div>
       )}
-      {error && <p className="text-[11px] text-rose-600">{error}</p>}
+      {error && <p className="text-[11px] text-[var(--ds-danger-text)]">{error}</p>}
 
       {canWrite && invited && !isPast && (
         <div className="flex items-center gap-1.5 pt-0.5">
@@ -215,7 +215,7 @@ const Detail: React.FC<{
         {canWrite && (
           <div className="flex items-center gap-1">
             <button disabled={busy} onClick={onEdit} title="Edit" className="rounded-lg p-1.5 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50"><Pencil className="h-3.5 w-3.5" /></button>
-            <button disabled={busy} onClick={onDelete} title="Delete" className="rounded-lg p-1.5 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-rose-600 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}</button>
+            <button disabled={busy} onClick={onDelete} title="Delete" className="rounded-lg p-1.5 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)] disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}</button>
           </div>
         )}
       </div>
@@ -269,7 +269,7 @@ export const CalendarAgenda: React.FC<{ data: CalendarAgendaArtifact; initialVie
   const title = data.accountLabel || data.account || 'Calendar';
   const headerRight = (
     <div className="flex items-center gap-1.5">
-      {flash && <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600"><Check className="h-3 w-3" />{flash}</span>}
+      {flash && <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ds-success-text)]"><Check className="h-3 w-3" />{flash}</span>}
       {canWrite && !compact && (
         <button
           onClick={(e) => setPopover({ kind: 'create', anchor: anchorFromEvent(e.currentTarget as HTMLElement) })}

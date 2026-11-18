@@ -468,7 +468,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
         <div>
           <div className="mb-2 flex items-center justify-between px-1">
             <SectionLabel>{items.length} {items.length === 1 ? 'memory' : 'memories'}</SectionLabel>
-            <button onClick={() => commit([])} className="text-[11px] font-medium text-red-500 hover:text-red-600">
+            <button onClick={() => commit([])} className="text-[11px] font-medium text-[var(--ds-danger-text)] hover:text-[var(--ds-danger-text)]">
               Clear all
             </button>
           </div>
@@ -484,7 +484,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
                 <button
                   onClick={() => remove(i)}
                   aria-label="Remove memory"
-                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] opacity-0 hover:bg-[var(--ds-hover)] hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
+                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] opacity-0 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)] focus-visible:opacity-100 group-hover:opacity-100"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -536,7 +536,7 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
               className="hidden"
               onChange={(e) => { void onPickFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
             />
-            {importError && <p className="text-xs text-red-500">{importError}</p>}
+            {importError && <p className="text-xs text-[var(--ds-danger-text)]">{importError}</p>}
             {/* Always mounted (empty until needed) so the notice is announced when its words arrive. */}
             <p role="status" aria-live="polite" className="flex items-start gap-1.5 text-xs leading-5 text-[var(--ds-ink)] empty:hidden">
               {importNotice && (
@@ -691,7 +691,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
                 <button
                   onClick={() => remove(a.id)}
                   aria-label={`Delete ${a.name}`}
-                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-red-500"
+                  className="shrink-0 rounded-md p-1 text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>

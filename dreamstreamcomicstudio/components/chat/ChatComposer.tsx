@@ -11,7 +11,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
   CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, INK, TRANSITION, SHADOW_SOFT,
-  RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
+  RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, DANGER_FILL, DANGER_FILL_HOVER
 } from './studioDesign';
 
 interface ChatComposerProps {
@@ -521,7 +521,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         />
 
         {busy ? (
-          <button onClick={onStop} className={`shrink-0 rounded-full p-2.5 bg-red-500 hover:bg-red-600 text-white ${TRANSITION}`} title="Stop">
+          <button onClick={onStop} className={`shrink-0 rounded-full p-2.5 ${DANGER_FILL} ${DANGER_FILL_HOVER} ${TRANSITION}`} title="Stop">
             <Square className="w-4 h-4" />
           </button>
         ) : (

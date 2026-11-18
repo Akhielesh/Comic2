@@ -19,7 +19,8 @@ import { ProviderLogo, hasProviderLogo } from '../providerLogos';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import {
   GLASS_STRONG, HAIRLINE, MUTED, INK, HEADING, TRANSITION, SHADOW_SOFT,
-  CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
+  CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT,
+  STATUS_CHIP_TONE, STATUS_INK, STATUS_SURFACE, TONE_TEXT
 } from './studioDesign';
 
 // Whether a model can actually be used right now: platform-served providers (OpenRouter,
@@ -33,11 +34,11 @@ const keyGate = (source: string): { ok: true } | { ok: false; needsKey: true } =
 const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
   if (!speed) return null;
   const tier = speedTier(speed.p50Ms);
-  const cls = tier === 'fast' ? 'bg-green-500/10 text-green-600' : tier === 'ok' ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : 'bg-red-500/10 text-red-600';
+  const cls = tier === 'fast' ? STATUS_CHIP_TONE.healthy : tier === 'ok' ? `border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] text-[var(--ds-muted)]` : STATUS_CHIP_TONE.attention;
   const Icon = tier === 'slow' ? Gauge : Zap;
   return (
     <span
-      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} flex items-center gap-0.5 ${cls}`}
+      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border flex items-center gap-0.5 ${cls}`}
       title={`Typical response time, measured from ${speed.samples} recent chats${tier === 'slow' ? ' — this model is slow' : ''}`}
     >
       <Icon className="w-2.5 h-2.5" /> {speedLabel(speed.p50Ms)}
@@ -78,21 +79,21 @@ const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = (
       <SpeedBadge speed={speed} />
       {timeoutProne && (
         <span
-          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-red-500/10 text-red-600 flex items-center gap-0.5`}
+          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border flex items-center gap-0.5 ${STATUS_CHIP_TONE.attention}`}
           title="Very large free model — it often queues on the free tier and can time out. Prefer a smaller/faster model, or use Auto."
         >
           <Gauge className="w-2.5 h-2.5" /> May time out
         </span>
       )}
-      {caps.isFree && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-green-500/10 text-green-600`}>Free</span>}
+      {caps.isFree && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)]`}>Free</span>}
       {caps.reasoning && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-indigo-500/10 text-indigo-500 flex items-center gap-0.5`}><Brain className="w-2.5 h-2.5" /> Reason</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)] flex items-center gap-0.5`}><Brain className="w-2.5 h-2.5" /> Reason</span>
       )}
       {caps.imageInput && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-amber-500/10 text-amber-600 flex items-center gap-0.5`}><Eye className="w-2.5 h-2.5" /> Vision</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)] flex items-center gap-0.5`}><Eye className="w-2.5 h-2.5" /> Vision</span>
       )}
       {model.source === 'openrouter' && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-sky-500/10 text-sky-600 flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)] flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
       )}
       {typeof model.contextLength === 'number' && model.contextLength > 0 && (
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
@@ -215,8 +216,8 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           </div>
 
           {hasMessages && (
-            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+            <div className={`mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] border rounded-xl px-3 py-2 ${STATUS_SURFACE.attention}`}>
+              <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${STATUS_INK.attention}`} />
               <span>
                 <span className="font-bold">Switching model mid-chat.</span> The new model picks up this same conversation, but tone, style and capabilities can change — and reasoning/web/vision options adjust to what it supports.
                 {conversationHasImages && ' Models without vision are disabled here because this chat contains images they can’t read.'}
@@ -269,7 +270,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
               <div className="flex items-center justify-center py-16 text-[var(--ds-muted)]"><Loader2 className="w-6 h-6 animate-spin" /></div>
             ) : (
               <>
-                {error && <p className="text-xs text-red-600 font-semibold mb-3">{error}</p>}
+                {error && <p className={`text-xs font-semibold mb-3 ${TONE_TEXT.danger}`}>{error}</p>}
                 {filtered.length === 0 ? (
                   <p className={`text-sm ${MUTED} text-center py-10`}>No models match your search.</p>
                 ) : (
@@ -332,7 +333,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                               )}
                             </p>
                           ) : visionIncompatible && (
-                            <p className="text-[11px] font-semibold text-red-600 mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
+                            <p className={`text-[11px] font-semibold mt-1.5 flex items-center gap-1 ${STATUS_INK.error}`}><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
                           )}
                         </button>
                       );

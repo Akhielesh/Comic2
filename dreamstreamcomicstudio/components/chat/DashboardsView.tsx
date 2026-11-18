@@ -528,7 +528,7 @@ const TileEditForm: React.FC<{
             aria-label="Tool arguments as JSON"
             className="w-full resize-y rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-2 font-mono text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
           />
-          {jsonError && <p className="mt-1 text-[11px] text-rose-600">{jsonError}</p>}
+          {jsonError && <p className="mt-1 text-[11px] text-[var(--ds-danger-text)]">{jsonError}</p>}
         </div>
       )}
       <div className="flex items-center justify-end gap-1.5 pt-0.5">
@@ -816,7 +816,7 @@ const TileCard: React.FC<{
                     onRemove();
                     close();
                   }}
-                  className={`${tileMenuItemCls} text-rose-600`}
+                  className={`${tileMenuItemCls} text-[var(--ds-danger-text)]`}
                 >
                   <Trash2 className="h-3.5 w-3.5" /> Remove
                 </button>
@@ -1303,7 +1303,7 @@ const AiCommandBar: React.FC<{
           </div>
         )}
         {result && (
-          <p role="status" className={`mt-1.5 text-[11px] ${result.kind === 'error' ? 'text-rose-600' : 'text-[var(--ds-muted)]'}`}>
+          <p role="status" className={`mt-1.5 text-[11px] ${result.kind === 'error' ? 'text-[var(--ds-danger-text)]' : 'text-[var(--ds-muted)]'}`}>
             {result.message}
           </p>
         )}
@@ -1851,7 +1851,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                         <button
                           title="Remove widget"
                           onClick={() => removeTile(active.id, tile.id)}
-                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-rose-600"
+                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>

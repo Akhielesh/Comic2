@@ -283,7 +283,7 @@ const ReaderPane: React.FC<{ connectionId: string; email: EmailMessage; onBack?:
           <Reply className="h-3.5 w-3.5" /> Reply
         </a>
         <button onClick={copy} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
-          {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
+          {copied ? <Check className="h-3.5 w-3.5 text-[var(--ds-success-text)]" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
     </div>
