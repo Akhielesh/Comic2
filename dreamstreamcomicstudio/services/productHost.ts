@@ -108,3 +108,85 @@ export const resolveAuthRedirectUrl = ({
   if (configured) return configured;
   return origin ? `${origin}/auth/callback` : '/auth/callback';
 };
+
+/* ------------------------------------------------------------------ main front page → comics
+ * For now the bare front page of the main site sends visitors to Comic Studio; the rest of the platform
+ * keeps working at its own addresses. The Pages middleware (functions/_middleware.ts) applies the rule at
+ * the edge; App.tsx only keeps the member hint cookie in step with the session. Docs:
+ * docs/infrastructure/main-front-page.md.
+ */
+
+/** THE switch. false: the main site's front page is served as before (one change and a deploy; the redirect is never cached). */
+export const MAIN_FRONT_PAGE_TO_COMICS = true;
+
+/** Query keys that carry no intent (campaign and click tracking). Only these ride along to the comics host. */
+export const FRONT_PAGE_TRACKING_KEYS: ReadonlySet<string> = new Set(['ref', 'fbclid', 'gclid', 'li_fat_id', 'msclkid']);
+const isTrackingKey = (key: string): boolean => /^utm_[a-z0-9_]+$/i.test(key) || FRONT_PAGE_TRACKING_KEYS.has(key);
+
+/**
+ * The member hint: a non-secret cookie the main site sets while someone is signed in there. It grants
+ * nothing (sessions live in browser storage, which the edge cannot see); it only tells the edge to serve the
+ * main front page to that browser instead of sending it to Comic Studio.
+ */
+export const MEMBER_HINT_COOKIE = 'ds_member';
+const MEMBER_HINT_MAX_AGE = 60 * 60 * 24 * 365;
+
+/** The escape hatch: the main front page with ?home=1 is always served (a member with no hint yet signs in there). */
+export const FRONT_PAGE_STAY_PARAM = 'home';
+
+/** True when a Cookie header carries the member hint (ds_member=1). */
+export const hasMemberHint = (cookieHeader: string | null | undefined): boolean =>
+  String(cookieHeader || '')
+    .split(';')
+    .some((part) => part.trim() === `${MEMBER_HINT_COOKIE}=1`);
+
+/**
+ * Where a main-site front-page request goes instead, or null to serve it unchanged. Pure. Redirect only when
+ * ALL hold: the switch is on; GET or HEAD; host exactly dreamstreamstudio.ai or www.; path exactly "/"; the query
+ * is empty or tracking keys only (carried over verbatim); no member hint cookie. Anything else (an auth callback's
+ * ?code= / ?token_hash= / ?error=, ?view=, ?invite=, ?home=1, any other path or host) is served as before.
+ */
+export const frontPageToComicsUrl = (
+  request: { url: string; method: string; cookie?: string | null },
+  on: boolean = MAIN_FRONT_PAGE_TO_COMICS
+): string | null => {
+  if (!on) return null;
+  const method = request.method.toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return null;
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return null;
+  }
+  if (!MAIN_HOSTS.includes(normalizeHost(url.hostname))) return null;
+  if (url.pathname !== '/') return null;
+  for (const key of url.searchParams.keys()) if (!isTrackingKey(key)) return null;
+  if (hasMemberHint(request.cookie)) return null;
+  return `${COMICS_ORIGIN}/${url.search}`;
+};
+
+/**
+ * The Set-Cookie value that keeps the member hint in step with the session on the main site: set while signed
+ * in, removed when signed out. null off the main site (localhost, previews, the comics host), where it is never written.
+ */
+export const memberHintCookie = (signedIn: boolean, hostname: string = currentHostname()): string | null => {
+  if (!isMainSiteHost(hostname)) return null;
+  const attrs = 'Path=/; Secure; SameSite=Lax';
+  return signedIn ? `${MEMBER_HINT_COOKIE}=1; ${attrs}; Max-Age=${MEMBER_HINT_MAX_AGE}` : `${MEMBER_HINT_COOKIE}=; ${attrs}; Max-Age=0`;
+};
+
+/** Browser side: write the member hint for the current session state. No-op without a document or off the main site. */
+export const syncMemberHint = (signedIn: boolean): void => {
+  const doc = (globalThis as { document?: { cookie: string } }).document;
+  if (!doc) return;
+  const value = memberHintCookie(signedIn);
+  if (!value) return;
+  // Leave an absent hint absent: a signed-out visitor never gets a removal cookie written.
+  if (!signedIn && !hasMemberHint(doc.cookie)) return;
+  try {
+    doc.cookie = value;
+  } catch {
+    // Cookies blocked: the member lands on Comic Studio and can use /?home=1.
+  }
+};
