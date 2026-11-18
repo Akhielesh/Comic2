@@ -16,6 +16,7 @@ import { Button } from './ds/Button';
 import { Segmented } from './ds/Segmented';
 import { Skeleton } from './ds/Skeleton';
 import { useComicTheme } from './comicstudio/useComicTheme';
+import { filterPublicListing, isPubliclyListed } from '../services/publicListing';
 import { SAMPLE_COVER_URL, SAMPLE_LOOKS } from './comicstudio/library/sampleArt';
 import { ComicSampleReader } from './comicshost/ComicSampleReader';
 import './comicshost/comicsLanding.css';
@@ -74,6 +75,7 @@ interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
     /** Kept for its callers; the page has no Back button (the header's lockup goes home). */
     onBack?: () => void;
+    /** Asked when a signed-in-only action is attempted without an account (kept for its callers; visitors see no such action). */
     onRequireAuth?: () => void;
 }
 
@@ -83,7 +85,6 @@ interface PublicProject extends Project {
     isLiked?: boolean;
     /** The rating the publish gate assigned (projects.content_rating, server-set). */
     contentRating?: ContentRating;
-    creatorHandle?: string;
 }
 
 const normalizeTimestamp = (value: unknown): number | undefined => {
@@ -97,13 +98,7 @@ const normalizeTimestamp = (value: unknown): number | undefined => {
     return undefined;
 };
 
-const fallbackUsernameFromId = (userId?: string): string => {
-    if (!userId) return 'Unknown creator';
-    return `user-${userId.slice(0, 8)}`;
-};
-
 type GallerySort = 'trending' | 'recent';
-type SearchKind = 'title' | 'creator';
 type SampleStory = 'paper-boat' | 'last-tram';
 const SAMPLES = [
     { id: 'last-tram' as const, title: 'The Last Tram', note: 'One last ride through a city after dark.', image: '/assets/comic-sample/last-tram-page-1-480.webp', detail: 'A city story · 2 pages' },
@@ -129,6 +124,11 @@ const literalLike = (value: string) => value.replace(/[\\%_]/g, '\\$&');
 // Only schema failures may fall back to creation-date ordering; network failures stay retryable.
 const isMissingGalleryColumn = (failure: { code?: string }) =>
     failure.code === '42703' || failure.code === 'PGRST204';
+/**
+ * Search, sort and the Kids-friendly filter appear only once the Library holds more than this many comics:
+ * with a handful, every comic is already on screen and the tools would only add clutter.
+ */
+export const LIBRARY_TOOLS_MIN = 6;
 
 async function hydratePreview(project: PublicProject): Promise<PublicProject> {
     // Never sign or display owner-writable draft images for a v4 publication.
@@ -168,11 +168,15 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const [filter, setFilter] = useState<GallerySort>('trending');
     const [search, setSearch] = useState('');
     const [query, setQuery] = useState('');
-    const [searchKind, setSearchKind] = useState<SearchKind>('title');
     const [kidsOnly, setKidsOnly] = useState(false);
     const [likeBusy, setLikeBusy] = useState<Record<string, boolean>>({});
     const [likeError, setLikeError] = useState<string | null>(null);
     const [sample, setSample] = useState<SampleStory | null>(sampleFromLocation);
+    /** Comics the current view lists in all (the database's count less any the client dropped); null until known. */
+    const [total, setTotal] = useState<number | null>(null);
+    /** Comics the whole Library lists (no search, no filter); null until the first unfiltered page arrives. */
+    const [libraryTotal, setLibraryTotal] = useState<number | null>(null);
+    const dropped = useRef(0);
     const requestGeneration = useRef(0);
     const effectiveSort = useRef<'likes_count' | 'created_at'>('likes_count');
     const pageBusy = useRef(false);
@@ -229,25 +233,17 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
         if (offset === 0) setLoading(true);
         else setLoadingMore(true);
         try {
-            let creatorIds: string[] | undefined;
-            if (query && searchKind === 'creator') {
-                // Handles are unique. Exact matching keeps creator discovery complete without a
-                // capped partial-profile search silently excluding some creators' comics.
-                const creators = await supabase.from('profiles').select('id').ilike('username', literalLike(query.replace(/^@/, ''))).limit(2);
-                if (creators.error) throw creators.error;
-                creatorIds = (creators.data ?? []).map((profile) => profile.id);
-            }
             const cards = (order: 'likes_count' | 'created_at') => {
-                let request = supabase.from('projects').select(GALLERY_CARD_SELECT)
-                    .eq('is_public', true).not('is_forced_private', 'is', true);
-                if (query && searchKind === 'title') request = request.ilike('name', `%${literalLike(query)}%`);
-                if (creatorIds) request = request.in('user_id', creatorIds);
+                // The listing rule (services/publicListing.ts) runs in the database: hidden comics never download.
+                // The first page also asks for the count, so "N comics" counts every listed comic, not one page.
+                let request = filterPublicListing(supabase.from('projects').select(GALLERY_CARD_SELECT, offset === 0 ? { count: 'exact' } : undefined));
+                if (query) request = request.ilike('name', `%${literalLike(query)}%`);
                 if (kidsOnly) request = request.in('content_rating', ['G', 'PG']);
                 // A deterministic secondary key prevents equal-score/date rows changing pages.
                 return request.order(order, { ascending: false, nullsFirst: false })
                     .order('id', { ascending: true }).range(offset, offset + GALLERY_PAGE_SIZE - 1);
             };
-            let result = creatorIds?.length === 0 ? { data: [], error: null } : await cards(effectiveSort.current);
+            let result = await cards(effectiveSort.current);
             if (generation !== requestGeneration.current) return;
             if (result.error && effectiveSort.current === 'likes_count' && isMissingGalleryColumn(result.error)) {
                 effectiveSort.current = 'created_at';
@@ -256,18 +252,13 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             if (result.error) throw result.error;
             if (generation !== requestGeneration.current) return;
             const received = (result.data ?? []) as unknown as Record<string, unknown>[];
+            // The same rule again on the client (a backstop), then the card's own shape checks.
             const rows = received.map((row) => ({ ...row, state: galleryCardStateOf(row) }))
                 .filter((row: any) => row && typeof row.id === 'string' && typeof row.name === 'string'
                     && typeof row.created_at === 'string' && typeof row.updated_at === 'string'
-                    && row.is_forced_private !== true && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
-            const userIds = Array.from(new Set(rows.flatMap((row: any) => typeof row.user_id === 'string' ? [row.user_id as string] : [])));
-            const authorMap = new Map<string, string>();
-            if (userIds.length) {
-                const profiles = await supabase.from('profiles').select('id, username').in('id', userIds);
-                if (!profiles.error) for (const profile of profiles.data ?? []) {
-                    if (typeof profile.username === 'string' && profile.username.trim()) authorMap.set(profile.id, profile.username.trim());
-                }
-            }
+                    && isPubliclyListed(row) && (!kidsOnly || isKidsFriendly(gateRatingOf(row))));
+            // No maker name on a card: profiles are readable by their owner only, and a publication's "show my
+            // name" choice is not on the listing row, so a name here would be wrong or a stand-in id.
             const mapped = rows.map((row: any): PublicProject => ({
                 id: row.id, name: row.name,
                 createdAt: new Date(row.created_at).getTime(), updatedAt: new Date(row.updated_at).getTime(),
@@ -275,8 +266,6 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
                 state: row.state, isPublic: !!row.is_public,
                 userId: typeof row.user_id === 'string' ? row.user_id : undefined,
-                authorName: authorMap.get(row.user_id) || fallbackUsernameFromId(row.user_id),
-                creatorHandle: authorMap.get(row.user_id),
                 likesCount: typeof row.likes_count === 'number' ? row.likes_count : 0,
                 viewsCount: typeof row.views_count === 'number' ? row.views_count : 0,
                 contentRating: gateRatingOf(row)
@@ -290,8 +279,18 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             setProjects((previous) => offset === 0 ? page : [...previous, ...page.filter((project) => !previous.some((p) => p.id === project.id))]);
             setHasMore(received.length === GALLERY_PAGE_SIZE);
             setNextOffset(offset + received.length);
+            if (offset === 0) dropped.current = 0;
+            dropped.current += received.length - rows.length;
+            const counted = typeof (result as { count?: unknown }).count === 'number' ? (result as { count: number }).count : null;
+            const listed = offset === 0
+                ? (counted !== null ? Math.max(rows.length, counted - dropped.current) : received.length < GALLERY_PAGE_SIZE ? rows.length : null)
+                : undefined;
+            if (listed !== undefined) {
+                setTotal(listed);
+                if (!query && !kidsOnly && listed !== null) setLibraryTotal(listed);
+            } else setTotal((previous) => previous === null ? null : Math.max(0, previous - (received.length - rows.length)));
         } catch {
-            if (generation === requestGeneration.current) setLoadNotice(offset === 0 ? 'The community Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
+            if (generation === requestGeneration.current) setLoadNotice(offset === 0 ? 'The Library could not be loaded.' : 'The next comics could not be loaded. Your place is saved.');
         } finally {
             if (generation === requestGeneration.current) {
                 pageBusy.current = false;
@@ -299,7 +298,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                 setLoadingMore(false);
             }
         }
-    }, [query, searchKind, kidsOnly, user?.id]);
+    }, [query, kidsOnly, user?.id]);
 
     useEffect(() => {
         const generation = ++requestGeneration.current;
@@ -308,6 +307,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
         setProjects([]);
         setHasMore(false);
         setNextOffset(0);
+        setTotal(null);
         focusNextPage.current = false;
         void fetchPage(0, generation);
         return () => { requestGeneration.current += 1; };
@@ -328,7 +328,17 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
     const clearFilters = () => { setSearch(''); setQuery(''); setKidsOnly(false); };
     const filteredProjects = projects.filter((project) => !kidsOnly || isKidsFriendly(project.contentRating));
     const isSearching = search.trim() !== query;
-    const showSamples = !query && !search.trim() && !kidsOnly;
+    const filtering = !!query || !!search.trim() || kidsOnly;
+    const showSamples = !filtering;
+    // A small Library shows its comics and nothing else: no search box, sort or filter until it has enough
+    // comics for them to help (and never while the size is unknown, so the tools do not flash in and out).
+    const showTools = filtering || (libraryTotal !== null && libraryTotal > LIBRARY_TOOLS_MIN);
+    // An empty Library shows no comics section at all (no empty shelf, no "0 comics"): the samples stay.
+    const showComics = loading || loadingMore || filtering || hasMore || !!loadNotice || filteredProjects.length > 0;
+    const shownCount = total ?? filteredProjects.length;
+    const countText = loading || isSearching ? 'Finding your next read…'
+        : loadNotice && projects.length === 0 ? 'Comics are temporarily unavailable.'
+        : `${shownCount} ${shownCount === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}`;
 
     const toggleLike = async (project: PublicProject) => {
         if (!user) { onRequireAuth?.(); return; }
@@ -348,6 +358,58 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
             setLikeBusy((previous) => ({ ...previous, [project.id]: false }));
         }
     };
+
+    const comicsSection = showComics && (
+        <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
+            <div className="library-section-heading"><h2 id="library-community-title">New comics</h2><span>Made in Comic Studio</span></div>
+            {showTools && <>
+                <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
+                    <label className="library-search-field"><Search aria-hidden /><span className="sr-only">Search comic titles</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder="Search comic titles" /></label>
+                    {search && <button type="button" className={cn('library-clear-search', FOCUS_RING)} aria-label="Clear search" onClick={() => { setSearch(''); setQuery(''); }}><X aria-hidden /></button>}
+                    <Button type="submit" variant="outline" className="library-search-submit">Search</Button>
+                </form>
+                <div className="library-toolbar">
+                    <Segmented<GallerySort> className="library-sort" label="Sort the Library" value={filter} onChange={setFilter} options={[{ value: 'trending', label: 'Trending' }, { value: 'recent', label: 'Recent' }]} />
+                    <Button type="button" variant="outline" aria-pressed={kidsOnly} onClick={() => setKidsOnly((value) => !value)} title="Only published comics rated G or PG by the publish check" className="library-kids">{kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)</Button>
+                    {(query || kidsOnly) && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearFilters}>Clear filters</button>}
+                </div>
+            </>}
+            <p className={cn('library-results-count', !showTools && 'sr-only')} role="status" aria-live="polite">{countText}</p>
+            {likeError && <p className="library-inline-error" role="alert">{likeError}</p>}
+            {loading ? (
+                <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: showTools ? 8 : 2 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
+            ) : (
+                <>
+                    {filteredProjects.length > 0 && <ul className="library-grid">
+                        {filteredProjects.map((project, index) => {
+                            const covers = coverCandidates(project);
+                            const slug = shareSlugOf(project);
+                            const likes = project.likesCount || 0;
+                            return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} className="library-card">
+                                <a href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={`Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
+                                    <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}<span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span></div>
+                                    <h3>{project.name}</h3>
+                                </a>
+                                <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                                <div className="library-card-stats">
+                                    {/* Reading needs no account: a visitor sees the likes, a signed-in reader can add one. */}
+                                    {user
+                                        ? <button type="button" onClick={() => void toggleLike(project)} aria-pressed={!!project.isLiked} aria-label={`${project.isLiked ? 'Unlike' : 'Like'} ${project.name}, ${likes} likes`} disabled={!!likeBusy[project.id]} className={cn('library-like', RADIUS_CONTROL, FOCUS_RING)}><Heart aria-hidden className={project.isLiked ? 'fill-current' : undefined} />{likes}</button>
+                                        : <span><Heart aria-hidden /><span className="sr-only">Likes: </span>{likes}</span>}
+                                    {/* A current-studio comic's reads are counted with its publication, not on this row (whose count stays
+                                        0), so a zero is left out rather than shown as if nobody had read it. */}
+                                    {(project.viewsCount || 0) > 0 && <span><Eye aria-hidden /><span className="sr-only">Views: </span>{project.viewsCount}</span>}
+                                </div>
+                            </li>;
+                        })}
+                    </ul>}
+                    {!loadNotice && filteredProjects.length === 0 && <div className="library-empty"><BookOpen aria-hidden /><h3>{hasMore ? 'Keep exploring the Library.' : query ? 'No matching comics.' : 'No kids-friendly comics yet.'}</h3><p>{hasMore ? 'No readable comics appeared in this batch. Load the next comics below.' : query ? 'Try another title.' : 'Only published comics rated G or PG show here.'}</p>{(query || kidsOnly) && <Button variant="outline" onClick={clearFilters}>Clear filters</Button>}</div>}
+                    {loadNotice && <div role="alert" className="library-load-error"><p className="[overflow-wrap:anywhere]">{loadNotice}</p><p>{showSamples ? 'Studio samples are still available below.' : 'Check your connection and try again.'}</p><Button variant="outline" onClick={() => void fetchPage(nextOffset, requestGeneration.current)}>Try again</Button></div>}
+                    {hasMore && !loadNotice && <div className="library-more"><Button type="button" variant="outline" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading more comics…' : 'Load more comics'}{!loadingMore && <ArrowRight aria-hidden />}</Button><p>Showing {filteredProjects.length} of {shownCount} comics.</p></div>}
+                </>
+            )}
+        </section>
+    );
 
     return (
         <div data-comics-library="" data-comic-theme={theme} className="comics-library">
@@ -369,9 +431,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                         <h1 ref={libraryTitle} tabIndex={-1}>Library</h1>
                         <p className="library-reading-note"><BookOpen aria-hidden /> Free to read. No account needed.</p>
                     </header>
+                    {comicsSection}
                     {showSamples && (
                         <section aria-labelledby="library-samples-title" className="library-samples">
-                            <div className="library-section-heading"><h2 id="library-samples-title">Studio samples</h2><span>From Comic Studio</span></div>
+                            <div className="library-section-heading"><h2 id="library-samples-title">Studio samples</h2><span>Two short stories to try the reader</span></div>
                             <div className="library-sample-grid">
                                 {SAMPLES.map((story) => (
                                     <a key={story.id} href={libraryHref(story.id)} onClick={(event) => navigateSample(event, story.id)} className={cn('library-sample-card', FOCUS_RING)} aria-label={`Read ${story.title}`}>
@@ -382,48 +445,6 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onReq
                             </div>
                         </section>
                     )}
-                    <section aria-labelledby="library-community-title" className="library-community" aria-busy={loading || isSearching || loadingMore}>
-                        <div className="library-section-heading"><h2 id="library-community-title">From the community</h2>{!user && onRequireAuth && <Button type="button" variant="outline" size="sm" onClick={onRequireAuth}>Sign in</Button>}</div>
-                        <form role="search" className="library-search-form" onSubmit={(event) => { event.preventDefault(); setQuery(search.trim()); }}>
-                            <label className="library-search-kind"><span className="sr-only">Search by</span><select value={searchKind} onChange={(event) => setSearchKind(event.target.value as SearchKind)}><option value="title">Comic title</option><option value="creator">Creator</option></select></label>
-                            <label className="library-search-field"><Search aria-hidden /><span className="sr-only">{searchKind === 'title' ? 'Search comic titles' : 'Search creator username'}</span><input type="search" value={search} maxLength={100} onChange={(event) => setSearch(event.target.value)} placeholder={searchKind === 'title' ? 'Search comic titles' : 'Enter a creator’s exact username'} aria-describedby="library-search-help" /></label>
-                            {search && <button type="button" className={cn('library-clear-search', FOCUS_RING)} aria-label="Clear search" onClick={() => { setSearch(''); setQuery(''); }}><X aria-hidden /></button>}
-                            <Button type="submit" variant="outline" className="library-search-submit">Search</Button>
-                        </form>
-                        <div className="library-toolbar">
-                            <Segmented<GallerySort> className="library-sort" label="Sort the Library" value={filter} onChange={setFilter} options={[{ value: 'trending', label: 'Trending' }, { value: 'recent', label: 'Recent' }]} />
-                            <Button type="button" variant="outline" aria-pressed={kidsOnly} onClick={() => setKidsOnly((value) => !value)} title="Only published comics rated G or PG by the publish check" className="library-kids">{kidsOnly ? <Check aria-hidden /> : <Baby aria-hidden />} Kids-friendly (G/PG)</Button>
-                            {(query || kidsOnly) && <button type="button" className={cn('library-reset', FOCUS_RING)} onClick={clearFilters}>Clear filters</button>}
-                        </div>
-                        <p id="library-search-help" className="library-search-help">{searchKind === 'creator' ? 'Search an exact username, with or without @.' : 'Search titles across the community Library.'}{kidsOnly && ' Only published comics rated G or PG are included.'}</p>
-                        <p className="library-results-count" role="status" aria-live="polite">{loading || isSearching ? 'Finding your next read…' : loadNotice && projects.length === 0 ? 'Community comics are temporarily unavailable.' : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'comic' : 'comics'}${query ? ` for “${query}”` : ''}${hasMore ? ' shown · more to discover' : ''}`}</p>
-                        {likeError && <p className="library-inline-error" role="alert">{likeError}</p>}
-                        {loading ? (
-                            <div aria-label="Loading the Library" className="library-grid" aria-busy="true">{Array.from({ length: 8 }, (_, index) => <div key={index}><Skeleton className="library-cover" /><Skeleton shape="text" className="mt-3 w-3/4" /><Skeleton shape="text" className="mt-2 w-1/2" /></div>)}</div>
-                        ) : (
-                            <>
-                                {filteredProjects.length > 0 && <ul className="library-grid">
-                                    {filteredProjects.map((project, index) => {
-                                        const covers = coverCandidates(project);
-                                        const slug = shareSlugOf(project);
-                                        const likeLabel = user ? (project.isLiked ? 'Unlike' : 'Like') : 'Sign in to like';
-                                        return <li key={project.id} ref={index === previousLength.current ? newResults : undefined} data-testid="gallery-card" data-share-slug={slug} className="library-card">
-                                            <a href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`} aria-label={`Read ${project.name}`} className={cn('library-card-read', FOCUS_RING)} onClick={slug ? undefined : (event) => { if (plainClick(event)) { event.preventDefault(); onReadComic(project.id); } }}>
-                                                <div className="library-cover"><SmartImage src={covers[0]} fallbackSources={covers.slice(1)} alt="" className="h-full w-full object-cover" containerClassName="w-full h-full" fallbackIcon={<BookOpen aria-hidden className="size-10" />} />{project.contentRating && <div className="library-rating"><RatingBadge rating={project.contentRating} onArt /></div>}<span className="library-cover-read" aria-hidden>Read comic <ArrowRight /></span></div>
-                                                <h3>{project.name}</h3>
-                                            </a>
-                                            {project.creatorHandle ? <button type="button" className={cn('library-creator', FOCUS_RING)} onClick={() => { setSearchKind('creator'); setSearch(project.creatorHandle!); setQuery(project.creatorHandle!); }}>by {project.creatorHandle}</button> : <p className="library-creator">by {project.authorName || 'Unknown creator'}</p>}
-                                            <p className="library-published">{new Date(project.publishedAt || project.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                                            <div className="library-card-stats"><button type="button" onClick={() => void toggleLike(project)} aria-pressed={user ? !!project.isLiked : undefined} aria-label={`${likeLabel} ${project.name}, ${project.likesCount || 0} likes`} disabled={!!likeBusy[project.id] || (!user && !onRequireAuth)} className={cn('library-like', RADIUS_CONTROL, FOCUS_RING)}><Heart aria-hidden className={project.isLiked ? 'fill-current' : undefined} />{project.likesCount || 0}</button><span><Eye aria-hidden /><span className="sr-only">Views: </span>{project.viewsCount || 0}</span></div>
-                                        </li>;
-                                    })}
-                                </ul>}
-                                {!loadNotice && filteredProjects.length === 0 && <div className="library-empty"><BookOpen aria-hidden /><h3>{hasMore ? 'Keep exploring the Library.' : query ? 'No matching comics.' : kidsOnly ? 'No kids-friendly comics yet.' : 'The next story could be yours.'}</h3><p>{hasMore ? 'No readable comics appeared in this batch. Load the next comics below.' : query ? 'Try another title or an exact creator username.' : kidsOnly ? 'Only published comics rated G or PG show here.' : 'Community comics will appear here when creators publish them. In the meantime, enjoy a Studio sample above.'}</p>{(query || kidsOnly) && <Button variant="outline" onClick={clearFilters}>Clear filters</Button>}</div>}
-                                {loadNotice && <div role="alert" className="library-load-error"><p className="[overflow-wrap:anywhere]">{loadNotice}</p><p>{showSamples ? 'Studio samples are still available above.' : 'Check your connection and try again.'}</p><Button variant="outline" onClick={() => void fetchPage(nextOffset, requestGeneration.current)}>Try again</Button></div>}
-                                {hasMore && !loadNotice && <div className="library-more"><Button type="button" variant="outline" disabled={loadingMore} onClick={loadMore}>{loadingMore ? 'Loading more comics…' : 'Load more comics'}{!loadingMore && <ArrowRight aria-hidden />}</Button><p>Showing {filteredProjects.length} comics. Keep exploring at your own pace.</p></div>}
-                            </>
-                        )}
-                    </section>
                 </div>
             </div>
         </div>

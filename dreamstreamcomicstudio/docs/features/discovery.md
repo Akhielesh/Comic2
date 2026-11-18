@@ -161,6 +161,7 @@ A held, unpublished or unlisted comic never shows, even when featured. Featured 
 
 - **Uploaded avatars** on bylines: they need an opaque copy (§2).
 - **"From creators you follow"** needs a signed-in listing; **Keep reading** and **Saved** are device-local (DS-R6).
-- **Classic (pre-v4) comics** stay on the existing gallery query (DS-R6 `classicListing.ts`), not in these RPCs.
+- **Classic (pre-v4) comics** are not in these RPCs. Until they are applied, the Library reads `projects` directly and
+  lists current Comic Studio publications only; classic comics are hidden from every public list (`public-library.md`).
 - **A trigram index for search**: the public set is small; the edge cache and the limiter bound the cost.
 - **An admin "Feature" UI**: SQL seeding first (§4).
