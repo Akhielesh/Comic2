@@ -5,26 +5,27 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { usePrefersReducedMotion } from './motion';
-import { useStudioTheme } from './themeStore';
+import { STATUS_DOT, STATUS_INK } from '../../chat/studioDesign';
 
 export type RunStatus = 'idle' | 'starting' | 'live' | 'error';
 
 interface StatusStyle {
   dot: string;
   ring: string;
-  /** Label text shade for dark vs. light themes. */
-  textDark: string;
-  textLight: string;
+  /** Label ink (the status tokens read correctly in light and dark). */
+  text: string;
   label: string;
   /** Whether the ring should pulse (steady-state "live"/"starting" do; idle/error don't). */
   animate: boolean;
 }
 
+// One status vocabulary (studioDesign STATUS_*): idle and starting are "waiting", live is
+// "healthy", error is "error". Always beside the label (or its aria-label).
 const STATUS_STYLES: Record<RunStatus, StatusStyle> = {
-  idle: { dot: 'bg-slate-400', ring: 'bg-slate-400', textDark: 'text-slate-400', textLight: 'text-slate-500', label: 'Idle', animate: false },
-  starting: { dot: 'bg-amber-400', ring: 'bg-amber-400', textDark: 'text-amber-300', textLight: 'text-amber-600', label: 'Starting', animate: true },
-  live: { dot: 'bg-emerald-400', ring: 'bg-emerald-400', textDark: 'text-emerald-300', textLight: 'text-emerald-600', label: 'Live', animate: true },
-  error: { dot: 'bg-rose-500', ring: 'bg-rose-500', textDark: 'text-rose-300', textLight: 'text-rose-600', label: 'Error', animate: false },
+  idle: { dot: STATUS_DOT.waiting, ring: STATUS_DOT.waiting, text: STATUS_INK.waiting, label: 'Idle', animate: false },
+  starting: { dot: STATUS_DOT.waiting, ring: STATUS_DOT.waiting, text: STATUS_INK.waiting, label: 'Starting', animate: true },
+  live: { dot: STATUS_DOT.healthy, ring: STATUS_DOT.healthy, text: STATUS_INK.healthy, label: 'Live', animate: true },
+  error: { dot: STATUS_DOT.error, ring: STATUS_DOT.error, text: STATUS_INK.error, label: 'Error', animate: false },
 };
 
 export interface StatusPulseProps {
@@ -38,10 +39,8 @@ export interface StatusPulseProps {
 
 export const StatusPulse: React.FC<StatusPulseProps> = ({ status, label, hideLabel, className }) => {
   const reduce = usePrefersReducedMotion();
-  const isDark = useStudioTheme().isDark;
   const s = STATUS_STYLES[status] ?? STATUS_STYLES.idle;
   const text = label ?? s.label;
-  const textColor = isDark ? s.textDark : s.textLight;
   const pulsing = s.animate && !reduce;
 
   return (
@@ -57,7 +56,7 @@ export const StatusPulse: React.FC<StatusPulseProps> = ({ status, label, hideLab
         )}
         <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${s.dot}`} />
       </span>
-      {!hideLabel && <span className={`text-xs font-semibold ${textColor}`}>{text}</span>}
+      {!hideLabel && <span className={`text-xs font-semibold ${s.text}`}>{text}</span>}
     </span>
   );
 };

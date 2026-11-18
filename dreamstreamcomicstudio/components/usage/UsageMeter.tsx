@@ -24,8 +24,20 @@ import {
 } from '../../services/usageAllowance';
 import { useUsageAllowance } from './useUsageAllowance';
 import { API_KEYS_HREF } from './links';
-
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+import { cn } from '../../lib/utils';
+import {
+  ACCENT_FILL,
+  ACCENT_FILL_HOVER,
+  FOCUS_RING,
+  ON_ACCENT_TEXT,
+  OVERLAY,
+  OVERLINE,
+  STATUS_CHIP_TONE,
+  STATUS_DOT,
+  STATUS_INK,
+  STATUS_SURFACE,
+  Z
+} from '../chat/studioDesign';
 
 /** Deep link into Settings → API keys (defined in ./links; re-exported here under the same name). */
 export { API_KEYS_HREF };
@@ -49,18 +61,25 @@ export const usageExhaustedCopy = (status: Pick<AllowanceStatus, 'resetsAt' | 'b
   return `${used} ${or} continue on your own key (it's on file)${reset ? ' now' : ''}. Its own limits still apply.`;
 };
 
-const CTA_CLASS =
-  'inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] disabled:opacity-50 coarse:h-11';
+const CTA_CLASS = cn(
+  'inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors disabled:opacity-50 coarse:h-11',
+  ACCENT_FILL,
+  ACCENT_FILL_HOVER,
+  ON_ACCENT_TEXT,
+  FOCUS_RING
+);
 
+// The gauge and bar are status marks (always beside the words "left" / "used up"): healthy,
+// attention (running low) and error (critical) on the status tokens.
 const TONE_STROKE: Record<ReturnType<typeof usageTone>, string> = {
-  ok: 'text-emerald-600 dark:text-emerald-400',
-  low: 'text-amber-500',
-  critical: 'text-rose-500'
+  ok: 'stroke-[var(--ds-success)]',
+  low: 'stroke-[var(--ds-warning)]',
+  critical: 'stroke-[var(--ds-danger-mark)]'
 };
 const TONE_FILL: Record<ReturnType<typeof usageTone>, string> = {
-  ok: 'bg-emerald-500',
-  low: 'bg-amber-500',
-  critical: 'bg-rose-500'
+  ok: STATUS_DOT.healthy,
+  low: STATUS_DOT.attention,
+  critical: STATUS_DOT.error
 };
 
 /** Screen-reader sentence for the meter. */
@@ -90,9 +109,8 @@ export const UsageGauge: React.FC<{ pctLeft: number; tone: ReturnType<typeof usa
           fill="none"
           strokeWidth={2.5}
           strokeLinecap="round"
-          stroke="currentColor"
           strokeDasharray={`${(left / 100) * c} ${c}`}
-          className={cx(TONE_STROKE[tone], 'motion-safe:transition-[stroke-dasharray] motion-safe:duration-500')}
+          className={cn(TONE_STROKE[tone], 'motion-safe:transition-[stroke-dasharray] motion-safe:duration-[var(--ds-motion-slow)]')}
         />
       </svg>
       {showNumber && (
@@ -107,7 +125,7 @@ export const UsageGauge: React.FC<{ pctLeft: number; tone: ReturnType<typeof usa
 /** A slim horizontal bar (fills with usage LEFT). */
 export const UsageBar: React.FC<{ pctLeft: number; tone: ReturnType<typeof usageTone>; className?: string }> = ({ pctLeft, tone, className }) => (
   <div
-    className={cx('relative h-2 w-full overflow-hidden rounded-full bg-[var(--ds-well)]', className)}
+    className={cn('relative h-2 w-full overflow-hidden rounded-full bg-[var(--ds-well)]', className)}
     role="meter"
     aria-valuemin={0}
     aria-valuemax={100}
@@ -115,7 +133,7 @@ export const UsageBar: React.FC<{ pctLeft: number; tone: ReturnType<typeof usage
     aria-label="Usage left"
   >
     <div
-      className={cx('h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500', TONE_FILL[tone])}
+      className={cn('h-full rounded-full motion-safe:transition-[width] motion-safe:duration-[var(--ds-motion-slow)]', TONE_FILL[tone])}
       style={{ width: `${pctLeft > 0 ? Math.max(2, Math.min(100, pctLeft)) : 0}%` }}
     />
   </div>
@@ -137,11 +155,11 @@ export const UsageMeterPill = React.forwardRef<
       aria-controls={open ? controls : undefined}
       aria-label={usageAriaLabel(status)}
       title={status.friendlyUnits?.label || 'Usage left'}
-      className={cx(
+      className={cn(
         'inline-flex shrink-0 items-center rounded-full border text-[12px] font-medium tabular-nums transition-colors',
-        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)]',
+        FOCUS_RING,
         status.exhausted
-          ? 'border-rose-500/30 bg-rose-500/[0.07] text-rose-700 hover:bg-rose-500/[0.12] dark:text-rose-300'
+          ? STATUS_CHIP_TONE.error
           : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]',
         compact ? 'h-11 w-11 justify-center' : 'h-8 gap-1.5 px-2.5 coarse:h-11 coarse:px-3'
       )}
@@ -170,11 +188,11 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
   };
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4 text-[var(--ds-ink)]">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+      <div className={cn('flex items-center gap-1.5', OVERLINE)}>
         <Gauge className="h-3.5 w-3.5 text-[var(--ds-accent)]" aria-hidden /> Usage left
       </div>
       <div className="mt-1 flex items-baseline gap-2">
-        <span className={cx('text-[26px] font-semibold tracking-tight tabular-nums', status.exhausted && 'text-rose-600 dark:text-rose-400')}>
+        <span className={cn('text-[26px] font-semibold tracking-tight tabular-nums', status.exhausted && STATUS_INK.error)}>
           {status.exhausted ? '0%' : formatPctLeft(status.pctLeft)}
         </span>
         {status.friendlyUnits && !status.exhausted && (
@@ -184,7 +202,7 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
       <UsageBar pctLeft={status.exhausted ? 0 : status.pctLeft} tone={tone} className="mt-2" />
 
       {status.exhausted ? (
-        <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] p-3" role="status">
+        <div className={cn('mt-3 rounded-xl border p-3', STATUS_SURFACE.error)} role="status">
           <p className="text-[13px] leading-snug">{usageExhaustedCopy(status)}</p>
           {ownKey !== 'auto' && (
             <p className="mt-1.5 text-[12px] text-[var(--ds-muted)]">Nothing more is spent until you choose one of these.</p>
@@ -284,7 +302,7 @@ export const UsageMeter: React.FC<{ status?: AllowanceStatus | null; compact?: b
   if (!showsUsageMeter(status)) return null;
 
   return (
-    <span className={cx('relative inline-flex shrink-0', className)}>
+    <span className={cn('relative inline-flex shrink-0', className)}>
       <UsageMeterPill ref={btnRef} status={status} compact={compact} open={open} controls={id} onClick={() => setOpen((o) => !o)} />
       {open &&
         typeof document !== 'undefined' &&
@@ -295,7 +313,7 @@ export const UsageMeter: React.FC<{ status?: AllowanceStatus | null; compact?: b
             role="dialog"
             aria-label="Usage left"
             tabIndex={-1}
-            className="fixed z-[80] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[0_8px_30px_rgba(0,0,0,0.14)] backdrop-blur-xl focus:outline-none"
+            className={cn('fixed max-w-[calc(100vw-2rem)] overflow-hidden focus:outline-none', Z.popover, OVERLAY)}
             style={pos ? { left: pos.left, top: pos.top, width: pos.width } : { right: 16, top: 64 }}
           >
             <UsageDetails status={status} onClose={close} />
