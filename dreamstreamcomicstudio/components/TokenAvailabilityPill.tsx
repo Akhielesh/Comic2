@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Zap, KeyRound } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { getActiveKey, usageFraction, usageColor, PROVIDER_META, ALL_PROVIDERS, type ApiKeyProvider } from '../services/apiKeys';
+import { getActiveKey, usageFraction, PROVIDER_META, ALL_PROVIDERS, type ApiKeyProvider } from '../services/apiKeys';
+import { CHIP, OVERLAY, OVERLINE, RADIUS_PILL, SHADOW_SOFT, STATUS_DOT, STATUS_INK, Z } from './chat/studioDesign';
+import { cn } from '../lib/utils';
 import {
   getSelectedImageModel,
   getSelectedTextModel,
@@ -19,6 +21,14 @@ interface TokenAvailabilityPillProps {
 
 // Provider priority for the "headline" key shown in the pill.
 const PROVIDER_PRIORITY: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo'];
+
+/** How close a key is to its limit, as one status: at the limit it is an error, from 80 % it wants attention. */
+const usageState = (frac: number): 'error' | 'attention' | null => (frac >= 1 ? 'error' : frac >= 0.8 ? 'attention' : null);
+/** The readable status ink for a usage figure (muted while under 80 %). */
+const usageInk = (frac: number): string => {
+  const state = usageState(frac);
+  return state ? STATUS_INK[state] : 'text-[var(--ds-muted)]';
+};
 
 /**
  * Header pill showing the ACTIVE API key's usage instead of the legacy CT credits.
@@ -71,16 +81,19 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   ];
   const active = priority.map((p) => getActiveKey(p)).find(Boolean) || null;
 
-  const pillShell =
-    'inline-flex items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1 text-[11px] font-semibold shadow-sm';
+  const pillShell = cn(
+    'inline-flex items-center gap-1.5 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1 text-[11px] font-semibold',
+    RADIUS_PILL,
+    SHADOW_SOFT
+  );
 
   if (!active) {
     return (
       <div
-        className={`${pillShell} text-[var(--ds-muted)] ${className}`}
+        className={cn(pillShell, 'text-[var(--ds-muted)]', className)}
         title={enabledProviders.length === 0 ? 'All AI sources are turned off in Settings → API Configuration' : 'Add an API key in Settings → API Configuration'}
       >
-        <KeyRound size={13} /> {enabledProviders.length === 0 ? 'Sources off' : 'No API key'}
+        <KeyRound size={13} aria-hidden /> {enabledProviders.length === 0 ? 'Sources off' : 'No API key'}
       </div>
     );
   }
@@ -104,36 +117,36 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
       : 'Auto · picks the best per task';
 
   return (
-    <div className={`relative group ${className}`}>
-      <div className={`${pillShell} gap-2 text-[var(--ds-ink)] cursor-default`}>
-        <Zap size={13} className="text-amber-400 fill-amber-400" />
+    <div className={cn('relative group', className)}>
+      <div className={cn(pillShell, 'gap-2 text-[var(--ds-ink)] cursor-default')}>
+        <Zap size={13} className="fill-current text-[var(--ds-ink)]" aria-hidden />
         <span className="max-w-[8rem] truncate">{active.label}</span>
-        <span className={`hidden md:inline tabular-nums ${hasLimit ? usageColor(frac) : 'text-[var(--ds-muted)]'}`}>
+        <span className={`hidden md:inline tabular-nums ${hasLimit ? usageInk(frac) : 'text-[var(--ds-muted)]'}`}>
           {hasLimit ? `${pct}%` : `$${active.usedUsd.toFixed(2)}`}
         </span>
       </div>
 
       {/* Hover detail card */}
-      <div className="absolute right-0 mt-2 w-72 z-50 hidden group-hover:block">
-        <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-xl p-3 text-left">
+      <div className={cn('absolute right-0 mt-2 w-72 max-w-[calc(100vw-2rem)] hidden group-hover:block', Z.popover)}>
+        <div className={cn(OVERLAY, 'p-3 text-left')}>
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">{PROVIDER_META[active.provider].label}</span>
-            <span className="text-[10px] font-bold uppercase bg-[#D97757]/10 text-[#D97757] px-1.5 py-0.5 rounded-full border border-[#D97757]/30">Active</span>
+            <span className={OVERLINE}>{PROVIDER_META[active.provider].label}</span>
+            <span className={cn(CHIP, 'border-transparent bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]')}>Active</span>
           </div>
           <div className="font-semibold text-sm mt-0.5 truncate text-[var(--ds-ink)]">{active.label}</div>
 
           <div className="mt-2">
             {hasLimit ? (
               <>
-                <div className="h-1.5 w-full bg-[var(--ds-well)] rounded-full overflow-hidden">
+                <div className="h-1.5 w-full overflow-hidden rounded-[var(--ds-radius-pill)] bg-[var(--ds-well-strong)]">
                   <div
-                    className={frac >= 1 ? 'bg-red-500 h-full' : frac >= 0.8 ? 'bg-amber-400 h-full' : 'bg-emerald-500 h-full'}
+                    className={cn('h-full', STATUS_DOT[usageState(frac) ?? 'active'])}
                     style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[11px] text-[var(--ds-muted)] mt-1 tabular-nums">
                   <span>${active.usedUsd.toFixed(2)} / ${active.limitUsd!.toFixed(2)} this month</span>
-                  <span className={usageColor(frac)}>{pct}%{frac >= 1 ? ' · blocked' : ''}</span>
+                  <span className={usageInk(frac)}>{pct}%{frac >= 1 ? ' · blocked' : ''}</span>
                 </div>
               </>
             ) : (
@@ -143,14 +156,14 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
 
           {activeSourceKeys.length > 1 && (
             <div className="mt-2 pt-2 border-t border-[var(--ds-hairline-soft)] text-[11px] text-[var(--ds-muted)] space-y-1">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">Per-source usage</div>
+              <div className={OVERLINE}>Per-source usage</div>
               {activeSourceKeys.map(({ provider, key }) => {
                 const f = usageFraction(key);
                 const lim = !!key.limitUsd && key.limitUsd > 0;
                 return (
                   <div key={provider} className="flex justify-between gap-2 tabular-nums">
                     <span className="truncate">{PROVIDER_META[provider].label}</span>
-                    <span className={lim ? usageColor(f) : ''}>
+                    <span className={lim ? usageInk(f) : ''}>
                       {lim ? `$${key.usedUsd.toFixed(2)} / $${key.limitUsd!.toFixed(2)}` : `$${key.usedUsd.toFixed(2)}`}
                     </span>
                   </div>
@@ -172,7 +185,7 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
           )}
 
           <div className="mt-2 pt-2 border-t border-[var(--ds-hairline-soft)] text-[11px] text-[var(--ds-muted)] space-y-0.5">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">Generation defaults</div>
+            <div className={OVERLINE}>Generation defaults</div>
             <div className="flex justify-between gap-2"><span>Image</span><span className="truncate text-[var(--ds-ink)]">{modelLine(imageModelId, imageSource)}</span></div>
             <div className="flex justify-between gap-2"><span>Text</span><span className="truncate text-[var(--ds-ink)]">{modelLine(textModelId, textSource)}</span></div>
           </div>
