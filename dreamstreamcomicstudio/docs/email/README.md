@@ -12,12 +12,12 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 
 | Email | Template | Kind | Trigger |
 |-------|----------|------|---------|
-| Newsletter confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/newsletter/subscribe` (kind=updates) |
-| Newsletter welcome | `newsletter-welcome` | marketing | clicking the confirm link |
+| Newsletter confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/newsletter/subscribe` (kind=updates), **only while `INTEREST_EMAILS=on`** (off by default; see [register interest](../features/register-interest.md)) |
+| Newsletter welcome | `newsletter-welcome` | marketing | clicking the confirm link, only while `INTEREST_EMAILS=on` |
 | Product update / broadcast | `product-update` | marketing | `sendProductUpdate(...)` |
 | Admin announcement / notice | `announcement` | essential | admin Email Console / `sendAnnouncement(...)` |
 | Beta invite / referral | `beta-invite` | essential | `/api/admin/email/invite`, `/api/invites/referral/send` |
-| Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access) |
+| Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access), new rows only, **only while `INTEREST_EMAILS=on`** |
 | Account welcome (fuller onboarding) | `welcome` | essential | `sendWelcome(...)` |
 | New sign-in alert | `signin-alert` | essential | `sendSigninAlert(...)` |
 | Confirm signup / resend / password reset / magic link | `auth-confirm-signup`, `auth-recovery`, `auth-magic-link` | essential | `POST /api/auth/email/*` (backend `generateLink` + `/send`; see [SETUP](./SETUP.md#auth-emails-go-through-the-backend-default-since-2026-10-22)) |

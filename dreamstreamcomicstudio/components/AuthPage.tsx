@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { getAuthPersistMode, getAuthRedirectUrl, setAuthPersistMode, supabase } from '../services/supabase';
-import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Lock, MailWarning, Ticket } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, MailWarning, Ticket } from 'lucide-react';
 import { WaitlistForm } from './WaitlistForm';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
@@ -353,13 +353,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     change: a press on it (click, Space or Enter) still goes back to the password step, as the old tab did. */}
                 <div className="border-b border-[var(--ds-hairline-soft)] p-3" onClick={onChoiceClick}>
                     <Segmented
-                        label="Sign in or join"
+                        label={signupsAllowed ? 'Sign in or join' : 'Sign in or register interest'}
                         fullWidth
                         value={choice}
                         onChange={(next) => (next === 'signin' ? chooseSignIn() : chooseJoin())}
                         options={[
                             { value: 'signin', label: 'Sign in' },
-                            { value: 'join', label: signupsAllowed ? 'Sign up' : 'Request access' }
+                            { value: 'join', label: signupsAllowed ? 'Sign up' : 'Register interest' }
                         ]}
                     />
                 </div>
@@ -382,16 +382,16 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     {mode === 'request-access' && (
                         <div className="space-y-5">
                             <span className={`${CHIP} ${CHIP_VARIANT.outline}`}>
-                                <Lock aria-hidden className="size-3" /> Invite-only beta
+                                Private beta
                             </span>
                             <p className="text-[length:var(--ds-text-base)] leading-relaxed text-[var(--ds-muted)]">
-                                DreamStream Studio is currently open to existing members only. Drop your email and
-                                we’ll reach out the moment new access opens up.
+                                Comic Studio is in a small private beta. Leave your email, and a few answers if you
+                                like.
                             </p>
                             <WaitlistForm
                                 kind="access"
                                 source="auth-request-access"
-                                buttonLabel="Request access"
+                                buttonLabel="Register interest"
                                 onSignIn={chooseSignIn}
                             />
                             <p className="text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
@@ -633,7 +633,7 @@ const AUTH_HEADINGS: Record<'signin' | 'signup' | 'forgot' | 'magic-link' | 'req
     signup: { title: 'Create your account' },
     forgot: { title: 'Reset your password', body: 'Enter your email to receive a reset link.' },
     'magic-link': { title: 'Email me a sign-in link', body: 'Enter your email and we will send a secure sign-in link.' },
-    'request-access': { title: 'Request access' }
+    'request-access': { title: 'Register your interest' }
 };
 
 /** A link inside a sentence: ink, underlined, the focus outline. */

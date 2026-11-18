@@ -36,7 +36,7 @@ describe('AuthPage on Atlas', () => {
     expect(screen.getByLabelText(/^Password/)).toHaveAttribute('type', 'password');
     expect(container.innerHTML).not.toMatch(LEGACY);
     // The two choices are one radio group (the DS Segmented), not two loose buttons.
-    expect(screen.getByRole('radiogroup', { name: 'Sign in or join' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Sign in or register interest' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveAttribute('aria-checked', 'true');
   });
 
@@ -122,10 +122,10 @@ describe('AuthPage on Atlas', () => {
     for (const cls of DENSITY.coarse.split(' ')) expect(resend.className.split(/\s+/)).toContain(cls);
   });
 
-  it('switching to “Request access” (sign-ups closed) shows the access request in place', () => {
+  it('switching to “Register interest” (sign-ups closed) shows the access request in place', () => {
     render(<AuthPage onLoginSuccess={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />);
-    fireEvent.click(screen.getByRole('radio', { name: 'Request access' }));
-    expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Register interest' }));
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
     expect(screen.getByTestId('waitlist')).toBeInTheDocument();
     // "Already have an account? Sign in" is a 44 x 44 target under a coarse pointer (the layout smoke's hit-target rule).
     const signIn = screen.getByRole('button', { name: 'Sign in' });
@@ -142,7 +142,7 @@ describe('AuthPage on Atlas', () => {
     rerender(<AuthPage key="auth-1" initialMode="request-access" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
     rerender(<AuthPage key="auth-2" initialMode="request-access" {...h} />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Request access' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Register your interest' })).toBeInTheDocument();
     expect(screen.getByTestId('waitlist')).toBeInTheDocument();
     rerender(<AuthPage key="auth-3" initialMode="signin" {...h} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Welcome back' })).toBeInTheDocument();
