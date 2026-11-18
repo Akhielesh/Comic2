@@ -11,12 +11,43 @@ import {
     upsertPrivateProfile
 } from '../services/db';
 import { getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
-import { Button } from './Button';
-import { FOCUS_RING, WRAP_TEXT } from './chat/studioDesign';
+import { cn } from '../lib/utils';
+import { Button, Checkbox, FIELD_LABEL, IconButton, Input, Skeleton, Textarea, buttonClasses, useReducedMotion, useScrolledPast } from './ds';
+import {
+    ACCENT_SOFT_BG,
+    DENSITY,
+    FADE_IN,
+    FIELD,
+    FOCUS_RING,
+    HEADER_GLASS,
+    HEADING,
+    MUTED,
+    OVERLAY,
+    OVERLINE,
+    RADIUS_CONTROL,
+    RADIUS_PANEL,
+    RADIUS_ROUND,
+    RISE_IN,
+    SCRIM,
+    SECTION_CARD,
+    SECTION_TITLE,
+    SHADOW_SOFT,
+    STATUS_CHIP,
+    STATUS_CHIP_TONE,
+    STATUS_EDGE,
+    STATUS_INK,
+    STATUS_SURFACE,
+    STICKY_HEADER,
+    TEXT_2XL,
+    TEXT_XL,
+    TONE_TEXT,
+    WRAP_TEXT,
+    Z
+} from './chat/studioDesign';
 import { SUPPORT_EMAIL } from './legal/contacts';
 import { ApiConfiguration } from './ApiConfiguration';
-import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Bell, CheckCircle2, ChevronLeft, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { AlertTriangle, Bell, Loader2, CheckCircle2, ChevronLeft, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { patchUrlParams, persistUiState, resolveInitialUiState } from '../services/viewState';
 import { listDevices, removeDevice, currentDeviceId, type UserDevice } from '../services/deviceSessions';
@@ -33,12 +64,26 @@ import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 import { StudiosAccess } from './account/StudiosAccess';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
+
+/** Security and session buttons sit in narrow cards: their labels wrap onto a second line instead of being cut. */
+const WRAP_BUTTON = 'h-auto min-h-9 whitespace-normal py-2 text-left';
+const WRAP_LABEL = 'min-w-0 whitespace-normal';
 import { fetchAccountAccess } from '../services/studioAccessApi';
 import { resolveName, splitName } from '../shared/accountName';
 
 // The photo button fills a round overflow-hidden frame, so the shared ring (drawn 2 px outside the element) would be
 // clipped away entirely. This one is drawn 4 px inside the button, where the frame cannot clip it.
 const AVATAR_FOCUS_RING = FOCUS_RING.replace('focus-visible:outline-offset-2', 'focus-visible:outline-offset-[-4px]');
+
+// The Atlas settings language: opaque section cards (SECTION_CARD), body-face semibold titles, labelled fields on the
+// FIELD recipe, and status in the one vocabulary (STATUS_*), always with its icon and its words.
+const CARD = cn(SECTION_CARD, 'space-y-4 p-5');
+const CARD_HEADING = SECTION_TITLE;
+const LABEL = cn('block', FIELD_LABEL);
+const HINT = cn('mt-1 text-[length:var(--ds-text-sm)]', MUTED, WRAP_TEXT);
+const NOTE = cn('flex items-start gap-2 border px-3 py-2 text-[length:var(--ds-text-base)]', RADIUS_CONTROL, WRAP_TEXT);
+/** A plain text button (Send another, Refresh): ink, underlined, 44 px under a coarse pointer, the focus ring. */
+const TEXT_BUTTON = cn('inline-flex items-center px-1 text-[length:var(--ds-text-base)] font-medium text-[var(--ds-ink)] underline underline-offset-2 disabled:opacity-50', RADIUS_CONTROL, DENSITY.coarse, FOCUS_RING);
 
 interface AccountSettingsProps {
     onClose: () => void;
@@ -90,66 +135,66 @@ const ContactSection = () => {
 
     if (sent) {
         return (
-            <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
-                <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4 border-4 border-black">
-                    <Mail size={40} />
+            <div className={cn('flex flex-col items-center justify-center py-20 text-center', FADE_IN)}>
+                <div className={cn('mb-4 grid size-16 place-items-center rounded-full border', STATUS_SURFACE.healthy, STATUS_INK.healthy)}>
+                    <Mail size={28} aria-hidden="true" />
                 </div>
-                <h3 className="font-display text-2xl">Message Sent!</h3>
-                <p className="font-comic text-slate-600 mt-2">A representative will be in touch shortly.</p>
-                <button onClick={() => setSent(false)} className="mt-8 text-sm font-bold underline">Send another</button>
+                <h3 className={cn(TEXT_XL, 'font-semibold text-[var(--ds-ink)]')}>Message Sent!</h3>
+                <p className={cn('mt-2', MUTED)}>A representative will be in touch shortly.</p>
+                <button onClick={() => setSent(false)} className={cn('mt-8', TEXT_BUTTON)}>Send another</button>
             </div>
         );
     }
 
     return (
-        <div className="max-w-xl animate-fade-in">
-            <h3 className="font-display text-2xl mb-2">Contact Support</h3>
-            <p className="text-slate-500 mb-6 font-comic">
+        <div className={cn('max-w-xl', FADE_IN)}>
+            <h3 className={cn(CARD_HEADING, 'mb-2')}>Contact Support</h3>
+            <p className={cn('mb-6', MUTED)}>
                 Share bugs, billing issues, or feature requests. We usually reply within 1-2 business days.
             </p>
-            <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
-                <p className="font-bold mb-1">Basic Contact Info</p>
-                <p className="text-slate-600">Support Email: <a href={`mailto:${SUPPORT_EMAIL}`} className="underline">{SUPPORT_EMAIL}</a></p>
-                <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
+            <div className={cn('mb-6 border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-4 text-[length:var(--ds-text-base)]', RADIUS_CONTROL)}>
+                <p className="mb-1 font-semibold text-[var(--ds-ink)]">Basic Contact Info</p>
+                <p className={cn(MUTED, WRAP_TEXT)}>Support Email: <a href={`mailto:${SUPPORT_EMAIL}`} className={cn('text-[var(--ds-ink)] underline underline-offset-2', RADIUS_CONTROL, FOCUS_RING)}>{SUPPORT_EMAIL}</a></p>
+                <p className={MUTED}>Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
             </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
-                    <label htmlFor="contact-email" className="font-bold text-xs uppercase">Your Email</label>
-                    <input
+                    <label htmlFor="contact-email" className={LABEL}>Your Email</label>
+                    <Input
                         id="contact-email"
                         type="email"
                         required
                         value={contactEmail}
                         onChange={e => setContactEmail(e.target.value)}
-                        className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
+                        className="mt-1.5"
                     />
                 </div>
                 <div>
-                    <label htmlFor="contact-phone" className="font-bold text-xs uppercase">Phone Number (Optional)</label>
-                    <input
+                    <label htmlFor="contact-phone" className={LABEL}>Phone Number (Optional)</label>
+                    <Input
                         id="contact-phone"
                         type="tel"
                         value={phone}
                         onChange={e => setPhone(e.target.value)}
-                        className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
+                        className="mt-1.5"
                     />
                 </div>
                 <div>
-                    <label htmlFor="contact-message" className="font-bold text-xs uppercase">Message (300 words max)</label>
-                    <textarea
+                    <label htmlFor="contact-message" className={LABEL}>Message (300 words max)</label>
+                    <Textarea
                         id="contact-message"
                         required
                         rows={6}
                         value={msg}
                         onChange={e => setMsg(e.target.value)}
-                        className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
+                        className="mt-1.5 resize-y"
                     />
-                    <div className={`text-right text-xs mt-1 ${words > 300 ? 'text-red-500 font-bold' : 'text-slate-400'}`}>
+                    <div className={cn('mt-1 text-right text-[length:var(--ds-text-sm)] tabular-nums', words > 300 ? `font-semibold ${TONE_TEXT.danger}` : MUTED)}>
                         {words}/300 words
                     </div>
                 </div>
-                {sendError && <div className="text-xs font-bold text-red-600">{sendError}</div>}
-                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300}>Send Message</Button>
+                {sendError && <div className={cn('flex items-start gap-1.5 text-[length:var(--ds-text-sm)] font-medium', TONE_TEXT.danger, WRAP_TEXT)}><AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />{sendError}</div>}
+                <Button type="submit" disabled={words > 300}><Mail size={16} /> Send Message</Button>
             </form>
         </div>
     );
@@ -587,12 +632,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
     const renderMessage = (message: MessageState) => {
         if (!message) return null;
-        const tone = message.type === 'success'
-            ? 'border-green-500 bg-green-50 text-green-700'
-            : 'border-red-500 bg-red-50 text-red-700';
-        const icon = message.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />;
+        const state = message.type === 'success' ? 'healthy' : 'error';
+        const icon = message.type === 'success' ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" />;
         return (
-            <div className={`border-2 rounded-lg px-3 py-2 text-sm font-semibold flex items-center gap-2 ${tone}`}>
+            <div className={cn(NOTE, 'font-medium', STATUS_SURFACE[state], STATUS_INK[state])}>
                 {icon} {message.text}
             </div>
         );
@@ -602,15 +645,15 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     // input: an input cannot wrap (an ordinary 30-character address was cut on phones) and a disabled one cannot be
     // focused, scrolled or selected, so the hidden part could not be reached at all.
     const renderProfile = () => (
-        <div className="space-y-8 animate-fade-in max-w-2xl">
+        <div className={cn('max-w-2xl space-y-8', FADE_IN)}>
             {requireDobCompletion && (
-                <div className="border-2 border-amber-500 bg-amber-50 text-amber-800 rounded-xl px-4 py-3 text-sm font-semibold">
-                    Please add your date of birth to complete your account profile.
+                <div className={cn(NOTE, 'font-medium', STATUS_SURFACE.attention, TONE_TEXT.warning)}>
+                    <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" /> Please add your date of birth to complete your account profile.
                 </div>
             )}
             {privateProfileWarning && (
-                <div className="border-2 border-amber-500 bg-amber-50 text-amber-800 rounded-xl px-4 py-3 text-sm font-semibold flex items-start gap-2">
-                    <AlertTriangle size={16} className="mt-0.5" /> {privateProfileWarning}
+                <div className={cn(NOTE, 'font-medium', STATUS_SURFACE.attention, TONE_TEXT.warning)}>
+                    <AlertTriangle size={16} className="mt-0.5 shrink-0" /> {privateProfileWarning}
                 </div>
             )}
             {renderMessage(profileMessage)}
@@ -619,7 +662,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 128 px photo was cut at 390 px). From sm the photo and the fields share one row again. */}
             <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start sm:gap-8">
                 <div className="relative group shrink-0">
-                    <div className="w-32 h-32 rounded-full border-4 border-black overflow-hidden bg-slate-200">
+                    <div className="size-32 overflow-hidden rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)]">
                         {avatarUrl ? (
                             <button
                                 type="button"
@@ -630,7 +673,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
                             </button>
                         ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-400">
+                            <div className={cn('flex h-full w-full items-center justify-center', MUTED)}>
                                 <UserIcon size={48} />
                             </div>
                         )}
@@ -642,7 +685,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         onClick={() => avatarInputRef.current?.click()}
                         aria-label={avatarUrl ? 'Change profile photo' : 'Upload a profile photo'}
                         title={avatarUrl ? 'Change profile photo' : 'Upload a profile photo'}
-                        className={`absolute bottom-0 right-0 w-11 h-11 flex items-center justify-center bg-brand-yellow border-2 border-black rounded-full cursor-pointer hover:bg-yellow-300 shadow-comic transition-transform hover:scale-105 z-10 ${FOCUS_RING}`}
+                        className={cn(buttonClasses({ variant: 'outline', size: 'icon' }), 'absolute bottom-0 right-0 size-11 shadow-[shadow:var(--ds-shadow-panel)]', RADIUS_ROUND)}
                     >
                         <Upload size={16} aria-hidden />
                     </button>
@@ -651,160 +694,143 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
                 <div className="w-full min-w-0 flex-1 space-y-4">
                     <div>
-                        <label htmlFor="account-username" className="font-display text-lg">Username *</label>
-                        <input
+                        <label htmlFor="account-username" className={LABEL}>Username *</label>
+                        <Input
                             id="account-username"
                             type="text"
                             value={username}
                             onChange={e => setUsername(e.target.value)}
                             autoComplete="username"
                             aria-describedby="account-username-hint"
-                            className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
+                            className="mt-1.5"
                         />
-                        <p id="account-username-hint" className="text-xs text-slate-500 mt-1">3-20 chars, letters/numbers/underscore only.</p>
+                        <p id="account-username-hint" className={HINT}>3-20 chars, letters/numbers/underscore only.</p>
                     </div>
                     <div>
-                        <span id="account-email-label" className="block font-display text-lg">Email</span>
+                        <span id="account-email-label" className={LABEL}>Email</span>
                         <div
                             id="account-email"
                             role="textbox"
                             aria-readonly="true"
                             aria-labelledby="account-email-label"
                             tabIndex={0}
-                            className={`w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono bg-slate-100 text-slate-600 select-text ${WRAP_TEXT} ${FOCUS_RING}`}
+                            className={cn(FIELD, 'mt-1.5 min-h-10 w-full select-text bg-[var(--ds-well)] px-3 py-2', WRAP_TEXT, FOCUS_RING)}
                         >
                             {user?.email || ''}
                         </div>
                     </div>
                     <div>
-                        <label htmlFor="account-display-name" className="font-display text-lg">Name *</label>
-                        <input
+                        <label htmlFor="account-display-name" className={LABEL}>Name *</label>
+                        <Input
                             id="account-display-name"
                             type="text"
                             value={displayName}
                             onChange={(e) => setDisplayName(e.target.value)}
                             maxLength={NAME_MAX}
                             autoComplete="name"
-                            className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
+                            className="mt-1.5"
                         />
-                        <p className="text-xs text-slate-500 mt-1">
+                        <p className={HINT}>
                             Shown in every studio — in Stream Studio, family and nursery members see it too.
                             {username ? ` @${normalizeText(username)}` : ' Your @username'} stays your sign-in and comic handle.
                         </p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <label htmlFor="account-phone" className="font-display text-lg">Phone Number</label>
-                            <input
+                            <label htmlFor="account-phone" className={LABEL}>Phone Number</label>
+                            <Input
                                 id="account-phone"
                                 type="tel"
                                 value={phoneNumber}
                                 onChange={(e) => setPhoneNumber(e.target.value)}
                                 autoComplete="tel"
-                                className="w-full mt-1 border-2 border-black rounded-xl px-4 py-2 font-mono"
+                                className="mt-1.5"
                                 placeholder="Optional"
                             />
                         </div>
                         <div>
-                            <label htmlFor="account-dob" className="font-display text-lg">Date of Birth {requireDobCompletion ? '*' : ''}</label>
-                            <input
+                            <label htmlFor="account-dob" className={LABEL}>Date of Birth {requireDobCompletion ? '*' : ''}</label>
+                            <Input
                                 id="account-dob"
                                 type="date"
                                 value={dob}
                                 onChange={(e) => setDob(e.target.value)}
                                 max={new Date().toISOString().slice(0, 10)}
                                 required={requireDobCompletion}
-                                className={`w-full mt-1 border-2 rounded-xl px-4 py-2 font-mono ${requireDobCompletion && !dob ? 'bg-amber-50 border-amber-500' : 'border-black'}`}
+                                className={cn('mt-1.5', requireDobCompletion && !dob && 'border-[var(--ds-warning)] bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,var(--ds-canvas))] hover:border-[var(--ds-warning)]')}
                             />
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div className="pt-8 border-t-2 border-slate-200">
-                <Button onClick={handleSaveProfile} disabled={isSavingProfile} icon={<Save size={18} />}>
-                    {isSavingProfile ? "Saving..." : "Save Changes"}
+            <div className="border-t border-[var(--ds-hairline)] pt-8">
+                <Button onClick={handleSaveProfile} disabled={isSavingProfile}>
+                    <Save size={16} /> {isSavingProfile ? "Saving..." : "Save Changes"}
                 </Button>
             </div>
 
             <StudiosAccess />
 
-            <div className="border-2 border-black rounded-xl bg-white">
-                <div className="px-4 py-3 font-display text-lg border-b-2 border-black">Invite Friends</div>
+            <div className={SECTION_CARD}>
+                <div className="border-b border-[var(--ds-hairline)] px-4 py-3 text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">Invite Friends</div>
                 <InviteFriends />
             </div>
         </div>
     );
 
     const renderPreferences = () => (
-        <div className="space-y-6 animate-fade-in max-w-2xl">
+        <div className={cn('max-w-2xl space-y-6', FADE_IN)}>
             {privateProfileWarning && (
-                <div className="border-2 border-amber-500 bg-amber-50 text-amber-800 rounded-xl px-4 py-3 text-sm font-semibold flex items-start gap-2">
-                    <AlertTriangle size={16} className="mt-0.5" /> {privateProfileWarning}
+                <div className={cn(NOTE, 'font-medium', STATUS_SURFACE.attention, TONE_TEXT.warning)}>
+                    <AlertTriangle size={16} className="mt-0.5 shrink-0" /> {privateProfileWarning}
                 </div>
             )}
             {renderMessage(preferencesMessage)}
 
-            <div className="border-2 border-black rounded-xl p-5 space-y-4">
-                <h3 className="font-display text-2xl">Generation Cost</h3>
-                <p className="text-sm text-slate-600">
+            <div className={CARD}>
+                <h3 className={CARD_HEADING}>Generation Cost</h3>
+                <p className={cn('text-[length:var(--ds-text-base)]', MUTED)}>
                     When Free-Only mode is on, generation will never silently fall back to a paid model. If no genuinely-free
                     model can serve a step, that step is blocked with a clear message — your provider key is never charged
                     behind your back. <strong>Note:</strong> "$0 per image" models that bill per token (like Gemini "Nano
                     Banana") are NOT considered free.
                 </p>
-                <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={freeOnly}
-                        onChange={(e) => setFreeOnly(e.target.checked)}
-                        className="mt-1 accent-black"
-                    />
-                    <div>
-                        <p className="font-bold">Free-Only Mode {freeOnly && <span className="ml-2 text-xs uppercase bg-green-500 text-white px-2 py-0.5 rounded">On</span>}</p>
-                        <p className="text-sm text-slate-500">On by default — "free" means free. Blocks (with an explanation) instead of silently using a paid model. Turn this off to opt into paid fallback. Text uses :free models; images route to NVIDIA's free image tier when an nvapi- key is configured.</p>
-                    </div>
-                </label>
+                <Checkbox
+                    checked={freeOnly}
+                    onChange={(e) => setFreeOnly(e.target.checked)}
+                    label={<span className="font-semibold">Free-Only Mode {freeOnly && <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.healthy, 'ml-2 align-middle')}>On</span>}</span>}
+                    description={<>On by default — "free" means free. Blocks (with an explanation) instead of silently using a paid model. Turn this off to opt into paid fallback. Text uses :free models; images route to NVIDIA's free image tier when an nvapi- key is configured.</>}
+                />
             </div>
 
-            <div className="border-2 border-black rounded-xl p-5 space-y-4">
-                <h3 className="font-display text-2xl">Email Preferences</h3>
-                <p className="text-sm text-slate-600">Control product and marketing communication from DreamStream.</p>
+            <div className={CARD}>
+                <h3 className={CARD_HEADING}>Email Preferences</h3>
+                <p className={cn('text-[length:var(--ds-text-base)]', MUTED)}>Control product and marketing communication from DreamStream.</p>
 
-                <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                        type="checkbox"
+                <div className="flex flex-col gap-3">
+                    <Checkbox
                         checked={emailPrefProductUpdates}
                         onChange={(e) => setEmailPrefProductUpdates(e.target.checked)}
-                        className="mt-1 accent-black"
+                        label={<span className="font-semibold">Product Updates</span>}
+                        description="Release notes, feature updates, and product education."
                     />
-                    <div>
-                        <p className="font-bold">Product Updates</p>
-                        <p className="text-sm text-slate-500">Release notes, feature updates, and product education.</p>
-                    </div>
-                </label>
-
-                <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                        type="checkbox"
+                    <Checkbox
                         checked={emailPrefMarketing}
                         onChange={(e) => setEmailPrefMarketing(e.target.checked)}
-                        className="mt-1 accent-black"
+                        label={<span className="font-semibold">Marketing Promotions</span>}
+                        description="Promotional campaigns, offers, and announcements."
                     />
-                    <div>
-                        <p className="font-bold">Marketing Promotions</p>
-                        <p className="text-sm text-slate-500">Promotional campaigns, offers, and announcements.</p>
-                    </div>
-                </label>
+                </div>
 
-                <div className="border-2 border-slate-200 bg-slate-50 rounded-lg p-3 text-sm text-slate-600">
-                    <p className="font-bold text-slate-800">Security Emails</p>
+                <div className={cn('border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3 text-[length:var(--ds-text-base)]', RADIUS_CONTROL, MUTED)}>
+                    <p className="font-semibold text-[var(--ds-ink)]">Security Emails</p>
                     <p>Always enabled for account safety (verification, recovery, and critical account activity).</p>
                 </div>
             </div>
 
-            <Button onClick={handleSavePreferences} disabled={isSavingPreferences} icon={<Save size={16} />}>
-                {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
+            <Button onClick={handleSavePreferences} disabled={isSavingPreferences}>
+                <Save size={16} /> {isSavingPreferences ? 'Saving...' : 'Save Preferences'}
             </Button>
         </div>
     );
@@ -831,110 +857,113 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         };
 
         return (
-            <div className="space-y-6 animate-fade-in max-w-2xl">
+            <div className={cn('max-w-2xl space-y-6', FADE_IN)}>
                 {renderMessage(securityMessage)}
 
-                <div className="border-2 border-black rounded-xl p-5 space-y-4">
-                    <h3 className="font-display text-2xl">Email Verification</h3>
-                    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold ${isVerified ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                <div className={CARD}>
+                    <h3 className={CARD_HEADING}>Email Verification</h3>
+                    <div className={cn(STATUS_CHIP, STATUS_CHIP_TONE[isVerified ? 'healthy' : 'attention'], 'px-3 py-1 text-[length:var(--ds-text-sm)]')}>
                         {isVerified ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
                         {isVerified ? 'Verified' : 'Unverified'}
                     </div>
                     {!isVerified && (
-                        <Button onClick={handleResendVerification} disabled={securityBusy} icon={<Mail size={16} />}>
-                            {securityBusy ? 'Sending...' : 'Resend Verification Email'}
-                        </Button>
+                        <div>
+                            <Button onClick={handleResendVerification} disabled={securityBusy} className={WRAP_BUTTON}>
+                                <Mail size={16} /> <span className={WRAP_LABEL}>{securityBusy ? 'Sending...' : 'Resend Verification Email'}</span>
+                            </Button>
+                        </div>
                     )}
                 </div>
 
-                <div className="border-2 border-black rounded-xl p-5 space-y-4">
-                    <h3 className="font-display text-2xl">Change Password</h3>
+                <div className={CARD}>
+                    <h3 className={CARD_HEADING}>Change Password</h3>
                     <form onSubmit={handleChangePassword} className="space-y-4">
                         <div>
-                            <label htmlFor="account-new-password" className="font-bold text-xs uppercase">New Password</label>
-                            <input
+                            <label htmlFor="account-new-password" className={LABEL}>New Password</label>
+                            <Input
                                 id="account-new-password"
                                 type="password"
                                 autoComplete="new-password"
                                 value={newPassword}
                                 onChange={(e) => setNewPassword(e.target.value)}
-                                className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
+                                className="mt-1.5"
                                 placeholder="At least 8 characters"
                                 required
                             />
                         </div>
                         <div>
-                            <label htmlFor="account-confirm-password" className="font-bold text-xs uppercase">Confirm Password</label>
-                            <input
+                            <label htmlFor="account-confirm-password" className={LABEL}>Confirm Password</label>
+                            <Input
                                 id="account-confirm-password"
                                 type="password"
                                 autoComplete="new-password"
                                 value={confirmNewPassword}
                                 onChange={(e) => setConfirmNewPassword(e.target.value)}
-                                className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono"
+                                className="mt-1.5"
                                 placeholder="Re-enter password"
                                 required
                             />
                         </div>
-                        <Button type="submit" disabled={securityBusy} icon={<Shield size={16} />}>
-                            {securityBusy ? 'Updating...' : 'Update Password'}
+                        <Button type="submit" disabled={securityBusy}>
+                            <Shield size={16} /> {securityBusy ? 'Updating...' : 'Update Password'}
                         </Button>
                     </form>
                 </div>
 
                 {/* Device / Session list */}
-                <div className="border-2 border-black rounded-xl p-5 space-y-4">
-                    <div className="flex items-center justify-between">
-                        <h3 className="font-display text-2xl flex items-center gap-2">
-                            <Monitor size={20} /> Active Devices
+                <div className={CARD}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className={cn(CARD_HEADING, 'flex items-center gap-2')}>
+                            <Monitor size={18} aria-hidden="true" /> Active Devices
                         </h3>
-                        <button onClick={() => void loadDevices()} disabled={devicesLoading} className="text-xs font-bold text-brand-blue hover:underline disabled:opacity-40">
+                        <Button variant="outline" size="sm" onClick={() => void loadDevices()} disabled={devicesLoading}>
                             {devicesLoading ? 'Loading…' : 'Refresh'}
-                        </button>
+                        </Button>
                     </div>
-                    <p className="text-xs text-slate-500">Every browser or device that has signed into your account.</p>
+                    <p className={cn('text-[length:var(--ds-text-sm)]', MUTED)}>Every browser or device that has signed into your account.</p>
 
                     {devicesError && (
-                        <div className="text-sm text-red-600 font-semibold border-2 border-red-300 bg-red-50 rounded-lg px-3 py-2">
-                            {devicesError}
+                        <div className={cn(NOTE, 'font-medium', STATUS_SURFACE.error, STATUS_INK.error)}>
+                            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" /> {devicesError}
                         </div>
                     )}
 
                     {devicesLoading && (
-                        <div className="text-sm text-slate-500 font-mono animate-pulse">Loading devices…</div>
+                        <div className={cn('flex items-center gap-2 text-[length:var(--ds-text-base)]', MUTED)}><Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Loading devices…</div>
                     )}
 
                     {!devicesLoading && devices.length === 0 && !devicesError && (
-                        <div className="text-sm text-slate-400 font-mono">No devices recorded yet — they appear here after signing in.</div>
+                        <div className={cn('text-[length:var(--ds-text-base)]', MUTED)}>No devices recorded yet — they appear here after signing in.</div>
                     )}
 
                     <div className="space-y-2">
                         {devices.map((device) => {
                             const isCurrent = device.device_id === thisDeviceId;
                             return (
-                                <div key={device.id} className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 ${isCurrent ? 'border-brand-blue bg-brand-blue/5' : 'border-black bg-white'}`}>
-                                    <Monitor size={18} className={isCurrent ? 'text-brand-blue' : 'text-slate-400'} />
+                                <div key={device.id} className={cn('flex items-center gap-3 border px-4 py-3', RADIUS_CONTROL, isCurrent ? `${ACCENT_SOFT_BG} border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)]` : 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)]')}>
+                                    <Monitor size={18} className={cn('shrink-0', isCurrent ? 'text-[var(--ds-ink)]' : MUTED)} aria-hidden="true" />
                                     <div className="flex-1 min-w-0">
-                                        <div className="font-bold text-sm flex items-center gap-2">
-                                            {device.device_name}
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)]">
+                                            <span className={WRAP_TEXT}>{device.device_name}</span>
                                             {isCurrent && (
-                                                <span className="text-[10px] font-bold uppercase bg-brand-blue text-white px-1.5 py-0.5 rounded border border-black">
+                                                <span className={cn(STATUS_CHIP, STATUS_CHIP_TONE.active)}>
                                                     This device
                                                 </span>
                                             )}
                                         </div>
-                                        <div className="text-[11px] text-slate-500 font-mono">
+                                        <div className={cn('text-[11px] tabular-nums', MUTED, WRAP_TEXT)}>
                                             Last seen {formatLastSeen(device.last_seen)} · First seen {new Date(device.created_at).toLocaleDateString()}
                                         </div>
                                     </div>
                                     {!isCurrent && (
-                                        <button
+                                        <IconButton
+                                            label="Remove from list"
+                                            variant="outline"
                                             onClick={() => void handleRemoveDevice(device.id)}
-                                            title="Remove from list"
-                                            className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-500"
+                                            className={cn('shrink-0', TONE_TEXT.danger)}
                                         >
                                             <Trash2 size={14} />
-                                        </button>
+                                        </IconButton>
                                     )}
                                 </div>
                             );
@@ -943,40 +972,37 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 </div>
 
                 {/* Session Control */}
-                <div className="border-2 border-red-400 bg-red-50 rounded-xl p-5 space-y-4">
-                    <h3 className="font-display text-2xl text-red-700">Session Control</h3>
+                {/* The one destructive card: a neutral card that borders in the error edge; the danger lives on its
+                    words and on the one destructive button. */}
+                <div className={cn(CARD, STATUS_EDGE.error)}>
+                    <h3 className={cn(CARD_HEADING, 'flex items-center gap-2')}><AlertTriangle size={18} className={cn('shrink-0', STATUS_INK.error)} aria-hidden="true" /> Session Control</h3>
 
-                    {sessionActionMsg && (
-                        <div className={`border-2 rounded-lg px-3 py-2 text-sm font-semibold flex items-center gap-2 ${sessionActionMsg.type === 'success' ? 'border-green-500 bg-green-50 text-green-700' : 'border-red-500 bg-red-50 text-red-700'}`}>
-                            {sessionActionMsg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                            {sessionActionMsg.text}
-                        </div>
-                    )}
+                    {renderMessage(sessionActionMsg)}
 
                     <div className="space-y-3">
-                        <div className="bg-white border-2 border-red-200 rounded-xl p-4 space-y-2">
-                            <p className="font-bold text-sm text-slate-800">Sign out other devices</p>
-                            <p className="text-xs text-slate-500">Invalidates all sessions except this one. You stay logged in.</p>
+                        <div className={cn('space-y-2 border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] p-4', RADIUS_CONTROL)}>
+                            <p className="text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)]">Sign out other devices</p>
+                            <p className={cn('text-[length:var(--ds-text-sm)]', MUTED)}>Invalidates all sessions except this one. You stay logged in.</p>
                             <Button
                                 onClick={() => void handleSignOutOthers()}
                                 disabled={sessionBusy}
-                                variant="secondary"
-                                icon={<LogOut size={16} />}
+                                variant="outline"
+                                className={WRAP_BUTTON}
                             >
-                                {sessionBusy ? 'Working…' : 'Sign Out Other Devices'}
+                                <LogOut size={16} /> <span className={WRAP_LABEL}>{sessionBusy ? 'Working…' : 'Sign Out Other Devices'}</span>
                             </Button>
                         </div>
 
-                        <div className="bg-white border-2 border-red-300 rounded-xl p-4 space-y-2">
-                            <p className="font-bold text-sm text-red-700">Sign out everywhere</p>
-                            <p className="text-xs text-slate-500">Invalidates ALL sessions including this one. You will be logged out now.</p>
+                        <div className={cn('space-y-2 border bg-[var(--ds-canvas)] p-4', RADIUS_CONTROL, STATUS_EDGE.error)}>
+                            <p className={cn('text-[length:var(--ds-text-base)] font-semibold', TONE_TEXT.danger)}>Sign out everywhere</p>
+                            <p className={cn('text-[length:var(--ds-text-sm)]', MUTED)}>Invalidates ALL sessions including this one. You will be logged out now.</p>
                             <Button
                                 onClick={() => void handleSignOutAll()}
                                 disabled={sessionBusy}
-                                className="bg-red-600 hover:bg-red-700 text-white border-red-800"
-                                icon={<LogOut size={16} />}
+                                variant="destructive"
+                                className={WRAP_BUTTON}
                             >
-                                {sessionBusy ? 'Signing out…' : 'Sign Out Everywhere'}
+                                <LogOut size={16} /> <span className={WRAP_LABEL}>{sessionBusy ? 'Signing out…' : 'Sign Out Everywhere'}</span>
                             </Button>
                         </div>
                     </div>
@@ -991,14 +1017,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         // any signed-in user the console shell with a perpetual 403 error banner.
         if (!isAdmin && !isModerator) {
             return accessChecked ? (
-                <div className="border-2 border-dashed border-slate-300 rounded-xl px-6 py-12 text-center">
-                    <Shield size={28} className="mx-auto text-slate-300" />
-                    <p className="font-display text-xl mt-3">No admin access</p>
-                    <p className="text-sm text-slate-500 mt-1">This area is for platform admins and moderators.</p>
+                <div className={cn('border border-dashed border-[var(--ds-hairline)] px-6 py-12 text-center', RADIUS_PANEL)}>
+                    <Shield size={28} className={cn('mx-auto', MUTED)} aria-hidden="true" />
+                    <p className="mt-3 text-[length:var(--ds-text-lg)] font-semibold text-[var(--ds-ink)]">No admin access</p>
+                    <p className={cn('mt-1 text-[length:var(--ds-text-base)]', MUTED)}>This area is for platform admins and moderators.</p>
                 </div>
             ) : (
-                <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm font-bold">
-                    <span className="w-4 h-4 border-2 border-slate-300 border-t-black rounded-full animate-spin" /> Checking access…
+                <div className={cn('flex items-center justify-center gap-2 py-16 text-[length:var(--ds-text-base)] font-medium', MUTED)}>
+                    <Loader2 size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Checking access…
                 </div>
             );
         }
@@ -1013,9 +1039,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     };
 
     const renderLegal = () => (
-        <div className="space-y-6 animate-fade-in max-w-3xl">
-            <div className="bg-white border-2 border-black rounded-xl p-6 h-[400px] overflow-y-auto font-mono text-xs leading-relaxed">
-                <h3 className="font-bold text-lg mb-4 underline">Privacy Policy</h3>
+        <div className={cn('max-w-3xl space-y-6', FADE_IN)}>
+            <div className={cn('h-[400px] overflow-y-auto border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] p-6 text-[length:var(--ds-text-sm)] leading-relaxed text-[var(--ds-ink)]', RADIUS_PANEL, WRAP_TEXT)}>
+                <h3 className={cn(CARD_HEADING, 'mb-4')}>Privacy Policy</h3>
                 <p><strong>Last Updated: Feb 11, 2026</strong></p>
                 <p className="mt-2">DreamStream processes account, project, and operational data to run comic generation and community features.</p>
                 <p className="mt-4 font-bold">1. Data We Process</p>
@@ -1027,9 +1053,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <p className="mt-4 font-bold">4. Visibility and Retention</p>
                 <p>Projects remain private unless you publish them. We retain operational/security records as needed for legal and service integrity.</p>
 
-                <hr className="my-6 border-slate-200" />
+                <hr className="my-6 border-[var(--ds-hairline)]" />
 
-                <h3 className="font-bold text-lg mb-4 underline">Terms of Service</h3>
+                <h3 className={cn(CARD_HEADING, 'mb-4')}>Terms of Service</h3>
                 <p><strong>Effective Date: Feb 11, 2026</strong></p>
                 <p className="mt-4 font-bold">1. Your Responsibilities</p>
                 <p>You are responsible for account security, key handling, rights clearance, and lawful use of generated output.</p>
@@ -1094,6 +1120,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     };
 
     const isFirstLoad = loading && !profile;
+    const reducedMotion = useReducedMotion();
+    // The sticky header frosts (HEADER_GLASS) only once the page scrolls under it.
+    const headerScrolled = useScrolledPast(4);
 
     // Phones: the section row scrolls sideways, so bring the current chip into view (a deep link to Legal or
     // Contact, a reload on a later tab). Only the row scrolls, never the page; from md the list is a column.
@@ -1117,32 +1146,29 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     }, [activeTab, showAdminChip]);
 
     return (
-        <div className="min-h-screen bg-slate-50 pb-20">
-            <div className="bg-white/95 backdrop-blur border-b-4 border-black sticky top-0 z-30">
+        <div className="min-h-screen bg-[var(--ds-sidebar)] pb-20 text-[var(--ds-ink)]">
+            <div className={STICKY_HEADER} data-scrolled={headerScrolled ? 'true' : 'false'}>
+                <div aria-hidden="true" className={HEADER_GLASS} />
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                        <button
-                            onClick={onClose}
-                            aria-label="Back"
-                            className="w-9 h-9 shrink-0 border-2 border-black rounded-lg bg-white hover:bg-brand-yellow transition-colors flex items-center justify-center shadow-comic hover:shadow-comic-hover hover:translate-y-[1px]"
-                        >
+                        <IconButton label="Back" title={null} variant="outline" size="lg" onClick={onClose}>
                             <ChevronLeft size={18} />
-                        </button>
+                        </IconButton>
                         <div className="min-w-0">
-                            <h1 className="font-display text-2xl leading-none">Settings</h1>
-                            <p className="text-[11px] text-slate-500 truncate">{tabMeta[activeTab].description}</p>
+                            <h1 className={cn(HEADING, TEXT_XL, 'leading-tight')}>Settings</h1>
+                            <p className={cn('truncate text-[11px]', MUTED)}>{tabMeta[activeTab].description}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                        <div className="hidden sm:flex items-center gap-2 border-2 border-black rounded-full pl-1 pr-3 py-1 bg-white">
-                            <div className="w-7 h-7 rounded-full border-2 border-black bg-brand-yellow flex items-center justify-center font-display text-sm overflow-hidden">
+                        <div className={cn('hidden items-center gap-2 border border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-1 pl-1 pr-3 sm:flex', RADIUS_ROUND)}>
+                            <div className="flex size-7 items-center justify-center overflow-hidden rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] text-[length:var(--ds-text-sm)] font-semibold">
                                 {avatarUrl
                                     ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
                                     : (savedName || username || user?.email || '?').slice(0, 1).toUpperCase()}
                             </div>
-                            <span className="text-xs font-bold max-w-[14rem] truncate">{savedName || username || user?.email}</span>
+                            <span className="max-w-[14rem] truncate text-xs font-semibold">{savedName || username || user?.email}</span>
                             {savedName && username && savedName !== username && (
-                                <span className="text-[11px] text-slate-500 max-w-[8rem] truncate">@{username}</span>
+                                <span className={cn('max-w-[8rem] truncate text-[11px]', MUTED)}>@{username}</span>
                             )}
                         </div>
                     </div>
@@ -1162,7 +1188,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         if (items.length === 0) return null;
                         return (
                             <div key={group.label} className="contents md:block">
-                                <div className="hidden md:block px-4 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</div>
+                                <div className={cn('hidden px-4 pb-1.5 md:block', OVERLINE)}>{group.label}</div>
                                 <div className="contents md:block md:space-y-1">
                                     {items.map((item) => {
                                         const active = activeTab === item.id;
@@ -1171,16 +1197,21 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                                 key={item.id}
                                                 onClick={() => setActiveTab(item.id)}
                                                 aria-current={active ? 'page' : undefined}
-                                                className={`relative shrink-0 md:w-full min-h-11 flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${FOCUS_RING} ${active ? 'text-white' : 'text-slate-500 hover:text-black hover:bg-slate-200/70'}`}
+                                                className={cn(
+                                                    'relative flex min-h-11 shrink-0 items-center gap-3 px-4 py-2.5 text-[length:var(--ds-text-base)] font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] md:w-full',
+                                                    RADIUS_CONTROL,
+                                                    FOCUS_RING,
+                                                    active ? 'text-[var(--ds-ink)]' : `${MUTED} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`
+                                                )}
                                             >
                                                 {active && (
                                                     <motion.span
                                                         layoutId="settings-nav-pill"
-                                                        className="absolute inset-0 rounded-xl bg-black shadow-comic"
-                                                        transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                                                        className={cn('absolute inset-0 border border-[var(--ds-hairline)]', RADIUS_CONTROL, ACCENT_SOFT_BG)}
+                                                        transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 38 }}
                                                     />
                                                 )}
-                                                <span className="relative z-10 flex items-center gap-3">{item.icon} {item.label}</span>
+                                                <span className="relative flex items-center gap-3">{item.icon} {item.label}</span>
                                             </button>
                                         );
                                     })}
@@ -1189,37 +1220,32 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         );
                     })}
 
-                    <div className="contents md:block md:pt-2 md:border-t-2 md:border-slate-200">
+                    <div className="contents md:block md:pt-2 md:border-t md:border-[var(--ds-hairline)]">
                         <button
                             onClick={async () => {
                                 await signOut();
                                 onSignedOut?.();
                             }}
-                            className={`shrink-0 md:w-full min-h-11 flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm text-red-600 hover:bg-red-50 transition-colors ${FOCUS_RING}`}
+                            className={cn('flex min-h-11 shrink-0 items-center gap-3 px-4 py-2.5 text-[length:var(--ds-text-base)] font-medium transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] hover:bg-[var(--ds-hover)] md:w-full', RADIUS_CONTROL, FOCUS_RING, TONE_TEXT.danger)}
                         >
                             <LogOut size={17} /> Sign Out
                         </button>
                     </div>
                 </nav>
 
-                <div className="md:col-span-3 bg-white border-4 border-black rounded-2xl p-5 md:p-8 shadow-comic min-h-[600px]">
+                <div className={cn('min-w-0 min-h-[600px] border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 md:col-span-3 md:p-8', RADIUS_PANEL, SHADOW_SOFT)}>
                     {isFirstLoad ? (
-                        <div className="space-y-4 animate-pulse" aria-label="Loading settings">
-                            <div className="h-8 w-48 bg-slate-200 rounded-lg" />
-                            <div className="h-4 w-72 bg-slate-100 rounded" />
-                            <div className="h-40 bg-slate-100 rounded-2xl" />
-                            <div className="h-24 bg-slate-100 rounded-2xl" />
+                        <div className="space-y-4" aria-label="Loading settings">
+                            <Skeleton className="h-8 w-48 max-w-full" />
+                            <Skeleton shape="text" className="w-72 max-w-full" />
+                            <Skeleton className="h-40" />
+                            <Skeleton className="h-24" />
                         </div>
                     ) : (
-                        <AnimatePresence mode="wait">
-                            <motion.div
-                                key={activeTab}
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -8 }}
-                                transition={{ duration: 0.18, ease: 'easeOut' }}
-                            >
-                                <h2 className="font-display text-3xl mb-6">{tabMeta[activeTab].title}</h2>
+                        <>
+                            {/* The section rises in on the shared entrance (tokens; still under reduced motion). */}
+                            <div key={activeTab} className={RISE_IN}>
+                                <h2 className={cn(HEADING, TEXT_2XL, 'mb-6')}>{tabMeta[activeTab].title}</h2>
                                 {activeTab === 'profile' && renderProfile()}
                                 {activeTab === 'settings' && renderSettings()}
                                 {activeTab === 'preferences' && renderPreferences()}
@@ -1227,24 +1253,26 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 {activeTab === 'legal' && renderLegal()}
                                 {activeTab === 'contact' && <ContactSection />}
                                 {activeTab === 'admin' && renderAdmin()}
-                            </motion.div>
-                        </AnimatePresence>
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
 
             {previewAvatar && (
-                <div className="fixed inset-0 z-[250] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setPreviewAvatar(null)}>
-                    <div className="bg-white p-2 rounded-2xl border-4 border-black shadow-2xl max-w-lg w-full relative">
-                        <button
-                            type="button"
+                <div className={cn('fixed inset-0 flex items-center justify-center p-4', Z.dialog, SCRIM)} onClick={() => setPreviewAvatar(null)}>
+                    <div className={cn(OVERLAY, 'relative w-full max-w-lg p-2')}>
+                        <IconButton
+                            label="Close photo preview"
+                            title={null}
+                            variant="outline"
+                            size="lg"
                             onClick={() => setPreviewAvatar(null)}
-                            aria-label="Close photo preview"
-                            className="absolute -top-4 -right-4 bg-red-500 text-white p-2 rounded-full border-2 border-black hover:bg-red-600 transition-colors"
+                            className={cn('absolute -right-3 -top-3 shadow-[shadow:var(--ds-shadow-overlay)]', RADIUS_ROUND)}
                         >
-                            <X size={20} />
-                        </button>
-                        <img src={previewAvatar} alt="Avatar Full" className="w-full h-auto rounded-xl" />
+                            <X size={18} />
+                        </IconButton>
+                        <img src={previewAvatar} alt="Avatar Full" className={cn('h-auto w-full', RADIUS_CONTROL)} />
                     </div>
                 </div>
             )}
