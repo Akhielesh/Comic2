@@ -42,20 +42,23 @@ function CheckList<T extends string>({
   options,
   picked,
   onToggle,
-  name
+  name,
+  columns = 1
 }: {
   legend: string;
   options: ReadonlyArray<{ id: T; label: string }>;
   picked: readonly T[];
   onToggle: (id: T, on: boolean) => void;
   name: string;
+  /** Two columns from sm for short labels; longer labels read better one per line. */
+  columns?: 1 | 2;
 }) {
   return (
     <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
       <legend className={cn(FIELD_LABEL, 'mb-2 p-0')}>
         {legend} <span className="font-normal text-[var(--ds-muted)]">(optional)</span>
       </legend>
-      <div className="grid min-w-0 gap-x-4 gap-y-1 sm:grid-cols-2">
+      <div className={cn('grid min-w-0 gap-x-4 gap-y-1', columns === 2 && 'sm:grid-cols-2')}>
         {options.map(({ id, label }) => (
           <Checkbox key={id} name={name} value={id} label={label} checked={picked.includes(id)} onCheckedChange={(on) => onToggle(id, on)} />
         ))}
@@ -228,7 +231,14 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
         </Field>
       </div>
 
-      <CheckList legend="Other studios you would try" name="studios" options={INTEREST_STUDIOS} picked={studios} onToggle={toggleIn(setStudios)} />
+      <CheckList
+        legend="Other studios you would try"
+        name="studios"
+        options={INTEREST_STUDIOS}
+        picked={studios}
+        onToggle={toggleIn(setStudios)}
+        columns={2}
+      />
 
       <Field
         label={<>Anything you would like to tell us {optional}</>}
