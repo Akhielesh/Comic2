@@ -16,6 +16,26 @@ import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import { halftone } from './comicstudio/library/procedural/textures';
 import { useBackLayer } from './comicstudio/mobile/backStack';
+import { buttonClasses } from './ds/Button';
+import {
+  FOCUS_ITEM,
+  FOCUS_RING,
+  HAIRLINE,
+  HEADING,
+  INK,
+  INVERSE_ACTION_QUIET,
+  INVERSE_SURFACE,
+  MUTED,
+  OVERLAY,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_PANEL,
+  SHADOW_SOFT,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TEXT_XL,
+  Z
+} from './chat/studioDesign';
 import {
   IOS_FULLSCREEN_NOTE,
   enterFullscreen,
@@ -43,13 +63,26 @@ const FLIP_DIALOGUE_MAX_W = 576;
 const SWIPE_MIN_PX = 45;
 /** Pinch-zoomed in: drags pan the page instead of turning it. */
 const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
-const PHONE_BTN =
-  'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
-const PHONE_MENU_ITEM =
-  'flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const PHONE_BTN = `inline-flex h-11 w-11 shrink-0 items-center justify-center ${RADIUS_CONTROL} text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`;
+const PHONE_MENU_ITEM = `flex min-h-[44px] w-full items-center gap-3 ${RADIUS_CONTROL} px-3 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-overlay-hover)] ${FOCUS_ITEM}`;
 /** Chrome that fades away (reduced motion: no animation, it just goes). */
 const chromeFade = (hidden: boolean) =>
-  `transition-[opacity,transform,visibility] duration-200 motion-reduce:transition-none ${hidden ? 'invisible opacity-0 pointer-events-none' : 'visible opacity-100'}`;
+  `transition-[opacity,transform,visibility] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none ${hidden ? 'invisible opacity-0 pointer-events-none' : 'visible opacity-100'}`;
+/** The desktop toolbar's buttons (the Atlas outline button), the pressed one on the active step, the close icon. */
+const TOOL_BTN = buttonClasses({ variant: 'outline', size: 'sm', className: 'shrink-0' });
+const TOOL_BTN_ON = buttonClasses({ variant: 'outline', size: 'sm', className: 'shrink-0 border-[var(--ds-ink)] bg-[var(--ds-active)] hover:bg-[var(--ds-active)]' });
+const ICON_BTN = buttonClasses({ variant: 'ghost', size: 'icon', className: 'shrink-0' });
+const PAGE_BTN = buttonClasses({ variant: 'outline', className: 'shrink-0' });
+/** A panel or page picture's frame: a hairline and the soft shadow (the art itself is content). */
+const ART_FRAME = `border border-[var(--ds-hairline)] ${SHADOW_SOFT}`;
+/** Where a picture is missing: the neutral art well, worded. */
+const MISSING_ART = 'flex items-center justify-center bg-[var(--ds-well-strong)] px-3 text-center text-sm font-medium text-[var(--ds-muted)]';
+/** A notice that needs a look (the status vocabulary's attention state, always worded). */
+const ATTENTION_NOTE = `border ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`;
+/** The Story box inside the reading column. */
+const STORY_BOX = `${RADIUS_PANEL} ${HAIRLINE} bg-[var(--ds-well)]`;
+const STORY_TEXT = `whitespace-pre-wrap text-sm leading-6 ${INK}`;
+const PROGRESS_FILL = 'h-full bg-[var(--ds-ink)]';
 
 const useMediaQuery = (query: string): boolean => {
   const read = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
@@ -71,7 +104,7 @@ const PhoneSheet: React.FC<{ title: string; onClose: () => void; children: React
     role="dialog"
     aria-modal="true"
     aria-label={title}
-    className="fixed inset-0 z-40 flex flex-col bg-white text-slate-900"
+    className={`fixed inset-0 ${Z.sheet} flex flex-col bg-[var(--ds-canvas)] text-[var(--ds-ink)]`}
     style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)', paddingRight: 'var(--sa-right)' }}
   >
     <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--ds-hairline)] pl-4 pr-1">
@@ -208,7 +241,7 @@ const StudioComicReader: React.FC<{ projectId: string; isReadOnly?: boolean; onC
   const leave = useBackLayer(true, onClose, readerLayerKey(projectId));
   return (
     <div
-      className="fixed inset-x-0 top-0 z-50 overflow-hidden bg-[var(--ds-canvas)]"
+      className={`fixed inset-x-0 top-0 ${Z.reader} overflow-hidden bg-[var(--ds-canvas)]`}
       style={{ height: 'var(--app-h, 100dvh)' }}
       data-testid="studio-comic-reader"
     >
@@ -707,17 +740,17 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   };
 
   const infoDetails = (
-    <div className="space-y-3 text-sm">
+    <div className={`space-y-3 text-sm ${INK}`}>
       <div>
-        <div className="text-xs uppercase font-bold text-slate-500">Title</div>
+        <div className={OVERLINE}>Title</div>
         <div className="font-semibold">{project.name}</div>
       </div>
       <div>
-        <div className="text-xs uppercase font-bold text-slate-500">Author</div>
+        <div className={OVERLINE}>Author</div>
         <div>{project.authorName || 'Unknown creator'}</div>
       </div>
       <div>
-        <div className="text-xs uppercase font-bold text-slate-500">Published</div>
+        <div className={OVERLINE}>Published</div>
         <div>
           {project.isPublic
             ? new Date(project.publishedAt || project.createdAt).toLocaleDateString()
@@ -725,37 +758,37 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         </div>
       </div>
       <div>
-        <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
-        <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
+        <div className={OVERLINE}>Overview</div>
+        <p className="whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <div className="border border-slate-200 rounded p-2">
-          <div className="text-xs uppercase font-bold text-slate-500">Panels</div>
+        <div className={`${HAIRLINE} ${RADIUS_CONTROL} p-2`}>
+          <div className={OVERLINE}>Panels</div>
           <div>{project.state.panels.length}</div>
         </div>
-        <div className="border border-slate-200 rounded p-2">
-          <div className="text-xs uppercase font-bold text-slate-500">Layout</div>
+        <div className={`${HAIRLINE} ${RADIUS_CONTROL} p-2`}>
+          <div className={OVERLINE}>Layout</div>
           <div>{project.state.layoutType || 'grid'}</div>
         </div>
       </div>
       {project.state.storyMood && (
-        <div className="border border-slate-200 rounded p-2">
-          <div className="text-xs uppercase font-bold text-slate-500">Mood the AI read</div>
+        <div className={`${HAIRLINE} ${RADIUS_CONTROL} p-2`}>
+          <div className={OVERLINE}>Mood the AI read</div>
           <div className="font-semibold">{project.state.storyMood.label}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{project.state.storyMood.summary}</div>
+          <div className={`mt-0.5 text-xs ${MUTED}`}>{project.state.storyMood.summary}</div>
         </div>
       )}
     </div>
   );
 
   const storyText = (
-    <pre className="whitespace-pre-wrap font-comic text-sm text-slate-700">{project.state.script || "No story text yet."}</pre>
+    <pre className={STORY_TEXT}>{project.state.script || "No story text yet."}</pre>
   );
 
   return (
     <div
       ref={readerRef}
-      className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col"
+      className={`fixed inset-0 ${Z.reader} flex flex-col overflow-hidden bg-[var(--ds-well)] text-[var(--ds-ink)]`}
       data-testid="classic-reader"
       data-phone={phoneUi ? 'true' : 'false'}
       data-reading-mode={readingMode ? 'true' : 'false'}
@@ -774,7 +807,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     >
       {phoneUi && (
         // Screen readers and keyboards can always bring the chrome back, even while it is hidden.
-        <button type="button" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-full focus:bg-white focus:px-3 focus:py-2" onClick={showChrome}>
+        <button type="button" className={`sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:${Z.dialog} focus:${RADIUS_CONTROL} focus:bg-[var(--ds-raised)] focus:px-3 focus:py-2 focus:text-[var(--ds-ink)] ${FOCUS_RING}`} onClick={showChrome}>
           Show reader controls
         </button>
       )}
@@ -794,7 +827,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         <header
           data-testid="reader-phone-bar"
           aria-hidden={chromeHidden || undefined}
-          className={`absolute inset-x-0 top-0 z-30 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md ${chromeFade(chromeHidden)} ${chromeHidden ? '-translate-y-full' : 'translate-y-0'}`}
+          className={`absolute inset-x-0 top-0 ${Z.chrome} border-b border-[var(--ds-hairline)] bg-[var(--ds-raised)] ${chromeFade(chromeHidden)} ${chromeHidden ? '-translate-y-full' : 'translate-y-0'}`}
           style={{ paddingTop: 'var(--sa-top)', paddingLeft: 'calc(var(--sa-left) + 12px)', paddingRight: 'calc(var(--sa-right) + 4px)' }}
           onPointerDown={() => setChromeTick((n) => n + 1)}
         >
@@ -830,7 +863,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         <div
           role="menu"
           aria-label="Reader options"
-          className="absolute right-2 z-40 w-60 max-w-[calc(100%-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1 shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-md"
+          className={`absolute right-2 ${Z.sheet} w-60 max-w-[calc(100%-16px)] overflow-y-auto overscroll-contain p-1 ${OVERLAY}`}
           style={{ top: 'calc(var(--sa-top) + 52px)', maxHeight: 'calc(100dvh - var(--sa-top) - 64px)' }}
         >
           <button type="button" role="menuitem" className={PHONE_MENU_ITEM} onClick={menuSelect(() => navigate('gallery'))}>
@@ -875,7 +908,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
           type="button"
           onClick={toggleFullscreen}
           aria-label="Exit full screen"
-          className="absolute z-40 inline-flex h-11 min-w-[44px] items-center justify-center gap-1.5 rounded-full bg-black/60 px-3 text-[13px] font-semibold text-white backdrop-blur-md hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          className={`absolute ${Z.sheet} inline-flex h-11 min-w-[44px] items-center justify-center gap-1.5 rounded-[var(--ds-radius-pill)] px-3 text-[13px] font-semibold ${INVERSE_SURFACE} shadow-[shadow:var(--ds-shadow-panel)] transition-opacity duration-[var(--ds-motion-medium)] hover:opacity-90 ${FOCUS_RING}`}
           style={{ top: 'calc(var(--sa-top) + 8px)', right: 'calc(var(--sa-right) + 8px)' }}
         >
           <Minimize2 className="h-4 w-4" aria-hidden /> Exit
@@ -885,12 +918,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       {showIosNote && (
         <div
           role="status"
-          className="absolute inset-x-3 z-40 mx-auto max-w-sm rounded-2xl bg-black/80 p-3 text-[13px] leading-snug text-white shadow-lg backdrop-blur-md"
+          className={`absolute inset-x-3 ${Z.sheet} mx-auto max-w-sm ${RADIUS_PANEL} ${INVERSE_SURFACE} p-3 text-[13px] leading-snug shadow-[shadow:var(--ds-shadow-panel)]`}
           style={{ bottom: 'calc(var(--sa-bottom) + 16px)' }}
         >
           <p>{IOS_FULLSCREEN_NOTE}</p>
           <div className="mt-1 flex justify-end">
-            <button type="button" onClick={() => setShowIosNote(false)} className="min-h-[44px] rounded-full bg-white/15 px-4 text-[13px] font-semibold hover:bg-white/25">
+            <button type="button" onClick={() => setShowIosNote(false)} className={buttonClasses({ variant: 'outline', size: 'sm', className: `min-h-[44px] px-4 text-[13px] font-semibold ${INVERSE_ACTION_QUIET}` })}>
               Got it
             </button>
           </div>
@@ -899,44 +932,44 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
       {/* Reader Controls */}
       {!phoneUi && !readingMode && (
-      <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between gap-2 px-3 sm:px-6 shadow-lg shrink-0">
+      <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 sm:px-6">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="font-display text-lg sm:text-2xl text-black truncate">{project.name}</h1>
+          <h1 className={`truncate text-lg sm:text-xl ${HEADING}`}>{project.name}</h1>
         </div>
-        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center gap-1.5 overflow-x-auto p-0.5 [scrollbar-width:none] sm:gap-2 [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => navigate('gallery')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
+            className={TOOL_BTN}
           >
             Library
           </button>
           <button
             onClick={() => navigate('dashboard')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
+            className={TOOL_BTN}
           >
             Dashboard
           </button>
           <button
             onClick={() => setShowStory((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+            className={TOOL_BTN}
           >
             <BookOpen className="w-4 h-4" /> Story
           </button>
           <button
             onClick={() => setShowInfo((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
+            className={TOOL_BTN}
           >
             Info
           </button>
           <button
             onClick={() => setShowComments((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+            className={TOOL_BTN}
           >
             <MessageSquareText className="w-4 h-4" /> Comments
           </button>
           <button
             onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-brand-yellow"
+            className={TOOL_BTN}
           >
             {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
           </button>
@@ -944,7 +977,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             onClick={toggleFx}
             title="Halftone comic texture"
             aria-pressed={fxOn}
-            className={`text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap flex items-center gap-1 ${fxOn ? 'bg-brand-blue text-white' : 'bg-slate-50'}`}
+            className={fxOn ? TOOL_BTN_ON : TOOL_BTN}
           >
             <Sparkles className="w-4 h-4" /> FX
           </button>
@@ -952,19 +985,19 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             onClick={toggleSound}
             title={soundOn ? 'Mute page-turn sound' : 'Unmute page-turn sound'}
             aria-pressed={soundOn}
-            className="text-xs font-bold border-2 border-black rounded-lg px-2 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+            className={TOOL_BTN}
           >
             {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
           <button
             onClick={toggleFullscreen}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+            className={TOOL_BTN}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             {isFullscreen ? 'Exit' : 'Full'}
           </button>
-          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0" aria-label="Close reader">
-            <X className="w-6 h-6" />
+          <button onClick={handleAttemptClose} className={ICON_BTN} aria-label="Close reader">
+            <X className="size-5" />
           </button>
         </div>
       </header >
@@ -972,7 +1005,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 
       <div className="flex-1 flex overflow-hidden">
         {/* Main Comic Area */}
-        <div className="flex-1 overflow-hidden bg-slate-200" onClick={onArtTap}>
+        <div className="flex-1 overflow-hidden bg-[var(--ds-well-strong)]" onClick={onArtTap}>
           {readerMode === 'scroll' ? (
             <div
               ref={scrollRef}
@@ -981,40 +1014,40 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
               // Phones: the art runs edge to edge under the floating bar (which hides itself while reading).
               style={phoneUi ? { paddingTop: 52, paddingBottom: 'calc(var(--sa-bottom) + 12px)' } : undefined}
             >
-              <div className="max-w-4xl w-full bg-white shadow-2xl min-h-full">
+              <div className="min-h-full w-full max-w-4xl bg-[var(--ds-surface)] shadow-[shadow:var(--ds-shadow-panel)]">
                 {showStory && !phoneUi && (
-                  <div className="p-6 border-b-4 border-black bg-white">
-                    <div className="border-2 border-black rounded-lg p-4 bg-slate-50">
-                      <div className="text-xs font-bold uppercase text-slate-500 mb-2">Story</div>
-                      <pre className="whitespace-pre-wrap font-comic text-sm text-slate-700">{project.state.script || "No story text yet."}</pre>
+                  <div className="border-b border-[var(--ds-hairline)] p-6">
+                    <div className={`${STORY_BOX} p-4`}>
+                      <div className={`mb-2 ${OVERLINE}`}>Story</div>
+                      <pre className={STORY_TEXT}>{project.state.script || "No story text yet."}</pre>
                     </div>
                   </div>
                 )}
                 {project.state.coverImageUrl && (
-                  <div className="p-6 border-b-4 border-black bg-slate-100">
-                    <div className="border-4 border-black rounded-lg overflow-hidden shadow-comic">
+                  <div className="border-b border-[var(--ds-hairline)] bg-[var(--ds-well)] p-6">
+                    <div className={`overflow-hidden ${RADIUS_PANEL} ${ART_FRAME}`}>
                       <img src={project.state.coverImageUrl} alt={`${project.name} cover`} className="block w-full h-auto animate-fade-in" />
                     </div>
                   </div>
                 )}
 	                <div className={`${phoneUi ? 'p-2' : 'p-4 sm:p-8'} ${getLayoutClass()}`}>
 	                  {allPanelsMissingArt && (
-	                    <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
+	                    <div role="status" className={`col-span-full py-6 text-center font-semibold ${RADIUS_PANEL} ${ATTENTION_NOTE}`}>
 	                      All panel artwork is currently missing for this comic.
 	                    </div>
 	                  )}
                   {project.state.panels.map((panel, idx) => (
                     <RevealOnScroll key={idx} className={getPanelClass(idx)}>
-                      <div className="border-2 border-black shadow-sm relative">
+                      <div className={`relative bg-[var(--ds-surface)] ${ART_FRAME}`}>
                         {panel.imageUrl ? (
                           <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
                         ) : (
-                          <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
+                          <div className={`min-h-[280px] w-full border-b border-[var(--ds-hairline)] ${MISSING_ART}`}>
                             Image missing for this panel
                           </div>
                         )}
                         {!panel.imageUrl && (
-                          <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
+                          <div className={`border-x-0 border-t-0 px-3 py-1 text-[11px] font-semibold ${ATTENTION_NOTE}`}>
                             Dialogue shown without artwork
                           </div>
                         )}
@@ -1026,16 +1059,16 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                  {project.state.panels.length === 0 && project.state.pageStudio?.pages?.map((page, idx) => (
 	                    <RevealOnScroll key={page.id || idx} className="col-span-full">
 	                      {page.imageUrl ? (
-	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" className="mx-auto block h-auto max-w-full animate-fade-in border-2 border-black shadow-sm" />
+	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" className={`mx-auto block h-auto max-w-full animate-fade-in ${ART_FRAME}`} />
 	                      ) : (
-	                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black">
+	                        <div className={`min-h-[280px] w-full ${RADIUS_PANEL} ${MISSING_ART}`}>
 	                          Image missing for this page
 	                        </div>
 	                      )}
 	                    </RevealOnScroll>
 	                  ))}
 	                  {project.state.panels.length === 0 && (project.state.pageStudio?.pages?.length || 0) === 0 && (
-	                    <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
+	                    <div className={`col-span-full py-20 text-center font-semibold ${TEXT_XL} ${MUTED}`}>
 	                      This comic hasn't been drawn yet!
 	                    </div>
 	                  )}
@@ -1044,12 +1077,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             </div>
           ) : (
             <div className={phoneUi ? 'h-full flex flex-col' : 'h-full flex flex-col items-center p-2 sm:p-4'}>
-              <div className={phoneUi ? 'relative flex flex-col w-full flex-1 min-h-0 bg-slate-100 overflow-hidden' : 'flex flex-col w-full max-w-5xl flex-1 min-h-0 bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden'}>
+              <div className={phoneUi ? 'relative flex flex-col w-full flex-1 min-h-0 bg-[var(--ds-well)] overflow-hidden' : `flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden bg-[var(--ds-surface)] ${HAIRLINE} ${RADIUS_PANEL} shadow-[shadow:var(--ds-shadow-panel)]`}>
                 {showStory && !phoneUi && (
-                  <div className="p-4 border-b-4 border-black bg-white shrink-0 max-h-40 overflow-y-auto custom-scrollbar">
-                    <div className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                      <div className="text-xs font-bold uppercase text-slate-500 mb-2">Story</div>
-                      <pre className="whitespace-pre-wrap font-comic text-sm text-slate-700">{project.state.script || "No story text yet."}</pre>
+                  <div className="max-h-40 shrink-0 overflow-y-auto border-b border-[var(--ds-hairline)] p-4 custom-scrollbar">
+                    <div className={`${STORY_BOX} p-3`}>
+                      <div className={`mb-2 ${OVERLINE}`}>Story</div>
+                      <pre className={STORY_TEXT}>{project.state.script || "No story text yet."}</pre>
                     </div>
                   </div>
                 )}
@@ -1059,7 +1092,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   <div
                     ref={setFlipRegion}
                     data-testid="flip-region"
-                    className="flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none"
+                    className="flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 select-none"
                     onTouchStart={onTouchStart}
                     onTouchMove={onTouchMove}
                     onTouchEnd={onTouchEnd}
@@ -1076,11 +1109,11 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                           <img
                             src={pages[pageIndex].imageUrl}
                             alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
-                            className="block max-h-full max-w-full w-auto h-auto object-contain border-2 border-black shadow-comic bg-white"
+                            className={`block max-h-full max-w-full w-auto h-auto object-contain bg-[var(--ds-surface)] ${ART_FRAME}`}
                             style={flipBox && flipArtMaxH ? { maxWidth: flipBox.w, maxHeight: flipArtMaxH } : undefined}
                           />
                         ) : (
-                          <div className="w-[70vw] max-w-md min-h-[200px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black rounded">
+                          <div className={`min-h-[200px] w-[70vw] max-w-md ${RADIUS_CONTROL} ${MISSING_ART}`}>
                             {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
                           </div>
                         )}
@@ -1103,7 +1136,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   // by BOTH max-h-full and max-w-full so it always scales to fit the viewport on
                   // either axis — never oversized, never leaving dead space.
                   <div
-                    className={phoneUi ? 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none' : 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 sm:p-3 select-none'}
+                    className={phoneUi ? 'flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 select-none' : 'flex-1 min-h-0 flex items-center justify-center bg-[var(--ds-well)] overflow-hidden p-2 sm:p-3 select-none'}
                     onTouchStart={onTouchStart}
                     onTouchMove={onTouchMove}
                     onTouchEnd={onTouchEnd}
@@ -1117,10 +1150,10 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                        <img
 	                          src={pages[pageIndex].imageUrl}
 	                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
-	                          className="block max-h-full max-w-full w-auto h-auto object-contain mx-auto border-2 border-black shadow-comic bg-white"
+	                          className={`mx-auto block max-h-full max-w-full w-auto h-auto object-contain bg-[var(--ds-surface)] ${ART_FRAME}`}
 	                        />
                       ) : (
-                        <div className="w-[70vw] max-w-md min-h-[300px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black rounded">
+                        <div className={`min-h-[300px] w-[70vw] max-w-md ${RADIUS_CONTROL} ${MISSING_ART}`}>
                           {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
                         </div>
                       )}
@@ -1129,44 +1162,44 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
+                  <div className={`flex flex-1 items-center justify-center p-10 text-center font-semibold ${TEXT_XL} ${MUTED}`}>This comic hasn't been drawn yet!</div>
                 )}
                 <div
-                  className={phoneUi ? `absolute inset-x-0 bottom-0 z-20 border-t-4 border-black bg-slate-50 ${chromeFade(chromeHidden)} ${chromeHidden ? 'translate-y-full' : 'translate-y-0'}` : 'shrink-0 border-t-4 border-black bg-slate-50'}
+                  className={phoneUi ? `absolute inset-x-0 bottom-0 ${Z.chrome} border-t border-[var(--ds-hairline)] bg-[var(--ds-raised)] ${chromeFade(chromeHidden)} ${chromeHidden ? 'translate-y-full' : 'translate-y-0'}` : 'shrink-0 border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)]'}
                   style={phoneUi ? { paddingBottom: 'var(--sa-bottom)' } : undefined}
                   aria-hidden={chromeHidden || undefined}
                   onPointerDown={phoneUi ? () => setChromeTick((n) => n + 1) : undefined}
                 >
-                  <div className="h-1.5 bg-slate-200" aria-hidden>
-                    <div className="h-full bg-brand-yellow transition-all duration-300" style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
+                  <div className="h-1 bg-[var(--ds-well-strong)]" aria-hidden>
+                    <div className={`${PROGRESS_FILL} transition-[width] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none`} style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
                   </div>
-                  <div className="flex items-center justify-between p-3">
-                    <button onClick={goPrev} disabled={pageIndex <= 0} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+                  <div className="flex items-center justify-between gap-2 p-3">
+                    <button onClick={goPrev} disabled={pageIndex <= 0} className={PAGE_BTN}>
                       <ChevronLeft className="w-4 h-4" /> Prev
                     </button>
-                    <div className="text-xs font-bold tabular-nums">{Math.min(pageIndex + 1, Math.max(pages.length, 1))} / {Math.max(pages.length, 1)}</div>
-                    <button onClick={goNext} disabled={pageIndex >= pages.length - 1} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+                    <div className={`text-xs font-semibold tabular-nums ${INK}`}>{Math.min(pageIndex + 1, Math.max(pages.length, 1))} / {Math.max(pages.length, 1)}</div>
+                    <button onClick={goNext} disabled={pageIndex >= pages.length - 1} className={PAGE_BTN}>
                       Next <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
                 {phoneUi && chromeHidden && (
                   // While the chrome is away, a hairline progress bar keeps your place.
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-1 bg-black/10" aria-hidden>
-                    <div className="h-full bg-brand-yellow" style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
+                  <div className={`pointer-events-none absolute inset-x-0 bottom-0 ${Z.chrome} h-1 bg-[var(--ds-hairline)]`} aria-hidden>
+                    <div className={PROGRESS_FILL} style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
                   </div>
                 )}
               </div>
-              {!phoneUi && <div className="text-[11px] text-slate-500 font-comic mt-1.5 hidden sm:block">← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>}
+              {!phoneUi && <div className={`mt-1.5 hidden text-[11px] sm:block ${MUTED}`}>← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>}
             </div>
           )}
         </div>
 
         {showInfo && !phoneUi && (
-          <aside className="w-full md:w-80 shrink-0 border-l-4 border-black bg-white p-4 overflow-y-auto">
+          <aside className="w-full shrink-0 overflow-y-auto border-l border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 md:w-80">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="font-display text-xl">Comic Info</h2>
-              <button onClick={() => setShowInfo(false)} className="p-2 -mr-2 rounded-full hover:bg-slate-100 md:hidden" aria-label="Close info">
+              <h2 className="text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">Comic Info</h2>
+              <button onClick={() => setShowInfo(false)} className={`-mr-2 md:hidden ${ICON_BTN}`} aria-label="Close info">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1187,13 +1220,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         <PhoneSheet title="Comic Info" onClose={() => setShowInfo(false)}>
           {infoDetails}
           {/* The site footer is not drawn inside the phone reader: its links live here. */}
-          <div className="mt-5 border-t border-slate-200 pt-3">
-            <div className="text-xs uppercase font-bold text-slate-500">DreamStream</div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold text-slate-600">
-              <button type="button" onClick={leaveTo(onOpenPrivacy)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
-              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
-              <button type="button" onClick={leaveTo(onOpenFaq)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
-              <a href="mailto:contact@dreamstreamstudio.ai" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
+          <div className="mt-5 border-t border-[var(--ds-hairline)] pt-3">
+            <div className={OVERLINE}>DreamStream</div>
+            <div className={`mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold ${MUTED}`}>
+              <button type="button" onClick={leaveTo(onOpenPrivacy)} className={`min-h-[44px] ${RADIUS_CONTROL} px-2 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}>Privacy Policy</button>
+              <button type="button" onClick={leaveTo(onOpenTerms)} className={`min-h-[44px] ${RADIUS_CONTROL} px-2 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}>Terms &amp; Conditions</button>
+              <button type="button" onClick={leaveTo(onOpenFaq)} className={`min-h-[44px] ${RADIUS_CONTROL} px-2 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}>FAQs</button>
+              <a href="mailto:contact@dreamstreamstudio.ai" className={`inline-flex min-h-[44px] items-center ${RADIUS_CONTROL} px-2 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}>Contact</a>
             </div>
           </div>
         </PhoneSheet>
@@ -1206,14 +1239,14 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       )}
 
       {showComments && (
-        <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col" style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)' }}>
-          <div className="p-4 border-b-4 border-black flex items-center justify-between bg-white shrink-0">
-            <div className="font-display text-xl">Comments</div>
-            <button onClick={() => setShowComments(false)} className="p-2 coarse:p-3 rounded-full hover:bg-slate-100" aria-label="Close comments">
+        <div className={`fixed inset-y-0 left-0 ${Z.dialog} flex w-full flex-col border-r border-[var(--ds-overlay-edge)] bg-[var(--ds-raised)] shadow-[shadow:var(--ds-shadow-overlay)] md:w-96`} style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)' }}>
+          <div className="flex shrink-0 items-center justify-between border-b border-[var(--ds-hairline)] p-4">
+            <div className="text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">Comments</div>
+            <button onClick={() => setShowComments(false)} className={ICON_BTN} aria-label="Close comments">
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto bg-slate-50">
+          <div className="flex-1 overflow-y-auto bg-[var(--ds-well)]">
             <CommentSection projectId={project.id} onNavigate={onNavigate ? navigate : undefined} />
           </div>
         </div>
