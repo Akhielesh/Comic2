@@ -1,6 +1,10 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { ProjectVersion } from '../../types';
 import { Clock, RotateCcw, Trash2, X } from 'lucide-react';
+import { buttonClasses } from '../ds/Button';
+import { CHIP, CHIP_VARIANT, DIALOG_TITLE, HAIRLINE, INK, MUTED, OVERLAY, RADIUS_PANEL, SCRIM, Z } from '../chat/studioDesign';
+
+const ROW_ACTION = buttonClasses({ variant: 'outline', size: 'icon', className: 'size-9' });
 
 interface VersionHistoryModalProps {
     versions: ProjectVersion[];
@@ -10,51 +14,53 @@ interface VersionHistoryModalProps {
 }
 
 export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versions, onRestore, onDelete, onClose }) => {
+    const titleId = useId();
     return (
-        <div className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white border-4 border-black rounded-2xl w-full max-w-lg shadow-comic max-h-[80vh] flex flex-col">
-                <div className="flex items-center justify-between p-4 border-b-4 border-black bg-brand-yellow">
-                    <div className="flex items-center gap-2">
-                        <Clock className="w-6 h-6" />
-                        <h2 className="text-xl font-display">Version History</h2>
+        <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4 animate-fade-in motion-reduce:animate-none`}>
+            <div role="dialog" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[80vh] w-full max-w-lg flex-col`}>
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <Clock className="size-5 shrink-0" aria-hidden="true" />
+                        <h2 id={titleId} className={DIALOG_TITLE}>Version History</h2>
                     </div>
-                    <button onClick={onClose} className="p-1 hover:bg-black/10 rounded-full transition-colors">
+                    <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}>
                         <X size={24} />
                     </button>
                 </div>
 
                 <div className="p-4 overflow-y-auto flex-1 space-y-3 custom-scrollbar">
                     {versions.length === 0 ? (
-                        <div className="text-center py-12 text-slate-500 font-comic">
+                        <div className={`py-12 text-center text-sm ${MUTED}`}>
                             No saved versions yet.
                             <br />
                             <span className="text-xs">Save a version in the editor to create a checkpoint.</span>
                         </div>
                     ) : (
                         versions.slice().reverse().map((v) => (
-                            <div key={v.id} className="border-2 border-black rounded-xl p-4 flex items-center justify-between group hover:bg-slate-50 transition-colors">
-                                <div>
-                                    <div className="font-bold text-lg">{v.name}</div>
-                                    <div className="text-xs text-slate-500 font-mono">
+                            <div key={v.id} className={`group flex items-center justify-between gap-3 p-4 transition-colors duration-[var(--ds-motion-medium)] hover:bg-[var(--ds-hover)] ${RADIUS_PANEL} ${HAIRLINE}`}>
+                                <div className="min-w-0">
+                                    <div className={`text-base font-semibold [overflow-wrap:anywhere] ${INK}`}>{v.name}</div>
+                                    <div className={`font-mono text-xs ${MUTED}`}>
                                         {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(v.createdAt)}
                                     </div>
-                                    <div className="text-xs mt-1 bg-slate-100 inline-block px-2 py-0.5 rounded border border-slate-300">
+                                    <div className={`mt-1 ${CHIP} ${CHIP_VARIANT.filled}`}>
                                         Step: {v.state.step} • {v.state.panels.length} Panels
                                     </div>
                                     {(v.reason || v.snapshotHash) && (
-                                        <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                                        <div className={`mt-1 font-mono text-[11px] [overflow-wrap:anywhere] ${MUTED}`}>
                                             {v.reason ? `Reason: ${v.reason}` : ''}{v.reason && v.snapshotHash ? ' • ' : ''}{v.snapshotHash ? `Hash: ${v.snapshotHash}` : ''}
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex shrink-0 gap-2 opacity-100 transition-opacity duration-[var(--ds-motion-medium)] focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
                                     <button
                                         onClick={() => {
                                             if (confirm(`Restore "${v.name}"? Current unsaved changes will be lost.`)) {
                                                 onRestore(v);
                                             }
                                         }}
-                                        className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 border-2 border-transparent hover:border-blue-300 transition-all"
+                                        className={ROW_ACTION}
+                                        aria-label="Restore this version"
                                         title="Restore this version"
                                     >
                                         <RotateCcw size={18} />
@@ -65,7 +71,8 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
                                                 onDelete(v.id);
                                             }
                                         }}
-                                        className="p-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 border-2 border-transparent hover:border-red-300 transition-all"
+                                        className={`${ROW_ACTION} text-[var(--ds-danger-text)]`}
+                                        aria-label="Delete version"
                                         title="Delete version"
                                     >
                                         <Trash2 size={18} />
@@ -76,7 +83,7 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
                     )}
                 </div>
 
-                <div className="p-4 border-t-4 border-black bg-slate-50 text-xs text-center text-slate-500 font-bold">
+                <div className={`border-t border-[var(--ds-hairline)] p-4 text-center text-xs font-medium ${MUTED}`}>
                     Versions are stored within the project file.
                 </div>
             </div>

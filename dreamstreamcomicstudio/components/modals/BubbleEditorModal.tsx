@@ -1,9 +1,31 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { X, Plus, Trash2, Move, MessageSquare, Cloud, Zap, Volume2, Type, Sparkles, CheckCheck } from 'lucide-react';
 import { ComicPanel, TextLayout, DialogueBlock } from '../../types';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
 import { SpeechBubble, NarrationBox } from '../PanelDialogue';
 import { Button } from '../Button';
+import { buttonClasses } from '../ds/Button';
+import {
+    DENSITY,
+    DIALOG_TITLE,
+    FIELD,
+    FOCUS_RING,
+    HAIRLINE,
+    INK,
+    MUTED,
+    OVERLAY,
+    OVERLINE,
+    RADIUS_CONTROL,
+    RADIUS_PANEL,
+    SCRIM,
+    SPARK_RING_ON_ART,
+    Z
+} from '../chat/studioDesign';
+
+const FIELD_LABEL = `mb-1 block text-xs font-medium ${INK}`;
+const TEXT_FIELD = `${FIELD} block w-full px-2 py-1 text-sm`;
+const styleOption = (on: boolean) =>
+    `flex flex-col items-center justify-center gap-1 border p-2 text-[11px] font-medium text-[var(--ds-ink)] ${RADIUS_CONTROL} ${DENSITY.coarse} transition-colors duration-[var(--ds-motion-medium)] ${FOCUS_RING} ${on ? 'border-[var(--ds-ink)] bg-[var(--ds-active)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-raised)] hover:bg-[var(--ds-hover)]'}`;
 
 interface BubbleEditorModalProps {
     isOpen: boolean;
@@ -23,6 +45,8 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
     const [blocks, setBlocks] = useState<DialogueBlock[]>([]);
     const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const speakerId = useId();
+    const textId = useId();
     const dragRef = useRef<{ id: string; startX: number; startY: number; startObjX: number; startObjY: number } | null>(null);
 
     useEffect(() => {
@@ -111,20 +135,20 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
     const selectedBlock = blocks.find(b => b.id === selectedBlockId);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}>
-            <div className="bg-white rounded-xl w-full max-w-5xl h-[85vh] flex overflow-hidden shadow-2xl flex-col md:flex-row">
+        <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4`} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}>
+            <div role="dialog" aria-label="Dialogue Editor" className={`${OVERLAY} flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden md:flex-row`}>
 
                 {/* Editor Area (Left/Top) */}
-                <div className="flex-1 bg-slate-100 relative overflow-hidden flex flex-col">
-                    <div className="p-4 border-b bg-white flex justify-between items-center">
-                        <h3 className="font-bold flex items-center gap-2"><Move className="w-4 h-4" /> Drag to Position Bubbles</h3>
-                        <div className="text-xs text-slate-500">Bubbles are draggable overlay elements</div>
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--ds-well)]">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4">
+                        <h3 className={`flex items-center gap-2 font-semibold ${INK}`}><Move className="size-4" aria-hidden="true" /> Drag to Position Bubbles</h3>
+                        <div className={`text-xs ${MUTED}`}>Bubbles are draggable overlay elements</div>
                     </div>
 
-                    <div className="flex-1 overflow-hidden relative flex items-center justify-center p-8 bg-slate-200">
+                    <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-[var(--ds-well-strong)] p-4 sm:p-8">
                         <div
                             ref={containerRef}
-                            className="relative border-4 border-black shadow-comic bg-white select-none"
+                            className={`relative select-none bg-[var(--ds-surface)] ${HAIRLINE} shadow-[shadow:var(--ds-shadow-panel)]`}
                             style={{
                                 aspectRatio: '1/1', // default to square if dimensions unknown
                                 maxHeight: '100%',
@@ -146,11 +170,11 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                                     <div
                                         key={block.id}
                                         onPointerDown={(e) => handlePointerDown(e, block.id, x, y)}
-                                        className={`absolute cursor-move touch-none transition-shadow ${isSelected ? 'z-50' : 'z-10'}`}
+                                        className={`absolute cursor-move touch-none transition-shadow ${isSelected ? Z.chrome : Z.stage}`}
                                         style={{ top: `${y}%`, left: `${x}%` }}
                                     >
                                         <div className={`
-                          ${isSelected ? 'ring-2 ring-brand-blue ring-offset-2' : ''}
+                          ${isSelected ? SPARK_RING_ON_ART : ''}
                           relative group w-max max-w-[300px]
                         `}>
                                             {/* Render the actual bubble component for preview */}
@@ -176,10 +200,10 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                 </div>
 
                 {/* Sidebar Controls (Right/Bottom) */}
-                <div className="w-full md:w-80 bg-white border-l border-slate-200 flex flex-col">
-                    <div className="p-4 border-b flex justify-between items-center bg-slate-50">
-                        <h2 className="font-bold text-lg">Dialogue Editor</h2>
-                        <button onClick={onClose} className="p-1 hover:bg-slate-200 rounded"><X size={20} /></button>
+                <div className="flex min-h-0 w-full flex-col border-t border-[var(--ds-hairline)] bg-[var(--ds-surface)] md:w-80 md:border-l md:border-t-0">
+                    <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
+                        <h2 className={DIALOG_TITLE}>Dialogue Editor</h2>
+                        <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}><X size={20} /></button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-6">
@@ -231,14 +255,14 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
 
                         {/* Selected Block Editor */}
                         {selectedBlock ? (
-                            <div className="space-y-4 border rounded-lg p-3 bg-slate-50">
-                                <div className="flex justify-between items-center">
-                                    <span className="text-xs font-bold uppercase text-slate-500">Editing Selected</span>
-                                    <button onClick={() => setBlocks(blocks.filter(b => b.id !== selectedBlock.id))} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={14} /></button>
+                            <div className={`space-y-4 bg-[var(--ds-well)] p-3 ${RADIUS_PANEL} ${HAIRLINE}`}>
+                                <div className="flex items-center justify-between">
+                                    <span className={OVERLINE}>Editing Selected</span>
+                                    <button onClick={() => setBlocks(blocks.filter(b => b.id !== selectedBlock.id))} aria-label="Delete bubble" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'size-8 text-[var(--ds-danger-text)]' })}><Trash2 size={14} /></button>
                                 </div>
 
                                 <div>
-                                    <label className="text-xs font-bold mb-1 block">Style</label>
+                                    <div className={FIELD_LABEL}>Style</div>
                                     <div className="grid grid-cols-4 gap-2">
                                         {[
                                             { id: 'speech', icon: MessageSquare, label: 'Speech' },
@@ -249,7 +273,8 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                                             <button
                                                 key={style.id}
                                                 onClick={() => handleUpdateBlock(selectedBlock.id, { style: style.id as any })}
-                                                className={`p-2 rounded border flex flex-col items-center gap-1 text-[10px] ${selectedBlock.style === style.id ? 'bg-brand-blue text-white border-brand-blue' : 'bg-white hover:bg-slate-100'}`}
+                                                aria-pressed={selectedBlock.style === style.id}
+                                                className={styleOption(selectedBlock.style === style.id)}
                                             >
                                                 <style.icon size={14} />
                                                 {style.label}
@@ -259,50 +284,54 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                                 </div>
 
                                 <div>
-                                    <label className="text-xs font-bold mb-1 block">Speaker</label>
+                                    <label htmlFor={speakerId} className={FIELD_LABEL}>Speaker</label>
                                     <input
                                         type="text"
                                         value={selectedBlock.speaker || ''}
                                         onChange={(e) => handleUpdateBlock(selectedBlock.id, { speaker: e.target.value })}
-                                        className="w-full text-sm border rounded px-2 py-1"
+                                        id={speakerId}
+                                        className={`${TEXT_FIELD} h-9`}
                                         placeholder="Name..."
                                     />
                                 </div>
 
                                 <div>
-                                    <label className="text-xs font-bold mb-1 block">Text</label>
+                                    <label htmlFor={textId} className={FIELD_LABEL}>Text</label>
                                     <textarea
                                         value={selectedBlock.text}
                                         onChange={(e) => handleUpdateBlock(selectedBlock.id, { text: e.target.value })}
-                                        className="w-full text-sm border rounded px-2 py-1 min-h-[80px]"
+                                        id={textId}
+                                        className={`${TEXT_FIELD} min-h-[80px]`}
                                     />
                                 </div>
 
-                                <div className="flex gap-2 text-xs">
-                                    <label className="flex items-center gap-1 cursor-pointer">
+                                <div className={`flex flex-wrap gap-x-4 text-xs ${INK}`}>
+                                    <label className="flex min-h-11 cursor-pointer items-center gap-1.5">
                                         <input
                                             type="radio"
                                             checked={selectedBlock.side === 'left'}
                                             onChange={() => handleUpdateBlock(selectedBlock.id, { side: 'left' })}
+                                            className="size-4 accent-[var(--ds-ink)]"
                                         /> Left Tail
                                     </label>
-                                    <label className="flex items-center gap-1 cursor-pointer">
+                                    <label className="flex min-h-11 cursor-pointer items-center gap-1.5">
                                         <input
                                             type="radio"
                                             checked={selectedBlock.side === 'right'}
                                             onChange={() => handleUpdateBlock(selectedBlock.id, { side: 'right' })}
+                                            className="size-4 accent-[var(--ds-ink)]"
                                         /> Right Tail
                                     </label>
                                 </div>
                             </div>
                         ) : (
-                            <div className="text-center text-slate-400 py-8 text-sm italic">
+                            <div className={`py-8 text-center text-sm ${MUTED}`}>
                                 Select a bubble to edit text & style
                             </div>
                         )}
                     </div>
 
-                    <div className="p-4 border-t bg-slate-50 flex justify-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--ds-hairline)] p-4">
                         <Button variant="secondary" onClick={onClose}>Cancel</Button>
                         <Button onClick={handleSave}>Save Changes</Button>
                     </div>
