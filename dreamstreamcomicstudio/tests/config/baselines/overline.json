@@ -2,9 +2,8 @@
   "guard": "overline",
   "test": "tests/config/overlineGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/overlineGuard.test.ts lowers it (see README.md).",
-  "totals": { "LABEL-import": 3, "hand-rolled-eyebrow": 131 },
+  "totals": { "LABEL-import": 3, "hand-rolled-eyebrow": 105 },
   "files": {
-    "components/PublicProfile.tsx": { "hand-rolled-eyebrow": 2 },
     "components/admin/costs/SortableTable.tsx": { "hand-rolled-eyebrow": 2 },
     "components/chat/ChatHome.tsx": { "hand-rolled-eyebrow": 1 },
     "components/chat/ChatModelPicker.tsx": { "hand-rolled-eyebrow": 3 },
@@ -60,15 +59,6 @@
     "components/chat/artifacts/YieldCurveCard.tsx": { "hand-rolled-eyebrow": 1 },
     "components/chat/artifacts/kit/Gauges.tsx": { "hand-rolled-eyebrow": 1 },
     "components/chat/artifacts/kit/Pills.tsx": { "hand-rolled-eyebrow": 1 },
-    "components/chat/studioDesign.ts": { "hand-rolled-eyebrow": 1 },
-    "components/models/DomainLeaderboard.tsx": { "hand-rolled-eyebrow": 3 },
-    "components/models/DrsBenchScores.tsx": { "hand-rolled-eyebrow": 2 },
-    "components/models/ImageModelRanking.tsx": { "hand-rolled-eyebrow": 4 },
-    "components/models/ModelBenchPanel.tsx": { "hand-rolled-eyebrow": 2 },
-    "components/models/ModelDataSources.tsx": { "hand-rolled-eyebrow": 4 },
-    "components/models/ModelInsights.tsx": { "hand-rolled-eyebrow": 3 },
-    "components/models/ModelUsageTrends.tsx": { "hand-rolled-eyebrow": 1 },
-    "components/models/ProviderAggregatorTable.tsx": { "hand-rolled-eyebrow": 4 },
-    "components/models/SectionHeader.tsx": { "hand-rolled-eyebrow": 1 }
+    "components/chat/studioDesign.ts": { "hand-rolled-eyebrow": 1 }
   }
 }

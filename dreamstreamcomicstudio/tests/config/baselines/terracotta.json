@@ -2,15 +2,12 @@
   "guard": "terracotta",
   "test": "tests/config/terracottaGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts lowers it (see README.md).",
-  "totals": { "#c2643f": 1, "#d97757": 12 },
+  "totals": { "#c2643f": 1, "#d97757": 9 },
   "files": {
-    "components/PublicProfile.tsx": { "#d97757": 1 },
     "components/chat/ComponentGallery.tsx": { "#d97757": 4 },
     "components/chat/artifacts/DeckDraftCard.tsx": { "#d97757": 1 },
     "components/chat/studioDesign.ts": { "#c2643f": 1, "#d97757": 2 },
     "components/comicstudio/board/StyleTab.tsx": { "#d97757": 1 },
-    "components/comicstudio/timeline/plates.ts": { "#d97757": 1 },
-    "components/models/DrsBenchScores.tsx": { "#d97757": 1 },
-    "components/models/ModelUsageTrends.tsx": { "#d97757": 1 }
+    "components/comicstudio/timeline/plates.ts": { "#d97757": 1 }
   }
 }

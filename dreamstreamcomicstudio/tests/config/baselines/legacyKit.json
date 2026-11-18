@@ -2,18 +2,6 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 61, "brand-blue": 17, "brand-red": 5, "brand-yellow": 16, "font-comic": 3, "font-display": 9, "shadow-comic": 13 },
-  "files": {
-    "components/PanelDialogue.tsx": { "border-black": 6, "font-comic": 3 },
-    "components/PublicProfile.tsx": { "border-black": 3, "font-display": 3, "shadow-comic": 2 },
-    "components/models/DomainLeaderboard.tsx": { "border-black": 9, "brand-blue": 3 },
-    "components/models/ImageModelRanking.tsx": { "border-black": 3, "brand-blue": 2, "brand-red": 1, "brand-yellow": 3, "font-display": 1, "shadow-comic": 1 },
-    "components/models/ModelBenchPanel.tsx": { "border-black": 20, "brand-blue": 5, "brand-red": 3, "brand-yellow": 8, "font-display": 2, "shadow-comic": 5 },
-    "components/models/ModelDataSources.tsx": { "border-black": 1, "brand-blue": 1, "brand-yellow": 1, "font-display": 1, "shadow-comic": 1 },
-    "components/models/ModelInsights.tsx": { "border-black": 3, "brand-blue": 2, "brand-red": 1, "brand-yellow": 1 },
-    "components/models/ProviderAggregatorTable.tsx": { "border-black": 12, "brand-blue": 3, "brand-yellow": 2, "font-display": 1, "shadow-comic": 2 },
-    "components/models/ProviderSections.tsx": { "border-black": 2, "brand-blue": 1, "brand-yellow": 1, "shadow-comic": 1 },
-    "components/models/SectionHeader.tsx": { "font-display": 1 },
-    "components/steps/ReviewExport.tsx": { "border-black": 2, "shadow-comic": 1 }
-  }
+  "totals": {},
+  "files": {}
 }
