@@ -14,6 +14,7 @@ import { clipThumbWidth } from './TimelineClip';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import { OPEN_HISTORY_EVENT, type OpenHistoryRequest } from '../history/openHistory';
 import { BOOK_SIZE_KEY, bookThumbMax } from './useBookPanelSize';
+import { TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
 
@@ -279,10 +280,11 @@ describe('BookTimeline', () => {
     setup();
     for (const o of options()) expect(o.querySelector('button, [tabindex]:not([tabindex="-1"]), a[href], input')).toBeNull();
     expect(document.querySelector('.bg-red-600\\/90')).toBeNull();
-    // The failed badge: red-700 (white text 6.5:1) at a readable 10 px, never the old 8.5 px.
+    // The failed badge: the danger tone surface over art (TONE_CHIP_ON_ART, >= 4.5:1 on any thumbnail) at a readable
+    // 10 px, never the old 8.5 px.
     const badge = document.querySelector('[data-clip-badge="failed"]') as HTMLElement;
     expect(badge).not.toBeNull();
-    expect(badge.className).toContain('bg-red-700');
+    for (const cls of TONE_CHIP_ON_ART.danger.split(' ')) expect(badge.classList.contains(cls)).toBe(true);
     expect(badge.className).toContain('text-[10px]');
   });
 

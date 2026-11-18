@@ -16,7 +16,7 @@ import { ExternalLink, Languages, LayoutGrid, Link2Off, QrCode as QrIcon, Refres
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { ACCENT_BG, ACCENT_BG_HOVER, CONTROL_BTN, DIALOG_TITLE, FOCUS_RING, ON_ACCENT_TEXT, OVERLINE, RADIUS_CONTROL, SEGMENTED_ACTIVE, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, CONTROL_BTN, DANGER_FILL, DANGER_FILL_HOVER, DIALOG_TITLE, FOCUS_RING, FOCUS_RING_FLUSH, ON_ACCENT_TEXT, OVERLINE, RADIUS_CONTROL, SEGMENTED_ACTIVE, STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { useBackLayer } from '../mobile/backStack';
 import { EmbedSnippet } from './EmbedSnippet';
@@ -348,7 +348,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             disabled={busy || (suspended && v !== 'private')}
             onClick={() => choose(v)}
             className={cx(
-              'min-h-[44px] min-w-0 rounded-[10px] px-1.5 text-[12px] font-medium leading-tight touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50',
+              `min-h-[44px] min-w-0 rounded-[10px] px-1.5 text-[12px] font-medium leading-tight touch-manipulation ${FOCUS_RING_FLUSH} disabled:opacity-50`,
               on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
@@ -379,7 +379,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             type="button"
             disabled={busy}
             onClick={() => void run(() => updatePublication(doc.id, { visibility: 'public' }))}
-            className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-4 text-[14px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
+            className="min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-4 text-[14px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:opacity-50"
           >
             {busy ? 'Working…' : 'List it in the Library'}
           </button>
@@ -387,7 +387,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       </div>
     ) : (
       confirm && (
-        <div role="alertdialog" aria-label={confirm === 'unpublish' ? 'Unpublish?' : 'Get a new link?'} className="rounded-xl border border-red-500/30 bg-red-500/[0.06] p-3">
+        <div role="alertdialog" aria-label={confirm === 'unpublish' ? 'Unpublish?' : 'Get a new link?'} className={`rounded-xl border ${STATUS_SURFACE.error} p-3`}>
           <p className="m-0 text-[13px] text-[var(--ds-ink)]">
             {confirm === 'unpublish'
               ? 'Unpublish? The link stops working for everyone. Publishing again creates a new link.'
@@ -401,7 +401,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
               type="button"
               disabled={busy}
               onClick={() => void run(() => (confirm === 'unpublish' ? unpublishComic(doc.id) : regeneratePublicationLink(doc.id)))}
-              className="min-h-[44px] rounded-xl bg-red-600 px-4 text-[14px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              className={`min-h-[44px] rounded-xl px-4 text-[14px] font-semibold ${DANGER_FILL} ${DANGER_FILL_HOVER} ${FOCUS_RING} disabled:opacity-50`}
             >
               {busy ? 'Working…' : confirm === 'unpublish' ? 'Unpublish' : 'Get new link'}
             </button>
@@ -480,7 +480,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       {visibilityControl}
       {visibilityHints}
       {suspended && view?.suspendedReason && (
-        <p className="m-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">{view.suspendedReason}</p>
+        <p className={`m-0 rounded-xl border px-3 py-2 text-[13px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>{view.suspendedReason}</p>
       )}
       {(confirm === 'unpublish' || confirm === 'public') && confirmBox}
       {publishAs ? (
@@ -499,7 +499,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       ) : (
         <>
           {live && view?.behind && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+            <div className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[13px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
               <span className="min-w-0">You’ve made changes since publishing. Readers still see the published version.</span>
               <ChangesSincePublishLink studio={studio} />
               <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -530,7 +530,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                   disabled={busy}
                   onClick={updateNow}
                   aria-describedby={readyLangs.length > 0 ? `${hintId}-update` : undefined}
-                  className={readyLangs.length > 0 ? PLAIN_UPDATE_BTN : 'min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50'}
+                  className={readyLangs.length > 0 ? PLAIN_UPDATE_BTN : 'min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-3 font-semibold text-[var(--ds-on-accent)] disabled:opacity-50'}
                 >
                   {busy && !adding ? 'Updating…' : 'Update'}
                 </button>
@@ -592,7 +592,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           )}
           {checkFailed && <CheckFailed onRetry={checkComic} />}
           {error && (
-            <p role="alert" className="m-0 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+            <p role="alert" className={`m-0 rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
               {error}
             </p>
           )}
@@ -710,7 +710,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             onClick={onClose}
             data-autofocus
             aria-label="Close"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
           >
             <X className="h-5 w-5" aria-hidden />
           </button>

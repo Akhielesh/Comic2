@@ -12,6 +12,7 @@ import { ShareSheet } from './ShareSheet';
 import { CHANNEL_LABEL, INTENT_CHANNELS, intentUrl } from './shareModel';
 import { useShareCapabilities } from './useShareCapabilities';
 
+import { FOCUS_RING, STATUS_DOT, TONE_FILL } from '../../chat/studioDesign';
 export interface ShareTarget {
   url: string;
   title: string;
@@ -34,7 +35,7 @@ export const openShareSheet = (): void => {
 
 const buttonCls = (compact?: boolean) =>
   cx(
-    'relative inline-flex h-11 items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 touch-manipulation',
+    `relative inline-flex h-11 items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} touch-manipulation`,
     compact ? 'w-11' : 'px-3'
   );
 
@@ -109,7 +110,7 @@ export const ShareButton: React.FC<ShareButtonProps> = ({ studio, target, compac
   if (!studio || !studio.doc) return null;
   const m = studio.doc.publication;
   const behind = !!studio.publication?.behind;
-  const dot = !m ? null : m.status === 'suspended' || behind ? 'bg-amber-500' : m.visibility === 'public' ? 'bg-emerald-500' : 'bg-sky-500';
+  const dot = !m ? null : m.status === 'suspended' || behind ? STATUS_DOT.attention : m.visibility === 'public' ? STATUS_DOT.healthy : TONE_FILL.info;
   const label = !m ? 'Share (private)' : m.status === 'suspended' ? 'Share (paused)' : `Share (${m.visibility === 'public' ? 'Library + link' : 'Link only'}${behind ? ', changes not published' : ''})`;
   return (
     <>

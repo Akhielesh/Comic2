@@ -27,7 +27,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController } from '../types';
 import { boardTabsFor } from './boardNavigation';
-import { ACCENT_SOFT_BG, CLIP_TEXT, HAIRLINE, OVERLINE, RADIUS_PANEL, WRAP_TEXT } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, CLIP_TEXT, FOCUS_RING, HAIRLINE, OVERLINE, RADIUS_PANEL, STATUS_SURFACE, WRAP_TEXT } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -227,7 +227,7 @@ const TabBadge: React.FC<{ children: React.ReactNode; active: boolean }> = ({ ch
     className={cx(
       // The 11 px step of the chrome scale (--ds-text-xs; it follows the user's text size), not a spelled 10 px (FX-15).
       'min-w-[1.25rem] rounded-full px-1.5 py-px text-center text-[length:var(--ds-text-xs)] font-semibold tabular-nums leading-4',
-      active ? 'bg-[#D97757]/15 text-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
+      active ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
     )}
   >
     {children}
@@ -297,7 +297,7 @@ export const BoardPane: React.FC<{ studio: StudioController; navigation?: 'inlin
     return (
       <div className="flex h-full min-h-0 flex-col" aria-busy={studio.loading || undefined}>
         {studio.loadError ? (
-          <div role="alert" className="m-4 rounded-2xl border border-red-500/25 bg-red-500/[0.06] p-4 text-[13px] text-[var(--ds-ink)]">
+          <div role="alert" className={`m-4 rounded-2xl border ${STATUS_SURFACE.error} p-4 text-[13px] text-[var(--ds-ink)]`}>
             <p className="font-semibold">Couldn’t open this comic.</p>
             <p className="mt-1 text-[var(--ds-muted)]">{studio.loadError}</p>
             <GhostButton size="sm" className="mt-3" onClick={() => void studio.refresh()}>
@@ -369,8 +369,8 @@ export const BoardPane: React.FC<{ studio: StudioController; navigation?: 'inlin
                   onClick={() => setTab(t.id)}
                   onKeyDown={(e) => onTabKey(e, i)}
                   className={cx(
-                    'inline-flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-xl px-2 py-1.5 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 sm:px-2.5 coarse:min-h-[44px] coarse:px-3',
-                    active ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                    `inline-flex shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-xl px-2 py-1.5 text-[13px] font-medium transition-all duration-[var(--ds-motion-medium)] ${FOCUS_RING} sm:px-2.5 coarse:min-h-[44px] coarse:px-3`,
+                    active ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                   )}
                 >
                   {/* Below 600 px: labels only (the row scrolls, with a fade, when it still doesn't fit). */}

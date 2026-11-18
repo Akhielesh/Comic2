@@ -54,7 +54,7 @@ import { useFormFactor } from '../mobile/useFormFactor';
 import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
-import { OVERLINE, RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
+import { FOCUS_ITEM, FOCUS_RING, OVERLINE, RADIUS_CONTROL, SHADOW_SOFT, STATUS_SURFACE } from '../../chat/studioDesign';
 import { CLEAR } from './boardModel';
 import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
@@ -110,7 +110,7 @@ export const liveShareUrl = (studio: Pick<StudioController, 'doc' | 'publication
 };
 
 const SHEET_ROW =
-  'flex min-h-[44px] w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+  `flex min-h-[44px] w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 ${FOCUS_ITEM}`;
 
 const SheetRow: React.FC<{ icon: React.ReactNode; label: React.ReactNode; hint?: React.ReactNode; onClick: () => void; disabled?: boolean }> = ({ icon, label, hint, onClick, disabled }) => (
   <button type="button" className={SHEET_ROW} onClick={onClick} disabled={disabled}>
@@ -440,14 +440,14 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
   // `overlay`, on a solid backing so they read over the art), and the toolbar stays the first row.
   const fallbackNotice =
     L.fallback.length > 0 ? (
-      <p className={cx('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-amber-500/[0.08] px-3 py-1.5 text-[12px] text-[var(--ds-ink)]', !compactH && 'mx-3 mt-2')} role="status">
+      <p className={cx(`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-1.5 text-[12px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`, !compactH && 'mx-3 mt-2')} role="status">
         <span className="min-w-0">
           {L.fallback.length} {L.fallback.length === 1 ? 'line is' : 'lines are'} still shown in {languageSpec(source)?.english || source} — not translated yet.
         </span>
         <button
           type="button"
           onClick={() => studio.setTab('languages')}
-          className="tap-target rounded-lg px-1.5 font-medium text-[var(--ds-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+          className={`tap-target rounded-lg px-1.5 font-medium text-[var(--ds-accent)] hover:underline ${FOCUS_RING}`}
         >
           Open Languages
         </button>
@@ -461,9 +461,9 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
           'flex shrink-0 items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]',
           !compactH && 'mx-3 mt-2',
           state.kind === 'error'
-            ? 'border-red-500/25 bg-red-500/[0.06]'
+            ? STATUS_SURFACE.error
             : state.kind === 'done' && state.tone === 'warn'
-              ? 'border-amber-500/30 bg-amber-500/[0.08]'
+              ? STATUS_SURFACE.attention
               : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
         )}
       >
@@ -484,7 +484,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
             type="button"
             aria-label="Dismiss"
             onClick={() => set({ kind: 'idle' })}
-            className="tap-target grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`tap-target grid h-7 w-7 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
           >
             <X className="h-3.5 w-3.5" aria-hidden />
           </button>

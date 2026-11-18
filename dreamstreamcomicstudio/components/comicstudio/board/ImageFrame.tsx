@@ -25,7 +25,7 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { VersionStack } from '../timeline/VersionStack';
 import { TimelineDialog } from '../timeline/ui';
 import { isFreshRender } from './boardModel';
-import { OVERLINE, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { GhostButton, cx } from './ui';
 
 // ── Variant sources (contract §13.4) ─────────────────────────────────────────
@@ -205,7 +205,7 @@ export const ImageFrame: React.FC<ImageFrameProps> = ({
         type="button"
         onClick={onClick}
         aria-label={clickLabel || alt}
-        className={cx(frame, 'block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45')}
+        className={cx(frame, `block text-left ${FOCUS_RING}`)}
         style={style}
       >
         {body}
@@ -346,13 +346,13 @@ export const VersionStrip: React.FC<{
                 aria-label={v.name}
                 title={v.current ? 'Current version' : v.blocked ? 'Hidden by the content check' : 'Use this version (free)'}
                 className={cx(
-                  'tap-target relative block w-16 overflow-hidden rounded-lg border bg-[var(--ds-well)] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
-                  v.current ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/50 disabled:opacity-50'
+                  `tap-target relative block w-16 overflow-hidden rounded-lg border bg-[var(--ds-well)] transition-all duration-[var(--ds-motion-medium)] ${FOCUS_RING}`,
+                  v.current ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-ds-accent/50 disabled:opacity-50'
                 )}
                 style={{ aspectRatio: typeof aspect === 'number' ? String(aspect) : aspect }}
               >
                 {u ? <img src={u} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-contain" /> : <span className={cx('absolute inset-0', !v.blocked && 'studio-shimmer')} aria-hidden />}
-                {v.current && <span className="absolute inset-x-0 bottom-0 bg-[var(--ds-accent)] py-px text-center text-[9px] font-semibold text-white">Current</span>}
+                {v.current && <span className="absolute inset-x-0 bottom-0 bg-[var(--ds-accent-fill)] py-px text-center text-[9px] font-semibold text-[var(--ds-on-accent)]">Current</span>}
               </button>
             </li>
           );

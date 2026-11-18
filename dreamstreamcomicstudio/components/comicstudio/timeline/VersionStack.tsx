@@ -30,6 +30,7 @@ import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
 import { PageHistoryLink } from '../history/EntryLinks';
 
+import { STATUS_SURFACE } from '../../chat/studioDesign';
 export interface VersionStackProps {
   studio: StudioController;
   target: RenderTarget;
@@ -131,7 +132,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
             className={cx(
               'tap-target relative shrink-0 overflow-hidden rounded-lg border bg-[var(--ds-well)]',
               FOCUS_RING,
-              on ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/50'
+              on ? 'border-[var(--ds-accent)] ring-1 ring-[var(--ds-accent)]' : 'border-[var(--ds-hairline)] hover:border-ds-accent/50'
             )}
             style={{ width: compact ? 44 : 52, aspectRatio: String(assetRatio(doc, v.asset)), maxHeight: compact ? 66 : 80 }}
           >
@@ -153,7 +154,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       onClick={() => use(selected)}
       title={busy ? `${label} is drawing — switch when it's done.` : undefined}
       className={cx(
-        'tap-target inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-[var(--ds-accent)] px-4 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45',
+        'tap-target inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-[var(--ds-accent-fill)] px-4 text-[13px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45',
         FOCUS_RING
       )}
     >
@@ -180,14 +181,14 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
   );
 
   const confirmBox = confirm && (
-    <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-[var(--ds-ink)]">
+    <div role="alert" className={`rounded-xl border p-3 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
       <p>
         Using v{confirm.v.n} of {label} marks {[confirm.pages.length ? pagesPhrase(confirm.pages) : '', confirm.cover ? 'the cover' : ''].filter(Boolean).join(' and ')} out of date — they were drawn
         from the current version. Their art stays as it is; redrawing them later would cost{' '}
         {amountInSentence(cost.approx(redrawPrice(doc, 'page', byok) * confirm.pages.length + (confirm.cover ? redrawPrice(doc, 'cover', byok) : 0)))}.
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
-        <button type="button" onClick={() => commitUse(confirm.v)} className={cx('tap-target h-8 rounded-xl bg-[var(--ds-accent)] px-3 text-[12.5px] font-semibold text-white hover:bg-[var(--ds-accent-hover)]', FOCUS_RING)}>
+        <button type="button" onClick={() => commitUse(confirm.v)} className={cx('tap-target h-8 rounded-xl bg-[var(--ds-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]', FOCUS_RING)}>
           Use v{confirm.v.n} anyway
         </button>
         <button type="button" onClick={() => setConfirm(null)} className={cx('tap-target h-8 rounded-xl border border-[var(--ds-hairline)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', FOCUS_RING)}>
@@ -298,7 +299,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       </div>
       {confirmBox}
       {selected.current && selected.stale && staleKind && (
-        <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
+        <p className={`rounded-xl border px-3 py-2 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
           This version was drawn before the latest script or style changes, so it shows as out of date. Pick another version (free) or redraw it (
           {cost.approx(redrawPrice(doc, staleKind, byok))}) from the page menu.
         </p>
@@ -306,7 +307,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
       {/* "Use this version" is an instant render_use patch, so the version UI says what the old
           round-trip did (P1-CLIENTSTATE): a shape that doesn't match the book gets a free fit. */}
       {selected.current && selected.mismatch && staleKind && !busy && (
-        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
           <p className="min-w-0 flex-1">
             This version is {selected.shape}; the book is {doc.format.pageAspect}. Fit it to the page for free, or pick another version.
           </p>

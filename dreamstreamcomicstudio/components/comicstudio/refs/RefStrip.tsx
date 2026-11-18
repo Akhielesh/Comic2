@@ -15,7 +15,7 @@ import type { RefOwner } from '../../../shared/comic/doc';
 import { capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { effectiveRating } from '../../../shared/comic/safety';
 import { byokFromDoc } from '../board/boardModel';
-import { TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import type { StudioController } from '../types';
@@ -39,7 +39,7 @@ export interface RefStripProps {
   transport?: UploadTransport;
 }
 
-const TILE = 'relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50';
+const TILE = `relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] ${FOCUS_RING}`;
 
 export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOpen, hideSheetHint, className, transport }) => {
   const doc = studio.doc;
@@ -69,7 +69,7 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
   return (
     <div className={cx('min-w-0', className)}>
       <div
-        className={cx('flex min-w-0 items-center gap-2 overflow-x-auto rounded-2xl p-1 [scrollbar-width:thin]', dropping && 'bg-[#D97757]/10 ring-2 ring-[#D97757]/60')}
+        className={cx('flex min-w-0 items-center gap-2 overflow-x-auto rounded-2xl p-1 [scrollbar-width:thin]', dropping && 'bg-[var(--ds-accent-soft)] ring-2 ring-ds-accent/60')}
         onDragOver={(e) => {
           if (Array.from(e.dataTransfer?.types || []).includes('Files')) {
             e.preventDefault();
