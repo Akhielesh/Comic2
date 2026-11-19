@@ -94,3 +94,27 @@ export function useAccountSettingsListener(handler: (tab: SettingsTab, opts: Acc
     return () => window.removeEventListener(ACCOUNT_SETTINGS_EVENT, onRequest);
   }, []);
 }
+
+// ── Back from Settings ───────────────────────────────────────────────────────────────────────────────────────────
+
+export interface SettingsBackInput<V extends string> {
+  /** The view Settings was opened from; null when Settings was reached by its address (a deep link, a reload). */
+  returnView: V | null;
+  /** The resume point the request carried. */
+  resume: AccountResume | null;
+  /** A comic is still open (the reader's comic). */
+  hasActiveProject: boolean;
+  comicsHost: boolean;
+  signedIn: boolean;
+}
+
+/**
+ * Where Back from Settings goes (App's onClose): the view it was opened from, with the New comic form again when the
+ * request came from it; a reader whose comic is gone goes to My comics; a Settings page reached by its address goes to
+ * My comics on the comics host when signed in (the person's own home there), else to the home page.
+ */
+export const settingsBackTarget = <V extends string>(input: SettingsBackInput<V>): { view: V | 'dashboard' | 'home'; newComic: boolean } => {
+  if (input.returnView === null) return { view: input.comicsHost && input.signedIn ? 'dashboard' : 'home', newComic: false };
+  if (input.returnView === 'reader' && !input.hasActiveProject) return { view: 'dashboard', newComic: false };
+  return { view: input.returnView, newComic: input.resume === 'new-comic' && input.returnView === 'dashboard' };
+};

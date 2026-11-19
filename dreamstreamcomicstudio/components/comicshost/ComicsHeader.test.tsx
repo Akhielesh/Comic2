@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RADIUS_ROUND } from '../chat/studioDesign';
 import { ComicsHeader, type ComicsHeaderProps } from './ComicsHeader';
 import { ComicsMark } from './ComicsMark';
+import { AccountProvider } from '../account/AccountContext';
 
 afterEach(() => {
   cleanup();
@@ -31,6 +32,14 @@ const props = (over: Partial<ComicsHeaderProps> = {}): ComicsHeaderProps => ({
   onShowSection: vi.fn(),
   ...over
 });
+/** Signed in, App fills the account context: the header's account menu shows the person's initial. */
+const PERSON = { id: 'person-1', name: 'Ada Example', initial: 'A', username: 'ada', avatarUrl: null };
+const renderHeader = (p: ComicsHeaderProps) =>
+  render(
+    <AccountProvider value={{ person: p.signedIn ? PERSON : null, staff: false, onSignedOut: () => undefined }}>
+      <ComicsHeader {...p} />
+    </AccountProvider>
+  );
 const menuRows = () => {
   const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
   return within(menu).queryAllByRole('button', { hidden: true }).map((b) => b.textContent);
@@ -117,7 +126,7 @@ describe('ComicsHeader', () => {
       [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics']]
     ];
     for (const [over, rows] of cases) {
-      const { unmount } = render(<ComicsHeader {...props(over)} />);
+      const { unmount } = renderHeader(props(over));
       expect(menuRows(), JSON.stringify(over)).toEqual(rows);
       // Public pages keep an explicit way home beside the current Library destination.
       const nav = screen.getByRole('navigation', { name: 'Comic Studio' });
@@ -129,19 +138,35 @@ describe('ComicsHeader', () => {
     }
   });
 
-  it('keeps account settings and My comics available from the signed-in Library menu', () => {
+  it('signed in: the account menu sits at the right end; the menu toggle is the plain Menu, gone from expanded, with no Account settings row', () => {
     const p = props({ signedIn: true, page: 'other', current: 'gallery', onOpenAccount: vi.fn() });
-    render(<ComicsHeader {...p} />);
-    const trigger = screen.getByRole('button', { name: 'Account and navigation' });
-    fireEvent.click(trigger);
+    renderHeader(p);
+    const actions = screen.getByRole('banner').querySelector('[data-region="actions"]') as HTMLElement;
+    const account = within(actions).getByRole('button', { name: 'Account and settings' });
+    expect(account.textContent).toBe('A');
+    // The right end: the account menu is the actions' last control.
+    expect(actions.lastElementChild?.contains(account)).toBe(true);
+    const toggle = within(actions).getByRole('button', { name: 'Menu' });
+    expect(toggle.className.split(/\s+/)).toContain('expanded:hidden');
+    expect(within(actions).queryByRole('button', { name: 'Account and navigation' })).toBeNull();
+    fireEvent.click(toggle);
     const menu = within(document.querySelector('[data-slot="comics-menu"]') as HTMLElement);
     expect(menu.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'page');
-    fireEvent.click(menu.getByRole('button', { name: 'Account settings' }));
-    expect(p.onOpenAccount).toHaveBeenCalledOnce();
-    expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(trigger);
-    fireEvent.click(menu.getByRole('button', { name: 'My comics' }));
+    expect(menu.queryByRole('button', { name: 'Account settings' })).toBeNull();
+    // My comics stays in the menu below 600, where the header button steps aside (comicsShell.css).
+    const myComics = menu.getByRole('button', { name: 'My comics' });
+    expect((myComics.closest('li') as HTMLElement).className.split(/\s+/)).toContain('medium:hidden');
+    fireEvent.click(myComics);
     expect(p.onOpenComics).toHaveBeenCalledOnce();
+    expect(p.onOpenAccount).not.toHaveBeenCalled();
+    // The menu container is gone from expanded for everyone now (nothing account-only lives in it).
+    expect((document.querySelector('[data-slot="comics-menu"]')!.parentElement as HTMLElement).className.split(/\s+/)).toContain('expanded:hidden');
+  });
+
+  it('signed out: Appearance alone, no account trigger', () => {
+    renderHeader(props({ signedIn: false, page: 'other' }));
+    expect(screen.queryByRole('button', { name: 'Account and settings' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Appearance: Light' })).toBeInTheDocument();
   });
 
   it('on the sign-in page the header offers neither Sign in nor Register interest (the card switches between them); on the Library its link is the current page', () => {
@@ -163,11 +188,11 @@ describe('ComicsHeader', () => {
     expect(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
   });
 
-  it('appearance: no Palette toggle; the Appearance button sits in the actions (from 600) and the compact menu ends with the Appearance group (below 600)', () => {
-    for (const over of [{ signedIn: false, page: 'home' }, { signedIn: true, page: 'other' }] as const) {
-      const { unmount } = render(<ComicsHeader {...props(over)} />);
+  it('appearance: no Palette toggle; signed out, the Appearance button sits in the actions (from 600) and the compact menu ends with the Appearance group (below 600)', () => {
+    const { unmount: un } = renderHeader(props({ signedIn: false, page: 'home' }));
+    {
       const banner = screen.getByRole('banner');
-      expect(within(banner).queryByRole('button', { name: /theme/i }), JSON.stringify(over)).toBeNull();
+      expect(within(banner).queryByRole('button', { name: /theme/i })).toBeNull();
       const actions = banner.querySelector('[data-region="actions"]') as HTMLElement;
       const button = within(actions).getByRole('button', { name: 'Appearance: Light' });
       // Hidden below 600 by its class (comicsShell.css), where the menu carries the same choice. The class sits on the
@@ -183,14 +208,19 @@ describe('ComicsHeader', () => {
       expect(row.className.split(/\s+/)).toContain('comics-header-menu-theme');
       expect(row.parentElement?.lastElementChild).toBe(row);
       expect(within(row).getByText('Appearance')).toBeInTheDocument();
-      unmount();
     }
+    un();
+    // Signed in, Appearance has one home: the account panel (the header carries neither the button nor the group).
+    renderHeader(props({ signedIn: true, page: 'other' }));
+    const banner = screen.getByRole('banner');
+    expect(within(banner).queryByRole('button', { name: /^Appearance/ })).toBeNull();
+    expect(within(document.querySelector('[data-slot="comics-menu"]') as HTMLElement).queryByRole('radiogroup', { name: 'Appearance', hidden: true })).toBeNull();
   });
 
   it('one overlay at a time: opening Appearance closes the menu, and pressing the menu trigger closes Appearance', () => {
-    render(<ComicsHeader {...props({ signedIn: true, page: 'other', onOpenAccount: vi.fn() })} />);
+    renderHeader(props({ signedIn: false, page: 'other' }));
     const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
-    const trigger = screen.getByRole('button', { name: 'Account and navigation' });
+    const trigger = screen.getByRole('button', { name: 'Menu' });
     fireEvent.click(trigger);
     expect(menu).not.toHaveAttribute('hidden');
     const appearance = screen.getByRole('button', { name: /^Appearance: / });
@@ -204,6 +234,18 @@ describe('ComicsHeader', () => {
     expect(menu).not.toHaveAttribute('hidden');
     expect(appearance).toHaveAttribute('aria-expanded', 'false');
     expect(document.querySelector('[data-slot="appearance-panel"]')).toBeNull();
+  });
+
+  it('one overlay at a time, signed in: opening the account menu closes the compact menu', () => {
+    renderHeader(props({ signedIn: true, page: 'other' }));
+    const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(menu).not.toHaveAttribute('hidden');
+    const account = screen.getByRole('button', { name: 'Account and settings' });
+    fireEvent.pointerDown(account);
+    fireEvent.click(account);
+    expect(account).toHaveAttribute('aria-expanded', 'true');
+    expect(menu).toHaveAttribute('hidden');
   });
 
   it('choosing Dark in the compact menu darkens the page at once and keeps the menu open', () => {

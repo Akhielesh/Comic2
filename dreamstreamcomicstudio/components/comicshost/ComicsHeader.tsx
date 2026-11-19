@@ -1,9 +1,10 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Menu as MenuIcon, UserRound, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Menu as MenuIcon, X } from 'lucide-react';
 import type { ComicsHeaderCurrent } from './hostRouting';
 import { cn } from '../../lib/utils';
 import { ARROW_NUDGE, DENSITY, FOCUS_RING, OVERLAY, RADIUS_CONTROL, RADIUS_ROUND } from '../chat/studioDesign';
 import { AppearanceButton, AppearanceSegmented } from '../account/AppearanceControl';
+import { AccountMenu } from '../account/AccountMenu';
 import { AppHeader } from '../ds/AppHeader';
 import { Button } from '../ds/Button';
 import { IconButton } from '../ds/IconButton';
@@ -32,7 +33,10 @@ export interface ComicsHeaderProps {
   /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's Register interest tab. */
   onRequestAccess: () => void;
   onOpenComics: () => void;
-  /** Opens account settings with the current Comic Studio page as its return destination. */
+  /**
+   * Unused since the account menu (navtheme NT-2a): signed in, the header's AccountMenu opens Settings through
+   * components/account/accountNav.ts, which App answers with the page as Back's destination. Kept so callers compile.
+   */
   onOpenAccount?: () => void;
   onBrowseGallery: () => void;
   onShowSection?: (id: ComicsSectionId) => void;
@@ -59,6 +63,8 @@ interface MenuEntry {
   /** A hairline above it (the access row after the links). */
   separated?: boolean;
   current?: boolean;
+  /** Classes on the row's item (show/hide by width). */
+  className?: string;
 }
 
 export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
@@ -69,7 +75,6 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   onSignIn,
   onRequestAccess,
   onOpenComics,
-  onOpenAccount,
   onBrowseGallery,
   onShowSection
 }) => {
@@ -81,7 +86,6 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   const home = page === 'home';
   const onLibrary = !home && current === 'gallery';
   const onSignInPage = !home && current === 'auth';
-  const accountMenu = signedIn && !!onOpenAccount;
 
   // Close on Esc (focus back to the trigger) and on a press outside the header. Listeners only while open.
   useEffect(() => {
@@ -112,10 +116,8 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
     ...(sections ? SECTION_LINKS.map((link) => ({ label: link.label, run: () => onShowSection!(link.id) })) : []),
     { label: 'Library', run: onBrowseGallery, current: onLibrary },
     ...(signedIn
-      ? [
-        { label: 'My comics', run: onOpenComics, separated: true },
-        ...(onOpenAccount ? [{ label: 'Account settings', run: onOpenAccount }] : [])
-      ]
+      ? // Below 600 the header's My comics steps aside (comicsShell.css), so the menu carries it there and only there.
+        [{ label: 'My comics', run: onOpenComics, separated: true, className: 'medium:hidden' }]
       : onSignInPage
         ? [] // the sign-in card itself switches between Sign in and Register interest
         : [{ label: 'Register interest', run: onRequestAccess, separated: true }])
@@ -154,8 +156,8 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
   const actions = (
     <>
       {/* One overlay at a time: opening Appearance closes the menu (a press on the menu trigger closes Appearance, as
-          any press outside it does). */}
-      <AppearanceButton paper wrapperClassName="comics-header-theme" onOpenChange={(opened) => opened && setOpen(false)} />
+          any press outside it does). Signed in, Appearance lives in the account menu instead. */}
+      {!signedIn && <AppearanceButton paper wrapperClassName="comics-header-theme" onOpenChange={(opened) => opened && setOpen(false)} />}
       {signedIn ? (
         <Button variant={home ? 'outline' : 'default'} className={cn(RADIUS_ROUND, 'comics-header-entry comics-header-my-comics', !home && 'comics-primary-action')} onClick={onOpenComics}>
           My comics
@@ -186,36 +188,40 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
       )}
       <IconButton
         ref={triggerRef}
-        label={accountMenu ? 'Account and navigation' : 'Menu'}
+        label="Menu"
         variant="ghost"
         aria-expanded={open}
         aria-controls={menuId}
-        className={cn(RADIUS_ROUND, 'comics-header-menu-toggle border border-[var(--ds-hairline)]', !accountMenu && 'expanded:hidden')}
+        className={cn(RADIUS_ROUND, 'comics-header-menu-toggle border border-[var(--ds-hairline)] expanded:hidden')}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? <X aria-hidden /> : accountMenu ? <UserRound aria-hidden /> : <MenuIcon aria-hidden />}
+        {open ? <X aria-hidden /> : <MenuIcon aria-hidden />}
       </IconButton>
+      {/* The account menu at the right end (navtheme NT-2a): the same one as the New comic frame's. */}
+      {signedIn && <AccountMenu paper onOpenChange={(opened) => opened && setOpen(false)} />}
     </>
   );
 
   return (
     <AppHeader ref={headerRef} brand={brand} nav={nav} actions={actions} className="comics-header" innerClassName="comics-shell-width">
-      <div className={cn('comics-shell-width pointer-events-none absolute inset-x-0 top-full flex justify-end', !accountMenu && 'expanded:hidden')}>
+      <div className="comics-shell-width pointer-events-none absolute inset-x-0 top-full flex justify-end expanded:hidden">
         <div id={menuId} hidden={!open} data-slot="comics-menu" className={cn(OVERLAY, 'comics-header-menu ds-scale-in pointer-events-auto mt-2 w-72 origin-top-right p-1')}>
           <ul className="flex flex-col">
             {menu.map((entry) => (
-              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1')}>
+              <li key={entry.label} className={cn(entry.separated && 'mt-1 border-t border-[var(--ds-hairline)] pt-1', entry.className)}>
                 <button type="button" aria-current={entry.current ? 'page' : undefined} className={MENU_ROW} onClick={choose(entry.run)}>
                   {entry.label}
                 </button>
               </li>
             ))}
-            {/* Below 600 the header's Appearance button steps aside (comicsShell.css) and the choice lives here; it stays
-                open while the person compares the looks. */}
-            <li className="comics-header-menu-theme mt-1 border-t border-[var(--ds-hairline)] px-2 pb-2 pt-2">
-              <p aria-hidden="true" className="mb-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]">Appearance</p>
-              <AppearanceSegmented paper fullWidth size="sm" />
-            </li>
+            {/* Signed out, below 600 the header's Appearance button steps aside (comicsShell.css) and the choice lives
+                here; it stays open while the person compares the looks. Signed in, the account menu holds it. */}
+            {!signedIn && (
+              <li className="comics-header-menu-theme mt-1 border-t border-[var(--ds-hairline)] px-2 pb-2 pt-2">
+                <p aria-hidden="true" className="mb-2 text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)]">Appearance</p>
+                <AppearanceSegmented paper fullWidth size="sm" />
+              </li>
+            )}
           </ul>
         </div>
       </div>
