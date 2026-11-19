@@ -790,11 +790,68 @@ each needing a component change Comic Studio has no shared primitive for yet:
 
 ## The comics home (Atlas public composition)
 
-The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) pairs the create and Library
-actions with a two-page sample reader. The six style previews change both sample pages while keeping the reader's place.
-Artwork lives in `public/assets/comic-sample` and uses the same scene and cast across every style. The Comic Studio
-library also uses the bundled thumbnails when a published preview is unavailable. Page turns move the visible spread,
-and style changes fade in the new art. Reduced motion makes both transitions immediate.
+The landing of comics.dreamstreamstudio.ai (`components/comicshost/ComicsLanding.tsx`) is the product's front page. In
+order, each `<section>` named by its own heading and reachable as `…/#id`: the hero (`#top`, a two-page sample reader
+beside it), `#features`, `#looks`, `#how-it-works`, `#models`, `#pricing`, `#read`, `#register`, `#faq`, then the footer.
+The six style previews change both sample pages while keeping the reader's place. Artwork lives in
+`public/assets/comic-sample` and uses the same scene and cast across every style. The Comic Studio library also uses the
+bundled thumbnails when a published preview is unavailable. Page turns move the visible spread, and style changes fade in
+the new art. Reduced motion makes both transitions immediate.
+
+- **Hero actions.** Sign-up is closed, so signed out the one filled action is "Register your interest": it scrolls to
+  `#register` on the same page and puts the cursor in the form. Beside it, the outline "Read comics" opens the Library;
+  under them, "Already a member? Sign in" (the header keeps its own Sign in). Signed in: "Start creating" and "Browse the
+  Library". The header's in-page links are Features, Looks and Pricing; on the landing its join row reads "Register
+  interest" and scrolls to the same form (elsewhere it is still the sign-in card's "Request access").
+- **Sections below the looks** live in `components/comicshost/landing/` with their styles in `landing/landing.css`, both in
+  the landing's lazy chunk: nothing about them reaches the first-load stylesheet of index.html. Every sentence is in
+  `landing/landingCopy.ts`; every model name and number comes from the registries through `landing/landingModels.ts`
+  (the Draft and Standard tiers' image model by the nickname members see in the picker, the picker's other pickable
+  models, the Draft and Standard page sizes, `DOC_LIMITS.pages`, `STYLE_PRESETS.length`, `LANGUAGES.length - 1`); no
+  registry id, price or benchmark leaves that module, and the Models section says the line-up can change.
+- **Features.** Four rows, each a few lines beside one real studio screen: the Director's plan card, the page editor's
+  lettering tools, the language picker and the Share sheet. Each row leads with a solid icon tile (ink, magenta, leaf,
+  sky; never orange or ultramarine).
+- **Pricing** says only what is certain: an invite-only beta, sign-up not open yet, no prices announced, registering
+  interest costs nothing. Models and Pricing carry no colour.
+- **Read.** The Library (a real `/?view=gallery` link) and the featured comics through their share links, kept in
+  `landing/flagship.ts` (the flagship opens its English edition), beside a short clip of the reader on a phone.
+- **Register your interest** renders the app's `WaitlistForm` (`kind="access"`) as it is: the form owns its fields, its
+  questions and what it says after sending. Members see "Open My comics" instead. Below 640 px `landing.css` gives the
+  form's stacked fields their own height back (a `flex-1` field in a column otherwise drew about 20 px tall in a narrow
+  desktop window).
+- **Questions** are native `<details className="ds-disclosure">`; the footer adds a row of links to the page's sections.
+
+### The landing's pictures and clip
+
+`landing/landingMedia.ts` lists them; `LandingShot` draws a still (`loading="lazy"`, `decoding="async"`, declared size,
+alt text), `LandingClip` the clip. Files live in `public/landing/` on the same origin, light and dark for each still;
+the reader is dark in both themes, so one recording serves both. Each file stays near 120 KB (`landingMedia.test.ts`
+pins the cap, the file list, the 2x still sizes and the alt text). The clip is muted and loops, loads nothing until it nears
+the screen (`preload="none"`), plays only while at least half of it is in view (an `IntersectionObserver`, no timer),
+one clip at a time, and under reduced motion shows its poster with a Play control; a visitor's pause holds.
+
+#### How the landing pictures were made
+
+They are real Comic Studio screens, captured from the QA app (the real components on the sample fixture `heist-12p`),
+never from production and never from anyone's comic. The fixture's page, cover and sheet images (`img=png`, requests to
+`/qa-assets/…`) were answered at capture time with the product's own sample art from `public/assets/comic-sample`
+(pages: two sample tiers on paper; the cover: The Paper Boat's), so every picture shows art made for the product.
+
+1. Build the QA app (`npm run qa:build`) and serve `dist-qa` with `vite preview` on `127.0.0.1`. The capture scripts
+   (Playwright with the local Chromium, kept outside the repository) block every other host.
+2. Stills, at device scale 2, `skin=atlas&img=png&still=1`, light and dark (`theme=`): the plan card
+   (`surface=studio&tab=pages`, cut above its footnote), the page editor's lettering column in a 1024 px window, where
+   the page is drawn largest (`surface=editor&page=1&mode=pro`, cut before the AI panel and its usage words), the
+   language picker (`surface=studio&tab=languages` after "Add a language") and the Share sheet's link column
+   (`share=live-public`, cut above the embed code and the readers' numbers).
+3. The clip: `surface=reader&page=1` at 390×700 as a touch phone, two page turns forward and two back, ending on the
+   first page so the loop is seamless.
+4. Encode with ffmpeg: stills `-c:v libwebp -quality 75 -compression_level 6` (65 for the lettering page, whose art is
+   busy) at twice the display width; the clip at 280 px wide, 15 fps, as WebM (`libvpx-vp9 -crf 48`) and MP4
+   (`libx264 -crf 34`), its poster the first frame.
+5. Look at every frame before committing it: no price or usage words, no spend control, no model name, no error or
+   failed tile, nothing only admins see.
 
 `ComicsHeader` uses the shared `AppHeader`. Its appearance control switches between Atlas and Paper, which is also
 available under Settings → Appearance in the editor. The preference is saved in the browser. Both appearances follow
@@ -823,6 +880,7 @@ on the header's paper in both themes. The page bodies:
   text in a 3xl reading column on `SECTION_CARD`, styled by `LEGAL_PROSE` (the app ships no typography plugin). No
   Back button: the header's lockup goes home.
 
-The signed-out hero's “Start creating” is the landing's single filled action. The footer links to the Library, privacy,
-terms and the routed support mailbox. `comicsHome.guard.test.ts` checks the landing and its shared components against the
-design-system guards.
+The hero holds the landing's one filled action ("Register your interest" signed out, "Start creating" signed in); the
+form's own submit is the only other fill, far below it. The footer links to the page's sections, the Library, privacy,
+terms and the routed support mailbox. `comicsHome.guard.test.ts` checks the landing, its sections in `landing/` and its
+shared components against the design-system guards.

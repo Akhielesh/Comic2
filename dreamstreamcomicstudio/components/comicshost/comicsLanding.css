@@ -64,6 +64,7 @@
 }
 
 .comics-invitation-link { min-height: 44px; background-image: none; }
+.comics-invitation-line { display: block; }
 
 .comics-sample {
   min-width: 0;
