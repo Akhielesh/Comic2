@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import type { Gate } from '../../../shared/comic/doc';
 import { formatUsd } from '../../../shared/comic/models';
 import { quoteRenderPages } from '../../../shared/comic/plan';
 import { PagesTab, DENSITY_KEY } from './PagesTab';
@@ -12,6 +13,23 @@ const card = (n: number) => screen.getByRole('article', { name: `Page ${n}` });
 /** An own-key studio: prices are real dollars. */
 const dollarStudio = (doc = makeSampleDoc()) => makeStudio(doc, { caps: { ...DEFAULT_CAPS, byok: true } });
 const governedStudio = (doc = makeSampleDoc()) => makeStudio(doc, { caps: { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 70, exhausted: false, pctPerStandardPage: 1.5 } } });
+/** An approval as the server stores it; the board's banner above the tab shows its title, price and Approve. */
+const gateFor = (action: Gate['action'], status: Gate['status'] = 'open'): Gate => ({
+  id: 'gate_1',
+  action,
+  title: 'Draw 3 pages',
+  summary: '3 pages',
+  estimateUsd: 0.2,
+  imageCount: 3,
+  model: 'Nano Banana 2.1',
+  createdAt: SAMPLE_NOW,
+  status,
+  reason: 'policy'
+});
+const gatedDoc = (gate: Gate) => makeSampleDoc((d) => (d.gate = gate));
+/** The Pages header: the plan line, the draw-all and its price, the cover option, the selection bar. */
+const header = () => document.querySelector('[data-pages-header]') as HTMLElement;
+const DRAW_ALL = /^(Approve & render all|Render (all|remaining))/;
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);
@@ -75,6 +93,21 @@ describe('PagesTab', () => {
     render(<PagesTab studio={studio} doc={studio.doc!} />);
     expect(within(card(3)).getByText(/Queued · Nano Banana 2.1/)).toBeInTheDocument();
     expect(within(card(4)).getByText(/Drawing · 12s · Nano Banana 2.1/)).toBeInTheDocument();
+  });
+
+  it('a drawing page is calm: its status chip and its overlay keep a static dot and the word, nothing pulses (C9)', () => {
+    const studio = makeStudio();
+    const { container } = render(<PagesTab studio={studio} doc={studio.doc!} />);
+    const drawing = card(4);
+    expect(drawing).toHaveAttribute('data-status', 'rendering');
+    // The words carry the state: the chip says Drawing, the overlay says Drawing with its clock.
+    expect(within(drawing).getByText('Drawing')).toBeInTheDocument();
+    expect(within(drawing).getByText(/^Drawing · 12s/)).toBeInTheDocument();
+    // Both dots are still there (the chip's and the overlay pill's), and neither moves.
+    const dots = Array.from(drawing.querySelectorAll('span[aria-hidden]')).filter((el) => /\bh-1\.5 w-1\.5 rounded-full\b/.test(el.getAttribute('class') || ''));
+    expect(dots).toHaveLength(2);
+    for (const dot of dots) expect(dot.getAttribute('class')).not.toMatch(/animate-/);
+    expect(container.querySelectorAll('[class*="animate-pulse"]')).toHaveLength(0);
   });
 
   it('stale pages carry the amber badge and a re-render with its price', () => {
@@ -154,6 +187,48 @@ describe('PagesTab', () => {
     expect(note).toHaveTextContent('the cover');
     fireEvent.click(button);
     expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', includeCover: true });
+  });
+
+  it('while a page-render approval is open, the banner above holds its one price: no Draw-all, no second price, one muted line', () => {
+    for (const studio of [dollarStudio(gatedDoc(gateFor({ type: 'render_pages' }))), governedStudio(gatedDoc(gateFor({ type: 'render_pages' })))]) {
+      const { unmount } = render(<PagesTab studio={studio} doc={studio.doc!} />);
+      expect(screen.queryByRole('button', { name: DRAW_ALL })).toBeNull();
+      expect(document.getElementById('pages-draw-all-price')).toBeNull();
+      // The cover option belongs to the draw-all (and carries its own price): it waits with it.
+      expect(screen.queryByRole('checkbox', { name: /Include the cover/ })).toBeNull();
+      const line = within(header()).getByText('Waiting for your OK above');
+      expect(line.className).toContain('text-[var(--ds-muted)]');
+      // No price of any kind in the header: never "$", never usage words.
+      expect(header().textContent).not.toMatch(/\$|¢|usage/);
+      // The free plan approval stays; it spends nothing.
+      expect(within(header()).getByRole('button', { name: 'Approve plan only' })).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('an open approval for something else (character sheets) keeps the Draw-all and its price', () => {
+    const studio = dollarStudio(gatedDoc(gateFor({ type: 'render_sheets' })));
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    const button = screen.getByRole('button', { name: 'Approve & render all' });
+    expect(document.getElementById(button.getAttribute('aria-describedby')!)).toHaveTextContent(/≈ \$\d/);
+    expect(screen.getByRole('checkbox', { name: /Include the cover/ })).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for your OK above')).toBeNull();
+  });
+
+  it.each(['approved', 'declined'] as const)('a %s page-render approval is closed: the Pages header is as without one', (status) => {
+    const studio = dollarStudio(gatedDoc(gateFor({ type: 'render_pages' }, status)));
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    const button = screen.getByRole('button', { name: 'Approve & render all' });
+    expect(document.getElementById(button.getAttribute('aria-describedby')!)).toHaveTextContent(/≈ \$\d/);
+    expect(screen.getByRole('checkbox', { name: /Include the cover/ })).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for your OK above')).toBeNull();
+  });
+
+  it('with no approval open the header has no waiting line', () => {
+    const studio = dollarStudio();
+    render(<PagesTab studio={studio} doc={studio.doc!} />);
+    expect(within(header()).getByRole('button', { name: 'Approve & render all' })).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for your OK above')).toBeNull();
   });
 
   it('governed users never see dollars on the Pages tab', () => {

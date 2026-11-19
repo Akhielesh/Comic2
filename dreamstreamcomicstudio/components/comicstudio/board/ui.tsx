@@ -431,9 +431,8 @@ export const StatusChip: React.FC<{ status: VisualStatus; className?: string; la
             : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-muted)]';
   return (
     <span className={cx('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold', tone, className)}>
-      {(status === 'rendering' || status === 'queued') && (
-        <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && 'animate-pulse')} aria-hidden />
-      )}
+      {/* A static dot: the word says Drawing / Queued, and a board full of chips never pulses (calm motion, C9). */}
+      {(status === 'rendering' || status === 'queued') && <span className="h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]" aria-hidden />}
       {label || STATUS_TEXT[status]}
     </span>
   );
@@ -550,7 +549,8 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
             compact ? 'text-[10px]' : 'text-[11px]'
           )}
         >
-          <span className={cx('h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]', status === 'rendering' && !stuck && 'animate-pulse')} aria-hidden />
+          {/* Static, like the status chip's: the label beside it says Drawing with its clock. */}
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)]" aria-hidden />
           {status === 'queued' && !stuck ? (
             <span className="min-w-0 truncate">Queued{model ? ` · ${model}` : ''}</span>
           ) : stuck ? (

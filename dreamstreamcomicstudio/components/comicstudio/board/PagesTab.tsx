@@ -520,12 +520,15 @@ const PlanHeader: React.FC<{
   const draft = doc.planStatus !== 'approved';
   // While an approval is open its Approve is the screen's one primary action, so drawing everything steps back.
   const DrawAllButton = doc.gate?.status === 'open' ? GhostButton : PrimaryButton;
+  // A page-render approval open in the banner above IS this spend: its price is shown once, there. The draw-all, its
+  // price and its cover option wait (one muted line instead) and come back as soon as the approval closes.
+  const waitingForOk = doc.gate?.status === 'open' && doc.gate.action.type === 'render_pages';
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-pages-header>
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
           <h3 className="text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">
@@ -550,7 +553,9 @@ const PlanHeader: React.FC<{
         />
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        {toDraw > 0 && (
+        {waitingForOk ? (
+          <span className="text-[12px] leading-snug text-[var(--ds-muted)]">Waiting for your OK above</span>
+        ) : toDraw > 0 && (
           <>
             <DrawAllButton
               size="sm"
@@ -577,7 +582,7 @@ const PlanHeader: React.FC<{
           </GhostButton>
         )}
       </div>
-      {toDraw > 0 && coverOffer && (
+      {!waitingForOk && toDraw > 0 && coverOffer && (
         <label className="flex min-h-[36px] w-fit max-w-full cursor-pointer items-center gap-2 rounded-xl px-1 text-[12.5px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[44px]">
           <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[var(--ds-accent)] coarse:h-5 coarse:w-5" />
           <span className="min-w-0">
