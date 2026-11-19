@@ -53,12 +53,14 @@ beforeEach(() => {
 });
 
 describe('LibraryConsole', () => {
-  it('shows the manifest grouped by kind with procedural art, and quotes without building', async () => {
+  it('shows the manifest grouped by kind with each look\'s art, and quotes without building', async () => {
     render(<LibraryConsole />);
     expect(await screen.findByText('Platform asset library')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Style previews' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Empty states' })).toBeInTheDocument();
-    expect(document.querySelector('[data-preset-thumb="noir-ink"]')).not.toBeNull();
+    // A style entry not built yet shows the look's picture (LookArt: the bundled sample art for noir-ink).
+    expect(document.querySelector('img[src="/assets/comic-sample/noir-ink-thumb.webp"]')).not.toBeNull();
+    expect(document.querySelector('[data-preset-thumb="noir-ink"]')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Get a quote/ }));
     expect(await screen.findByText(/2 images · about \$0.07/)).toBeInTheDocument();
     expect(screen.getByText(/nothing is generated until you confirm/)).toBeInTheDocument();

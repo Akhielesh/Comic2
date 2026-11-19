@@ -760,8 +760,9 @@ const flatText = (v: unknown, max: number): string => (typeof v === 'string' ? v
 /** jobs.ts bounds for user text in actions (edit instruction, plan instructions, style directions). */
 const ACTION_TEXT_LIMITS = { instruction: 2000, instructions: 8000, directionName: 60, directionSpec: 1500 } as const;
 /**
- * Style directions screened per request. jobs.ts draws the first 4 valid ones; every valid entry up to
- * this (larger) bound is screened, so a raised job limit or padding can never slip one past the screen.
+ * Style directions screened per request. jobs.ts draws the first MAX_STYLE_DIRECTIONS (6) valid ones; every valid
+ * entry up to this (larger) bound is screened, so padding can never slip one past the screen. comic.routes.test.ts
+ * fails if the job limit ever rises above this bound.
  */
 const MAX_SCREENED_DIRECTIONS = 8;
 

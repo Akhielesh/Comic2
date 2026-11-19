@@ -744,7 +744,10 @@ describe('runDirectorTurn — never silent (contract §12.2)', () => {
   });
 
   it('production bug (b4b5774f): the reply never claims runs that already failed are under way', async () => {
-    const session = newSession(createEmptyDoc('proj-1'));
+    const doc = createEmptyDoc('proj-1');
+    // "Never ask" so the style tests start (a Director style test otherwise waits for Approve, stylepick SC-0).
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
     const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image service had a problem.', { status: 502, retryable: false }));
     let ctxRef: ReturnType<typeof testContext>;
     const allFailed = async () => {

@@ -45,7 +45,7 @@ import {
   stepLibraryRun,
   type LibraryStartResult
 } from '../../../../services/adminLibrary';
-import { PresetThumb } from '../procedural/PresetThumb';
+import { LookArt } from '../LookArt';
 import { EmptyArt, type EmptyArtVariant } from '../procedural/EmptyArt';
 
 import { cn } from '../../../../lib/utils';
@@ -120,11 +120,7 @@ const EntryArt: React.FC<{ entry: LibraryEntryView; url?: string }> = ({ entry, 
     return <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-full w-full object-cover" />;
   }
   if (preset && (entry.kind === 'style_preview' || entry.kind === 'style_anchor')) {
-    return (
-      <span className="block h-full w-full [&>*]:h-full [&>*]:w-full">
-        <PresetThumb preset={preset} />
-      </span>
-    );
+    return <LookArt presetId={preset.id} size="tile" alt="" />;
   }
   return (
     <span className="flex h-full w-full items-center justify-center">

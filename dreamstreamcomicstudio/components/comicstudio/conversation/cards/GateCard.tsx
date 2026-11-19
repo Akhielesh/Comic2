@@ -70,10 +70,12 @@ export const gateReasonCopy = (gate: Gate, doc: ComicDoc, cost: CostFormat = DOL
       const s = doc.settings;
       if (s.confirm === 'always') return 'You asked me to check before every spend.';
       // Only claim the threshold when this spend really is over it. A smaller "policy" gate is a
-      // re-quote (the price moved since a button showed it, or a chip carried no price) or a turn
-      // whose spends add up — say what is true instead of blaming a setting.
+      // re-quote (the price moved since a button showed it, or a chip carried no price), a turn
+      // whose spends add up, or a style test the user asked for (every Director style test waits for
+      // Approve, stylepick SC-0) — say what is true instead of blaming a setting.
       if (s.confirm !== 'never' && Number.isFinite(s.bigSpendUsd) && gate.estimateUsd > s.bigSpendUsd)
         return cost.governed ? 'You asked me to check before bigger spends.' : `You asked me to check before spends over ${cost.exact(s.bigSpendUsd)}.`;
+      if (gate.action.type === 'render_style_options') return 'Looks are drawn only after you approve — nothing is spent until then.';
       return 'Here’s the up-to-date price first — nothing is spent until you approve.';
     }
   }

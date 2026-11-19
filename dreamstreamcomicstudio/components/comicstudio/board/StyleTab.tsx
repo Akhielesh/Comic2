@@ -7,7 +7,7 @@
 //   • "Your style references (n/8)": the shared <RefStrip> for style photos (the bug: style refs were
 //     uploaded but never visible anywhere on the board) — add, open the drawer, drop or paste;
 //   • the lettering preset gallery (the comic's balloon and caption look; free, instant, undoable);
-//   • preset tiles show the platform library preview (style.<id>) over the free procedural thumb;
+//   • preset tiles show each look's picture through LookArt (bundled sample art, at once; no library index);
 //   • option boards: the content-check veil, ≤ 480w variants, calm failures, version stacks;
 //   • prices print through formatCostForUser (governed users never see dollars); no hover-only UI.
 
@@ -15,17 +15,16 @@ import React, { useRef, useState } from 'react';
 import { ArrowDown, Check, Lock, Palette, Plus, Sparkles, Type, X } from 'lucide-react';
 import type { ComicDoc, StyleBible, StyleOption } from '../../../shared/comic/doc';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets';
-import { stylePreviewId } from '../../../shared/comic/library';
 import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
+import { IN_ART_LETTERING_NOTE } from '../../../shared/comic/pro/types';
 import type { StudioController } from '../types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
-import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
+import { INK, RADIUS_CONTROL, RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
-import { LibraryImage } from '../library/LibraryImage';
-import { PresetThumb } from '../library/procedural/PresetThumb';
-import { PresetGallery } from '../lettering/PresetGallery';
+import { LookArt } from '../library/LookArt';
+import { LETTERING_STYLE_UNDO, PresetGallery } from '../lettering/PresetGallery';
 import { presetOps as letteringPresetOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { RefStrip } from '../refs/RefStrip';
@@ -224,20 +223,10 @@ const OptionCard: React.FC<{ studio: StudioController; doc: ComicDoc; option: St
   );
 };
 
-/** A preset's look: the platform library preview when published, the free procedural thumb under it. */
+/** A preset's look: its picture through LookArt (static art in the first render; the button names the look). */
 const PresetArt: React.FC<{ preset: StylePreset; className?: string }> = ({ preset, className }) => (
-  <span className={cx('relative block overflow-hidden rounded-lg', className)} style={{ background: preset.swatch }} aria-hidden>
-    <LibraryImage
-      id={stylePreviewId(preset.id)}
-      alt=""
-      sizes="128px"
-      className="absolute inset-0 h-full w-full object-cover"
-      fallback={
-        <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
-          <PresetThumb preset={preset} />
-        </span>
-      }
-    />
+  <span className={cx('relative block overflow-hidden rounded-lg bg-[var(--ds-well)]', className)} aria-hidden>
+    <LookArt presetId={preset.id} size="tile" alt="" className="absolute inset-0" />
   </span>
 );
 
@@ -462,17 +451,18 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
       </TabsContent>
       <TabsContent value="lettering">
       <section aria-labelledby="style-lettering-title">
-        <SectionTitle id="style-lettering-title" icon={<Type className="h-3.5 w-3.5" />} right={<span className="text-[11px] font-medium normal-case tracking-normal text-[var(--ds-muted)]">Free · instant</span>}>
+        <SectionTitle id="style-lettering-title" icon={<Type className="h-3.5 w-3.5" />}>
           Lettering style
         </SectionTitle>
-        <p className="mb-2 px-1 text-[11.5px] leading-snug text-[var(--ds-muted)]">
-          How balloons, captions and sound effects look on every page. Changing it re-letters the comic for free — nothing is redrawn.
-        </p>
-        <PresetGallery
-          value={letterPreset}
-          lang={doc.format.language}
-          onChange={(id) => void studio.patch(letteringPresetOps(id), { label: 'Change lettering style' })}
-        />
+        {/* Lettered into the art: a style would change nothing, so say so instead of offering one. A run of picks
+            (arrowing through the grid) is one undo entry (PresetGallery's LETTERING_STYLE_UNDO). */}
+        {doc.format.lettering === 'overlay' ? (
+          <PresetGallery value={letterPreset} lang={doc.format.language} onChange={(id) => void studio.patch(letteringPresetOps(id), LETTERING_STYLE_UNDO)} />
+        ) : (
+          <div role="note" className={`${RADIUS_CONTROL} bg-[var(--ds-well)] px-3 py-2 text-[12.5px] leading-snug ${INK}`}>
+            {IN_ART_LETTERING_NOTE}
+          </div>
+        )}
       </section>
       </TabsContent>
     </Tabs>

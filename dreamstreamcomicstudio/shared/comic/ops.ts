@@ -342,7 +342,17 @@ export type FlattenPageAction = { type: 'flatten_page'; pageId: string };
 /** Spend actions — the ones that may be gated. A confirmed action whose fresh estimate exceeds
  *  quotedUsd × 1.15 + 0.01 is treated as UNconfirmed (re-gated), same tolerance as gateStillHolds. */
 export type SpendAction =
-  | ({ type: 'render_style_options'; directions?: { name: string; spec: string }[] } & Quoted)
+  /** Style tests (stylepick): presetIds (known preset ids, drawn from the preset's own name and spec) first, then
+   *  directions, at most 6 in all; with neither, the writer proposes `count` looks (2–6, default 3). optionId + force
+   *  (redraw one look in place) are read from stylepick SC-3 on; until then they are ignored. */
+  | ({
+      type: 'render_style_options';
+      directions?: { name: string; spec: string }[];
+      count?: number;
+      presetIds?: string[];
+      optionId?: string;
+      force?: boolean;
+    } & Quoted)
   | ({ type: 'render_sheets'; characterIds?: string[]; force?: boolean } & Quoted)
   /** force = explicit "Redraw" of ready pages (UI button or director redraw with explicit intent).
    *  drawOverfull (plan §4.1, §5.1; decision PD-1): "Render all" (no pageIds, no force) holds back pages whose words

@@ -884,3 +884,36 @@ export const withQaConflict = (doc: ComicDoc): ComicDoc => {
   };
   return { ...doc, conversation: [...doc.conversation, msg] };
 };
+
+/**
+ * `state=looks` (stylepick SC-1 verify): the last reply is the director suggesting looks — a `style_presets` card with
+ * the six Paper Boat looks (their bundled art) and an open "which look?" question whose choices carry preset pictures,
+ * two with bundled art and two still on the interim drawn thumb — so the harness can check that every look picture is
+ * there on first paint and that no style surface asks for the library index. Synthetic words only.
+ */
+export const QA_LOOKS_PRESET_IDS = ['noir-ink', 'ligne-claire', 'watercolor-storybook', 'manga-screentone', 'indie-risograph', 'retro-pop'] as const;
+export const QA_LOOKS_OPTION_PRESETS = ['noir-ink', 'retro-pop', 'cozy-anime', 'cartoon-strip'] as const;
+
+export const withQaLooks = (doc: ComicDoc): ComicDoc => {
+  const msg: Msg = {
+    id: 'm_qa_looks',
+    role: 'assistant',
+    text: 'Here are looks that suit a rooftop chase. Trying one is free and draws nothing.',
+    at: QA_NOW,
+    cards: [
+      { type: 'style_presets', id: 'card_qa_looks', presetIds: [...QA_LOOKS_PRESET_IDS], note: 'Picked for night rooftops and quick action.' },
+      {
+        type: 'options',
+        id: 'card_qa_look_question',
+        question: 'Which look should the chase scenes have?',
+        choices: QA_LOOKS_OPTION_PRESETS.map((presetId, i) => ({
+          id: `qa_look_${i + 1}`,
+          label: ['Noir ink', 'Retro pop', 'Cozy anime', 'Cartoon strip'][i],
+          description: ['Deep blacks and rain', 'Bold dots and colour', 'Soft light, warm faces', 'Clean, bouncy lines'][i],
+          visual: { kind: 'preset' as const, presetId }
+        }))
+      }
+    ]
+  };
+  return { ...doc, conversation: [...doc.conversation, msg] };
+};

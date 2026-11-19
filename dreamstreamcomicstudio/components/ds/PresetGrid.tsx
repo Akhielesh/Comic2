@@ -23,8 +23,12 @@ export interface PresetOption<T extends string> {
   value: T;
   label: string;
   description?: string;
+  /** Off-tile explanation (PresetTile `hint`): the native title and the accessible description. */
+  hint?: string;
   art: React.ReactNode;
   badge?: React.ReactNode;
+  /** PresetTile `checkSide`: the top corner the chosen check sits in (art that draws top-right asks for 'left'). */
+  checkSide?: 'right' | 'left';
   disabled?: boolean;
 }
 
@@ -110,9 +114,11 @@ export function PresetGrid<T extends string>(props: PresetGridProps<T>) {
           <PresetTile
             label={o.label}
             description={o.description}
+            hint={o.hint}
             art={o.art}
             aspect={aspect}
             badge={o.badge}
+            checkSide={o.checkSide}
             disabled={o.disabled}
             selected={isOn(o.value)}
             semantics={semantics}
