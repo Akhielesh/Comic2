@@ -264,6 +264,12 @@ describe('wikidataCountry', () => {
     expect(words.replace(' haswbstatement:P31=Q6256|P31=Q3624078', '')).not.toMatch(/[:/]/);
   });
 
+  it('looks a name up as one title: a "|" never asks for several pages', async () => {
+    const urls = stubFetch((u) => (u.searchParams.get('ids') ? FRANCE_LABELS : entitiesReply(FRANCE)));
+    await wikidataCountry('France|Q2');
+    expect(param(urls[0], 'titles')).toBe('France Q2');
+  });
+
   it('answers null when the source answered and nothing is a country', async () => {
     stubFetch((u) => (u.searchParams.get('list') === 'search' ? searchReply() : MISSING_REPLY));
     await expect(wikidataCountry('Atlantis')).resolves.toBeNull();

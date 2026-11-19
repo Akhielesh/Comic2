@@ -354,7 +354,12 @@ const plainWords = (s: string): string =>
  * provider budget) when there was none.
  */
 export const wikidataCountry = async (nameOrCode: string, opts: WikiFetchOptions = {}): Promise<CountryFacts | null> => {
-  const input = (typeof nameOrCode === 'string' ? nameOrCode : '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80);
+  // "|" separates titles in the API: one name is one title.
+  const input = (typeof nameOrCode === 'string' ? nameOrCode : '')
+    .replace(/[\u0000-\u001f\u007f|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
   if (!input) return null;
 
   let entity: WikidataEntity | undefined;
