@@ -16,6 +16,7 @@ import type {
   FlightStatusArtifact,
   FlightEndpointStatus,
   FlightPhase,
+  FlightUnavailableReason,
   TripBudgetArtifact,
   BudgetCategory,
   LocalCheatsheetArtifact,
@@ -25,6 +26,7 @@ import type {
 } from '../../../../apiTypes.js';
 import { getWeather } from './weather.js';
 import { fetchJson, envKey } from './http.js';
+import { ProviderBudgetError } from '../../lib/providerUsage.js';
 
 const str = (v: unknown, max: number): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
@@ -348,34 +350,113 @@ const avsEndpoint = (raw?: Record<string, unknown>): FlightEndpointStatus | null
   };
 };
 
-type AvsAnswer = { ok: true; flight: AvsFlight | null } | { ok: false };
+/**
+ * Why aviationstack gave no live record. `https_refused`: the key's plan has no HTTPS (it counts as no
+ * key); `busy`: our call budget or the plan's usage/rate limit is spent; `unavailable`: no usable answer
+ * (network, deadline, server error, a reply without a `data` list); `no_record`: it answered with an
+ * empty list.
+ */
+type AvsMiss = 'https_refused' | 'busy' | 'unavailable' | 'no_record';
+type AvsAnswer = { ok: true; flight: AvsFlight } | { ok: false; miss: AvsMiss };
+
+const AVS_HTTPS_CODES = new Set(['https_access_restricted']);
+const AVS_BUSY_CODES = new Set(['usage_limit_reached', 'rate_limit_reached']);
+
+/** The HTTP status fetchJson names in its error ("<host> returned 403"), if any. */
+const statusOf = (err: unknown): number | undefined => {
+  const m = /\breturned (\d{3})\b/.exec(err instanceof Error ? err.message : '');
+  return m ? Number(m[1]) : undefined;
+};
 
 /** One HTTPS request; never a plain-HTTP retry (the key is in the query string). */
 const fetchAviationstack = async (flightIata: string, key: string, signal?: AbortSignal): Promise<AvsAnswer> => {
   const query = `access_key=${encodeURIComponent(key)}&flight_iata=${encodeURIComponent(flightIata)}`;
+  let data: { data?: unknown; error?: { code?: unknown } } | null;
   try {
-    const data = await fetchJson<{ data?: AvsFlight[] }>(`https://api.aviationstack.com/v1/flights?${query}`, { signal });
-    return { ok: true, flight: Array.isArray(data?.data) ? data.data[0] ?? null : null };
-  } catch {
-    return { ok: false };
+    data = await fetchJson<{ data?: unknown; error?: { code?: unknown } } | null>(`https://api.aviationstack.com/v1/flights?${query}`, { signal });
+  } catch (err) {
+    if (err instanceof ProviderBudgetError) return { ok: false, miss: 'busy' };
+    const status = statusOf(err);
+    if (status === 403) return { ok: false, miss: 'https_refused' };
+    if (status === 429) return { ok: false, miss: 'busy' };
+    return { ok: false, miss: 'unavailable' };
   }
+  // aviationstack can also answer 200 with an error body instead of a `data` list.
+  const code = data && typeof data === 'object' && data.error && typeof data.error.code === 'string' ? data.error.code : undefined;
+  if (code && AVS_HTTPS_CODES.has(code)) return { ok: false, miss: 'https_refused' };
+  if (code && AVS_BUSY_CODES.has(code)) return { ok: false, miss: 'busy' };
+  if (!data || typeof data !== 'object' || !Array.isArray(data.data)) return { ok: false, miss: 'unavailable' };
+  const flight = data.data[0];
+  return flight && typeof flight === 'object' ? { ok: true, flight: flight as AvsFlight } : { ok: false, miss: 'no_record' };
 };
 
-const FLIGHT_UNAVAILABLE = 'Live status needs a data source. Do not state times, gates or delays.';
+const NO_TIMES = 'Do not state times, gates or delays.';
+const FLIGHT_UNAVAILABLE = `Live status needs a data source. ${NO_TIMES}`;
 const FLIGHT_CARD_NOTE = 'The card shows the flight number and a link to check it on the web.';
 
 /** The card without live data: the flight number and airline, nothing that reads like a schedule. */
-const unavailableFlight = (flightNumber: string, airline: string | undefined): FlightStatusArtifact => ({
+const unavailableFlight = (flightNumber: string, airline: string | undefined, reason?: FlightUnavailableReason): FlightStatusArtifact => ({
   flightNumber,
   ...(airline ? { airline } : {}),
   live: false,
-  unavailable: true
+  unavailable: true,
+  ...(reason && reason !== 'no_source' ? { unavailableReason: reason } : {})
 });
+
+type FlightNotice = { level: 'info' | 'warn'; message: string; fix?: string };
+
+/** What the model is told, what the card says and what the notice says, for each way there is no live record. */
+const flightMiss = (flightNumber: string, miss: AvsMiss | 'no_key'): { content: string; reason: FlightUnavailableReason; notice: FlightNotice } => {
+  switch (miss) {
+    case 'no_key':
+      return {
+        content: FLIGHT_UNAVAILABLE,
+        reason: 'no_source',
+        notice: {
+          level: 'info',
+          message: 'Live flight status needs a data source.',
+          fix: 'Set AVIATIONSTACK_API_KEY to an aviationstack key that works over HTTPS (a paid plan)'
+        }
+      };
+    case 'https_refused':
+      return {
+        content: FLIGHT_UNAVAILABLE,
+        reason: 'no_source',
+        notice: {
+          level: 'warn',
+          message: 'aviationstack refused HTTPS for this key. A free key works only over plain HTTP, which is never used.',
+          fix: 'Use an aviationstack plan with HTTPS for AVIATIONSTACK_API_KEY'
+        }
+      };
+    case 'busy':
+      return {
+        content: `The live flight data source is busy right now. ${NO_TIMES} Suggest checking again later.`,
+        reason: 'busy',
+        notice: {
+          level: 'warn',
+          message: 'Live flight status is busy: the aviationstack call budget or the plan limit is used up for now.',
+          fix: 'Raise the aviationstack entry in PROVIDER_BUDGETS to match the plan, or wait for the limit to reset'
+        }
+      };
+    case 'unavailable':
+      return {
+        content: `The live flight data source did not answer. ${NO_TIMES}`,
+        reason: 'no_answer',
+        notice: { level: 'warn', message: 'aviationstack did not answer with flight data.' }
+      };
+    case 'no_record':
+      return {
+        content: `The live flight data source has no record for ${flightNumber} right now. ${NO_TIMES}`,
+        reason: 'no_record',
+        notice: { level: 'info', message: `aviationstack has no live record for ${flightNumber} right now.` }
+      };
+  }
+};
 
 export const flightStatusTool: ChatTool = {
   name: 'get_flight_status',
   description:
-    'Track a FLIGHT by its IATA flight number (e.g. "UA2402"). With a configured live flight data source it returns the live status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate and a route-progress arc. Without one the card shows only the flight number and a link to check it on the web: then tell the user live status needs a data source, and do not state times, gates or delays — not even ones you remember.',
+    'Track a FLIGHT by its IATA flight number (e.g. "UA2402"). With a configured live flight data source it returns the live status (scheduled/active/landed/cancelled), departure/arrival times with delays, terminal/gate and a route-progress arc. Without live data (no source, or the source is busy, did not answer or has no record) the card shows only the flight number and a link to check it on the web: then tell the user the reason this tool gives, and do not state times, gates or delays — not even ones you remember.',
   parameters: {
     type: 'object',
     properties: {
@@ -414,23 +495,12 @@ export const flightStatusTool: ChatTool = {
         artifacts: [{ type: 'flight_status', data }]
       };
     }
-    const notice = !key
-      ? {
-          level: 'info' as const,
-          message: 'Live flight status needs a data source.',
-          fix: 'Set AVIATIONSTACK_API_KEY to an aviationstack key that works over HTTPS (a paid plan)'
-        }
-      : !answer?.ok
-        ? {
-            level: 'warn' as const,
-            message: 'aviationstack did not answer over HTTPS. A free key works only over plain HTTP, which is never used.',
-            fix: 'Use an aviationstack plan with HTTPS for AVIATIONSTACK_API_KEY'
-          }
-        : { level: 'info' as const, message: `aviationstack has no live record for ${flightNumber} today.` };
+    // A record without both airports cannot draw a route: it is no live record either.
+    const miss = flightMiss(flightNumber, !answer ? 'no_key' : 'miss' in answer ? answer.miss : 'no_record');
     return {
-      content: `${key && answer?.ok ? `No live record for ${flightNumber} today. ` : ''}${FLIGHT_UNAVAILABLE} ${FLIGHT_CARD_NOTE}`,
-      artifacts: [{ type: 'flight_status', data: unavailableFlight(flightNumber, airline) }],
-      notice
+      content: `${miss.content} ${FLIGHT_CARD_NOTE}`,
+      artifacts: [{ type: 'flight_status', data: unavailableFlight(flightNumber, airline, miss.reason) }],
+      notice: miss.notice
     };
   }
 };

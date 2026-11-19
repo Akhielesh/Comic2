@@ -1,6 +1,6 @@
-// FlightStatus without live data: the card names the flight, says live status needs a data source
+// FlightStatus without live data: the card names the flight, says why there is no live status
 // and offers one link to check the flight on the web. It shows no times, gates, terminals, delays
-// or route arc, even when a stored card from before carries some.
+// or route arc, even when a card saved in chat history before carries some (live:false).
 import React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
@@ -24,6 +24,18 @@ const LIVE: FlightStatusArtifact = {
   asOf: '2026-06-10T14:30:00Z'
 };
 
+/** The shape the old keyless path saved: live:false, remembered times, no `unavailable` flag. */
+const SAVED_KEYLESS: FlightStatusArtifact = {
+  airline: 'United',
+  flightNumber: 'UA2402',
+  status: 'scheduled',
+  departure: { code: 'SFO', scheduled: '2026-06-10T09:15:00', terminal: 'I', gate: 'G92' },
+  arrival: { code: 'HND', scheduled: '2026-06-11T13:05:00' },
+  progressPct: 0,
+  live: false,
+  asOf: '2026-06-10T08:00:00Z'
+};
+
 const CLOCK = /\b\d{1,2}:\d{2}\b/;
 
 describe('FlightStatus without live data', () => {
@@ -43,13 +55,50 @@ describe('FlightStatus without live data', () => {
     expect(container.querySelector('svg[viewBox="0 0 280 90"]')).toBeNull();
   });
 
-  it('shows none of a stored card’s times or gates either', () => {
+  it('shows none of the times or gates a card saved in chat history before carries', () => {
+    // The old keyless path saved live:false with the times the model remembered and no `unavailable`.
+    const { container } = render(<FlightStatus data={SAVED_KEYLESS} />);
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(CLOCK);
+    expect(text).not.toMatch(/G92|Gate|Terminal|Departure|Arrival|Scheduled|SFO|HND/);
+    expect(screen.getByText('United UA2402')).toBeInTheDocument();
+    expect(screen.getByText('Live status needs a data source')).toBeInTheDocument();
+    expect(container.querySelector('svg[viewBox="0 0 280 90"]')).toBeNull();
+  });
+
+  it('shows no saved times in the compact glance either', () => {
+    const { container } = render(
+      <DensityProvider value="compact">
+        <FlightStatus data={SAVED_KEYLESS} />
+      </DensityProvider>
+    );
+    expect(container.textContent ?? '').not.toMatch(CLOCK);
+    expect(container.textContent ?? '').not.toMatch(/SFO|HND|Scheduled/);
+    expect(screen.getByText('Live status needs a data source')).toBeInTheDocument();
+  });
+
+  it('a card that kept old times next to the new flag shows none of them', () => {
     const stale: FlightStatusArtifact = { ...LIVE, live: false, unavailable: true };
     const { container } = render(<FlightStatus data={stale} />);
     const text = container.textContent ?? '';
     expect(text).not.toMatch(CLOCK);
     expect(text).not.toMatch(/G92|SFO|HND|\+17/);
     expect(screen.getByText('Live status needs a data source')).toBeInTheDocument();
+  });
+
+  it('says why when a configured source answered without a record, was busy or did not answer', () => {
+    const cases: [NonNullable<FlightStatusArtifact['unavailableReason']>, string][] = [
+      ['no_record', 'No live status for this flight right now'],
+      ['busy', 'Live flight status is busy right now'],
+      ['no_answer', 'Live flight status is not answering right now']
+    ];
+    for (const [reason, sentence] of cases) {
+      const { container, unmount } = render(<FlightStatus data={{ ...UNAVAILABLE, unavailableReason: reason }} />);
+      expect(screen.getByText(sentence)).toBeInTheDocument();
+      expect(screen.queryByText('Live status needs a data source')).toBeNull();
+      expect(container.textContent ?? '').not.toMatch(CLOCK);
+      unmount();
+    }
   });
 
   it('keeps the same honesty in the compact glance', () => {

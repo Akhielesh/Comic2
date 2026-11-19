@@ -31,6 +31,9 @@ const REMEMBERED = {
   arrival: { code: 'HND', city: 'Tokyo', scheduled: '2026-11-20T13:05:00', terminal: '3' }
 };
 
+/** The card without live data: the flight number and airline only. */
+const CARD = { flightNumber: 'UA2402', airline: 'United', live: false, unavailable: true };
+
 const TIME_FIELDS = /scheduled|estimated|actual|gate|terminal|delay|progress|departure|arrival|altitude|speed|asOf/i;
 
 const LIVE_RECORD = {
@@ -105,12 +108,69 @@ describe('get_flight_status with a key', () => {
     expect(out.notice?.message).toMatch(/HTTPS/);
   });
 
-  it('a live source with no record today shows the flight number only, too', async () => {
+  it('a live source with no record shows the flight number only, and says the source has no record', async () => {
     vi.stubEnv('AVIATIONSTACK_API_KEY', 'test-key');
     stubFetch(() => ({ data: [] }));
     const out = await flightStatusTool.execute(REMEMBERED);
     expect(JSON.stringify(out.artifacts)).not.toMatch(TIME_FIELDS);
-    expect((out.artifacts?.[0]?.data as Record<string, unknown>).unavailable).toBe(true);
+    expect(out.artifacts?.[0]?.data).toEqual({ ...CARD, unavailableReason: 'no_record' });
+    expect(out.content).toContain('has no record for UA2402 right now');
     expect(out.content).toContain('Do not state times, gates or delays.');
+    expect(out.content).not.toMatch(/needs a data source/);
+    expect(out.notice).toMatchObject({ level: 'info' });
+    expect(out.notice?.message).toMatch(/no live record for UA2402/);
+  });
+});
+
+/** A 200 reply carrying an aviationstack error body instead of a `data` list. */
+const errorBody = (code: string) => () => ({ error: { code, message: 'x' } });
+
+describe('get_flight_status names the real reason when there is no live record', () => {
+  beforeEach(() => vi.stubEnv('AVIATIONSTACK_API_KEY', 'test-key'));
+
+  it('a 200 reply that refuses HTTPS is not "no record": the key counts as no key', async () => {
+    stubFetch(errorBody('https_access_restricted'));
+    const out = await flightStatusTool.execute(REMEMBERED);
+    expect(out.artifacts?.[0]?.data).toEqual(CARD);
+    expect(out.content).not.toMatch(/no record|No live record/i);
+    expect(out.content).toContain('Live status needs a data source. Do not state times, gates or delays.');
+    expect(out.notice).toMatchObject({ level: 'warn' });
+    expect(out.notice?.message).toMatch(/HTTPS/);
+  });
+
+  it('a spent call budget sends nothing and says busy, not HTTPS', async () => {
+    vi.stubEnv('PROVIDER_BUDGETS', JSON.stringify({ aviationstack: { perMin: 0, perDay: 0 } }));
+    __resetProviderUsage();
+    const urls = stubFetch(() => LIVE_RECORD);
+    const out = await flightStatusTool.execute(REMEMBERED);
+    expect(urls).toEqual([]);
+    expect(out.artifacts?.[0]?.data).toEqual({ ...CARD, unavailableReason: 'busy' });
+    expect(out.content).toMatch(/busy right now/);
+    expect(out.content).toContain('Do not state times, gates or delays.');
+    expect(out.notice?.message).not.toMatch(/HTTPS|free key/);
+    expect(out.notice?.message).toMatch(/busy/);
+  });
+
+  it("the plan's usage or rate limit (a 200 error body or a 429) is busy too", async () => {
+    for (const route of [errorBody('usage_limit_reached'), errorBody('rate_limit_reached'), () => new Response('{}', { status: 429 })]) {
+      __resetProviderUsage();
+      stubFetch(route);
+      const out = await flightStatusTool.execute(REMEMBERED);
+      expect(out.artifacts?.[0]?.data).toEqual({ ...CARD, unavailableReason: 'busy' });
+      expect(out.notice?.message).not.toMatch(/HTTPS|free key/);
+    }
+  });
+
+  it('a network error, a deadline or a reply without a data list is "did not answer", never "no record" or HTTPS', async () => {
+    for (const route of [() => new Error('getaddrinfo ENOTFOUND'), errorBody('internal_error'), () => ({ pagination: {} }), () => new Response('{}', { status: 500 })]) {
+      __resetProviderUsage();
+      stubFetch(route);
+      const out = await flightStatusTool.execute(REMEMBERED);
+      expect(out.artifacts?.[0]?.data).toEqual({ ...CARD, unavailableReason: 'no_answer' });
+      expect(out.content).toMatch(/did not answer/);
+      expect(out.content).not.toMatch(/no record/i);
+      expect(out.notice?.level).toBe('warn');
+      expect(out.notice?.message).not.toMatch(/HTTPS|free key|no live record/);
+    }
   });
 });

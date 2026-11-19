@@ -31,9 +31,15 @@ describe('providerForUrl', () => {
     expect(providerForUrl('https://evil.test/www.wikidata.org/w/api.php')).toBe('evil.test');
     expect(providerForUrl('https://www.wikidata.org.evil.test/w/api.php')).toBe('www.wikidata.org.evil.test');
   });
-  it('no longer knows ip-api.com: nothing calls it', () => {
+  it('ip_lookup no longer calls ip-api.com, so it has no named budget', () => {
     expect(providerForUrl('http://ip-api.com/json/x')).toBe('ip-api.com');
     expect(getConfiguredProviderBudget('ip-api')).toBeNull();
+  });
+  it('meters aviationstack in a small budget of its own, not the generic fallback', () => {
+    expect(providerForUrl('https://api.aviationstack.com/v1/flights?access_key=k&flight_iata=UA2402')).toBe('aviationstack');
+    expect(getConfiguredProviderBudget('aviationstack')).toEqual({ perMin: 5, perDay: 30 });
+    expect(providerForUrl('https://evil.test/api.aviationstack.com/v1/flights')).toBe('evil.test');
+    expect(providerForUrl('https://aviationstack.com.evil.test/v1/flights')).toBe('aviationstack.com.evil.test');
   });
   it('maps the configured SearXNG instance', () => {
     process.env.SEARXNG_URL = 'https://searxng-production-e7df.up.railway.app';

@@ -1275,9 +1275,12 @@ export interface DebtClockArtifact {
 // --- Flight status tracker ---
 // Emitted by `get_flight_status`. Live when AVIATIONSTACK_API_KEY is set to a key
 // that works over HTTPS (real-time status/delays/gates). Without live data the tool
-// sends `{ flightNumber, airline?, live: false, unavailable: true }` only: no times,
-// gates, terminals or delays, and the card shows a link to check the flight on the web.
+// sends `{ flightNumber, airline?, live: false, unavailable: true, unavailableReason? }`
+// only: no times, gates, terminals or delays, and the card shows a link to check the
+// flight on the web. Cards saved before carry `live: false` with remembered times and no
+// `unavailable`; the card treats any `live: false` as unavailable and shows none of them.
 export type FlightPhase = 'scheduled' | 'active' | 'landed' | 'cancelled' | 'diverted' | 'unknown';
+export type FlightUnavailableReason = 'no_source' | 'no_record' | 'busy' | 'no_answer';
 export interface FlightEndpointStatus {
   /** IATA code. */
   code: string;
@@ -1308,8 +1311,14 @@ export interface FlightStatusArtifact {
   delayMin?: number;
   /** True when data came from a live provider. */
   live?: boolean;
-  /** No live data source answered: the card shows the flight number and a web link, never times. */
+  /** No live data: the card shows the flight number and a web link, never times. */
   unavailable?: boolean;
+  /**
+   * Why there is no live data, when a source is configured: it answered without a record
+   * (`no_record`), its call budget or plan limit is spent (`busy`), or it did not answer
+   * (`no_answer`). Absent: no usable data source (`no_source`).
+   */
+  unavailableReason?: FlightUnavailableReason;
   asOf?: string;
   density?: 'compact' | 'detailed';
 }

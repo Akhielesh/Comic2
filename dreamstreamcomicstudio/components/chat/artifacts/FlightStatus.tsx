@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowUp, Clock, ExternalLink, Gauge, Plane } from 'lucide-react';
-import type { FlightStatusArtifact, FlightEndpointStatus, FlightPhase } from '../../../apiTypes';
+import type { FlightStatusArtifact, FlightEndpointStatus, FlightPhase, FlightUnavailableReason } from '../../../apiTypes';
 import { buttonClasses } from '../../ds/Button';
 import {
   Surface,
@@ -24,9 +24,11 @@ import {
 //    struck through when the estimate moved, delays tinted) and altitude / speed /
 //    delay chips.
 //  • compact — one row: "UA 2402 · SFO → HND" + status badge + delay chip.
-//  • unavailable (no live data source answered) — the flight number, "Live status needs a
-//    data source" and one link to check the flight on the web. No times, gates, terminals,
-//    delays or arc: nothing that could read as a schedule the model remembered.
+//  • unavailable (no live data) — the flight number, why ("Live status needs a data source",
+//    or the configured source's own reason) and one link to check the flight on the web. No
+//    times, gates, terminals, delays or arc: nothing that could read as a schedule the model
+//    remembered. Any card with `live: false` takes this path, so cards saved in chat history
+//    before (live:false with remembered times, no `unavailable`) show none of their times.
 
 const STATUS_COLORS: Record<FlightPhase, string> = {
   scheduled: NEUTRAL,
@@ -70,14 +72,24 @@ const bezier = (t: number): readonly [number, number] => {
 
 const ARC_PATH = `M${P0[0]},${P0[1]} Q${C[0]},${C[1]} ${P1[0]},${P1[1]}`;
 
-const UNAVAILABLE_TEXT = 'Live status needs a data source';
+const UNAVAILABLE_TEXT: Record<FlightUnavailableReason, string> = {
+  no_source: 'Live status needs a data source',
+  no_record: 'No live status for this flight right now',
+  busy: 'Live flight status is busy right now',
+  no_answer: 'Live flight status is not answering right now'
+};
 
 /** A web search for the flight number (no times of our own to show). */
 const flightSearchUrl = (flightNumber: string): string =>
   `https://www.google.com/search?q=${encodeURIComponent(`${flightNumber} flight status`)}`;
 
-/** The card when no live data source answered: flight number, why, one link. */
-const UnavailableFlight: React.FC<{ title: string; flightNumber: string; compact: boolean }> = ({ title, flightNumber, compact }) => {
+/** The card without live data: flight number, why, one link. */
+const UnavailableFlight: React.FC<{ title: string; flightNumber: string; reason: FlightUnavailableReason; compact: boolean }> = ({
+  title,
+  flightNumber,
+  reason: why,
+  compact
+}) => {
   const link = (
     <a
       href={flightSearchUrl(flightNumber)}
@@ -89,7 +101,7 @@ const UnavailableFlight: React.FC<{ title: string; flightNumber: string; compact
       <ExternalLink aria-hidden="true" />
     </a>
   );
-  const reason = <p className="min-w-0 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">{UNAVAILABLE_TEXT}</p>;
+  const reason = <p className="min-w-0 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">{UNAVAILABLE_TEXT[why]}</p>;
   if (compact) {
     return (
       <Surface>
@@ -196,9 +208,12 @@ export const FlightStatus: React.FC<{ data: FlightStatusArtifact }> = ({ data })
 
   if (!data.flightNumber && !data.departure?.code && !data.arrival?.code) return null;
 
-  if (data.unavailable) {
+  // `live: false` is never live data: the old keyless path saved cards that way with the times the
+  // model remembered (and no `unavailable` flag), so they take this path too and show none of them.
+  if (data.unavailable || data.live === false) {
     const label = [data.airline, data.flightNumber].filter(Boolean).join(' ') || 'Flight';
-    return <UnavailableFlight title={label} flightNumber={data.flightNumber || label} compact={compact} />;
+    const reason = data.unavailableReason && UNAVAILABLE_TEXT[data.unavailableReason] ? data.unavailableReason : 'no_source';
+    return <UnavailableFlight title={label} flightNumber={data.flightNumber || label} reason={reason} compact={compact} />;
   }
 
   const phase: FlightPhase = data.status && STATUS_COLORS[data.status] ? data.status : 'unknown';
