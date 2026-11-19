@@ -46,6 +46,9 @@ const formatCount = (n: number) => n.toLocaleString('en');
 
 const OPTIONAL = <span className="font-normal text-[var(--ds-muted)]">(optional)</span>;
 
+/** "How did you hear about us?": an empty first choice, so the answer can be cleared again, then the sources. */
+const HEARD_OPTIONS = [{ value: '', label: 'Choose one' }, ...INTEREST_HEARD.map((h) => ({ value: h.id, label: h.label }))];
+
 /** A quick pick: the kit's filter chip shape (32 px, 44 px under a coarse pointer); the native box inside is hidden. */
 const PICK = cn(
   FILTER_CHIP,
@@ -285,11 +288,13 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
 
       <div className="grid min-w-0 gap-4 sm:grid-cols-2">
         <Field label={<>{INTEREST_HEARD_QUESTION} {OPTIONAL}</>}>
+          {/* The question is optional, so "Choose one" stays a real choice (not the kit's disabled placeholder): a pick
+              made by mistake can be taken back, and nothing is stored for it. Muted while nothing is chosen. */}
           <Select
             value={heardFrom}
             onChange={(e) => setHeardFrom(e.target.value as InterestHeard | '')}
-            placeholder="Choose one"
-            options={INTEREST_HEARD.map((h) => ({ value: h.id, label: h.label }))}
+            options={HEARD_OPTIONS}
+            className={heardFrom ? undefined : 'text-[var(--ds-muted)]'}
           />
         </Field>
       </div>

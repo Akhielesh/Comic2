@@ -271,9 +271,15 @@ describe('optional answers: validated and capped on the server', () => {
   };
   const consent = (updates: boolean) => ({ updates, at: AT, wording: INTEREST_UPDATES.label });
 
-  it('email alone stores no answers, and an explicit "no" to updates', async () => {
-    await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access' });
+  it('email alone (the form sends the unticked box as false) stores no answers, and an explicit "no" to updates', async () => {
+    await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access', keepUpdated: false });
     expect(stored()).toEqual({ metadata: { source: 'auth-request-access', consent: consent(false) }, intent: {} });
+  });
+
+  it('a request that never carried the box (a tab opened before it existed) records no choice, not a "no"', async () => {
+    const res = await post({ email: 'new@example.com', kind: 'access', source: 'auth-request-access' });
+    expect(res.body).toEqual(NEUTRAL_REPLY.access);
+    expect(stored()).toEqual({ metadata: { source: 'auth-request-access' }, intent: {} });
   });
 
   it('the list card (kind updates) carries no consent flag', async () => {
@@ -307,19 +313,24 @@ describe('optional answers: validated and capped on the server', () => {
     expect(stored().intent).toEqual({ feedback: 'Line one\nLine two\n\nLast line' });
   });
 
-  it('the consent flag is false unless the box was ticked (only a real true counts)', async () => {
-    for (const keepUpdated of [undefined, false, 'true', 'on', 1, null, ['yes']]) {
+  it('only a real true is a yes, a real false is a no, and anything else records no choice (never a yes)', async () => {
+    for (const keepUpdated of [undefined, 'true', 'on', 1, null, ['yes']]) {
       store.upsertSubscriber.mockClear();
-      expect((await post({ email: 'new@example.com', kind: 'access', keepUpdated })).status).toBe(200);
-      expect(stored().metadata.consent, String(keepUpdated)).toEqual(consent(false));
+      const res = await post({ email: 'new@example.com', kind: 'access', keepUpdated });
+      expect(res.status).toBe(200);
+      expect(stored().metadata, String(keepUpdated)).not.toHaveProperty('consent');
+      expect(res.body.message).not.toContain(INTEREST_THANKS.keptUpdated);
     }
+    store.upsertSubscriber.mockClear();
+    await post({ email: 'new@example.com', kind: 'access', keepUpdated: false });
+    expect(stored().metadata.consent).toEqual(consent(false));
     store.upsertSubscriber.mockClear();
     await post({ email: 'new@example.com', kind: 'access', keepUpdated: true });
     expect(stored().metadata.consent).toEqual(consent(true));
   });
 
   it('an unknown "how did you hear" is dropped, not stored', async () => {
-    await post({ email: 'new@example.com', kind: 'access', heardFrom: 'billboard' });
+    await post({ email: 'new@example.com', kind: 'access', heardFrom: 'billboard', keepUpdated: false });
     expect(stored().metadata).toEqual({ consent: consent(false) });
   });
 
@@ -330,7 +341,7 @@ describe('optional answers: validated and capped on the server', () => {
     expect(stored().metadata).toEqual(interestMetadata('auth-request-access', answers as never, AT));
   });
 
-  it("still accepts an old open tab's payload: its studio, feature and something-else picks are not stored", async () => {
+  it("still accepts an old open tab's payload: its studio, feature and something-else picks are not stored, its name and note are marked as the old set's, and no box choice is made up", async () => {
     const res = await post({
       email: 'new@example.com',
       kind: 'access',
@@ -343,7 +354,7 @@ describe('optional answers: validated and capped on the server', () => {
     });
     expect(res).toEqual({ status: 200, body: { ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers } });
     expect(stored().intent).toEqual({ feedback: 'Hi' });
-    expect(stored().metadata).toEqual({ answers: { v: 2, comment: 'Hi', firstName: 'Old' }, consent: consent(false) });
+    expect(stored().metadata).toEqual({ answers: { v: 1, comment: 'Hi', firstName: 'Old' } });
   });
 
   it('the surface tag is cut, never a reason to refuse', async () => {

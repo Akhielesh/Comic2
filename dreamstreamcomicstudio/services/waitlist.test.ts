@@ -147,10 +147,21 @@ describe('submitWaitlistEmail', () => {
 
   it('a repeat on the direct path (23505) gets the same answer as a new address', async () => {
     vi.stubGlobal('fetch', vi.fn(() => reply(503, { ok: false })));
-    const first = await submitWaitlistEmail('a@b.co', 'access');
+    const first = await submitWaitlistEmail('a@b.co', 'access', {}, undefined, { comment: 'Hi', keepUpdated: false });
     insert.mockResolvedValueOnce({ error: { code: '23505', message: 'duplicate key' } });
-    const repeat = await submitWaitlistEmail('a@b.co', 'access');
+    const repeat = await submitWaitlistEmail('a@b.co', 'access', {}, undefined, { comment: 'Hi', keepUpdated: false });
     expect(repeat).toEqual(first);
+  });
+
+  it('a ticked box on a direct-path repeat (23505) is not promised: that save can only insert, so nothing recorded it', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => reply(503, { ok: false })));
+    insert.mockResolvedValueOnce({ error: { code: '23505', message: 'duplicate key' } });
+    const repeat = await submitWaitlistEmail('a@b.co', 'access', {}, undefined, { keepUpdated: true });
+    expect(repeat).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.access });
+    expect(repeat.message).not.toContain(INTEREST_THANKS.keptUpdated);
+    // A new row on the same path stores the yes, so its thank-you may say they will hear.
+    const fresh = await submitWaitlistEmail('b@b.co', 'access', {}, undefined, { keepUpdated: true });
+    expect(fresh.message).toBe(`${INTEREST_THANKS.access} ${INTEREST_THANKS.keptUpdated}`);
   });
 
   it('a failed direct save is honest and retryable', async () => {

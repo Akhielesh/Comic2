@@ -42,8 +42,10 @@ export type InterestHeard = (typeof INTEREST_HEARD)[number]['id'];
 
 /**
  * The one consent box, unticked by default. Nothing is sent while interest emails are off (the server's
- * INTEREST_EMAILS), and no email path reads this flag; it only records the person's choice, with its time and these
- * exact words (interestMetadata), so a later list of who may be told about news is built only from a real yes.
+ * INTEREST_EMAILS), and no email path reads this flag; it only records the choice, with its time and these exact
+ * words (interestMetadata). A yes here is a request from an address nobody has verified (anyone can type any
+ * address, and the form's direct save can write any metadata), so it is never enough to mail news: a later sender
+ * first sends a confirm link and mails only the addresses that confirm it (docs/features/register-interest.md).
  */
 export const INTEREST_UPDATES = {
   label: 'Keep me updated about Comic Studio news and new DreamStream studios.',
@@ -106,8 +108,8 @@ export interface InterestAnswers {
   /** "Anything else?" */
   comment?: string;
   /**
-   * The keep-me-updated box. Register interest always carries it (false unless ticked: answersForKind); the main
-   * site's list card never does. It is a choice, not an answer: it never adds `answers` on its own.
+   * The keep-me-updated box. The register-interest form always carries it (false unless ticked: answersForKind); the
+   * main site's list card never does. It is a choice, not an answer: it never adds `answers` on its own.
    */
   keepUpdated?: boolean;
 }
@@ -117,7 +119,9 @@ export const INTEREST_ANSWERS_VERSION = 2;
 
 /**
  * The answers as a kind sends them: register interest (`access`) always says whether the box was ticked, and only a
- * real `true` counts; the list card (`updates`) has no box, so it never carries one. Both paths call this.
+ * real `true` counts; the list card (`updates`) has no box, so it never carries one. The form calls this before
+ * either save; the server calls it only when the request carried the box (an older tab never showed it, so no
+ * choice is recorded for it).
  */
 export const answersForKind = (kind: 'access' | 'updates', answers: InterestAnswers): InterestAnswers => {
   const { keepUpdated, ...rest } = answers;

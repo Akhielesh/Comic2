@@ -169,9 +169,11 @@ export const submitWaitlistEmail = async (
     });
     if (error) {
       const code = (error as { code?: string }).code;
-      // 23505: already on the list for this kind. Same answer as a new address.
+      // 23505: already on the list for this kind. The same thanks as a new address, except one line: this path may only
+      // insert (RLS), so a box ticked now cannot be added to the stored row, and the thank-you must not say it was.
+      // (Anyone with the public key already sees this unique violation, so the shorter answer tells them nothing new.)
       if (code === '23505' || /duplicate key|already exists/i.test(error.message || '')) {
-        return { ok: true, status: 'registered', message: interestThanks(kind, clean) };
+        return { ok: true, status: 'registered', message: interestThanks(kind, { ...clean, keepUpdated: false }) };
       }
       console.warn('[waitlist] save failed', (error as { code?: string }).code ?? 'unknown');
       return { ok: false, status: 'unavailable', message: UNAVAILABLE };

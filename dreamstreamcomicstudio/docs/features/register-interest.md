@@ -56,14 +56,19 @@ same whichever path wrote it.
   stay (scripts and emoji need them). Limits count what is left.
 - `cleanBlock` (the "Anything else?" note): the same, but line breaks stay (CRLF folded, at most one
   blank line).
-- `answersForKind(kind, answers)`: register interest always carries the box as `true` or `false` (only a
-  real `true` counts); the list card never carries it.
+- `answersForKind(kind, answers)`: the register-interest form always carries the box as `true` or `false`
+  (only a real `true` counts); the list card never carries it. The server applies it only when the request
+  carried the box (see below).
 - `interestMetadata(source, answers, at)` is the row's `metadata`:
   `{ source?, answers?: { v: 2, makes?, heardFrom?, comment?, firstName? }, consent?: { updates, at, wording } }`.
-  `consent` is written for every register-interest row: `updates` is `true` only when the box was
-  ticked, `at` is when the choice was sent (the server's clock; the direct save uses the moment the
-  person pressed the button), and `wording` is the exact label they saw. The box is a choice, not an
-  answer: it never adds `answers` on its own and never changes the "your answers" sentence.
+  `consent` is written for every register-interest row whose form showed the box: `updates` is `true` only
+  when the box was ticked, `at` is when the choice was sent (the server's clock; the direct save uses the
+  moment the person pressed the button), and `wording` is the exact label they saw. The box is a choice,
+  not an answer: it never adds `answers` on its own and never changes the "your answers" sentence.
+- `consent.updates: true` is a request from an address nobody has verified: anyone can type any address
+  (the bot check proves a person, not that the address is theirs), and anyone with the public key can
+  insert a row straight into `waitlist_signups` with any `metadata` (RLS checks only the email shape and
+  the kind). So it is never enough on its own to mail news (see the email switch below).
 
 ## Server contract (`server/src/routes/newsletter.ts`)
 
@@ -84,12 +89,16 @@ same whichever path wrote it.
   text cleaned as above, and anything of the wrong type or over its limit refused, not cut
   (quick picks at most 16 entries, the note 1,000, first name 80; `heardFrom` must be text, and an
   unknown one is dropped). The source tag is cut to 200 instead, since the person never typed it.
-- `keepUpdated` counts only as a real `true`; anything else (missing, `"true"`, `1`) is stored as `false`.
-  No email path reads it: with `INTEREST_EMAILS` on, a ticked and an unticked form send exactly the same
-  mail (the existing `access-requested` for a new row), and with it off, nothing.
+- `keepUpdated` is read only as a real `true` or `false` (the current form always sends one). A request
+  without it, or with anything else (`"true"`, `1`, `null`), records no `consent` key at all, which counts
+  as no, and its thank-you has no updates line: a tab opened before the box existed never showed its words,
+  so no choice is made up for it. No email path reads the box: with `INTEREST_EMAILS` on, a ticked and an
+  unticked form send exactly the same mail (the existing `access-requested` for a new row), and with it
+  off, nothing.
 - Older forms that send `feedback` for the note still work. Open tabs from before the questions
   changed may still send `features`, `featureOther`, `studios` or `productInterests`: the request is
-  accepted and those fields are not stored or checked (those questions are no longer asked).
+  accepted and those fields are not stored or checked (those questions are no longer asked). When one of
+  them is present, the name and note that are stored carry `answers.v: 1`, since the old set asked them.
 - Where answers are stored: the existing `metadata` jsonb column of `waitlist_signups`
   (`metadata.answers` and `metadata.consent`). The server also copies the note into the existing
   `feedback` column; `product_interests` is no longer written (older rows keep theirs). **No schema
@@ -97,18 +106,25 @@ same whichever path wrote it.
 - The store (`server/src/services/emailStore.ts` `upsertSubscriber`) reads every error supabase-js
   returns and throws when nothing was stored, so a failed save is never answered as a saved one. A
   unique violation on insert (two requests at once) counts as already on the list.
-- An address already on the list keeps its row exactly as it is: rows are keyed by an email the caller
-  supplies, so a repeat (or anyone else posting that address) never replaces its answers or its consent
-  flag. The one write is for an unconfirmed `updates` row while interest emails are on: a fresh confirm
-  token, which the confirm email then carries.
+- An address already on the list keeps its answers as they are: rows are keyed by an email the caller
+  supplies, so a repeat (or anyone else posting that address) never replaces its answers, note or source.
+  Two writes are allowed:
+  - a register-interest repeat with the box ticked, on a row that holds no yes (an earlier no, or a row
+    from before the box): only `metadata.consent` is set to the new yes, with its time and wording. A
+    stored yes is never turned back into a no. This adds nothing a stranger could not already do with a
+    new row, and the yes is unverified either way (above).
+  - an unconfirmed `updates` row while interest emails are on: a fresh confirm token, which the confirm
+    email then carries.
 
 ## The form's direct save (`services/waitlist.ts`)
 
 If the server cannot answer within 8 s, answers 5xx, or refuses the bot check while the page shows
 no check, the client saves the row directly (insert-only under RLS, the same write the public key
 already allows) with the same `metadata`, and gives the same thank-you. A repeat on that path is a
-unique violation and also gets the same thank-you. With a check on the page, a refused check asks
-the person to try again. The direct save sends nothing.
+unique violation and gets the same thank-you, except that a ticked box there gets no "we will let you
+know" line: the direct save may only insert, so it cannot add the yes to the stored row. (Anyone with the
+public key already sees that unique violation, so the shorter line tells them nothing new.) With a check on
+the page, a refused check asks the person to try again. The direct save sends nothing.
 
 ## The email switch: `INTEREST_EMAILS`
 
@@ -123,14 +139,19 @@ Off unless the backend variable is exactly `on`. Leave it unset; it is deliberat
 - Never governed by it: admin invites (`beta-invite`), auth emails, member notifications.
 - `updates` rows stored while it is off are unconfirmed and must not be mailed as marketing.
 - News about Comic Studio or new studios goes, if it ever goes, only to `access` rows whose
-  `metadata.consent.updates` is `true`; rows from before the box (`answers.v: 1` or no `consent`) count
-  as no.
+  `metadata.consent.updates` is `true`, and only after a confirm step: those addresses are first sent one
+  confirm (double opt-in) link, and news goes only to the ones that confirm it. Rows with no `consent` or
+  `updates: false` (rows from before the box among them) count as no, and are not sent the confirm link
+  either. Suppressed addresses are never mailed.
 
 ## Known limits
 
-- On a repeat registration the store keeps the first row as it is (`metadata`, `feedback` and
-  `product_interests`); a repeat's answers and box are not stored, so someone who ticks the box on a
-  second visit is not recorded as a yes.
+- On a repeat registration the store keeps the first row's answers (`metadata.answers`, `source`,
+  `feedback` and `product_interests`); a repeat's answers are not stored. Only a ticked box is recorded
+  (above), and only through the server: a repeat that falls back to the direct save cannot record it, and
+  its thank-you says nothing about updates.
+- The server does not mark which rows it wrote, so a yes written straight through the public key looks
+  the same as one from the form; the confirm step before any news mail is what makes either safe to mail.
 - Answers are read in the Supabase dashboard (`metadata->'answers'`, `metadata->'consent'`); there is no
   admin screen yet.
 

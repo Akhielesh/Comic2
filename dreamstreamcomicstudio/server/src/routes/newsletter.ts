@@ -31,7 +31,8 @@ import {
 // (kind 'updates'). Mounted with optionalAuth BEFORE the global requireAuth (like
 // /api/telemetry), so signed-out pages can call it. Writes go through the service role; the
 // client never sees tokens or the list. Sends no email unless INTEREST_EMAILS is "on"; the register-interest form's
-// "keep me updated" box is stored as a consent flag and is read by no email path.
+// "keep me updated" box is stored as a consent flag and is read by no email path. That flag is a request from an
+// address nobody has verified, never a reason on its own to mail it (docs/features/register-interest.md).
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -71,12 +72,21 @@ const optionalList = (raw: unknown, label: string): Checked<unknown[]> => {
   return { ok: true, value: raw };
 };
 
+/** Fields only the question set before this one sent (an open tab from then); none of them is stored. */
+const V1_ONLY_FIELDS = ['features', 'featureOther', 'studios', 'productInterests'] as const;
+
+/** True when the request carries a field only the old question set sent, so its name and note were asked by that set. */
+export const fromOldQuestionSet = (body: Record<string, unknown>): boolean =>
+  V1_ONLY_FIELDS.some((key) => body[key] !== undefined && body[key] !== null);
+
 /**
  * The optional answers, checked here whatever the client did: unknown ids dropped, each id once,
  * control characters stripped (the note keeps its line breaks), and anything of the wrong type or
- * over its limit refused with a 400 that says what to shorten. The keep-me-updated box counts only as a
- * real `true` (answersForKind decides per kind). Older forms sent `feedback` for the note (still read), and
- * open tabs from before the questions changed may still send `features`, `featureOther`, `studios` or
+ * over its limit refused with a 400 that says what to shorten. The keep-me-updated box is read only when
+ * the request carried it as `true` or `false` (the current form always does; answersForKind then decides
+ * per kind): a request without it, such as a tab opened before the box existed, records no choice at all
+ * rather than a "no" to words the person never saw. Older forms sent `feedback` for the note (still read),
+ * and open tabs from before the questions changed may still send `features`, `featureOther`, `studios` or
  * `productInterests`: those are accepted and not stored, since those questions are no longer asked.
  */
 export const readInterestAnswers = (body: Record<string, unknown>): Checked<InterestAnswers> => {
@@ -98,7 +108,7 @@ export const readInterestAnswers = (body: Record<string, unknown>): Checked<Inte
       ...(makeIds.length ? { makes: makeIds } : {}),
       ...(heardFrom ? { heardFrom } : {}),
       ...(comment.value ? { comment: comment.value } : {}),
-      keepUpdated: body.keepUpdated === true
+      ...(typeof body.keepUpdated === 'boolean' ? { keepUpdated: body.keepUpdated } : {})
     }
   };
 };
@@ -135,8 +145,8 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     }
     const read = readInterestAnswers(body);
     if (!read.ok) return res.status(400).json(invalid(read.message));
-    // Register interest records the box (false unless ticked); the list card has none.
-    const answers = answersForKind(kind, read.value);
+    // Register interest records the box when the form showed it (false unless ticked); the list card has none.
+    const answers = read.value.keepUpdated === undefined ? read.value : answersForKind(kind, read.value);
     // The surface tag is ours, not the person's: cleaned and cut, never a reason to refuse.
     const source = typeof body.source === 'string' ? cleanLine(body.source).slice(0, INTEREST_LIMITS.sourceMax) || undefined : undefined;
 
@@ -152,13 +162,17 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     // shape the form's direct save writes too; the note also goes to the existing feedback column.
     const { firstName, comment } = answers;
     const intent = comment ? { feedback: comment } : {};
+    const metadata = interestMetadata(source, answers, new Date().toISOString());
+    // An open tab from before the questions changed: its name and note were asked by the old set, so say so.
+    if (fromOldQuestionSet(body) && metadata.answers) metadata.answers = { ...(metadata.answers as Record<string, unknown>), v: 1 };
     const token = newConfirmToken();
     const emailsOn = interestEmailsOn();
     let outcome: string;
     try {
-      // An address already on the list keeps its row as it is; only with emails on does an unconfirmed
-      // 'updates' row get a fresh confirm token (the link about to be sent). A store that saved nothing throws.
-      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers, new Date().toISOString()), intent, { reissueToken: emailsOn }));
+      // An address already on the list keeps its answers; a ticked box is recorded on a register-interest row that
+      // held no yes, and only with emails on does an unconfirmed 'updates' row get a fresh confirm token (the link
+      // about to be sent). A store that saved nothing throws.
+      ({ outcome } = await upsertSubscriber(email, kind, token, metadata, intent, { reissueToken: emailsOn }));
     } catch (err) {
       console.warn('[newsletter] store failed', (err as Error)?.message);
       return res

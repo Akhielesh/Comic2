@@ -46,7 +46,15 @@ describe('WaitlistForm: register interest', () => {
     expect(other).toHaveAccessibleDescription('Up to 1,000 characters.');
     const heard = screen.getByRole('combobox', { name: /How did you hear about us\?/ }) as HTMLSelectElement;
     expect(heard).toHaveValue('');
-    expect([...heard.options].filter((o) => !o.disabled).map((o) => o.text)).toEqual(['LinkedIn', 'A friend', 'Search', 'Social media', 'Other']);
+    // Every choice can be picked, the empty one included, so an answer given by mistake can be taken back.
+    expect([...heard.options].map((o) => [o.value, o.text, o.disabled])).toEqual([
+      ['', 'Choose one', false],
+      ['linkedin', 'LinkedIn', false],
+      ['friend', 'A friend', false],
+      ['search', 'Search', false],
+      ['social', 'Social media', false],
+      ['other', 'Other', false]
+    ]);
     const updates = screen.getByRole('checkbox', { name: UPDATES_LABEL });
     expect(updates).not.toBeChecked();
     expect(updates).toHaveAccessibleDescription(/Nothing is sent yet/);
@@ -69,6 +77,20 @@ describe('WaitlistForm: register interest', () => {
     expect(pick).toBeChecked();
     expect(chip).toHaveAttribute('data-state', 'on');
     expect(chip.querySelector('[data-mark="on"]')).not.toBeNull();
+  });
+
+  it('"How did you hear about us?" can be cleared again: picked, then set back, nothing is sent for it', async () => {
+    submit.mockResolvedValue({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
+    render(<WaitlistForm kind="access" source="landing" />);
+    fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
+    const heard = screen.getByRole('combobox', { name: /How did you hear about us\?/ }) as HTMLSelectElement;
+    fireEvent.change(heard, { target: { value: 'linkedin' } });
+    expect(heard).toHaveValue('linkedin');
+    fireEvent.change(heard, { target: { value: '' } });
+    expect(heard).toHaveValue('');
+    submitForm();
+    await settle();
+    expect(submit).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, { keepUpdated: false });
   });
 
   it('the "Anything else?" counter shows the count near the limit', () => {

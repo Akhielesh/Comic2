@@ -31,6 +31,10 @@ describe('launch legal copy', () => {
     expect(interest).not.toHaveTextContent(/studios you pick/i);
     expect(interest).toHaveTextContent(/kept until you ask us to remove it/i);
     expect(interest).toHaveTextContent(/we do not send emails for it/i);
+    // The box belongs to the register-interest form only; the Stream Studio list has its own confirm step.
+    expect(interest).toHaveTextContent(/From the register-interest form, only people who ticked that box will hear about news or new studios/i);
+    expect(interest).toHaveTextContent(/only after confirming their address/i);
+    expect(interest).toHaveTextContent(/the Stream Studio list is mailed only after its own confirm step/i);
     const cookie = screen.getByText(/ds_member/).closest('p')!;
     expect(cookie).toHaveTextContent(/only while you are signed in on dreamstreamstudio\.ai/i);
     expect(cookie).toHaveTextContent(/which front page to show/i);
