@@ -23,6 +23,7 @@ import {
   makeQaDoc,
   parseQaImagePath,
   qaPublicationView,
+  withPaperBoatScript,
   withQaConflict,
   withoutVariants,
   withQaPublication,
@@ -79,6 +80,12 @@ export interface QaParams {
    * stored before the server kept them (RD-A #12: the reader's never-white paper path). Default true.
    */
   variants: boolean;
+  /**
+   * `script=paper-boat`: every line of the fixture is rewritten from a short script that suits the product's sample art
+   * (a girl, her dog and a paper boat on a canal), one distinct line per balloon on every page (withPaperBoatScript).
+   * For pictures of the studio that strangers see (the comics landing); null: the fixture's own lines.
+   */
+  script: 'paper-boat' | null;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
@@ -109,13 +116,15 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     share: ['1', 'live', 'live-public'].includes(q.get('share') || ''),
     live: q.get('share') === 'live' ? 'unlisted' : q.get('share') === 'live-public' ? 'public' : null,
     history: q.get('history') === '1',
-    variants: q.get('variants') !== '0'
+    variants: q.get('variants') !== '0',
+    script: q.get('script') === 'paper-boat' ? 'paper-boat' : null
   };
 };
 
 /** The fixture doc a URL names, as every surface (studio, readers, the public payload, window.__qa) builds it. */
-export const qaDocFromParams = (p: Pick<QaParams, 'fixture' | 'rtl' | 'variants'>): ComicDoc => {
-  const doc = makeQaDoc(p.fixture, { rtl: p.rtl });
+export const qaDocFromParams = (p: Pick<QaParams, 'fixture' | 'rtl' | 'variants'> & Partial<Pick<QaParams, 'script'>>): ComicDoc => {
+  const made = makeQaDoc(p.fixture, { rtl: p.rtl });
+  const doc = p.script === 'paper-boat' ? withPaperBoatScript(made) : made;
   return p.variants ? doc : withoutVariants(doc);
 };
 

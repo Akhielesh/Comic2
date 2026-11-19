@@ -1,0 +1,168 @@
+// @vitest-environment jsdom
+// The landing says only what landingCopy.ts and the registries say: every line of the hero and the sections below it
+// is on the page, filled from the registries (no brace left), and the page never uses words it must not: a price or an
+// amount, "free forever", promises of an email, a reply, early access or a date, or plans; not before the interest
+// form is sent and not after. The register section is the app's own interest form (components/WaitlistForm.tsx, kind
+// "access"), the one the sign-in card's Register interest tab shows, with its own questions and thank-you.
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const waitlist = vi.hoisted(() => ({ submitWaitlistEmail: vi.fn() }));
+/** Whether this build "has" a bot-check site key (off unless a test turns it on). */
+const build = vi.hoisted(() => ({ turnstile: false }));
+vi.mock('../../../services/waitlist', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/waitlist')>()),
+  submitWaitlistEmail: waitlist.submitWaitlistEmail
+}));
+vi.mock('../../../services/supabase', () => ({ supabase: { from: vi.fn() } }));
+vi.mock('../../../services/clientConfig', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/clientConfig')>()),
+  TURNSTILE_SITE_KEY: 'test-site-key',
+  turnstileEnabled: () => build.turnstile
+}));
+
+import { ComicsLanding } from '../ComicsLanding';
+import { FAQ, FEATURES, HERO, HOW, MODELS, PRICING, fill } from './landingCopy';
+import { INTEREST_FEATURES_QUESTION, INTEREST_THANKS } from '../../../shared/interest';
+import { DEFAULT_MODEL, LANDING_VALUES, OTHER_MODELS } from './landingModels';
+
+beforeEach(() => {
+  waitlist.submitWaitlistEmail.mockReset();
+  build.turnstile = false;
+});
+afterEach(() => {
+  cleanup();
+  for (const s of document.querySelectorAll('script[src]')) s.remove();
+  delete (window as { __dsTurnstileLoading?: unknown }).__dsTurnstileLoading;
+});
+
+const renderLanding = (signedIn = false) =>
+  render(
+    <ComicsLanding signedIn={signedIn} onSignIn={vi.fn()} onRequestAccess={vi.fn()} onOpenComics={vi.fn()} onBrowseGallery={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />
+  );
+const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** Words the page must never use. */
+const BANNED = [
+  /[$¢€£₹]/,
+  /\bfree forever\b/i,
+  /\bfree (?:plan|tier|trial)\b/i,
+  /\bper (?:month|year|page|comic)\b/i,
+  /\bearly access\b/i,
+  /\bfirst access\b/i,
+  /\bwe(?:’|')?ll (?:email|reply|be in touch|contact|let you know|get back)\b/i,
+  /\bwe will (?:email|reply|contact)\b/i,
+  /\b(?:pro|creator|studio) plan\b/i,
+  /\bpaid plans?\b/i,
+  /\bunlimited\b/i,
+  /\bguarantee/i,
+  /\bcoming soon\b/i
+];
+
+describe('landing copy', () => {
+  it('every line below the hero is on the page, filled from the registries', () => {
+    const { container } = renderLanding();
+    const text = squash(container.textContent || '');
+    const lines = [
+      HERO.lead,
+      HERO.invitation,
+      ...FEATURES.flatMap((f) => [f.title, ...f.lines]),
+      ...HOW.steps.flatMap((s) => [s.title, s.body]),
+      ...MODELS.items.flatMap((m) => [m.title, m.body]),
+      MODELS.note,
+      ...PRICING.lines,
+      ...FAQ.map((f) => f.q)
+    ];
+    for (const line of lines) expect(text, line).toContain(squash(fill(line, LANDING_VALUES)));
+    expect(text).not.toMatch(/\{[A-Z_]+\}/);
+  });
+
+  it('pricing says only what is certain: invite-only beta, sign-up not open, no prices announced, registering costs nothing', () => {
+    renderLanding();
+    const pricing = within(document.getElementById('pricing') as HTMLElement);
+    expect(pricing.getAllByRole('listitem').map((li) => squash(li.textContent || ''))).toEqual([
+      'Comic Studio is in an invite-only beta.',
+      'Sign-up is not open yet.',
+      'Prices have not been announced.',
+      'Registering your interest costs nothing.'
+    ]);
+  });
+
+  it('names the image models as members see them and says the line-up can change', () => {
+    renderLanding();
+    const models = document.getElementById('models') as HTMLElement;
+    const text = squash(models.textContent || '');
+    expect(text).toContain(DEFAULT_MODEL.name);
+    for (const name of OTHER_MODELS) expect(text).toContain(name);
+    expect(text).toMatch(/line-up can change/i);
+  });
+
+  it('uses no banned word, signed out or in', () => {
+    for (const signedIn of [false, true]) {
+      const { container, unmount } = renderLanding(signedIn);
+      const text = squash(container.textContent || '');
+      for (const re of BANNED) expect(text.match(re), String(re)).toBeNull();
+      unmount();
+    }
+  });
+
+  it('the hero says, in its first lines, that an AI makes the pages', () => {
+    renderLanding();
+    const hero = squash((document.getElementById('top') as HTMLElement).textContent || '');
+    expect(hero).toContain(HERO.lead);
+    expect(hero).toMatch(/\bAI\b/);
+  });
+
+  it('the register section is the app’s own interest form: email, the optional questions, one submit with source "landing"', async () => {
+    waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message: INTEREST_THANKS.access });
+    renderLanding();
+    const register = document.getElementById('register') as HTMLElement;
+    expect(within(register).getByRole('group', { name: new RegExp(INTEREST_FEATURES_QUESTION.replace(/[?]/g, '\\?')) })).toBeInTheDocument();
+    const email = within(register).getByRole('textbox', { name: /Email address/ });
+    fireEvent.change(email, { target: { value: 'reader@example.com' } });
+    await act(async () => {
+      fireEvent.submit(email.closest('form')!);
+    });
+    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledTimes(1);
+    expect(waitlist.submitWaitlistEmail).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'landing' }, undefined, {});
+  });
+
+  // The form's one thank-you, with or without answers (shared/interest.ts INTEREST_THANKS): it promises no email.
+  it.each([INTEREST_THANKS.access, INTEREST_THANKS.accessWithAnswers])('after sending, the page shows the form’s thank-you and no banned words (%s)', async (message) => {
+    waitlist.submitWaitlistEmail.mockResolvedValue({ ok: true, status: 'registered', message });
+    const { container } = renderLanding();
+    const register = document.getElementById('register') as HTMLElement;
+    const email = within(register).getByRole('textbox', { name: /Email address/ });
+    fireEvent.change(email, { target: { value: 'reader@example.com' } });
+    await act(async () => {
+      fireEvent.submit(email.closest('form')!);
+    });
+    expect(within(register).getByRole('status')).toHaveTextContent(message);
+    const text = squash(container.textContent || '');
+    for (const re of BANNED) expect(text.match(re), String(re)).toBeNull();
+  });
+
+  it('without a bot-check key the page loads no script from another site; with one, only the form’s check', () => {
+    const external = () => [...document.querySelectorAll<HTMLScriptElement>('script[src]')].filter((el) => new URL(el.src, location.href).origin !== location.origin);
+    const first = renderLanding();
+    expect(external()).toEqual([]);
+    first.unmount();
+    build.turnstile = true;
+    renderLanding();
+    expect(external().map((el) => new URL(el.src).hostname)).toEqual(['challenges.cloudflare.com']);
+  });
+
+  it('fill() refuses a missing value instead of shipping a brace', () => {
+    expect(() => fill('{NOPE}', {})).toThrow(/NOPE/);
+    expect(fill('Up to {N} pages', { N: 3 })).toBe('Up to 3 pages');
+  });
+
+  it('the questions answer from the same registries (default model, languages)', () => {
+    renderLanding();
+    const faq = squash((document.getElementById('faq') as HTMLElement).textContent || '');
+    expect(faq).toContain(`New comics are drawn with ${DEFAULT_MODEL.name}`);
+    expect(faq).toContain(`English and ${LANDING_VALUES.LANGS} more`);
+    expect(screen.getByRole('link', { name: /support@/ })).toHaveAttribute('href', expect.stringMatching(/^mailto:/));
+  });
+});

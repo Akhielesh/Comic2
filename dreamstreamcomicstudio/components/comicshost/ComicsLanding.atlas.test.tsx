@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ComicsLanding } from './ComicsLanding';
+import { LANDING_SECTION_IDS } from './landing/parts';
 
 afterEach(() => {
   cleanup();
@@ -24,9 +25,111 @@ const renderLanding = () => render(
 );
 
 describe('Comics landing', () => {
-  it('offers the sample and style choices without the previous walkthrough', () => {
+  it('lays the page out in order: hero, features, looks, how it works, models, pricing, read, register, questions, then the footer', () => {
+    const { container } = renderLanding();
+    const main = container.querySelector('main') as HTMLElement;
+    const ids = [...main.querySelectorAll(':scope > section')].map((section) => section.id);
+    expect(ids).toEqual([...LANDING_SECTION_IDS]);
+    expect(ids).toEqual(['top', 'features', 'looks', 'how-it-works', 'models', 'pricing', 'read', 'register', 'faq']);
+    // Every section is named by its own heading, and the footer comes after the page.
+    for (const section of main.querySelectorAll(':scope > section')) {
+      const label = document.getElementById(section.getAttribute('aria-labelledby') || '');
+      expect(label?.textContent?.trim(), section.id).toBeTruthy();
+    }
+    expect(main.compareDocumentPosition(screen.getByRole('contentinfo')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the footer links to every section on the page, and each link shows its section and focuses its heading', () => {
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    try {
+      renderLanding();
+      const nav = within(screen.getByRole('navigation', { name: 'On this page' }));
+      const links = nav.getAllByRole('link');
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(['#features', '#how-it-works', '#models', '#pricing', '#read', '#register', '#faq']);
+      fireEvent.click(nav.getByRole('link', { name: 'Pricing' }));
+      expect(scroll.mock.contexts.at(-1)).toBe(document.getElementById('pricing'));
+      expect(screen.getByRole('heading', { level: 2, name: 'Pricing' })).toHaveFocus();
+      fireEvent.click(nav.getByRole('link', { name: 'FAQ' }));
+      expect(screen.getByRole('heading', { level: 2, name: 'Questions and answers' })).toHaveFocus();
+      // The join link puts the cursor in the form's first field (whatever fields the form has).
+      fireEvent.click(nav.getByRole('link', { name: 'Register interest' }));
+      expect(document.activeElement?.closest('#register')).not.toBeNull();
+      expect(document.activeElement?.tagName).toMatch(/INPUT|TEXTAREA|H2/);
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('signed out, "Register your interest" renders the app’s own form on the page; signed in, members get their comics instead', () => {
+    const { unmount } = renderLanding();
+    const register = within(document.getElementById('register') as HTMLElement);
+    expect(register.getByRole('heading', { level: 2, name: 'Register your interest' })).toBeInTheDocument();
+    // The app's WaitlistForm, as it is (its fields and wording belong to that form); the page writes no form of its own.
+    expect((document.getElementById('register') as HTMLElement).querySelectorAll('form')).toHaveLength(1);
+    expect(document.querySelectorAll('form')).toHaveLength(1);
+    expect(register.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    unmount();
+    const onOpenComics = vi.fn();
+    render(
+      <ComicsLanding signedIn onSignIn={vi.fn()} onRequestAccess={vi.fn()} onOpenComics={onOpenComics} onBrowseGallery={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} />
+    );
+    const member = within(document.getElementById('register') as HTMLElement);
+    expect(member.queryByRole('textbox')).toBeNull();
+    fireEvent.click(member.getByRole('button', { name: 'Open My comics' }));
+    expect(onOpenComics).toHaveBeenCalledTimes(1);
+    // No join link for members in the footer.
+    expect(within(screen.getByRole('navigation', { name: 'On this page' })).queryByRole('link', { name: 'Register interest' })).toBeNull();
+  });
+
+  it('arriving on a section link shows that section once, after the fonts and two frames, with a jump', async () => {
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    let releaseFonts: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => {
+      releaseFonts = resolve;
+    });
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready } });
+    const frames = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    window.history.replaceState({}, '', '/#models');
+    try {
+      renderLanding();
+      // Nothing moves while the fonts are still loading (the page above has not reached its final height).
+      expect(scroll).not.toHaveBeenCalled();
+      await act(async () => {
+        releaseFonts();
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(document.getElementById('models'));
+      expect(scroll.mock.calls[0][0]).toMatchObject({ block: 'start', behavior: 'auto' });
+      expect(frames.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(document.activeElement).toBe(document.getElementById('landing-models'));
+    } finally {
+      frames.mockRestore();
+      window.history.replaceState({}, '', '/');
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      delete (document as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it('the hero’s Register your interest puts the cursor in the form’s email field', () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    try {
+      renderLanding();
+      fireEvent.click(screen.getByTestId('comics-hero-cta'));
+      const register = document.getElementById('register') as HTMLElement;
+      expect(document.activeElement).toBe(within(register).getByRole('textbox', { name: /Email address/ }));
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('offers the sample and style choices', () => {
     renderLanding();
-    expect(screen.queryByText(/how it works/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Make your story a comic.' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Find your look' })).toBeInTheDocument();
     const looks = within(screen.getByRole('region', { name: 'Find your look' }));

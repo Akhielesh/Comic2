@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * The comics home (the landing, its header and the shared header, lockup and legal line it is built from, the studio
- * replica, the comic page specimen, the mark), the views a visitor reaches from it in the same chrome (sign-in, the
+ * The comics home (the landing and its sections in landing/, its header and the shared header, lockup and legal line it
+ * is built from, the sample reader, the mark), the views a visitor reaches from it in the same chrome (sign-in, the
  * access request and the tester invite, the Library, Privacy, Terms) and their QA scenes read 0 on every design-system guard's own detector
  * (tests/config/classLists.ts), so none of them needs a ratchet baseline entry (tests/config/baselines/*.json):
  *   - legacyKit: border-black, shadow-comic, font-comic, Tailwind font-display (Bangers), brand-* colours;
@@ -26,6 +26,9 @@ const OWNED = [
   'components/comicshost/ComicsHeader.tsx',
   'components/comicshost/ComicSampleReader.tsx',
   'components/comicshost/ComicsMark.tsx',
+  ...['FeaturesSection.tsx', 'HowItWorks.tsx', 'LandingClip.tsx', 'LandingShot.tsx', 'ModelsPricing.tsx', 'ReadSection.tsx', 'RegisterFaq.tsx', 'parts.tsx', 'landingCopy.ts', 'landingMedia.ts', 'landingModels.ts', 'flagship.ts', 'useDarkClass.ts'].map(
+    (f) => `components/comicshost/landing/${f}`
+  ),
   'components/ds/AppHeader.tsx',
   'components/layout/BrandLockup.tsx',
   'components/layout/LegalMicroLinks.tsx'

@@ -77,10 +77,17 @@ describe('ComicsHeader', () => {
     expect(signIn.className.split(/\s+/)).toContain(RADIUS_ROUND);
     fireEvent.click(signIn);
     expect(p.onSignIn).toHaveBeenCalledTimes(1);
-    expect(within(actions).queryByRole('button', { name: /^register interest$/i })).toBeNull();
-    fireEvent.click(within(actions).getByRole('button', { name: 'Menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Register interest' }));
+    expect(within(actions).queryByRole('button', { name: /^request access$/i })).toBeNull();
+    // On the landing the join row scrolls to the page's own form; elsewhere it opens the sign-in card's Register interest tab.
+    // From lg the header also carries it as a ghost beside Sign in (never a second fill), so it stays one press away.
+    const register = within(actions).getByRole('button', { name: 'Register interest' });
+    expect(register).toHaveAttribute('data-variant', 'ghost');
+    expect(register.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'lg:inline-flex']));
+    fireEvent.click(register);
     expect(p.onRequestAccess).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(actions).getByRole('button', { name: 'Menu' }));
+    fireEvent.click(within(document.querySelector('[data-slot="comics-menu"]') as HTMLElement).getByRole('button', { name: 'Register interest' }));
+    expect(p.onRequestAccess).toHaveBeenCalledTimes(2);
     expect(within(actions).queryByRole('button', { name: /my comics/i })).toBeNull();
   });
 
@@ -100,8 +107,8 @@ describe('ComicsHeader', () => {
 
   it('the menu rows per state and page: section links on the landing only, Register interest only signed out', () => {
     const cases: Array<[Partial<ComicsHeaderProps>, string[]]> = [
-      [{ signedIn: false, page: 'home' }, ['Looks', 'Library', 'Register interest', 'Use Paper theme']],
-      [{ signedIn: true, page: 'home' }, ['Looks', 'Library', 'My comics', 'Use Paper theme']],
+      [{ signedIn: false, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'Register interest', 'Use Paper theme']],
+      [{ signedIn: true, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'My comics', 'Use Paper theme']],
       [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Register interest', 'Use Paper theme']],
       [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics', 'Use Paper theme']]
     ];
@@ -111,7 +118,7 @@ describe('ComicsHeader', () => {
       // Public pages keep an explicit way home beside the current Library destination.
       const nav = screen.getByRole('navigation', { name: 'Comic Studio' });
       expect(within(nav).getAllByRole('button').map((b) => b.textContent), JSON.stringify(over)).toEqual(
-        over.page === 'home' ? ['Looks', 'Library'] : ['Home', 'Library']
+        over.page === 'home' ? ['Features', 'Looks', 'Models', 'Pricing', 'Library'] : ['Home', 'Library']
       );
       expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(['hidden', 'expanded:flex']));
       unmount();

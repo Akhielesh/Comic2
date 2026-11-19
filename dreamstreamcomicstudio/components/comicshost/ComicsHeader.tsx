@@ -11,7 +11,15 @@ import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from './ComicsMark';
 import './comicsShell.css';
 
-export type ComicsSectionId = 'looks';
+export type ComicsSectionId = 'features' | 'looks' | 'models' | 'pricing';
+
+/** The landing's in-page links, in page order (the header's nav from expanded and its menu below that). */
+const SECTION_LINKS: ReadonlyArray<{ id: ComicsSectionId; label: string }> = [
+  { id: 'features', label: 'Features' },
+  { id: 'looks', label: 'Looks' },
+  { id: 'models', label: 'Models' },
+  { id: 'pricing', label: 'Pricing' }
+];
 
 export interface ComicsHeaderProps {
   signedIn: boolean;
@@ -21,6 +29,7 @@ export interface ComicsHeaderProps {
   current?: ComicsHeaderCurrent;
   onGoHome: () => void;
   onSignIn: () => void;
+  /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's Register interest tab. */
   onRequestAccess: () => void;
   onOpenComics: () => void;
   /** Opens account settings with the current Comic Studio page as its return destination. */
@@ -104,9 +113,7 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
 
   const menu: MenuEntry[] = [
     ...(!home ? [{ label: 'Home', run: onGoHome }] : []),
-    ...(sections
-      ? [{ label: 'Looks', run: () => onShowSection!('looks') }]
-      : []),
+    ...(sections ? SECTION_LINKS.map((link) => ({ label: link.label, run: () => onShowSection!(link.id) })) : []),
     { label: 'Library', run: onBrowseGallery, current: onLibrary },
     ...(signedIn
       ? [
@@ -132,11 +139,12 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
           Home
         </button>
       )}
-      {sections && (
-        <button type="button" className={NAV_LINK} onClick={() => onShowSection!('looks')}>
-          Looks
-        </button>
-      )}
+      {sections &&
+        SECTION_LINKS.map((link) => (
+          <button key={link.id} type="button" className={NAV_LINK} onClick={() => onShowSection!(link.id)}>
+            {link.label}
+          </button>
+        ))}
       <button
         type="button"
         aria-current={onLibrary ? 'page' : undefined}
@@ -163,6 +171,13 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
               card and wiped what was typed). */}
           {!home && !onSignInPage && (
             <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden expanded:inline-flex')} onClick={onRequestAccess}>
+              Register interest
+            </Button>
+          )}
+          {/* The landing's join action stays one press away once the hero has scrolled off: a ghost, never a fill (the
+              hero's button is the page's one filled action). Below lg the menu carries the same row. */}
+          {home && (
+            <Button variant="ghost" className={cn(RADIUS_ROUND, 'comics-header-register hidden lg:inline-flex')} onClick={onRequestAccess}>
               Register interest
             </Button>
           )}

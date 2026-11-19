@@ -709,6 +709,45 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?:
 };
 
 /**
+ * A short script for the product's sample art (public/assets/comic-sample: a girl in a red hood, her dog and a paper
+ * boat on a rainy canal), by line kind. `script=paper-boat` rewrites a fixture's lines from it so that pictures of the
+ * studio shown to strangers read as a real comic: every balloon on a page says something different (the fixture's own
+ * lines repeat by design, which reads as a bug in a picture).
+ */
+export const PAPER_BOAT_SCRIPT: Readonly<Record<Line['kind'], readonly string[]>> = {
+  speech: ['There it goes!', 'Come on, Biscuit!', 'Don’t let it sink!', 'Almost got it…', 'Good boy!', 'It’s still dry!', 'Look, it floats!', 'This way!'],
+  thought: ['Please don’t tip over…', 'Where is it going?', 'I folded it myself.', 'Just a little further.', 'Is it waiting for us?'],
+  caption: ['After the rain, the canal ran fast.', 'Under the old bridge.', 'Biscuit saw it first.', 'Down by the water steps.', 'Home, with one wet boat.'],
+  sfx: ['SPLASH!', 'WOOF!', 'PLIP!', 'SPLISH!'],
+  whisper: ['Shh… there it is.', 'Careful now.', 'Got you.', 'Easy, easy…'],
+  shout: ['WAIT, LITTLE BOAT!', 'BISCUIT, NO!', 'OVER HERE!', 'GOT IT!']
+};
+
+/**
+ * Every line of `doc` rewritten from PAPER_BOAT_SCRIPT, keeping its id, kind and speaker: in reading order, each kind
+ * takes the next line of its list, starting further along on each page, so no line repeats within a page (the longest
+ * page of any fixture has fewer lines of one kind than its list holds; qaController.test.ts checks every fixture).
+ */
+export const withPaperBoatScript = (doc: ComicDoc): ComicDoc => ({
+  ...doc,
+  pages: doc.pages.map((page, pageIndex) => {
+    const next: Partial<Record<Line['kind'], number>> = {};
+    return {
+      ...page,
+      panels: page.panels.map((panel) => ({
+        ...panel,
+        lines: panel.lines.map((line) => {
+          const list = PAPER_BOAT_SCRIPT[line.kind];
+          const i = next[line.kind] ?? 0;
+          next[line.kind] = i + 1;
+          return { ...line, text: list[(pageIndex + i) % list.length] };
+        })
+      }))
+    };
+  })
+});
+
+/**
  * The doc with no stored variants on any page or on the cover (`variants=0`, RD-A #12): a comic stored before the
  * server kept 480w / 1080w variants, so the reader has no stand-in and stands on its toned paper instead. Character
  * sheets, the style board and options keep theirs.

@@ -13,6 +13,7 @@ to their comics — see `services/productHost.ts` and `components/comicshost/`).
 | `comic.dreamstreamstudio.ai/*` | `301` to `comics.` (same path + query); any other host (workers.dev) → `302` |
 | `/api`, `/api/*` | `env.API.fetch(request)` — the original request, untouched (agent gate, rate limits and client-IP forwarding stay in `dreamstream-api`) |
 | `/live*`, `/models`, `/share/*`, `/studio.html` | `302` to the main site (other products; separate session) |
+| `GET`/`HEAD` `/library`, `/library/` | `302` to `/?view=gallery`, the Library (the SPA has no `/library` route); other query params are kept behind `view=gallery` |
 | a page asked for by an AI agent (UA, `Signature-Agent`, or Cloudflare's verified-bot category) | `302` to `/api/agent-gate?from=…`, like `functions/_middleware.ts` on the apex. The edge runs this page gate itself because the Pages middleware only sees the edge's subrequest, whose `request.cf` has no verified-bot category. Crawl-policy files (`/robots.txt`, `/llms.txt`, `/.well-known/*`), `/agents` and static files stay open. Detection is `api-proxy/src/agent-gate.ts`, shared (the deploy workflow also runs when it changes). |
 | everything else | fetched from `PAGES_ORIGIN` (same path + query) with `X-Forwarded-Host: comics.dreamstreamstudio.ai`, so the Pages middleware serves instead of redirecting to the apex |
 
@@ -20,9 +21,13 @@ On top of that:
 
 - **Location** headers that point at the Pages origin or the apex are mapped back to the comics host.
 - **HTML** (except `/c/*`, owned by the share Pages Function, and legacy `/?view=read&id=` reader heads)
-  gets the Comic Studio head through `HTMLRewriter`: title "Comic Studio — DreamStream", description,
-  `og:*`/`twitter:*` defaults with `/icons/comics-og.png`, `<meta name="ds-product" content="comics">`,
-  theme colours and the `/comics.webmanifest` manifest. Nothing from the request is reflected.
+  gets the Comic Studio head through `HTMLRewriter`: title, description, canonical, `og:*`/`twitter:*`
+  (summary_large_image), `<meta name="ds-product" content="comics">`, theme colours and the
+  `/comics.webmanifest` manifest. Two heads (`brand.ts` `headFor`): the Library view (`/?view=gallery`) gets
+  "Library · Comic Studio" with its own canonical/`og:url` and `/icons/comics-library-og.png`; every other page
+  gets "Comic Studio — DreamStream" with canonical `/` and `/icons/comics-og.png`. Each image URL carries its
+  content hash as `?v=` (`OG_IMAGE_REV`, checked by the tests). Nothing from the request is reflected. The
+  pictures and how to remake them: `docs/features/link-previews.md`.
 - **Security headers on every response:** `Strict-Transport-Security: max-age=31536000` (never
   `includeSubDomains` — other subdomains are separate products), `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, a minimal `Permissions-Policy`, and

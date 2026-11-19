@@ -5,9 +5,10 @@
 // iMessage crop to a square):
 //   backdrop: the cover (or first published page) blurred and darkened, or a themed gradient;
 //   cover card: the art fit to 530 px high, rounded 18 px, soft shadow, at x=88;
-//   text column x=560…1130: title (Bangers + per-script Noto, auto-fit 64→40 px, ≤ 3 lines,
-//   dark outline), description (Noto Sans SemiBold 26 px, ≤ 3 lines), meta row;
-//   mark: "DreamStream Studio", bottom right.
+//   text column x=560…1130: title (Noto Sans Bold, the per-script Noto for other scripts, auto-fit
+//   64→40 px, ≤ 3 lines, dark outline), description (Noto Sans SemiBold 26 px, ≤ 3 lines), meta row;
+//   mark: the Comic Studio mark in ink + "Comic Studio", bottom right (the name the comics host and
+//   its own preview pictures use).
 //   The meta row carries the publish-time content rating ("Rated PG") when there is one, so a
 //   parent sees it in the WhatsApp/iMessage preview before opening the link.
 //
@@ -32,6 +33,8 @@ import { SHARP_INPUT, withSharpSlot } from '../imageMeasure.js';
 export const OG_W = 1200;
 export const OG_H = 630;
 export const OG_MAX_BYTES = 300 * 1024;
+/** Bumped when the drawn card changes without an OG_TEMPLATE_VERSION bump (2: the ink mark; 3: plain title face, "Comic Studio"). */
+export const OG_RENDER_REV = 'r3-plain-title';
 const DEFAULT_THEME = '#3B5B8C';
 
 export interface OgRenderInput {
@@ -77,10 +80,11 @@ const UNCOVERED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Scrip
 /** True when every letter in `text` is drawable with the vendored fonts (no tofu). */
 export const scriptsCovered = (text: string): boolean => !UNCOVERED.test(String(text ?? ''));
 
-const TITLE_FAMILIES = 'Bangers,Noto Sans Devanagari,Noto Sans Bengali,Noto Sans Tamil,Noto Sans Telugu,Noto Sans Kannada,Noto Sans Malayalam,Noto Sans Gujarati,Noto Sans Gurmukhi,Noto Sans Arabic,Noto Sans';
 const BODY_FAMILIES = 'Noto Sans,Noto Sans Devanagari,Noto Sans Bengali,Noto Sans Tamil,Noto Sans Telugu,Noto Sans Kannada,Noto Sans Malayalam,Noto Sans Gujarati,Noto Sans Gurmukhi,Noto Sans Arabic';
-/** Latin titles use the comic display face; other scripts start with their bold Noto. */
-const titleFamiliesFor = (text: string): string => (/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text) ? `${BODY_FAMILIES.replace('Noto Sans,', '')},Noto Sans` : TITLE_FAMILIES);
+/** Latin titles are set in Noto Sans Bold (no comic display face on the card's chrome); other scripts start with their bold Noto. */
+const titleFamiliesFor = (text: string): string => (/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text) ? `${BODY_FAMILIES.replace('Noto Sans,', '')},Noto Sans` : BODY_FAMILIES);
+/** The name on the card's mark: the product the comics host and its own preview pictures name. */
+export const OG_MARK_TEXT = 'Comic Studio';
 
 const FONT_DIR_CANDIDATES = (): string[] => {
   const here = (() => {
@@ -160,7 +164,10 @@ export function ogHash(input: Omit<OgRenderInput, 'coverBuf' | 'fallbackPageBuf'
     input.fallbackTitle || '',
     input.coverPath || '',
     // Appended only when set, so a card without a rating keeps its exact earlier hash (and URL).
-    ...(isContentRating(input.rating) ? [input.rating] : [])
+    ...(isContentRating(input.rating) ? [input.rating] : []),
+    // The drawn template's own revision (the ink mark), so a card made with the old orange mark
+    // gets a new file name the next time its publication is written, instead of being reused.
+    OG_RENDER_REV
   ]);
   return crypto.createHash('sha1').update(material).digest('hex').slice(0, 12);
 }
@@ -218,16 +225,16 @@ async function renderTitle(text: string, width: number): Promise<{ fill: TextLay
   let chosen: { fill: TextLayer; size: number } | null = null;
   for (const size of sizes) {
     const lineH = size * 1.22;
-    const fill = await renderText(`<span foreground="#FFFFFF" letter_spacing="${size >= 52 ? 1024 : 512}">${escPango(text)}</span>`, {
-      font: `${families} ${size}px`,
+    const fill = await renderText(`<span foreground="#FFFFFF">${escPango(text)}</span>`, {
+      font: `${families} Bold ${size}px`,
       width
     });
     chosen = { fill, size };
     if (fill.h <= lineH * 3 + 4) break;
   }
   const size = chosen!.size;
-  const outline = await renderText(`<span foreground="#14110F" letter_spacing="${size >= 52 ? 1024 : 512}">${escPango(text)}</span>`, {
-    font: `${families} ${size}px`,
+  const outline = await renderText(`<span foreground="#14110F">${escPango(text)}</span>`, {
+    font: `${families} Bold ${size}px`,
     width
   });
   return { fill: chosen!.fill, outline, size };
@@ -256,11 +263,21 @@ async function renderClamped(text: string, opts: { size: number; alpha: number; 
 const roundedMask = (w: number, h: number, r: number) =>
   Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="${r}" ry="${r}" fill="#fff"/></svg>`);
 
-const markSvg = (): Buffer =>
+/**
+ * The Comic Studio mark (components/comicshost/ComicsMark.tsx, viewBox 48) drawn in ink, as the
+ * product shows it on dark paper: a light ink tile with the turning page cut out in the dark
+ * paper. The card's backdrop is always dark (blurred, darkened art or a dark gradient), so the
+ * light tile reads on every cover. No hue: the old orange bubble tile is gone (Atlas ink look).
+ */
+export const OG_MARK_INK = '#FAFAFA';
+export const OG_MARK_PAPER = '#0A0A0A';
+export const markSvg = (size = 36): Buffer =>
   Buffer.from(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">` +
-      `<rect x="1" y="1" width="34" height="34" rx="9" fill="#D97757"/>` +
-      `<path d="M10 11.5h16a3 3 0 0 1 3 3v6.5a3 3 0 0 1-3 3h-8.5l-4.5 4v-4H10a3 3 0 0 1-3-3v-6.5a3 3 0 0 1 3-3z" fill="#FDFBF7"/>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 48 48">` +
+      `<rect x="2" y="2" width="44" height="44" rx="12" fill="${OG_MARK_INK}"/>` +
+      `<path d="M15 13h18l4 4v20H15z" fill="none" stroke="${OG_MARK_PAPER}" stroke-width="2" stroke-linejoin="round" opacity=".55"/>` +
+      `<path d="M11 10h17l6 6v19H11z" fill="${OG_MARK_PAPER}"/>` +
+      `<path d="M27 10v7h7M15 20h15v11H15zM15 25h15M22 25v6" fill="none" stroke="${OG_MARK_INK}" stroke-width="1.8" stroke-linejoin="round"/>` +
       `</svg>`
   );
 
@@ -365,7 +382,7 @@ async function renderOgCardUngated(input: OgRenderInput): Promise<{ jpeg: Buffer
   if (metaLayer && y + metaLayer.h < 560) layers.push({ input: metaLayer.buf, left: textLeft, top: Math.max(y, 470) });
 
   // 4. Mark.
-  const markText = await renderText(`<span foreground="#FFFFFF" fgalpha="90%">DreamStream Studio</span>`, { font: `${BODY_FAMILIES} SemiBold 18px`, width: 300 });
+  const markText = await renderText(`<span foreground="#FFFFFF" fgalpha="90%">${escPango(OG_MARK_TEXT)}</span>`, { font: `${BODY_FAMILIES} SemiBold 18px`, width: 300 });
   const markLeft = 1130 - markText.w;
   layers.push({ input: markText.buf, left: Math.max(0, markLeft), top: 574 + Math.round((36 - markText.h) / 2) });
   layers.push({ input: markSvg(), left: Math.max(0, markLeft - 46), top: 574 });

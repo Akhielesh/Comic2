@@ -1,0 +1,250 @@
+/*
+ * The comics landing's sections below the hero (features, how it works, models, pricing, read, register, questions,
+ * the footer's page links). Loaded with the landing's own lazy chunk, never with index.html: nothing here may move
+ * into a global stylesheet. Tokens only (ink, muted, hairline, well, surface, the radius, shadow and motion tokens);
+ * colour comes from the recipes the components pass (the feature tiles), never from here.
+ */
+
+/*
+ * The comics header is 64 px tall at every width (56 px and not sticky on a short landscape screen), but it sets
+ * --header-h on itself only; the app's :root value (48 px under 600 px wide) is what the sections below would read.
+ * Restate it on the page so a section's scroll margin clears the real header.
+ */
+.comics-landing { --header-h: 64px; }
+@media (max-height: 479px) { .comics-landing { --header-h: 56px; } }
+
+.landing-section {
+  padding-block: clamp(48px, 7vw, 96px);
+  border-top: 1px solid var(--ds-hairline);
+  scroll-margin-top: calc(var(--header-h, 64px) + 12px);
+}
+
+.landing-head { max-width: 46rem; }
+.landing-head > .ds-overline-display { margin: 0 0 12px; }
+
+.landing-title {
+  margin: 0;
+  font-size: clamp(28px, 3.4vw, 46px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+  color: var(--ds-ink);
+}
+
+.landing-lead {
+  max-width: 40rem;
+  margin: 16px 0 0;
+  font-size: clamp(16px, 1.4vw, 19px);
+  line-height: 1.55;
+  color: var(--ds-muted);
+  text-wrap: pretty;
+}
+
+.landing-body {
+  margin: 10px 0 0;
+  max-width: 36rem;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--ds-muted);
+  text-wrap: pretty;
+}
+
+.landing-note { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--ds-muted); }
+
+.landing-count { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--ds-muted); }
+
+/* ── Pictures and the clip ─────────────────────────────────────────────────────────────── */
+
+.landing-figure { width: 100%; min-width: 0; margin: 0 auto; }
+
+.landing-frame {
+  overflow: hidden;
+  border: 1px solid var(--ds-hairline);
+  border-radius: var(--ds-radius-feature, 16px);
+  background: var(--ds-well);
+  box-shadow: var(--ds-shadow-soft);
+}
+
+.landing-media { display: block; width: 100%; height: auto; }
+
+.landing-caption { margin-top: 10px; font-size: 13px; line-height: 1.45; color: var(--ds-muted); }
+
+.landing-clip { display: flex; flex-direction: column; }
+/* The Play / Pause control sits in its own strip under the clip, never on the page art. */
+.landing-clip-bar { display: flex; align-items: center; padding: 8px; border-top: 1px solid var(--ds-hairline); }
+
+/* ── Features ──────────────────────────────────────────────────────────────────────────── */
+
+.landing-features { margin: clamp(28px, 4vw, 48px) 0 0; padding: 0; list-style: none; }
+
+.landing-feature {
+  display: grid;
+  gap: 28px;
+  padding-block: clamp(28px, 4vw, 56px);
+  border-top: 1px solid var(--ds-hairline-soft, var(--ds-hairline));
+}
+
+.landing-feature-copy { min-width: 0; }
+.landing-feature-mark { display: flex; align-items: center; gap: 14px; }
+
+.landing-tile {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: var(--ds-radius-panel, 16px);
+  transition: transform var(--ds-motion-panel, 240ms) var(--ds-ease, ease);
+}
+.landing-tile > svg { width: 24px; height: 24px; }
+
+.landing-feature-title,
+.landing-step-title,
+.landing-comic-title {
+  margin: 18px 0 0;
+  font-size: clamp(20px, 1.9vw, 26px);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  color: var(--ds-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .landing-feature:hover .landing-tile { transform: rotate(-6deg) scale(1.05); }
+}
+
+@media (min-width: 960px) {
+  .landing-feature { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; column-gap: clamp(40px, 5vw, 80px); }
+  .landing-feature:nth-child(even) .landing-feature-figure { order: -1; }
+}
+
+/* ── How it works ──────────────────────────────────────────────────────────────────────── */
+
+.landing-steps { display: grid; gap: 36px; margin: clamp(28px, 4vw, 48px) 0 0; padding: 0; list-style: none; }
+
+.landing-step { position: relative; padding-top: 22px; border-top: 1px solid var(--ds-ink); }
+.landing-step-dot { position: absolute; top: -5px; left: 0; width: 9px; height: 9px; border-radius: 999px; background: var(--ds-ink); }
+.landing-step .landing-count { display: block; }
+.landing-step-title { margin-top: 8px; }
+
+@media (min-width: 768px) {
+  .landing-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 28px; }
+}
+
+/* ── Models and pricing (ink only) ─────────────────────────────────────────────────────── */
+
+.landing-models { display: grid; margin: clamp(24px, 3vw, 40px) 0 0; column-gap: 48px; }
+.landing-model { padding-block: 20px; border-top: 1px solid var(--ds-hairline); }
+.landing-model-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; color: var(--ds-ink); }
+.landing-model .landing-body { margin-top: 6px; }
+
+@media (min-width: 768px) {
+  .landing-models { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.landing-pricing {
+  max-width: 40rem;
+  margin: clamp(20px, 3vw, 32px) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ds-hairline);
+}
+.landing-pricing > li {
+  padding-block: 14px;
+  border-bottom: 1px solid var(--ds-hairline);
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ds-ink);
+}
+
+/* ── Read ──────────────────────────────────────────────────────────────────────────────── */
+
+.landing-read { display: grid; gap: 40px; }
+.landing-read-copy { min-width: 0; }
+.landing-read-media { min-width: 0; display: flex; flex-direction: column; align-items: center; }
+
+.landing-featured { display: grid; gap: 14px; margin: 28px 0; padding: 0; list-style: none; }
+
+.landing-comic {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--ds-hairline);
+  border-radius: var(--ds-radius-panel, 16px);
+  background: var(--ds-surface);
+}
+.landing-comic-icon { width: 22px; height: 22px; margin-top: 2px; color: var(--ds-ink); }
+.landing-comic-body { min-width: 0; }
+.landing-comic-title { margin: 0; font-size: clamp(18px, 1.6vw, 22px); }
+.landing-comic .landing-link-button { margin-top: 14px; }
+
+.landing-link-button { max-width: 100%; white-space: normal; text-align: left; height: auto; min-height: 44px; }
+
+@media (min-width: 960px) {
+  .landing-read { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); align-items: start; column-gap: clamp(40px, 6vw, 96px); }
+  .landing-read-media { position: sticky; top: calc(var(--header-h, 64px) + 24px); }
+}
+
+/* ── Register ──────────────────────────────────────────────────────────────────────────── */
+
+.landing-register {
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: clamp(24px, 4vw, 48px);
+  border: 1px solid var(--ds-hairline);
+  border-radius: var(--ds-radius-feature, 20px);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-soft);
+}
+.landing-register-form { margin-top: 24px; }
+.landing-register-action { margin-top: 24px; }
+.landing-member { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 16px 0 0; font-size: 14px; color: var(--ds-muted); }
+
+/* ── Questions ─────────────────────────────────────────────────────────────────────────── */
+
+.landing-faq { max-width: 48rem; margin-top: clamp(20px, 3vw, 32px); border-top: 1px solid var(--ds-hairline); }
+.landing-faq-item { border-bottom: 1px solid var(--ds-hairline); }
+.landing-faq-q {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 16px;
+  font-size: 16px;
+  font-weight: 550;
+  line-height: 1.4;
+  color: var(--ds-ink);
+  cursor: pointer;
+  list-style: none;
+}
+.landing-faq-q::-webkit-details-marker { display: none; }
+.landing-faq-q > span { min-width: 0; }
+.landing-faq-chevron {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--ds-muted);
+  transition: transform var(--ds-motion-fast, 150ms) var(--ds-ease, ease);
+}
+.landing-faq-item[open] .landing-faq-chevron { transform: rotate(180deg); }
+.landing-faq-a { padding-bottom: 18px; font-size: 15px; line-height: 1.65; color: var(--ds-muted); }
+.landing-faq-a > p { margin: 0; }
+
+/* ── Footer: links to the page's sections ──────────────────────────────────────────────── */
+
+.landing-page-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 20px;
+  padding-block: 18px 6px;
+  border-top: 1px solid var(--ds-hairline);
+  font-size: 14px;
+}
+.landing-page-links > a { color: var(--ds-ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-tile, .landing-faq-chevron { transition: none; }
+  .landing-feature:hover .landing-tile { transform: none; }
+}
