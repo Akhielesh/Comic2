@@ -9,7 +9,10 @@
 import type { EditionTextField, LineKind, TranslationFailure } from './doc.js';
 import { DOC_LIMITS } from './limits.js';
 
-export { CONTENT_CHECK_NOTES, lineRefOf, translationProblems, whereText } from './i18n.js';
+export { CONTENT_CHECK_NOTES, lineRefOf, lineRefsOf, translationProblems, whereText } from './i18n.js';
+/** The id check for a translate action's `lineIds` and `redo` (line ids and the four title fields): use it, not
+ *  SAFE_ID_RE alone, wherever those lists are validated (the quote route, the action sanitizer). */
+export { isTranslateScopeId } from './ops.js';
 
 /**
  * Where a translatable text sits. `page` = page.n, `panel` = panel.n, `line` = 1-based index in `panel.lines` (the
@@ -51,7 +54,8 @@ export interface TranslationProblem {
   /** Blocks publishing this language. Titles never do (as today: the reader falls back to the source title). */
   blocking: boolean;
   fix: FixKind;
-  /** The stored review note, for `flagged` and `note` only. Never the translation text. */
+  /** The stored review note, for `flagged` and `note` (and `refused` when a redo of a flagged line was refused). Never
+   *  the translation text. */
   note?: string;
   /** For refused / timed_out / provider_failed / review_failed: the stored failure reason ('empty' and 'provider'
    *  both read as provider_failed). */
@@ -62,12 +66,11 @@ export interface TranslationProblem {
 export type I18nFixStage = 'off' | 'admins' | 'all';
 export const I18N_FIX_STAGE: I18nFixStage = 'all';
 
-/** The fields a `translate` action needs for "Fix automatically" (spread into `{ type: 'translate', languages: [lang] }`). */
+/** The fields a `translate` action needs for "Fix automatically" (spread into `{ type: 'translate', languages: [lang] }`).
+ *  Every id in it passes isTranslateScopeId (a title field has a dot, which SAFE_ID_RE alone refuses). */
 export interface FixPlan {
   /** Line ids (or title fields) to translate again although current: flagged lines the review gave no usable fix for. */
   redo: string[];
-  /** The scope: only these lines and titles are planned. Absent = the whole language, which then does the same work. */
-  lineIds?: string[];
   /** Translate in parts of 10 lines (after a time-out). */
   chunkLines?: 10;
 }
@@ -78,25 +81,20 @@ const MACHINE_FIXES: ReadonlySet<FixKind> = new Set<FixKind>(['translate', 'fini
  * The one action behind "Fix automatically" for ONE language (the first problem's; others are ignored), or null when
  * nothing blocking is left that the machine can fix (only creator choices, notes or titles).
  *
- * Scope: when a refused line is in the language, `lineIds` names the fixable lines and titles (≤ 200, reading order,
- * titles first) so the refused line is never retried blindly. Otherwise the scope is left out: the whole-language plan
- * already does exactly that work (missing, stale and waiting lines, titles, plus `redo`) and the action stays small.
- * `redo` (≤ 200) never holds the author's own words or a content-check flag (those are `creator`).
+ * No scope: the whole-language plan does exactly the machine-fixable work (missing, stale and waiting lines, titles,
+ * plus `redo`) and leaves a refused line or title out by itself (planTranslation skips a current 'unsafe' failure
+ * unless `redo` names it), so the action stays small and is never capped by a scope. `redo` (≤ 200) holds the flagged
+ * lines a new wording may fix (fix redo, or smaller_parts after a timed-out redo), never the author's own words, a
+ * content-check flag or a refused redo (those are `creator`).
  */
 export function fixPlanFor(problems: readonly TranslationProblem[]): FixPlan | null {
   if (!problems.length) return null;
   const lang = problems[0].lang;
-  const mine = problems.filter((p) => p.lang === lang);
-  const fixable = mine.filter((p) => MACHINE_FIXES.has(p.fix));
+  const fixable = problems.filter((p) => p.lang === lang && MACHINE_FIXES.has(p.fix));
   if (!fixable.some((p) => p.blocking)) return null;
-  const cap = DOC_LIMITS.translateLineIds;
-  const plan: FixPlan = { redo: fixable.filter((p) => p.fix === 'redo').map((p) => p.ref.lineId).slice(0, cap) };
-  if (mine.some((p) => p.kind === 'refused')) {
-    const scope = fixable.map((p) => p.ref.lineId).slice(0, cap);
-    const inScope = new Set(scope);
-    plan.lineIds = scope;
-    plan.redo = plan.redo.filter((id) => inScope.has(id));
-  }
+  // A flagged line is current: only `redo` sends it again (a time-out's smaller parts included).
+  const redo = fixable.filter((p) => p.kind === 'flagged').map((p) => p.ref.lineId).slice(0, DOC_LIMITS.translateLineIds);
+  const plan: FixPlan = { redo };
   if (fixable.some((p) => p.fix === 'smaller_parts')) plan.chunkLines = 10;
   return plan;
 }

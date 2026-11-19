@@ -294,10 +294,11 @@ const titleEntry = (edition: LanguageEdition | undefined, field: EditionTextFiel
 
 const titleRef = (field: EditionTextField): LineRef => ({ lineId: field, pageId: '', page: 0, panel: 0, line: 0, kind: 'caption', field });
 
-/** Every line with its address, pages by n, panels by n, lines in array order (the review's row order). */
+/** Every line with its address, pages by n, panels by n, lines in array order (the review's row order). Built fresh
+ *  on every call: readiness (which gates publishing) never reads a cached walk. */
 const addressedLines = (doc: ComicDoc): { line: Line; ref: LineRef }[] => {
   const out: { line: Line; ref: LineRef }[] = [];
-  for (const page of [...doc.pages].sort((a, b) => a.n - b.n))
+  for (const page of [...(doc.pages || [])].sort((a, b) => a.n - b.n))
     for (const panel of [...page.panels].sort((a, b) => a.n - b.n))
       panel.lines.forEach((line, i) => {
         const ref: LineRef = { lineId: line.id, pageId: page.id, page: page.n, panel: panel.n, line: i + 1, kind: line.kind };
@@ -307,11 +308,28 @@ const addressedLines = (doc: ComicDoc): { line: Line; ref: LineRef }[] => {
   return out;
 };
 
+// Docs are immutable (ops return new pages arrays), so the addresses of one pages array never change: one walk serves
+// every row of a review or list (lineRefOf per row would otherwise sort the whole book each time).
+const refsByPages = new WeakMap<object, ReadonlyMap<string, LineRef>>();
+
+/** Every line's address (live pages), keyed by line id, in reading order. Computed once per pages array; the refs are
+ *  frozen (shared between callers). Titles are not in it (lineRefOf answers them). */
+export const lineRefsOf = (doc: ComicDoc): ReadonlyMap<string, LineRef> => {
+  const pages = Array.isArray(doc?.pages) ? doc.pages : undefined;
+  if (!pages) return new Map();
+  const hit = refsByPages.get(pages);
+  if (hit) return hit;
+  const map = new Map<string, LineRef>();
+  for (const { ref } of addressedLines(doc)) if (!map.has(ref.lineId)) map.set(ref.lineId, Object.freeze(ref));
+  refsByPages.set(pages, map);
+  return map;
+};
+
 /** Where a line (live pages only) or a title field is; undefined for anything else. */
 export const lineRefOf = (doc: ComicDoc, lineId: string): LineRef | undefined => {
   if (typeof lineId !== 'string') return undefined;
   if (isTitleField(lineId)) return titleRef(lineId);
-  return addressedLines(doc).find((x) => x.ref.lineId === lineId)?.ref;
+  return lineRefsOf(doc).get(lineId);
 };
 
 const placeOf = (r: LineRef): string => (r.field ? TITLE_WORDS[r.field] : `page ${r.page}, panel ${r.panel}, line ${r.line}`);
@@ -331,6 +349,9 @@ export const whereText = (refs: readonly LineRef[], max = 3): string => {
 
 type LineIssueCode = 'missing' | 'stale' | 'unreviewed' | 'major_issue';
 interface Classified { problem: TranslationProblem; code?: LineIssueCode }
+
+/** A flagged line whose redo failed this many times in a row is the creator's (no further machine retry is offered). */
+const FLAGGED_REDO_ATTEMPTS = 2;
 
 const FAILURE_FIX: Record<TranslationFailure['reason'], { kind: ProblemKind; fix: FixKind }> = {
   unsafe: { kind: 'refused', fix: 'creator' },
@@ -356,8 +377,19 @@ const judge = (lang: string, ref: LineRef, entry: TextTranslation | undefined, h
   }
   const issue = entry.issue;
   if (issue?.severity === 'major') {
-    const creator = entry.status === 'edited' || CONTENT_CHECK_NOTES.includes(issue.note);
-    return make('flagged', creator ? 'creator' : 'redo', 'major_issue', { note: issue.note });
+    const note = { note: issue.note };
+    if (entry.status === 'edited' || CONTENT_CHECK_NOTES.includes(issue.note)) return make('flagged', 'creator', 'major_issue', note);
+    // A redo of this flagged line failed (the run records it on the current source and keeps the old wording): never
+    // the same paid redo again blindly. Refused → the creator's; a time-out → once more in small parts; a provider
+    // error or an empty answer → once more; after that the creator's. The code stays major_issue (same readiness).
+    if (failure) {
+      const extra = { ...note, reason: failure.reason };
+      const again = failure.attempts < FLAGGED_REDO_ATTEMPTS;
+      if (failure.reason === 'unsafe') return make('refused', 'creator', 'major_issue', extra);
+      if (failure.reason === 'timeout') return make('flagged', again ? 'smaller_parts' : 'creator', 'major_issue', extra);
+      return make('flagged', again ? 'redo' : 'creator', 'major_issue', extra);
+    }
+    return make('flagged', 'redo', 'major_issue', note);
   }
   if (entry.status === 'machine') return failure ? make('review_failed', 'finish_review', 'unreviewed', { reason: failure.reason }) : make('waiting', 'finish_review', 'unreviewed');
   if (issue) return make('note', null, undefined, { note: issue.note });
@@ -390,8 +422,10 @@ const classify = (doc: ComicDoc, lang: string): Classified[] => {
  * panel order — the review's rows). One problem per text, the most pressing:
  *   not current (missing / stale): the author's edit → stale_edited (creator); a failure on the CURRENT source →
  *   refused (creator) / timed_out (smaller_parts) / provider_failed (translate); else missing / stale (translate);
- *   current: a MAJOR issue → flagged (redo; creator on the author's words or a content-check flag); machine →
- *   waiting, or review_failed with a failure (finish_review); a minor issue → note (fix null, never blocking).
+ *   current: a MAJOR issue → flagged (redo; creator on the author's words or a content-check flag); when a redo of it
+ *   failed on this source: refused (creator) after a refusal, else flagged with smaller_parts (time-out) or redo, and
+ *   creator once FLAGGED_REDO_ATTEMPTS failed; machine → waiting, or review_failed with a failure (finish_review); a
+ *   minor issue → note (fix null, never blocking).
  * Titles never block. A problem never carries translation text. [] for the source language.
  */
 export const translationProblems = (doc: ComicDoc, lang: string): TranslationProblem[] => classify(doc, lang).map((c) => c.problem);

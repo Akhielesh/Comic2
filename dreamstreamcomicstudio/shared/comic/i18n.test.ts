@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { editionViewDoc } from '../../components/comicstudio/mobile/editor/editorModel';
-import { normalizeDoc, type ComicDoc, type LanguageEdition, type Line, type TranslationFailure } from './doc';
+import { isValidNextStep, normalizeDoc, type ComicDoc, type LanguageEdition, type Line, type NextStep, type TranslationFailure } from './doc';
 import { applyOps, type DocOp } from './ops';
+import { fixPlanFor, translationProblems } from './translationProblems';
+import { inverseOps } from './undo';
 import {
   editionProgress,
   editionReadiness,
@@ -456,16 +458,72 @@ describe('failure records through ops (STU-T0)', () => {
     expect(failuresOf(doc)).toEqual({ pg_1_l2: f2 });
   });
 
-  it("the author's translation op clears that line's failure; edition_text clears a title's", () => {
+  it("the author's translation op keeps the line's failure (their words win anyway); edition_text clears a title's", () => {
     let doc = translated();
     const f = failureOf(doc, 'pg_1_l1');
-    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f, pg_1_l2: f, 'brief.title': f } }]);
+    const f2 = failureOf(doc, 'pg_1_l2');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: f, pg_1_l2: f2, 'brief.title': f } }]);
     doc = applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: { text: 'मेरे शब्द', status: 'edited' } }]);
-    expect(Object.keys(failuresOf(doc)!).sort()).toEqual(['brief.title', 'pg_1_l2']);
+    expect(failuresOf(doc)).toEqual({ pg_1_l1: f, pg_1_l2: f2, 'brief.title': f });
+    // Under the author's own current words the record is no problem at all.
+    expect(translationProblems(doc, 'hi').some((p) => p.ref.lineId === 'pg_1_l1')).toBe(false);
     doc = applyOps(doc, [{ op: 'edition_text', lang: 'hi', field: 'brief.title', value: { text: 'केसर चोर', status: 'edited', sourceHash: '', at: 1 } }]);
-    expect(Object.keys(failuresOf(doc)!)).toEqual(['pg_1_l2']);
-    doc = applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l2', patch: null }]);
-    expect(failuresOf(doc)).toBeUndefined();
+    expect(Object.keys(failuresOf(doc)!).sort()).toEqual(['pg_1_l1', 'pg_1_l2']);
+    // Removing the author's words brings the refusal back (the record still matches the source).
+    doc = applyOps(doc, [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: null }]);
+    expect(translationProblems(doc, 'hi').find((p) => p.ref.lineId === 'pg_1_l1')).toMatchObject({ kind: 'refused', fix: 'creator' });
+  });
+
+  it('undo of the author’s words on a refused line keeps it refused: no paid retry is offered', () => {
+    let doc = applyOps(translated(), [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l2', patch: null }]);
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l2: failureOf(doc, 'pg_1_l2') } }]);
+    // Lines only (this edition has no titles translated: those never block and never make a button).
+    const problems = (d: ComicDoc) => translationProblems(d, 'hi').filter((p) => !p.ref.field).map((p) => [p.ref.lineId, p.kind, p.fix]);
+    expect(problems(doc)).toEqual([['pg_1_l2', 'refused', 'creator']]);
+    expect(fixPlanFor(translationProblems(doc, 'hi'))).toBeNull();
+    const edit: DocOp[] = [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l2', patch: { text: 'मेरे शब्द', status: 'edited', sourceHash: lineSourceHash(lines(doc)[1]), at: 9 } }];
+    const edited = applyOps(doc, edit);
+    expect(problems(edited)).toEqual([]);
+    const undone = applyOps(edited, inverseOps(doc, edit));
+    expect(i18nOf(undone).editions.hi).toEqual(i18nOf(doc).editions.hi);
+    expect(problems(undone)).toEqual([['pg_1_l2', 'refused', 'creator']]);
+    expect(fixPlanFor(translationProblems(undone, 'hi'))).toBeNull();
+  });
+
+  it('at the 2,000 cap, the clears in an op make room for its adds whatever their order', () => {
+    const base = translated();
+    const many = Array.from({ length: 2001 }, (_, i): Line => ({ id: `x${i}`, kind: 'speech', text: `Line ${i}` }));
+    const big: ComicDoc = { ...base, pages: base.pages.map((p, i) => (i ? p : { ...p, panels: p.panels.map((pn, j) => (j ? pn : { ...pn, lines: [...pn.lines, ...many] })) })) };
+    const f: TranslationFailure = { reason: 'timeout', sourceHash: 'h', attempts: 1, at: 1 };
+    let doc = applyOps(big, [{ op: 'translations', lang: 'hi', lines: {}, failures: Object.fromEntries(many.slice(0, 2000).map((l) => [l.id, f])) }]);
+    expect(Object.keys(failuresOf(doc)!)).toHaveLength(2000);
+    // Full: a 2,001st record is not kept.
+    expect(failuresOf(applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { x2000: f } }]))!.x2000).toBeUndefined();
+    // The add comes first and the clear second in the same op: the add is kept all the same.
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { x2000: f, x0: null } }]);
+    expect(failuresOf(doc)!.x2000).toEqual(f);
+    expect(failuresOf(doc)!.x0).toBeUndefined();
+    expect(Object.keys(failuresOf(doc)!)).toHaveLength(2000);
+  });
+
+  it('a server write drops failure records of lines that no longer exist (kept while the line is only in the trash)', () => {
+    let doc = translated();
+    const f = failureOf(doc, 'pg_1_l2');
+    doc = applyOps(doc, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l2: f, pg_6_l1: { ...f, sourceHash: lineSourceHash(lines(doc).find((l) => l.id === 'pg_6_l1')!) } } }]);
+    // The line is removed: its record stays until the next server write (so undoing the removal keeps it)…
+    const removal: DocOp[] = [{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p2', id: 'pg_1_l2', patch: null }];
+    const removed = applyOps(doc, removal);
+    expect(Object.keys(failuresOf(removed)!).sort()).toEqual(['pg_1_l2', 'pg_6_l1']);
+    const undone = applyOps(removed, inverseOps(doc, removal));
+    expect(failuresOf(undone)).toEqual(failuresOf(doc));
+    // …and a trashed page keeps its lines' records.
+    const trashed = applyOps(removed, [{ op: 'page_delete', id: 'pg_6', deletedAt: 5 }]);
+    // The next server write drops the orphan only.
+    const next = applyOps(trashed, [{ op: 'translations', lang: 'hi', lines: {}, failures: { pg_1_l1: failureOf(doc, 'pg_1_l1') } }]);
+    expect(Object.keys(failuresOf(next)!).sort()).toEqual(['pg_1_l1', 'pg_6_l1']);
+    // Even a server write that changes nothing else tidies it away.
+    const tidy = applyOps(removed, [{ op: 'translations', lang: 'hi', lines: {} }]);
+    expect(Object.keys(failuresOf(tidy)!)).toEqual(['pg_6_l1']);
   });
 
   it('edition: null removes every failure with the edition; a register change keeps them', () => {
@@ -502,10 +560,14 @@ describe('old documents (STU-T0): every new field is optional, nothing is added 
     expect(editionReadiness(loaded, 'hi').issues.map(({ code, count, blocking, text }) => ({ code, count, blocking, text }))).toEqual(legacyReadiness(stored, 'hi').issues);
   });
 
-  it('an old open_tab chip and an old translate action keep their shape', () => {
-    const chip = { label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } } as const;
-    const action = { type: 'translate', languages: ['hi'], quotedUsd: 0.01 } as const;
-    expect(JSON.parse(JSON.stringify(chip))).toEqual(chip);
-    expect(JSON.parse(JSON.stringify(action))).toEqual(action);
+  it('a stored chat keeps both the old open_tab chip and the new one that names a line, through a save and a load', () => {
+    const old: NextStep = { label: 'Review translations', client: { type: 'open_tab', tab: 'languages' } };
+    const show: NextStep = { label: 'Show the line', client: { type: 'open_tab', tab: 'languages', review: { lang: 'hi', lineId: 'pg_4_l1' } } };
+    const fix: NextStep = { label: 'Fix Hindi', action: { type: 'translate', languages: ['hi'], redo: ['pg_4_l1'], chunkLines: 10, quotedUsd: 0.01 }, usd: 0.01 };
+    for (const step of [old, show, fix]) expect(isValidNextStep(step), step.label).toBe(true);
+    const doc = normalizeDoc(makeSampleDoc());
+    doc.conversation = [{ id: 'm1', role: 'assistant', text: 'Done.', at: 1, nextSteps: [old, show, fix] }];
+    const loaded = normalizeDoc(JSON.parse(JSON.stringify(doc)));
+    expect(loaded.conversation[0].nextSteps).toEqual([old, show, fix]);
   });
 });

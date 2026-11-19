@@ -6,13 +6,16 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { normalizeDoc, type ComicDoc, type Line, type TextTranslation, type TranslationFailure } from './doc';
-import { i18nOf, lineSourceHash, textSourceHash, translationStatus } from './i18n';
-import { applyOps, type DocOp } from './ops';
+import { editionReadiness, i18nOf, lineSourceHash, textSourceHash, translationStatus } from './i18n';
+import { applyOps, SAFE_ID_RE, type DocOp } from './ops';
+import { editionTextSource, planTranslation } from './translationPlan';
 import {
   CONTENT_CHECK_NOTES,
   fixPlanFor,
   I18N_FIX_STAGE,
+  isTranslateScopeId,
   lineRefOf,
+  lineRefsOf,
   translationProblems,
   whereText,
   type LineRef,
@@ -232,18 +235,25 @@ describe('lineRefOf and whereText', () => {
 
 describe('fixPlanFor: the one action behind "Fix automatically"', () => {
   it('redoes flagged lines, translates the missing, finishes the review, in smaller parts after a time-out, and never retries a refused line', () => {
-    const problems = translationProblems(everyKind(), 'te');
+    const doc = everyKind();
+    const problems = translationProblems(doc, 'te');
     const plan = fixPlanFor(problems)!;
-    expect(plan.redo).toEqual(['pg_4_l1']);
-    expect(plan.chunkLines).toBe(10);
-    // A refused line is in the language: the plan names its scope so the refused line stays out of it.
-    expect(plan.lineIds).toEqual(['brief.logline', 'pg_1_l1', 'pg_1_l3', 'pg_1_l4', 'pg_1_l5', 'pg_2_l1', 'pg_3_l1', 'pg_3_l2', 'pg_4_l1']);
-    expect(plan.lineIds).not.toContain('pg_1_l2');
+    // No scope: the whole-language plan already leaves a refused line out (planTranslation skips it), so the action
+    // is never capped at 200 fixable lines because one line was refused.
+    expect(plan).toEqual({ redo: ['pg_4_l1'], chunkLines: 10 });
     // Creator-only problems (the author's words, the content check) are never in the action.
-    for (const id of ['pg_2_l2', 'pg_4_l2', 'pg_4_l3', 'pg_5_l1']) {
-      expect(plan.lineIds).not.toContain(id);
-      expect(plan.redo).not.toContain(id);
-    }
+    for (const id of ['pg_1_l2', 'pg_2_l2', 'pg_4_l2', 'pg_4_l3', 'pg_5_l1']) expect(plan.redo).not.toContain(id);
+    // The whole-language plan with these fields covers every machine-fixable line (the sample repeats its lines on
+    // every page, so most missing ones are copied from a twin for free), and never sends the refused line.
+    const planned = planTranslation(doc, 'te', plan);
+    const sent = planned.toTranslate.flatMap((g) => g.lineIds);
+    const covered = new Set([...sent, ...planned.freeLines.map((f) => f.lineId), ...(planned.toReview || []), ...(planned.deferred || []).map((d) => d.lineId)]);
+    for (const p of problems) if (p.blocking && p.fix !== 'creator' && p.fix !== null) expect(covered.has(p.ref.lineId), p.ref.lineId).toBe(true);
+    expect(sent).toContain('pg_4_l1');
+    expect(sent).not.toContain('pg_1_l2');
+    expect(planned.toReview).toEqual(['pg_3_l1', 'pg_3_l2']);
+    expect(planned.coverTexts).toEqual(['brief.logline']);
+    expect(planned.chunkLines).toBe(10);
   });
 
   it('returns null when only refused lines (or other creator choices) remain', () => {
@@ -278,21 +288,134 @@ describe('fixPlanFor: the one action behind "Fix automatically"', () => {
     expect(fixPlanFor(translationProblems(onlyFlag, 'te'))).toEqual({ redo: ['pg_2_l4'] });
   });
 
-  it('caps the scope and the redo list at 200 ids (DOC_LIMITS.translateLineIds), in reading order', () => {
+  it('caps the redo list at 200 ids (DOC_LIMITS.translateLineIds), in reading order; a refused line adds no scope', () => {
     const ref = (i: number): LineRef => ({ lineId: `l${i}`, pageId: 'p', page: 1, panel: 1, line: i + 1, kind: 'speech' });
     const many: TranslationProblem[] = Array.from({ length: 250 }, (_, i) => ({ lang: 'te', kind: 'flagged', ref: ref(i), blocking: true, fix: 'redo' }));
     many.push({ lang: 'te', kind: 'refused', ref: ref(999), blocking: true, fix: 'creator' });
+    many.push(...Array.from({ length: 300 }, (_, i): TranslationProblem => ({ lang: 'te', kind: 'missing', ref: ref(1000 + i), blocking: true, fix: 'translate' })));
     const plan = fixPlanFor(many)!;
     expect(plan.redo).toHaveLength(200);
-    expect(plan.lineIds).toHaveLength(200);
     expect(plan.redo[0]).toBe('l0');
-    expect(plan.lineIds).not.toContain('l999');
+    expect(plan.redo).not.toContain('l999');
+    expect('lineIds' in plan).toBe(false);
+  });
+
+  it('every id it hands the action is a valid translate id (titles too), which SAFE_ID_RE alone would refuse', () => {
+    const doc = applyOps(reviewedTelugu(), [
+      { op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 'TE:x', status: 'machine', sourceHash: textSourceHash(editionTextSource(reviewedTelugu(), 'brief.title')), at: 1, issue: { severity: 'major', note: 'Wrong meaning.' } } },
+      { op: 'translation', lang: 'te', lineId: 'pg_2_l4', patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } },
+      { op: 'translation', lang: 'te', lineId: 'pg_1_l1', patch: null }
+    ]);
+    const plan = fixPlanFor(translationProblems(doc, 'te'))!;
+    expect(plan.redo).toEqual(['brief.title', 'pg_2_l4']);
+    for (const id of plan.redo) expect(isTranslateScopeId(id), id).toBe(true);
+    expect(SAFE_ID_RE.test('brief.title')).toBe(false);
+    for (const id of ['cover.title', 'cover.tagline', 'brief.logline', 'pg_1_l1', 'l-9']) expect(isTranslateScopeId(id), id).toBe(true);
+    for (const bad of ['brief.titles', 'brief.', 'a.b', '', 'x'.repeat(65), 'pg 1', 7, null, undefined]) expect(isTranslateScopeId(bad), String(bad)).toBe(false);
   });
 
   it('only the first problem language is planned (one action per language)', () => {
     const hi = translationProblems(normalizeDoc(makeSampleDoc()), 'hi');
     const te = translationProblems(everyKind(), 'te');
     expect(fixPlanFor([...te, ...hi])).toEqual(fixPlanFor(te));
+  });
+});
+
+describe('a flagged line whose redo failed (the old wording stays, the failure is on the current source)', () => {
+  const ID = 'pg_4_l1';
+  const flaggedWith = (reason: TranslationFailure['reason'], attempts = 1, sourceHash?: string): ComicDoc => {
+    const doc = applyOps(reviewedTelugu(), [{ op: 'translation', lang: 'te', lineId: ID, patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+    i18nOf(doc).editions.te.failures = { [ID]: { ...failure(doc, ID, reason, sourceHash), attempts } };
+    return doc;
+  };
+  const only = (doc: ComicDoc) => {
+    const problems = translationProblems(doc, 'te');
+    expect(problems).toHaveLength(1);
+    return problems[0];
+  };
+
+  it('refused by the content check: refused and the creator’s, so no paid redo is offered again (at any attempt count)', () => {
+    for (const attempts of [1, 9]) {
+      const doc = flaggedWith('unsafe', attempts);
+      expect(only(doc)).toEqual({ lang: 'te', kind: 'refused', ref: lineRefOf(doc, ID), blocking: true, fix: 'creator', note: 'Wrong meaning.', reason: 'unsafe' });
+      expect(fixPlanFor(translationProblems(doc, 'te'))).toBeNull();
+      // Readiness still counts it as flagged by the review (same code, count and text as before).
+      expect(editionReadiness(doc, 'te').issues).toEqual([expect.objectContaining({ code: 'major_issue', count: 1, blocking: true, text: '1 line flagged by the review.' })]);
+    }
+  });
+
+  it('timed out: tried again once in parts of 10 lines; a second time-out is the creator’s', () => {
+    const doc = flaggedWith('timeout');
+    expect(only(doc)).toMatchObject({ kind: 'flagged', fix: 'smaller_parts', note: 'Wrong meaning.', reason: 'timeout', blocking: true });
+    expect(fixPlanFor(translationProblems(doc, 'te'))).toEqual({ redo: [ID], chunkLines: 10 });
+    const again = flaggedWith('timeout', 2);
+    expect(only(again)).toMatchObject({ kind: 'flagged', fix: 'creator', reason: 'timeout' });
+    expect(fixPlanFor(translationProblems(again, 'te'))).toBeNull();
+  });
+
+  it('a provider error or an empty answer: one more redo, then the creator’s', () => {
+    for (const reason of ['provider', 'empty'] as const) {
+      const doc = flaggedWith(reason);
+      expect(only(doc)).toMatchObject({ kind: 'flagged', fix: 'redo', reason, note: 'Wrong meaning.' });
+      expect(fixPlanFor(translationProblems(doc, 'te'))).toEqual({ redo: [ID] });
+      const again = flaggedWith(reason, 2);
+      expect(only(again)).toMatchObject({ kind: 'flagged', fix: 'creator', reason });
+      expect(fixPlanFor(translationProblems(again, 'te'))).toBeNull();
+    }
+  });
+
+  it('a failure recorded for an older source changes nothing: the flagged line is redone as usual', () => {
+    const doc = flaggedWith('unsafe', 9, 'feedf00d');
+    expect(only(doc)).toEqual({ lang: 'te', kind: 'flagged', ref: lineRefOf(doc, ID), blocking: true, fix: 'redo', note: 'Wrong meaning.' });
+    expect(fixPlanFor(translationProblems(doc, 'te'))).toEqual({ redo: [ID] });
+  });
+
+  it('the readiness golden is unchanged by the failure (code major_issue, same text)', () => {
+    const plain = applyOps(reviewedTelugu(), [{ op: 'translation', lang: 'te', lineId: ID, patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+    const strip = (doc: ComicDoc) => editionReadiness(doc, 'te').issues.map(({ code, count, blocking, text }) => ({ code, count, blocking, text }));
+    for (const reason of ['unsafe', 'timeout', 'provider', 'empty'] as const) expect(strip(flaggedWith(reason)), reason).toEqual(strip(plain));
+  });
+});
+
+describe('lineRefsOf: every address at once (for per-row use)', () => {
+  it('maps every line to the ref lineRefOf gives, in reading order, and is reused for the same pages', () => {
+    const doc = normalizeDoc(makeSampleDoc());
+    const refs = lineRefsOf(doc);
+    expect(refs.size).toBe(30);
+    expect([...refs.keys()].slice(0, 3)).toEqual(['pg_1_l1', 'pg_1_l2', 'pg_1_l3']);
+    for (const [id, ref] of refs) expect(lineRefOf(doc, id)).toEqual(ref);
+    // The same pages give the same map (no re-sort per row); an edition-only change keeps it.
+    expect(lineRefsOf(doc)).toBe(refs);
+    expect(lineRefsOf({ ...doc, i18n: { editions: {}, glossary: [] } })).toBe(refs);
+    // A page change makes a new map.
+    const moved = applyOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p1', id: 'pg_1_l1', patch: null }]);
+    expect(lineRefsOf(moved).has('pg_1_l1')).toBe(false);
+    expect(lineRefsOf(moved).size).toBe(29);
+    expect(lineRefsOf(doc).has('pg_1_l1')).toBe(true);
+  });
+});
+
+describe('titles: the problems list and the plan read the same source', () => {
+  it('for all four fields, the same text and hash decide "current" (i18n.ts titleSource = translationPlan.ts editionTextSource)', () => {
+    const base = normalizeDoc(makeSampleDoc());
+    // Odd spacing and line breaks, so a different normalisation would show.
+    base.brief = { ...base.brief, title: '  The   Saffron\nThief ', logline: 'Two  rivals,\tone recipe. ' };
+    base.cover = { ...base.cover, title: ' The Saffron  Thief', tagline: '  Smell  the  trouble ' };
+    const fields = ['brief.title', 'brief.logline', 'cover.title', 'cover.tagline'] as const;
+    const titles = (doc: ComicDoc) => translationProblems(doc, 'te').filter((p) => p.ref.field).map((p) => p.ref.field);
+    for (const field of fields) {
+      expect(editionTextSource(base, field), field).not.toBe('');
+      const current = applyOps(base, [
+        { op: 'edition', lang: 'te', patch: {} },
+        ...fields.map((f): DocOp => ({ op: 'edition_text', lang: 'te', field: f, value: { text: 'T', status: 'reviewed', sourceHash: textSourceHash(editionTextSource(base, f)), at: 1 } }))
+      ]);
+      expect(titles(current), field).toEqual([]);
+      expect(planTranslation(current, 'te').coverTexts, field).toEqual([]);
+      // One field one character off: both name exactly that field.
+      const off = applyOps(current, [{ op: 'edition_text', lang: 'te', field, value: { text: 'T', status: 'reviewed', sourceHash: textSourceHash(`${editionTextSource(base, field)}!`), at: 1 } }]);
+      expect(titles(off), field).toEqual([field]);
+      expect(planTranslation(off, 'te').coverTexts, field).toEqual([field]);
+    }
   });
 });
 

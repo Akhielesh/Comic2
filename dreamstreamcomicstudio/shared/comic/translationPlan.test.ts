@@ -431,3 +431,61 @@ describe('planTranslation — redo, lineIds scope and smaller parts (STU-T0)', (
     expect(planLineCount(planTranslation(doc, 'te', { lineIds: ids.slice(-200) }))).toBe(1);
   });
 });
+
+describe('planTranslation — a line the content check refused is never sent again blindly (STU-T0)', () => {
+  /** Telugu done, then l9 (and the title) left without a translation and refused on their current source. */
+  const refusedDoc = (sourceHash?: string): ComicDoc => {
+    let doc = translateAll(sixPages(), 'te');
+    doc = applyOps(doc, [
+      { op: 'translation', lang: 'te', lineId: 'l9', patch: null },
+      { op: 'edition_text', lang: 'te', field: 'brief.title', value: null }
+    ]);
+    const at = 5;
+    doc = applyOps(doc, [{
+      op: 'translations',
+      lang: 'te',
+      lines: {},
+      failures: {
+        l9: { reason: 'unsafe', sourceHash: sourceHash ?? lineSourceHash(lineOf(doc, 'l9')), attempts: 1, at },
+        'brief.title': { reason: 'unsafe', sourceHash: sourceHash ?? textSourceHash(editionTextSource(doc, 'brief.title')), attempts: 1, at }
+      }
+    }]);
+    return doc;
+  };
+
+  it('a whole-language translate leaves a refused line and title out, counts them, and charges nothing for them', () => {
+    const plan = planTranslation(refusedDoc(), 'te');
+    expect(plan.toTranslate).toEqual([]);
+    expect(plan.coverTexts).toEqual([]);
+    expect(plan.calls).toBe(0);
+    expect(plan.tokens).toEqual({ input: 0, output: 0, reviewInput: 0, reviewOutput: 0 });
+    expect(plan.refusedSkipped).toBe(2);
+    // So does "translate everything again" (force): the content check would refuse the same words.
+    const forced = planTranslation(refusedDoc(), 'te', { force: true });
+    expect(forced.toTranslate.flatMap((g) => g.lineIds)).not.toContain('l9');
+    expect(forced.coverTexts).not.toContain('brief.title');
+    expect(forced.refusedSkipped).toBe(2);
+  });
+
+  it('only redo sends a refused line or title again, by name', () => {
+    const plan = planTranslation(refusedDoc(), 'te', { redo: ['l9', 'brief.title'] });
+    expect(plan.toTranslate).toEqual([{ pageId: 'pg_5', lineIds: ['l9'] }]);
+    expect(plan.coverTexts).toEqual(['brief.title']);
+    expect(plan.refusedSkipped).toBeUndefined();
+  });
+
+  it('a refusal recorded for an older source is ignored: the line is translated as usual', () => {
+    const plan = planTranslation(refusedDoc('feedf00d'), 'te');
+    expect(plan.toTranslate).toEqual([{ pageId: 'pg_5', lineIds: ['l9'] }]);
+    expect(plan.coverTexts).toEqual(['brief.title']);
+    expect(plan.refusedSkipped).toBeUndefined();
+  });
+
+  it('only a refusal skips: a timed-out or failed line is planned again', () => {
+    let doc = applyOps(translateAll(sixPages(), 'te'), [{ op: 'translation', lang: 'te', lineId: 'l9', patch: null }]);
+    for (const reason of ['timeout', 'provider', 'empty'] as const) {
+      doc = applyOps(doc, [{ op: 'translations', lang: 'te', lines: {}, failures: { l9: { reason, sourceHash: lineSourceHash(lineOf(doc, 'l9')), attempts: 1, at: 1 } } }]);
+      expect(planTranslation(doc, 'te').toTranslate, reason).toEqual([{ pageId: 'pg_5', lineIds: ['l9'] }]);
+    }
+  });
+});

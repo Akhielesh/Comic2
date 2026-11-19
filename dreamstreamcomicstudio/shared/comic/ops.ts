@@ -232,8 +232,10 @@ export type DocOp =
   | { op: 'edition'; lang: string; patch: { register?: TranslationRegister } | null }
   | { op: 'translation'; lang: string; lineId: string; patch: Partial<TextTranslation> | null }
   /** Server-only batch upsert (one translator chunk). Never deletes a translation. `failures` (STU-T0) records why a
-   *  line or title (key = line id or EditionTextField) was not translated, or clears a record (null); every id written
-   *  in `lines` loses its record. Empty `lines` with `failures` is a valid change. Unknown ids are ignored. */
+   *  line or title (key = line id or EditionTextField) was not translated, or clears a record (null; clears apply
+   *  before adds); every id written in `lines` loses its record, and records of lines no longer in the doc (pages or
+   *  trash) are dropped. Empty `lines` with `failures` is a valid change. Unknown ids are ignored. The author's
+   *  'translation' op never touches a record. */
   | { op: 'translations'; lang: string; lines: Record<string, TextTranslation>; failures?: Record<string, TranslationFailure | null> }
   | { op: 'edition_text'; lang: string; field: EditionTextField; value: TextTranslation | null }
   | { op: 'edition_balloon'; lang: string; lineId: string; patch: BalloonGeometryOverride | null }
@@ -366,8 +368,10 @@ export type SpendAction =
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
   /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):
    *  the scope — only these lines (and title fields such as 'cover.title') are planned. redo (≤ 200, STU-T0): ids to
-   *  translate again although current (flagged lines; the author's edits still need overwriteEdits). chunkLines
-   *  (STU-T0): translator calls of at most 10 or 20 lines (after a time-out). planTranslation reads all three. */
+   *  translate again although current (flagged lines; the author's edits still need overwriteEdits), and the only way
+   *  a line or title the content check refused on its current source is sent again. chunkLines (STU-T0): translator
+   *  calls of at most 10 or 20 lines (after a time-out). planTranslation reads all three. Ids in lineIds / redo are
+   *  checked with isTranslateScopeId (titles have a dot). */
   | ({ type: 'translate'; languages: string[]; pageIds?: string[]; lineIds?: string[]; redo?: string[]; chunkLines?: 10 | 20; force?: boolean; overwriteEdits?: boolean } & Quoted)
   /** Paid re-check of a drawn page (lettering.md §9): one vision call re-reads the art (QC, faces, speakers), then
    *  the balloons are re-laid around it. TEXT-priced (models.ts RELAYOUT_VISION_USD); gated, budgeted and refused
@@ -1245,6 +1249,11 @@ const EDITION_FIELDS: Record<EditionTextField, ['cover' | 'brief', 'title' | 'ta
 
 const isEditionField = (key: string): key is EditionTextField => Object.prototype.hasOwnProperty.call(EDITION_FIELDS, key);
 
+/** A valid id for a translate action's `lineIds` / `redo` lists (STU-T0): a line id (SAFE_ID_RE) or one of the four
+ *  title fields ('brief.title', 'cover.tagline', …), whose dot SAFE_ID_RE alone refuses. The one check the quote
+ *  route and the action sanitizer use for those lists. */
+export const isTranslateScopeId = (id: unknown): id is string => typeof id === 'string' && (SAFE_ID_RE.test(id) || isEditionField(id));
+
 /** The edition without the failure record of `key` (the same object when it has none); an empty map is dropped. */
 const withoutFailure = (e: LanguageEdition, key: string): LanguageEdition => {
   if (!e.failures || !Object.prototype.hasOwnProperty.call(e.failures, key)) return e;
@@ -1277,12 +1286,14 @@ const applyI18nOp = (
     case 'translation': {
       const e = i18n.editions[op.lang];
       if (!e || !lineIdsOf(doc, true).has(op.lineId)) return doc;
-      // The author's edit (or removal) of a line settles its failure record (STU-T0).
+      // The author's edit (or removal) leaves the line's failure record alone (STU-T0): under the author's own current
+      // words it counts for nothing (translationProblems), and an undo of the edit (the same op) could never put a
+      // server-only record back. Only server writes ('translations', 'edition_text') clear it.
       if (op.patch === null) {
         if (!(op.lineId in e.lines)) return doc;
         const lines = { ...e.lines };
         delete lines[op.lineId];
-        return setEdition(doc, op.lang, withoutFailure({ ...e, lines }, op.lineId));
+        return setEdition(doc, op.lang, { ...e, lines });
       }
       if (!isObject(op.patch)) return doc;
       const prev = e.lines[op.lineId];
@@ -1294,7 +1305,7 @@ const applyI18nOp = (
       if (!prev && !(typeof merged.text === 'string' && typeof merged.status === 'string' && typeof merged.sourceHash === 'string' && typeof merged.at === 'number')) return doc;
       const t = normalizeTextTranslation(merged);
       if (!t) return doc;
-      return setEdition(doc, op.lang, withoutFailure({ ...e, lines: { ...e.lines, [op.lineId]: t } }, op.lineId));
+      return setEdition(doc, op.lang, { ...e, lines: { ...e.lines, [op.lineId]: t } });
     }
     case 'translations': {
       const e = i18n.editions[op.lang];
@@ -1310,21 +1321,29 @@ const applyI18nOp = (
         written.push(id);
       }
       // Failure records (STU-T0): set or clear per live line id or title field; a written line loses its record.
-      const failures: Record<string, TranslationFailure> = { ...(e.failures || {}) };
-      let count = Object.keys(failures).length;
+      // A server write also drops the records of lines that are gone (not on a page, not in the trash), so they never
+      // pile up in saves or count toward the cap; a removed line keeps its record until then, so undoing the removal
+      // keeps it too. Clears apply before adds, so a full map always has room for this op's adds.
+      const failures: Record<string, TranslationFailure> = {};
       let failuresChanged = false;
+      if (e.failures) {
+        const known = lineIdsOf(doc, true);
+        for (const [key, f] of Object.entries(e.failures)) {
+          if (known.has(key) || isEditionField(key)) failures[key] = f;
+          else failuresChanged = true;
+        }
+      }
       if (isObject(op.failures)) {
-        for (const [key, raw] of Object.entries(op.failures)) {
-          if (!isFailureKey(key) || !(ids.has(key) || isEditionField(key))) continue;
+        const entries = Object.entries(op.failures).filter(([key]) => isFailureKey(key) && (ids.has(key) || isEditionField(key)));
+        for (const [key, raw] of entries) {
+          if (raw !== null || !Object.prototype.hasOwnProperty.call(failures, key)) continue;
+          delete failures[key];
+          failuresChanged = true;
+        }
+        let count = Object.keys(failures).length;
+        for (const [key, raw] of entries) {
+          if (raw === null) continue;
           const had = Object.prototype.hasOwnProperty.call(failures, key);
-          if (raw === null) {
-            if (had) {
-              delete failures[key];
-              count -= 1;
-              failuresChanged = true;
-            }
-            continue;
-          }
           const f = normalizeTranslationFailure(raw);
           if (!f || (!had && count >= TRANSLATION_FAILURES_MAX)) continue;
           const prev = had ? failures[key] : undefined;

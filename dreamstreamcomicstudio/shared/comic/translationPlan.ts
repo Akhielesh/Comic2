@@ -10,6 +10,8 @@
 //   6 duplicate        the same lineSourceHash is already translated here        → freeLines 'duplicate'
 //                      (a duplicate inside this plan waits for its twin: `deferred`)
 //   7 loose match      only case/punctuation/spacing of the source changed       → freeLines 'loose_match'
+//   – refused          the content check refused this source before (a stored    → skipped (refusedSkipped), even with
+//                      'unsafe' failure on the current hash)                        force; only `redo` sends it again
 //   8 everything else  the translator (writer-class model), then the linguist review (always)
 //
 // The token estimate is deterministic (§8.4); the server turns it into USD with the resolved route's
@@ -40,6 +42,9 @@ export interface TranslationPlan {
   /** Set only when the plan was asked for smaller translator calls (STU-T0): the line cap the run must chunk with
    *  (`chunkTranslation(plan.toTranslate, plan.chunkLines)`), so the quote and the run stay equal. */
   chunkLines?: number;
+  /** Set only when > 0 (STU-T0): lines and titles left out because the content check refused their current source (a
+   *  stored 'unsafe' failure). Never quoted, never charged; only `redo` naming them sends them again. */
+  refusedSkipped?: number;
 }
 
 /** The plan options a `translate` action carries (ops.ts TranslateAction). */
@@ -47,7 +52,8 @@ export interface TranslationPlanOptions {
   pageIds?: string[];
   /** STU-T0: the scope — only these line ids (and title fields such as 'cover.title') are planned. */
   lineIds?: string[];
-  /** STU-T0: translate these ids again although current (the author's edits still need overwriteEdits). */
+  /** STU-T0: translate these ids again although current (the author's edits still need overwriteEdits); also the only
+   *  way a line or title the content check refused on its current source is planned again. */
   redo?: string[];
   /** STU-T0: translator calls of at most 10 or 20 lines (anything else: TRANSLATE_CHUNK_LINES). */
   chunkLines?: 10 | 20;
@@ -319,7 +325,8 @@ const idList = (v: unknown): string[] =>
  * STU-T0 options: `lineIds` scopes the plan to those lines (and the title fields it names); `redo` plans those ids
  * again although current — like `force`, but for them only, and an author's edit still needs `overwriteEdits`;
  * `chunkLines` (10 | 20) estimates with smaller translator calls. Each list reads at most DOC_LIMITS.translateLineIds
- * ids; unknown ids are ignored.
+ * ids; unknown ids are ignored. A line or title with a stored 'unsafe' failure on its current source is left out (even
+ * with `force`) and counted in `refusedSkipped`, unless `redo` names it.
  */
 export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationPlanOptions): TranslationPlan {
   const spec = languageSpec(lang);
@@ -335,6 +342,15 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationP
   if (maxLines !== TRANSLATE_CHUNK_LINES) plan.chunkLines = maxLines;
   const edition = i18nOf(doc).editions[lang];
   const entries = edition?.lines ?? {};
+  // A line (or title) the content check refused on its CURRENT source is never re-sent blindly: the same words would
+  // meet the same check (and be charged). Only `redo` names it back in; a changed source makes the record old.
+  const failures = edition?.failures;
+  const refusedHere = (id: string, hash: string): boolean => {
+    if (redo.has(id) || !failures || !Object.prototype.hasOwnProperty.call(failures, id)) return false;
+    const f = failures[id];
+    return f.reason === 'unsafe' && f.sourceHash === hash;
+  };
+  let refusedSkipped = 0;
 
   // Current translations in this edition by source hash (duplicates, path 6); a line being redone is no twin.
   const byHash = force ? new Map<string, TextTranslation>() : bestTwins(doc, lang, redo);
@@ -409,6 +425,11 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationP
         continue;
       }
     }
+    // refused before on this very source (free paths above still apply: they never ask the translator)
+    if (refusedHere(line.id, hash)) {
+      refusedSkipped += 1;
+      continue;
+    }
     // in-plan duplicate: copied for free after its twin is translated
     const first = queued.get(hash);
     if (first) {
@@ -429,9 +450,14 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationP
       const source = editionTextSource(doc, field);
       if (!source) continue;
       const entry = editionTextEntry(doc, lang, field);
-      const current = !!entry && entry.sourceHash === textSourceHash(source);
+      const sourceHash = textSourceHash(source);
+      const current = !!entry && entry.sourceHash === sourceHash;
       if (current && !(force || redo.has(field))) continue;
       if (entry?.status === 'edited' && !overwrite) continue;
+      if (refusedHere(field, sourceHash)) {
+        refusedSkipped += 1;
+        continue;
+      }
       // cover.title usually repeats brief.title: one translation serves both (the run copies it).
       const key = source.toLowerCase();
       if (seen.has(key) && field.startsWith('cover.')) {
@@ -442,6 +468,8 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: TranslationP
       plan.coverTexts.push(field);
     }
   }
+
+  if (refusedSkipped) plan.refusedSkipped = refusedSkipped;
 
   // Token estimate.
   const lineById = new Map(linesInOrder(doc).map(({ line }) => [line.id, line] as const));

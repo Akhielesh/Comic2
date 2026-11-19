@@ -861,8 +861,9 @@ export type TranslationRegister = 'everyday' | 'formal' | 'code_mixed';
 export type EditionTextField = 'cover.title' | 'cover.tagline' | 'brief.title' | 'brief.logline';
 /**
  * Why the last attempt at a line (or title) did not produce a translation (STU-T0). SERVER-WRITTEN, never published
- * (publicI18n builds new objects without it). It counts only while `sourceHash` equals the line's current source hash;
- * any write of that line's translation removes it. No model name, no text.
+ * (publicI18n builds new objects without it). It counts only while `sourceHash` equals the line's current source hash,
+ * and not under the author's own current words; a server write of that line's translation removes it (the author's
+ * edit does not, so undoing the edit keeps it). No model name, no text.
  *   unsafe   the content check refused every wording the translator gave
  *   timeout  the translator call ran out of time
  *   provider the provider failed (or, on a line that has a machine translation, its review call failed)
