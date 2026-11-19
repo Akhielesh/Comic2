@@ -1,18 +1,21 @@
 import React from 'react';
 import { Sparkles, ListOrdered, AlertTriangle, ArrowRightCircle } from 'lucide-react';
 import { MessageBody } from './MessageBody';
+import { cn } from '../lib/utils';
+import { OVERLINE, RADIUS_CONTROL, STATUS_INK, STATUS_SURFACE } from './chat/studioDesign';
 
 type Section = {
   label: 'Summary' | 'Steps' | 'Warnings' | 'Next' | 'Body';
   content: string;
 };
 
+// Neutral surfaces with a hairline; hue only where it carries meaning (a warning, with its icon and its word).
 const SECTION_META: Record<string, { icon: React.ReactNode; className: string }> = {
-  Summary: { icon: <Sparkles className="w-3 h-3" />, className: 'bg-brand-yellow/30 border-brand-yellow' },
-  Steps: { icon: <ListOrdered className="w-3 h-3" />, className: 'bg-white border-black/30' },
-  Warnings: { icon: <AlertTriangle className="w-3 h-3 text-brand-red" />, className: 'bg-red-50 border-brand-red/40' },
-  Next: { icon: <ArrowRightCircle className="w-3 h-3" />, className: 'bg-brand-blue/10 border-brand-blue/40' },
-  Body: { icon: null, className: 'bg-white border-black/20' }
+  Summary: { icon: <Sparkles className="w-3 h-3" aria-hidden="true" />, className: 'border-[var(--ds-hairline)] bg-[var(--ds-well-strong)]' },
+  Steps: { icon: <ListOrdered className="w-3 h-3" aria-hidden="true" />, className: 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)]' },
+  Warnings: { icon: <AlertTriangle className={cn('w-3 h-3', STATUS_INK.attention)} aria-hidden="true" />, className: STATUS_SURFACE.attention },
+  Next: { icon: <ArrowRightCircle className="w-3 h-3" aria-hidden="true" />, className: STATUS_SURFACE.active },
+  Body: { icon: null, className: 'border-[var(--ds-hairline-soft)] bg-[var(--ds-canvas)]' }
 };
 
 const parseSections = (text: string): Section[] => {
@@ -63,10 +66,10 @@ export const MessageCard: React.FC<MessageCardProps> = ({ text }) => {
         return (
           <div
             key={`${section.label}-${idx}`}
-            className={`border rounded-lg px-2 py-2 text-[13px] leading-relaxed text-slate-800 ${meta.className}`}
+            className={cn('border px-2 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)]', RADIUS_CONTROL, meta.className)}
           >
             {section.label !== 'Body' && (
-              <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1">
+              <div className={cn('mb-1 flex items-center gap-2', OVERLINE)}>
                 {meta.icon}
                 <span>{section.label}</span>
               </div>

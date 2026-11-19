@@ -62,7 +62,11 @@ export const AdaptiveSheet: React.FC<AdaptiveSheetProps> = ({
     setAnchorTop(r ? r.top : null);
   }, [open, ff.coarse, presentation, anchorRef, above]);
 
-  const resolved = resolvePresentation(ff, presentation, { panel, anchorRect: above && anchorTop !== null ? { top: anchorTop } : null });
+  const chosen = resolvePresentation(ff, presentation, { panel, anchorRect: above && anchorTop !== null ? { top: anchorTop } : null });
+  // A modal popover with nothing to anchor to (a dialog opened from a menu item that has already closed) would
+  // sit against the nearest positioned ancestor, often off screen: it presents as the bottom sheet instead,
+  // which is centred and capped at 640 px on a wide screen and carries its own title.
+  const resolved: ResolvedPresentation = chosen === 'popover' && presentation === 'auto' && modal === true && !anchorRef ? 'bottom' : chosen;
   useLayoutEffect(() => {
     if (open) onPresentation?.(resolved);
   }, [open, resolved, onPresentation]);

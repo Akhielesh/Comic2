@@ -368,9 +368,12 @@ export const usageFraction = (key: ManagedApiKey): number => {
 export const isOverLimit = (key: ManagedApiKey): boolean =>
   Boolean(key.limitUsd && key.limitUsd > 0 && key.usedUsd >= key.limitUsd);
 
-/** Tailwind text-color class for a usage fraction — shared by the header pill + composer chip. */
+/**
+ * Text-colour class for a usage fraction — shared by the header pill + composer chip. The readable status inks
+ * (components/chat/studioDesign.ts TONE_TEXT.danger / .warning / .neutral), always beside the percentage itself.
+ */
 export const usageColor = (frac: number): string =>
-  frac >= 1 ? 'text-red-500' : frac >= 0.8 ? 'text-amber-500' : 'text-[var(--ds-muted)]';
+  frac >= 1 ? 'text-[var(--ds-danger-text)]' : frac >= 0.8 ? 'text-[var(--ds-warning-text)]' : 'text-[var(--ds-muted)]';
 
 /**
  * Can a model from this source actually be used right now? Platform-served providers run on the

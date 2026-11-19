@@ -49,7 +49,7 @@ const COST_BADGE: Record<ActivityCost, { text: string; title: string; cls: strin
   image: {
     text: 'Image',
     title: 'Draws with the image model — priced before it starts',
-    cls: 'bg-[#D97757]/10 text-[var(--ds-ink)]'
+    cls: 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
   }
 };
 

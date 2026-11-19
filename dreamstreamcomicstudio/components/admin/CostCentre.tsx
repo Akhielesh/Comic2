@@ -22,6 +22,7 @@ import { SecurityCard } from './costs/SecurityCard';
 import { COST_PALETTE_CLASS, CATEGORY_SHORT_LABEL, STACK_ORDER } from './costs/costPalette';
 import { fmtCount, fmtDay, fmtTime, fmtUsd, pctChange } from './costs/costFormat';
 import { UsageBudgetsPanel } from '../usage/UsageBudgetsPanel';
+import { DENSITY, FOCUS_RING, OVERLINE, ON_ACCENT_TEXT, TONE_TEXT } from '../chat/studioDesign';
 
 // Admin → Costs. A cost-benefit view of the whole platform on REAL data
 // (GET /api/admin/costs): what it costs to run (AI, email, containers, connectors, fixed
@@ -42,7 +43,8 @@ type AiTab = (typeof AI_TABS)[number];
 const VIEW_TABS = ['Chart', 'Table'] as const;
 type ViewTab = (typeof VIEW_TABS)[number];
 
-const ACCENT = '#D97757';
+// The selected range / tab reads in the ink (Atlas: hue never decorates a control).
+const ACCENT = 'var(--ds-ink)';
 
 const readStoredDays = (): CostRangeDays => {
   try {
@@ -210,7 +212,7 @@ const DailyTable: React.FC<{ report: CostCentreReport }> = ({ report }) => {
 const Methodology: React.FC<{ report: CostCentreReport }> = ({ report }) => {
   const [open, setOpen] = useState(false);
   return (
-    <Surface className="!my-0">
+    <Surface className="my-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -221,7 +223,7 @@ const Methodology: React.FC<{ report: CostCentreReport }> = ({ report }) => {
           <Info className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden />
           <span className="text-sm font-semibold tracking-tight text-[var(--ds-ink)]">How these numbers are computed</span>
         </span>
-        <ChevronDown className={`h-4 w-4 text-[var(--ds-muted)] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} aria-hidden />
+        <ChevronDown className={`h-4 w-4 text-[var(--ds-muted)] transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} aria-hidden />
       </button>
       {open && (
         <div className="space-y-3 border-t border-[var(--ds-hairline-soft)] px-3 py-3 text-xs leading-relaxed text-[var(--ds-ink)]">
@@ -235,7 +237,7 @@ const Methodology: React.FC<{ report: CostCentreReport }> = ({ report }) => {
             ))}
           </ul>
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">Definitions</div>
+            <div className={`mb-1 ${OVERLINE}`}>Definitions</div>
             <ul className="list-disc space-y-1 pl-4 text-[var(--ds-muted)]">
               <li>
                 Range: the last {report.range.days} UTC days including today (partial). The trend compares with the {report.range.days} days
@@ -256,7 +258,7 @@ const Methodology: React.FC<{ report: CostCentreReport }> = ({ report }) => {
           </div>
           {report.notes.length > 0 && (
             <div>
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">Notes for this range</div>
+              <div className={`mb-1 ${OVERLINE}`}>Notes for this range</div>
               <ul className="list-disc space-y-1 pl-4 text-[var(--ds-muted)]">
                 {report.notes.map((n) => (
                   <li key={n}>{n}</li>
@@ -351,10 +353,10 @@ export const CostCentre: React.FC = () => {
           <button
             type="button"
             onClick={() => setTab('Stream Studio')}
-            className="inline-flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+            className={`inline-flex items-center gap-1 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] ${DENSITY.coarse} ${FOCUS_RING}`}
             data-testid="stream-alert-badge"
           >
-            <TriangleAlert className="h-3.5 w-3.5" style={{ color: report!.stream!.alerts.some((a) => a.severity === 'critical') ? '#d03b3b' : '#fab219' }} aria-hidden />
+            <TriangleAlert className={`h-3.5 w-3.5 ${report!.stream!.alerts.some((a) => a.severity === 'critical') ? TONE_TEXT.danger : TONE_TEXT.warning}`} aria-hidden />
             {report!.stream!.alerts.length > 0 && `${report!.stream!.alerts.length} Stream Studio ${report!.stream!.alerts.length === 1 ? 'alert' : 'alerts'}`}
             {/* A dataset that didn't answer is not "no alerts": its alerts couldn't be checked. */}
             {report!.stream!.errors.length > 0 && `${report!.stream!.alerts.length > 0 ? ' · ' : 'Stream Studio: '}couldn’t measure ${report!.stream!.errors.length} ${report!.stream!.errors.length === 1 ? 'dataset' : 'datasets'}`}
@@ -364,10 +366,10 @@ export const CostCentre: React.FC = () => {
           <button
             type="button"
             onClick={() => setTab('Security')}
-            className="inline-flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+            className={`inline-flex items-center gap-1 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] ${DENSITY.coarse} ${FOCUS_RING}`}
             data-testid="security-alert-badge"
           >
-            <TriangleAlert className="h-3.5 w-3.5" style={{ color: report!.security!.alerts.some((a) => a.severity === 'critical') ? '#d03b3b' : '#fab219' }} aria-hidden />
+            <TriangleAlert className={`h-3.5 w-3.5 ${report!.security!.alerts.some((a) => a.severity === 'critical') ? TONE_TEXT.danger : TONE_TEXT.warning}`} aria-hidden />
             {`${report!.security!.alerts.length} security ${report!.security!.alerts.length === 1 ? 'alert' : 'alerts'}`}
           </button>
         )}
@@ -379,10 +381,10 @@ export const CostCentre: React.FC = () => {
           type="button"
           onClick={() => void load(true)}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50"
+          className={`inline-flex items-center gap-1.5 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50 ${DENSITY.coarse} ${FOCUS_RING}`}
           aria-label="Refresh costs"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden /> Refresh
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'motion-safe:animate-spin' : ''}`} aria-hidden /> Refresh
         </button>
       </div>
     </div>
@@ -393,15 +395,15 @@ export const CostCentre: React.FC = () => {
     body = <LoadingSkeleton />;
   } else if (!report || !derived) {
     body = (
-      <Surface className="!my-0">
+      <Surface className="my-0">
         <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-          <TriangleAlert className="h-5 w-5 text-[#d03b3b]" aria-hidden />
+          <TriangleAlert className={`h-5 w-5 ${TONE_TEXT.danger}`} aria-hidden />
           <div className="text-sm font-semibold text-[var(--ds-ink)]">Couldn't load the cost report</div>
           <p className="max-w-md text-xs text-[var(--ds-muted)]">{error || 'The server returned no data.'}</p>
           <button
             type="button"
             onClick={() => void load(true)}
-            className="mt-1 rounded-lg bg-[var(--ds-accent)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)]"
+            className={`mt-1 rounded-[var(--ds-radius-control)] bg-[var(--ds-accent)] px-3 py-1.5 text-xs font-semibold ${ON_ACCENT_TEXT} transition-colors hover:bg-[var(--ds-accent-hover)] ${DENSITY.coarse} ${FOCUS_RING}`}
           >
             Retry
           </button>
@@ -414,12 +416,12 @@ export const CostCentre: React.FC = () => {
     const aiNote = report.ai.byokEvents ? `${fmtCount(report.ai.byokEvents)} ${report.ai.byokEvents === 1 ? 'call' : 'calls'} ran on users' own keys (not platform spend).` : null;
     body = (
       // Refetch keeps the frame: the previous render dims instead of flashing a skeleton.
-      <div className={`space-y-4 transition-opacity duration-200 ${loading ? 'opacity-60' : 'opacity-100'}`} aria-busy={loading}>
+      <div className={`space-y-4 transition-opacity duration-[var(--ds-motion-medium)] motion-reduce:transition-none ${loading ? 'opacity-60' : 'opacity-100'}`} aria-busy={loading}>
         {error && (
-          <div className="flex items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs text-[var(--ds-ink)]" role="alert">
-            <TriangleAlert className="h-4 w-4 shrink-0 text-[#d03b3b]" aria-hidden />
+          <div className="flex items-center gap-2 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs text-[var(--ds-ink)]" role="alert">
+            <TriangleAlert className={`h-4 w-4 shrink-0 ${TONE_TEXT.danger}`} aria-hidden />
             Refresh failed: {error}. Showing the last loaded report.
-            <button type="button" onClick={() => void load(true)} className="ml-auto font-semibold text-[#D97757] hover:underline">
+            <button type="button" onClick={() => void load(true)} className={`ml-auto rounded-[var(--ds-radius-sm)] font-semibold text-[var(--ds-ink)] underline underline-offset-2 hover:no-underline ${DENSITY.coarse} ${FOCUS_RING}`}>
               Retry
             </button>
           </div>
@@ -477,7 +479,7 @@ export const CostCentre: React.FC = () => {
         {/* Daily chart + where it goes */}
         <div className="grid gap-3 lg:grid-cols-3">
           <Surface
-            className="!my-0 lg:col-span-2"
+            className="my-0 lg:col-span-2"
             header={
               <div>
                 <SurfaceTitle>Daily cost by category</SurfaceTitle>
@@ -489,7 +491,7 @@ export const CostCentre: React.FC = () => {
             <div className="px-3 pb-3">{view === 'Chart' ? <StackedDailyChart daily={report.daily} height={250} /> : <DailyTable report={report} />}</div>
           </Surface>
           <Surface
-            className="!my-0"
+            className="my-0"
             header={
               <div>
                 <SurfaceTitle>Where it goes</SurfaceTitle>
@@ -507,7 +509,7 @@ export const CostCentre: React.FC = () => {
 
         {/* Detail tables */}
         <Surface
-          className="!my-0"
+          className="my-0"
           header={
             <div>
               <SurfaceTitle>Details</SurfaceTitle>
@@ -645,7 +647,7 @@ export const CostCentre: React.FC = () => {
   }
 
   return (
-    <div className={`space-y-4 p-1 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
+    <div className={`space-y-4 text-[var(--ds-ink)] ${COST_PALETTE_CLASS}`}>
       {header}
       {body}
       {/* Per-user usage budgets ($10 lifetime per user, all studios) — independent of the report above. */}

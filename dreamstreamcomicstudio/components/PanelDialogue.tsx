@@ -1,6 +1,13 @@
 import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { ensureDialogueBlocks, readerDialogueBlocks } from '../services/dialogueUtils';
+import { INVERSE_SURFACE, MUTED } from './chat/studioDesign';
+
+// Lettering is content: the balloons, the caption box and the narration box keep their comic faces, black ink and
+// white paper in every theme (they sit on the art). Only the chrome around them reads the tokens: the speaker label
+// (the balloon's own ink, not a display face), the chat-style messages under the art and the "+N more" counts.
+/** The speaker's name inside a balloon or caption box: a small bold label in the balloon's ink. */
+const SPEAKER_LABEL = 'font-sans font-bold uppercase text-black/70';
 
 // ---------------------------------------------------------------------------
 // Placement (mobile-reading hotfix)
@@ -174,7 +181,7 @@ export function SpeechBubble({
             <div className={containerClasses} style={style === 'shout' ? { transform: 'rotate(-1deg)' } : {}}>
                 {block.speaker && (
                     <span className={`
-            font-display uppercase text-brand-blue
+            ${SPEAKER_LABEL}
             ${compact ? 'text-[8px]' : 'text-[10px]'}
             block mb-0.5
           `}>
@@ -232,12 +239,12 @@ function CaptionBar({
                     {speeches.map((block, idx) => (
                         <span key={block.id}>
                             {block.speaker && (
-                                <span className="text-brand-blue font-display uppercase text-[10px] mr-1">
+                                <span className={`${SPEAKER_LABEL} mr-1 text-[10px]`}>
                                     {block.speaker}:
                                 </span>
                             )}
                             {block.text}
-                            {idx < speeches.length - 1 && <span className="mx-1 text-slate-400">·</span>}
+                            {idx < speeches.length - 1 && <span className="mx-1 text-black/40">·</span>}
                         </span>
                     ))}
                 </div>
@@ -265,7 +272,7 @@ function ChatMessage({
     if (isNarration) {
         return (
             <div className={`
-        text-center font-serif italic text-slate-500
+        text-center font-serif italic ${MUTED}
         ${compact ? 'text-[8px] py-0.5' : 'text-[11px] py-1'}
       `}>
                 <span className={clamp ? `line-clamp-2 ${compact ? 'line-clamp-1' : ''}` : 'block whitespace-pre-line break-words'}>{block.text}</span>
@@ -276,18 +283,18 @@ function ChatMessage({
     return (
         <div className={`flex ${isRight ? 'justify-end' : 'justify-start'}`}>
             <div className={`
-        max-w-[80%] border-2 border-black font-comic font-bold
-        ${compact ? 'px-2 py-1 text-[9px] rounded-lg' : 'px-3 py-2 text-xs rounded-xl'}
+        max-w-[80%] border font-medium [overflow-wrap:anywhere]
+        ${compact ? 'px-2 py-1 text-[9px]' : 'px-3 py-2 text-xs'}
+        rounded-[var(--ds-radius-panel)]
         ${isRight
-                    ? 'bg-brand-blue text-white rounded-br-sm'
-                    : 'bg-brand-yellow text-black rounded-bl-sm'
+                    ? `${INVERSE_SURFACE} border-transparent rounded-br-[var(--ds-radius-sm)]`
+                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] rounded-bl-[var(--ds-radius-sm)]'
                 }
       `}>
                 {block.speaker && (
                     <span className={`
-            block font-display uppercase mb-0.5
+            block font-semibold mb-0.5 opacity-75
             ${compact ? 'text-[7px]' : 'text-[9px]'}
-            ${isRight ? 'text-blue-200' : 'text-amber-700'}
           `}>
                         {block.speaker}
                     </span>
@@ -335,12 +342,12 @@ function StackedCaptions({ blocks, compact }: { blocks: DialogueBlock[]; compact
                     {speeches.map((block, idx) => (
                         <span key={block.id}>
                             {block.speaker && (
-                                <span className="text-brand-blue font-display uppercase text-[10px] mr-1">
+                                <span className={`${SPEAKER_LABEL} mr-1 text-[10px]`}>
                                     {block.speaker}:
                                 </span>
                             )}
                             {block.text}
-                            {idx < speeches.length - 1 && <span className="mx-1 text-slate-400">·</span>}
+                            {idx < speeches.length - 1 && <span className="mx-1 text-black/40">·</span>}
                         </span>
                     ))}
                 </div>
@@ -408,7 +415,7 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
                     return (
                         <div
                             key={block.id}
-                            className={`absolute transition-all duration-200`}
+                            className="absolute transition-[top,left,right,transform] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none"
                             style={{
                                 top: `${topPct}%`,
                                 left: leftPct !== undefined ? `${leftPct}%` : (side === 'left' ? '2%' : 'auto'),
@@ -426,7 +433,7 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
                     );
                 })}
                 {hasMore && (
-                    <div className="absolute bottom-1 right-2 bg-black/60 text-white text-[8px] px-1.5 py-0.5 rounded-full font-bold">
+                    <div className={`absolute bottom-1 right-2 rounded-[var(--ds-radius-pill)] px-1.5 py-0.5 text-[9px] font-semibold ${INVERSE_SURFACE}`}>
                         +{blocks.length - maxVisible} more
                     </div>
                 )}
@@ -455,7 +462,7 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
                     <ChatMessage key={block.id} block={block} compact={compact} clamp={!stacked} />
                 ))}
                 {!stacked && hasMore && (
-                    <div className="text-center text-[9px] text-slate-400 font-bold">
+                    <div className={`text-center text-[9px] font-semibold ${MUTED}`}>
                         +{blocks.length - maxVisible} more lines
                     </div>
                 )}

@@ -26,7 +26,6 @@ import { analyzeScriptDetailed, checkDeploymentParity, DeploymentParityStatus } 
 import { confirmGateNeeded } from '../services/comicAgentSettings';
 import { estimateComicCostUsd, planBeats } from '../services/beatPlanner';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
-import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, getSelectedImageSource, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { API_KEYS_CHANGED, getActiveKeyForUse } from '../services/apiKeys';
 import { isProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
@@ -36,7 +35,24 @@ import { costContextFromAllowance } from '../services/costDisplay';
 import { useUsageAllowance } from './usage/useUsageAllowance';
 import { comicCostView, isGovernedComicCost, type ComicCostResponse } from './steps/comicCostDisplay';
 import { createStudioProject } from './comicstudio/studioApi';
-import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesign';
+import {
+  CANVAS_BG,
+  CHIP,
+  CHIP_VARIANT,
+  FIELD,
+  INK,
+  MUTED,
+  OVERLAY,
+  OVERLINE,
+  RADIUS_CONTROL,
+  RADIUS_ROUND,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TONE_TEXT,
+  Z
+} from './chat/studioDesign';
+import { Button, IconButton, LiveDot, StatusBanner } from './ds';
+import { cn } from '../lib/utils';
 
 /**
  * Will the classic pipeline's image calls run on the user's OWN provider key (they pay the provider; their
@@ -134,39 +150,35 @@ export const OpenInNewStudioBanner: React.FC<{
     <div
       role="region"
       aria-label="New Comic Studio"
-      className={`shrink-0 border-b border-[var(--ds-hairline)] ${GLASS} px-3 py-2 text-[13px] text-[var(--ds-ink)] font-sans`}
+      className={cn('shrink-0 border-b border-[var(--ds-hairline)] px-3 py-2 text-[13px]', 'bg-[var(--ds-surface)]', INK)}
     >
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1.5">
-        <MessageSquare className={`h-4 w-4 shrink-0 ${ACCENT_TEXT}`} aria-hidden />
+        <MessageSquare className={cn('h-4 w-4 shrink-0', INK)} aria-hidden />
         <p className="min-w-0 flex-1">
           <span className="font-semibold">There&apos;s a new conversational Comic Studio.</span>{' '}
-          <span className="text-[var(--ds-muted)]">Your script, cast and style come along; this project stays as it is.</span>
+          <span className={MUTED}>Your script, cast and style come along; this project stays as it is.</span>
         </p>
         {error && (
-          <span role="alert" className="basis-full text-[12px] text-red-600 sm:basis-auto">
+          <span role="alert" className={cn('basis-full text-[12px] sm:basis-auto', TONE_TEXT.danger)}>
             {error}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => void open()}
-          disabled={pending}
-          className={`inline-flex shrink-0 items-center gap-1.5 ${RADIUS_PILL} ${PRIMARY_BTN} px-3 py-1 text-[12px] font-semibold disabled:opacity-60`}
-        >
+        <Button type="button" size="sm" onClick={() => void open()} disabled={pending}>
           {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
           {pending ? 'Bringing your story over…' : error ? 'Try again' : 'Open this story in it'}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <IconButton
+          label="Dismiss"
+          title={null}
+          size="sm"
+          className={MUTED}
           onClick={() => {
             rememberBannerDismissed(projectId);
             setDismissed(true);
           }}
-          aria-label="Dismiss"
-          className={`grid h-7 w-7 shrink-0 place-items-center ${RADIUS_PILL} text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
         >
           <X className="h-3.5 w-3.5" />
-        </button>
+        </IconButton>
       </div>
     </div>
   );
@@ -205,23 +217,23 @@ export const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) =>
   return (
     <div className="relative group hidden md:block">
       <div
-        className="flex max-w-[18rem] items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default"
+        className={cn(CHIP, CHIP_VARIANT.outline, 'max-w-[18rem] cursor-default')}
         title={view.governed ? 'How much of your usage this comic has used' : 'What this comic has cost so far'}
       >
-        <Icon size={12} className={`shrink-0 ${view.governed ? 'text-slate-500' : 'text-green-600'}`} aria-hidden />
+        <Icon size={12} className="shrink-0" aria-hidden />
         <span className="truncate tabular-nums">This comic: {view.total}</span>
       </div>
       {(view.byStage.length > 0 || view.ownKeyNote) && (
-        <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] z-50 hidden group-hover:block">
-          <div className="bg-white border-2 border-black rounded-xl shadow-comic p-3 text-left space-y-1">
-            <div className="text-[10px] font-bold uppercase text-slate-500">{view.governed ? 'Usage by stage' : 'Cost by stage'}</div>
+        <div className={cn('absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] hidden group-hover:block', Z.popover)}>
+          <div className={cn(OVERLAY, 'p-3 text-left space-y-1')}>
+            <div className={OVERLINE}>{view.governed ? 'Usage by stage' : 'Cost by stage'}</div>
             {view.byStage.map((line) => (
-              <div key={line.key} className="flex justify-between gap-2 text-[11px] text-slate-600 tabular-nums">
+              <div key={line.key} className={cn('flex justify-between gap-2 text-[11px] tabular-nums', MUTED)}>
                 <span className="min-w-0 capitalize truncate">{line.key.replace(/_/g, ' ')}</span>
                 <span className="shrink-0">{line.value}</span>
               </div>
             ))}
-            {view.ownKeyNote && <div className="pt-1 text-[11px] text-slate-500">{view.ownKeyNote}</div>}
+            {view.ownKeyNote && <div className={cn('pt-1 text-[11px]', MUTED)}>{view.ownKeyNote}</div>}
           </div>
         </div>
       )}
@@ -243,10 +255,10 @@ const ActiveImageModelChip: React.FC = () => {
   }, []);
   return (
     <div
-      className="hidden lg:flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700"
+      className={cn(CHIP, CHIP_VARIANT.outline, 'hidden lg:flex')}
       title={`Active image model: ${model}`}
     >
-      <ImageIcon size={12} className="text-brand-blue" />
+      <ImageIcon size={12} className="shrink-0" aria-hidden />
       <span className="font-mono truncate max-w-[11rem]">{model}</span>
     </div>
   );
@@ -844,14 +856,14 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className={cn('min-h-screen flex flex-col', CANVAS_BG)}>
       {newStudioBanner}
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
-      <div className="px-4 py-2 border-b-4 border-black bg-white flex items-center gap-3">
-        <button onClick={onBack} title="Back to Dashboard" className="flex items-center shrink-0 text-xs font-bold text-slate-500 hover:text-black transition-colors">
-          <ArrowLeft className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Dashboard</span>
-        </button>
-        <span className="text-slate-300 shrink-0">|</span>
+      <div className={cn('px-4 py-2 border-b border-[var(--ds-hairline)] flex items-center gap-3', CANVAS_BG)}>
+        <Button variant="ghost" size="sm" onClick={onBack} title="Back to Dashboard" className={cn('shrink-0 px-2', MUTED)}>
+          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">Dashboard</span>
+        </Button>
+        <span aria-hidden className="h-5 w-px shrink-0 bg-[var(--ds-hairline)]" />
         <input
           value={titleDraft}
           onChange={(e) => setTitleDraft(e.target.value)}
@@ -868,47 +880,42 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
               (e.target as HTMLInputElement).blur();
             }
           }}
-          className="font-display text-lg bg-transparent border-b-2 border-transparent focus:border-black outline-none min-w-0 flex-1 sm:max-w-[16rem] truncate"
+          aria-label="Comic title"
+          className={cn(FIELD, 'h-9 min-w-0 flex-1 truncate border-transparent bg-transparent px-2 text-[length:var(--ds-text-lg)] font-semibold hover:border-[var(--ds-control-border)] sm:max-w-[16rem]')}
         />
 
         {state.generationStatus?.isActive && (
-          <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-brand-yellow rounded-full border border-black text-[11px] font-bold shrink-0">
-            <div className="w-2 h-2 bg-black rounded-full animate-pulse" /> Building…
+          <div className={cn(CHIP, CHIP_VARIANT.filled, 'hidden sm:inline-flex gap-1.5 shrink-0')}>
+            <LiveDot /> Building…
           </div>
         )}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={saveVersion}
-            className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"
-            title="Save Version Snapshot"
-          >
+          <IconButton label="Save Version Snapshot" onClick={saveVersion} className={MUTED}>
             <Save size={18} />
-          </button>
-          <button
-            onClick={() => setShowVersions(true)}
-            className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors relative"
-            title="Version History"
-          >
+          </IconButton>
+          <IconButton label="Version History" onClick={() => setShowVersions(true)} className={cn('relative', MUTED)}>
             <History size={18} />
             {(state.versions?.length || 0) > 0 && (
-              <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-brand-blue rounded-full" />
+              <span aria-hidden className={cn('absolute top-1 right-1 size-2 bg-[var(--ds-ink)]', RADIUS_ROUND)} />
             )}
-          </button>
+          </IconButton>
         </div>
       </div>
       <main className="p-3 sm:p-6 max-w-7xl mx-auto w-full flex-1 space-y-4">
         {deploymentParity?.mismatch && (
-          <div className="max-w-7xl mx-auto border-2 border-amber-500 bg-amber-50 rounded-lg p-3 text-xs font-bold text-amber-800">
+          <StatusBanner tone="attention" className="max-w-7xl mx-auto">
             Deployment mismatch detected: frontend `{deploymentParity.frontendGitSha}` vs backend `{deploymentParity.backendGitSha}`.
             Some features may behave inconsistently until both deployments use the same commit.
-          </div>
+          </StatusBanner>
         )}
         {navError && (
-          <div className="mx-4 mt-3 text-sm bg-amber-100 border-2 border-black rounded-lg p-2 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span className="flex-1">{navError}</span>
-            <button onClick={() => setNavError(null)} className="font-bold text-slate-600 hover:text-black" aria-label="Dismiss">×</button>
+          <div className={cn('mx-4 mt-3 text-sm p-2 flex items-start gap-2 border', RADIUS_CONTROL, STATUS_SURFACE.attention, INK)}>
+            <AlertTriangle className={cn('w-4 h-4 shrink-0 mt-0.5', STATUS_INK.attention)} aria-hidden />
+            <span className="flex-1 min-w-0 [overflow-wrap:anywhere]">{navError}</span>
+            <IconButton label="Dismiss" title={null} size="sm" onClick={() => setNavError(null)} className={cn('-my-1', MUTED)}>
+              <X className="h-3.5 w-3.5" />
+            </IconButton>
           </div>
         )}
         {renderStep()}

@@ -18,7 +18,8 @@ import {
   formatSigned,
   compactNumber,
   useCompact,
-  safeHref
+  safeHref,
+  withAlpha
 } from './kit';
 import type { PaletteName } from './kit';
 
@@ -92,7 +93,7 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
   } else if (kind === 'badge') {
     const col2 = cell.color || '#64748b';
     body = cell.value != null && cell.value !== ''
-      ? <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: col2, backgroundColor: `${col2}1a` }}>{String(cell.value)}</span>
+      ? <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: col2, backgroundColor: withAlpha(col2, 0.1) }}>{String(cell.value)}</span>
       : <span className="text-[var(--ds-faint)]">—</span>;
   } else if ((kind === 'delta' || kind === 'deltaPercent') && hasNum) {
     const pos = num > 0;

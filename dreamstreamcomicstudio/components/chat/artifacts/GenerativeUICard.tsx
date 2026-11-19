@@ -1,7 +1,7 @@
 import React from 'react';
 import { Star } from 'lucide-react';
 import type { GenerativeUIArtifact, ChartArtifact, DataTableArtifact } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, RadialGauge, compactNumber } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, RadialGauge, compactNumber, withAlpha } from './kit';
 import { ChartCard } from './ChartCard';
 import { DataTableCard } from './DataTableCard';
 import { InlineMap } from './InlineMap';
@@ -245,7 +245,8 @@ const GAP: Record<number, string> = { 0: 'gap-0', 1: 'gap-1', 2: 'gap-2', 3: 'ga
 const ALIGN: Record<string, string> = { start: 'items-start', center: 'items-center', end: 'items-end', stretch: 'items-stretch', baseline: 'items-baseline' };
 const COLS: Record<number, string> = { 1: 'sm:grid-cols-1', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-3', 4: 'sm:grid-cols-4' };
 const RATIO: Record<string, string> = { '1:1': 'aspect-square', '4:3': 'aspect-[4/3]', '16:9': 'aspect-video' };
-const TONE_COLOR: Record<string, string> = { neutral: 'var(--ds-muted)', good: '#059669', warn: '#d97706', bad: '#dc2626', info: '#3B82F6' };
+// Callout and badge tones read the readable status inks (always beside the words they colour).
+const TONE_COLOR: Record<string, string> = { neutral: 'var(--ds-muted)', good: 'var(--ds-success-text)', warn: 'var(--ds-warning-text)', bad: 'var(--ds-danger-text)', info: 'var(--ds-info-text)' };
 const HEADING: Record<number, string> = { 1: 'text-lg', 2: 'text-base', 3: 'text-sm' };
 const TEXT_TONE: Record<string, string> = { default: 'text-[var(--ds-ink)]', muted: 'text-[var(--ds-muted)]', strong: 'text-[var(--ds-ink)] font-semibold' };
 const TEXT_ALIGN: Record<string, string> = { left: 'text-left', center: 'text-center', right: 'text-right' };
@@ -318,7 +319,7 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
     case 'callout': {
       const c = TONE_COLOR[block.tone];
       return (
-        <div className="rounded-xl border-l-4 p-3" style={{ borderColor: c, backgroundColor: `${c}12` }}>
+        <div className="rounded-xl border-l-4 p-3" style={{ borderColor: c, backgroundColor: withAlpha(c, 0.07) }}>
           {block.title && <div className="text-xs font-semibold" style={{ color: c }}>{block.title}</div>}
           <div className="text-sm text-[var(--ds-ink)] whitespace-pre-wrap break-words">{block.text}</div>
         </div>
@@ -439,7 +440,7 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
         <ol className="flex flex-col gap-2">
           {block.items.map((it, i) => (
             <li key={i} className="flex gap-2.5">
-              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#D97757]/12 text-[11px] font-bold text-[var(--ds-accent)]">{i + 1}</span>
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[var(--ds-accent-soft)] text-[11px] font-bold text-[var(--ds-accent)]">{i + 1}</span>
               <div className="min-w-0">
                 {it.title && <div className="text-sm font-semibold text-[var(--ds-ink)]">{it.title}</div>}
                 {it.text && <p className="whitespace-pre-wrap break-words text-xs text-[var(--ds-muted)]">{it.text}</p>}

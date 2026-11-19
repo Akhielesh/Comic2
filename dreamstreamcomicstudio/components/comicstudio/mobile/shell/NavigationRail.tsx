@@ -6,6 +6,7 @@ import React from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { NavItemButton, type StudioNavItem } from './MobileTabBar';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 export const NavigationRail: React.FC<{ items: StudioNavItem[]; onBack: () => void }> = ({ items, onBack }) => (
   <nav
     aria-label="Studio views"
@@ -17,7 +18,7 @@ export const NavigationRail: React.FC<{ items: StudioNavItem[]; onBack: () => vo
       onClick={onBack}
       aria-label="Back to My comics"
       title="My comics"
-      className="press mb-1 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+      className={`press mb-1 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
     >
       <ArrowLeft className="h-4 w-4" aria-hidden />
     </button>

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { BookOpen, CheckCircle2, RefreshCw } from "lucide-react";
-import { Button } from "./Button";
+import { Badge, Button, CARD, CARD_DESCRIPTION, CARD_TITLE } from "./ds";
+import { CANVAS_BG, HEADING, RADIUS_CONTROL, RISE_IN, SECTION_ICON_TILE, SHADOW_SOFT, TEXT_3XL, TONE_TEXT } from "./chat/studioDesign";
+import { cn } from "../lib/utils";
 import { LearnProgress } from "../types";
 import { loadLearnProgress, saveLearnProgress } from "../services/db";
 
@@ -127,60 +129,64 @@ export const LearnHub: React.FC = () => {
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6 animate-fade-in">
-      <div className="flex items-center gap-3">
-        <BookOpen className="w-7 h-7" />
-        <div>
-          <h1 className="text-4xl font-display">Learn</h1>
-          <p className="text-sm font-comic text-slate-600">Guided lessons to master prompts, workflow, and output quality.</p>
+    <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>
+      <div className={`max-w-6xl mx-auto px-4 py-6 sm:px-6 space-y-6 ${RISE_IN}`}>
+        <div className="flex items-center gap-3">
+          <span className={SECTION_ICON_TILE} aria-hidden>
+            <BookOpen className="w-5 h-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className={cn(TEXT_3XL, HEADING)}>Learn</h1>
+            <p className="text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Guided lessons to master prompts, workflow, and output quality.</p>
+          </div>
         </div>
-      </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        {LEARN_MODULES.map((module) => {
-          const moduleProgress = progress[module.id];
-          const completed = moduleProgress?.completedLessons.length || 0;
-          const total = module.lessons.length;
-          return (
-            <div key={module.id} className="bg-white border-4 border-black rounded-xl shadow-comic p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-display text-xl">{module.title}</h3>
-                  <p className="text-xs font-comic text-slate-600">{module.description}</p>
+        <div className="grid lg:grid-cols-2 gap-6">
+          {LEARN_MODULES.map((module) => {
+            const moduleProgress = progress[module.id];
+            const completed = moduleProgress?.completedLessons.length || 0;
+            const total = module.lessons.length;
+            return (
+              <div key={module.id} className={cn(CARD, SHADOW_SOFT, 'p-5 gap-4')}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className={CARD_TITLE}>{module.title}</h3>
+                    <p className={cn(CARD_DESCRIPTION, 'mt-0.5')}>{module.description}</p>
+                  </div>
+                  <Badge variant="secondary" className="tabular-nums">
+                    {completed}/{total} complete
+                  </Badge>
                 </div>
-                <div className="text-xs font-bold bg-slate-50 border-2 border-black rounded px-2 py-1">
-                  {completed}/{total} complete
+
+                <div className="space-y-3">
+                  {module.lessons.map((lesson) => {
+                    const isDone = moduleProgress?.completedLessons.includes(lesson.id);
+                    return (
+                      <div key={lesson.id} className={cn('border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3', RADIUS_CONTROL)}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 text-[length:var(--ds-text-base)] font-semibold leading-5 text-[var(--ds-ink)]">{lesson.title}</div>
+                          {isDone && <CheckCircle2 className={cn('w-4 h-4 shrink-0', TONE_TEXT.success)} role="img" aria-label="Complete" />}
+                        </div>
+                        <p className="mt-1 text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">{lesson.summary}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" onClick={() => markLesson(module.id, lesson.id)}>
+                            Mark Complete
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-end">
+                  <Button size="sm" variant="ghost" onClick={() => resetModule(module.id)}>
+                    <RefreshCw aria-hidden /> Reset Progress
+                  </Button>
                 </div>
               </div>
-
-              <div className="space-y-3">
-                {module.lessons.map((lesson) => {
-                  const isDone = moduleProgress?.completedLessons.includes(lesson.id);
-                  return (
-                    <div key={lesson.id} className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                      <div className="flex items-center justify-between">
-                        <div className="font-bold text-sm">{lesson.title}</div>
-                        {isDone && <CheckCircle2 className="w-4 h-4 text-green-600" />}
-                      </div>
-                      <p className="text-xs text-slate-600 mt-1">{lesson.summary}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => markLesson(module.id, lesson.id)}>
-                          Mark Complete
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="flex justify-end">
-                <Button size="sm" variant="outline" onClick={() => resetModule(module.id)} icon={<RefreshCw className="w-4 h-4" />}>
-                  Reset Progress
-                </Button>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

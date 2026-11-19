@@ -100,7 +100,7 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
         aria-checked={on}
         disabled={opts.disabled}
         onClick={() => onPick(target)}
-        className={cx(ROW, on && 'bg-[#D97757]/10')}
+        className={cx(ROW, on && 'bg-[var(--ds-accent-soft)]')}
       >
         <span className={ICON} aria-hidden>
           {icon}
@@ -143,12 +143,12 @@ export const AssignMenu: React.FC<AssignMenuProps> = ({ doc, count, value, onPic
             maxLength={80}
             placeholder="Their name"
             aria-label="New character's name"
-            className="h-10 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[14px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/45 coarse:h-11 coarse:text-[16px]"
+            className="h-10 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[14px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-focus)] coarse:h-11 coarse:text-[16px]"
           />
           <button
             type="submit"
             disabled={!name.trim()}
-            className="inline-flex h-10 shrink-0 items-center rounded-xl bg-[var(--ds-accent)] px-3 text-[13px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11"
+            className="inline-flex h-10 shrink-0 items-center rounded-xl bg-[var(--ds-accent-fill)] px-3 text-[13px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11"
           >
             Add
           </button>

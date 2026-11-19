@@ -142,7 +142,7 @@ const AvoidEditor: React.FC<{ avoid: string[]; onChange: (next: string[]) => voi
         maxLength={120}
         aria-label="Add something to avoid"
         placeholder="Add a never…"
-        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none coarse:h-11 coarse:text-base"
+        className="h-7 min-w-[8rem] flex-1 rounded-full border border-dashed border-[var(--ds-hairline)] bg-transparent px-2.5 text-[12px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-base"
       />
     </div>
   );
@@ -419,7 +419,7 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
                   <span className="relative block">
                     <PresetArt preset={p} className="h-20" />
                     {on && (
-                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent)] text-white" aria-hidden>
+                      <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)]" aria-hidden>
                         <Check className="h-3 w-3" />
                       </span>
                     )}

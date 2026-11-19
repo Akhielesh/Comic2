@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { withAlpha } from './theme';
+import { BEAR, BULL, withAlpha } from './theme';
 
 // Interactive, dependency-free SVG chart — the line/area/candlestick primitive every
 // finance/weather/data card composes. Container-responsive: a ResizeObserver measures
@@ -175,8 +175,8 @@ export const Chart: React.FC<ChartProps> = ({
   candles,
   variant = 'area',
   color,
-  up = '#059669',
-  down = '#dc2626',
+  up = BULL,
+  down = BEAR,
   height = 120,
   aspect,
   maxHeight = 460,

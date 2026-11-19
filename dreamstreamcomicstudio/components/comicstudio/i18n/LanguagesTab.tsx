@@ -20,7 +20,7 @@ import { estimateDocJobs } from '../../../shared/comic/plan';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
-import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { EmptyHint, GhostButton, PrimaryButton, SectionTitle, Surface, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { GlossaryDrawer } from './GlossaryDrawer';
@@ -90,7 +90,7 @@ function LanguagePicker({ doc, exclude, onPick }: { doc: ComicDoc; exclude: Set<
               type="button"
               onClick={() => onPick(l.code)}
               title={l.english}
-              className="inline-flex min-h-[36px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-[44px] motion-reduce:transition-none"
+              className={`inline-flex min-h-[36px] max-w-full items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] motion-reduce:transition-none`}
             >
               <span lang={l.code} dir={dirOf(l.code)} className="break-words">{l.endonym}</span>
               {l.endonym !== l.english && <span className="text-[11.5px] text-[var(--ds-muted)]">{l.english}</span>}
@@ -108,7 +108,7 @@ function LanguagePicker({ doc, exclude, onPick }: { doc: ComicDoc; exclude: Set<
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search languages (Telugu, తెలుగు, Hindi…)"
           aria-label="Search languages"
-          className="h-10 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/60 focus:outline-none coarse:h-11 coarse:text-[16px]"
+          className="h-10 w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:outline-none coarse:h-11 coarse:text-[16px]"
         />
       </label>
       {group('Popular in India', india)}
@@ -297,7 +297,7 @@ function LetteringNotices({ studio, doc }: { studio: StudioController; doc: Comi
   }
   if (!notices.length) return null;
   return (
-    <div className="space-y-3 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 p-3 text-[13px] leading-snug text-[var(--ds-ink)]" role="region" aria-label="Lettering for translations">
+    <div className="space-y-3 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3 text-[13px] leading-snug text-[var(--ds-ink)]" role="region" aria-label="Lettering for translations">
       {notices}
     </div>
   );
@@ -352,7 +352,7 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
             Ready to publish
           </span>
         ) : (
-          <span className="rounded-full border border-[#D97757]/40 px-2 py-0.5 font-medium text-[var(--ds-ink)]">Draft</span>
+          <span className="rounded-full border border-ds-accent/40 px-2 py-0.5 font-medium text-[var(--ds-ink)]">Draft</span>
         )}
         {chips.map((c) => (
           <span key={c} className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[var(--ds-muted)]">
@@ -410,7 +410,7 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
             type="button"
             onClick={() => setRemoving(true)}
             aria-label={`Remove the ${spec.english} translation`}
-            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
+            className={`ml-auto inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING} coarse:h-11 coarse:w-11`}
           >
             <Trash2 className="h-4 w-4" aria-hidden />
           </button>
@@ -483,9 +483,16 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
           title="Readers in their own language"
           action={
             hasLines ? (
-              <PrimaryButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
-                Add a language
-              </PrimaryButton>
+              // While an approval is open its Approve is the one primary action on the screen.
+              doc.gate?.status === 'open' ? (
+                <GhostButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
+                  Add a language
+                </GhostButton>
+              ) : (
+                <PrimaryButton size="sm" className="coarse:h-11" onClick={() => setAdding(true)}>
+                  Add a language
+                </PrimaryButton>
+              )
             ) : undefined
           }
         >
@@ -554,7 +561,7 @@ export const LanguagesTab: React.FC<{ studio: StudioController }> = ({ studio })
                     <span key={code} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-[var(--ds-raised)] py-1 pl-3 pr-1 text-[13px] shadow-sm">
                       <span lang={code} dir={dirOf(code)} className="break-words">{s.endonym}</span>
                       {q && <span className="text-[11.5px] tabular-nums text-[var(--ds-muted)]">{cost.approx(q.usd)}</span>}
-                      <button type="button" aria-label={`Remove ${s.english}`} onClick={() => setPending((p) => p.filter((x) => x !== code))} className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:w-11">
+                      <button type="button" aria-label={`Remove ${s.english}`} onClick={() => setPending((p) => p.filter((x) => x !== code))} className={`inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:w-11`}>
                         <X className="h-3.5 w-3.5" aria-hidden />
                       </button>
                     </span>

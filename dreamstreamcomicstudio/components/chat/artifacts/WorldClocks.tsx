@@ -12,7 +12,7 @@ import { Surface, SurfaceTitle, useCompact } from './kit';
 //    24 h for when the call window opens.
 //  • compact — one quiet row per zone: label left, time + sun/moon right.
 
-const SECOND_HAND = '#D97757';
+const SECOND_HAND = 'var(--ds-accent)';
 
 interface ZoneFmts {
   time: Intl.DateTimeFormat;

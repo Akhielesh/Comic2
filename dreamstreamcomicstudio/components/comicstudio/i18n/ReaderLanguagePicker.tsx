@@ -11,6 +11,18 @@ import { Check, ChevronDown, Globe } from 'lucide-react';
 import { dirOf, sameLanguage } from '../../../shared/comic/languages';
 import { readerString } from './readerStrings';
 
+import { Z } from '../../chat/studioDesign';
+import { cn } from '../../../lib/utils';
+
+/**
+ * FOCUS_RING drawn in the reader's HUD focus colour where there is one: over the immersive reader's room and glass the
+ * app ink can match the glass (light app ink on the day glass, dark on the night glass), so inside [data-reader-root]
+ * the ring takes --ds-reader-hud-focus (>= 3:1 on the room and the glass, as HudButton). Outside the reader the
+ * fallback is the app focus colour, the same ring as FOCUS_RING.
+ */
+const TRIGGER_FOCUS_RING =
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-reader-hud-focus,var(--ds-focus))] contrast-more:focus-visible:outline-[3px]';
+
 /** What a reader surface needs to offer a language switch (also ImmersiveReader's `language`). */
 export interface ReaderLanguageSlot {
   current: string;
@@ -27,7 +39,6 @@ export type ReaderLanguagePickerProps = ReaderLanguageSlot & {
   className?: string;
 };
 
-const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(' ');
 
 export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ current, options, onChange, source, compact, className }) => {
   const [open, setOpen] = useState(false);
@@ -139,7 +150,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
 
   const shown = currentOpt?.native || currentOpt?.label || current;
   return (
-    <div ref={rootRef} className={cx('relative inline-flex min-w-0', className)} data-no-turn>
+    <div ref={rootRef} className={cn('relative inline-flex min-w-0', className)} data-no-turn>
       <button
         ref={buttonRef}
         type="button"
@@ -150,7 +161,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
         title={strings.choose}
         onClick={() => (open ? close(false) : openList())}
         onKeyDown={onButtonKey}
-        className="inline-flex min-h-[44px] min-w-[44px] max-w-[12rem] items-center justify-center gap-1.5 rounded-xl px-2.5 text-[13px] font-medium text-inherit transition-colors duration-150 hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/60 motion-reduce:transition-none"
+        className={`inline-flex min-h-[44px] min-w-[44px] max-w-[12rem] items-center justify-center gap-1.5 rounded-xl px-2.5 text-[13px] font-medium text-inherit transition-colors duration-[var(--ds-motion-medium)] hover:bg-[color-mix(in_srgb,currentColor_10%,transparent)] ${TRIGGER_FOCUS_RING} motion-reduce:transition-none`}
       >
         <Globe className="h-[18px] w-[18px] shrink-0" aria-hidden />
         {!compact && (
@@ -158,7 +169,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
             {shown}
           </span>
         )}
-        <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 opacity-70 transition-transform duration-150 motion-reduce:transition-none', open && 'rotate-180')} aria-hidden />
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 opacity-70 transition-transform duration-[var(--ds-motion-medium)] motion-reduce:transition-none', open && 'rotate-180')} aria-hidden />
       </button>
       {open && (
         <ul
@@ -170,7 +181,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
           aria-activedescendant={`${listId}-${active}`}
           onKeyDown={onListKey}
           style={offset === null ? undefined : { left: offset }}
-          className={cx(offset === null && 'right-0', 'absolute top-full z-50 mt-1.5 max-h-[min(22rem,60vh)] w-[min(18rem,calc(100vw-32px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1.5 text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none')}
+          className={cn(offset === null && 'right-0', Z.popover, 'absolute top-full mt-1.5 max-h-[min(22rem,60vh)] w-[min(18rem,calc(100vw-32px))] overflow-y-auto overscroll-contain rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-1.5 text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none')}
         >
           {options.map((o, i) => {
             const selected = sameLanguage(o.code, current);
@@ -184,7 +195,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
                 aria-selected={selected}
                 onPointerEnter={() => setActive(i)}
                 onClick={() => pick(i)}
-                className={cx(
+                className={cn(
                   'flex min-h-[44px] cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-1.5',
                   i === active ? 'bg-[var(--ds-hover)]' : '',
                   selected && 'font-semibold'
@@ -202,7 +213,7 @@ export const ReaderLanguagePicker: React.FC<ReaderLanguagePickerProps> = ({ curr
                 {isOriginal && (
                   <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--ds-muted)]">{strings.original}</span>
                 )}
-                <Check className={cx('h-4 w-4 shrink-0 text-[var(--ds-accent)]', !selected && 'invisible')} aria-hidden />
+                <Check className={cn('h-4 w-4 shrink-0 text-[var(--ds-accent)]', !selected && 'invisible')} aria-hidden />
               </li>
             );
           })}

@@ -66,7 +66,7 @@ import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { loadDictationSettings, voiceInputSupported, webSpeechSupported, type DictationEngine, type FinalInfo } from '../../../hooks/useDictation';
 import { isEnglish, voiceAutoSend } from '../../../services/dictation/autoSend';
-import { CONTROL_BTN, FOCUS_RING, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
+import { CONTROL_BTN, FOCUS_RING, FOCUS_RING_FLUSH, GLASS_STRONG, HAIRLINE, MUTED, PRESS, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
 import { sendOutcomeOf } from '../messageQueue';
 import { QueuedMessages } from './QueuedMessages';
@@ -1273,9 +1273,10 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
       disabled={!ready}
       onClick={() => setPanel((p) => (p === id ? null : id))}
       className={cx(
-        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3.5 coarse:text-[13px]`,
+        // Flush focus: the chips scroll inside a 2 px padded strip, which would clip an outline set 2 px off.
+        `inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium ${TRANSITION} disabled:opacity-40 ${FOCUS_RING_FLUSH} coarse:h-11 coarse:px-3.5 coarse:text-[13px]`,
         panel === id
-          ? 'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)]'
+          ? 'border-ds-accent/45 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
           : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         extra
       )}
@@ -1459,8 +1460,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
         ref={composerBoxRef}
         data-composer-box
         className={cx(
-          `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`,
-          dragOver && 'border-[#D97757]/60 ring-2 ring-[#D97757]/30'
+          `${GLASS_STRONG} ${HAIRLINE} ${inSheet ? '' : SHADOW_SOFT} ${RADIUS_PANEL} px-3 pb-2.5 pt-2 transition-shadow duration-[var(--ds-motion-slow)] focus-within:border-[var(--ds-focus)] focus-within:shadow-[shadow:var(--ds-shadow-panel)]`,
+          dragOver && 'border-ds-accent/60 ring-2 ring-ds-accent/30'
         )}
       >
         {dragOver && (
@@ -1473,7 +1474,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           <div className="mb-1.5 flex min-w-0 pt-0.5">
             <span
               data-focus-chip
-              className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-[#D97757]/35 bg-[#D97757]/10 py-0.5 pl-2.5 pr-0.5 text-[12px] font-medium text-[var(--ds-ink)]"
+              className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-ds-accent/35 bg-[var(--ds-accent-soft)] py-0.5 pl-2.5 pr-0.5 text-[12px] font-medium text-[var(--ds-ink)]"
             >
               <Crosshair className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />
               <span className="min-w-0 truncate" title={`Your next message is about ${focusText}`}>
@@ -1548,8 +1549,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                       aria-label={who ? `${a.name}: ${who}. Change who this is` : `${a.name}: who's this?`}
                       title={who ? `${who} — tap to change` : 'Who’s this? Tap to say'}
                       className={cx(
-                        `relative block h-14 w-14 overflow-hidden rounded-xl ${HAIRLINE} bg-[var(--ds-well)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50`,
-                        who && 'ring-2 ring-[#D97757]/45'
+                        `relative block h-14 w-14 overflow-hidden rounded-xl ${HAIRLINE} bg-[var(--ds-well)] ${FOCUS_RING}`,
+                        who && 'ring-2 ring-ds-accent/45'
                       )}
                     >
                       {a.previewUrl || a.dataUrl ? (
@@ -1589,7 +1590,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                     onClick={() => setAssigning((cur) => (cur === 'all' ? null : 'all'))}
                     aria-haspopup="menu"
                     aria-expanded={assigning === 'all'}
-                    className={`inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium text-[var(--ds-accent)] ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3`}
+                    className={`inline-flex min-h-[28px] shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium text-[var(--ds-accent)] ${TRANSITION} hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-[44px] coarse:px-3`}
                   >
                     <Users className="h-3.5 w-3.5" aria-hidden /> Assign all {imageAttachments.length} to…
                   </button>
@@ -1847,7 +1848,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                 disabled={!canSend}
                 aria-label="Send"
                 title={uploadsBusy ? 'Waiting for your photos to finish uploading' : coarse ? 'Send' : 'Send (Enter)'}
-                className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
+                className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] ${TRANSITION} hover:bg-[var(--ds-accent-fill-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
               >
                 <ArrowUp className="h-4 w-4" />
               </button>

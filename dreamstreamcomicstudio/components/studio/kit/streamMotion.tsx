@@ -30,6 +30,7 @@ import {
   useImageReveal,
 } from '../../ds/useImageReveal';
 
+import { SHADOW_SOFT } from '../../chat/studioDesign';
 // ---- Variants -------------------------------------------------------------------------
 
 /** A stream card: blur-up + rise + faint scale, settling on the soft spring. */
@@ -291,19 +292,18 @@ export const SelectPop: React.FC<SelectPopProps> = ({ selected, children, classN
           <motion.span
             key="ring"
             aria-hidden
-            className={`pointer-events-none absolute inset-0 ${rounded} ring-2 ring-[var(--ds-accent)]`}
+            className={`pointer-events-none absolute inset-0 ${rounded} ring-2 ring-[var(--ds-accent)] ${SHADOW_SOFT}`}
             initial={reduced ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={springSnappy}
-            style={{ boxShadow: '0 0 0 4px rgba(217,119,87,0.15)' }}
           />
         )}
         {selected && (
           <motion.span
             key="check"
             aria-hidden
-            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent)] text-[12px] text-white"
+            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[12px] text-[var(--ds-on-accent)]"
             initial={reduced ? false : { scale: 0, rotate: -30 }}
             animate={{ scale: 1, rotate: 0 }}
             exit={{ scale: 0 }}

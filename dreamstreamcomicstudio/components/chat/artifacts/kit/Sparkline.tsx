@@ -19,7 +19,7 @@ export const Sparkline: React.FC<{
   className?: string;
   /** Gradient tint hint: 'up' keeps the line's accent, 'down' goes rose. */
   direction?: 'up' | 'down';
-}> = ({ values, color = '#3B82F6', width = 280, height = 48, fill = true, className, direction }) => {
+}> = ({ values, color = 'var(--ds-chart-1)', width = 280, height = 48, fill = true, className, direction }) => {
   const gradId = useId().replace(/:/g, '');
   const [attachWrap, size] = useMeasure<HTMLDivElement>();
   const lineRef = useRef<SVGPathElement>(null);

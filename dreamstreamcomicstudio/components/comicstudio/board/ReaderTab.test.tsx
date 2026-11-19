@@ -90,8 +90,8 @@ describe('ReaderTab exports', () => {
     expect(passedDoc).toBe(doc); // the SOURCE doc, not a localized copy
     expect(urlFor).toBe(studio.urlFor);
     expect(opts.lang).toBe('te');
-    // A font fallback is a warning, not a plain success.
-    expect(status.closest('[role="status"]')!.className).toContain('amber');
+    // A font fallback is a warning, not a plain success: the attention status surface (the warning token).
+    expect(status.closest('[role="status"]')!.className).toContain('--ds-warning');
   });
 
   it('a draft edition’s download says how many lines are still in the original language', async () => {

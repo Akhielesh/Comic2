@@ -3,7 +3,7 @@
 // Three switchable workspace themes:
 //   • black — absolute-black OLED dark
 //   • light — clean white/light
-//   • brand — the DreamStream main-app look (comic borders, brand yellow/blue)
+//   • brand — the DreamStream app look, on the app's own --ds-* tokens
 //
 // Each theme is the SAME set of Tailwind class fragments, so every studio surface composes
 // `t.bg`, `t.panel`, … from the active theme via the `useStudioTheme()` hook (themeStore.ts).
@@ -127,33 +127,36 @@ export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
     chip: 'bg-white border-slate-200',
     accentGrad: 'bg-gradient-to-r from-violet-600 via-fuchsia-500 to-sky-500',
   },
-  // ---- DreamStream brand (comic look) ----
+  // ---- DreamStream (the app's own tokens) ----
+  // Token-only: the Atlas paper / ink surfaces, hairlines, the ink accent and the focus outline,
+  // so it follows the app skin and its light / dark tokens. The editor stays on the light Monaco
+  // theme's white page. The id stays 'brand' so stored preferences still load.
   brand: {
     id: 'brand',
     label: 'DreamStream',
     isDark: false,
     monaco: 'studio-light',
-    bg: 'bg-slate-50',
-    panel: 'bg-white',
-    panelAlt: 'bg-amber-50',
+    bg: 'bg-[var(--ds-canvas)]',
+    panel: 'bg-[var(--ds-surface)]',
+    panelAlt: 'bg-[var(--ds-well)]',
     editorBg: 'bg-white',
-    edge: 'border-black',
-    edgeStrong: 'border-black',
-    hover: 'hover:bg-black/5',
-    text: 'text-black',
-    textDim: 'text-slate-600',
-    textFaint: 'text-slate-400',
-    accent: 'text-brand-blue',
-    accentSoft: 'bg-brand-blue/10',
-    accentBg: 'bg-brand-yellow',
-    accentBgHover: 'hover:bg-yellow-300',
-    accentText: 'text-black',
-    focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/50',
-    glass: 'bg-white/80 backdrop-blur',
-    glow: 'shadow-comic',
-    gradient: 'bg-gradient-to-b from-amber-50 to-white',
-    chip: 'bg-white border-black',
-    accentGrad: 'bg-gradient-to-r from-brand-yellow via-amber-300 to-brand-blue',
+    edge: 'border-[var(--ds-hairline)]',
+    edgeStrong: 'border-[var(--ds-control-border-hover)]',
+    hover: 'hover:bg-[var(--ds-hover)]',
+    text: 'text-[var(--ds-ink)]',
+    textDim: 'text-[var(--ds-muted)]',
+    textFaint: 'text-[var(--ds-muted)]',
+    accent: 'text-[var(--ds-accent-text)]',
+    accentSoft: 'bg-[var(--ds-accent-soft)]',
+    accentBg: 'bg-[var(--ds-accent-fill)]',
+    accentBgHover: 'hover:bg-[var(--ds-accent-fill-hover)]',
+    accentText: 'text-[var(--ds-on-accent)]',
+    focusRing: 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)]',
+    glass: 'bg-[var(--ds-surface)]',
+    glow: 'shadow-[shadow:var(--ds-shadow-soft)]',
+    gradient: 'bg-[var(--ds-canvas)]',
+    chip: 'bg-[var(--ds-surface)] border-[var(--ds-hairline)]',
+    accentGrad: 'bg-[var(--ds-accent)]',
   },
 };
 

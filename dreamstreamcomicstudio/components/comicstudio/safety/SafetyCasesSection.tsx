@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { ContentRating } from '../../../shared/comic/safety';
 import { getComicCaseAsset, listComicCases, resolveComicCase, type ComicCaseFilter } from '../studioApi';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 /** GET /api/moderation/comic-cases item (routes/comicSafety.ts caseView). */
 export interface ComicCase {
   id: string;
@@ -39,9 +40,9 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 const BTN =
-  'inline-flex min-h-[44px] items-center justify-center rounded-full px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-50';
+  `inline-flex min-h-[44px] items-center justify-center rounded-full px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-50`;
 const QUIET = `${BTN} border border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
-const PRIMARY = `${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+const PRIMARY = `${BTN} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 
 const when = (t: number) => {
   try {
@@ -96,7 +97,7 @@ const CaseCard: React.FC<{ item: ComicCase; onResolved(): void }> = ({ item, onR
   return (
     <li className="min-w-0 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3 shadow-sm">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--ds-muted)]">
-        <span className="rounded-full bg-[#D97757]/10 px-2 py-0.5 font-medium text-[var(--ds-ink)]">{KIND_LABEL[item.kind]}</span>
+        <span className="rounded-full bg-[var(--ds-accent-soft)] px-2 py-0.5 font-medium text-[var(--ds-ink)]">{KIND_LABEL[item.kind]}</span>
         <span className="min-w-0 truncate">{item.projectName || item.projectId}</span>
         <span aria-hidden>·</span>
         <span>{when(item.createdAt)}</span>
@@ -155,7 +156,7 @@ const CaseCard: React.FC<{ item: ComicCase; onResolved(): void }> = ({ item, onR
             value={reason}
             maxLength={500}
             onChange={(e) => setReason(e.target.value)}
-            className="mt-1 block min-h-[44px] w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 text-[14px] text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`mt-1 block min-h-[44px] w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 text-[14px] text-[var(--ds-ink)] ${FOCUS_RING}`}
           />
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <button type="button" className={QUIET} disabled={!!busy} onClick={() => void resolve('dismiss')}>

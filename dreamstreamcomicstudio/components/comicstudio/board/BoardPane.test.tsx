@@ -198,7 +198,8 @@ describe('BoardPane on a phone (visualqa P1-6, P1-7; mobile.md §3.1)', () => {
     expect(banner).toHaveAttribute('data-gate-banner', 'compact');
     // Pinned: it sits outside (above) the scrolling tab panel, so it never scrolls away.
     expect(screen.getByRole('tabpanel').contains(banner)).toBe(false);
-    expect(within(banner).getByText('Draw the remaining 5 pages in the painted style').className).toContain('truncate');
+    // Closed, the title (the decision) may take two lines, then an ellipsis: it is never cut to one line by the price.
+    expect(within(banner).getByText('Draw the remaining 5 pages in the painted style').className).toContain('line-clamp-2');
     expect(within(banner).queryByText(/very-long-model-identifier/)).toBeNull();
     fireEvent.click(within(banner).getByRole('button', { name: /Show details/ }));
     expect(within(banner).getByText(/5 images on nano-banana-2\.1-a-very-long-model-identifier/).className).toContain('[overflow-wrap:anywhere]');
@@ -352,7 +353,8 @@ describe('BoardPane feature tabs and dock (wave 2)', () => {
       expect(gate.className).not.toMatch(/rounded-2xl|#D97757/i);
       // The one-line banner's own details toggle too (the shared Approve / Not now buttons are ui.tsx's).
       const toggle = within(gate).queryByRole('button', { name: /Show details/ });
-      if (toggle) expect(toggle.className).toContain('ring-[var(--ds-ring)]');
+      // Its focus is the shared FOCUS_RING (the 2 px focus outline), not a hand-rolled ring.
+      if (toggle) expect(toggle.className).toContain('focus-visible:outline-[color:var(--ds-focus)]');
       unmount();
     }
   });

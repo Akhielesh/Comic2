@@ -7,6 +7,7 @@ import { ArrowUpRight, ClipboardPaste, ImagePlus } from 'lucide-react';
 import { composeInStudio } from './composerBus';
 import { DirectorMark } from './MessageItem';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 export interface Starter {
   label: string;
   /** send = start the conversation right away; prefill = put it in the box for the user to finish. */
@@ -58,7 +59,7 @@ export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disab
           type="button"
           disabled={disabled}
           onClick={() => (s.mode === 'send' ? onSend(s.text) : composeInStudio({ text: s.text, hint: s.hint }))}
-          className="group flex min-h-[44px] items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-200 hover:-translate-y-px hover:border-[#D97757]/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:text-[14px]"
+          className={`group flex min-h-[44px] items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-[var(--ds-motion-medium)] hover:-translate-y-px hover:border-ds-accent/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 ${FOCUS_RING} coarse:text-[14px]`}
         >
           <span>{s.label}</span>
           <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-colors group-hover:text-[var(--ds-accent)]" aria-hidden />

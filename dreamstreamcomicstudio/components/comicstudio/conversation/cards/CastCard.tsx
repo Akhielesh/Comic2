@@ -13,7 +13,7 @@ import type { Card, Character } from '../../../../shared/comic/doc';
 import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
-import { TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, cx, plural } from '../ui';
 import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
 import { useAction } from './useAction';
@@ -99,7 +99,7 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
                   onClick={() => setInspecting(c.id)}
                   title={c.look.summary || c.name}
                   aria-label={`${castAriaLabel(c)}. ${status.text}. Open character details`}
-                  className="flex w-full max-w-[16rem] items-center gap-2.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-1.5 pr-3 text-left transition-colors duration-200 hover:border-[#D97757]/35 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+                  className={`flex w-full max-w-[16rem] items-center gap-2.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-1.5 pr-3 text-left transition-colors duration-[var(--ds-motion-medium)] hover:border-ds-accent/35 hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
                 >
                   <CastAvatar character={c} urlFor={studio.urlFor} size={40} busy={status.tone === 'busy'} showCount={false} />
                   <span className="min-w-0 flex-1">

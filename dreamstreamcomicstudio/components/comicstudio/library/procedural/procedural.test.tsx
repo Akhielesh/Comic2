@@ -116,14 +116,15 @@ describe('BubblePreview', () => {
 });
 
 describe('EmptyArt', () => {
-  it('draws each variant in currentColor with one accent, aria-hidden', () => {
+  it('draws each variant in currentColor (its detail too, in the ink), aria-hidden, never the old terracotta', () => {
     const all: Record<string, string> = {};
     for (const v of VARIANTS) {
       const { container, unmount } = render(<EmptyArt variant={v} />);
       const svg = container.querySelector('svg')!;
       expect(svg).toHaveAttribute('aria-hidden');
       expect(svg).toHaveAttribute('stroke', 'currentColor');
-      expect(svg.innerHTML).toContain('#D97757');
+      expect(svg.innerHTML).not.toMatch(/#d97757/i);
+      expect(svg.innerHTML).not.toMatch(/#[0-9a-f]{6}/i);
       expect(svg.innerHTML).not.toMatch(/NaN/);
       all[v] = markup(svg);
       unmount();
@@ -132,10 +133,10 @@ describe('EmptyArt', () => {
     expect(all).toMatchSnapshot();
   });
 
-  it('accent="currentColor" draws the spot in one ink (the comics landing: one colour, its hero spark)', () => {
+  it('a token accent picks the detail out (the default is the ink)', () => {
     for (const v of VARIANTS) {
-      const { container, unmount } = render(<EmptyArt variant={v} accent="currentColor" />);
-      expect(container.querySelector('svg')!.innerHTML).not.toContain('#D97757');
+      const { container, unmount } = render(<EmptyArt variant={v} accent="var(--ds-ink)" />);
+      expect(container.querySelector('svg')!.innerHTML).toContain('var(--ds-ink)');
       unmount();
     }
   });

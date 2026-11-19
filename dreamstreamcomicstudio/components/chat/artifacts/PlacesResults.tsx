@@ -26,7 +26,7 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
 
   const header = (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]">
         <MapPin className="h-4 w-4" />
       </span>
       <span className="min-w-0">
@@ -44,7 +44,7 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
       title="Open your shortlist"
       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:border-[var(--ds-accent)] hover:text-[var(--ds-ink)]"
     >
-      <Heart className="h-3 w-3 fill-[#D97757] text-[var(--ds-accent)]" /> {savedCount}
+      <Heart className="h-3 w-3 fill-[var(--ds-accent)] text-[var(--ds-accent)]" /> {savedCount}
     </button>
   );
 
@@ -60,7 +60,7 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
                 <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[var(--ds-muted)]">{i + 1}</span>
                 <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--ds-ink)]">{p.name}</span>
                 {typeof p.rating === 'number' && (
-                  <span className="flex shrink-0 items-center gap-0.5 text-[11px] font-semibold text-amber-600">
+                  <span className="flex shrink-0 items-center gap-0.5 text-[11px] font-semibold text-[var(--ds-ink)]">
                     <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
                     {p.rating.toFixed(1)}
                   </span>
@@ -134,7 +134,7 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number; source?: string }>
       {/* Accent rail slides in on hover. */}
       <span className="absolute inset-y-2 left-0 w-0.5 origin-top scale-y-0 rounded-r-full bg-[var(--ds-accent)] transition-transform duration-200 group-hover/place:scale-y-100" aria-hidden />
       {/* Imagery — larger, rounded, with a rank chip + a gentle zoom on hover. */}
-      <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-[var(--ds-well)] ring-1 ring-[var(--ds-hairline)] transition-all duration-300 group-hover/place:ring-[#D97757]/40 group-hover/place:shadow-[0_6px_18px_-8px_rgba(0,0,0,0.3)]">
+      <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-[var(--ds-well)] ring-1 ring-[var(--ds-hairline)] transition-all duration-300 group-hover/place:ring-[color:color-mix(in_srgb,var(--ds-accent)_40%,transparent)] group-hover/place:shadow-[0_6px_18px_-8px_rgba(0,0,0,0.3)]">
         {place.image ? (
           <img
             src={place.image}
@@ -167,20 +167,20 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number; source?: string }>
                 : 'text-[var(--ds-faint)] opacity-0 hover:text-[var(--ds-accent)] focus-visible:opacity-100 group-hover/place:opacity-100 [@media(pointer:coarse)]:opacity-70'
             }`}
           >
-            <Heart className={`h-4 w-4 transition-transform duration-200 ${saved ? 'scale-110 fill-[#D97757]' : ''}`} />
+            <Heart className={`h-4 w-4 transition-transform duration-200 ${saved ? 'scale-110 fill-[var(--ds-accent)]' : ''}`} />
           </button>
         </div>
 
         {/* Metadata — clean pills. */}
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {typeof place.rating === 'number' && (
-            <Pill className="bg-amber-500/12 text-amber-600">
+            <Pill className="bg-[var(--ds-well-strong)] text-[var(--ds-ink)]">
               <Star className="h-2.5 w-2.5 fill-amber-500 text-amber-500" />
               {place.rating.toFixed(1)}
             </Pill>
           )}
           {typeof place.price === 'number' && place.price > 0 && (
-            <Pill className="bg-emerald-500/12 text-emerald-700">{'$'.repeat(Math.min(4, place.price))}</Pill>
+            <Pill className="bg-[var(--ds-well-strong)] text-[var(--ds-ink)]">{'$'.repeat(Math.min(4, place.price))}</Pill>
           )}
           {dist && (
             <Pill className="bg-[var(--ds-well-strong)] text-[var(--ds-ink)]">
@@ -189,8 +189,8 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number; source?: string }>
             </Pill>
           )}
           {openNow && (
-            <Pill className="bg-emerald-500/12 text-emerald-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            <Pill className="bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] text-[var(--ds-success-text)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--ds-success)]" />
               Open
             </Pill>
           )}

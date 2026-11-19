@@ -18,8 +18,9 @@ import { STATUS_TEXT, plural, type ClipVM } from './bookModel';
 import { amountInSentence } from '../../../services/costDisplay';
 import { PlateView } from './PlateView';
 import type { PlateKind } from './plates';
-import { BlockedTile, cx, FOCUS_RING } from './ui';
+import { BlockedTile, cx, FOCUS_RING_FLUSH } from './ui';
 
+import { TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 /** Thumbnail box height (px) per mode; widths follow the art's aspect within bounds. */
 export const CLIP_THUMB_H = { full: 64, compact: 52 } as const;
 const CLIP_W = { full: [44, 116], compact: [34, 76] } as const;
@@ -34,14 +35,14 @@ export const clipThumbWidth = (ratio: number, compact: boolean, height?: number)
 const ringFor = (clip: ClipVM): string => {
   switch (clip.status) {
     case 'stale':
-      return 'ring-2 ring-amber-500/70';
+      return 'ring-2 ring-[var(--ds-warning)]';
     case 'failed':
-      return 'ring-2 ring-red-500/70';
+      return 'ring-2 ring-[var(--ds-danger-mark)]';
     case 'queued':
     case 'rendering':
-      return 'ring-2 ring-[#D97757]/60';
+      return 'ring-2 ring-ds-accent/60';
     case 'custom':
-      return 'ring-1 ring-[#D97757]/50';
+      return 'ring-1 ring-ds-accent/50';
     case 'planned':
     case 'empty':
       return 'border border-dashed border-[var(--ds-hairline)]';
@@ -166,8 +167,9 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
       onContextMenu={onContextMenu}
       className={cx(
         'no-callout group relative flex shrink-0 cursor-pointer select-none flex-col items-center gap-0.5 rounded-xl p-1',
-        FOCUS_RING,
-        selected ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]',
+        // Flush: the track above the tiles has a 2 px top padding, which clips an outline set 2 px off.
+        FOCUS_RING_FLUSH,
+        selected ? 'bg-[var(--ds-accent-soft)]' : 'hover:bg-[var(--ds-hover)]',
         lifted && 'z-10 bg-[var(--ds-surface-strong)] shadow-[0_8px_24px_rgba(0,0,0,0.22)]',
         animate && !lifted && 'transition-transform duration-150'
       )}
@@ -182,20 +184,21 @@ export const TimelineClip: React.FC<TimelineClipProps> = ({
           </span>
         )}
         {clip.mismatch && !compact && (
-          <span className="absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded bg-amber-700 px-1 text-[9px] font-semibold leading-[14px] text-white" aria-hidden>
+          <span className={`absolute left-0.5 top-0.5 inline-flex items-center gap-0.5 rounded border px-1 text-[9px] font-semibold leading-[14px] ${TONE_CHIP_ON_ART.warning}`} aria-hidden>
             <AlertTriangle className="h-2.5 w-2.5" />
             {clip.mismatch.got}
           </span>
         )}
         {clip.status === 'stale' && (
-          <span className="absolute inset-x-0 bottom-0 bg-amber-700 text-center text-[8.5px] font-semibold leading-[13px] text-white" aria-hidden>
+          <span className={`absolute inset-x-0 bottom-0 border-t text-center text-[8.5px] font-semibold leading-[13px] ${TONE_CHIP_ON_ART.warning}`} aria-hidden>
             Out of date
           </span>
         )}
         {clip.status === 'failed' && (
-          // red-700 under white 10 px semibold text: 6.5:1 (red-600/90 under 8.5 px measured 4.35:1 — P1-QA
-          // timeline-failed-badge-contrast). "Failed" fits the narrowest (34 px compact) thumb at this size.
-          <span className="absolute inset-x-0 bottom-0 truncate bg-red-700 text-center text-[10px] font-semibold leading-[14px] text-white" aria-hidden data-clip-badge="failed">
+          // The danger tone surface over art (TONE_CHIP_ON_ART: >= 4.5:1 whatever the thumbnail), as the "Out of date"
+          // bar beside it, at a readable 10 px (8.5 px measured too small — P1-QA timeline-failed-badge-contrast).
+          // "Failed" fits the narrowest (34 px compact) thumb at this size.
+          <span className={`absolute inset-x-0 bottom-0 truncate border-t text-center text-[10px] font-semibold leading-[14px] ${TONE_CHIP_ON_ART.danger}`} aria-hidden data-clip-badge="failed">
             Failed
           </span>
         )}
@@ -259,7 +262,7 @@ export const AddClip: React.FC<{
       onClick={() => !disabled && onActivate()}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
-      className={cx('flex shrink-0 cursor-pointer flex-col items-center gap-0.5 rounded-xl p-1 hover:bg-[var(--ds-hover)]', FOCUS_RING, disabled && 'cursor-not-allowed opacity-45')}
+      className={cx('flex shrink-0 cursor-pointer flex-col items-center gap-0.5 rounded-xl p-1 hover:bg-[var(--ds-hover)]', FOCUS_RING_FLUSH, disabled && 'cursor-not-allowed opacity-45')}
       style={{ minWidth: 44 }}
     >
       <span className="sr-only">{`${label} — ${hint}`}</span>
@@ -267,7 +270,7 @@ export const AddClip: React.FC<{
         aria-hidden
         className={cx(
           'flex items-center justify-center rounded-lg border border-dashed',
-          ghost ? 'border-[var(--ds-hairline)] bg-transparent text-[var(--ds-muted)]' : 'border-[#D97757]/45 bg-[#D97757]/5 text-[var(--ds-accent)]'
+          ghost ? 'border-[var(--ds-hairline)] bg-transparent text-[var(--ds-muted)]' : 'border-ds-accent/45 bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
         )}
         style={{ width: compact ? 36 : ghost ? 56 : 44, height: h }}
       >

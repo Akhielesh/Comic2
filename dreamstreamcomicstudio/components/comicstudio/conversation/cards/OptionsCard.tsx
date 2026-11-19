@@ -28,6 +28,7 @@ import { sendOutcomeOf } from '../../messageQueue';
 import { CardShell, ChipButton, PrimaryButton, cx } from '../ui';
 import { CastAvatar, KindIcon } from './castVisual';
 
+import { FOCUS_RING } from '../../../chat/studioDesign';
 type OptionsCardData = Extract<Card, { type: 'options' }>;
 
 const replyFor = (c: OptionChoice) => (c.reply || c.label).trim();
@@ -276,10 +277,10 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
                 title={c.description}
                 onClick={() => onPick(c)}
                 className={cx(
-                  'group relative flex min-w-0 flex-col overflow-hidden rounded-xl border text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed',
+                  `group relative flex min-w-0 flex-col overflow-hidden rounded-xl border text-left transition-colors duration-[var(--ds-motion-medium)] ${FOCUS_RING} disabled:cursor-not-allowed`,
                   chosen
-                    ? 'border-[#D97757]/55 bg-[#D97757]/10'
-                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] enabled:hover:border-[#D97757]/35 enabled:hover:bg-[var(--ds-hover)]',
+                    ? 'border-ds-accent/55 bg-[var(--ds-accent-soft)]'
+                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] enabled:hover:border-ds-accent/35 enabled:hover:bg-[var(--ds-hover)]',
                   isAnswered && !chosen && 'opacity-45',
                   !isAnswered && disabled && 'opacity-60'
                 )}
@@ -292,7 +293,7 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
                   {c.description && <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{c.description}</span>}
                 </span>
                 {chosen && (
-                  <span className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent)] text-white shadow" aria-hidden>
+                  <span className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow" aria-hidden>
                     <Check className="h-3 w-3" />
                   </span>
                 )}
@@ -358,13 +359,13 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
             disabled={disabled}
             placeholder="Or type your own answer…"
             aria-label="Your own answer"
-            className="h-11 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/45 disabled:opacity-50 coarse:text-[16px]"
+            className="h-11 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-focus)] disabled:opacity-50 coarse:text-[16px]"
           />
           <button
             type="submit"
             disabled={!custom.trim() || disabled}
             aria-label="Send answer"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent)] text-white transition-all duration-200 hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)]"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] transition-all duration-[var(--ds-motion-medium)] hover:bg-[var(--ds-accent-fill-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)]"
           >
             <CornerDownLeft className="h-4 w-4" />
           </button>

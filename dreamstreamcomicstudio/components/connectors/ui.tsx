@@ -6,17 +6,18 @@ import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
 
+import { FOCUS_RING, TONE_TEXT } from '../chat/studioDesign';
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors ' +
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 ' +
+    `${FOCUS_RING} ` +
     'disabled:pointer-events-none disabled:opacity-50 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        primary: 'bg-[var(--ds-accent)] text-white shadow-sm hover:bg-[var(--ds-accent-hover)]',
+        primary: 'bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow-sm hover:bg-[var(--ds-accent-fill-hover)]',
         outline: 'border border-[var(--ds-hairline)] bg-transparent text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]',
         ghost: 'bg-transparent text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
-        destructive: 'bg-transparent text-rose-600 hover:bg-rose-500/10'
+        destructive: `bg-transparent ${TONE_TEXT.danger} hover:bg-[var(--ds-status-error-tint)]`
       },
       size: {
         sm: 'h-8 px-3 text-xs [&_svg]:h-3.5 [&_svg]:w-3.5',
@@ -75,7 +76,7 @@ export const Group: React.FC<{ children: React.ReactNode; className?: string }> 
 export const IconTile: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
   <div
     className={cn(
-      'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]',
+      'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]',
       className
     )}
   >

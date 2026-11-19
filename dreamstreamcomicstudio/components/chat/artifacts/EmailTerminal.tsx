@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { EmailInboxArtifact, EmailMessage, EmailAttachment, EmailCategory } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact, relativeTime } from './kit';
+import { HUE_MARK } from '../studioDesign';
 import { fetchEmails, fetchEmailBody, fetchAttachment } from '../../../services/emailApi';
 import { EmailHtmlView, b64urlToDataUrl, hasRemoteImages } from './EmailHtmlView';
 
@@ -55,12 +56,14 @@ const CATEGORIES: { id: EmailCategory; label: string }[] = [
   { id: 'updates', label: 'Updates' },
   { id: 'forums', label: 'Forums' }
 ];
-const CAT_COLOR: Record<EmailCategory, string> = {
-  primary: 'var(--ds-accent)',
-  social: '#3b82f6',
-  promotions: '#10b981',
-  updates: '#f59e0b',
-  forums: '#8b5cf6'
+// The category dot tells categories apart (the colour layer's job 1): primary in ink, the
+// rest on hue marks by slot, always beside the category's name or title.
+const CAT_DOT: Record<EmailCategory, string> = {
+  primary: 'bg-[var(--ds-ink)]',
+  social: HUE_MARK.dot[0],
+  promotions: HUE_MARK.dot[5],
+  updates: HUE_MARK.dot[6],
+  forums: HUE_MARK.dot[4]
 };
 
 const formatBytes = (n?: number): string => {
@@ -283,7 +286,7 @@ const ReaderPane: React.FC<{ connectionId: string; email: EmailMessage; onBack?:
           <Reply className="h-3.5 w-3.5" /> Reply
         </a>
         <button onClick={copy} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
-          {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
+          {copied ? <Check className="h-3.5 w-3.5 text-[var(--ds-success-text)]" /> : <Copy className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
     </div>
@@ -321,7 +324,7 @@ const Row: React.FC<{ email: EmailMessage; selected: boolean; showAccount: boole
         </span>
         <span className={`mt-0.5 block truncate text-[12px] ${email.unread ? 'font-medium text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]'}`}>{email.subject}</span>
         <span className="mt-0.5 flex items-center gap-1.5">
-          {email.category && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: CAT_COLOR[email.category] }} title={email.category} />}
+          {email.category && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CAT_DOT[email.category]}`} title={email.category} />}
           {showAccount && email.account && <span className="shrink-0 truncate text-[10px] text-[var(--ds-faint)]">{email.account}</span>}
           {email.snippet && <span className="truncate text-[11px] text-[var(--ds-faint)]">{email.snippet}</span>}
         </span>
@@ -471,7 +474,7 @@ export const EmailTerminal: React.FC<{ data: EmailInboxArtifact }> = ({ data }) 
           {emails.slice(0, 6).map((e) => (
             <li key={`${e.connectionId || ''}:${e.id}`}>
               <a href={e.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-[var(--ds-well)]">
-                {e.category && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: CAT_COLOR[e.category] }} />}
+                {e.category && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CAT_DOT[e.category]}`} aria-hidden="true" />}
                 <Avatar email={e} size={20} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center justify-between gap-2">
@@ -524,7 +527,7 @@ export const EmailTerminal: React.FC<{ data: EmailInboxArtifact }> = ({ data }) 
                 active ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
               }`}
             >
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: CAT_COLOR[c.id] }} />
+              <span className={`h-1.5 w-1.5 rounded-full ${CAT_DOT[c.id]}`} aria-hidden="true" />
               {c.label}
             </button>
           );
@@ -581,7 +584,7 @@ export const EmailTerminal: React.FC<{ data: EmailInboxArtifact }> = ({ data }) 
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search all mail (from:, subject:, has:attachment…)"
-          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/40"
+          className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[12px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-focus)] focus:ring-1 focus:ring-[var(--ds-focus)]"
         />
         {query && (
           <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--ds-faint)] hover:text-[var(--ds-ink)]" aria-label="Clear search">

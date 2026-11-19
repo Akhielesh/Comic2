@@ -96,7 +96,7 @@ export const RecipeStudio: React.FC<{ userId?: string }> = ({ userId }) => {
         </div>
       )}
       {loadError && (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+        <div className="rounded-xl border border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--ds-warning-text)]">
           {loadError} — built-ins still work in chat.
         </div>
       )}
@@ -164,7 +164,7 @@ const RecipeRow: React.FC<{
         </button>
       )}
       {onDelete && (
-        <button onClick={onDelete} className="ml-auto text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-red-500">
+        <button onClick={onDelete} className="ml-auto text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-[var(--ds-danger-text)]">
           <Trash2 className="h-4 w-4" />
         </button>
       )}
@@ -255,7 +255,7 @@ const RunPanel: React.FC<{ recipe: StoredRecipe; onBack: () => void }> = ({ reci
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+        <div className="flex items-start gap-2 rounded-xl border border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--ds-danger-text)]">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
         </div>
       )}
@@ -277,14 +277,14 @@ const ParamField: React.FC<{ param: RecipeParameterView; value: string | boolean
   const label = (
     <div className="mb-0.5 flex items-center gap-1.5">
       <code className="text-[12px] font-semibold text-[var(--ds-ink)]">{param.key}</code>
-      {param.requirement === 'required' && <span className="text-[10px] font-semibold text-red-600">required</span>}
+      {param.requirement === 'required' && <span className="text-[10px] font-semibold text-[var(--ds-danger-text)]">required</span>}
       {param.description && <span className="text-[11px] text-[var(--ds-muted)]">— {param.description}</span>}
     </div>
   );
   if (param.input_type === 'boolean') {
     return (
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
         <code className="text-[12px] font-semibold text-[var(--ds-ink)]">{param.key}</code>
         {param.description && <span className="text-[11px] text-[var(--ds-muted)]">— {param.description}</span>}
       </label>
@@ -393,7 +393,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
       </div>
 
       <label className="flex items-center gap-2 text-sm text-[var(--ds-ink)]">
-        <input type="checkbox" checked={swarm} onChange={(e) => setSwarm(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+        <input type="checkbox" checked={swarm} onChange={(e) => setSwarm(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
         <Network className="h-4 w-4 text-[var(--ds-accent)]" /> Run through the agent <span className="font-semibold">swarm</span> (multi-agent)
       </label>
 
@@ -421,7 +421,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
               </select>
               <input value={p.description || ''} onChange={(e) => updateParam(i, { description: e.target.value })} placeholder="description" className={`min-w-[8rem] flex-1 ${smallInput}`} />
               <input value={p.default !== undefined ? String(p.default) : ''} onChange={(e) => updateParam(i, { default: e.target.value })} placeholder="default" className={`w-20 ${smallInput}`} />
-              <button onClick={() => removeParam(i)} className="text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
+              <button onClick={() => removeParam(i)} className="text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-[var(--ds-danger-text)]"><Trash2 className="h-4 w-4" /></button>
             </div>
           ))}
         </div>

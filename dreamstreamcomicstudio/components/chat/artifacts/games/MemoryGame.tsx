@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GameShell, useGameAudio } from '../kit/game';
 import { dealMemory } from './logic';
+import { ACCENT_SOFT_BG } from '../../studioDesign';
 
 // Memory match — flip two cards, keep the pairs. A turn-based DOM game (no loop):
 // state is the deck, the up-to-two flipped cards, and the matched set. Tap/click to
@@ -112,8 +113,7 @@ export const MemoryGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'no
                   <div className={`relative h-full w-full transition-transform duration-300 [transform-style:preserve-3d] ${faceUp ? '[transform:rotateY(180deg)]' : ''}`}>
                     {/* Back */}
                     <div
-                      className="absolute inset-0 flex items-center justify-center rounded-xl border border-[var(--ds-hairline)] [backface-visibility:hidden]"
-                      style={{ backgroundColor: 'rgba(217,119,87,0.12)' }}
+                      className={`absolute inset-0 flex items-center justify-center rounded-xl border border-[var(--ds-hairline)] [backface-visibility:hidden] ${ACCENT_SOFT_BG}`}
                     >
                       <span className="text-[var(--ds-accent)] opacity-50" style={{ fontSize: face * 0.7 }}>✦</span>
                     </div>

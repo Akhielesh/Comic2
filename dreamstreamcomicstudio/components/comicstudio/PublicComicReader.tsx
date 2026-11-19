@@ -26,7 +26,7 @@ import { canServeToOwner, isContentRating, type ContentRating } from '../../shar
 import { languageSpec, sameLanguage } from '../../shared/comic/languages';
 import { COMIC_STUDIO_SKIN, COMICS_ORIGIN } from '../../services/productHost';
 import { useComicTheme } from './useComicTheme';
-import { CANVAS_BG } from '../chat/studioDesign';
+import { CANVAS_BG, FOCUS_RING } from '../chat/studioDesign';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
 import { aspectNumber } from './board/balloonGeometry';
@@ -490,7 +490,7 @@ const ReaderShell: React.FC<ShellProps> = ({
             {!embed && (
               <a
                 href={MAKE_YOUR_OWN_HREF}
-                className="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                className={`mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
               >
                 <Home className="h-4 w-4" aria-hidden /> Go to DreamStream
               </a>
@@ -604,7 +604,7 @@ const ReaderShell: React.FC<ShellProps> = ({
               href={embedOpenHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-xl px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-[44px]"
+              className={`inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-xl px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:min-w-[44px]`}
             >
               {/* Icon-only in a narrow frame (the name stays for screen readers). Measured in JS: this
                   app's raw `screens` disable Tailwind's max-[…] variants (they emit nothing). */}

@@ -122,7 +122,7 @@ const createDirectionsMap = (L: typeof Leaflet): React.FC<DirectionsMapProps> =>
       L.marker([origin.lat, origin.lng], { icon: originDot(cssVar('--ds-ink', '#3d3929')), zIndexOffset: 100 })
         .addTo(map)
         .bindTooltip(escapeHtml(origin.label), { direction: 'top', offset: [0, -8], className: 'ds-map-label' });
-      L.marker([destination.lat, destination.lng], { icon: destinationPin(cssVar('--ds-accent', '#D97757')), zIndexOffset: 200 })
+      L.marker([destination.lat, destination.lng], { icon: destinationPin(cssVar('--ds-accent', '#1a1915')), zIndexOffset: 200 })
         .addTo(map)
         .bindTooltip(escapeHtml(destination.label), { direction: 'top', offset: [0, -34], className: 'ds-map-label' });
 
@@ -160,7 +160,7 @@ const createDirectionsMap = (L: typeof Leaflet): React.FC<DirectionsMapProps> =>
       for (const layer of routeLayersRef.current) layer.remove();
       routeLayersRef.current = [];
 
-      const accent = cssVar('--ds-accent', '#D97757');
+      const accent = cssVar('--ds-accent', '#1a1915');
       const muted = cssVar('--ds-muted', '#83827d');
 
       routes.forEach((r, i) => {
@@ -263,7 +263,7 @@ export const DirectionsCard: React.FC<{ data: DirectionsArtifact }> = ({ data })
             title={label}
             className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold tabular-nums transition-colors duration-200 ${
               active
-                ? 'border-[#D97757]/35 bg-[#D97757]/10 text-[var(--ds-accent)]'
+                ? 'border-[color:color-mix(in_srgb,var(--ds-accent)_35%,transparent)] bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]'
                 : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-well)]'
             }`}
           >
@@ -371,7 +371,7 @@ export const DirectionsCard: React.FC<{ data: DirectionsArtifact }> = ({ data })
                 aria-pressed={active}
                 className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs transition-colors duration-200 ${
                   i > 0 ? 'border-t border-[var(--ds-hairline-soft)]' : ''
-                } ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-well)]'}`}
+                } ${active ? 'bg-[var(--ds-accent-soft)]' : 'hover:bg-[var(--ds-well)]'}`}
               >
                 <span className={`min-w-0 truncate font-medium ${active ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]'}`}>
                   {r.summary || (i === 0 ? 'Fastest route' : `Route ${i + 1}`)}

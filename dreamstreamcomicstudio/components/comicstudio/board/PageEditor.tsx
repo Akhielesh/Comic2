@@ -1941,7 +1941,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           )}
         </div>
         {artOk && mismatch && (
-          <div data-testid="aspect-notice" className="rounded-xl border border-amber-500/30 bg-amber-500/[0.08] p-2.5 text-[12px] leading-snug text-[var(--ds-ink)]">
+          <div data-testid="aspect-notice" className={`rounded-xl border p-2.5 text-[12px] leading-snug text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
             <p>
               This page came back {mismatch.got}, but your book is {mismatch.want}. Fit it to {mismatch.want} for free (the art is padded or trimmed, never redrawn),
               or try another take at {mismatch.want}.
