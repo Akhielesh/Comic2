@@ -1,24 +1,32 @@
 import { useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import { loadThemePreference } from '../../services/theme';
+import { setAppearance } from '../../services/appearance';
 
+/** Comic Studio's material: Atlas, or the Paper look. The person picks it with the mode through services/appearance.ts. */
 export type ComicTheme = 'atlas' | 'paper';
 
 // The blocking script in public/theme-boot.js reads the same key on the comics host.
 const THEME_KEY = 'ds.comic-theme.v1';
 const THEME_CHANGED = 'dreamstream:comic-theme-changed';
-const THEME_ATTRIBUTE = 'data-comic-theme';
+export const COMIC_THEME_ATTRIBUTE = 'data-comic-theme';
+const THEME_ATTRIBUTE = COMIC_THEME_ATTRIBUTE;
 const defaultTheme = (): ComicTheme => 'atlas';
 let temporaryTheme: ComicTheme | undefined;
 
-const readTheme = (): ComicTheme => {
+/** The stored material (Atlas when nothing or something unknown is stored). */
+export const loadComicMaterial = (): ComicTheme => readTheme();
+
+function readTheme(): ComicTheme {
   if (temporaryTheme) return temporaryTheme;
   try {
     return window.localStorage.getItem(THEME_KEY) === 'paper' ? 'paper' : 'atlas';
   } catch {
     return 'atlas';
   }
-};
+}
 
-const setTheme = (theme: ComicTheme): void => {
+/** Store the material alone (services/appearance.ts calls it with the mode; nothing else should). */
+export const setComicMaterial = (theme: ComicTheme): void => {
   try {
     window.localStorage.setItem(THEME_KEY, theme);
     temporaryTheme = undefined;
@@ -29,7 +37,8 @@ const setTheme = (theme: ComicTheme): void => {
   window.dispatchEvent(new Event(THEME_CHANGED));
 };
 
-const subscribe = (notify: () => void): (() => void) => {
+/** Calls `notify` when the material changes here or in another tab. */
+export const subscribeComicMaterial = (notify: () => void): (() => void) => {
   const syncStorage = (event: StorageEvent) => {
     if (event.key === THEME_KEY || event.key === null) notify();
   };
@@ -40,6 +49,11 @@ const subscribe = (notify: () => void): (() => void) => {
     window.removeEventListener('storage', syncStorage);
   };
 };
+
+const subscribe = subscribeComicMaterial;
+
+/** Atlas keeps the person's mode; Paper is the light Paper look. Either way both keys are written by the one writer. */
+const setTheme = (theme: ComicTheme): void => setAppearance(theme === 'paper' ? 'paper' : loadThemePreference());
 
 export function useComicTheme() {
   return { theme: useSyncExternalStore(subscribe, readTheme, defaultTheme), setTheme };

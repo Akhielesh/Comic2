@@ -3,27 +3,44 @@
 import { readFileSync } from 'node:fs';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { useComicTheme, useComicThemeScope } from './useComicTheme';
+import { setComicMaterial, useComicTheme, useComicThemeScope } from './useComicTheme';
 
 const storageKey = 'ds.comic-theme.v1';
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  document.documentElement.classList.remove('dark', 'ds-no-transitions');
 });
 
 describe('Comic Studio appearance', () => {
-  it('defaults to Atlas and remembers Paper without changing the light/dark preference', () => {
+  it('defaults to Atlas; setComicMaterial changes only the material and is remembered', () => {
     window.localStorage.setItem('ds.theme.v1', 'dark');
     const { result, unmount } = renderHook(useComicTheme);
     expect(result.current.theme).toBe('atlas');
 
-    act(() => result.current.setTheme('paper'));
+    act(() => setComicMaterial('paper'));
     expect(result.current.theme).toBe('paper');
     expect(window.localStorage.getItem('ds.theme.v1')).toBe('dark');
     unmount();
 
     expect(renderHook(useComicTheme).result.current.theme).toBe('paper');
+  });
+
+  it('the hook setter goes through the one appearance writer, so a leftover caller writes both keys', () => {
+    window.localStorage.setItem('ds.theme.v1', 'dark');
+    const { result } = renderHook(useComicTheme);
+    // Paper is the light Paper look: the mode moves to light with it.
+    act(() => result.current.setTheme('paper'));
+    expect(result.current.theme).toBe('paper');
+    expect(window.localStorage.getItem('ds.theme.v1')).toBe('light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    // Atlas keeps the mode the person has.
+    window.localStorage.setItem('ds.theme.v1', 'system');
+    act(() => result.current.setTheme('atlas'));
+    expect(result.current.theme).toBe('atlas');
+    expect(window.localStorage.getItem('ds.theme.v1')).toBe('system');
+    expect(window.localStorage.getItem(storageKey)).toBe('atlas');
   });
 
   it('applies the appearance to the document only while a scoped screen is active', () => {

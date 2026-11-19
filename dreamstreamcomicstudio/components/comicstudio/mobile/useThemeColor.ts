@@ -1,9 +1,11 @@
 // useThemeColor() (mobile.md §9.1): while the studio or reader is mounted, the browser chrome
 // (Android status bar, Safari's tab bar tint, the installed-PWA title bar) matches the studio canvas
 // instead of the landing page's brand blue. It follows the app's own `dark` class (services/theme.ts),
-// not only the OS scheme, and restores the previous colours on unmount.
+// not only the OS scheme. On unmount an explicit colour gives back the colours it replaced; the canvas tint hands the
+// chrome back to services/theme.ts (the current canvas), since the look may have changed while the studio was open.
 
 import { useEffect } from 'react';
+import { syncThemeColorMeta } from '../../../services/theme';
 
 const readCanvas = (): string => {
   try {
@@ -46,6 +48,10 @@ export function useThemeColor(color?: string, enabled = true): void {
       observer?.disconnect();
       if (created) {
         created.remove();
+        return;
+      }
+      if (!color) {
+        syncThemeColorMeta();
         return;
       }
       metas.forEach((m, i) => {
