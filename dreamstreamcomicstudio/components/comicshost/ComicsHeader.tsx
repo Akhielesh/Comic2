@@ -33,11 +33,8 @@ export interface ComicsHeaderProps {
   /** Signed out: on the landing, its "Register your interest" section; elsewhere, the sign-in card's Register interest tab. */
   onRequestAccess: () => void;
   onOpenComics: () => void;
-  /**
-   * Unused since the account menu (navtheme NT-2a): signed in, the header's AccountMenu opens Settings through
-   * components/account/accountNav.ts, which App answers with the page as Back's destination. Kept so callers compile.
-   */
-  onOpenAccount?: () => void;
+  // Signed in, the header's AccountMenu opens Settings through components/account/accountNav.ts, which App answers with
+  // the page as Back's destination (navtheme NT-2a): the header takes no account handler of its own.
   onBrowseGallery: () => void;
   onShowSection?: (id: ComicsSectionId) => void;
 }

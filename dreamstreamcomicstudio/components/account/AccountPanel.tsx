@@ -13,8 +13,9 @@
  * Presentation: an anchored panel under the trigger from 600 px (OVERLAY on the popover layer, portalled and kept
  * inside the viewport); the studio's bottom sheet below 600 px, on a short landscape phone, and when the host asks for
  * the sheet. Esc and a press outside close it and focus returns to the trigger; the first row takes focus on open.
- * The panel reads one thing, once per page: the person's public profile row, for the @handle and the photo (App's
- * session data has the name but not those). It never reads usage, money or admin state.
+ * The panel reads one thing, once per page: the @handle and the photo from the person's public profile row, those two
+ * fields only (getProfileFace; App's session data has the name but not those). It never reads usage, money, admin
+ * state or the address.
  */
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -22,15 +23,15 @@ import { HelpCircle, KeyRound, LogOut, Shield, ShieldCheck, SlidersHorizontal, U
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, MUTED, OVERLAY, OVERLINE, RADIUS_CONTROL, WRAP_TEXT, Z } from '../chat/studioDesign';
 import { useAuth } from '../../contexts/AuthContext';
-import { getUserProfile } from '../../services/db';
+import { getProfileFace } from '../../services/db';
 import { placeSheet, useSheetBehaviour } from '../comicstudio/conversation/PopSheet';
 import { LEAVE_SETTLE_MS } from '../comicstudio/mobile/backStack';
 import { AdaptiveSheet } from '../comicstudio/mobile/sheets/AdaptiveSheet';
 import { useFormFactor } from '../comicstudio/mobile/useFormFactor';
 import type { SettingsTab } from '../settingsTabs';
 import { AppearanceSegmented } from './AppearanceControl';
-import { AccountFace } from './AccountMenu';
-import { rememberProfile, useAccount, usePersonWithProfile } from './AccountContext';
+import { AccountFace } from './AccountFace';
+import { rememberProfileRow, useAccount, usePersonWithProfile } from './AccountContext';
 import { requestAccountSettings, useSettingsOpenInNewTab, type AccountResume } from './accountNav';
 
 /** The panel's accessible name (also the sheet's, which keys its history layer). */
@@ -79,16 +80,14 @@ export interface AccountPanelProps {
   presentation?: 'anchored' | 'sheet';
 }
 
-/** Read the @handle and photo once per page (person-initiated: the panel only mounts on open). */
+/** Read the @handle and photo once per page (person-initiated: the panel only mounts on open; Settings refreshes them). */
 const useProfileRead = (id: string | undefined, known: boolean): void => {
   useEffect(() => {
     if (!id || known) return undefined;
     let live = true;
-    void getUserProfile(id)
+    void getProfileFace(id)
       .then((row) => {
-        if (!live || !row) return;
-        const clean = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-        rememberProfile(id, { username: clean(row.username), avatarUrl: clean(row.avatar_url) });
+        if (live && row) rememberProfileRow(id, row);
       })
       .catch(() => undefined);
     return () => {

@@ -10,8 +10,8 @@ const auth = vi.hoisted(() => ({ calls: [] as string[], signOut: vi.fn() }));
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ user: null, signOut: auth.signOut })
 }));
-const db = vi.hoisted(() => ({ getUserProfile: vi.fn() }));
-vi.mock('../../services/db', () => ({ getUserProfile: db.getUserProfile }));
+const db = vi.hoisted(() => ({ getProfileFace: vi.fn() }));
+vi.mock('../../services/db', () => ({ getProfileFace: db.getProfileFace }));
 
 import { AccountPanel, type AccountPanelProps } from './AccountPanel';
 import { AccountMenu } from './AccountMenu';
@@ -58,7 +58,7 @@ beforeEach(() => {
   auth.signOut.mockReset().mockImplementation(async () => {
     auth.calls.push('signOut');
   });
-  db.getUserProfile.mockReset().mockResolvedValue({ id: 'person-1', username: 'ada_now', avatar_url: null });
+  db.getProfileFace.mockReset().mockResolvedValue({ id: 'person-1', username: 'ada_now', avatar_url: null });
   requests.length = 0;
   window.addEventListener(ACCOUNT_SETTINGS_EVENT, onRequest);
 });
@@ -177,19 +177,19 @@ describe('AccountPanel', () => {
   it('reads the @handle and photo once, on open, when App does not know them; a second open reads nothing', async () => {
     const value = ctx({ person: { id: 'person-1', name: 'Ada Example', initial: 'A' } });
     const { unmount } = render(<Harness value={value} />);
-    expect(db.getUserProfile).toHaveBeenCalledWith('person-1');
+    expect(db.getProfileFace).toHaveBeenCalledWith('person-1');
     expect(await within(panel()).findByText('@ada_now')).toBeInTheDocument();
     unmount();
     render(<Harness value={value} />);
     expect(within(panel()).getByText('@ada_now')).toBeInTheDocument();
-    expect(db.getUserProfile).toHaveBeenCalledTimes(1);
+    expect(db.getProfileFace).toHaveBeenCalledTimes(1);
   });
 
   it('a person with no display name reads "Your account"; a handle App passed is never re-read', () => {
     render(<Harness value={ctx({ person: { id: 'p2', name: null, initial: 'Z', username: 'zed', avatarUrl: null } })} />);
     expect(within(panel()).getByText('Your account')).toBeInTheDocument();
     expect(within(panel()).getByText('@zed')).toBeInTheDocument();
-    expect(db.getUserProfile).not.toHaveBeenCalled();
+    expect(db.getProfileFace).not.toHaveBeenCalled();
   });
 
   it('below 600 px it is the studio’s bottom sheet, titled Account; a row acts once the sheet has closed', async () => {
@@ -204,6 +204,23 @@ describe('AccountPanel', () => {
     fireEvent.click(within(sheet).getByRole('button', { name: 'Preferences' }));
     expect(screen.queryByRole('dialog', { name: 'Account and settings' })).toBeNull();
     await waitFor(() => expect(requests).toEqual([{ tab: 'preferences' }]));
+  });
+
+  it('as the sheet while the Director works, a row opens the new tab inside the press itself (not after the sheet settles)', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    setStudioBusy(true);
+    render(
+      <FormFactorProvider value={PHONE}>
+        <Harness value={ctx()} panel={{ resume: 'new-comic' }} />
+      </FormFactorProvider>
+    );
+    expect(panel()).toHaveAttribute('aria-modal', 'true');
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Preferences' }));
+    // Synchronously, in the click: a popup opened after a popstate or a timer is blocked by the browser.
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('/?view=settings&tab=preferences', '_blank', 'noopener');
+    expect(requests).toEqual([]);
+    expect(screen.queryByRole('dialog', { name: 'Account and settings' })).toBeNull();
   });
 
   it('presentation="sheet" asks for the sheet at any width (the ⋯ row inside a comic)', () => {

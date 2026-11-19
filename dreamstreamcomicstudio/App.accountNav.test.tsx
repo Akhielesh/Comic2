@@ -64,7 +64,8 @@ vi.mock('./services/productAccess', async (orig) => ({ ...(await orig<object>())
 vi.mock('./services/db', async (orig) => ({
   ...(await orig<object>()),
   getPrivateProfile: vi.fn(async () => ({ id: 'acct-nav-user', dob: '2000-01-01' })),
-  getUserProfile: vi.fn(async () => ({ id: 'acct-nav-user', username: 'ada', avatar_url: null }))
+  getUserProfile: vi.fn(async () => ({ id: 'acct-nav-user', username: 'ada', avatar_url: null })),
+  getProfileFace: vi.fn(async () => ({ username: 'ada', avatar_url: null }))
 }));
 vi.mock('./hooks/useMemberHint', () => ({ useMemberHint: () => undefined }));
 vi.mock('./components/comicshost/useComicsHost', () => ({
@@ -204,6 +205,37 @@ describe('App: the account menu opens the DreamStream settings in the app, and B
     expect(await findTrigger()).toBeInTheDocument();
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('view')).toBe('dashboard'));
   });
+
+  it('a request made inside a Settings page reached by its address keeps Back pointing out of Settings', async () => {
+    projectsState.list = [project('p1', 'Salt Road', NOW)];
+    goTo('?view=settings&tab=settings');
+    render(<App />);
+    expect(await screen.findByText('Settings at settings', undefined, SLOW)).toBeInTheDocument();
+    act(() => {
+      requestAccountSettings('profile');
+    });
+    expect(await screen.findByText('Settings at profile')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await findTrigger()).toBeInTheDocument();
+    expect(screen.queryByTestId('settings')).toBeNull();
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('view')).toBe('dashboard'));
+  });
+
+  it('a request made inside Settings keeps the Back it had: All comics → Preferences → Profile → Back → All comics', async () => {
+    projectsState.list = [project('p1', 'Salt Road', NOW)];
+    goTo('?view=dashboard');
+    render(<App />);
+    await openAccountRow('Preferences');
+    expect(await screen.findByText('Settings at preferences')).toBeInTheDocument();
+    act(() => {
+      requestAccountSettings('profile');
+    });
+    expect(await screen.findByText('Settings at profile')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await findTrigger();
+    expect(screen.queryByTestId('settings')).toBeNull();
+    expect(screen.getAllByText('All comics').length).toBeGreaterThan(0);
+  });
 });
 
 describe('settingsBackTarget: where Back from Settings goes', () => {
@@ -220,6 +252,12 @@ describe('settingsBackTarget: where Back from Settings goes', () => {
     expect(settingsBackTarget({ ...base, returnView: null })).toEqual({ view: 'dashboard', newComic: false });
     expect(settingsBackTarget({ ...base, returnView: null, comicsHost: false })).toEqual({ view: 'home', newComic: false });
     expect(settingsBackTarget({ ...base, returnView: null, signedIn: false })).toEqual({ view: 'home', newComic: false });
+  });
+
+  it('never returns to Settings itself: a return view of Settings reads as an address', () => {
+    expect(settingsBackTarget({ ...base, returnView: 'settings' })).toEqual({ view: 'dashboard', newComic: false });
+    expect(settingsBackTarget({ ...base, returnView: 'settings', resume: 'new-comic' })).toEqual({ view: 'dashboard', newComic: false });
+    expect(settingsBackTarget({ ...base, returnView: 'settings', comicsHost: false })).toEqual({ view: 'home', newComic: false });
   });
 
   it('keeps the reader rule: a reader with no comic left goes to My comics', () => {

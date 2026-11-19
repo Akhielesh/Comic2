@@ -4,8 +4,9 @@
 // handler that runs after a sign-out (App's handleSignedOut, the same one Settings calls).
 //
 // The @handle and the photo live in the public profile row, not in the session (the handle can be renamed in
-// Settings): the panel reads that row once, when the person opens it, and remembers it here for the page's life so
-// the trigger can show the photo and a second open reads nothing.
+// Settings): the panel reads those two fields once, when the person opens it, and remembers them here for the page's
+// life so the trigger can show the photo and a second open reads nothing. Settings, where both change, writes here too:
+// the row it reads and every save, so a new handle or photo reaches the menu without a reload.
 
 import React, { createContext, useContext, useSyncExternalStore } from 'react';
 
@@ -77,6 +78,12 @@ export const rememberProfile = (id: string, profile: RememberedProfile): void =>
   remembered.set(id, profile);
   for (const listener of [...listeners]) listener();
 };
+
+const field = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/** Remember the handle and photo from a profile row as stored (blank reads as none). */
+export const rememberProfileRow = (id: string, row: { username?: unknown; avatar_url?: unknown }): void =>
+  rememberProfile(id, { username: field(row.username), avatarUrl: field(row.avatar_url) });
 
 /** Test hook. */
 export const forgetRememberedProfiles = (): void => {

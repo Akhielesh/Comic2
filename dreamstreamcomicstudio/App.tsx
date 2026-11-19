@@ -430,15 +430,18 @@ const App: React.FC = () => {
   // Single entry point for opening Settings on a specific tab. Writes the tab into the
   // continuity layers FIRST so an explicit intent ("open Security") always beats the
   // remembered last-visited tab when AccountSettings mounts.
-  const openSettings = (tab?: SettingsTab, returnTo: AppView = currentView, resume: AccountResume | null = null) => {
-    setSettingsResume(resume);
+  // A request made inside Settings keeps the Back it had: the view and resume point it was opened from, or null when
+  // it was reached by its address (accountNav settingsBackTarget), so Back never leads to Settings itself.
+  const openSettings = (tab?: SettingsTab, returnTo: AppView | null = currentView, resume: AccountResume | null = null) => {
+    const fromInside = returnTo === 'settings';
+    setSettingsResume(fromInside ? settingsResume : resume);
     if (tab) {
       setSettingsTab(tab);
       setSettingsTabRequestId((n) => n + 1);
       persistUiState('settings.tab', 'tab', tab);
       if (tab !== 'security') setOpenSecurityPasswordReset(false);
     }
-    setSettingsReturnView(returnTo);
+    setSettingsReturnView(fromInside ? settingsReturnView : returnTo);
     setCurrentView('settings');
   };
 
@@ -1071,11 +1074,8 @@ const App: React.FC = () => {
   };
 
   // The account menu (components/account): every settings link asks here, so Settings opens inside the app with this
-  // view as Back's destination (Settings itself keeps the Back it had when a request comes from inside it).
-  useAccountSettingsListener((tab, opts) => {
-    if (currentView === 'settings') openSettings(tab, settingsReturnView ?? undefined, settingsResume);
-    else openSettings(tab, currentView, opts.resume ?? null);
-  });
+  // view as Back's destination (openSettings keeps the Back Settings had when a request comes from inside it).
+  useAccountSettingsListener((tab, opts) => openSettings(tab, currentView, opts.resume ?? null));
   // Who the account menu shows (session data only), whether it lists the Admin console (display only: the server
   // enforces every admin route), and the same signed-out handler Settings calls.
   const signedOutRef = useRef(handleSignedOut);

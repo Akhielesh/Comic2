@@ -18,8 +18,8 @@ vi.mock('./AccountPanel', () => {
   };
   return { AccountPanel, default: AccountPanel };
 });
-const db = vi.hoisted(() => ({ getUserProfile: vi.fn() }));
-vi.mock('../../services/db', () => ({ getUserProfile: db.getUserProfile }));
+const db = vi.hoisted(() => ({ getProfileFace: vi.fn() }));
+vi.mock('../../services/db', () => ({ getProfileFace: db.getProfileFace }));
 
 import { AccountMenu } from './AccountMenu';
 import { AccountProvider, forgetRememberedProfiles, rememberProfile, type AccountContextValue } from './AccountContext';
@@ -38,7 +38,7 @@ const fetchSpy = vi.fn(async () => new Response('{}'));
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchSpy);
   fetchSpy.mockClear();
-  db.getUserProfile.mockReset();
+  db.getProfileFace.mockReset();
   panel.props.length = 0;
 });
 
@@ -125,7 +125,7 @@ describe('AccountMenu', () => {
       await Promise.resolve();
     });
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(db.getUserProfile).not.toHaveBeenCalled();
+    expect(db.getProfileFace).not.toHaveBeenCalled();
   });
 
   it('tells its host when it opens and closes (one overlay at a time)', async () => {
@@ -150,5 +150,12 @@ describe('AccountMenu', () => {
     expect(src).toMatch(/import\('\.\/AccountPanel'\)/);
     // Nor anything the panel alone needs (the sheet, the profile read).
     expect(src).not.toMatch(/from '\.\.\/\.\.\/services\/db'|comicstudio\/mobile/);
+  });
+
+  it('the panel and the trigger share the face through its own module, never through each other (no import cycle)', () => {
+    const panelSrc = readFileSync(path.join(HERE, 'AccountPanel.tsx'), 'utf8');
+    expect(panelSrc).not.toMatch(/from '\.\/AccountMenu'/);
+    expect(panelSrc).toMatch(/import \{ AccountFace \} from '\.\/AccountFace'/);
+    expect(readFileSync(path.join(HERE, 'AccountMenu.tsx'), 'utf8')).toMatch(/import \{ AccountFace \} from '\.\/AccountFace'/);
   });
 });

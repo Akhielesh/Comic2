@@ -10,9 +10,10 @@
  */
 import React, { Suspense, useCallback, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
-import { FOCUS_RING, INK, RADIUS_ROUND } from '../chat/studioDesign';
+import { FOCUS_RING, RADIUS_ROUND } from '../chat/studioDesign';
 import { AppearanceButton } from './AppearanceControl';
-import { useAccount, usePersonWithProfile, type AccountPerson } from './AccountContext';
+import { AccountFace } from './AccountFace';
+import { useAccount, usePersonWithProfile } from './AccountContext';
 import type { AccountResume } from './accountNav';
 
 const loadPanel = () => import('./AccountPanel');
@@ -32,21 +33,6 @@ export interface AccountMenuProps {
   /** Told when the panel opens or closes, so the host keeps one overlay open at a time. */
   onOpenChange?: (open: boolean) => void;
 }
-
-/** The person's face: the photo when known, else the initial on the well, with a hairline ring. */
-export const AccountFace: React.FC<{ person: AccountPerson; size?: 'sm' | 'md' }> = ({ person, size = 'sm' }) => (
-  <span
-    aria-hidden="true"
-    className={cn(
-      'flex shrink-0 items-center justify-center overflow-hidden border border-[var(--ds-hairline)] bg-[var(--ds-well)] font-semibold leading-none',
-      RADIUS_ROUND,
-      INK,
-      size === 'sm' ? 'size-8 text-[length:var(--ds-text-sm)]' : 'size-10 text-[length:var(--ds-text-base)]'
-    )}
-  >
-    {person.avatarUrl ? <img src={person.avatarUrl} alt="" className="size-full object-cover" /> : person.initial}
-  </span>
-);
 
 export function AccountMenu({ paper = false, resume, presentation = 'anchored', className, onOpenChange }: AccountMenuProps): React.ReactElement {
   const { person: given } = useAccount();

@@ -98,7 +98,10 @@ export function useAccountSettingsListener(handler: (tab: SettingsTab, opts: Acc
 // ── Back from Settings ───────────────────────────────────────────────────────────────────────────────────────────
 
 export interface SettingsBackInput<V extends string> {
-  /** The view Settings was opened from; null when Settings was reached by its address (a deep link, a reload). */
+  /**
+   * The view Settings was opened from; null when Settings was reached by its address (a deep link, a reload). Settings
+   * itself reads as null: Back always leaves Settings.
+   */
   returnView: V | null;
   /** The resume point the request carried. */
   resume: AccountResume | null;
@@ -114,7 +117,7 @@ export interface SettingsBackInput<V extends string> {
  * My comics on the comics host when signed in (the person's own home there), else to the home page.
  */
 export const settingsBackTarget = <V extends string>(input: SettingsBackInput<V>): { view: V | 'dashboard' | 'home'; newComic: boolean } => {
-  if (input.returnView === null) return { view: input.comicsHost && input.signedIn ? 'dashboard' : 'home', newComic: false };
+  if (input.returnView === null || input.returnView === 'settings') return { view: input.comicsHost && input.signedIn ? 'dashboard' : 'home', newComic: false };
   if (input.returnView === 'reader' && !input.hasActiveProject) return { view: 'dashboard', newComic: false };
   return { view: input.returnView, newComic: input.resume === 'new-comic' && input.returnView === 'dashboard' };
 };

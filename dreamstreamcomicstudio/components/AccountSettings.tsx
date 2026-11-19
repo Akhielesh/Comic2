@@ -64,6 +64,7 @@ import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 import { StudiosAccess } from './account/StudiosAccess';
 import { AppearanceSegmented } from './account/AppearanceControl';
+import { rememberProfileRow } from './account/AccountContext';
 import { isComicsHost } from '../services/productHost';
 import { NAME_MAX, cleanName, updateAccountName } from '../services/accountName';
 
@@ -373,6 +374,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
             setUsername(publicProfile?.username || '');
             setAvatarUrl(normalizeText(publicProfile?.avatar_url));
+            // The account menu shows the handle and photo it remembered; this read is the fresher one.
+            if (publicProfile) rememberProfileRow(user.id, publicProfile);
 
             // First + last for now; the account's one name (what every studio shows) replaces it below.
             const localName = resolveName({ first: privateData?.first_name, last: privateData?.last_name }) || '';
@@ -461,6 +464,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 username: normalizedUsername,
                 avatar_url: normalizedAvatar
             });
+            // Saved: the account menu shows the new handle and photo at once, not after a reload.
+            rememberProfileRow(user.id, { username: normalizedUsername, avatar_url: normalizedAvatar });
             // The name is saved separately below (it lives in more than one place).
             await upsertPrivateProfile(user.id, {
                 phone_number: normalizedPhone || null,

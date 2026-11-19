@@ -139,7 +139,7 @@ describe('ComicsHeader', () => {
   });
 
   it('signed in: the account menu sits at the right end; the menu toggle is the plain Menu, gone from expanded, with no Account settings row', () => {
-    const p = props({ signedIn: true, page: 'other', current: 'gallery', onOpenAccount: vi.fn() });
+    const p = props({ signedIn: true, page: 'other', current: 'gallery' });
     renderHeader(p);
     const actions = screen.getByRole('banner').querySelector('[data-region="actions"]') as HTMLElement;
     const account = within(actions).getByRole('button', { name: 'Account and settings' });
@@ -158,7 +158,6 @@ describe('ComicsHeader', () => {
     expect((myComics.closest('li') as HTMLElement).className.split(/\s+/)).toContain('medium:hidden');
     fireEvent.click(myComics);
     expect(p.onOpenComics).toHaveBeenCalledOnce();
-    expect(p.onOpenAccount).not.toHaveBeenCalled();
     // The menu container is gone from expanded for everyone now (nothing account-only lives in it).
     expect((document.querySelector('[data-slot="comics-menu"]')!.parentElement as HTMLElement).className.split(/\s+/)).toContain('expanded:hidden');
   });
