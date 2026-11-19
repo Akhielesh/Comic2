@@ -18,7 +18,7 @@ import { cn } from '../../../lib/utils';
 import { CANVAS_BG, HEADING, INK, MUTED, OVERLINE, RADIUS_PANEL } from '../../../components/chat/studioDesign';
 import { Button, Segmented } from '../../../components/ds';
 import { applyOps, type DocOp } from '../../../shared/comic/ops';
-import type { ComicDoc } from '../../../shared/comic/doc';
+import type { ComicDoc, RenderState } from '../../../shared/comic/doc';
 import type { StreamRequest, StudioEvent } from '../../../shared/comic/events';
 import { ConversationPane } from '../../../components/comicstudio/conversation/ConversationPane';
 import { useStudio, type StudioTransport } from '../../../components/comicstudio/useStudio';
@@ -38,6 +38,9 @@ type Phase = 'idle' | 'planning' | 'checking' | 'replying' | 'done';
 type View = 'comic' | 'settings';
 type Step = 'start' | 'away' | 'back';
 
+/** A render the fixture left queued or drawing, as finished. */
+const settled = <R extends RenderState>(r: R): R => (r.status === 'queued' || r.status === 'rendering' ? { ...r, status: 'ready' } : r);
+
 /** A pretend backend for one page: the doc it holds, the one open message stream, and the script. */
 class ScriptedServer {
   doc: ComicDoc;
@@ -48,7 +51,17 @@ class ScriptedServer {
 
   constructor() {
     const base = makeQaDoc('lake-1p');
-    this.doc = { ...base, id: PROJECT_ID, conversation: [] };
+    // Nothing drawing: the only live work on this page is the Director's turn.
+    this.doc = {
+      ...base,
+      id: PROJECT_ID,
+      conversation: [],
+      pages: base.pages.map((p) => ({ ...p, render: settled(p.render) })),
+      cast: base.cast.map((c) => ({ ...c, sheet: settled(c.sheet) })),
+      places: base.places.map((p) => ({ ...p, sheet: settled(p.sheet) })),
+      style: { ...base.style, options: base.style.options.map((o) => ({ ...o, render: settled(o.render) })) },
+      cover: { ...base.cover, render: settled(base.cover.render) }
+    };
   }
 
   onChange(fn: () => void): () => void {
@@ -235,12 +248,13 @@ function LiveTurnScene() {
             Leave mid-turn and come back
           </h1>
           <p className={cn('m-0 text-[length:var(--ds-text-sm)]', MUTED)}>
-            Open Settings while the Director is planning, then go back to the comic: the steps and “Thinking…” are still there, and the reply streams in.
+            Open Settings while the Director is planning, then go back to the comic: the steps and the thinking line are still there, and the reply streams in.
           </p>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Segmented<View>
             label="Where you are"
+            className="w-52 shrink-0"
             value={view}
             onChange={go}
             options={[
