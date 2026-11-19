@@ -7,6 +7,9 @@
 // runs on the QA harness (tests/e2e/studio.chat.images.spec.ts; the `studio.` prefix is what DEVICE_SPECS runs).
 // That spec opens the harness's heist-12p chat (10 images), not this 14-object shape: an f8312c86-shaped QA
 // fixture belongs to the harness owner (PF-2 wave note). Until it lands, this file holds the 14-object half.
+// Since quick2 Q-PROG a finished run in the chat is one line ("9 pages and the cover drawn · View") that mounts no
+// picture, so the finished chat loads only the cast card's sheets; a run still drawing shows one strip of small
+// thumbnails, which must be the same 480w variants.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
@@ -96,8 +99,13 @@ const fetched = (root: HTMLElement): string[] =>
     return pathOf(srcset ? srcset.trim().split(/\s+/)[0] : img.getAttribute('src') || '');
   });
 
-const openChat = () => {
+/** The same chat while the run is still drawing its last image (the cover): the pages strip is on screen. */
+const midRun = (): ComicDoc => {
   const doc = f8312c86();
+  return { ...doc, cover: { ...doc.cover, render: { ...doc.cover.render, status: 'rendering', updatedAt: AT } } };
+};
+
+const openChat = (doc: ComicDoc = f8312c86()) => {
   const studio = makeFakeStudio({ doc, urlFor });
   return render(
     <div role="log">
@@ -119,24 +127,40 @@ describe.each([1, 2, 3])('the f8312c86-shaped chat at device pixel ratio %i', (d
     Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
   });
 
-  it('every tile and avatar requests the 480w variant, lazily, never an original', () => {
-    const { container } = openChat();
+  const allSmall = (container: HTMLElement) => {
     const paths = fetched(container);
-    expect(paths.length).toBeGreaterThanOrEqual(14); // 9 pages + cover + 4 sheets, plus avatars of the same sheets
     expect(paths.filter((p) => !/_w480\.webp$/.test(p))).toEqual([]);
     expect(container.querySelectorAll('[data-heavy-img]')).toHaveLength(0);
     for (const img of container.querySelectorAll('img')) {
       expect(img).toHaveAttribute('loading', 'lazy');
       expect(img).toHaveAttribute('decoding', 'async');
     }
+    return paths;
+  };
+  const bytesOf = (paths: string[]) => paths.reduce((sum, p) => sum + (BYTES.get(p) ?? Number.POSITIVE_INFINITY), 0);
+
+  it('every tile and avatar requests the 480w variant, lazily, never an original', () => {
+    // Finished: the runs are one line each (no picture); the cast card shows its 4 sheets (tiles and avatars).
+    const done = openChat();
+    expect(done.container.querySelectorAll('[data-renders-done]')).toHaveLength(2);
+    expect(allSmall(done.container).length).toBeGreaterThanOrEqual(4);
+    done.unmount();
+    // Mid-run: the pages strip fills in with the 9 drawn pages, the cover still drawing.
+    const live = openChat(midRun());
+    expect(allSmall(live.container).length).toBeGreaterThanOrEqual(13);
   });
 
   it('loads ≤ 0.6 MB of images (was ≈ 4.6 MB of originals)', () => {
-    const { container } = openChat();
-    const unique = [...new Set(fetched(container))];
-    expect(unique).toHaveLength(14);
-    const total = unique.reduce((sum, p) => sum + (BYTES.get(p) ?? Number.POSITIVE_INFINITY), 0);
-    expect(total).toBeLessThanOrEqual(0.6 * 1000 * KB);
+    const done = openChat();
+    const doneUnique = [...new Set(fetched(done.container))];
+    expect(doneUnique).toHaveLength(4);
+    expect(bytesOf(doneUnique)).toBeLessThanOrEqual(0.6 * 1000 * KB);
+    done.unmount();
+
+    const live = openChat(midRun());
+    const unique = [...new Set(fetched(live.container))];
+    expect(unique).toHaveLength(13); // 9 pages + 4 sheets; the cover is still drawing
+    expect(bytesOf(unique)).toBeLessThanOrEqual(0.6 * 1000 * KB);
     const originals = [...BYTES.entries()].filter(([p]) => p.endsWith('.png')).reduce((s, [, b]) => s + b, 0);
     expect(originals).toBeGreaterThan(4.5 * 1000 * KB); // the fixture really is the heavy production shape
   });

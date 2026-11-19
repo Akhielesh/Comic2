@@ -1155,7 +1155,9 @@ export type Card =
   | { type: 'cast'; id: string; characterIds: string[] }
   | { type: 'plan'; id: string }
   | { type: 'gate'; id: string; gateId: string }
-  | { type: 'renders'; id: string; targets: RenderTarget[]; label: string }
+  /** `since` (ms): when the run queued its targets (server clock). A picture stored before it was not drawn by this run
+   *  (a stopped redraw put the earlier one back, or an earlier take was reused). Absent on cards made before it existed. */
+  | { type: 'renders'; id: string; targets: RenderTarget[]; label: string; since?: number }
   /** `fixes` (plan §5.1): chips under the notice, free first; a paid one carries `quotedUsd` on its action and goes
    *  through the existing spend gate. */
   | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string; fixes?: NoticeFix[] }

@@ -589,7 +589,8 @@ const clip = (s: string, max: number): string => {
   const space = cut.lastIndexOf(' ');
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:–—-]+$/u, '')}…`;
 };
-const listWords = (items: string[]): string =>
+/** "a", "a and b", "a, b and c" (the chat's live renders card reads the same words through this one). */
+export const listWords = (items: readonly string[]): string =>
   items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 const names = (items: string[], max: number): string =>
   items.length > max ? `${items.slice(0, max).join(', ')} +${items.length - max}` : items.join(', ');

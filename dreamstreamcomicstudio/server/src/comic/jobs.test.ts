@@ -260,6 +260,10 @@ describe('runAction render_pages', () => {
     expect(progress?.text).toMatch(/^Pages 1–3 and 2 sheets are ready \(\$0\.\d\d\)\./);
     expect(doc.conversation.at(-1)?.id).toBe(progress?.id);
     expect(progress?.nextSteps?.length).toBeGreaterThan(0);
+    // The card carries when the run queued its targets: every picture this run drew is stored at or after it.
+    const card = progress?.cards?.find((c) => c.type === 'renders') as Extract<Card, { type: 'renders' }> | undefined;
+    expect(card?.since).toEqual(expect.any(Number));
+    for (const page of doc.pages) expect(page.render.asset!.at).toBeGreaterThanOrEqual(card!.since!);
     // Activity start/end pairs for every image.
     const starts = ctx.events.filter((e) => e.type === 'activity' && e.phase === 'start' && e.label.startsWith('Drawing page'));
     expect(starts.map((e) => (e as { label: string }).label)).toEqual(expect.arrayContaining(['Drawing page 1', 'Drawing page 2', 'Drawing page 3']));
