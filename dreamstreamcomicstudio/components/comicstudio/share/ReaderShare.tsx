@@ -5,19 +5,23 @@
 // link to the {language} edition"; the menu then always opens (with a "Share…" row when Web Share exists), so the
 // edition stays one tap away on phones too, while the plain Share still passes on the bare link.
 //
-// `onShared(channel)` fires once per share: a completed Web Share, the first copy or channel row of an opening of the
-// menu. Opening the menu, a closed share sheet and a failed copy are not shares.
+// `onShared(channel)` fires once per share: each completed Web Share, and each channel (Copy link, an intent, LinkedIn)
+// once per opening of the menu, so Copy link then WhatsApp counts both and a second copy counts nothing. Opening the
+// menu, a closed share sheet and a failed copy are not shares.
+//
+// A copy can go through a hidden field in the page (no Clipboard API, or one that refuses, as in-app browsers do):
+// focus moves there for a moment, which is not a step out of the menu, so the menu stays open, the row says what
+// happened, and focus comes back to the row.
 //
 // Read-only by construction: no studio controller, no network, no studio API. It imports none of the studio's Share
 // sheet code (ReaderShare.test.tsx walks its imports), so the share title page can load it without the sheet.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Link2, Share2 } from 'lucide-react';
-import { cn } from '../../../lib/utils';
 import { DENSITY } from '../../chat/studioDesign';
-import { buttonClasses } from '../../ds/Button';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '../../ds/Menu';
 import { CHANNEL_LABEL, INTENT_CHANNELS, intentUrl, type IntentChannel } from './shareModel';
+import { readerShareTriggerClass } from './readerShareTrigger';
 import { LINKEDIN_LABEL, linkedinShareUrl, withVia } from './shareTargets';
 import { useShareCapabilities } from './useShareCapabilities';
 
@@ -73,7 +77,10 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
   const [failed, setFailed] = useState<CopyTarget | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const sharing = useRef(false);
-  const reported = useRef(false);
+  /** The channels already reported in this opening of the menu. */
+  const reported = useRef(new Set<ReaderShareChannel>());
+  /** Copies in flight: their hidden field takes focus outside the menu for a moment. */
+  const copying = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -89,8 +96,8 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
 
   const report = useCallback(
     (channel: ReaderShareChannel) => {
-      if (reported.current) return;
-      reported.current = true;
+      if (reported.current.has(channel)) return;
+      reported.current.add(channel);
       onShared?.(channel);
     },
     [onShared]
@@ -98,7 +105,7 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
 
   const setOpen = useCallback((next: boolean) => {
     if (next) {
-      reported.current = false;
+      reported.current.clear();
       setCopied(null);
       setFailed(null);
     }
@@ -109,7 +116,7 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
   const shareNative = useCallback(async () => {
     if (sharing.current) return;
     sharing.current = true;
-    reported.current = false;
+    reported.current.delete('native'); // every completed share sheet is a share
     try {
       const result = await caps.share({ title, text, url });
       if (!alive.current) return;
@@ -135,8 +142,19 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
 
   const copy = useCallback(
     async (target: CopyTarget, link: string) => {
-      const ok = await caps.copy(link);
+      const back = document.activeElement;
+      copying.current += 1;
+      let ok = false;
+      try {
+        ok = await caps.copy(link);
+      } finally {
+        copying.current -= 1;
+      }
       if (!alive.current) return;
+      // The hidden field took focus and is gone, so focus sits on the page itself: give it back to the row, unless
+      // the reader has moved on (the menu closed, or focus went somewhere on purpose).
+      const now = document.activeElement;
+      if (back instanceof HTMLElement && back !== now && back.isConnected && (!now || now === document.body)) back.focus({ preventScroll: true });
       setCopied(ok ? target : null);
       setFailed(ok ? null : target);
       if (ok) report('copy');
@@ -155,7 +173,7 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
             ref={triggerRef}
             type="button"
             aria-label={compact ? words.share : undefined}
-            className={buttonClasses({ variant: 'ghost', size: compact ? 'icon' : 'default', className: cn('text-[var(--ds-ink)] touch-manipulation', compact ? 'size-11' : 'h-11 px-3', className) })}
+            className={readerShareTriggerClass(compact, className)}
             // The press never opens the menu by itself: the tap tries Web Share first (onClick below).
             onPointerDown={(e) => e.preventDefault()}
             onClick={(e) => {
@@ -180,6 +198,10 @@ export const ReaderShare: React.FC<ReaderShareProps> = ({ url, title, text, edit
           // A press on the trigger toggles the menu (above); it is not a press outside it.
           onInteractOutside={(e) => {
             if (triggerRef.current?.contains(e.target as Node)) e.preventDefault();
+          }}
+          // A copy's hidden field is not a step out of the menu (see the top of the file).
+          onFocusOutside={(e) => {
+            if (copying.current > 0) e.preventDefault();
           }}
         >
           {editionLink && caps.canShare && (

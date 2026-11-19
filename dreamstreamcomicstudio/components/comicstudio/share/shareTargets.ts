@@ -37,7 +37,10 @@ const linkTo = (input: ShareLinkInput, lang?: string | null): string | undefined
   return buildShareUrl(origin, input.slug, keep ? { lang: keep } : {});
 };
 
-/** The link the reader's Share passes on: the link's own edition until the visitor switches, else the bare link. */
+/**
+ * The link the reader's Share passes on: the link's own edition until the visitor switches, else the bare link.
+ * The reader's rule; the studio owner's link (its page, language and `via` options) is shareModel's `shareLinkFor`.
+ */
 export function shareLinkFor(input: ShareLinkInput): string | undefined {
   return linkTo(input, input.switched ? null : input.linkLang);
 }
@@ -73,6 +76,9 @@ export const linkedinShareUrl = (link: string): string => `${LINKEDIN_SHARE}?url
 
 const LINKEDIN_APP = /LinkedInApp/i;
 
-/** An in-app browser (LinkedIn, Facebook, Instagram, and the others shareModel lists): downloads often fail there. */
+/**
+ * An in-app browser (LinkedIn, Facebook, Instagram, and the others shareModel lists): downloads often fail there.
+ * shareModel's `isInAppBrowser` (and so `useShareCapabilities().inApp`) does not know LinkedIn yet: use this one.
+ */
 export const inAppBrowser = (ua: string = typeof navigator === 'undefined' ? '' : navigator.userAgent || ''): boolean =>
   !!ua && (LINKEDIN_APP.test(ua) || isInAppBrowser(ua));

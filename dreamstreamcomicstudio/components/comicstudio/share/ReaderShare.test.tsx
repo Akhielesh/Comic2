@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COMICS_ORIGIN } from '../../../services/productHost';
 import { DENSITY } from '../../chat/studioDesign';
 import { ReaderShare } from './ReaderShare';
+import { readerShareTriggerClass } from './readerShareTrigger';
 import { ShareButton } from './ShareButton';
 import { editionLinkFor, linkedinShareUrl, shareLinkFor } from './shareTargets';
 
@@ -202,6 +203,83 @@ describe('ReaderShare: the fallback menu', () => {
     delete (document as { execCommand?: unknown }).execCommand;
   });
 
+  describe('a copy through the hidden field (no Clipboard API, or one that refuses)', () => {
+    // Browsers move focus to the field copyText selects, outside the menu; jsdom's select() does not, so it does here.
+    const select = HTMLTextAreaElement.prototype.select;
+    beforeEach(() => {
+      vi.spyOn(HTMLTextAreaElement.prototype, 'select').mockImplementation(function (this: HTMLTextAreaElement) {
+        this.focus();
+        select.call(this);
+      });
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete (document as { execCommand?: unknown }).execCommand;
+    });
+    const copyThroughField = async (copies: boolean, clipboard: 'none' | 'refuses') => {
+      stubNavigator();
+      if (clipboard === 'none') vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
+      else writeText.mockRejectedValue(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+      Object.defineProperty(document, 'execCommand', { value: vi.fn(() => copies), configurable: true });
+      const onShared = vi.fn();
+      render(<ReaderShare url={BARE} title={TITLE} onShared={onShared} />);
+      fireEvent.click(trigger());
+      await screen.findByRole('menu');
+      const row = screen.getByRole('menuitem', { name: 'Copy link' });
+      row.focus();
+      fireEvent.click(row);
+      return { row, onShared };
+    };
+
+    for (const clipboard of ['none', 'refuses'] as const) {
+      it(`keeps the menu open, says "Link copied" and gives focus back to the row (clipboard ${clipboard})`, async () => {
+        const { row, onShared } = await copyThroughField(true, clipboard);
+        expect(await screen.findByRole('menuitem', { name: 'Link copied' })).toBe(row);
+        expect(screen.getByRole('menu')).toBeInTheDocument();
+        expect(document.activeElement).toBe(row);
+        expect(document.querySelector('textarea')).toBeNull();
+        expect(onShared.mock.calls).toEqual([['copy']]);
+      });
+    }
+
+    it('a copy that fails says so in the open menu, with focus on the row', async () => {
+      const { row, onShared } = await copyThroughField(false, 'refuses');
+      expect(await screen.findByRole('menuitem', { name: /Couldn.t copy/ })).toBe(row);
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+      expect(document.activeElement).toBe(row);
+      expect(onShared).not.toHaveBeenCalled();
+    });
+
+    it('focus leaving the menu for anything else still closes it', async () => {
+      stubNavigator();
+      render(
+        <>
+          <ReaderShare url={BARE} title={TITLE} />
+          <button type="button">Elsewhere</button>
+        </>
+      );
+      fireEvent.click(trigger());
+      await screen.findByRole('menu');
+      act(() => screen.getByRole('button', { name: 'Elsewhere' }).focus());
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    });
+  });
+
+  it('each channel counts once per opening: Copy link, then WhatsApp, reports both', async () => {
+    stubNavigator();
+    const onShared = vi.fn();
+    render(<ReaderShare url={BARE} title={TITLE} onShared={onShared} />);
+    fireEvent.click(trigger());
+    await screen.findByRole('menu');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
+    await screen.findByRole('menuitem', { name: 'Link copied' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Link copied' }));
+    await flush();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'WhatsApp' }));
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(onShared.mock.calls).toEqual([['copy'], ['whatsapp']]);
+  });
+
   it('every row is 44 px tall and the trigger is a 44 px target', async () => {
     stubNavigator();
     const { unmount } = render(<ReaderShare url={BARE} title={TITLE} compact />);
@@ -282,9 +360,37 @@ describe('ReaderShare: the edition link', () => {
 });
 
 describe('ShareButton keeps the reader on ReaderShare', () => {
+  // Keep this test first: ShareButton loads ReaderShare once per module, so only the first render shows the stand-in.
+  it('until ReaderShare has loaded, the same 44 px button stands in, and a tap on it opens the menu once it arrives', async () => {
+    stubNavigator(async () => undefined);
+    const { unmount } = render(<ShareButton target={{ url: BARE, title: TITLE }} compact />);
+    const standIn = trigger();
+    expect(standIn).toHaveAttribute('data-loading');
+    expect(standIn).toHaveAttribute('aria-label', 'Share');
+    const face = standIn.className;
+    fireEvent.click(standIn);
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+    expect(trigger()).not.toHaveAttribute('data-loading');
+    expect(trigger().className).toBe(face);
+    // A tap before the chunk arrived opens the menu; it is not handed to Web Share late.
+    expect(shareSpy).not.toHaveBeenCalled();
+    unmount();
+    render(<ShareButton target={{ url: BARE, title: TITLE }} />);
+    expect(trigger().className).toBe(readerShareTriggerClass(false));
+    expect(trigger()).toHaveTextContent('Share');
+  });
+
+  it('the studio never loads ReaderShare or the ds Menu: ShareButton imports ReaderShare lazily', () => {
+    const rel = [...staticClosure(path.resolve(__dirname, 'ShareButton.tsx'))].map((f) => path.relative(path.resolve(__dirname, '../../..'), f));
+    expect(rel).toContain('components/comicstudio/share/ShareSheet.tsx');
+    for (const banned of ['components/comicstudio/share/ReaderShare.tsx', 'components/ds/Menu.tsx']) expect(rel, banned).not.toContain(banned);
+    expect(readFileSync(path.resolve(__dirname, 'ShareButton.tsx'), 'utf8')).toMatch(/import\(\s*'\.\/ReaderShare'\s*\)/);
+  });
+
   it('a ShareButton with a target renders ReaderShare (LinkedIn included), never the studio Share sheet', async () => {
     stubNavigator();
     render(<ShareButton target={{ url: BARE, title: TITLE }} compact />);
+    await waitFor(() => expect(trigger()).not.toHaveAttribute('data-loading'));
     fireEvent.click(trigger());
     await screen.findByRole('menu');
     expect(rows()).toEqual(['Copy link', 'WhatsApp', 'X', 'Telegram', 'Facebook', 'Email', 'LinkedIn']);
