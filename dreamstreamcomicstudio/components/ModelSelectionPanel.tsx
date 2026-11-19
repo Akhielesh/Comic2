@@ -121,7 +121,7 @@ const Slot: React.FC<{
         aria-expanded={open}
         className={cn(FIELD, 'flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left text-sm', DENSITY.coarse)}
       >
-        <span className="flex min-w-0 items-center gap-1.5 truncate">
+        <span className="flex min-w-0 items-center gap-1.5">
           {selected ? (
             <>
               <SourceBadge source={selected.source} />
