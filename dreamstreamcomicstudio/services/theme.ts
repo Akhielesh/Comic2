@@ -91,6 +91,7 @@ export const setThemePreference = (pref: ThemePreference): void => {
     unsaved = pref; // the preference just won't persist past this tab
   }
   applyTheme(pref, { animate: true });
+  if (pref === 'system') followSystem(); // also where initTheme never ran (an embed, the QA harness)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT));
 };
 

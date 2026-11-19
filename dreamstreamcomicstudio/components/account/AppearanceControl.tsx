@@ -21,6 +21,8 @@ import { APPEARANCES, APPEARANCE_LABEL, useAppearance, type Appearance } from '.
 
 const ICON: Record<Appearance, LucideIcon> = { light: Sun, dark: Moon, paper: BookOpen, system: Monitor };
 
+const ITEMS_FIT_THEIR_WORDS = '[&>[role=radio]]:flex-auto';
+
 const WITH_PAPER: readonly SegmentedOption<Appearance>[] = APPEARANCES.map((value) => ({ value, label: APPEARANCE_LABEL[value] }));
 const WITHOUT_PAPER: readonly SegmentedOption<Appearance>[] = WITH_PAPER.filter((o) => o.value !== 'paper');
 
@@ -42,7 +44,8 @@ export function AppearanceSegmented({ paper = false, fullWidth, size, className 
       options={paper ? WITH_PAPER : WITHOUT_PAPER}
       fullWidth={fullWidth}
       size={size}
-      className={className}
+      // Each item keeps its own word's width and they share what is left: equal shares cut "System" short in a menu.
+      className={cn(ITEMS_FIT_THEIR_WORDS, className)}
     />
   );
 }

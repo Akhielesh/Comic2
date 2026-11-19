@@ -208,6 +208,21 @@ describe('System follows the OS with no hook mounted', () => {
     expect(root.classList.contains('dark')).toBe(false);
   });
 
+  it('picking System registers the same one listener even where initTheme never ran (an embed, the QA harness)', async () => {
+    const listeners: Array<() => void> = [];
+    const mq = { matches: false, media: '(prefers-color-scheme: dark)', addEventListener: vi.fn((_t: string, fn: () => void) => listeners.push(fn)), removeEventListener: vi.fn() };
+    window.matchMedia = vi.fn(() => mq) as unknown as typeof window.matchMedia;
+    vi.resetModules();
+    const fresh = await import('./appearance');
+    fresh.setAppearance('system');
+    fresh.setAppearance('light');
+    fresh.setAppearance('system');
+    expect(listeners).toHaveLength(1);
+    mq.matches = true;
+    listeners.forEach((fn) => fn());
+    expect(root.classList.contains('dark')).toBe(true);
+  });
+
   it('THEME_DEFAULT is Light and is what an empty or unknown store reads as', async () => {
     const theme = await import('./theme');
     expect(theme.THEME_DEFAULT).toBe('light');
