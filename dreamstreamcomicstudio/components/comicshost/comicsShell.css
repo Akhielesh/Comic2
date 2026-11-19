@@ -6,16 +6,11 @@
   padding-inline: 0;
 }
 
+/* Under Atlas the primary is the skin's ink, light and dark (#0a0a0a / #fafafa, hover #2f2f2f / #d6d6d6); the label
+   keeps the inherited --ds-on-accent (restating it here would be a var() cycle). Only Paper's public chrome differs. */
 .comics-primary-action {
-  --ds-accent-fill: #0a0a0a;
-  --ds-accent-fill-hover: #2f2f2f;
-  --ds-on-accent: #fff;
-}
-
-.dark .comics-primary-action {
-  --ds-accent-fill: #fafafa;
-  --ds-accent-fill-hover: #d6d6d6;
-  --ds-on-accent: #0a0a0a;
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
 }
 
 [data-comic-theme='paper'] .comics-primary-action {

@@ -28,7 +28,7 @@ export function ComicProjectNavigation({ projects, activeProjectId, activeView, 
   const recentId = useId();
   const recent = [...projects].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
   return <nav className="comic-project-nav" aria-label="Your comics">
-    <button type="button" className="comic-project-new comics-primary-action" onClick={onNewComic} disabled={disabled} aria-current={activeView === 'new' ? 'page' : undefined}><Plus aria-hidden />New comic</button>
+    <button type="button" className="comic-project-new" onClick={onNewComic} disabled={disabled} aria-current={activeView === 'new' ? 'page' : undefined}><Plus aria-hidden />New comic</button>
     <button type="button" className="comic-project-recents-toggle" aria-expanded={recentOpen} aria-controls={recentId} onClick={() => setRecentOpen(!recentOpen)}><ChevronDown aria-hidden className={recentOpen ? '' : 'is-closed'} />Recent comics</button>
     {recentOpen && <div id={recentId} className="comic-project-recents">
       {recent.map((project) => <button type="button" key={project.id} disabled={disabled} onClick={() => onOpenProject(project.id)} aria-current={activeProjectId === project.id ? 'page' : undefined} title={project.name}><FileText aria-hidden /><span>{project.name || 'Untitled comic'}</span></button>)}
@@ -111,7 +111,7 @@ export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onSt
       <div className="comic-idea-compose">
         <label className="sr-only" htmlFor={`${id}-idea`}>Your comic idea or script</label>
         <textarea id={`${id}-idea`} value={idea} onChange={(event) => onIdea(event.target.value)} disabled={pending} maxLength={200000} placeholder="Describe your idea or paste a script here…" aria-describedby={`${id}-help`} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && idea.trim() && !pending) { event.preventDefault(); onStart(); } }} />
-        <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start comics-primary-action" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
+        <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
       </div>
       {error && <p className="comic-idea-error" role="alert">{error}</p>}
       <p id={`${id}-help`} className="comic-idea-help">Start prepares the conversation. Send submits your idea.</p>
