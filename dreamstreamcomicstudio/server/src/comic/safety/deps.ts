@@ -197,8 +197,11 @@ export const invalidateModerationCache = (userId: string): void => {
   cooldownCache.delete(userId);
 };
 
-/** Classifier spend caps (safety.md §8): 60 text / 30 image checks per user per hour. */
-export const CAPS = { textPerHour: 60, imagePerHour: 30, appealsPerDay: 5, reportChecksPerProjectDay: 20 } as const;
+/**
+ * Classifier spend caps (safety.md §8): 60 text / 30 upload image checks per user per hour, and 60 render-time image
+ * checks beside the page check (past it the page check's verdict stands and the publish gate re-rates it).
+ */
+export const CAPS = { textPerHour: 60, imagePerHour: 30, pageCheckPerHour: 60, appealsPerDay: 5, reportChecksPerProjectDay: 20 } as const;
 
 // ── Ratings ──────────────────────────────────────────────────────────────────
 

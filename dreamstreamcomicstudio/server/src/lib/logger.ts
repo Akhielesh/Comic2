@@ -6,12 +6,18 @@
 // guaranteeing two things the team asked for: a timestamp on every log, and a
 // consistent shape (ts, level, event, …fields) that's easy to slice later.
 
+//
+// Every string in the line (the event and every field, at any depth) passes through redactSecrets
+// first, so a vendor error that echoes a key never reaches the log store as text.
+
+import { redactJsonStrings } from './redact.js';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const emit = (level: LogLevel, event: string, fields?: Record<string, unknown>) => {
   let line: string;
   try {
-    line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields });
+    line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields }, redactJsonStrings);
   } catch {
     // A field wasn't serializable (circular ref, BigInt, …) — never let logging throw.
     line = JSON.stringify({ ts: new Date().toISOString(), level, event, note: 'unserializable_fields' });

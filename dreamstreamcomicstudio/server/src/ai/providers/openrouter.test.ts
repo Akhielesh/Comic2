@@ -376,3 +376,35 @@ describe('openrouter connected-account privacy: review fixes', () => {
     expect(nothing.sent).toBe(false);
   });
 });
+
+describe('openrouter error text carries no key', () => {
+  it('a refused own key keeps the "failed: NNN" shape and drops any key the body echoes', async () => {
+    const fake = `sk-or-v1-${'0'.repeat(64)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: { message: `User not found for key ${fake}`, code: 401 } }), { status: 401, statusText: 'Unauthorized' }))
+    );
+    const err = await openRouterProvider.generateText(baseReq({ retries: 1 }), { apiKey: fake, byok: true }).catch((e) => e);
+    expect(err.message).toMatch(/^OpenRouter \/chat\/completions failed: 401 Unauthorized /);
+    expect(err.message).not.toContain('sk-or-v1');
+    expect(err.status).toBe(401);
+  });
+
+  it('a refused stream drops the key too', async () => {
+    const fake = `sk-or-v1-${'1'.repeat(64)}`;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(`bad key ${fake}`, { status: 401, statusText: 'Unauthorized' })));
+    const err = await openRouterProvider.generateTextStream!(baseReq(), { apiKey: fake, byok: true }, () => {}).catch((e) => e);
+    expect(err.message).toMatch(/^OpenRouter stream failed: 401/);
+    expect(err.message).not.toContain('sk-or-v1');
+  });
+
+  it('a capacity 403 is still recognised after redaction', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: { message: 'Key limit exceeded (total limit)', code: 403 } }), { status: 403, statusText: 'Forbidden' }))
+    );
+    const err = await openRouterProvider.generateText(baseReq({ retries: 1 }), { apiKey: 'test-own-key', byok: true }).catch((e) => e);
+    expect(err.publicCode).toBe('PROVIDER_CAPACITY');
+    expect(err.message).toMatch(/failed: 403/);
+  });
+});

@@ -218,8 +218,10 @@ const publicI18n = (i18n: unknown): unknown => {
       for (const [k, t] of Object.entries(group)) outGroup[k] = publicTranslation(t);
       return outGroup;
     };
+    // Failure records (why a line was not translated) are server bookkeeping, never reader content.
+    const { failures: _failures, ...rest } = raw;
     editions[lang] = {
-      ...raw,
+      ...rest,
       lines,
       ...(raw.cover !== undefined ? { cover: pick(raw.cover) } : {}),
       ...(raw.brief !== undefined ? { brief: pick(raw.brief) } : {})

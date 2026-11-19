@@ -757,7 +757,7 @@ describe('sanitizePublicDoc: key-path allow-list (P0-SEC verification)', () => {
       publication: { visibility: 'unlisted', status: 'live', slug: 'SECRETSLUG0000000000', publishedRev: 1, publishedAt: 1, languages: [] } as any,
       planInputHash: 'SECRET-HASH',
       i18n: {
-        editions: { es: { lang: 'es', lines: { l: { text: 'Hola', status: 'machine', sourceHash: 'h', gloss: 'SECRET-GLOSS', issue: { severity: 'major', note: 'SECRET-ISSUE' }, model: 'secret-model', at: 1 } }, balloons: {}, register: 'neutral' } },
+        editions: { es: { lang: 'es', lines: { l: { text: 'Hola', status: 'machine', sourceHash: 'h', gloss: 'SECRET-GLOSS', issue: { severity: 'major', note: 'SECRET-ISSUE' }, model: 'secret-model', at: 1 } }, balloons: {}, register: 'neutral', failures: { l: { reason: 'unsafe', sourceHash: 'h', attempts: 2, at: 1 } } } },
         glossary: [{ id: 'g', term: 'Maya', kind: 'character', policy: 'keep', forms: {}, note: 'SECRET-GLOSSARY' }]
       } as any,
       settings: { ...doc.settings, budgetUsd: 99, imageModelOverride: 'secret-model' },
@@ -768,7 +768,7 @@ describe('sanitizePublicDoc: key-path allow-list (P0-SEC verification)', () => {
 
   it('leaves no private text, model, safety verdict or non-published path anywhere', () => {
     const json = JSON.stringify(sanitizePublicDoc(fullDoc()));
-    expect(json).not.toMatch(/SECRET|secret-model|DRAFT-SOURCE|PARENT|PHOTO|STYLE\.webp|FACE|BOARD|OPTION|SHEET|PLACE\.webp|ARCHIVED|INBOX|\.old|lib\.secret|"safety"|"publication"|planInputHash|"glossary":\[\{/);
+    expect(json).not.toMatch(/SECRET|secret-model|DRAFT-SOURCE|PARENT|PHOTO|STYLE\.webp|FACE|BOARD|OPTION|SHEET|PLACE\.webp|ARCHIVED|INBOX|\.old|lib\.secret|"safety"|"publication"|planInputHash|"glossary":\[\{|"failures"/);
   });
 
   it('every image path left is a current page/cover image or its downscale', () => {

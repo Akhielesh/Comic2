@@ -387,15 +387,40 @@ describe('ComicReaderView', () => {
   });
 
   it('closes with the End card when the host gives one', () => {
-    const onMakeYourOwn = vi.fn();
-    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" endCard={{ onMakeYourOwn }} />);
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" endCard={{ browseLibraryHref: '/library', makeLikeThisHref: '/#register' }} />);
     press('End');
     expect(screen.getByTestId('end-card')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'The End' })).toHaveFocus();
-    fireEvent.click(screen.getByRole('button', { name: /Make your own comic/ }));
-    expect(onMakeYourOwn).toHaveBeenCalled();
+    // The host's actions pass through unchanged: the Library link is the one filled action, register interest sits beside it.
+    expect(screen.getByRole('link', { name: 'Browse the Library' })).toHaveAttribute('data-primary');
+    expect(screen.getByRole('link', { name: 'Make comics like this' })).toHaveAttribute('href', '/#register');
     fireEvent.click(screen.getByRole('button', { name: /Read again/ }));
     expect(shownKeys()).toEqual(['cover']);
+  });
+
+  it('a tap on the End card’s Up next cover (in the turn-back third) opens it and never turns the page back', () => {
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 360, h: 740, coarse: true })}>
+        <ComicReaderView
+          doc={drawnDoc()}
+          urlFor={fakeUrlFor}
+          initialMode="page"
+          endCard={{ upNext: { href: '/c/brick-bridge', title: 'Brick Bridge', coverUrl: 'https://media.example.test/pub/brick-bridge/cover-w480.webp' } }}
+        />
+      </FormFactorProvider>
+    );
+    press('End');
+    const atEnd = shownKeys();
+    const stage = screen.getByTestId('reader-stage');
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 360, height: 740, right: 360, bottom: 740, x: 0, y: 0, toJSON: () => ({}) });
+    const cover = screen.getByTestId('end-card').querySelector('[data-part="up-next"] img') as HTMLElement;
+    // x = 60 of 360: inside the left 30%, which turns back in a left-to-right book.
+    fireEvent.pointerDown(cover, { clientX: 60, clientY: 300, pointerType: 'touch' });
+    fireEvent.pointerUp(cover, { clientX: 60, clientY: 300, pointerType: 'touch' });
+    expect(shownKeys()).toEqual(atEnd);
+    expect(screen.getByTestId('end-card')).toBeInTheDocument();
+    // The tap belongs to the Read next link instead: the cover sits inside a copy of it.
+    expect(cover.closest('a')).toHaveAttribute('href', '/c/brick-bridge');
   });
 
   it('auto-hides its chrome while reading and brings it back on a center tap', () => {
