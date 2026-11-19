@@ -232,7 +232,7 @@ export const PageCard: React.FC<{
             onChange={onToggleSelect}
             disabled={!page.panels.length}
             aria-label={`Select page ${page.n}`}
-            className="h-3.5 w-3.5 accent-[#D97757] coarse:h-5 coarse:w-5"
+            className="h-3.5 w-3.5 accent-[var(--ds-accent)] coarse:h-5 coarse:w-5"
           />
         </label>
         <h4 className="min-w-0 truncate text-[13px] font-semibold text-[var(--ds-ink)]" title={page.chapterTitle ? `Page ${page.n} · ${page.chapterTitle}` : undefined}>
@@ -518,6 +518,8 @@ const PlanHeader: React.FC<{
   const drawn = doc.pages.filter((p) => pageVisualStatus(doc, p) === 'ready').length;
   const panels = totalPanels(doc);
   const draft = doc.planStatus !== 'approved';
+  // While an approval is open its Approve is the screen's one primary action, so drawing everything steps back.
+  const DrawAllButton = doc.gate?.status === 'open' ? GhostButton : PrimaryButton;
   const coverOffer = coverNeedsDraw(doc) && !isBusy(doc.cover.render);
   const toDraw = quote.pageIds.length;
   const what = [plural(toDraw, 'page'), quote.sheetIds.length ? plural(quote.sheetIds.length, 'character sheet') : '', quote.cover ? 'the cover' : ''].filter(Boolean).join(' + ');
@@ -550,7 +552,7 @@ const PlanHeader: React.FC<{
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {toDraw > 0 && (
           <>
-            <PrimaryButton
+            <DrawAllButton
               size="sm"
               busy={busyKey === 'all'}
               onClick={() => fire('all', () => studio.act({ type: 'render_pages', ...(quote.cover ? { includeCover: true } : {}) }))}
@@ -558,7 +560,7 @@ const PlanHeader: React.FC<{
               aria-describedby="pages-draw-all-price"
             >
               {draft ? 'Approve & render all' : `Render ${toDraw === doc.pages.length ? 'all' : `remaining ${toDraw}`}`}
-            </PrimaryButton>
+            </DrawAllButton>
             <PriceNote id="pages-draw-all-price">
               {cost.quote(quote.usd)} · {what}
             </PriceNote>
@@ -577,7 +579,7 @@ const PlanHeader: React.FC<{
       </div>
       {toDraw > 0 && coverOffer && (
         <label className="flex min-h-[36px] w-fit max-w-full cursor-pointer items-center gap-2 rounded-xl px-1 text-[12.5px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:min-h-[44px]">
-          <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[#D97757] coarse:h-5 coarse:w-5" />
+          <input type="checkbox" checked={includeCover} onChange={(e) => setIncludeCover(e.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[var(--ds-accent)] coarse:h-5 coarse:w-5" />
           <span className="min-w-0">
             Include the cover <span className="text-[var(--ds-muted)]">({cost.quote(estimateOne(doc, 'cover', byok).usd)})</span>
           </span>

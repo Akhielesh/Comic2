@@ -9,6 +9,7 @@ import { turnstileEnabled } from '../../../services/clientConfig';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { StudioApiError, reportPublicComic, type ReportReason } from '../studioApi';
 
+import { FIELD, FOCUS_RING } from '../../chat/studioDesign';
 export const REPORT_REASON_OPTIONS: { value: ReportReason; label: string }[] = [
   { value: 'sexual', label: 'Sexual content or nudity' },
   { value: 'violent', label: 'Graphic violence or gore' },
@@ -103,7 +104,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
             <button
               type="button"
               onClick={onClose}
-              className="mt-4 inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent)] px-5 text-[14px] font-medium text-white hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+              className={`mt-4 inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent-fill)] px-5 text-[14px] font-medium text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] ${FOCUS_RING}`}
             >
               Done
             </button>
@@ -115,8 +116,8 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               void send();
             }}
           >
-            <h2 className="text-[15px] font-semibold">Report this comic</h2>
-            <p className="mt-0.5 text-[13px] text-[var(--ds-muted)]">What&apos;s wrong with it?</p>
+            {/* The sheet's header carries the title; the form opens on the question. */}
+            <p className="text-[13px] text-[var(--ds-muted)]">What&apos;s wrong with it?</p>
             <fieldset className="mt-3 min-w-0" aria-labelledby={legendId}>
               <legend id={legendId} className="sr-only">
                 Reason
@@ -129,8 +130,8 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
                       key={o.value}
                       className={[
                         'inline-flex min-h-[44px] max-w-full cursor-pointer items-center rounded-full border px-3 text-[13px] transition-colors motion-reduce:transition-none',
-                        'focus-within:ring-2 focus-within:ring-[#D97757]/45',
-                        checked ? 'border-[#D97757] bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+                        'has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[color:var(--ds-focus)]',
+                        checked ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                       ].join(' ')}
                     >
                       <input type="radio" name="report-reason" value={o.value} checked={checked} onChange={() => setReason(o.value)} className="sr-only" />
@@ -143,7 +144,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
 
             {page ? (
               <label className="mt-3 flex min-h-[44px] cursor-pointer items-center gap-2 text-[13px]">
-                <input type="checkbox" checked={aboutPage} onChange={(e) => setAboutPage(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+                <input type="checkbox" checked={aboutPage} onChange={(e) => setAboutPage(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
                 About page {page}
               </label>
             ) : null}
@@ -158,7 +159,7 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               aria-describedby={counterId}
               onChange={(e) => setNote(e.target.value.slice(0, REPORT_NOTE_MAX))}
               rows={3}
-              className="mt-1 block w-full min-w-0 resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-[14px] text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+              className={`mt-1 block w-full min-w-0 resize-none px-3 py-2 text-[14px] ${FIELD}`}
               placeholder="A few words help us find it faster"
             />
             <div id={counterId} className="mt-0.5 text-right text-[11px] tabular-nums text-[var(--ds-muted)]">
@@ -181,14 +182,14 @@ export const ReportDialog: React.FC<ReportDialogProps> = ({ slug, open, onClose,
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex min-h-[44px] items-center justify-center rounded-full border border-[var(--ds-hairline)] px-4 text-[14px] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                className={`inline-flex min-h-[44px] items-center justify-center rounded-full border border-[var(--ds-hairline)] px-4 text-[14px] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={!canSend}
-                className="inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent)] px-5 text-[14px] font-medium text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+                className={`inline-flex min-h-[44px] items-center justify-center rounded-full bg-[var(--ds-accent-fill)] px-5 text-[14px] font-medium text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`}
               >
                 {state === 'sending' ? 'Sending…' : 'Send report'}
               </button>

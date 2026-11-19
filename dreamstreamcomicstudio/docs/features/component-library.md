@@ -41,9 +41,10 @@ House style lives in two files:
   radii (`rounded-2xl` panels, `rounded-xl` controls), and composites (`PANEL`,
   `PRIMARY_BTN`, `MENU`, …).
 - `components/chat/artifacts/kit/Surface.tsx` — the card shell every widget sits in:
-  `rounded-2xl border border-black/10 bg-white/85 backdrop-blur-md` with a soft
-  ambient shadow (`Surface.tsx:26-45`), optional accent gradient strip, optional
-  header/right/footer slots.
+  the Atlas section-card recipe (`SECTION_CARD`: an opaque `--ds-surface`, a hairline,
+  `--ds-shadow-soft` and the panel radius, no blur), optional header/right/footer
+  slots. The `accent` prop is still accepted but no longer draws a strip: a card's
+  identity comes from its content (series colours, status chips), never its edge.
 
 **Do**
 - Compose from `Surface` + kit primitives; hairline dividers `divide-black/5`;
@@ -114,14 +115,22 @@ Detailed mode only (compact is fixed-small by design, `WidgetFrame.tsx:182`):
 `components/chat/artifacts/kit/theme.ts` is the one color system:
 
 - 7 named palettes (`brand`, `bull`, `bear`, `ocean`, `sunset`, `violet`, `mono`) each
-  resolving to an `accent` + multi-series chart ramp (`theme.ts:27-35`).
+  resolving to an `accent` + multi-series chart ramp, all design tokens: the series take
+  the colour layer's hues in `CHART_HUE_ORDER` (a named palette leads with its own hue:
+  ocean sky, sunset magenta, violet violet), `mono` takes the ink steps `--ds-chart-1…5`,
+  the accent is the ink (or that palette's hue), and `BULL` / `BEAR` / `NEUTRAL` are the
+  readable status inks (`--ds-success-text`, `--ds-danger-text`, `--ds-muted`). A colour
+  the model puts on one series (`s.color`) is content and is drawn as given.
 - `resolveTheme({ palette?, accent?, trend? })` (`theme.ts:55-64`): an explicit
   `accent` hex overrides the palette; a numeric `trend` auto-picks bull/bear/neutral
   (finance). Unknown palette names **fall back to brand instead of throwing** — the
   model supplies `palette` as a free string (`theme.ts:56-58`).
 - The AI recolors a card by emitting `palette` (and/or `accent`) in the artifact data;
-  cards pass it through `resolveTheme` and feed `Surface`'s `accent` strip.
-- `withAlpha(hex, alpha)` makes translucent fills for chart areas (`theme.ts:67-75`).
+  cards pass it through `resolveTheme` and use the result for lines, fills and active controls.
+- `withAlpha(color, alpha)` makes translucent fills for chart areas and soft tints: a hex
+  becomes rgba, a token (or any other CSS colour) becomes a `color-mix()` over transparent,
+  so a tint never needs a hex. Canvas games keep their own fixed colours
+  (`kit/game/useThemeColors.ts`), because a canvas cannot read a CSS variable.
 
 ## All artifact types
 

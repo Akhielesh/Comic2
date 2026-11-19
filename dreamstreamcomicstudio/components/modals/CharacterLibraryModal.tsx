@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { X, User, Trash2, Import } from 'lucide-react';
 import { CharacterLibraryItem, Character } from '../../types';
 import { getLibraryCharacters, deleteCharacterFromLibrary } from '../../services/characterLibrary';
 import { Button } from '../Button';
+import { buttonClasses } from '../ds/Button';
+import { DIALOG_TITLE, HAIRLINE, INK, MUTED, OVERLAY, RADIUS_CONTROL, RADIUS_PANEL, SCRIM, SHADOW_SOFT, STATUS_SURFACE, TONE_TEXT, Z } from '../chat/studioDesign';
 
 interface CharacterLibraryModalProps {
     onClose: () => void;
@@ -13,6 +15,7 @@ export const CharacterLibraryModal: React.FC<CharacterLibraryModalProps> = ({ on
     const [items, setItems] = useState<CharacterLibraryItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const titleId = useId();
 
     useEffect(() => {
         loadLibrary();
@@ -42,37 +45,37 @@ export const CharacterLibraryModal: React.FC<CharacterLibraryModalProps> = ({ on
     };
 
     return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl flex flex-col max-h-[85vh] border-4 border-black">
-                <div className="p-4 border-b-2 border-black flex justify-between items-center bg-slate-50 rounded-t-lg">
-                    <h2 className="text-2xl font-display font-bold flex items-center gap-2">
-                        <User className="text-brand-blue" /> Character Library
+        <div className={`fixed inset-0 ${Z.dialog} ${SCRIM} flex items-center justify-center p-4 animate-fade-in motion-reduce:animate-none`}>
+            <div role="dialog" aria-modal="true" aria-labelledby={titleId} className={`${OVERLAY} flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden`}>
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--ds-hairline)] p-4">
+                    <h2 id={titleId} className={`flex min-w-0 items-center gap-2 ${DIALOG_TITLE}`}>
+                        <User className="size-5 shrink-0" aria-hidden="true" /> Character Library
                     </h2>
-                    <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                    <button onClick={onClose} aria-label="Close" className={buttonClasses({ variant: 'ghost', size: 'icon', className: 'text-[var(--ds-muted)]' })}>
                         <X size={24} />
                     </button>
                 </div>
 
-                <div className="p-6 overflow-y-auto flex-1 bg-slate-100">
+                <div className="flex-1 overflow-y-auto bg-[var(--ds-well)] p-4 sm:p-6">
                     {loading ? (
-                        <div className="flex flex-col items-center justify-center h-40 gap-3">
-                            <div className="animate-spin w-8 h-8 border-4 border-brand-blue border-t-transparent rounded-full" />
-                            <p className="font-comic text-slate-500">Opening the vault...</p>
+                        <div className="flex h-40 flex-col items-center justify-center gap-3" role="status">
+                            <div className="size-8 animate-spin rounded-[var(--ds-radius-pill)] border-4 border-[var(--ds-well-strong)] border-t-[var(--ds-ink)] motion-reduce:animate-none" aria-hidden="true" />
+                            <p className={`text-sm ${MUTED}`}>Opening the vault...</p>
                         </div>
                     ) : error ? (
-                        <div className="text-center p-8 bg-white rounded-lg border-2 border-dashed border-red-300">
-                            <p className="text-red-500 font-bold mb-2">Library Error</p>
-                            <p className="text-sm text-slate-600 mb-4">{error}</p>
+                        <div className={`border p-8 text-center ${RADIUS_PANEL} ${STATUS_SURFACE.error}`}>
+                            <p className={`mb-2 font-semibold ${TONE_TEXT.danger}`}>Library Error</p>
+                            <p className={`mb-4 text-sm [overflow-wrap:anywhere] ${INK}`}>{error}</p>
                             {error.includes("migration") && (
-                                <div className="text-xs bg-slate-800 text-white p-3 rounded text-left overflow-x-auto font-mono">
+                                <div className={`overflow-x-auto p-3 text-left font-mono text-xs ${RADIUS_CONTROL} bg-[var(--ds-ink)] text-[var(--ds-canvas)]`}>
                                     Is the `character_library` table missing? Ask me for the SQL migration code!
                                 </div>
                             )}
                         </div>
                     ) : items.length === 0 ? (
-                        <div className="text-center py-12 text-slate-400">
-                            <User size={48} className="mx-auto mb-4 opacity-50" />
-                            <p className="font-display text-xl mb-2">Library is Empty</p>
+                        <div className={`py-12 text-center ${MUTED}`}>
+                            <User size={48} className="mx-auto mb-4 opacity-50" aria-hidden="true" />
+                            <p className={`mb-2 text-lg font-semibold ${INK}`}>Library is Empty</p>
                             <p className="text-sm">Save characters from your projects to see them here.</p>
                         </div>
                     ) : (
@@ -81,33 +84,34 @@ export const CharacterLibraryModal: React.FC<CharacterLibraryModalProps> = ({ on
                                 <div
                                     key={item.id}
                                     onClick={() => onSelect(item)}
-                                    className="bg-white border-2 border-slate-200 hover:border-brand-blue hover:shadow-lg rounded-lg overflow-hidden cursor-pointer transition-all group flex flex-col"
+                                    className={`group flex cursor-pointer flex-col overflow-hidden bg-[var(--ds-surface)] transition-[border-color,box-shadow] duration-[var(--ds-motion-medium)] hover:border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)] hover:shadow-[shadow:var(--ds-shadow-panel)] ${RADIUS_PANEL} ${HAIRLINE} ${SHADOW_SOFT}`}
                                 >
-                                    <div className="aspect-square bg-slate-50 relative border-b border-slate-100">
+                                    <div className="relative aspect-square border-b border-[var(--ds-hairline)] bg-[var(--ds-well-strong)]">
                                         {item.imageUrl ? (
                                             <img src={item.imageUrl} className="w-full h-full object-cover" />
                                         ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-slate-300">
+                                            <div className={`flex h-full w-full items-center justify-center ${MUTED}`}>
                                                 <User size={32} />
                                             </div>
                                         )}
                                         <button
                                             onClick={(e) => handleDelete(item.id, e)}
-                                            className="absolute top-2 right-2 p-1.5 bg-white/90 text-red-500 rounded hover:bg-red-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity border border-slate-200"
+                                            className={buttonClasses({ variant: 'outline', size: 'icon', className: `absolute right-2 top-2 size-8 text-[var(--ds-danger-text)] opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100` })}
+                                            aria-label="Delete from Library"
                                             title="Delete from Library"
                                         >
                                             <Trash2 size={14} />
                                         </button>
                                         {/* Hover Overlay */}
-                                        <div className="absolute inset-0 bg-brand-blue/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                                            <div className="bg-white px-3 py-1 rounded-full shadow font-bold text-xs text-brand-blue flex items-center gap-1">
+                                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[color:color-mix(in_srgb,var(--ds-ink)_8%,transparent)] opacity-0 transition-opacity duration-[var(--ds-motion-medium)] group-hover:opacity-100">
+                                            <div className={`flex items-center gap-1 rounded-[var(--ds-radius-pill)] bg-[var(--ds-raised)] px-3 py-1 text-xs font-semibold ${INK} ${SHADOW_SOFT}`}>
                                                 <Import size={12} /> Select
                                             </div>
                                         </div>
                                     </div>
                                     <div className="p-3">
-                                        <h3 className="font-bold truncate" title={item.name}>{item.name}</h3>
-                                        <p className="text-xs text-slate-500 line-clamp-2 mt-1 h-8">{item.description}</p>
+                                        <h3 className={`truncate font-semibold ${INK}`} title={item.name}>{item.name}</h3>
+                                        <p className={`mt-1 h-8 line-clamp-2 text-xs ${MUTED}`}>{item.description}</p>
                                     </div>
                                 </div>
                             ))}
@@ -115,7 +119,7 @@ export const CharacterLibraryModal: React.FC<CharacterLibraryModalProps> = ({ on
                     )}
                 </div>
 
-                <div className="p-4 border-t-2 border-black bg-white rounded-b-lg flex justify-end">
+                <div className="flex justify-end border-t border-[var(--ds-hairline)] p-4">
                     <Button variant="secondary" onClick={onClose}>Cancel</Button>
                 </div>
             </div>

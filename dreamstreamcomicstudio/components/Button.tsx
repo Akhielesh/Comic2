@@ -1,5 +1,6 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { buttonClasses, labelChildren, type ButtonSize, type ButtonVariant } from './ds/Button';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'danger';
@@ -8,42 +9,49 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: React.ReactNode;
 }
 
-export const Button: React.FC<ButtonProps> = ({ 
-  children, 
-  variant = 'primary', 
+/**
+ * The older app-wide button (dashboard, settings, admin, the classic editor). Same props and variants as
+ * before; it paints with the Atlas Button recipes (components/ds/Button.tsx `buttonClasses`): primary is the
+ * ink fill, secondary the soft well, outline the hairline edge, danger the solid danger fill. 44 px under a
+ * coarse pointer, the ink focus outline, press feedback (motion-safe). A caller's className still wins.
+ */
+const VARIANT: Record<NonNullable<ButtonProps['variant']>, ButtonVariant> = {
+  primary: 'default',
+  secondary: 'secondary',
+  outline: 'outline',
+  danger: 'destructive'
+};
+
+const SIZE: Record<NonNullable<ButtonProps['size']>, ButtonSize> = {
+  sm: 'sm',
+  md: 'default',
+  lg: 'lg'
+};
+
+export const Button: React.FC<ButtonProps> = ({
+  children,
+  variant = 'primary',
   size = 'md',
-  isLoading, 
-  icon, 
-  className = '', 
+  isLoading,
+  icon,
+  className = '',
   disabled,
-  ...props 
+  type,
+  ...props
 }) => {
-  const sizeStyles = {
-    sm: "px-4 py-2 text-xs",
-    md: "px-6 py-3 text-lg",
-    lg: "px-8 py-4 text-xl"
-  };
-  const baseStyles = "relative flex items-center justify-center rounded-lg font-comic font-bold uppercase tracking-wide transition-all duration-150 border-2 border-black disabled:opacity-50 disabled:cursor-not-allowed transform";
-
-  const variants = {
-    primary: "bg-brand-yellow text-black shadow-comic hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none",
-    secondary: "bg-white text-black shadow-comic hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none",
-    outline: "bg-white border-black text-black shadow-comic hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none",
-    danger: "bg-brand-red text-white shadow-comic hover:translate-y-[2px] hover:shadow-comic-hover active:translate-y-[4px] active:shadow-none",
-  };
-
   return (
-    <button 
-      className={`${baseStyles} ${sizeStyles[size]} ${variants[variant]} ${className}`}
+    <button
+      type={type}
+      className={buttonClasses({ variant: VARIANT[variant], size: SIZE[size], className: `relative flex ${className}` })}
       disabled={disabled || isLoading}
       {...props}
     >
       {isLoading ? (
-        <Loader2 className="w-6 h-6 animate-spin mr-2" />
+        <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
       ) : icon ? (
-        <span className="mr-2">{icon}</span>
+        <span className="inline-flex shrink-0 items-center">{icon}</span>
       ) : null}
-      {children}
+      {labelChildren(children)}
     </button>
   );
 };

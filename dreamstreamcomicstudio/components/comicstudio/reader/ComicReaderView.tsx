@@ -59,6 +59,7 @@ import {
 import { chapterStarts, clampIndex, keyDelta, readerItems, resolvePageN, swipeDelta, tapDelta, isWithheld, type ReaderItem, type ReaderMode } from './readerModel';
 import { pageProgress, pageVisualStatus } from '../board/boardModel';
 
+import { FOCUS_ITEM, FOCUS_RING } from '../../chat/studioDesign';
 /**
  * One "drawn" definition (declutter F7; PROGRAM3 B25): the board's — drawn and current (`pageProgress`) —
  * plus how many drawn pages are out of date. The reader used to count every page with art, so the board
@@ -148,6 +149,11 @@ export interface ComicReaderViewProps {
    * them there at a compact height.
    */
   overlay?: React.ReactNode;
+  /**
+   * The author's working status in the toolbar ("6 of 12 pages drawn · 1 out of date"), for the comic's owner in the
+   * studio's Read tab only. Off by default: a reader of a shared or public comic never sees how far its drawing got.
+   */
+  showDrawnStatus?: boolean;
 }
 
 /** Reader ink on paper (same in both themes, like the immersive reading room). */
@@ -295,7 +301,7 @@ export const ReaderMenu: React.FC<{ label: string; items: ReaderMenuItem[]; icon
                 setOpen(false);
                 it.onSelect();
               }}
-              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-50 [&>svg]:shrink-0"
+              className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_ITEM} disabled:opacity-50 [&>svg]:shrink-0`}
             >
               {it.icon}
               {/* Long labels wrap instead of hiding their end: at 320 px "Download page images (.zip) (Telugu)"
@@ -339,7 +345,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   onDownload,
   readerDownload,
   fullscreenControl = true,
-  overlay
+  overlay,
+  showDrawnStatus = false
 }) => {
   // ── Document (keyed on the language CODE: a host's inline slot object must not re-localize) ──
   const lang = language?.current;
@@ -391,6 +398,10 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const winH = typeof window !== 'undefined' ? window.innerHeight : 768;
   const boxW = rootSize.width || winW;
   const boxH = rootSize.height || winH;
+  // One toolbar row whenever a second one would appear: a compact height (the pane is too short for it) or a narrow
+  // box (a phone in portrait, 360 px), where the leading controls scroll sideways and the trailing group (the menus
+  // and Full screen) keeps its place on the row instead of dropping under it.
+  const oneRow = compactH || boxW < 560;
   // Where this box sits on the screen (ui-findings 2026-10-29): a dual-screen hinge matters only when
   // the box actually spans the fold (the studio's board pane sits on ONE segment; the public reader
   // spans both), and the home-indicator inset only when the box ends at the screen's bottom edge (a
@@ -463,7 +474,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // with a fade when the one row can't hold them — never squeezed to nothing, never clipped by the pane.
   // Only that part scrolls: the trailing group keeps its popovers (⋯, the language menu) unclipped.
   const leadRef = useRef<HTMLDivElement>(null);
-  const { clip: leadClip, measure: measureLead } = useEdgeClip(leadRef, [compactH, layout, rtl, fallback.length, rating, items.length]);
+  const { clip: leadClip, measure: measureLead } = useEdgeClip(leadRef, [oneRow, layout, rtl, fallback.length, rating, items.length]);
   const pokeChrome = useCallback(
     (show = true) => {
       if (!autoHide) return;
@@ -886,11 +897,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     kind === 'webtoon'
       ? []
       : [
-          { value: 'scroll' as const, label: (<><Rows3 className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('scroll')}</span></>), title: 'One long vertical scroll' },
-          { value: 'page' as const, label: (<><Square className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('page')}</span></>), title: 'One page at a time' },
+          { value: 'scroll' as const, label: (<><Rows3 className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('scroll')}</span></>), title: 'One long vertical scroll' },
+          { value: 'page' as const, label: (<><Square className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('page')}</span></>), title: 'One page at a time' },
           // Facing pages need room — where they can't fit the option is left out rather than shown dead.
           ...(kind !== 'strip' && (decision.allowSpread || layout === 'spread')
-            ? [{ value: 'spread' as const, label: (<><Columns2 className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('spread')}</span></>), title: 'Facing pages' }]
+            ? [{ value: 'spread' as const, label: (<><Columns2 className="h-3 w-3" aria-hidden /> <span className={cx(oneRow && 'sr-only')}>{t('spread')}</span></>), title: 'Facing pages' }]
             : [])
         ];
   const narrow = boxW < 560 || compactH;
@@ -931,7 +942,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         'flex shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3',
         // Compact height: ONE row — the host pane may be ~100 px tall, and a wrapped second row would
         // run under it (ui-findings 2026-10-29, iPhone 15 landscape).
-        compactH ? 'flex-nowrap py-1' : 'flex-wrap py-2',
+        compactH ? 'flex-nowrap py-1' : oneRow ? 'flex-nowrap py-2' : 'flex-wrap py-2',
         autoHide && 'absolute inset-x-0 top-0 z-20 bg-[var(--ds-surface-strong)] backdrop-blur-md',
         autoHide && !reduced && 'transition-[opacity,transform] duration-200 ease-out',
         autoHide && !chromeShown && 'pointer-events-none -translate-y-full opacity-0'
@@ -939,10 +950,10 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     >
       <div
         ref={leadRef}
-        onScroll={compactH ? measureLead : undefined}
+        onScroll={oneRow ? measureLead : undefined}
         data-testid="reader-toolbar-lead"
         className={
-          compactH
+          oneRow
             ? cx('flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0', edgeFadeMask(leadClip))
             : 'contents'
         }
@@ -953,7 +964,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
               <ChevronLeft className="h-4 w-4" />
             </IconButton>
-            <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', compactH ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
+            <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', oneRow ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
               {counter}
             </span>
             <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
@@ -970,7 +981,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             {t('readsRightToLeft')}
           </span>
         )}
-        {drawn.ready < drawn.total && (
+        {showDrawnStatus && drawn.ready < drawn.total && (
           <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')} data-testid="reader-drawn">
             {drawnLabel(drawn)}
           </span>
@@ -981,7 +992,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           </span>
         )}
       </div>
-      <div className={cx('ml-auto flex items-center gap-1', compactH ? 'shrink-0' : 'min-w-0')} data-testid="reader-toolbar-actions">
+      <div className={cx('ml-auto flex items-center gap-1', oneRow ? 'shrink-0' : 'min-w-0')} data-testid="reader-toolbar-actions">
         {toolbarExtra}
         {language && <ReaderLanguagePicker {...language} source={doc.format.language} compact={narrow} />}
         {onShare && (
@@ -996,7 +1007,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             type="button"
             onClick={openImmersive}
             data-action="read"
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:h-11 coarse:min-w-[44px]"
+            className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:h-11 coarse:min-w-[44px]`}
           >
             <Expand className="h-4 w-4" aria-hidden />
             <span className={cx(narrow && 'sr-only')}>{t('fullScreen')}</span>
@@ -1029,7 +1040,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
               setPos({ key: resume.key, end: false });
               setResume(null);
             }}
-            className="min-h-8 rounded-full px-2.5 font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-11"
+            className={`min-h-8 rounded-full px-2.5 font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING} coarse:min-h-11`}
           >
             {resume.n ? `Continue from page ${resume.n}` : 'Continue reading'}
           </button>
@@ -1203,7 +1214,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             <button
               type="button"
               onClick={() => setShowIosNote(false)}
-              className="min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+              className={`min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
             >
               Got it
             </button>

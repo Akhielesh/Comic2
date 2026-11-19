@@ -31,7 +31,7 @@ const KindIcon: React.FC<{ change: ChangeItem }> = ({ change }) => {
   const weight = change.weight ?? 1;
   const box =
     weight >= 3
-      ? 'bg-[#D97757]/10 text-[#D97757]'
+      ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent-text)]'
       : weight === 2
         ? 'bg-[var(--ds-well)] text-[var(--ds-muted)]'
         : 'text-[var(--ds-muted)]';

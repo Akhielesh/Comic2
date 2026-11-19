@@ -15,7 +15,7 @@ import { capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { effectiveRating } from '../../../shared/comic/safety';
 import { byokFromDoc } from '../board/boardModel';
 import { SlideOver } from '../conversation/PopSheet';
-import { OVERLINE } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE, STATUS_SURFACE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { StudioController } from '../types';
 import { ACCEPT_ATTR, isSvgFile } from './downscale';
@@ -39,8 +39,8 @@ export interface RefsDrawerInternalProps extends RefsDrawerProps {
 }
 
 const BTN =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-3.5 text-[13px] font-semibold transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 disabled:cursor-not-allowed disabled:opacity-45';
-const PRIMARY = `${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+  `inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl px-3.5 text-[13px] font-semibold transition-colors motion-reduce:transition-none ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`;
+const PRIMARY = `${BTN} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 const QUIET = `${BTN} border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 
 const imageFiles = (list: FileList | File[] | null | undefined): File[] =>
@@ -230,7 +230,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       </div>
 
       {full && !inflight && (
-        <p role="status" className="rounded-xl bg-[#D97757]/10 px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="status" className="rounded-xl bg-[var(--ds-accent-soft)] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
           {overCapCopy(doc, owner)}
         </p>
       )}
@@ -238,7 +238,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       <div
         className={cx(
           'flex min-h-[64px] items-center justify-center gap-2 rounded-xl border border-dashed px-3 py-3 text-center text-[13px] transition-colors motion-reduce:transition-none',
-          dropping ? 'border-[#D97757] bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)]'
+          dropping ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)]'
         )}
       >
         <Upload className="h-4 w-4 shrink-0" aria-hidden />
@@ -313,7 +313,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       )}
 
       {error && (
-        <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-[var(--ds-ink)]">
+        <p role="alert" className={`rounded-xl border ${STATUS_SURFACE.error} px-3 py-2 text-[13px] text-[var(--ds-ink)]`}>
           {error}
         </p>
       )}
@@ -331,7 +331,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
                   role="radio"
                   aria-checked={on}
                   title={o.hint}
-                  className={cx(QUIET, on && 'border-[#D97757]/50 bg-[#D97757]/10')}
+                  className={cx(QUIET, on && 'border-ds-accent/50 bg-[var(--ds-accent-soft)]')}
                   onClick={() => !on && void patch([{ op: 'character', id: character.id, patch: { likeness: o.value } }], 'Likeness')}
                 >
                   {o.label}
@@ -343,7 +343,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
       )}
 
       {hint && (hint.missing || hint.changed) && character && (
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#D97757]/30 bg-[#D97757]/[0.06] p-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3">
           {/* A real flex basis (not flex-1's 0) so a long button wraps below the sentence instead of
               squeezing it into a sliver — the CI smoke caught the text spilling at 768–1440 px. */}
           <p className="min-w-0 grow basis-56 text-[13px] text-[var(--ds-ink)]">

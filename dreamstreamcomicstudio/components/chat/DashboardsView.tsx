@@ -528,7 +528,7 @@ const TileEditForm: React.FC<{
             aria-label="Tool arguments as JSON"
             className="w-full resize-y rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-2 font-mono text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
           />
-          {jsonError && <p className="mt-1 text-[11px] text-rose-600">{jsonError}</p>}
+          {jsonError && <p className="mt-1 text-[11px] text-[var(--ds-danger-text)]">{jsonError}</p>}
         </div>
       )}
       <div className="flex items-center justify-end gap-1.5 pt-0.5">
@@ -696,7 +696,7 @@ const TileResizeFrame: React.FC<{
             })
           }
           className={`absolute z-30 touch-none rounded-full transition-colors duration-200 ${grip.cls} ${grip.cursor} ${
-            active ? 'bg-[#D97757]/30' : 'bg-transparent hover:bg-[#D97757]/25'
+            active ? 'bg-[color:color-mix(in_srgb,var(--ds-accent)_30%,transparent)]' : 'bg-transparent hover:bg-[var(--ds-hover)]'
           }`}
         />
       ))}
@@ -816,7 +816,7 @@ const TileCard: React.FC<{
                     onRemove();
                     close();
                   }}
-                  className={`${tileMenuItemCls} text-rose-600`}
+                  className={`${tileMenuItemCls} text-[var(--ds-danger-text)]`}
                 >
                   <Trash2 className="h-3.5 w-3.5" /> Remove
                 </button>
@@ -1303,7 +1303,7 @@ const AiCommandBar: React.FC<{
           </div>
         )}
         {result && (
-          <p role="status" className={`mt-1.5 text-[11px] ${result.kind === 'error' ? 'text-rose-600' : 'text-[var(--ds-muted)]'}`}>
+          <p role="status" className={`mt-1.5 text-[11px] ${result.kind === 'error' ? 'text-[var(--ds-danger-text)]' : 'text-[var(--ds-muted)]'}`}>
             {result.message}
           </p>
         )}
@@ -1573,7 +1573,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
         {/* The AI bar also bootstraps the first board ("study dashboard for ML"). */}
         <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} onAsk={onAsk} />
         <div className="mx-auto w-full max-w-3xl px-4 py-12 text-center sm:py-16">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D97757]/10">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--ds-accent-soft)]">
             <LayoutDashboard className="h-7 w-7 text-[var(--ds-accent)]" />
           </div>
           <h2 className="mt-4 text-xl font-semibold text-[var(--ds-ink)]">Build your own live dashboards</h2>
@@ -1714,7 +1714,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                 title={locked ? 'Unlock: edit layout' : 'Lock: freeze layout (view-only pulse)'}
                 className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
                   locked
-                    ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 }`}
               >
@@ -1851,7 +1851,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                         <button
                           title="Remove widget"
                           onClick={() => removeTile(active.id, tile.id)}
-                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-rose-600"
+                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>

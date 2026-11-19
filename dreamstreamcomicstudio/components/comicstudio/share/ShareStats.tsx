@@ -57,7 +57,7 @@ export const ShareStats: React.FC<{ stats?: Stats | null }> = ({ stats }) => {
               <span className="w-20 shrink-0 truncate text-[var(--ds-muted)]">{CHANNEL_LABEL[ch as ShareChannel] || ch}</span>
               <svg viewBox="0 0 100 8" preserveAspectRatio="none" className="h-2 min-w-0 flex-1" aria-hidden>
                 <rect width="100" height="8" rx="4" fill="var(--ds-well-strong)" />
-                <rect width={Math.max(4, (v / top) * 100)} height="8" rx="4" fill="#D97757" />
+                <rect width={Math.max(4, (v / top) * 100)} height="8" rx="4" className="fill-[var(--ds-chart-1)]" />
               </svg>
               <span className="w-8 shrink-0 text-right tabular-nums text-[var(--ds-ink)]">{compactCount(v)}</span>
             </li>

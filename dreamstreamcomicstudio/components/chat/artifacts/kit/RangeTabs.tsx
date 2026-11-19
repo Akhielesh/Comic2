@@ -11,7 +11,7 @@ interface RangeTabsProps<T extends string> {
   onChange: (value: T) => void;
 }
 
-export function RangeTabs<T extends string>({ options, value, accent = '#3B82F6', onChange }: RangeTabsProps<T>) {
+export function RangeTabs<T extends string>({ options, value, accent = 'var(--ds-ink)', onChange }: RangeTabsProps<T>) {
   return (
     <div className="inline-flex rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] p-0.5 text-[11px] font-semibold">
       {options.map((opt) => {
@@ -21,7 +21,7 @@ export function RangeTabs<T extends string>({ options, value, accent = '#3B82F6'
             key={opt}
             onClick={() => onChange(opt)}
             aria-pressed={active}
-            className={`rounded-md px-2 py-0.5 transition-all duration-200 ${
+            className={`rounded-md px-2 py-0.5 transition-all duration-[var(--ds-motion-medium)] ${
               active ? 'bg-[var(--ds-raised)] shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             }`}
             style={active ? { color: accent } : undefined}

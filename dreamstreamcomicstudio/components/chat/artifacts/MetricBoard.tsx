@@ -16,9 +16,9 @@ const formatTileValue = (v: string | number): string => {
 // row; detailed renders the full tile grid (sparklines, rings, embedded charts).
 
 const STATUS: Record<NonNullable<MetricTile['status']>, { bar: string; text: string }> = {
-  good: { bar: '#059669', text: 'text-emerald-600' },
-  warn: { bar: '#d97706', text: 'text-amber-600' },
-  bad: { bar: '#dc2626', text: 'text-red-600' },
+  good: { bar: '#059669', text: 'text-[var(--ds-success-text)]' },
+  warn: { bar: '#d97706', text: 'text-[var(--ds-warning-text)]' },
+  bad: { bar: '#dc2626', text: 'text-[var(--ds-danger-text)]' },
   neutral: { bar: '#64748b', text: 'text-[var(--ds-muted)]' }
 };
 

@@ -3,7 +3,29 @@ import { Wand2, UploadCloud, RefreshCw, Image as ImageIcon, Sparkles, Check } fr
 import { ComicAgentSettings, ComicState } from '../../types';
 import { generateImage } from '../../services/imageService';
 import { saveImage, getImageUrl } from '../../services/db';
-import { Button } from '../Button';
+import { Button } from '../ds/Button';
+import { Field, FIELD_LABEL } from '../ds/Field';
+import { Input, Textarea } from '../ds/Input';
+import { cn } from '../../lib/utils';
+import {
+  CHIP,
+  CHIP_VARIANT,
+  FOCUS_RING,
+  HAIRLINE,
+  HEADING,
+  OVERLINE,
+  RADIUS_PANEL,
+  SHADOW_SOFT,
+  STATUS_CHIP,
+  STATUS_CHIP_TONE,
+  STATUS_INK,
+  STATUS_SURFACE,
+  TEXT_XL,
+  TONE_TEXT,
+  TRANSITION,
+  WRAP_TEXT
+} from '../chat/studioDesign';
+import { AgentStageShell, STAGE_BOARD_HEADER, STAGE_BOARD_TITLE, STAGE_BODY, STAGE_CARD, STAGE_WELL, UPLOAD_TILE } from '../AgentStageShell';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { classifyStoryMood } from '../../services/storyMood';
@@ -245,257 +267,241 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
     || 'Saved cover art for this project.';
 
   return (
-    <div className="mx-auto w-full max-w-7xl animate-fade-in">
-      <div className="overflow-hidden rounded-xl border-4 border-black bg-white text-black shadow-comic">
-        <div className="flex flex-col gap-4 border-b border-2 border-black px-5 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-yellow text-black border-2 border-black">
-              <Sparkles className="h-5 w-5" />
-            </div>
+    <AgentStageShell
+      eyebrow="Cover agent"
+      title="Design the front cover"
+      description={autoRunAgent ? 'Autopilot will generate, pick, and continue from the first successful cover.' : undefined}
+      icon={<Sparkles className="h-5 w-5" />}
+      actions={(
+        <>
+          <Button variant="outline" onClick={handleSkip}>
+            Skip
+          </Button>
+          <Button onClick={onConfirm} disabled={isGenerating}>
+            Use cover
+          </Button>
+        </>
+      )}
+      sidebar={(
+        <>
+          <div className="mb-5">
+            <h3 className={STAGE_BOARD_TITLE}>Brief</h3>
+            <p className={cn('mt-1', STAGE_BODY)}>
+              Title, tone, and optional reference art are carried into the cover concepts.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <Field label="Title">
+              <Input
+                value={coverTitle}
+                onChange={(e) => setCoverTitle(e.target.value)}
+                placeholder="Cover title"
+                className="h-11"
+              />
+            </Field>
+
+            <Field label="Tagline">
+              <Input
+                value={coverTagline}
+                onChange={(e) => setCoverTagline(e.target.value)}
+                placeholder="Optional"
+                className="h-11"
+              />
+            </Field>
+
+            <Field label="Direction">
+              <Textarea
+                value={roughIdea}
+                onChange={(e) => {
+                  setRoughIdea(e.target.value);
+                  onUpdate({ coverPrompt: e.target.value });
+                }}
+                placeholder="Example: Maya above the flooded city, defiant, dramatic moonlight."
+                className="h-32 leading-6"
+              />
+            </Field>
+
             <div>
-              <div className="text-xs font-display uppercase text-black">Cover agent</div>
-              <h2 className="text-xl font-display text-black">Design the front cover</h2>
-              {autoRunAgent && (
-                <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600 font-comic">
-                  Autopilot will generate, pick, and continue from the first successful cover.
-                </p>
+              <div className={cn('mb-1.5', FIELD_LABEL)}>Reference</div>
+              <label className={UPLOAD_TILE}>
+                <UploadCloud className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className={WRAP_TEXT}>Upload cover layout or mood reference</span>
+                <input type="file" accept="image/*" className="sr-only" onChange={(e) => handleUpload(e.target.files)} />
+              </label>
+              {state.coverTemplateImageUrl && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPreviewImage(state.coverTemplateImageUrl || null)}
+                  className="mt-2 -ml-2.5 text-[var(--ds-muted)]"
+                >
+                  <ImageIcon className="h-3.5 w-3.5" /> View uploaded reference
+                </Button>
               )}
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
+
             <Button
               variant="outline"
-              onClick={handleSkip}
-              className="border-2 border-black text-black hover:bg-brand-yellow"
-            >
-              Skip
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={onConfirm}
+              onClick={() => handleDesignCovers(false)}
+              loading={isGenerating}
               disabled={isGenerating}
-              className="border-2 border-black"
+              className="w-full"
             >
-              Use cover
+              {isGenerating ? null : <Wand2 className="h-4 w-4" />}
+              {candidates.length > 0 ? 'New options' : 'Create options'}
             </Button>
+
+            {progressLine && (
+              <div className={cn('flex items-center gap-2 px-3 py-2 text-xs font-medium text-[var(--ds-ink)]', STAGE_WELL)}>
+                <Sparkles className="h-3.5 w-3.5 shrink-0 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+                <span className={WRAP_TEXT}>{progressLine}</span>
+              </div>
+            )}
+
+            {error && (
+              <div className={cn('rounded-[var(--ds-radius-control)] border px-3 py-2 text-sm font-medium', STATUS_SURFACE.error, STATUS_INK.error, WRAP_TEXT)}>
+                {error}
+              </div>
+            )}
           </div>
+
+          <div className={cn('mt-6 p-4', STAGE_CARD)}>
+            <h3 className={STAGE_BOARD_TITLE}>Context used</h3>
+            <div className="mt-3 space-y-2 text-sm text-[var(--ds-muted)]">
+              <div className="flex items-center gap-2">
+                <Check className={cn('h-4 w-4 shrink-0', TONE_TEXT.success)} aria-hidden="true" />
+                {state.characters.length || 0} character{state.characters.length === 1 ? '' : 's'}
+              </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <Check className={cn('h-4 w-4 shrink-0', TONE_TEXT.success)} aria-hidden="true" />
+                <span className={WRAP_TEXT}>{state.scenes[0]?.setting || 'Story setting'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Check className={cn('h-4 w-4 shrink-0', TONE_TEXT.success)} aria-hidden="true" />
+                {state.stylePrompt ? 'Locked style prompt' : 'Default comic style'}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    >
+      <div className="flex min-h-[680px] flex-col">
+        <div className={STAGE_BOARD_HEADER}>
+          <div className="min-w-0">
+            <h3 className={STAGE_BOARD_TITLE}>Cover board</h3>
+            <div className="mt-1 text-xs text-[var(--ds-muted)]">
+              {state.coverImageUrl ? 'Selected cover ready' : 'No cover selected yet'}
+            </div>
+          </div>
+          <span className={cn(CHIP, CHIP_VARIANT.outline, 'tabular-nums')}>
+            {candidates.length} option{candidates.length === 1 ? '' : 's'}
+          </span>
         </div>
 
-        <div className="grid min-h-[680px] grid-cols-1 lg:grid-cols-[360px_1fr]">
-          <section className="border-b border-2 border-black bg-amber-50 px-5 py-5 lg:border-b-0 lg:border-r">
-            <div className="mb-5">
-              <div className="text-sm font-display uppercase text-black">Brief</div>
-              <p className="mt-1 text-sm leading-6 text-slate-600 font-comic">
-                Title, tone, and optional reference art are carried into the cover concepts.
+        <div className="flex-1 overflow-y-auto p-5">
+          {state.coverImageUrl ? (
+            <div className="grid gap-5 xl:grid-cols-[minmax(260px,420px)_1fr]">
+              <button
+                type="button"
+                onClick={() => setPreviewImage(state.coverImageUrl || null)}
+                aria-label="Preview selected cover"
+                className={cn('group overflow-hidden text-left', RADIUS_PANEL, HAIRLINE, SHADOW_SOFT, 'bg-[var(--ds-well)]', FOCUS_RING)}
+              >
+                <img src={state.coverImageUrl} alt="Selected cover" className={cn('h-auto w-full object-cover group-hover:opacity-90', TRANSITION)} />
+              </button>
+              <div className={cn('flex min-w-0 flex-col justify-between p-5', STAGE_CARD)}>
+                <div className="min-w-0">
+                  <span className={cn('mb-3', STATUS_CHIP, STATUS_CHIP_TONE.healthy)}>
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    Selected
+                  </span>
+                  <h3 className={cn('m-0', HEADING, TEXT_XL, WRAP_TEXT)}>{selectedConceptName}</h3>
+                  <p className={cn('mt-3', STAGE_BODY)}>{selectedConceptBrief}</p>
+                </div>
+                <div className="mt-6 grid gap-3 text-sm sm:grid-cols-2">
+                  <div className={cn('min-w-0 p-3', STAGE_WELL)}>
+                    <div className={OVERLINE}>Masthead</div>
+                    <div className="mt-1 truncate text-[var(--ds-ink)]">{coverTitle || projectName || 'Untitled'}</div>
+                  </div>
+                  <div className={cn('min-w-0 p-3', STAGE_WELL)}>
+                    <div className={OVERLINE}>Tagline</div>
+                    <div className="mt-1 truncate text-[var(--ds-ink)]">{coverTagline || 'None'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className={cn('flex min-h-[360px] flex-col items-center justify-center border-dashed px-6 text-center', STAGE_WELL)}>
+              <RefreshCw className={cn('h-6 w-6 text-[var(--ds-muted)]', isGenerating && 'animate-spin motion-reduce:animate-none')} aria-hidden="true" />
+              <div className="mt-4 text-[length:var(--ds-text-lg)] font-semibold text-[var(--ds-ink)]">
+                {isGenerating ? 'Designing cover options' : 'Create cover options'}
+              </div>
+              <p className={cn('mt-2 max-w-md', STAGE_BODY)}>
+                The agent will create distinct cover concepts from the story, style, cast, setting, and brief.
               </p>
             </div>
+          )}
 
-            <div className="space-y-4">
-              <label className="block">
-                <span className="mb-2 block text-xs font-display uppercase text-black">Title</span>
-                <input
-                  value={coverTitle}
-                  onChange={(e) => setCoverTitle(e.target.value)}
-                  placeholder="Cover title"
-                  className="h-11 w-full rounded-xl border-2 border-black bg-white px-3 text-sm text-black outline-none placeholder-slate-400 focus:border-brand-blue"
-                />
-              </label>
-
-              <label className="block">
-                <span className="mb-2 block text-xs font-display uppercase text-black">Tagline</span>
-                <input
-                  value={coverTagline}
-                  onChange={(e) => setCoverTagline(e.target.value)}
-                  placeholder="Optional"
-                  className="h-11 w-full rounded-xl border-2 border-black bg-white px-3 text-sm text-black outline-none placeholder-slate-400 focus:border-brand-blue"
-                />
-              </label>
-
-              <label className="block">
-                <span className="mb-2 block text-xs font-display uppercase text-black">Direction</span>
-                <textarea
-                  value={roughIdea}
-                  onChange={(e) => {
-                    setRoughIdea(e.target.value);
-                    onUpdate({ coverPrompt: e.target.value });
-                  }}
-                  placeholder="Example: Maya above the flooded city, defiant, dramatic moonlight."
-                  className="h-32 w-full resize-none rounded-xl border-2 border-black bg-white p-3 text-sm leading-6 text-black outline-none placeholder-slate-400 focus:border-brand-blue"
-                />
-              </label>
-
-              <div>
-                <div className="mb-2 text-xs font-display uppercase text-black">Reference</div>
-                <label className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border-dashed border-2 border-black bg-slate-50 px-4 py-3 text-sm text-slate-600 hover:bg-brand-yellow/20 hover:text-black">
-                  <UploadCloud className="h-4 w-4 shrink-0" />
-                  <span>Upload cover layout or mood reference</span>
-                  <input type="file" hidden accept="image/*" onChange={(e) => handleUpload(e.target.files)} />
-                </label>
-                {state.coverTemplateImageUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setPreviewImage(state.coverTemplateImageUrl || null)}
-                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-black"
-                  >
-                    <ImageIcon className="h-3.5 w-3.5" /> View uploaded reference
-                  </button>
-                )}
-              </div>
-
-              <Button
-                variant="secondary"
-                onClick={() => handleDesignCovers(false)}
-                isLoading={isGenerating}
-                icon={<Wand2 className="h-4 w-4" />}
-                className="w-full border-2 border-black"
-              >
-                {candidates.length > 0 ? 'New options' : 'Create options'}
-              </Button>
-
-              {progressLine && (
-                <div className="flex items-center gap-2 rounded-xl border-2 border-black bg-slate-50 px-3 py-2 text-xs font-bold text-black">
-                  <Sparkles className="h-3.5 w-3.5 animate-pulse text-brand-blue" />
-                  {progressLine}
-                </div>
-              )}
-
-              {error && (
-                <div className="rounded-xl border-2 border-brand-red bg-red-100 px-3 py-2 text-sm font-bold text-red-700">
-                  {error}
-                </div>
+          <div className="mt-6">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className={STAGE_BOARD_TITLE}>Generated options</h3>
+              {candidates.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDesignCovers(false)}
+                  disabled={isGenerating}
+                  className="text-[var(--ds-muted)]"
+                >
+                  Refresh
+                </Button>
               )}
             </div>
 
-            <div className="mt-6 rounded-xl border-2 border-black bg-slate-50 p-4">
-              <div className="text-sm font-display uppercase text-black">Context used</div>
-              <div className="mt-3 space-y-2 text-sm text-slate-600">
-                <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-green-600" />
-                  {state.characters.length || 0} character{state.characters.length === 1 ? '' : 's'}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-green-600" />
-                  {state.scenes[0]?.setting || 'Story setting'}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-green-600" />
-                  {state.stylePrompt ? 'Locked style prompt' : 'Default comic style'}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="flex min-h-[680px] flex-col">
-            <div className="flex items-center justify-between border-b border-2 border-black px-5 py-4">
-              <div>
-                <div className="text-sm font-display uppercase text-black">Cover board</div>
-                <div className="mt-1 text-xs text-slate-600">
-                  {state.coverImageUrl ? 'Selected cover ready' : 'No cover selected yet'}
-                </div>
-              </div>
-              <div className="rounded-full border-2 border-black bg-white px-3 py-1 text-xs font-bold text-black">
-                {candidates.length} option{candidates.length === 1 ? '' : 's'}
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5">
-              {state.coverImageUrl ? (
-                <div className="grid gap-5 xl:grid-cols-[minmax(260px,420px)_1fr]">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewImage(state.coverImageUrl || null)}
-                    className="group overflow-hidden rounded-xl border-2 border-black bg-white text-left shadow-comic"
-                  >
-                    <img src={state.coverImageUrl} alt="Selected cover" className="h-auto w-full object-cover transition duration-200 group-hover:opacity-90" />
-                  </button>
-                  <div className="flex flex-col justify-between rounded-xl border-2 border-black bg-white p-5">
-                    <div>
-                      <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 border-2 border-black">
-                        <Check className="h-3.5 w-3.5" />
-                        Selected
-                      </div>
-                      <h3 className="text-2xl font-display text-black">{selectedConceptName}</h3>
-                      <p className="mt-3 text-sm leading-6 text-slate-600 font-comic">{selectedConceptBrief}</p>
-                    </div>
-                    <div className="mt-6 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
-                      <div className="rounded-xl bg-slate-50 border-2 border-black p-3">
-                        <div className="text-xs font-display uppercase text-black">Masthead</div>
-                        <div className="mt-1 truncate text-black">{coverTitle || projectName || 'Untitled'}</div>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 border-2 border-black p-3">
-                        <div className="text-xs font-display uppercase text-black">Tagline</div>
-                        <div className="mt-1 truncate text-black">{coverTagline || 'None'}</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-xl border-dashed border-2 border-black bg-slate-50 px-6 text-center">
-                  <RefreshCw className={`h-6 w-6 text-slate-600 ${isGenerating ? 'animate-spin' : ''}`} />
-                  <div className="mt-4 text-lg font-display text-black">
-                    {isGenerating ? 'Designing cover options' : 'Create cover options'}
-                  </div>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-slate-600 font-comic">
-                    The agent will create distinct cover concepts from the story, style, cast, setting, and brief.
-                  </p>
-                </div>
-              )}
-
-              <div className="mt-6">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-display uppercase text-black">Generated options</h3>
-                  {candidates.length > 0 && (
+            {candidates.length > 0 ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {candidates.map((candidate) => {
+                  const selected = state.coverImageUrl === candidate.imageUrl;
+                  return (
                     <button
+                      key={candidate.id}
                       type="button"
-                      onClick={() => handleDesignCovers(false)}
-                      disabled={isGenerating}
-                      className="text-xs font-bold text-slate-600 hover:text-black disabled:opacity-50"
+                      onClick={() => selectCoverCandidate(candidate)}
+                      aria-pressed={selected}
+                      className={cn(
+                        'min-w-0 overflow-hidden border bg-[var(--ds-surface)] text-left',
+                        RADIUS_PANEL,
+                        TRANSITION,
+                        FOCUS_RING,
+                        selected
+                          ? 'border-[var(--ds-ink)] ring-1 ring-[var(--ds-ink)]'
+                          : 'border-[var(--ds-hairline)] hover:border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)]'
+                      )}
+                      title={candidate.conceptBrief}
                     >
-                      Refresh
+                      <img src={candidate.imageUrl} alt={candidate.conceptName} className="h-40 w-full bg-[var(--ds-well)] object-cover" />
+                      <div className="border-t border-[var(--ds-hairline)] p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 truncate text-sm font-semibold text-[var(--ds-ink)]">{candidate.conceptName}</div>
+                          {selected && <Check className={cn('h-4 w-4 shrink-0', TONE_TEXT.success)} aria-hidden="true" />}
+                        </div>
+                        <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ds-muted)]">{candidate.conceptBrief}</div>
+                      </div>
                     </button>
-                  )}
-                </div>
-
-                {candidates.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    {candidates.map((candidate) => {
-                      const selected = state.coverImageUrl === candidate.imageUrl;
-                      return (
-                        <button
-                          key={candidate.id}
-                          type="button"
-                          onClick={() => selectCoverCandidate(candidate)}
-                          className={`overflow-hidden rounded-xl border-2 text-left transition ${
-                            selected
-                              ? 'border-brand-blue bg-white ring-2 ring-brand-blue'
-                              : 'border-black bg-white hover:border-brand-blue'
-                          }`}
-                          title={candidate.conceptBrief}
-                        >
-                          <img src={candidate.imageUrl} alt={candidate.conceptName} className="h-40 w-full object-cover" />
-                          <div className="border-t border-2 border-black p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="truncate text-sm font-display text-black">{candidate.conceptName}</div>
-                              {selected && <Check className="h-4 w-4 shrink-0 text-green-600" />}
-                            </div>
-                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{candidate.conceptBrief}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-xl border-2 border-black bg-slate-50 px-4 py-5 text-sm text-slate-600">
-                    Cover concepts will appear here after generation.
-                  </div>
-                )}
+                  );
+                })}
               </div>
-            </div>
-          </section>
+            ) : (
+              <div className={cn('px-4 py-5', STAGE_WELL, STAGE_BODY)}>
+                Cover concepts will appear here after generation.
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {previewImage && <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />}
-    </div>
+    </AgentStageShell>
   );
 };

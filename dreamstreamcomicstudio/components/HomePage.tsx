@@ -1,6 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Radio } from 'lucide-react';
-import { Button } from './Button';
+import { Badge, Button, buttonClasses } from './ds';
+import {
+  ARROW_NUDGE,
+  CHIP,
+  CHIP_VARIANT,
+  CTA_LG,
+  DENSITY,
+  DISPLAY_CARD_TITLE,
+  DISPLAY_HERO,
+  DISPLAY_SECTION,
+  FOCUS_RING,
+  FONT_DISPLAY,
+  HAIRLINE,
+  INK_TILE,
+  INVERSE_ACTION_QUIET,
+  INVERSE_SURFACE,
+  LIFT,
+  OVERLINE,
+  OVERLINE_DISPLAY,
+  PUBLIC_BODY,
+  PUBLIC_LEAD,
+  RADIUS_CONTROL,
+  RADIUS_FEATURE,
+  RADIUS_HERO,
+  RADIUS_ROUND,
+  SECTION_ICON_TILE,
+  SHADOW_HERO,
+  SHADOW_SOFT,
+  TRANSITION
+} from './chat/studioDesign';
+import { cn } from '../lib/utils';
 import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,6 +65,17 @@ const MOCK_MESSAGES = [
   { role: 'user', text: "Perfect. What's her tragic backstory?" },
 ];
 
+/** An opaque public card: the page surface, a hairline, the soft shadow and the feature radius. */
+const FEATURE_CARD = `bg-[var(--ds-surface)] text-[var(--ds-ink)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_FEATURE}`;
+/** The section eyebrow: the larger public overline with its icon. */
+const EYEBROW = `${OVERLINE_DISPLAY} inline-flex items-center gap-2 text-[var(--ds-muted)]`;
+/** A text link that reads as an action ("Open Stream Studio →"): ink, 44 px tall, the arrow nudges on hover. */
+const TEXT_ACTION = `group inline-flex ${DENSITY.touch} items-center gap-2 ${RADIUS_CONTROL} text-[length:var(--ds-text-base)] font-semibold text-[var(--ds-ink)] underline-offset-4 hover:underline ${FOCUS_RING}`;
+/** A footer link: muted, ink on hover, 44 px on touch. */
+const FOOTER_LINK = `inline-flex ${DENSITY.coarse} items-center gap-2 ${RADIUS_CONTROL} text-left text-[var(--ds-muted)] hover:text-[var(--ds-ink)] ${TRANSITION} ${FOCUS_RING}`;
+/** The 56 px tile on a launch card. */
+const FEATURE_TILE = `flex h-14 w-14 shrink-0 items-center justify-center ${RADIUS_CONTROL}`;
+
 export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenPrivacy, onOpenTerms, onNavigate }) => {
   useEffect(() => {
     if (window.location.hash === '#home-faq') {
@@ -56,167 +97,169 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden py-24 px-6">
+      <section className="relative overflow-hidden px-4 py-16 sm:px-6 medium:py-24">
         <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
-          <div className="space-y-8 relative z-10">
-            <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold tracking-widest uppercase">
-              <Radio size={12} className="text-brand-yellow" /> Stream Studio private beta
+          <div className="min-w-0 space-y-8">
+            <div className={EYEBROW}>
+              <Radio size={14} aria-hidden /> Stream Studio private beta
             </div>
-            <h1 className="text-6xl md:text-7xl font-display leading-[0.9]">
-              Private live events, <span className="text-brand-blue">from browser to replay.</span>
+            <h1 className={DISPLAY_HERO}>
+              Private live events, <span className="text-[var(--ds-muted)]">from browser to replay.</span>
             </h1>
-            <p className="text-xl font-comic text-slate-600 max-w-xl leading-relaxed">
+            <p className={cn(PUBLIC_LEAD, 'max-w-xl')}>
               Host polished creator sessions without OBS or webinar bloat: invite viewers, manage lobby/chat, bring guests on air, record the moment, and share the replay.
             </p>
-            <div className="flex flex-wrap gap-4">
-              <Button onClick={() => { void openLiveApp('/live.html'); }} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Radio />}>
-                Open Stream Studio
+            <div className="flex flex-wrap gap-3">
+              <Button size="lg" className={CTA_LG} onClick={() => { void openLiveApp('/live.html'); }}>
+                <Radio aria-hidden /> Open Stream Studio
               </Button>
-              <button
-                onClick={scrollToUpdates}
-                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-yellow transition-colors flex items-center gap-2"
-              >
-                <Mail size={18} /> Request access
-              </button>
+              <Button size="lg" variant="outline" className={CTA_LG} onClick={scrollToUpdates}>
+                <Mail aria-hidden /> Request access
+              </Button>
             </div>
-            <div className="flex flex-wrap items-center gap-6 text-sm font-bold text-slate-500">
-              <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Viewer links need only a name
-              </div>
-              <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Recording + replay workflow
-              </div>
-              <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Cost-conscious beta limits
-              </div>
-            </div>
+            <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[length:var(--ds-text-base)] font-medium text-[var(--ds-muted)]">
+              <li className="flex items-center gap-2">
+                <Check size={16} className="shrink-0 text-[var(--ds-ink)]" aria-hidden /> Viewer links need only a name
+              </li>
+              <li className="flex items-center gap-2">
+                <Check size={16} className="shrink-0 text-[var(--ds-ink)]" aria-hidden /> Recording + replay workflow
+              </li>
+              <li className="flex items-center gap-2">
+                <Check size={16} className="shrink-0 text-[var(--ds-ink)]" aria-hidden /> Cost-conscious beta limits
+              </li>
+            </ul>
           </div>
 
           {/* Stream Studio value cards */}
-          <div className="relative">
-            <div className="absolute inset-0 bg-brand-yellow/20 rounded-full blur-3xl transform translate-x-10 translate-y-10" />
-            <div className="relative grid grid-cols-2 gap-4">
-              <div className="bg-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-2 hover:rotate-0 transition-transform duration-300">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center border-2 border-black">
-                    <Radio size={20} />
-                  </div>
-                  <div className="text-xl font-display">Go live fast</div>
+          <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className={cn(FEATURE_CARD, 'p-6')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className={SECTION_ICON_TILE}>
+                  <Radio size={18} aria-hidden />
                 </div>
-                <p className="text-sm font-comic text-slate-600">Camera, mic, screen, scenes, and guest seats from the browser.</p>
+                <div className="text-[length:var(--ds-text-lg)] font-semibold leading-6">Go live fast</div>
               </div>
-              <div className="bg-white border-4 border-black rounded-2xl p-6 shadow-comic transform -rotate-1 hover:rotate-0 transition-transform duration-300 mt-8">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center border-2 border-black">
-                    <Users size={20} />
-                  </div>
-                  <div className="text-xl font-display">Control the room</div>
+              <p className="text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Camera, mic, screen, scenes, and guest seats from the browser.</p>
+            </div>
+            <div className={cn(FEATURE_CARD, 'p-6')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className={SECTION_ICON_TILE}>
+                  <Users size={18} aria-hidden />
                 </div>
-                <p className="text-sm font-comic text-slate-600">Lobby approval, chat, reactions, moderation, and audience-safe viewer links.</p>
+                <div className="text-[length:var(--ds-text-lg)] font-semibold leading-6">Control the room</div>
               </div>
-              <div className="col-span-2 bg-black text-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-1 hover:rotate-0 transition-transform duration-300 flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-brand-yellow font-display text-xl">Leave with a replay</div>
-                  <div className="text-sm font-mono text-zinc-400">Record locally, preserve key sessions, and turn events into reusable content.</div>
-                </div>
-                <a href={liveAppUrl('/live.html')} onClick={(e) => followLiveLink(e, '/live.html')} className="shrink-0 px-4 py-2 bg-brand-yellow text-black border-2 border-white rounded-lg font-bold hover:bg-white transition-colors">Try beta</a>
+              <p className="text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">Lobby approval, chat, reactions, moderation, and audience-safe viewer links.</p>
+            </div>
+            <div className={cn(INVERSE_SURFACE, RADIUS_FEATURE, SHADOW_SOFT, 'p-6 sm:col-span-2 flex flex-wrap items-center justify-between gap-4')}>
+              <div className="min-w-0 flex-1 basis-56">
+                <div className="text-[length:var(--ds-text-lg)] font-semibold leading-6">Leave with a replay</div>
+                <div className="mt-1 text-[length:var(--ds-text-base)] leading-6 text-[color:color-mix(in_srgb,var(--ds-canvas)_72%,transparent)]">Record locally, preserve key sessions, and turn events into reusable content.</div>
               </div>
+              <a
+                href={liveAppUrl('/live.html')}
+                onClick={(e) => followLiveLink(e, '/live.html')}
+                className={buttonClasses({ variant: 'outline', size: 'lg', className: cn(CTA_LG, INVERSE_ACTION_QUIET) })}
+              >
+                Try beta
+              </a>
             </div>
           </div>
         </div>
       </section>
 
       {/* Launch focus */}
-      <section className="py-20 px-6 bg-white border-t-4 border-black">
+      <section className="px-4 py-16 sm:px-6 medium:py-20 border-t border-[var(--ds-hairline)]">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-14">
-            <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest mb-4">
-              <Sparkles size={12} className="text-brand-yellow" /> June beta focus
+          <div className="text-center mb-12">
+            <div className={cn(EYEBROW, 'mb-4')}>
+              <Sparkles size={14} aria-hidden /> June beta focus
             </div>
-            <h2 className="text-4xl md:text-5xl font-display mb-4">One flagship workflow. Supporting creative tools.</h2>
-            <p className="font-comic text-slate-600 max-w-2xl mx-auto">
+            <h2 className={cn(DISPLAY_SECTION, 'mb-4')}>One flagship workflow. Supporting creative tools.</h2>
+            <p className={cn(PUBLIC_BODY, 'max-w-2xl mx-auto')}>
               Stream Studio is the launch wedge: private creator events that start in the browser and end with replayable content. Chat and Comic Studio support planning and repurposing.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* Stream Studio — launch focus */}
-            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1 md:col-span-2">
-              <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-brand-red border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 text-white">
-                  <Radio size={26} />
+            <div className={cn(FEATURE_CARD, LIFT, 'p-7 flex min-w-0 flex-col md:col-span-2')}>
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className={cn(FEATURE_TILE, INK_TILE)}>
+                  <Radio size={26} aria-hidden />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Launch focus</span>
+                <Badge variant="default">Launch focus</Badge>
               </div>
-              <h3 className="text-3xl font-display mb-2">Stream Studio</h3>
-              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+              <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>Stream Studio</h3>
+              <p className={cn(PUBLIC_BODY, 'flex-1')}>
                 Create a private event, share a viewer link, approve the room, go live with guests, chat in real time, record the session, and leave with a replay. Built for intimate creator workshops, coaching calls, classes, and paid-community sessions.
               </p>
               <a
                 href={liveAppUrl('/live.html')}
                 onClick={(e) => followLiveLink(e, '/live.html')}
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-red hover:gap-3 transition-all"
+                className={cn(TEXT_ACTION, 'mt-4 self-start')}
               >
-                Open Stream Studio <ArrowRight size={16} />
+                Open Stream Studio <ArrowRight size={16} className={ARROW_NUDGE} aria-hidden />
               </a>
             </div>
 
             {/* AI Chat — supporting */}
-            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
-              <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-brand-blue border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform rotate-2 text-white">
-                  <Bot size={26} />
+            <div className={cn(FEATURE_CARD, LIFT, 'p-7 flex min-w-0 flex-col')}>
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className={cn(FEATURE_TILE, HAIRLINE, 'bg-[var(--ds-well)] text-[var(--ds-ink)]')}>
+                  <Bot size={26} aria-hidden />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-blue-100 text-blue-700 border-2 border-blue-600 rounded-full px-2.5 py-1">Support</span>
+                <Badge variant="secondary">Support</Badge>
               </div>
-              <h3 className="text-2xl font-display mb-2">Chat Studio</h3>
-              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+              <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>Chat Studio</h3>
+              <p className={cn(PUBLIC_BODY, 'flex-1')}>
                 Plan session topics, write descriptions, brainstorm audience hooks, and turn raw ideas into usable creator scripts.
               </p>
               <button
+                type="button"
                 onClick={() => onNavigate?.('chat')}
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-blue hover:gap-3 transition-all"
+                className={cn(TEXT_ACTION, 'mt-4 self-start')}
               >
-                {user ? 'Open Chat Studio' : 'Try Chat Studio'} <ArrowRight size={16} />
+                {user ? 'Open Chat Studio' : 'Try Chat Studio'} <ArrowRight size={16} className={ARROW_NUDGE} aria-hidden />
               </button>
             </div>
 
             {/* Comic Studio — supporting */}
-            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
-              <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
-                  <BookOpen size={26} />
+            <div className={cn(FEATURE_CARD, LIFT, 'p-7 flex min-w-0 flex-col')}>
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className={cn(FEATURE_TILE, HAIRLINE, 'bg-[var(--ds-well)] text-[var(--ds-ink)]')}>
+                  <BookOpen size={26} aria-hidden />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Support</span>
+                <Badge variant="secondary">Support</Badge>
               </div>
-              <h3 className="text-2xl font-display mb-2">Comic Studio</h3>
-              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+              <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>Comic Studio</h3>
+              <p className={cn(PUBLIC_BODY, 'flex-1')}>
                 Talk through your idea — the studio plans pages, keeps characters consistent, and letters every balloon.
               </p>
               {comicsHref ? (
-                // mt-3/-mb-3 offset the 44px hit areas so the label lines up with the sibling cards' CTAs.
-                <div className="mt-3 -mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <a
-                    href={comicsHref}
-                    className="inline-flex min-h-[44px] items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
-                  >
-                    Explore Comic Studio <ArrowRight size={16} />
+                <div className="mt-4 flex flex-wrap items-center gap-x-4">
+                  <a href={comicsHref} className={TEXT_ACTION}>
+                    Explore Comic Studio <ArrowRight size={16} className={ARROW_NUDGE} aria-hidden />
                   </a>
                   {user && (
-                    <button onClick={onEnterStudio} className="inline-flex min-h-[44px] items-center text-xs font-bold text-slate-500 underline-offset-2 hover:underline">
+                    <button
+                      type="button"
+                      onClick={onEnterStudio}
+                      className={`inline-flex ${DENSITY.touch} items-center ${RADIUS_CONTROL} text-[length:var(--ds-text-sm)] font-medium text-[var(--ds-muted)] underline-offset-4 hover:text-[var(--ds-ink)] hover:underline ${FOCUS_RING}`}
+                    >
                       or open my comics here
                     </button>
                   )}
                 </div>
               ) : (
                 <button
+                  type="button"
                   onClick={onEnterStudio}
-                  className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+                  className={cn(TEXT_ACTION, 'mt-4 self-start')}
                 >
-                  Explore Comic Studio <ArrowRight size={16} />
+                  Explore Comic Studio <ArrowRight size={16} className={ARROW_NUDGE} aria-hidden />
                 </button>
               )}
             </div>
@@ -225,87 +268,80 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
       </section>
 
       {/* AI Chat Feature Section */}
-      <section className="py-20 px-6 bg-white border-y-4 border-black">
+      <section className="px-4 py-16 sm:px-6 medium:py-20 bg-[var(--ds-sidebar)] border-y border-[var(--ds-hairline)]">
         <div className="max-w-7xl mx-auto">
-          <div className="grid lg:grid-cols-2 gap-16 items-center">
+          <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
 
             {/* Left: Description */}
-            <div className="space-y-7">
-              <div className="inline-flex items-center gap-2 bg-brand-blue text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest">
-                <Bot size={14} /> Chat Studio
+            <div className="min-w-0 space-y-7">
+              <div className={EYEBROW}>
+                <Bot size={14} aria-hidden /> Chat Studio
               </div>
-              <h2 className="text-4xl md:text-5xl font-display leading-tight">
+              <h2 className={DISPLAY_SECTION}>
                 Talk to AI. Build better comics.
               </h2>
-              <p className="text-lg font-comic text-slate-600 leading-relaxed">
+              <p className={PUBLIC_LEAD}>
                 Brainstorm story ideas, develop characters, and explore creative possibilities through conversation. Powered by 100+ models — no extra API key required to start.
               </p>
               <ul className="space-y-3">
                 {CHAT_FEATURES.map((feature, i) => (
-                  <li key={i} className="flex items-center gap-3 text-sm font-bold text-slate-700">
-                    <span className="w-8 h-8 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center shrink-0">
+                  <li key={i} className="flex items-center gap-3 text-[length:var(--ds-text-base)] font-medium text-[var(--ds-ink)]">
+                    <span className={SECTION_ICON_TILE} aria-hidden>
                       {feature.icon}
                     </span>
-                    {feature.text}
+                    <span className="min-w-0">{feature.text}</span>
                   </li>
                 ))}
               </ul>
               <div className="flex flex-wrap gap-3 pt-2">
-                <Button
-                  onClick={() => onNavigate?.('chat')}
-                  icon={<MessageSquare size={16} />}
-                  className="shadow-comic hover:shadow-none transition-all"
-                >
-                  {user ? 'Open Chat Studio' : 'Try Chat Studio'}
+                <Button size="lg" className={CTA_LG} onClick={() => onNavigate?.('chat')}>
+                  <MessageSquare aria-hidden /> {user ? 'Open Chat Studio' : 'Try Chat Studio'}
                 </Button>
                 {!user && (
-                  <button
-                    onClick={onEnterStudio}
-                    className="px-6 py-3 border-4 border-black rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm"
-                  >
+                  <Button size="lg" variant="outline" className={CTA_LG} onClick={onEnterStudio}>
                     Sign In First
-                  </button>
+                  </Button>
                 )}
               </div>
               {!user && (
-                <p className="text-xs font-mono text-slate-400">
+                <p className="text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
                   * Chat Studio is open to members. New here? We’re in invite-only beta — request access above.
                 </p>
               )}
             </div>
 
             {/* Right: Mock chat preview */}
-            <div className="bg-white border-4 border-black rounded-2xl shadow-comic overflow-hidden">
+            <div className={cn('min-w-0 overflow-hidden bg-[var(--ds-surface)]', HAIRLINE, SHADOW_HERO, RADIUS_HERO)}>
               {/* Chat header bar */}
-              <div className="bg-black text-white px-4 py-3 flex items-center gap-3">
-                <div className="flex gap-1.5">
-                  <div className="w-3 h-3 rounded-full bg-red-500" />
-                  <div className="w-3 h-3 rounded-full bg-yellow-400" />
-                  <div className="w-3 h-3 rounded-full bg-green-500" />
+              <div className="flex items-center gap-3 border-b border-[var(--ds-hairline)] px-4 py-3">
+                <div className="flex gap-1.5" aria-hidden>
+                  <div className="w-2.5 h-2.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-faint)]" />
+                  <div className="w-2.5 h-2.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-faint)]" />
+                  <div className="w-2.5 h-2.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-faint)]" />
                 </div>
-                <div className="flex items-center gap-2 text-sm font-bold">
-                  <Bot size={14} className="text-brand-yellow" />
+                <div className="flex items-center gap-2 text-[length:var(--ds-text-base)] font-semibold">
+                  <Bot size={14} aria-hidden />
                   Chat Studio
                 </div>
-                <span className="ml-auto text-xs bg-brand-yellow/20 text-brand-yellow px-2 py-0.5 rounded font-mono border border-brand-yellow/30">
+                <span className={cn(CHIP, CHIP_VARIANT.outline, 'ml-auto min-w-0 truncate')}>
                   claude-3.5-sonnet
                 </span>
               </div>
 
               {/* Mock messages */}
-              <div className="p-4 space-y-4 bg-slate-50 min-h-[280px]">
+              <div className="p-4 space-y-4 bg-[var(--ds-well)] min-h-[280px]">
                 {MOCK_MESSAGES.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     {msg.role === 'user' ? (
-                      <div className="max-w-[80%] bg-white border-2 border-black rounded-xl rounded-tr-sm px-3 py-2 text-sm font-medium shadow-[2px_2px_0px_rgba(0,0,0,0.15)]">
+                      <div className={cn('max-w-[80%] bg-[var(--ds-well-strong)] px-3 py-2 text-[length:var(--ds-text-base)] leading-6', RADIUS_FEATURE)}>
                         {msg.text}
                       </div>
                     ) : (
-                      <div className="max-w-[88%] bg-black text-white border-2 border-black rounded-xl rounded-tl-sm px-4 py-3 text-sm shadow-[2px_2px_0px_rgba(0,0,0,0.3)]">
+                      <div className={cn('max-w-[88%] bg-[var(--ds-surface)] px-4 py-3', HAIRLINE, RADIUS_FEATURE)}>
                         {msg.title && (
-                          <div className="text-brand-yellow font-display text-base mb-1">{msg.title}</div>
+                          <div className="mb-1 text-[length:var(--ds-text-base)] font-semibold leading-6">{msg.title}</div>
                         )}
-                        <div className="text-zinc-300 font-mono text-xs leading-relaxed">{msg.text}</div>
+                        <div className="text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">{msg.text}</div>
                       </div>
                     )}
                   </div>
@@ -313,11 +349,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
 
                 {/* Typing indicator */}
                 <div className="flex justify-start">
-                  <div className="inline-flex items-center gap-2 bg-white border-2 border-black rounded-xl px-3 py-2 text-xs font-mono text-slate-400">
-                    <div className="flex gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <div className={cn('inline-flex items-center gap-2 bg-[var(--ds-surface)] px-3 py-2 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]', HAIRLINE, RADIUS_FEATURE)}>
+                    <div className="flex gap-1" aria-hidden>
+                      <span className="w-1.5 h-1.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-muted)] animate-bounce motion-reduce:animate-none" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-muted)] animate-bounce motion-reduce:animate-none" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-[var(--ds-radius-pill)] bg-[var(--ds-muted)] animate-bounce motion-reduce:animate-none" style={{ animationDelay: '300ms' }} />
                     </div>
                     AI is writing...
                   </div>
@@ -325,17 +361,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
 
               {/* Composer bar */}
-              <div className="border-t-4 border-black p-3 bg-white">
+              <div className="border-t border-[var(--ds-hairline)] p-3">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 border-2 border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-400 bg-slate-50 font-comic">
+                  <div className={cn('min-w-0 flex-1 truncate border border-[var(--ds-control-border)] bg-[var(--ds-canvas)] px-3 py-2 text-[length:var(--ds-text-base)] text-[var(--ds-muted)]', RADIUS_CONTROL)}>
                     Ask anything about your story...
                   </div>
-                  <button
-                    onClick={() => onNavigate?.('chat')}
-                    className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center hover:bg-black hover:text-brand-yellow transition-colors shrink-0"
-                  >
-                    <ArrowRight size={16} />
-                  </button>
+                  <Button size="icon" variant="outline" aria-label={user ? 'Open Chat Studio' : 'Try Chat Studio'} onClick={() => onNavigate?.('chat')}>
+                    <ArrowRight aria-hidden />
+                  </Button>
                 </div>
               </div>
             </div>
@@ -344,14 +377,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
       </section>
 
       {/* Comic Studio Process */}
-      <section className="py-20 bg-slate-50 border-b-4 border-black">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <div className="inline-flex items-center gap-2 bg-brand-yellow border-2 border-black px-3 py-1 rounded-full font-mono text-[11px] font-bold uppercase tracking-widest mb-4">
-              <BookOpen size={12} /> Inside Comic Studio
+      <section className="py-16 medium:py-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          <div className="text-center mb-12">
+            <div className={cn(EYEBROW, 'mb-4')}>
+              <BookOpen size={14} aria-hidden /> Inside Comic Studio
             </div>
-            <h2 className="text-4xl md:text-5xl font-display mb-4">The Studio Workflow</h2>
-            <p className="font-comic text-slate-600">From raw idea to polished comic through one agent flow.</p>
+            <h2 className={cn(DISPLAY_SECTION, 'mb-4')}>The Studio Workflow</h2>
+            <p className={PUBLIC_BODY}>From raw idea to polished comic through one agent flow.</p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
@@ -361,33 +394,34 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 <div
                   key={stage.id}
                   onMouseEnter={() => setActiveStage(stage.id)}
-                  className={`cursor-pointer border-l-4 pl-6 py-4 transition-all duration-300 ${activeStage === stage.id
-                    ? "border-brand-blue"
-                    : "border-slate-200 hover:border-slate-300"
-                    }`}
+                  className={cn(
+                    'cursor-pointer border-l-2 pl-6 py-4 transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none',
+                    activeStage === stage.id ? 'border-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] hover:border-[var(--ds-control-border)]'
+                  )}
                 >
-                  <h3 className={`text-xl font-display mb-1 ${activeStage === stage.id ? "text-brand-blue" : "text-black"}`}>
+                  <h3 className="mb-1 text-[length:var(--ds-text-lg)] font-semibold leading-6 text-[var(--ds-ink)]">
                     {stage.id}. {stage.title}
                   </h3>
-                  <p className={`text-sm font-comic ${activeStage === stage.id ? "text-slate-800" : "text-slate-400"}`}>
+                  <p className={cn('text-[length:var(--ds-text-base)] leading-6', activeStage === stage.id ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>
                     {stage.desc}
                   </p>
                 </div>
               ))}
             </div>
 
-            {/* Visualizer (Mock) */}
-            <div className="bg-slate-100 border-4 border-black rounded-2xl shadow-comic h-[500px] flex items-center justify-center relative overflow-hidden">
-              <div className="absolute top-4 left-4 bg-white border-2 border-black px-3 py-1 rounded-full text-xs font-bold uppercase shadow-sm">
-                Stage {activeStage} Preview
+            {/* The stage in focus: its icon, title and what happens there */}
+            <div className={cn('bg-[var(--ds-well)] min-h-80 lg:min-h-[420px] flex items-center justify-center relative overflow-hidden', HAIRLINE, SHADOW_SOFT, RADIUS_FEATURE)}>
+              <div className={cn(CHIP, CHIP_VARIANT.outline, 'absolute top-4 left-4')}>
+                Stage {activeStage} of {PROCESS_STAGES.length}
               </div>
               <div className="text-center p-8">
-                {activeStage === 1 && <Sparkles size={64} className="mx-auto text-brand-yellow mb-4" />}
-                {activeStage === 2 && <BookOpen size={64} className="mx-auto text-brand-blue mb-4" />}
-                {activeStage === 3 && <Zap size={64} className="mx-auto text-purple-500 mb-4" />}
-                <h3 className="text-3xl font-display mb-2">{PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title}</h3>
-                <p className="font-comic text-slate-500 max-w-xs mx-auto">
-                  Simulated interface for {(PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title).toLowerCase()} goes here.
+                {activeStage === 1 && <Sparkles size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
+                {activeStage === 2 && <BookOpen size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
+                {activeStage === 3 && <Zap size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
+                {activeStage === 4 && <Check size={64} className="mx-auto text-[var(--ds-ink)] mb-4" aria-hidden />}
+                <h3 className={cn(DISPLAY_CARD_TITLE, 'mb-2')}>{(PROCESS_STAGES[activeStage - 1] || PROCESS_STAGES[0]).title}</h3>
+                <p className={cn(PUBLIC_BODY, 'max-w-xs mx-auto')}>
+                  {(PROCESS_STAGES[activeStage - 1] || PROCESS_STAGES[0]).desc}
                 </p>
               </div>
             </div>
@@ -396,76 +430,76 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
       </section>
 
       {/* Stay updated — email capture */}
-      <section id="stay-updated" className="py-20 px-6 bg-brand-blue border-y-4 border-black scroll-mt-24">
+      <section id="stay-updated" className="px-4 py-16 sm:px-6 medium:py-20 bg-[var(--ds-sidebar)] border-y border-[var(--ds-hairline)] scroll-mt-24">
         <div className="max-w-3xl mx-auto">
-          <div className="bg-white border-4 border-black rounded-2xl shadow-comic p-8 md:p-10 text-center">
-            <div className="inline-flex items-center gap-2 bg-brand-yellow border-2 border-black px-3 py-1 rounded-full font-mono text-[11px] font-bold uppercase tracking-widest mb-5">
-              <Mail size={12} /> Stay in the loop
+          <div className={cn(FEATURE_CARD, 'p-6 medium:p-10 text-center')}>
+            <div className={cn(EYEBROW, 'mb-5')}>
+              <Mail size={14} aria-hidden /> Stay in the loop
             </div>
-            <h2 className="text-3xl md:text-4xl font-display mb-3">Want to stay updated?</h2>
-            <p className="font-comic text-slate-600 max-w-xl mx-auto mb-7">
+            <h2 className={cn(DISPLAY_SECTION, 'mb-3')}>Want to stay updated?</h2>
+            <p className={cn(PUBLIC_BODY, 'max-w-xl mx-auto mb-7')}>
               Get Stream Studio beta updates, early access invites, launch notes, and the heads-up when new creator workflows go live. No spam — just the useful stuff.
             </p>
             <div className="max-w-lg mx-auto">
               <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />
             </div>
-            <p className="text-xs font-mono text-slate-400 mt-4">
+            <p className="mt-4 text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)] [overflow-wrap:anywhere]">
               Prefer email? Reach us at{' '}
-              <a href={`mailto:${SUPPORT_EMAIL}`} className="underline hover:text-black">{SUPPORT_EMAIL}</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`} className={`underline underline-offset-2 hover:text-[var(--ds-ink)] ${RADIUS_CONTROL} ${FOCUS_RING}`}>{SUPPORT_EMAIL}</a>
             </p>
           </div>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="bg-black text-white pt-20 pb-10 px-6">
+      <footer className="px-4 pt-16 pb-10 sm:px-6 medium:pt-20">
         <div className="max-w-7xl mx-auto grid md:grid-cols-5 gap-12 mb-16">
           <div className="md:col-span-2">
             <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-brand-yellow border-2 border-white rounded-lg flex items-center justify-center text-black font-display text-2xl transform -rotate-3">D</div>
+              <div className={cn('flex h-10 w-10 items-center justify-center text-[length:var(--ds-text-xl)] font-semibold', FONT_DISPLAY, INK_TILE, RADIUS_CONTROL)} aria-hidden>D</div>
               <div className="leading-none">
-                <div className="font-display text-2xl">DreamStream</div>
-                <div className="text-[10px] font-bold text-brand-yellow uppercase tracking-widest mt-1">Studio</div>
+                <div className={cn(FONT_DISPLAY, 'text-[length:var(--ds-text-xl)] font-semibold leading-7')}>DreamStream</div>
+                <div className={OVERLINE}>Studio</div>
               </div>
             </div>
-            <p className="text-zinc-400 font-comic max-w-sm">
+            <p className={cn(PUBLIC_BODY, 'max-w-sm')}>
               Stream Studio is the launch focus for private creator events: host from the browser, invite viewers, manage interaction, record, and replay. Chat and Comic Studio support the broader creator workflow.
             </p>
           </div>
           <div>
-            <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Products</h4>
-            <ul className="space-y-4 text-sm font-bold">
+            <h4 className={cn(OVERLINE, 'mb-4')}>Products</h4>
+            <ul className="space-y-2 text-[length:var(--ds-text-base)] font-medium">
               <li>
                 {comicsHref ? (
-                  <a href={comicsHref} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</a>
+                  <a href={comicsHref} className={FOOTER_LINK}><BookOpen size={16} aria-hidden /> Comic Studio</a>
                 ) : (
-                  <button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button>
+                  <button type="button" onClick={onEnterStudio} className={FOOTER_LINK}><BookOpen size={16} aria-hidden /> Comic Studio</button>
                 )}
               </li>
-              <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
-              <li><a href={liveAppUrl('/live.html')} onClick={(e) => followLiveLink(e, '/live.html')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
+              <li><button type="button" onClick={() => onNavigate?.('chat')} className={FOOTER_LINK}><Bot size={16} aria-hidden /> Chat Studio</button></li>
+              <li><a href={liveAppUrl('/live.html')} onClick={(e) => followLiveLink(e, '/live.html')} className={FOOTER_LINK}><Radio size={16} aria-hidden /> Stream Studio <span className={cn(CHIP, CHIP_VARIANT.outline)}>Beta</span></a></li>
             </ul>
           </div>
           <div>
-            <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Support</h4>
-            <ul className="space-y-4 text-sm font-bold">
-              <li><a href={`mailto:${SUPPORT_EMAIL}`} className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
-              <li><button onClick={scrollToUpdates} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Sparkles size={16} /> Stay Updated</button></li>
-              <li><button onClick={() => setFaqOpen(0)} className="flex items-center gap-2 hover:text-brand-yellow text-left"><HelpCircle size={16} /> FAQs</button></li>
+            <h4 className={cn(OVERLINE, 'mb-4')}>Support</h4>
+            <ul className="space-y-2 text-[length:var(--ds-text-base)] font-medium">
+              <li><a href={`mailto:${SUPPORT_EMAIL}`} className={FOOTER_LINK}><Mail size={16} aria-hidden /> Contact Us</a></li>
+              <li><button type="button" onClick={scrollToUpdates} className={FOOTER_LINK}><Sparkles size={16} aria-hidden /> Stay Updated</button></li>
+              <li><button type="button" onClick={() => setFaqOpen(0)} className={FOOTER_LINK}><HelpCircle size={16} aria-hidden /> FAQs</button></li>
             </ul>
           </div>
           <div>
-            <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Legal</h4>
-            <ul className="space-y-4 text-sm text-zinc-400 font-bold">
-              <li><button onClick={onOpenPrivacy} className="hover:text-white text-left">Privacy Policy</button></li>
-              <li><button onClick={onOpenTerms} className="hover:text-white text-left">Terms of Service</button></li>
+            <h4 className={cn(OVERLINE, 'mb-4')}>Legal</h4>
+            <ul className="space-y-2 text-[length:var(--ds-text-base)] font-medium">
+              <li><button type="button" onClick={onOpenPrivacy} className={FOOTER_LINK}>Privacy Policy</button></li>
+              <li><button type="button" onClick={onOpenTerms} className={FOOTER_LINK}>Terms of Service</button></li>
             </ul>
           </div>
         </div>
 
         {/* FAQs Accordion */}
-        <div id="home-faq" className="max-w-3xl mx-auto border-t border-zinc-800 pt-10">
-          <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
+        <div id="home-faq" className="max-w-3xl mx-auto border-t border-[var(--ds-hairline)] pt-10">
+          <h3 className={cn(DISPLAY_CARD_TITLE, 'text-center mb-8')}>Frequently Asked Questions</h3>
           <div className="space-y-2">
             {[
               { q: "Who is Stream Studio for?", a: "Creators, educators, coaches, workshop hosts, and small communities that want private live sessions without OBS or heavy webinar software." },
@@ -474,16 +508,18 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               { q: "Is this a full webinar or enterprise streaming platform?", a: "Not for this beta. The focus is intimate, creator-led events and workshops, not enterprise webinars, massive streams, or gaming-grade ultra-low latency." },
               { q: "When will paid subscriptions start?", a: "Subscription packaging is still being evaluated. We will not activate paid plans until the beta workflow, costs, and user value are proven." }
             ].map((faq, i) => (
-              <div key={i} className="border border-zinc-800 rounded-lg overflow-hidden">
+              <div key={i} className={cn('bg-[var(--ds-surface)]', HAIRLINE, RADIUS_CONTROL)}>
                 <button
+                  type="button"
                   onClick={() => toggleFaq(i)}
-                  className="w-full flex items-center justify-between p-4 text-left font-bold hover:bg-zinc-900"
+                  aria-expanded={faqOpen === i}
+                  className={cn('w-full flex items-center justify-between gap-3 p-4 text-left text-[length:var(--ds-text-base)] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]', RADIUS_CONTROL, TRANSITION, FOCUS_RING)}
                 >
                   {faq.q}
-                  <ChevronRight size={16} className={`transform transition-transform ${faqOpen === i ? "rotate-90" : ""}`} />
+                  <ChevronRight size={16} aria-hidden className={cn('shrink-0 transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none', faqOpen === i && 'rotate-90')} />
                 </button>
                 {faqOpen === i && (
-                  <div className="p-4 pt-0 text-zinc-400 text-sm font-comic">
+                  <div className="p-4 pt-0 text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]">
                     {faq.a}
                   </div>
                 )}
@@ -492,7 +528,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           </div>
         </div>
 
-        <div className="text-center mt-20 text-zinc-600 text-xs font-mono">
+        <div className="text-center mt-16 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
           © 2026 DreamStream Studio. All rights reserved.
         </div>
       </footer>

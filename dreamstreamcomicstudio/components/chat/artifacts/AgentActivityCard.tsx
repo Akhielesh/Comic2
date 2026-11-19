@@ -26,11 +26,11 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 const statusIcon = (status: AgentActivityStatus) => {
   switch (status) {
     case 'running':
-      return <Loader2 className="w-3.5 h-3.5 text-[#D97757] animate-spin" />;
+      return <Loader2 className="w-3.5 h-3.5 text-[var(--ds-accent-text)] animate-spin" />;
     case 'done':
-      return <Check className="w-3.5 h-3.5 text-emerald-600" />;
+      return <Check className="w-3.5 h-3.5 text-[var(--ds-success-text)]" />;
     case 'error':
-      return <AlertTriangle className="w-3.5 h-3.5 text-red-500" />;
+      return <AlertTriangle className="w-3.5 h-3.5 text-[var(--ds-danger-text)]" />;
     default:
       return <Circle className="w-3.5 h-3.5 text-[var(--ds-faint)]" />;
   }
@@ -109,7 +109,7 @@ export const AgentActivityCard: React.FC<{ data: AgentActivityArtifact }> = ({ d
 
   const header = (
     <div className="flex items-start gap-2">
-      <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[#D97757]">
+      <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-accent-text)]">
         <Sparkles className="w-4 h-4" />
       </span>
       <div className="min-w-0">
@@ -129,12 +129,12 @@ export const AgentActivityCard: React.FC<{ data: AgentActivityArtifact }> = ({ d
   if (compact) {
     const current = working ? steps.find((s) => s.status === 'running') : undefined;
     return (
-      <Surface accent="#D97757">
+      <Surface>
         <div className="flex items-center gap-2 px-3 py-2">
           {working ? (
-            <Loader2 className="w-3.5 h-3.5 shrink-0 text-[#D97757] animate-spin" />
+            <Loader2 className="w-3.5 h-3.5 shrink-0 text-[var(--ds-accent-text)] animate-spin" />
           ) : (
-            <Sparkles className="w-3.5 h-3.5 shrink-0 text-[#D97757]" />
+            <Sparkles className="w-3.5 h-3.5 shrink-0 text-[var(--ds-accent-text)]" />
           )}
           <span className="shrink-0 text-[12px] font-semibold text-[var(--ds-ink)]">{working ? 'Working…' : 'Agent activity'}</span>
           {current && <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--ds-muted)]">{labelFor(current.tool)}</span>}
@@ -148,7 +148,6 @@ export const AgentActivityCard: React.FC<{ data: AgentActivityArtifact }> = ({ d
 
   return (
     <Surface
-      accent="#D97757"
       header={header}
       right={
         <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">

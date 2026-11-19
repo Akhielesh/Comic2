@@ -14,7 +14,8 @@ import { PATH_COLOR, PATH_LABEL, STATUS } from './costPalette';
 // every account-wide free allowance, with alerts. Measured = Cloudflare's own analytics; estimated =
 // the rooms' counters × list price. Nothing here is charged to users.
 
-const ACCENT = '#D97757';
+// The selected tab reads in the ink (Atlas: hue never decorates a control).
+const ACCENT = 'var(--ds-ink)';
 const PATHS: readonly StreamPathKey[] = ['lan', 'direct', 'turn', 'server'];
 const CONSUMER_TABS = ['Nurseries', 'Accounts', 'Events'] as const;
 type ConsumerTab = (typeof CONSUMER_TABS)[number];
@@ -124,7 +125,7 @@ const PathMix: React.FC<{ mix: StreamCostSection['pathMix'] }> = ({ mix }) => {
           <li key={p} className="inline-flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: PATH_COLOR[p] }} aria-hidden />
             {PATH_LABEL[p]}
-            {(p === 'lan' || p === 'direct') && <span className="text-[10px]">· free</span>}
+            {(p === 'lan' || p === 'direct') && <span className="text-[11px]">· free</span>}
           </li>
         ))}
       </ul>
@@ -139,7 +140,7 @@ const PathMix: React.FC<{ mix: StreamCostSection['pathMix'] }> = ({ mix }) => {
                 <span className="tabular-nums text-[var(--ds-muted)]">{total > 0 ? fmtMinutes(total) : 'none'}</span>
               </div>
               <div
-                className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-sm bg-[var(--ds-well-strong)]"
+                className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)]"
                 role="img"
                 aria-label={total > 0 ? `${m.label}: ${PATHS.filter((p) => m.minutes[p] > 0).map((p) => `${PATH_LABEL[p]} ${fmtPct((m.minutes[p] / total) * 100)}`).join(', ')}` : `${m.label}: no minutes`}
               >
@@ -161,7 +162,7 @@ const AlertList: React.FC<{ alerts: StreamCostSection['alerts'] }> = ({ alerts }
       {alerts.map((a) => {
         const Icon = a.severity === 'critical' ? OctagonAlert : TriangleAlert;
         return (
-          <li key={a.id} className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs">
+          <li key={a.id} className="flex items-start gap-2 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs">
             <Icon className="mt-0.5 h-4 w-4 shrink-0" style={{ color: a.severity === 'critical' ? STATUS.critical : STATUS.warning }} aria-hidden />
             <div className="min-w-0">
               <div className="font-semibold text-[var(--ds-ink)]">
@@ -185,13 +186,13 @@ const KPI_ROWS: { key: 'doRequests' | 'rowsWritten' | 'gbSeconds'; label: string
 
 /** One small figure in the health panel: a value, its unit, and a line of context under it. */
 const HealthTile: React.FC<{ label: string; value: string; sub: string; warn?: boolean; testId?: string }> = ({ label, value, sub, warn, testId }) => (
-  <li className="rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-2" data-testid={testId}>
+  <li className="rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-2" data-testid={testId}>
     <div className="text-[11px] text-[var(--ds-muted)]">{label}</div>
     <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-[var(--ds-ink)]">
       {warn && <TriangleAlert className="h-3.5 w-3.5" style={{ color: STATUS.warning }} aria-label="over budget" />}
       {value}
     </div>
-    <div className="text-[10px] text-[var(--ds-muted)]">{sub}</div>
+    <div className="text-[11px] text-[var(--ds-muted)]">{sub}</div>
   </li>
 );
 
@@ -282,12 +283,12 @@ const Setup: React.FC<{ s: StreamCostSection }> = ({ s }) => (
         Engine).
       </li>
       <li>
-        Set <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
-        <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> on the backend (Worker secrets or D1{' '}
+        Set <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CF_ANALYTICS_API_TOKEN</code> and{' '}
+        <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code> on the backend (Worker secrets or D1{' '}
         <span className="font-mono text-[11px]">backend_env</span>).
       </li>
       <li>
-        Optional: <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">STREAM_DO_NAMESPACES</code> ={' '}
+        Optional: <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">STREAM_DO_NAMESPACES</code> ={' '}
         <span className="font-mono text-[11px]">MonitorRoom=&lt;id&gt;,EventRoom=&lt;id&gt;,…</span> for per-room figures.
       </li>
       <li>Set a Cloudflare account budget alert (Billing → budget alerts) at $10 — the backstop if metering ever breaks.</li>
@@ -334,7 +335,7 @@ const NoAnswer: React.FC<{ s: StreamCostSection }> = ({ s }) => (
       <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--ds-muted)]">
         <li>
           Check the token still exists and has <span className="font-semibold">Account › Account Analytics › Read</span> on the account in{' '}
-          <code className="rounded bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code>.
+          <code className="rounded-[var(--ds-radius-sm)] bg-[var(--ds-well-strong)] px-1 font-mono text-[11px]">CLOUDFLARE_ACCOUNT_ID</code>.
         </li>
         <li>The in-room counters (Analytics Engine) appear after the live Worker has written its first usage point.</li>
         <li>Until it answers, rely on the Cloudflare account budget alert (Billing → budget alerts) as the backstop.</li>
@@ -357,7 +358,7 @@ const Notes: React.FC<{ s: StreamCostSection }> = ({ s }) => {
           <Info className="h-4 w-4 text-[var(--ds-muted)]" aria-hidden />
           <span className="text-sm font-semibold tracking-tight text-[var(--ds-ink)]">How the Stream Studio numbers are computed</span>
         </span>
-        <ChevronDown className={`h-4 w-4 text-[var(--ds-muted)] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} aria-hidden />
+        <ChevronDown className={`h-4 w-4 text-[var(--ds-muted)] transition-transform duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} aria-hidden />
       </button>
       {open && (
         <ul className="list-disc space-y-1 border-t border-[var(--ds-hairline-soft)] px-3 py-3 pl-7 text-xs leading-relaxed text-[var(--ds-muted)]">
@@ -386,7 +387,7 @@ export const StreamCard: React.FC<{ stream?: StreamCostSection; days: number }> 
     <div className="space-y-3" data-testid="stream-card">
       <AlertList alerts={s.alerts} />
       {s.errors.length > 0 && (
-        <div className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs text-[var(--ds-ink)]">
+        <div className="flex items-start gap-2 rounded-[var(--ds-radius-panel)] border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-2 text-xs text-[var(--ds-ink)]">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" style={{ color: STATUS.warning }} aria-hidden />
           <div>
             <div className="font-semibold">Some Cloudflare datasets didn’t answer — the alerts they feed can’t be checked until they do; the rest is shown</div>

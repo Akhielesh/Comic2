@@ -36,7 +36,7 @@ const atWidth = (w: number, studio: ReturnType<typeof makeStudio>) => render(atW
 
 const cls = (el: Element) => (el.getAttribute('class') || '').split(/\s+/);
 /** Text that is cut to one line (an ellipsis) instead of shown whole. */
-const isCut = (el: Element) => cls(el).some((c) => c === 'truncate' || c.startsWith('max-w-[') || c === 'line-clamp-1');
+const isCut = (el: Element) => cls(el).some((c) => c === 'truncate' || c.startsWith('max-w-[') || c.startsWith('line-clamp-'));
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(SAMPLE_NOW);

@@ -14,12 +14,13 @@ import { useAction } from '../conversation/cards/useAction';
 import { LibraryImage } from './LibraryImage';
 import { PresetThumb } from './procedural/PresetThumb';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
+import { cn } from '../../../lib/utils';
 type StylePresetsData = Extract<Card, { type: 'style_presets' }>;
 
 /** The "saved by software" line (decisions-final #6). */
 export const STYLE_PRESETS_FREE_NOTE = 'Free — done by the editor, no AI cost.';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
 export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, studio }) => {
   const { run, isPending, anyPending } = useAction(studio.act);
@@ -54,7 +55,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
     <CardShell
       title="Styles that fit"
       icon={<Palette className="h-4 w-4" />}
-      right={<span className="rounded-full bg-[#D97757]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-accent)]">Free</span>}
+      right={<span className="rounded-full bg-[var(--ds-accent-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-accent)]">Free</span>}
       aria-label="Style presets"
     >
       {card.note && <p className="mb-3 text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{card.note}</p>}
@@ -62,7 +63,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
         role="radiogroup"
         aria-label="Pick a style"
         onKeyDown={onGroupKey}
-        className={cx('grid gap-2 sm:gap-2.5', presets.length <= 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3')}
+        className={cn('grid gap-2 sm:gap-2.5', presets.length <= 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3')}
       >
         {presets.map((p, i) => {
           const on = chosen === p.id;
@@ -81,10 +82,10 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
               onClick={() => {
                 if (!on && !anyPending) void run(`use:${p.id}`, { type: 'use_preset', presetId: p.id });
               }}
-              className={cx(
-                'group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 aria-disabled:cursor-wait',
+              className={cn(
+                `group relative min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)] text-left ${FOCUS_RING} aria-disabled:cursor-wait`,
                 'motion-safe:transition-[transform,border-color,box-shadow] motion-safe:duration-200',
-                on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/25' : 'border-[var(--ds-hairline)] hover:border-[#D97757]/35 motion-safe:hover:-translate-y-px'
+                on ? 'border-ds-accent/60 ring-2 ring-ds-accent/25' : 'border-[var(--ds-hairline)] hover:border-ds-accent/35 motion-safe:hover:-translate-y-px'
               )}
             >
               <span className="relative block aspect-[4/5] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>
@@ -100,7 +101,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
                   }
                 />
                 {(on || pending) && (
-                  <span className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ds-accent)] text-white shadow-sm">
+                  <span className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow-sm">
                     {pending ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
                   </span>
                 )}

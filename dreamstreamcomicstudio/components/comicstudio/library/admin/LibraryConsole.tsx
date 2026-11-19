@@ -32,7 +32,7 @@ import {
   type LibraryStepView
 } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
-import { ACCENT_TEXT, OVERLINE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+import { ACCENT_TEXT, FOCUS_RING, OVERLINE, STATUS_EDGE, STATUS_SURFACE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import {
   cancelLibraryRun,
   getLibraryManifest,
@@ -48,7 +48,7 @@ import {
 import { PresetThumb } from '../procedural/PresetThumb';
 import { EmptyArt, type EmptyArtVariant } from '../procedural/EmptyArt';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+import { cn } from '../../../../lib/utils';
 const usd = (n: number | undefined) => `$${(Math.round((n || 0) * 100) / 100).toFixed(2)}`;
 const usd3 = (n: number | undefined) => `$${(n || 0).toFixed(3)}`;
 const errText = (err: unknown) => (err instanceof Error && err.message ? err.message : 'Something went wrong. Try again.');
@@ -76,8 +76,8 @@ const STATUS_LABEL: Record<LibraryAssetStatus, string> = {
 };
 const STATUS_CLASS: Record<LibraryAssetStatus, string> = {
   pending: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
-  generating: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
-  analyzing: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
+  generating: 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]',
+  analyzing: 'bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]',
   needs_review: TONE_CHIP.warning,
   published: TONE_CHIP.success,
   rejected: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
@@ -99,8 +99,8 @@ const STATUS_ON_ART: Record<LibraryAssetStatus, string> = {
 };
 
 const btn =
-  'inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-xl px-3 text-[13px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]';
-const primary = `${btn} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`;
+  `inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-xl px-3 text-[13px] font-medium ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]`;
+const primary = `${btn} bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)]`;
 const ghost = `${btn} border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
 const panel = 'rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3 sm:p-4';
 
@@ -423,15 +423,15 @@ export const LibraryConsole: React.FC = () => {
 
   if (!manifest && !loadError) {
     return (
-      <div className={cx(panel, 'flex items-center gap-2 text-[13px] text-[var(--ds-muted)]')}>
+      <div className={cn(panel, 'flex items-center gap-2 text-[13px] text-[var(--ds-muted)]')}>
         <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden /> Loading the library…
       </div>
     );
   }
   if (!manifest) {
     return (
-      <div className={cx(panel, 'flex flex-wrap items-center gap-3 text-[13px] text-[var(--ds-ink)]')} role="alert">
-        <AlertTriangle className={cx('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
+      <div className={cn(panel, 'flex flex-wrap items-center gap-3 text-[13px] text-[var(--ds-ink)]')} role="alert">
+        <AlertTriangle className={cn('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{loadError}</span>
         <button type="button" className={ghost} onClick={() => void load()}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry
@@ -459,10 +459,10 @@ export const LibraryConsole: React.FC = () => {
           </div>
           <div className="flex flex-wrap gap-1.5 text-[11.5px]">
             <span className="rounded-full bg-[var(--ds-well-strong)] px-2 py-1 tabular-nums">v{manifest.manifestVersion}</span>
-            <span className={cx('inline-flex min-w-0 items-center gap-1 rounded-full px-2 py-1 [overflow-wrap:anywhere]', keyChip(manifest).tone)} data-library-key="">
+            <span className={cn('inline-flex min-w-0 items-center gap-1 rounded-full px-2 py-1 [overflow-wrap:anywhere]', keyChip(manifest).tone)} data-library-key="">
               <KeyRound className="h-3 w-3 shrink-0" aria-hidden /> {keyChip(manifest).text}
             </span>
-            {!manifest.tableReady && <span className={cx('rounded-full px-2 py-1', STATUS_CLASS.needs_review)}>Tables not installed</span>}
+            {!manifest.tableReady && <span className={cn('rounded-full px-2 py-1', STATUS_CLASS.needs_review)}>Tables not installed</span>}
           </div>
         </div>
         {/* Three columns while a cell fits its longest one-word label ("Published" as an overline, 5.75rem cells: from
@@ -475,7 +475,7 @@ export const LibraryConsole: React.FC = () => {
             ['Spent (all builds)', usd(totals.spent)]
           ].map(([k, v]) => (
             <div key={k} className="flex min-w-0 flex-col rounded-xl bg-[var(--ds-well)] px-2 py-2">
-              <dt className={cx('mb-0.5 break-words', OVERLINE)}>{k}</dt>
+              <dt className={cn('mb-0.5 break-words', OVERLINE)}>{k}</dt>
               <dd className="mt-auto text-[16px] font-semibold tabular-nums">{v}</dd>
             </div>
           ))}
@@ -500,9 +500,9 @@ export const LibraryConsole: React.FC = () => {
         <div
           role="status"
           data-tone={notice.tone}
-          className={cx(
+          className={cn(
             'flex items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] [overflow-wrap:anywhere]',
-            notice.tone === 'ok' ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/35 bg-amber-500/10'
+            notice.tone === 'ok' ? STATUS_SURFACE.healthy : STATUS_SURFACE.attention
           )}
         >
           {notice.tone === 'ok' ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />}
@@ -572,11 +572,11 @@ export const LibraryConsole: React.FC = () => {
             />
           </label>
           <label className="flex min-h-[36px] items-center gap-2 text-[12.5px]">
-            <input type="checkbox" checked={includeOptional} onChange={(e) => setIncludeOptional(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+            <input type="checkbox" checked={includeOptional} onChange={(e) => setIncludeOptional(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
             Include optional style anchors
           </label>
           <label className="flex min-h-[36px] items-center gap-2 text-[12.5px]">
-            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-[var(--ds-accent)]" />
             Force rebuild {selected.size ? 'selected' : 'everything'}
           </label>
         </div>
@@ -650,7 +650,7 @@ export const LibraryConsole: React.FC = () => {
         )}
 
         {confirming && quote && (
-          <div role="dialog" aria-label="Confirm the build" className="mt-3 rounded-xl border border-[#D97757]/40 bg-[#D97757]/5 p-3">
+          <div role="dialog" aria-label="Confirm the build" className="mt-3 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-accent-soft)] p-3">
             <p className="text-[13px] font-semibold">
               Draw {quote.images} image{quote.images === 1 ? '' : 's'} for about {usd(quote.usd)}?
             </p>
@@ -685,11 +685,11 @@ export const LibraryConsole: React.FC = () => {
               const status: LibraryAssetStatus = row?.status ?? 'pending';
               const isSel = selected.has(e.id);
               return (
-                <li key={e.id} className={cx('min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)]', openId === e.id ? 'border-[#D97757]/55' : 'border-[var(--ds-hairline)]')}>
-                  <button type="button" onClick={() => setOpenId(openId === e.id ? null : e.id)} className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/45" aria-expanded={openId === e.id}>
+                <li key={e.id} className={cn('min-w-0 overflow-hidden rounded-xl border bg-[var(--ds-surface-strong)]', openId === e.id ? 'border-ds-accent/55' : 'border-[var(--ds-hairline)]')}>
+                  <button type="button" onClick={() => setOpenId(openId === e.id ? null : e.id)} className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-focus)]" aria-expanded={openId === e.id}>
                     <span className="relative block aspect-[4/3] w-full overflow-hidden bg-[var(--ds-well)] text-[var(--ds-muted)]">
                       <EntryArt entry={e} url={row?.thumb || row?.published?.thumb} />
-                      <span data-status-pill="" className={cx('absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold', STATUS_ON_ART[status])}>
+                      <span data-status-pill="" className={cn('absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold', STATUS_ON_ART[status])}>
                         {row ? STATUS_LABEL[status] : 'Not built'}
                       </span>
                       {row && !row.upToDate && <span className="absolute bottom-1.5 left-1.5 rounded-full bg-[var(--ds-surface-strong)] px-1.5 py-0.5 text-[10px]">Prompt changed</span>}
@@ -706,7 +706,7 @@ export const LibraryConsole: React.FC = () => {
                     </span>
                   </button>
                   <label className="flex min-h-[32px] cursor-pointer items-center gap-1.5 border-t border-[var(--ds-hairline-soft)] px-2 text-[11px] text-[var(--ds-muted)] coarse:min-h-[44px]">
-                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} aria-label={`Select ${e.id}`} className="h-3.5 w-3.5 accent-[#D97757]" /> Select
+                    <input type="checkbox" checked={isSel} onChange={() => toggle(e.id)} aria-label={`Select ${e.id}`} className="h-3.5 w-3.5 accent-[var(--ds-accent)]" /> Select
                   </label>
                 </li>
               );
@@ -757,7 +757,7 @@ const AssetDrawer: React.FC<{
           {row.candidates.map((c) => {
             const live = row.published?.rev === c.rev;
             return (
-              <li key={c.rev} className={cx('min-w-0 overflow-hidden rounded-lg border bg-[var(--ds-surface-strong)]', live ? 'border-emerald-500/50' : 'border-[var(--ds-hairline)]')}>
+              <li key={c.rev} className={cn('min-w-0 overflow-hidden rounded-lg border bg-[var(--ds-surface-strong)]', live ? STATUS_EDGE.healthy : 'border-[var(--ds-hairline)]')}>
                 <a href={c.url} target="_blank" rel="noopener noreferrer" className="block aspect-[4/3] overflow-hidden bg-[var(--ds-well)]">
                   <img src={c.thumb || c.url} alt={c.alt || `Candidate ${c.rev}`} loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
                 </a>
@@ -768,11 +768,11 @@ const AssetDrawer: React.FC<{
                     </span>
                     <span className="text-[var(--ds-muted)]">{c.strategy}</span>
                   </div>
-                  {live && <span className={cx('inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CLASS.published)}>Live</span>}
+                  {live && <span className={cn('inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CLASS.published)}>Live</span>}
                   {live && (
                     <button
                       type="button"
-                      className={cx(ghost, 'mt-1 w-full')}
+                      className={cn(ghost, 'mt-1 w-full')}
                       disabled={drawing || busy('takedown')}
                       onClick={() => {
                         // eslint-disable-next-line no-alert
@@ -800,7 +800,7 @@ const AssetDrawer: React.FC<{
                   {!live && (
                     <button
                       type="button"
-                      className={cx(ghost, 'mt-1 w-full')}
+                      className={cn(ghost, 'mt-1 w-full')}
                       disabled={drawing || busy('publish')}
                       onClick={() => void act(`publish:${entry.id}`, () => publishLibraryAsset(entry.id, c.rev), `Published ${entry.id} (rev ${c.rev}).`)}
                     >

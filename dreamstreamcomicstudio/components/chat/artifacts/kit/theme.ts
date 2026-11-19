@@ -1,7 +1,15 @@
-// Shared color system for rich-output components. One palette/accent prop drives
-// every card so the AI (and the gallery) can recolor a component without touching
-// its markup. Palettes resolve to a single `accent` plus a multi-series ramp for
-// charts. Keep these in sync with tailwind.config.cjs brand tokens.
+// Shared colour system for rich-output components. One palette/accent prop drives
+// every card so the AI (and the gallery) can recolour a component without touching
+// its markup. Every colour here is a design token (docs/design/design-system.md,
+// "Colour layer"), so the cards follow light and dark and the skin:
+// - series take the seven hues in CHART_HUE_ORDER (ultramarine, magenta, leaf, sky first,
+//   the order that stays apart for colour-blind readers); the mono palette takes the ink steps;
+// - the accent is the ink, or one hue by slot for a named palette;
+// - up / down / neutral are the readable status inks (cards use them for words as much as
+//   for lines, so they read at 4.5:1 on every surface).
+// A colour the model supplies on one series (`s.color`) is content and is kept as given.
+
+import { CHART_HUE_ORDER } from '../../studioDesign';
 
 export type PaletteName =
   | 'brand'
@@ -19,19 +27,28 @@ export interface Palette {
   series: string[];
 }
 
-/** Canonical up/down colors, matched to the existing StockCard. */
-export const BULL = '#059669';
-export const BEAR = '#dc2626';
-export const NEUTRAL = '#64748b';
+/** Up / down / flat: the readable status inks (words, icons and marks alike). */
+export const BULL = 'var(--ds-success-text)';
+export const BEAR = 'var(--ds-danger-text)';
+export const NEUTRAL = 'var(--ds-muted)';
+
+/** The hue token for a 1-based slot. */
+const hue = (slot: number) => `var(--ds-hue-${slot})`;
+/** The categorical series, in the colour-blind-safe chart order. */
+const CATEGORICAL: string[] = CHART_HUE_ORDER.map(hue);
+/** The same order, starting at a given slot (a named palette leads with its own hue). */
+const leadingWith = (slot: number): string[] => [hue(slot), ...CATEGORICAL.filter((c) => c !== hue(slot))];
+/** The monochrome ink steps (tiers, ordinal data, a calm card). */
+const INK_STEPS = [1, 2, 3, 4, 5].map((n) => `var(--ds-chart-${n})`);
 
 export const PALETTES: Record<PaletteName, Palette> = {
-  brand: { accent: '#3B82F6', series: ['#3B82F6', '#EF4444', '#FACC15', '#10b981', '#8b5cf6'] },
-  bull: { accent: BULL, series: [BULL, '#0ea5e9', '#84cc16', '#14b8a6'] },
-  bear: { accent: BEAR, series: [BEAR, '#f97316', '#ec4899', '#f59e0b'] },
-  ocean: { accent: '#0ea5e9', series: ['#0ea5e9', '#6366f1', '#06b6d4', '#3b82f6'] },
-  sunset: { accent: '#f97316', series: ['#f97316', '#ef4444', '#f59e0b', '#ec4899'] },
-  violet: { accent: '#8b5cf6', series: ['#8b5cf6', '#6366f1', '#a855f7', '#d946ef'] },
-  mono: { accent: '#334155', series: ['#334155', '#64748b', '#94a3b8', '#cbd5e1'] }
+  brand: { accent: 'var(--ds-ink)', series: CATEGORICAL },
+  bull: { accent: BULL, series: CATEGORICAL },
+  bear: { accent: BEAR, series: CATEGORICAL },
+  ocean: { accent: hue(7), series: leadingWith(7) },
+  sunset: { accent: hue(2), series: leadingWith(2) },
+  violet: { accent: hue(5), series: leadingWith(5) },
+  mono: { accent: 'var(--ds-ink)', series: INK_STEPS }
 };
 
 export interface ThemeInput {
@@ -63,13 +80,18 @@ export const resolveTheme = (input: ThemeInput = {}): ResolvedTheme => {
   return { accent, series: base.series, up: BULL, down: BEAR, neutral: NEUTRAL };
 };
 
-/** A translucent version of a hex color, for chart area fills. */
-export const withAlpha = (hex: string, alpha: number): string => {
-  const m = hex.replace('#', '');
-  const full = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
-  const n = parseInt(full, 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+/**
+ * A translucent version of a colour, for chart area fills and soft tints. A hex is mixed
+ * to rgba as before; a token or any other CSS colour (`var(--ds-hue-2)`) is mixed with
+ * color-mix, so a tint never needs a hex.
+ */
+export const withAlpha = (color: string, alpha: number): string => {
+  const a = Math.max(0, Math.min(1, alpha));
+  const m = color.trim().replace(/^#/, '');
+  if (color.trim().startsWith('#') && /^(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(m)) {
+    const full = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
+    const n = parseInt(full, 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+  return `color-mix(in srgb, ${color} ${Math.round(a * 1000) / 10}%, transparent)`;
 };

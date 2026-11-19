@@ -234,7 +234,7 @@ describe('the stage off: an account it does not admit gets today’s sheet', () 
     expect(screen.queryByRole('button', { name: /to the link$/ })).toBeNull();
     expect(screen.queryByText(/Readers still get/)).toBeNull();
     const update = screen.getByRole('button', { name: 'Update' });
-    expect(update.className).toBe('min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50');
+    expect(update.className).toBe('min-h-[44px] rounded-xl bg-[var(--ds-accent-fill)] px-3 font-semibold text-[var(--ds-on-accent)] disabled:opacity-50');
     expect(update).not.toHaveAttribute('aria-describedby');
     fireEvent.click(update);
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'] }));

@@ -110,7 +110,7 @@ export const WidgetGallery: React.FC<{ items: GalleryItem[] }> = ({ items }) => 
         aria-label={`${items.length} result cards`}
         tabIndex={0}
         onKeyDown={onKeyDown}
-        className="ds-gallery-track flex snap-x snap-proximity gap-3 overflow-x-auto rounded-2xl px-1 py-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+        className="ds-gallery-track flex snap-x snap-proximity gap-3 overflow-x-auto rounded-2xl px-1 py-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)]"
       >
         {items.map((item, i) => (
           <div

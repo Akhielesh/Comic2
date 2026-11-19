@@ -8,6 +8,7 @@ import { HeatmapCard } from './HeatmapCard';
 import { ChartCard } from './ChartCard';
 import { Surface, SurfaceTitle, SurfaceSubtitle, TrendPill, resolveTheme, relativeTime, formatPrice, useCompact } from './kit';
 import type { PaletteName } from './kit';
+import { SECTION_CARD } from '../studioDesign';
 
 // The FLAGSHIP composite artifact — a Bloomberg-style terminal panel in the calm
 // studio glass language. It assembles whichever sections the model provides (focus
@@ -87,8 +88,7 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
   }
 
   return (
-    <div className="my-2 overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)] animate-fade-in">
-      <div className="h-[3px]" style={{ background: `linear-gradient(90deg, ${theme.accent}, ${theme.accent}66)` }} />
+    <div className={`my-2 animate-fade-in ${SECTION_CARD}`}>
       <div className="flex items-center justify-between gap-2 border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-surface)] px-3 py-2">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold tracking-tight text-[var(--ds-ink)]">{data.title || 'Finance Terminal'}</div>

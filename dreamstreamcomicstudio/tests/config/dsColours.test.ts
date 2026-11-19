@@ -62,9 +62,10 @@ describe('named ds colours (tailwind.config.cjs)', () => {
     expect(css).not.toMatch(/var\(--ds-[\w-]+\)\s*\//);
   });
 
-  it('is additive: the existing palettes and arbitrary token classes still compile as before', async () => {
+  it('is additive: the default palettes and arbitrary token classes still compile as before', async () => {
+    // The old comic kit's brand-* colours were removed with it (tests/config/legacyKitGuard.test.ts): they compile to nothing.
     const css = await compile('bg-brand-yellow text-[var(--ds-ink)] bg-red-500');
-    expect(css).toContain('.bg-brand-yellow');
+    expect(css).not.toContain('brand-yellow');
     expect(css).toContain('.text-\\[var\\(--ds-ink\\)\\] { color: var(--ds-ink) }');
     expect(css).toContain('.bg-red-500');
   });

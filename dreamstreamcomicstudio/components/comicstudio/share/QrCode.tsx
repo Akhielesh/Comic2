@@ -7,6 +7,7 @@ import { encode } from 'uqr';
 import { fileNameFor } from './shareModel';
 import { cx } from '../conversation/ui';
 
+import { FOCUS_RING } from '../../chat/studioDesign';
 export interface QrCodeProps {
   value: string;
   /** Rendered size in CSS px (default 192). */
@@ -81,7 +82,7 @@ export const QrCode: React.FC<QrCodeProps> = ({ value, size = 192, title, classN
         <button
           type="button"
           onClick={() => void downloadPng(matrix, fileNameFor(title || 'comic-qr', 'png'))}
-          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
         >
           <Download className="h-4 w-4" aria-hidden /> Download PNG
         </button>

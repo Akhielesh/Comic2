@@ -17,14 +17,14 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { HAIRLINE } from '../../../chat/studioDesign';
+import { FOCUS_RING, HAIRLINE } from '../../../chat/studioDesign';
 import { useSheetBehaviour } from '../../conversation/PopSheet';
 import { useBackLayer } from '../backStack';
 import { useFormFactor } from '../useFormFactor';
 import { detentHeights, rubber, snapDetent, type SheetDetent } from './snap';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
+import { cn } from '../../../../lib/utils';
 export interface BottomSheetProps {
   open: boolean;
   onClose: () => void;
@@ -273,7 +273,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
       data-sheet="bottom"
       data-detent={typeof current === 'number' ? String(current) : current}
       onFocusCapture={onFocusCapture}
-      className={cx(
+      className={cn(
         `fixed inset-x-0 z-[86] mx-auto flex w-full max-w-[640px] flex-col overflow-hidden rounded-t-[var(--sheet-radius,20px)] ${HAIRLINE} border-b-0 bg-[var(--ds-surface-strong)] shadow-[0_-8px_40px_rgba(0,0,0,0.18)] backdrop-blur-xl focus:outline-none`,
         ff.reducedMotion ? 'animate-fade-in' : 'studio-reveal',
         motion,
@@ -302,7 +302,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             onClick={cycle}
             aria-label="Resize sheet"
             data-hit-exempt="grabber: the whole 52 px header is its drag zone"
-            className="absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`absolute left-1/2 top-0 flex h-5 w-16 -translate-x-1/2 cursor-grab items-start justify-center pt-1.5 ${FOCUS_RING}`}
           >
             <span aria-hidden className="block h-1 w-9 rounded-full bg-[var(--ds-hairline)]" />
           </button>
@@ -324,7 +324,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="mt-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className={`mt-1.5 grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${FOCUS_RING}`}
           >
             <X className="h-4 w-4" />
           </button>

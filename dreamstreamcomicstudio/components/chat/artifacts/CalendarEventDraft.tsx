@@ -6,7 +6,7 @@ import { mutateEvent, type CalendarAction } from '../../../services/calendarApi'
 import { beginArtifactWrite, endArtifactWrite, isArtifactWriteInFlight } from '../../../services/chatStreams';
 import type { ChatArtifactState } from '../../../services/chatStorage';
 import type { ArtifactTurn } from './ChatArtifacts';
-import { FOCUS_RING, TONE_TEXT } from '../studioDesign';
+import { DANGER_FILL, DANGER_FILL_HOVER, FOCUS_RING, TONE_TEXT } from '../studioDesign';
 
 // The confirmation card a calendar WRITE tool emits. The model prepared an action;
 // nothing changes until the user clicks confirm here, which calls the scoped mutate
@@ -314,14 +314,14 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
   // While another view's Add all runs, its in-flight row is recorded as `pending`: show it working.
   const rowIcon = (s: RowStatus) =>
     s === 'busy' || (s === 'pending' && elsewhere) ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--ds-accent)]" />
-      : s === 'done' ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-        : s === 'error' ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+      : s === 'done' ? <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-success-text)]" />
+        : s === 'error' ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--ds-danger-text)]" />
           : s === 'pending' ? <Clock className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.warning}`} />
             : <CalendarPlus className="h-3.5 w-3.5 shrink-0 text-[var(--ds-faint)]" />;
 
   if (!shown.length) {
     return (
-      <Surface header={header} accent="#10b981">
+      <Surface header={header}>
         <div className="px-3.5 py-4 text-[13px] text-[var(--ds-muted)]">{doneCount ? `Added ${doneCount} event${doneCount === 1 ? '' : 's'} to your calendar.` : 'Nothing to add.'}</div>
       </Surface>
     );
@@ -342,7 +342,7 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
                 </p>
               </div>
               {!adding && rowsNow[i] === 'idle' && (
-                <button onClick={() => removeRow(i)} aria-label={`Remove ${e.title}`} className="tap-target shrink-0 rounded-md p-1 text-[var(--ds-faint)] hover:bg-[var(--ds-hover)] hover:text-rose-500">
+                <button onClick={() => removeRow(i)} aria-label={`Remove ${e.title}`} className="tap-target shrink-0 rounded-md p-1 text-[var(--ds-faint)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-danger-text)]">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               )}
@@ -352,15 +352,15 @@ const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Artif
 
         {blocked === 'not_connected' && (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /><span>Connect Google Calendar in <span className="font-medium text-[var(--ds-ink)]">Settings → Connectors</span>, then ask again.</span>
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-warning-text)]" /><span>Connect Google Calendar in <span className="font-medium text-[var(--ds-ink)]">Settings → Connectors</span>, then ask again.</span>
           </div>
         )}
         {blocked === 'read_only' && (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /><span>This calendar is <span className="font-medium text-[var(--ds-ink)]">read-only</span>. Reconnect in Connectors to grant edit access.</span>
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-warning-text)]" /><span>This calendar is <span className="font-medium text-[var(--ds-ink)]">read-only</span>. Reconnect in Connectors to grant edit access.</span>
           </div>
         )}
-        {error && <p className="text-[12px] text-rose-600">{error}</p>}
+        {error && <p className="text-[12px] text-[var(--ds-danger-text)]">{error}</p>}
         {!adding && unsureCount > 0 && (
           <p className={`text-[12px] ${TONE_TEXT.warning}`}>
             {unsureCount === 1 ? 'One event' : `${unsureCount} events`} may already be in your calendar — they won’t be added again.
@@ -461,7 +461,6 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
     );
   }
 
-  const accent = meta.danger ? '#e11d48' : 'var(--ds-accent)';
   const header = (
     <>
       <SurfaceTitle>{meta.label}</SurfaceTitle>
@@ -470,11 +469,11 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
   );
 
   return (
-    <Surface header={header} accent={accent}>
+    <Surface header={header}>
       <div className="space-y-3 px-3.5 py-3">
         {/* Event summary */}
         <div className="flex items-start gap-2.5">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]"><Icon className="h-4 w-4" /></span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--ds-accent-soft)] text-[var(--ds-accent)]"><Icon className="h-4 w-4" /></span>
           <div className="min-w-0 flex-1 space-y-1">
             {ev.title ? <p className="break-words text-[14px] font-semibold text-[var(--ds-ink)]">{ev.title}</p> : <p className="text-[13px] italic text-[var(--ds-muted)]">(this event)</p>}
             {ev.start && (
@@ -491,24 +490,24 @@ const SingleEventDraft: React.FC<{ data: CalendarEventDraftArtifact; turn?: Arti
         {/* Honest blocked states */}
         {blocked === 'not_connected' && (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-warning-text)]" />
             <span>Connect Google Calendar in <span className="font-medium text-[var(--ds-ink)]">Settings → Connectors</span> to use this, then ask again.</span>
           </div>
         )}
         {blocked === 'read_only' && (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-warning-text)]" />
             <span>This calendar is connected <span className="font-medium text-[var(--ds-ink)]">read-only</span>. Reconnect it in Connectors to grant edit access.</span>
           </div>
         )}
-        {error && <p className="text-[12px] text-rose-600">{error}</p>}
+        {error && <p className="text-[12px] text-[var(--ds-danger-text)]">{error}</p>}
 
         {/* Confirm */}
         <div className="flex items-center justify-end gap-2 border-t border-[var(--ds-hairline-soft)] pt-2.5">
           <button
             onClick={confirm}
             disabled={busy || !!blocked}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors disabled:opacity-50 ${meta.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[var(--ds-accent)] hover:bg-[var(--ds-accent-hover)]'}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold transition-colors disabled:opacity-50 ${meta.danger ? `${DANGER_FILL} ${DANGER_FILL_HOVER}` : 'bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]'}`}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
             {meta.verb}

@@ -121,6 +121,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Runs the capture's onclone on a dark-theme clone and returns whether the clone is still dark. */
+function cloneStaysDark(options: { onclone?: (doc: Document) => void }): boolean {
+  const doc = document.implementation.createHTMLDocument('clone');
+  doc.documentElement.classList.add('dark');
+  expect(options.onclone).toBeTypeOf('function');
+  options.onclone!(doc);
+  return doc.documentElement.classList.contains('dark');
+}
+
 describe('ReviewExport Book/PDF on the on-demand loader', () => {
   it('loads nothing until the button is pressed, then awaits the loader and downloads the PDF', async () => {
     const onUpdateProject = vi.fn();
@@ -133,6 +142,8 @@ describe('ReviewExport Book/PDF on the on-demand loader', () => {
     await waitFor(() => expect(downloadBlobMock).toHaveBeenCalledTimes(1));
     expect(loadLegacyPdfMock).toHaveBeenCalledTimes(1);
     expect(html2canvasMock).toHaveBeenCalledWith(document.getElementById('comic-render-area'), expect.objectContaining({ scale: 2 }));
+    // The PDF is captured in the light theme: a dark screen never darkens the exported page.
+    expect(cloneStaysDark(html2canvasMock.mock.calls[0][1])).toBe(false);
     expect(jsPdfInstances).toHaveLength(1);
     expect(jsPdfInstances[0].args).toEqual(['l', 'mm', 'a4']);
     expect(jsPdfInstances[0].addImage).toHaveBeenCalled();

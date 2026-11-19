@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { OVERLINE } from '../../chat/studioDesign';
+import { FOCUS_RING, OVERLINE } from '../../chat/studioDesign';
 import { embedSnippet } from './shareModel';
 import { copyText } from './useShareCapabilities';
 
@@ -21,13 +21,13 @@ export const EmbedSnippet: React.FC<{ url: string; title: string; aspect?: strin
           value={code}
           rows={3}
           onFocus={(e) => e.currentTarget.select()}
-          className="min-w-0 flex-1 resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-2 font-mono text-[11px] leading-snug text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className={`min-w-0 flex-1 resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-2 font-mono text-[11px] leading-snug text-[var(--ds-ink)] ${FOCUS_RING}`}
         />
         <button
           type="button"
           aria-label={copied ? 'Embed code copied' : 'Copy embed code'}
           onClick={async () => setCopied(await copyText(code))}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className={`inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
         >
           {copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />}
           <span>{copied ? 'Copied' : 'Copy'}</span>

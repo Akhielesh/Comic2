@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { ArrowRight, CalendarDays, Check, Repeat, Target } from 'lucide-react';
 import type { GoalTrackerArtifact, GoalMilestone } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, RadialGauge, useCompact, shortDate, BULL, BEAR } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, RadialGauge, useCompact, shortDate, BULL, BEAR, withAlpha } from './kit';
 
 // Goal tracker — the /goal skill's interactive, progress-tracked goal card.
 //  • detailed — title + "why" header with a percent progress gauge, meta chips
@@ -14,7 +14,7 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, RadialGauge, useCompact, shortD
 // artifact id → array of completed milestone ids. No server round-trip.
 
 const STORE_KEY = 'ds.goal.v1';
-const ACCENT = '#D97757';
+const ACCENT = 'var(--ds-accent)';
 
 const loadDone = (goalId: string): Set<string> => {
   try {
@@ -62,7 +62,7 @@ const MetaChip: React.FC<{
     className={`inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums ${
       danger ? '' : 'border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] text-[var(--ds-muted)]'
     }`}
-    style={danger ? { color: BEAR, backgroundColor: `${BEAR}1a` } : undefined}
+    style={danger ? { color: BEAR, backgroundColor: withAlpha(BEAR, 0.1) } : undefined}
   >
     <Icon className="h-3 w-3 shrink-0" />
     <span className="min-w-0 truncate">{children}</span>

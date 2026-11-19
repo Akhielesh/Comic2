@@ -36,6 +36,7 @@ import type { TimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
 
+import { STATUS_SURFACE } from '../../chat/studioDesign';
 // ── Page/cover use: the server's render_use rule, mirrored ──────────────────────────────────────
 // server/src/comic/sanitize/timeline.ts isServerArtForComic + publication/snapshot.ts isServerArt.
 const laneSegment = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '-');
@@ -95,8 +96,8 @@ const ROLE_LABEL: Record<MediaItem['role'], string> = {
 };
 
 const btn = cx('tap-target inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[12.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45', FOCUS_RING);
-const primary = cx('tap-target inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-[var(--ds-accent)] px-3 text-[12.5px] font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-45', FOCUS_RING);
-const select = 'h-9 min-w-0 max-w-full flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] sm:text-[12.5px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const primary = cx('tap-target inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-[var(--ds-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--ds-on-accent)] hover:bg-[var(--ds-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45', FOCUS_RING);
+const select = `h-9 min-w-0 max-w-full flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[16px] text-[var(--ds-ink)] sm:text-[12.5px] focus:outline-none ${FOCUS_RING}`;
 
 type RefChoice = { key: string; label: string; owner: RefOwner };
 
@@ -269,7 +270,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
         </p>
       )}
       {confirm && (
-        <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-[var(--ds-ink)]">
+        <div role="alert" className={`rounded-xl border p-3 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
           <p>{confirm.why}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button type="button" className={primary} onClick={() => putOn(confirm.target, confirm.label, true)}>
@@ -282,7 +283,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
         </div>
       )}
       {boardConfirm && (
-        <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[12.5px] text-[var(--ds-ink)]">
+        <div role="alert" className={`rounded-xl border p-3 text-[12.5px] text-[var(--ds-ink)] ${STATUS_SURFACE.attention}`}>
           <p>
             A new style board marks {drawnPages === 1 ? 'the drawn page' : `all ${drawnPages} drawn pages`} out of date — their art stays as it is, and only a redraw (paid, quoted) would
             restyle them.

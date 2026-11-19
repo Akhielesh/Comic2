@@ -17,10 +17,10 @@ import React from 'react';
 import { Cloud, Eye, EyeOff, Layers, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../../shared/comic/doc';
 
-import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+import { FOCUS_RING, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 
-const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
+import { cn } from '../../../../lib/utils';
 export type EditorMode = 'move' | 'markup';
 
 export interface LetteringTrayProps {
@@ -64,7 +64,7 @@ const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
   { kind: 'sfx', label: 'SFX', icon: <Zap className="h-4 w-4" aria-hidden /> }
 ];
 
-const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const FOCUS = FOCUS_RING;
 
 const BarButton: React.FC<{
   label: string;
@@ -93,10 +93,12 @@ const BarButton: React.FC<{
       disabled={disabled}
       data-testid={testId}
       onClick={onClick}
-      className={cx(
-        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
-        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5',
-        on ? 'bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
+      className={cn(
+        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-[var(--ds-motion-medium)] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
+        // The horizontal buttons share the spare width (flex-auto) but never shrink below their own width. cn drops a
+        // shrink-0 that comes before flex-auto (flex covers shrink), so the horizontal run restates it after flex-auto.
+        vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-auto px-0.5 shrink-0',
+        on ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         FOCUS
       )}
     >
@@ -129,10 +131,10 @@ const TrayButton: React.FC<{ label: string; short: string; icon: React.ReactNode
     aria-pressed={pressed}
     disabled={disabled}
     onClick={onClick}
-    className={cx(
+    className={cn(
       'press inline-flex h-11 shrink-0 items-center justify-center gap-1 rounded-xl border text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
       vertical ? 'w-11' : 'px-3',
-      pressed ? 'border-[#D97757]/50 bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
+      pressed ? 'border-ds-accent/50 bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
       tone === 'warn' ? TONE_TEXT.warning : 'text-[var(--ds-ink)]',
       FOCUS
     )}
@@ -149,7 +151,7 @@ export const LetteringTray: React.FC<LetteringTrayProps & { vertical: boolean }>
     aria-label="Lettering tools"
     aria-orientation={vertical ? 'vertical' : 'horizontal'}
     data-testid="lettering-tray"
-    className={cx(
+    className={cn(
       'flex min-h-0 min-w-0 shrink-0 gap-1.5 bg-[var(--ds-surface)] p-1.5 [scrollbar-width:none]',
       vertical ? 'max-h-full flex-col overflow-y-auto overscroll-y-contain border-r border-[var(--ds-hairline)]' : 'max-w-full overflow-x-auto overscroll-x-contain border-t border-[var(--ds-hairline)]'
     )}
@@ -222,7 +224,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
       aria-orientation={vertical ? 'vertical' : 'horizontal'}
       data-testid="editor-toolbar"
       data-orientation={orientation}
-      className={cx(
+      className={cn(
         'flex shrink-0 bg-[var(--ds-surface-strong)]',
         vertical
           ? 'h-full w-14 flex-col items-center gap-1 overflow-y-auto overscroll-y-contain border-r border-[var(--ds-hairline)] px-1.5 py-1.5 [scrollbar-width:none]'
@@ -230,7 +232,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
       )}
       style={vertical ? undefined : { paddingBottom: 'calc(var(--sa-bottom-eff, 0px) + 4px)' }}
     >
-      <div role="radiogroup" aria-label="Editing mode" className={cx('flex', vertical ? 'flex-col gap-1' : 'min-w-0 flex-auto gap-0.5')}>
+      <div role="radiogroup" aria-label="Editing mode" className={cn('flex', vertical ? 'flex-col gap-1' : 'min-w-0 flex-auto gap-0.5')}>
         <BarButton
           vertical={vertical}
           role="radio"
@@ -249,10 +251,10 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
           onClick={() => onModeChange('markup')}
         />
       </div>
-      <span aria-hidden className={cx('shrink-0 bg-[var(--ds-hairline)]', vertical ? 'my-0.5 h-px w-8' : 'mx-0.5 my-2 w-px')} />
+      <span aria-hidden className={cn('shrink-0 bg-[var(--ds-hairline)]', vertical ? 'my-0.5 h-px w-8' : 'mx-0.5 my-2 w-px')} />
       <BarButton vertical={vertical} label={undoLabel ? `Undo ${undoLabel}` : 'Undo'} short="Undo" icon={<Undo2 className="h-4 w-4" aria-hidden />} disabled={!canUndo} onClick={onUndo} />
       <BarButton vertical={vertical} label="Redo" icon={<Redo2 className="h-4 w-4" aria-hidden />} disabled={!canRedo} onClick={onRedo} />
-      <span aria-hidden className={cx('shrink-0 bg-[var(--ds-hairline)]', vertical ? 'my-0.5 h-px w-8' : 'mx-0.5 my-2 w-px')} />
+      <span aria-hidden className={cn('shrink-0 bg-[var(--ds-hairline)]', vertical ? 'my-0.5 h-px w-8' : 'mx-0.5 my-2 w-px')} />
       {lettering && (
         <BarButton
           vertical={vertical}
@@ -272,7 +274,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
         vertical={vertical}
         label={tools.open ? 'Hide page tools' : 'Page tools'}
         short="Tools"
-        icon={<PanelBottomOpen className={cx('h-4 w-4', vertical && '-rotate-90')} aria-hidden />}
+        icon={<PanelBottomOpen className={cn('h-4 w-4', vertical && '-rotate-90')} aria-hidden />}
         expanded={tools.open}
         testId="toolbar-tools"
         onClick={tools.onToggle}
@@ -281,7 +283,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({
   );
   const showTray = !!(tray && lettering?.open);
   return (
-    <div className={cx('flex min-h-0 min-w-0 shrink-0', vertical ? 'h-full flex-row' : 'w-full flex-col', className)} data-testid="editor-toolbar-host">
+    <div className={cn('flex min-h-0 min-w-0 shrink-0', vertical ? 'h-full flex-row' : 'w-full flex-col', className)} data-testid="editor-toolbar-host">
       {vertical ? (
         <>
           {bar}

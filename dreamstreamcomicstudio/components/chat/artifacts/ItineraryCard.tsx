@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { createDashboard } from '../../../services/customDashboards';
 import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport, MapArtifact, MapMarker, MapRouteSegment } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Expandable, useCompact, resolveTheme, formatPrice } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Expandable, useCompact, resolveTheme, formatPrice, withAlpha } from './kit';
 import { InlineMap } from './InlineMap';
 
 // Travel itinerary card — the full interactive trip widget.
@@ -230,7 +230,7 @@ const TransportLeg: React.FC<{ stop: ItineraryStop; currency: string; accent: st
         <span className="w-11 shrink-0 pt-px text-[11px] tabular-nums text-[var(--ds-muted)]">{stop.time ?? tp.depart ?? ''}</span>
         <span
           className="mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: `${accent}1a`, color: accent }}
+          style={{ backgroundColor: withAlpha(accent, 0.1), color: accent }}
           title={mode}
         >
           <Icon className="h-3.5 w-3.5" />
