@@ -45,6 +45,8 @@ verification status, plus the complete logs/analytics/metrics collection list):
 | Dev (GitHub, npm, PyPI, QR) | public APIs | — | — | open ✓ | **rich cards** ✓ (data table / metric boards; QR = image, predict_name text by design) |
 | 800+ SaaS (OAuth) | Nango (self-hosted) | — | `NANGO_SECRET_KEY` | per-provider | text |
 | Anything via MCP | 13 curated + user-added servers | — | per-server | per-server | text |
+| Comic research (Comic Studio) | Wikipedia search (`en.wikipedia.org` REST `search/page`: 4 articles, title + one-line description, linked) and Wikimedia Commons file search (6 JPEG/PNG/WebP pictures with licence and credit), both on every search: the composer's research sheet and the Director's `research_comic` tool (explicit asks only) | a partial answer when one of the two fails (`incomplete`) | — (keyless; the `wikipedia` budget, shared with Chat; cached 5 min per query) | article text is not copied (links only); pictures only CC0, public domain, CC BY or CC BY-SA, the BY ones only with a named credit | research sheet + "Research sources" card ([`features/comic-research.md`](features/comic-research.md)) |
+| Approximate location (Chat) | Cloudflare's own request data (`request.cf`): the API Worker sets `X-DS-Geo` (city and region ≤ 80 characters, 2-letter country, coordinates rounded to 2 decimals, ≤ 512 bytes) on the main host's `/api/chat` routes only, and deletes any incoming `X-DS-Geo` on every request (`api-proxy/src/geoHeader.ts`); the backend reads it with `geoFromEdgeHeader` and the chat route's client-context caps | none: a location the browser shares wins; without either, Chat has no location (the comics host never gets the header) | — (no key, no extra call; no IP is sent anywhere for geolocation) | n/a (no third party) | system-prompt context + weather, maps and places tool context (news: the country only) |
 
 Topics with **no source yet** (candidates verified in the June 2026 audit): real
 estate (RentCast paid / FRED+Census free), jobs (Adzuna/USAJobs/BLS), elections
@@ -79,6 +81,10 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
   Per-request HTTP metrics (latency, status, userId, requestId) are logged by
   `requestLogger` as JSON lines.
 - Caching: search 5 min, weather 10 min, quotes 60 s (`lib/cache.ts` TtlCache).
+- **Plain-HTTP lookups kept on purpose.** These hosts have no working HTTPS (checked 2026-11-19) and the
+  request carries no key, no IP and no location: `numbersapi.com` (`number_fact`; the certificate does not
+  match), `universities.hipolabs.com` (`find_university`; HTTPS resets the connection) and
+  `api.open-notify.org` (`iss_location`, `people_in_space`; HTTPS does not answer).
 
 ## Connected-account privacy and model routing (Google Limited Use)
 
