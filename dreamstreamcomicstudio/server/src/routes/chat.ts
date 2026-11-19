@@ -19,7 +19,7 @@ import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool, DELEGATE_TOOL_NAME } from '../ai/agents/delegateTool.js';
 import { makeDeepResearchTool, DEEP_RESEARCH_TOOL_NAME } from '../ai/research/deepResearchTool.js';
-import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
+import { geoFromEdgeHeader } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
@@ -187,6 +187,15 @@ const sanitizeClientContext = (raw: unknown): ChatClientContext | undefined => {
   }
   const hasAny = Object.values(ctx).some((v) => v !== undefined);
   return hasAny ? ctx : undefined;
+};
+
+// When the browser shared no location, the approximate place the API Worker attached from Cloudflare's own request
+// data (X-DS-Geo, set only for the main host's /api/chat routes; api-proxy/src/geoHeader.ts). It goes through
+// sanitizeClientContext like a browser location, so the same caps apply. No IP is looked up anywhere.
+const withEdgeLocation = (ctx: ChatClientContext | undefined, headers: Record<string, unknown> | undefined): ChatClientContext | undefined => {
+  if (ctx?.location) return ctx;
+  const location = sanitizeClientContext({ location: geoFromEdgeHeader(headers) })?.location;
+  return location ? { ...(ctx || {}), location } : ctx;
 };
 
 type ResolvedProvider = { provider: AIProviderId; apiKey: string };
@@ -645,26 +654,10 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
   }
 
-  let clientContext = sanitizeClientContext(body.clientContext);
-  // The browser only shares precise location after an explicit permission grant (rare), so
-  // when no location came through, derive a COARSE one from the request IP. This is what makes
+  // The browser only shares precise location after an explicit permission grant (rare), so when no location came
+  // through, use the approximate place Cloudflare attached to the request (withEdgeLocation). This is what makes
   // "weather", "near me" and "local news" resolve to the USER instead of the whole world.
-  if (!clientContext?.location) {
-    const geo = await resolveClientGeo(clientIpFromReq(req)).catch(() => null);
-    if (geo && (geo.city || geo.country)) {
-      clientContext = {
-        ...(clientContext || {}),
-        location: {
-          city: geo.city,
-          region: geo.region,
-          country: geo.country,
-          lat: geo.lat,
-          lng: geo.lng,
-          approximate: true
-        }
-      };
-    }
-  }
+  let clientContext = withEdgeLocation(sanitizeClientContext(body.clientContext), req.headers);
   // Shared-platform drafts (email_draft, deck_create; plan §5.5): the server-only answer for THIS request (the
   // PLATFORM_DOCS kill switch, the rollout stage, the person's role). It is bound to this request's clientContext
   // object, which every agent path below receives as is (recipes, the swarm, the run_recipe / swarm tools), so they
@@ -2403,16 +2396,7 @@ chatPublicRouter.post('/tool-refresh', async (req, res) => {
     body.args && typeof body.args === 'object' && !Array.isArray(body.args)
       ? (body.args as Record<string, unknown>)
       : {};
-  let clientContext = sanitizeClientContext(body.clientContext);
-  if (!clientContext?.location) {
-    const geo = await resolveClientGeo(clientIpFromReq(req)).catch(() => null);
-    if (geo && (geo.city || geo.country)) {
-      clientContext = {
-        ...(clientContext || {}),
-        location: { city: geo.city, region: geo.region, country: geo.country, lat: geo.lat, lng: geo.lng, approximate: true }
-      };
-    }
-  }
+  const clientContext = withEdgeLocation(sanitizeClientContext(body.clientContext), req.headers);
   // Never a platform tool: this public refresh route carries no platformDocs answer (and REFRESHABLE excludes them).
   const impl = resolveTools([tool], {
     timezone: clientContext?.timezone,
