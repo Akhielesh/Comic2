@@ -68,6 +68,7 @@ import { EmptyState } from './components/ds/EmptyState';
 import { ErrorState } from './components/ds/ErrorState';
 import { LoadingState } from './components/ds/LoadingState';
 import { toast, ToastHost, TOAST_DURATION_MS } from './components/ds/Toast';
+import { AlertsHost } from './components/alerts/AlertsHost';
 import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppStatusBar } from './components/status/AppStatusBar';
@@ -1134,6 +1135,8 @@ const App: React.FC = () => {
       <div data-slot="app-root" className={appRootClass(effectiveView, Boolean(gatedProductLabel), comicsChrome || comicsDashboard)}>
         {/* The app's one toast slot: every app toast renders here (portalled to <body>, above the tab bar). */}
         <ToastHost />
+        {/* Alerts (notify NF-4): a chime and a toast when work lands while the person is elsewhere; signed-in only. */}
+        <AlertsHost accountId={user?.id ?? null} onOpenComic={handleOpenProject} onOpenChat={() => handleNavigate('chat')} />
         {showSharedHeader && (() => {
           const header = (
             <StaticSiteHeader

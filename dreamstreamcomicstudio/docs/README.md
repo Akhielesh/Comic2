@@ -44,6 +44,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/pro-edit.md` | Comic Studio's Pro Edit: the Easy \| Pro editor contract (effects, stickers, motion, opaque layers), its flags, ops and the packages that fill the PE-0 stubs. |
 | `features/settled-cards.md` | Comic Studio's settled chat cards: when a card settles, its one-line summary, the gate outcome stamps and plan counts, the SETTLED_CARDS stage, and the director wave note. |
 | `features/link-previews.md` | Link previews on comics.dreamstreamstudio.ai: the home and Library heads (edge), the `/library` redirect, share-link heads and `?lang=`, the preview pictures (`scripts/og-cards.mjs`, the per-comic card's ink mark) and how each part ships. |
+| `features/alerts.md` | Alerts: the chime and toast when a comic or a chat finishes or waits on you while you are elsewhere — where-you-are rules, the moments, fixed copy, the two chimes' numbers, the audio lifecycle, the tab-title count, Chat's new-answer dot, the bus API for sources, two sites. |
 | `features/discovery.md` | Discover's public listing: the edge routes /api/comic/public/discover[/shelves], the item allow-list (bylines only with Show my username), the ask-first SQL comic_discovery.sql, featured seeding, tests. |
 
 ## Conventions
