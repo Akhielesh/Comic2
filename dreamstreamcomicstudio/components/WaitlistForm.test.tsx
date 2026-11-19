@@ -1,67 +1,166 @@
 // @vitest-environment jsdom
-// The access request (the sign-in card's "Request access" step, one click off the comics landing) on the page tokens:
-// a labelled email field, the ink submit, outline toggle chips, a calm callout per answer. The submit itself is
-// unchanged: the email, the kind, the source, the chosen products and the note go to submitWaitlistEmail once.
+// Register interest (the sign-in card's "Register interest" step): the email plus a few optional
+// questions (first name, the Comic Studio feature checklist, something else, the other studios the
+// form already offered, a comment with a visible limit) and one line that sign-up is not open yet. The email alone submits; the answers
+// travel to submitWaitlistEmail once; the thank-you promises no email.
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const submit = vi.hoisted(() => vi.fn());
-vi.mock('../services/waitlist', () => ({ submitWaitlistEmail: submit }));
+vi.mock('../services/waitlist', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/waitlist')>()),
+  submitWaitlistEmail: submit
+}));
+vi.mock('../services/supabase', () => ({ supabase: { from: vi.fn() } }));
 vi.mock('./Turnstile', () => ({ Turnstile: () => null, resetTurnstile: vi.fn() }));
-vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p }));
+vi.mock('../services/clientConfig', () => ({ turnstileEnabled: () => false, buildApiUrl: (p: string) => p, API_BASE_URL: '' }));
 
 import { WaitlistForm } from './WaitlistForm';
+import { NEUTRAL_SUCCESS } from '../services/waitlist';
 
 const settle = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
+const emailField = () => screen.getByRole('textbox', { name: /Email address/ });
+const submitForm = () => fireEvent.submit(emailField().closest('form')!);
 
 beforeEach(() => submit.mockReset());
 afterEach(cleanup);
 
-describe('WaitlistForm on the tokens', () => {
-  it('no comic chrome: no black borders, yellow, comic face, mono or hex anywhere in its markup', () => {
-    const { container } = render(<WaitlistForm kind="access" source="auth-request-access" buttonLabel="Request access" />);
-    expect(container.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|font-mono|(?<![\w-])font-display|brand-(?:yellow|blue|red)|text-white|#[0-9a-f]{6}\b/i);
-    expect(screen.getByRole('button', { name: /request access/i })).toHaveAttribute('data-variant', 'default');
-    expect(screen.getByRole('group', { name: /what do you want first access to/i })).toBeInTheDocument();
+describe('WaitlistForm: register interest', () => {
+  it('asks the optional questions with real Comic Studio abilities and says sign-up is not open yet', () => {
+    render(<WaitlistForm kind="access" source="auth-request-access" />);
+    expect(emailField()).toBeRequired();
+    expect(screen.getByRole('textbox', { name: /First name/ })).not.toBeRequired();
+    const group = screen.getByRole('group', { name: /What would you use, or like to see\?/ });
+    const boxes = Array.from(group.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(boxes.map((b) => b.value)).toEqual(['chat', 'translations', 'series', 'library', 'print']);
+    for (const name of [
+      'Making a comic by chatting',
+      'Translations into other languages',
+      'Series and collections',
+      'Publishing to the public Library',
+      'Printing and export'
+    ]) {
+      expect(screen.getByRole('checkbox', { name })).not.toBeChecked();
+    }
+    expect(screen.getByRole('textbox', { name: /Something else/ })).toHaveAttribute('maxLength', '120');
+    const others = screen.getByRole('group', { name: /Other studios you would try/ });
+    // Only studios that exist: Code Studio was retired (docs/decisions/0005-retire-code-studio.md).
+    expect(Array.from(others.querySelectorAll('input[type="checkbox"]')).map((b) => (b as HTMLInputElement).value)).toEqual([
+      'chat_studio',
+      'stream_studio',
+      'dashboards'
+    ]);
+    expect(screen.queryByRole('checkbox', { name: 'Code Studio' })).toBeNull();
+    // Every question is optional: only the email is required.
+    for (const box of screen.getAllByRole('checkbox')) expect(box).not.toBeRequired();
+    expect(screen.getByRole('textbox', { name: /Something else/ })).not.toBeRequired();
+    const comment = screen.getByRole('textbox', { name: /Anything you would like to tell us/ });
+    expect(comment).toHaveAttribute('maxLength', '1000');
+    expect(comment).toHaveAccessibleDescription('Up to 1,000 characters.');
+    expect(screen.getByText('Sign-up is not open yet. Your answers shape what we build next.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Register interest' })).toHaveAttribute('type', 'submit');
   });
 
-  it('submits the email, the chosen products and the note once, then says so calmly', async () => {
-    submit.mockResolvedValue({ ok: true, message: 'You are on the list.' });
+  it('the comment counter shows the count near the limit', () => {
+    render(<WaitlistForm kind="access" />);
+    const comment = screen.getByRole('textbox', { name: /Anything you would like to tell us/ });
+    fireEvent.change(comment, { target: { value: 'x'.repeat(850) } });
+    expect(comment).toHaveAccessibleDescription('850 of 1,000 characters');
+  });
+
+  it('the email alone submits, with no answers', async () => {
+    submit.mockResolvedValue({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
+    render(<WaitlistForm kind="access" source="auth-request-access" />);
+    fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
+    submitForm();
+    await settle();
+    expect(submit).toHaveBeenCalledWith('reader@example.com', 'access', { source: 'auth-request-access' }, undefined, {});
+  });
+
+  it('sends the chosen answers once, trimmed, then thanks them without promising an email', async () => {
+    submit.mockResolvedValue({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
     const onJoined = vi.fn();
-    render(<WaitlistForm kind="access" source="auth-request-access" buttonLabel="Request access" onJoined={onJoined} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Email address' }), { target: { value: 'Reader@Example.com' } });
-    const chip = screen.getByRole('button', { name: 'Comic Studio' });
-    fireEvent.click(chip);
-    expect(chip).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.change(screen.getByRole('textbox', { name: /anything you'd want to see/i }), { target: { value: 'Manga looks' } });
-    fireEvent.submit(screen.getByRole('button', { name: /request access/i }).closest('form')!);
+    render(<WaitlistForm kind="access" source="auth-request-access" onJoined={onJoined} />);
+    fireEvent.change(emailField(), { target: { value: 'Reader@Example.com' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /First name/ }), { target: { value: ' Asha ' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Translations into other languages' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Printing and export' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Making a comic by chatting' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Making a comic by chatting' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Something else/ }), { target: { value: ' Voice acting ' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Dashboards' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Anything you would like/ }), { target: { value: '  Manga for my class  ' } });
+    submitForm();
     await settle();
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith('Reader@Example.com', 'access', { source: 'auth-request-access' }, undefined, {
-      productInterests: ['comic_studio'],
-      feedback: 'Manga looks'
+      firstName: 'Asha',
+      features: ['translations', 'print'],
+      featureOther: 'Voice acting',
+      studios: ['dashboards'],
+      comment: 'Manga for my class'
     });
-    expect(screen.getByRole('status')).toHaveTextContent('You are on the list.');
+    const done = screen.getByRole('status');
+    expect(done).toHaveTextContent('Thank you, you are on the list.');
+    expect(done.textContent).not.toMatch(/email|inbox|account|invite/i);
+    expect(document.activeElement).toBe(done);
     expect(onJoined).toHaveBeenCalledWith('reader@example.com');
   });
 
-  it('an existing account is pointed at sign-in; a failure reads as a calm alert with a word and an icon', async () => {
-    submit.mockResolvedValueOnce({ ok: false, status: 'account-exists', message: 'You already have an account.' });
-    const onSignIn = vi.fn();
-    render(<WaitlistForm kind="access" onSignIn={onSignIn} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Email address' }), { target: { value: 'a@b.co' } });
-    fireEvent.submit(screen.getByRole('textbox', { name: 'Email address' }).closest('form')!);
-    await settle();
-    expect(screen.getByRole('status')).toHaveTextContent('You already have an account.');
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(onSignIn).toHaveBeenCalledTimes(1);
+  it('a bad email is shown at the field: marked invalid, described, focused; nothing is sent and no other alert shows', async () => {
+    for (const kind of ['access', 'updates'] as const) {
+      const view = render(<WaitlistForm kind={kind} />);
+      const form = emailField().closest('form')!;
+      // The form checks the address itself, so the browser's own bubbles never compete with it.
+      expect(form).toHaveAttribute('novalidate');
+      for (const bad of ['', 'reader', 'reader@example']) {
+        fireEvent.change(emailField(), { target: { value: bad } });
+        submitForm();
+        await settle();
+        expect(submit).not.toHaveBeenCalled();
+        expect(emailField()).toHaveAttribute('aria-invalid', 'true');
+        expect(emailField()).toHaveAccessibleDescription(bad ? 'That email does not look right. Please check it.' : 'Please enter your email address.');
+        expect(document.activeElement).toBe(emailField());
+        expect(screen.queryByRole('alert')).toBeNull();
+      }
+      // Editing the address clears the mark.
+      fireEvent.change(emailField(), { target: { value: 'reader@example.com' } });
+      expect(emailField()).not.toHaveAttribute('aria-invalid');
+      view.unmount();
+    }
+  });
 
-    submit.mockResolvedValueOnce({ ok: false, status: 'error', message: 'Something went wrong. Try again.' });
-    fireEvent.submit(screen.getByRole('textbox', { name: 'Email address' }).closest('form')!);
+  it('a failure is an honest alert and keeps everything typed', async () => {
+    submit.mockResolvedValueOnce({ ok: false, status: 'unavailable', message: 'We could not save that just now. Please try again in a moment.' });
+    render(<WaitlistForm kind="access" />);
+    fireEvent.change(emailField(), { target: { value: 'a@b.co' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Anything you would like/ }), { target: { value: 'Keep me' } });
+    submitForm();
     await settle();
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent('Something went wrong. Try again.');
+    expect(alert).toHaveTextContent('We could not save that just now.');
     expect(alert.querySelector('svg')).not.toBeNull();
+    expect(emailField()).toHaveValue('a@b.co');
+    expect(screen.getByRole('textbox', { name: /Anything you would like/ })).toHaveValue('Keep me');
+    // Trying again works from the same form.
+    submit.mockResolvedValueOnce({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.access });
+    submitForm();
+    await settle();
+    expect(screen.getByRole('status')).toHaveTextContent('Thank you');
+  });
+
+  it('kind "updates" is the email alone, with no questions', async () => {
+    submit.mockResolvedValue({ ok: true, status: 'registered', message: NEUTRAL_SUCCESS.updates });
+    render(<WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Add me to the list" />);
+    expect(screen.queryByRole('group')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getAllByRole('textbox')).toHaveLength(1);
+    expect(screen.queryByText(/Sign-up is not open yet/)).toBeNull();
+    fireEvent.change(emailField(), { target: { value: 'a@b.co' } });
+    submitForm();
+    await settle();
+    expect(submit).toHaveBeenCalledWith('a@b.co', 'updates', { source: 'home-stay-updated' }, undefined, {});
+    expect(screen.getByRole('status')).toHaveTextContent('Thank you, you are on the list.');
   });
 });

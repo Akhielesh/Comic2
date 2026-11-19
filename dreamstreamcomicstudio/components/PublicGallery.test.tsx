@@ -1,6 +1,7 @@
-// Public gallery (sharing.md §5.5): published v4 comics open their read-only share link /c/<slug> with
-// the public cover; the publish gate's rating shows as a badge; "Kids-friendly (G/PG)" keeps only G and
-// PG comics (an unrated comic is never assumed kids-friendly). Classic comics keep the in-app reader.
+// Public Library (sharing.md §5.5, services/publicListing.ts): only current Comic Studio publications are
+// listed, each opening its read-only share link /c/<slug> with the public cover and the publish gate's rating;
+// older comics are not listed (nor counted). A small Library shows its comics without search, sort or filters;
+// "Kids-friendly (G/PG)" keeps only G and PG comics once the Library is big enough to need it.
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,8 +36,18 @@ vi.mock('./common/SmartImage', () => ({
   )
 }));
 
-const { PublicGallery, shareSlugOf, publicCoverUrl, isKidsFriendly } = await import('./PublicGallery');
+const { PublicGallery, shareSlugOf, publicCoverUrl, isKidsFriendly, LIBRARY_TOOLS_MIN } = await import('./PublicGallery');
 const db = await import('../services/db');
+
+/** A listed comic: a published current-studio comic with a well-formed slug and a gate rating. */
+const listed = (index: number, name: string, extra: Record<string, unknown> = {}) =>
+  row(`comic-${String(index).padStart(3, '0')}`, name, { studioVersion: 4, shareSlug: `Slug${String(index).padStart(13, '0')}` }, { content_rating: 'PG', likes_count: 1, ...extra });
+const manyRows = (count: number) => Array.from({ length: count }, (_, index) => listed(index, `Story ${String(index).padStart(3, '0')}`));
+const LISTING_FILTERS = ['is_public=eq.true', 'is_forced_private=not.is.true', 'state->>studioVersion=eq.4', 'state->>shareSlug=not.is.null', 'content_rating=in.(G,PG,PG-13)'];
+const submitSearch = (value: string) => {
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value } });
+  fireEvent.submit(screen.getByRole('search'));
+};
 
 const row = (id: string, name: string, state: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
   id,
@@ -84,66 +95,69 @@ describe('PublicGallery helpers', () => {
   });
 });
 
-describe('PublicGallery', () => {
-  it('links published v4 comics to their share page with the public cover and rating', async () => {
+describe('PublicGallery lists only current Comic Studio comics', () => {
+  it('links each listed comic to its share page with the public cover and rating; an older comic is not listed', async () => {
     const onReadComic = vi.fn();
+    rows.value[1] = { ...rows.value[1], views_count: 12 };
     render(<PublicGallery onReadComic={onReadComic} onBack={() => undefined} />);
     const lake = await screen.findByRole('link', { name: 'Read The Lake' });
     expect(lake).toHaveAttribute('href', `/c/${SLUG}`);
     expect(lake.querySelector('img')?.getAttribute('src')).toBe(`https://sb.test/storage/v1/object/public/comic-assets/pub/${KEY}/cover-1080.webp`);
+    expect(screen.getByRole('link', { name: 'Read Night Raid' })).toHaveAttribute('href', `/c/BbCdEfGhIjKlMnOpQ`);
     expect(screen.getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Rated PG-13' })).toBeInTheDocument();
-    // Classic comics still open the in-app reader (and keep a real href for a new tab).
-    const classic = screen.getByRole('link', { name: 'Read Old Classic' });
-    expect(classic).toHaveAttribute('href', '/?view=read&id=classic-1');
-    fireEvent.click(classic);
-    expect(onReadComic).toHaveBeenCalledWith('classic-1');
+    expect(screen.queryByText('Old Classic')).toBeNull();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(2);
+    // A counted read shows; a zero does not.
+    expect(screen.getAllByText('Views:')).toHaveLength(1);
+    expect(screen.getByText('Views:').parentElement).toHaveTextContent('Views: 12');
+    // A plain click follows the share link (a full page the reader owns); the in-app reader is not asked.
+    fireEvent.click(lake);
+    expect(onReadComic).not.toHaveBeenCalled();
   });
 
-  it('filters to kids-friendly (G/PG) comics, never assuming an unrated one is', async () => {
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+  it('asks the database for listed comics only, with the count, one page at a time', async () => {
+    render(<PublicGallery onReadComic={() => undefined} />);
     await screen.findByRole('link', { name: 'Read The Lake' });
-    const toggle = screen.getByRole('button', { name: /Kids-friendly \(G\/PG\)/ });
-    expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Read Night Raid' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Read Old Classic' })).toBeNull();
+    const [query] = fakeSupabase.queriesOn('projects');
+    expect(query.filters).toEqual([...LISTING_FILTERS, 'order=likes_count.desc', 'order=id.asc', 'range=0-47']);
+    expect(query.count).toBe('exact');
+    // The rows that come back are listed ones only: the older comic never leaves the database.
+    const shipped = rows.value.filter((r) => r.id !== 'classic-1').map((r) => projectRow(r, query.columns));
+    expect(JSON.stringify(shipped)).not.toContain('classic');
   });
 
-  it('never lists a comic held by moderation', async () => {
+  it('drops an older comic the database returned anyway, and does not count it', async () => {
+    fakeSupabase.state.ignoredFilterColumns = new Set(['state->>studioVersion', 'state->>shareSlug', 'content_rating']);
+    rows.value = [
+      ...rows.value,
+      // An older comic that copied the studio keys into its own state: the server-set rating is still missing.
+      row('copycat', 'Copycat', { studioVersion: 4, shareSlug: 'CbCdEfGhIjKlMnOpQ' })
+    ];
+    render(<PublicGallery onReadComic={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read The Lake' });
+    expect(screen.queryByText('Old Classic')).toBeNull();
+    expect(screen.queryByText('Copycat')).toBeNull();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(2);
+    expect(screen.getByRole('status')).toHaveTextContent(/^2 comics$/);
+  });
+
+  it('never lists a comic held by moderation, even when the database returns it', async () => {
+    fakeSupabase.state.ignoredFilterColumns = new Set(['is_forced_private']);
     rows.value = [...rows.value, row('held', 'Held Comic', { studioVersion: 4, shareSlug: 'CbCdEfGhIjKlMnOpQ', publicCover: `pub/${KEY}/cover.webp` }, { content_rating: 'G', is_forced_private: true })];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    render(<PublicGallery onReadComic={() => undefined} />);
     await screen.findByRole('link', { name: 'Read The Lake' });
     expect(screen.queryByRole('link', { name: 'Read Held Comic' })).toBeNull();
-    expect(screen.getAllByTestId('gallery-card')).toHaveLength(3);
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(2);
   });
 
-  it('a rated row that is not a published v4 listing shows no rating and is not kids-friendly', async () => {
-    // An owner flipped the studio marker and swapped the classic cover fields on a rated row.
-    rows.value = [
-      row('evil', 'Evil', { studioVersion: 3, shareSlug: SLUG, panels: [{ id: 'p', imageUrl: 'https://evil.test/p.jpg' }] }, { content_rating: 'G', cover_image_url: 'https://evil.test/x.jpg' }),
-      rows.value[0]
-    ];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
-    const evil = await screen.findByRole('link', { name: 'Read Evil' });
-    // Treated like any classic comic: the in-app reader, never the share page, never a badge.
-    expect(evil).toHaveAttribute('href', '/?view=read&id=evil');
-    expect(evil.querySelector('[aria-label^="Rated"]')).toBeNull();
-    expect(screen.getAllByRole('img', { name: /^Rated / }).map((el) => el.getAttribute('aria-label'))).toEqual(['Rated PG']);
-    fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
-    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Read Evil' })).toBeNull();
-  });
-
-  it('a v4 listing never shows an owner-written cover (first or fallback), and signs no draft', async () => {
+  it('a listed comic never shows an owner-written cover (first or fallback), and signs no draft', async () => {
     const owner = { coverImageUrl: 'https://evil.test/c.jpg', coverImageId: 'u/u1/p/v4/img/draft.webp', panels: [{ id: 'p', imageUrl: 'https://evil.test/p.jpg' }, { id: 'q', imageId: 'u/u1/p/v4/img/q.webp' }], styleVariants: [{ id: 's', imageUrl: 'https://evil.test/s.jpg' }] };
     rows.value = [
       row('v4-a', 'No Cover Yet', { studioVersion: 4, shareSlug: 'BbCdEfGhIjKlMnOpQ', ...owner }, { content_rating: 'G', cover_image_url: 'https://evil.test/x.jpg' }),
       row('v4-b', 'With Cover', { studioVersion: 4, shareSlug: SLUG, publicCover: `pub/${KEY}/cover-1080.webp`, ...owner }, { content_rating: 'PG', cover_image_url: 'https://evil.test/x.jpg' })
     ];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    render(<PublicGallery onReadComic={() => undefined} />);
     const noCover = await screen.findByRole('link', { name: 'Read No Cover Yet' });
     const withCover = screen.getByRole('link', { name: 'Read With Cover' });
     const seen = [noCover, withCover].map((a) => {
@@ -154,136 +168,138 @@ describe('PublicGallery', () => {
     expect(withCover.querySelector('img')?.getAttribute('src')).toBe(`https://sb.test/storage/v1/object/public/comic-assets/pub/${KEY}/cover-1080.webp`);
     expect(noCover.querySelector('img')?.getAttribute('src')).toBeNull();
     expect(db.getImageUrl).not.toHaveBeenCalled();
-    // Both are real publications: their badges stay.
-    expect(screen.getByRole('img', { name: 'Rated G' })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Rated PG' })).toBeInTheDocument();
   });
 
-  it('says so when no comic is kids-friendly yet', async () => {
-    rows.value = [rows.value[1]];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
-    await screen.findByRole('link', { name: 'Read Night Raid' });
-    fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
-    expect(await screen.findByText('No kids-friendly comics yet.')).toBeInTheDocument();
-  });
-});
-
-// EGRESS-DB E3: the gallery reads cards (the columns and state keys a card reads), never a comic's whole state, and
-// asks the database to leave out held comics; the client still drops one that slips through.
-describe('PublicGallery reads cards', () => {
-  const VERSIONS = Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, state: { script: 'draft '.repeat(2_000) } }));
-  const galleryQueries = () => fakeSupabase.queriesOn('projects');
-
-  it('selects no `*`, no bare `state` and no `versions`, unheld public comics only, one page at a time', async () => {
-    rows.value = [...rows.value, row('big', 'Big Classic', { coverImageUrl: 'https://cdn.test/big.png', versions: VERSIONS, script: 'x'.repeat(10_000) })];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
-    await screen.findByRole('link', { name: 'Read Big Classic' });
-    const [query] = galleryQueries();
+  it('reads cards: no `*`, no bare `state`, no `versions`', async () => {
+    rows.value = [listed(1, 'Big', {}), ...rows.value];
+    (rows.value[0].state as Record<string, unknown>).versions = Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, state: { script: 'draft '.repeat(2_000) } }));
+    render(<PublicGallery onReadComic={() => undefined} />);
+    await screen.findByRole('link', { name: 'Read Big' });
+    const [query] = fakeSupabase.queriesOn('projects');
     const items = query.columns.split(',');
     expect(items).not.toContain('*');
     expect(items).not.toContain('state');
     expect(query.columns).not.toMatch(/versions|script/);
     for (const item of items) if (columnsRead(item)[0] === 'state') expect(item).toMatch(/^[A-Za-z]+:state->[A-Za-z]+$/);
-    expect(query.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=likes_count.desc', 'order=id.asc', 'range=0-47']);
-    // The rows on the wire are cards: a small fraction of the full rows.
     const shipped = rows.value.map((r) => projectRow(r, query.columns));
     expect(JSON.stringify(shipped)).not.toContain('draft draft');
     expect(jsonBytes(shipped)).toBeLessThan(jsonBytes(rows.value) / 10);
   });
 
-  it('the trending fallback and the recent tab keep the same projection', async () => {
+  it('the trending fallback keeps the same projection and the listing rule', async () => {
     fakeSupabase.state.failures.push({ when: (q) => q.table === 'projects' && q.filters.includes('order=likes_count.desc'), error: { code: '42703', message: 'no likes_count' } });
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
+    render(<PublicGallery onReadComic={() => undefined} />);
     await screen.findByRole('link', { name: 'Read The Lake' });
-    const [failed, fallback] = galleryQueries();
+    const [failed, fallback] = fakeSupabase.queriesOn('projects');
     expect(fallback.columns).toBe(failed.columns);
-    expect(fallback.filters).toEqual(['is_public=eq.true', 'is_forced_private=not.is.true', 'order=created_at.desc', 'order=id.asc', 'range=0-47']);
-  });
-
-  it('still drops a held comic the database returned (defence in depth)', async () => {
-    fakeSupabase.state.ignoredFilterColumns = new Set(['is_forced_private']);
-    rows.value = [...rows.value, row('held', 'Held Comic', { coverImageUrl: 'https://cdn.test/held.png' }, { is_forced_private: true })];
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
-    await screen.findByRole('link', { name: 'Read The Lake' });
-    expect(screen.queryByRole('link', { name: 'Read Held Comic' })).toBeNull();
-    expect(screen.getAllByTestId('gallery-card')).toHaveLength(3);
-  });
-
-  it('a classic card falls back to its first panel or style preview, signing ids from the projected fields', async () => {
-    rows.value = [
-      row('panel', 'Panel Only', { panels: [{ id: 'p', imageUrl: 'https://cdn.test/panel.png' }], styleVariants: [{ id: 's', imageUrl: 'https://cdn.test/style.png' }], versions: VERSIONS }),
-      row('style', 'Style Only', { styleVariants: [{ id: 's', imageUrl: 'https://cdn.test/style-only.png' }] }),
-      row('ids', 'Ids Only', { coverImageId: 'u1/cover.png', panels: [{ id: 'q', imageId: 'u1/q.png' }] })
-    ];
-    vi.mocked(db.getImageUrl).mockImplementation(async (id: string) => `https://signed.test/${id}`);
-    render(<PublicGallery onReadComic={() => undefined} onBack={() => undefined} />);
-    const panel = await screen.findByRole('link', { name: 'Read Panel Only' });
-    expect(panel.querySelector('img')?.getAttribute('src')).toBe('https://cdn.test/panel.png');
-    expect(panel.querySelector('img')?.getAttribute('data-fallbacks')).toContain('https://cdn.test/style.png');
-    expect(screen.getByRole('link', { name: 'Read Style Only' }).querySelector('img')?.getAttribute('src')).toBe('https://cdn.test/style-only.png');
-    const ids = screen.getByRole('link', { name: 'Read Ids Only' });
-    expect(ids.querySelector('img')?.getAttribute('src')).toBe('https://signed.test/u1/cover.png');
-    expect(ids.querySelector('img')?.getAttribute('data-fallbacks')).toContain('https://signed.test/u1/q.png');
-    expect(db.getImageUrl).toHaveBeenCalledWith('u1/cover.png', expect.anything());
+    expect(fallback.filters).toEqual([...LISTING_FILTERS, 'order=created_at.desc', 'order=id.asc', 'range=0-47']);
   });
 });
 
-describe('PublicGallery on the Atlas tokens', () => {
-  it('signed out: a calm sign-in note (an outline "Sign in", no yellow "Log In"), no Back button of its own, the display title', async () => {
+describe('a small Library looks deliberate', () => {
+  it('one comic: the comic first, then the samples; no search, sort, filter, visible count or sign-in prompt', async () => {
+    rows.value = [rows.value[0]];
     const onRequireAuth = vi.fn();
     const { container } = render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} onRequireAuth={onRequireAuth} />);
     await screen.findByRole('link', { name: 'Read The Lake' });
     expect(screen.getByRole('heading', { level: 1, name: 'Library' })).toBeInTheDocument();
-    const signIn = screen.getByRole('button', { name: 'Sign in' });
-    expect(signIn).toHaveAttribute('data-variant', 'outline');
-    fireEvent.click(signIn);
-    expect(onRequireAuth).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: /log in|back home/i })).toBeNull();
-    expect(container.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|bg-slate-50|text-white|#[0-9a-f]{6}\b/i);
+    expect(screen.queryByRole('search')).toBeNull();
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Kids-friendly/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /sign in|log in|back home/i })).toBeNull();
+    // The count is still announced to a screen reader, but not shown.
+    expect(screen.getByRole('status')).toHaveTextContent(/^1 comic$/);
+    expect(screen.getByRole('status')).toHaveClass('sr-only');
+    // Real comics come before the two short samples.
+    const comics = screen.getByRole('region', { name: 'New comics' });
+    const samples = screen.getByRole('region', { name: 'Studio samples' });
+    expect(comics.compareDocumentPosition(samples) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A visitor sees likes, but no button that leads to a sign-in page.
+    const card = screen.getByTestId('gallery-card');
+    expect(within(card).queryByRole('button')).toBeNull();
+    expect(within(card).getByText('Likes:')).toBeInTheDocument();
+    // A zero read count is left out (current-studio reads are counted with the publication, not on the row).
+    expect(within(card).queryByText('Views:')).toBeNull();
+    expect(onRequireAuth).not.toHaveBeenCalled();
+    // No maker stand-in ("by user-…") under the title.
+    expect(card.textContent).not.toMatch(/\bby\b|user-/);
+    expect(container.innerHTML).not.toMatch(/border-black|shadow-comic|font-comic|(?<![\w-])font-display|brand-(?:yellow|blue|red)|bg-slate-50|text-white|orange|#[0-9a-f]{6}\b/i);
   });
 
-  it('sorts with one segmented switch and filters with a pressed toggle; each card names its comic under the cover', async () => {
-    render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} />);
-    await screen.findByRole('link', { name: 'Read The Lake' });
-    const sort = screen.getByRole('radiogroup', { name: 'Sort the Library' });
-    expect(screen.getByRole('radio', { name: 'Trending' })).toHaveAttribute('aria-checked', 'true');
-    expect(sort).toBeInTheDocument();
-    expect(screen.getByRole('searchbox', { name: 'Search comic titles' })).toBeInTheDocument();
-    for (const card of screen.getAllByTestId('gallery-card')) expect(card.tagName).toBe('LI');
-    expect(within(screen.getByRole('region', { name: 'From the community' })).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Old Classic', 'The Lake', 'Night Raid']);
+  it('one or two comics read as wide cards like the samples (cover, title, date, a read link), never a near-empty row', async () => {
+    for (const count of [1, 2]) {
+      fakeSupabase.reset();
+      rows.value = manyRows(count);
+      const view = render(<PublicGallery onReadComic={vi.fn()} />);
+      await screen.findByText('Story 000');
+      const list = screen.getByRole('list');
+      expect(list).toHaveAttribute('data-layout', 'few');
+      const cards = screen.getAllByTestId('gallery-card');
+      expect(cards).toHaveLength(count);
+      for (const card of cards) {
+        expect(card).toHaveAttribute('data-layout', 'wide');
+        // One link per card, holding the cover and saying where it goes, with the date and likes beside it.
+        const link = within(card).getByRole('link', { name: /^Read Story/ });
+        expect(link.querySelector('img')).not.toBeNull();
+        expect(within(link).getByText('Read comic')).toBeInTheDocument();
+        expect(within(card).getByText('Likes:')).toBeInTheDocument();
+        expect(within(card).getByText(/\d{4}/)).toBeInTheDocument();
+      }
+      view.unmount();
+    }
   });
 
-  it('says so in the shared empty state when nothing is listed', async () => {
-    rows.value = [];
-    render(<PublicGallery onReadComic={vi.fn()} onBack={vi.fn()} />);
-    expect(await screen.findByRole('heading', { level: 3, name: 'The next story could be yours.' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('0 comics');
+  it('three comics or more keep the cover grid', async () => {
+    rows.value = manyRows(3);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(screen.getByRole('list')).not.toHaveAttribute('data-layout');
+    for (const card of screen.getAllByTestId('gallery-card')) expect(card).not.toHaveAttribute('data-layout');
+  });
+
+  it('an empty Library shows no comics section, no "0 comics" and no empty shelf: just the samples', async () => {
+    rows.value = [rows.value[2]];
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await waitFor(() => expect(fakeSupabase.queriesOn('projects')).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'New comics' })).toBeNull());
+    expect(screen.queryByText(/0 comics/)).toBeNull();
+    expect(screen.queryByRole('heading', { level: 3, name: /next story|No matching/ })).toBeNull();
     expect(screen.getByRole('link', { name: 'Read The Paper Boat' })).toBeInTheDocument();
+  });
+
+  it(`up to the threshold (${6}) the tools stay hidden; above it they appear with the visible count`, async () => {
+    expect(LIBRARY_TOOLS_MIN).toBe(6);
+    rows.value = manyRows(LIBRARY_TOOLS_MIN);
+    const first = render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(screen.queryByRole('search')).toBeNull();
+    first.unmount();
+    fakeSupabase.reset();
+    rows.value = manyRows(LIBRARY_TOOLS_MIN + 1);
+    render(<PublicGallery onReadComic={vi.fn()} />);
+    await screen.findByText('Story 000');
+    expect(await screen.findByRole('searchbox', { name: 'Search comic titles' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Sort the Library' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/^7 comics$/);
+    expect(screen.getByRole('status')).not.toHaveClass('sr-only');
+    // There is no creator search: makers' names are not public.
+    expect(screen.queryByRole('combobox')).toBeNull();
   });
 });
 
 describe('Library discovery and recovery', { timeout: 15000 }, () => {
-  const manyRows = (count: number) => Array.from({ length: count }, (_, index) => row(
-    `comic-${String(index).padStart(3, '0')}`, `Story ${String(index).padStart(3, '0')}`,
-    { coverImageUrl: 'https://cdn.test/cover.webp' }, { likes_count: 1 }
-  ));
-  const submitSearch = (value: string) => {
-    fireEvent.change(screen.getByRole('searchbox'), { target: { value } });
-    fireEvent.submit(screen.getByRole('search'));
-  };
-
-  it('searches titles beyond the first page and keeps the wire projection bounded', async () => {
+  it('searches titles beyond the first page and keeps the listing rule on the search', async () => {
     rows.value = manyRows(65);
     render(<PublicGallery onReadComic={vi.fn()} />);
     await screen.findByText('Story 000');
     expect(screen.queryByText('Story 064')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('65 comics');
     submitSearch('Story 064');
     expect(await screen.findByText('Story 064')).toBeInTheDocument();
     expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
     const searched = fakeSupabase.queriesOn('projects').at(-1)!;
-    expect(searched.filters).toContain('name=ilike.%Story 064%');
-    expect(searched.filters).toContain('range=0-47');
-    expect(searched.columns).not.toMatch(/versions|script/);
+    expect(searched.filters).toEqual(expect.arrayContaining([...LISTING_FILTERS, 'name=ilike.%Story 064%', 'range=0-47']));
+    expect(screen.getByRole('status')).toHaveTextContent('1 comic for “Story 064”');
   });
 
   it('loads the next stable page once, preserves existing cards, and focuses its first comic', async () => {
@@ -291,55 +307,52 @@ describe('Library discovery and recovery', { timeout: 15000 }, () => {
     render(<PublicGallery onReadComic={vi.fn()} />);
     await screen.findByText('Story 000');
     expect(screen.getAllByTestId('gallery-card')).toHaveLength(48);
+    expect(screen.getByText('Showing 48 of 65 comics.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Load more comics' }));
     const next = (await screen.findByText('Story 048')).closest('a');
     await waitFor(() => expect(next).toHaveFocus());
     expect(screen.getAllByTestId('gallery-card')).toHaveLength(65);
-    expect(screen.getByText('Story 000')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load more comics' })).toBeNull();
-    expect(fakeSupabase.queriesOn('projects').at(-1)?.filters).toEqual(expect.arrayContaining(['order=likes_count.desc', 'order=id.asc', 'range=48-95']));
+    const later = fakeSupabase.queriesOn('projects').at(-1)!;
+    expect(later.filters).toEqual(expect.arrayContaining([...LISTING_FILTERS, 'order=likes_count.desc', 'order=id.asc', 'range=48-95']));
+    expect(later.count).toBeUndefined();
   });
 
-  it('filters kids-friendly comics across all pages, while retaining the publication gate', async () => {
-    rows.value = [...manyRows(60), row('safe', 'Safe Story', { studioVersion: 4, shareSlug: SLUG }, { content_rating: 'G' }), row('fake-safe', 'Unpublished Rating', {}, { content_rating: 'G' })];
+  it('filters kids-friendly comics in the query and on the client', async () => {
+    rows.value = [...manyRows(8), listed(90, 'Safe Story', { content_rating: 'G' }), listed(91, 'Older Teen', { content_rating: 'PG-13' })];
     render(<PublicGallery onReadComic={vi.fn()} />);
     await screen.findByText('Story 000');
-    fireEvent.click(screen.getByRole('button', { name: /Kids-friendly/ }));
+    const toggle = await screen.findByRole('button', { name: /Kids-friendly \(G\/PG\)/ });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expect(await screen.findByRole('link', { name: 'Read Safe Story' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Read Unpublished Rating' })).toBeNull();
-    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Read Older Teen' })).toBeNull());
     expect(fakeSupabase.queriesOn('projects').at(-1)?.filters).toContain('content_rating=in.(G,PG)');
   });
 
-  it('uses exact creator handles and creator names open that creator’s complete shelf', async () => {
-    rows.value = [...manyRows(50), row('other', 'Someone Else', {}, { user_id: 'u2' })];
-    fakeSupabase.state.tables.profiles.push({ id: 'u2', username: 'mira2' });
+  it('says so when no comic is kids-friendly yet, and the tools stay while filtering', async () => {
+    rows.value = Array.from({ length: 8 }, (_, i) => listed(i, `Teen ${i}`, { content_rating: 'PG-13' }));
     render(<PublicGallery onReadComic={vi.fn()} />);
-    await screen.findByText('Story 000');
-    fireEvent.click(screen.getAllByText('by mira')[0]);
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Search by' })).toHaveValue('creator'));
-    await screen.findByText('Story 000');
-    expect(screen.queryByText('Someone Else')).toBeNull();
-    expect(fakeSupabase.queriesOn('profiles').some((q) => q.filters.includes('username=ilike.mira'))).toBe(true);
-    submitSearch('@mira2');
-    expect(await screen.findByText('Someone Else')).toBeInTheDocument();
-    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    await screen.findByText('Teen 0');
+    fireEvent.click(await screen.findByRole('button', { name: /Kids-friendly/ }));
+    expect(await screen.findByText('No kids-friendly comics yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Kids-friendly/ })).toBeInTheDocument();
   });
 
   it('treats wildcard punctuation as literal text', async () => {
-    rows.value = [row('literal', '100%_done', {}), row('other', '100 percent done', {})];
+    rows.value = [...manyRows(7), listed(80, '100%_done'), listed(81, '100 percent done')];
     render(<PublicGallery onReadComic={vi.fn()} />);
     await screen.findByRole('link', { name: 'Read 100%_done' });
     submitSearch('%_');
     expect(await screen.findByRole('link', { name: 'Read 100%_done' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Read 100 percent done' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Read 100 percent done' })).toBeNull());
   });
 
-  it('reports a failed first request with retry instead of an empty collection or silent sort fallback', async () => {
+  it('reports a failed first request with retry instead of an empty collection', async () => {
     fakeSupabase.state.failures.push({ when: (q) => q.table === 'projects', error: { code: '503', message: 'Unavailable' } });
     render(<PublicGallery onReadComic={vi.fn()} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('The community Library could not be loaded.');
-    expect(screen.queryByText('The next story could be yours.')).toBeNull();
+    expect(await screen.findByRole('alert')).toHaveTextContent('The Library could not be loaded.');
     expect(fakeSupabase.queriesOn('projects')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
@@ -357,43 +370,32 @@ describe('Library discovery and recovery', { timeout: 15000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByText('Story 064');
     expect(screen.getAllByTestId('gallery-card')).toHaveLength(65);
-    expect(fakeSupabase.queriesOn('projects').slice(-2).every((q) => q.filters.includes('range=48-95'))).toBe(true);
   });
 
   it('does not replace a newer search with an older slow result', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     fakeSupabase.state.gates.push({ when: (q) => q.filters.includes('name=ilike.%Slow%'), release: gate });
-    rows.value.push(row('slow', 'Slow Story', {}));
+    rows.value = [...manyRows(7), listed(70, 'Slow Story'), listed(71, 'The Lake')];
     render(<PublicGallery onReadComic={vi.fn()} />);
     await screen.findByRole('link', { name: 'Read The Lake' });
     submitSearch('Slow');
     await waitFor(() => expect(fakeSupabase.queriesOn('projects').some((q) => q.filters.includes('name=ilike.%Slow%'))).toBe(true));
     submitSearch('Lake');
-    await screen.findByRole('link', { name: 'Read The Lake' });
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Read Story 000' })).toBeNull());
     await act(async () => { release(); await gate; });
     expect(screen.getByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Read Slow Story' })).toBeNull();
   });
 
-  it('makes each title and cover one native link and preserves modifier-click navigation', async () => {
-    const onReadComic = vi.fn();
-    render(<PublicGallery onReadComic={onReadComic} />);
-    const classic = await screen.findByRole('link', { name: 'Read Old Classic' });
-    expect(classic.querySelector('h3')).toHaveTextContent('Old Classic');
-    fireEvent.click(classic, { ctrlKey: true });
-    expect(onReadComic).not.toHaveBeenCalled();
-    fireEvent.click(classic.querySelector('h3')!);
-    expect(onReadComic).toHaveBeenCalledWith('classic-1');
-  });
-
   it('distinguishes a search with no matches and clears it without leaving the Library', async () => {
+    rows.value = manyRows(7);
     render(<PublicGallery onReadComic={vi.fn()} />);
-    await screen.findByRole('link', { name: 'Read The Lake' });
+    await screen.findByText('Story 000');
     submitSearch('Does not exist');
     expect(await screen.findByRole('heading', { name: 'No matching comics.' })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0]);
-    expect(await screen.findByRole('link', { name: 'Read The Lake' })).toBeInTheDocument();
+    expect(await screen.findByText('Story 000')).toBeInTheDocument();
     expect(screen.getByRole('searchbox')).toHaveValue('');
   });
 });
@@ -409,7 +411,7 @@ describe('Library sample reading', () => {
     expect(screen.getByRole('heading', { name: 'The Paper Boat', level: 1 })).toHaveFocus();
     expect(window.location.search).toBe('?view=gallery&sample=paper-boat');
     fireEvent.click(screen.getByRole('button', { name: 'Next sample page' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Page 2 of 2');
+    expect(screen.getAllByRole('status').some((el) => /Page 2 of 2/.test(el.textContent ?? ''))).toBe(true);
     fireEvent.click(screen.getByRole('link', { name: 'Back to Library' }));
     await waitFor(() => expect(card).toHaveFocus());
     expect(window.location.search).toBe('?view=gallery');

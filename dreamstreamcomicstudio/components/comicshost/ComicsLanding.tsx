@@ -76,8 +76,8 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
             </div>
             {!signedIn && (
               <p className="comics-invitation">
-                New accounts are by invitation.{' '}
-                <button type="button" className={cn(TEXT_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onRequestAccess}>Request access</button>
+                Sign-up is not open yet.{' '}
+                <button type="button" className={cn(TEXT_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onRequestAccess}>Register interest</button>
               </p>
             )}
           </div>

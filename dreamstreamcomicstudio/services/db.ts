@@ -7,6 +7,7 @@ import { buildApiUrl } from "./clientConfig";
 import { isStudioV4Project } from "./studioDeepLink";
 import { isContentRating } from "../shared/comic/safety";
 import { CARD_STATE, isCardState } from './projectCardState';
+import { filterPublicListing, isPubliclyListed } from './publicListing';
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -1696,13 +1697,12 @@ export const getProfileByUsername = async (username: string): Promise<UserProfil
 };
 
 export const getPublicProjectsByUser = async (userId: string): Promise<Project[]> => {
-  // Cards only (EGRESS-DB E3), and a comic held by moderation is never shipped.
-  const { data, error } = await supabase
+  // Cards only (EGRESS-DB E3), and only comics the public listing rule shows (services/publicListing.ts):
+  // the database leaves the others out, and the client drops any that slip through.
+  const { data, error } = await filterPublicListing(supabase
     .from('projects')
     .select(GALLERY_CARD_SELECT)
-    .eq('user_id', userId)
-    .eq('is_public', true)
-    .not('is_forced_private', 'is', true)
+    .eq('user_id', userId))
     .order('created_at', { ascending: false });
 
   if (error) return [];
@@ -1710,7 +1710,8 @@ export const getPublicProjectsByUser = async (userId: string): Promise<Project[]
   const rows = ((data || []) as unknown[])
     .filter(isProjectCardRow)
     .map((row) => ({ ...row, state: galleryCardStateOf(row) }) as ProjectRow)
-    .filter(isProjectRow);
+    .filter(isProjectRow)
+    .filter((row) => isPubliclyListed(row));
   const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
   return rows.map((row): Project => {
     const project: ProjectWithStats = {

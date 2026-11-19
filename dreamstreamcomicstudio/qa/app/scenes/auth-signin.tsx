@@ -1,6 +1,6 @@
 // QA scene `auth-signin` (DS-3; the scene contract is in qa/app/index.tsx): the sign-in card most people meet —
 // no invite, the password step with "Remember me", "Email me a sign-in link", "Forgot password?" and the
-// "Enter Studio" submit, under the Sign in / Request access switch. The page brings its own <main>. Nothing is
+// "Enter Studio" submit, under the Sign in / Register interest switch. The page brings its own <main>. Nothing is
 // submitted (the form only acts on submit, and the scene never submits it), so nothing reaches the network.
 // (The invited sign-up form is scene `auth`; the access request is scene `auth-access`.)
 

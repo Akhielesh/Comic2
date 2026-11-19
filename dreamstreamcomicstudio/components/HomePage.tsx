@@ -33,6 +33,7 @@ import {
 import { cn } from '../lib/utils';
 import { followLiveLink, liveAppUrl, openLiveApp } from '../services/liveLink';
 import { WaitlistForm } from './WaitlistForm';
+import { UPDATES_CARD } from '../shared/interest';
 import { useAuth } from '../contexts/AuthContext';
 import { comicsEntryUrl } from '../services/productHost';
 import { SUPPORT_EMAIL } from './legal/contacts';
@@ -429,19 +430,19 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
-      {/* Stay updated — email capture */}
+      {/* The Stream Studio list (kind 'updates'): it promises no email while none are sent (shared/interest.ts UPDATES_CARD). */}
       <section id="stay-updated" className="px-4 py-16 sm:px-6 medium:py-20 bg-[var(--ds-sidebar)] border-y border-[var(--ds-hairline)] scroll-mt-24">
         <div className="max-w-3xl mx-auto">
           <div className={cn(FEATURE_CARD, 'p-6 medium:p-10 text-center')}>
             <div className={cn(EYEBROW, 'mb-5')}>
-              <Mail size={14} aria-hidden /> Stay in the loop
+              <Mail size={14} aria-hidden /> {UPDATES_CARD.eyebrow}
             </div>
-            <h2 className={cn(DISPLAY_SECTION, 'mb-3')}>Want to stay updated?</h2>
+            <h2 className={cn(DISPLAY_SECTION, 'mb-3')}>{UPDATES_CARD.title}</h2>
             <p className={cn(PUBLIC_BODY, 'max-w-xl mx-auto mb-7')}>
-              Get Stream Studio beta updates, early access invites, launch notes, and the heads-up when new creator workflows go live. No spam — just the useful stuff.
+              {UPDATES_CARD.body}
             </p>
             <div className="max-w-lg mx-auto">
-              <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />
+              <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel={UPDATES_CARD.button} />
             </div>
             <p className="mt-4 text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)] [overflow-wrap:anywhere]">
               Prefer email? Reach us at{' '}

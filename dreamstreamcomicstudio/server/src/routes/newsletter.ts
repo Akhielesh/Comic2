@@ -13,14 +13,23 @@ import {
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
-import { resendPendingInvite } from '../services/invites.js';
-import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
+import {
+  INTEREST_LIMITS,
+  INTEREST_THANKS,
+  cleanBlock,
+  cleanLine,
+  interestMetadata,
+  interestThanks,
+  knownFeatures,
+  knownStudios,
+  type InterestAnswers
+} from '../../../shared/interest.js';
 
-// Public, logged-out newsletter + waitlist capture with double opt-in. Mounted with
-// optionalAuth BEFORE the global requireAuth (like /api/telemetry), so the marketing site
-// can call it while signed out. Reads/writes go through the service role under the hood;
-// the client never sees tokens or the list.
+// Public, logged-out "register your interest" capture (kind 'access') and product updates
+// (kind 'updates'). Mounted with optionalAuth BEFORE the global requireAuth (like
+// /api/telemetry), so signed-out pages can call it. Writes go through the service role; the
+// client never sees tokens or the list. Sends no email unless INTEREST_EMAILS is "on".
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -35,113 +44,136 @@ const baseUrl = (req: Request): string =>
 const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter=${encodeURIComponent(status)}`;
 
 /**
- * Does this email already belong to an account (profiles, service role)? Best-effort:
- * any failure (no service role, transient DB error) returns false so the lookup can
- * never block a waitlist capture.
+ * Interest emails are off unless INTEREST_EMAILS is exactly "on" (unset, empty or anything else is
+ * off). Off means registering (either kind) stores the row and sends nothing, and the confirm link
+ * in older emails still confirms without the welcome email. Read per request, never cached.
  */
-const accountExistsForEmail = async (email: string): Promise<boolean> => {
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('profiles')
-      .select('id')
-      .ilike('email', email.replace(/[%_]/g, ''))
-      .limit(1)
-      .maybeSingle();
-    return !error && Boolean(data?.id);
-  } catch {
-    return false;
-  }
+export const interestEmailsOn = (): boolean => process.env.INTEREST_EMAILS === 'on';
+
+type Checked<T> = { ok: true; value: T; message?: undefined } | { ok: false; value?: undefined; message: string };
+
+/** Optional text: absent is fine; not text, or longer than `max` once cleaned, is refused (never cut). */
+const optionalText = (raw: unknown, max: number, clean: (v: string) => string, label: string): Checked<string | undefined> => {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined };
+  if (typeof raw !== 'string') return { ok: false, message: `${label} must be text.` };
+  const value = clean(raw);
+  if (value.length > max) return { ok: false, message: `${label} can be at most ${max} characters.` };
+  return { ok: true, value: value || undefined };
 };
 
-// POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source?, firstName? }
+/** Optional list: absent is fine; not a list, or longer than the cap, is refused. Entries are filtered later. */
+const optionalList = (raw: unknown, label: string): Checked<unknown[]> => {
+  if (raw === undefined || raw === null) return { ok: true, value: [] };
+  if (!Array.isArray(raw)) return { ok: false, message: `${label} must be a list.` };
+  if (raw.length > INTEREST_LIMITS.listMax) return { ok: false, message: `${label}: choose at most ${INTEREST_LIMITS.listMax}.` };
+  return { ok: true, value: raw };
+};
+
+/**
+ * The optional answers, checked here whatever the client did: unknown ids dropped, each id once,
+ * control characters stripped (the comment keeps its line breaks), and anything of the wrong type or
+ * over its limit refused with a 400 that says what to shorten. Older forms sent `productInterests`
+ * (studio picks) and `feedback` (the note); both are still read.
+ */
+export const readInterestAnswers = (body: Record<string, unknown>): Checked<InterestAnswers> => {
+  const features = optionalList(body.features, 'Features');
+  if (!features.ok) return { ok: false, message: features.message };
+  const studios = optionalList(body.studios ?? body.productInterests, 'Studios');
+  if (!studios.ok) return { ok: false, message: studios.message };
+  const firstName = optionalText(body.firstName, INTEREST_LIMITS.firstNameMax, cleanLine, 'First name');
+  if (!firstName.ok) return { ok: false, message: firstName.message };
+  const other = optionalText(body.featureOther, INTEREST_LIMITS.otherMax, cleanLine, 'Something else');
+  if (!other.ok) return { ok: false, message: other.message };
+  const comment = optionalText(body.comment ?? body.feedback, INTEREST_LIMITS.commentMax, cleanBlock, 'Your comment');
+  if (!comment.ok) return { ok: false, message: comment.message };
+  const featureIds = knownFeatures(features.value);
+  const studioIds = knownStudios(studios.value);
+  return {
+    ok: true,
+    value: {
+      ...(firstName.value ? { firstName: firstName.value } : {}),
+      ...(featureIds.length ? { features: featureIds } : {}),
+      ...(other.value ? { featureOther: other.value } : {}),
+      ...(studioIds.length ? { studios: studioIds } : {}),
+      ...(comment.value ? { comment: comment.value } : {})
+    }
+  };
+};
+
+/** The one answer every valid address gets, per kind, whatever its history (here: with no optional answers). */
+export const NEUTRAL_REPLY = {
+  access: { ok: true, status: 'registered', message: INTEREST_THANKS.access },
+  updates: { ok: true, status: 'registered', message: INTEREST_THANKS.updates }
+} as const;
+
+/** NEUTRAL_REPLY for one request: it thanks for the answers when some were sent (what was sent, never the address). */
+export const neutralReply = (kind: 'access' | 'updates', answers: InterestAnswers) => ({
+  ...NEUTRAL_REPLY[kind],
+  message: interestThanks(kind, answers)
+});
+
+const invalid = (message: string) => ({ ok: false, status: 'invalid', message });
+
+// POST /api/newsletter/subscribe
+//   { email, kind?: 'access'|'updates', source?, firstName?, features?: string[], featureOther?,
+//     studios?: string[], comment?, captchaToken? }
+// Every valid address gets NEUTRAL_REPLY[kind]: the same status and body for a new address, one already
+// on the list, one with an account and one holding an invite. The route never looks the address up in
+// accounts or invites and never re-sends an invite, so a caller learns nothing about it.
 newsletterRouter.post('/subscribe', async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.body?.email ?? ''));
-    const kind = req.body?.kind === 'access' ? 'access' : 'updates';
-    const firstName = typeof req.body?.firstName === 'string' ? req.body.firstName.slice(0, 80) : undefined;
-    const source = typeof req.body?.source === 'string' ? req.body.source.slice(0, 200) : undefined;
-    // Optional intent capture — whitelisted/capped in upsertSubscriber.
-    const intent = {
-      productInterests: Array.isArray(req.body?.productInterests)
-        ? (req.body.productInterests as unknown[]).map(String).slice(0, 10)
-        : undefined,
-      feedback: typeof req.body?.feedback === 'string' ? req.body.feedback.slice(0, 1000) : undefined
-    };
+    const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>;
+    const email = normalizeEmail(typeof body.email === 'string' ? body.email : '');
+    const kind = body.kind === 'access' ? 'access' : 'updates';
 
-    if (!email) return res.status(400).json({ ok: false, message: 'Please enter your email address.' });
+    if (!email) return res.status(400).json(invalid('Please enter your email address.'));
     if (!EMAIL_REGEX.test(email) || email.length > 320) {
-      return res.status(400).json({ ok: false, message: 'That email doesn’t look right — please check it.' });
+      return res.status(400).json(invalid('That email does not look right. Please check it.'));
     }
+    const answers = readInterestAnswers(body);
+    if (!answers.ok) return res.status(400).json(invalid(answers.message));
+    // The surface tag is ours, not the person's: cleaned and cut, never a reason to refuse.
+    const source = typeof body.source === 'string' ? cleanLine(body.source).slice(0, INTEREST_LIMITS.sourceMax) || undefined : undefined;
 
     // Bot protection (no-op unless TURNSTILE_SECRET_KEY is configured).
-    const captchaToken = typeof req.body?.captchaToken === 'string' ? req.body.captchaToken : undefined;
+    const captchaToken = typeof body.captchaToken === 'string' ? body.captchaToken : undefined;
     if (!(await verifyTurnstile(captchaToken, req.ip))) {
-      return res.status(400).json({ ok: false, message: 'Please complete the verification challenge and try again.' });
+      return res
+        .status(400)
+        .json({ ok: false, status: 'verify', message: 'Please complete the verification check and try again.' });
     }
 
-    if (kind === 'access') {
-      // Dedupe 1: an existing ACCOUNT doesn't belong on the waitlist — tell them to
-      // sign in instead (200 + ok:false + status, so the client treats it as
-      // authoritative and doesn't fall back to a direct insert).
-      if (await accountExistsForEmail(email)) {
-        return res.json({
-          ok: false,
-          status: 'account-exists',
-          message: 'You already have an account — sign in instead.'
-        });
-      }
-
-      // Dedupe 1.5: an ALREADY-INVITED email doesn't belong on the waitlist either —
-      // they already have access. Re-send their invite (cooldown-guarded inside) and
-      // point them at the email instructions. Behind the same Turnstile gate as the
-      // rest of this route, so this isn't a free enumeration oracle.
-      const invited = await resendPendingInvite(email, { requestId: req.requestId });
-      if (invited.status === 'invited') {
-        return res.json({
-          ok: false,
-          status: 'already-invited',
-          resent: invited.resent,
-          message: invited.resent
-            ? 'You already have access — we just re-sent your invite email. Follow its instructions to set up your account.'
-            : 'You already have access — check your inbox for the invite email (sent recently) and follow its instructions to set up your account.'
-        });
-      }
-
-      const token = newConfirmToken();
-      const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {}, intent);
-
-      // Dedupe 2: already on the waitlist — soft success, no duplicate row, no re-email.
-      if (outcome === 'already_registered' || outcome === 'already_confirmed') {
-        return res.json({
-          ok: true,
-          status: 'already-registered',
-          alreadyJoined: true,
-          message: "You're already on the list."
-        });
-      }
-
-      // NEW signup: acknowledge with the access-requested template (essential) —
-      // best-effort and non-blocking; a mailer failure is logged by the mailer and
-      // must never fail the signup itself.
-      void sendAccessRequested(email, firstName, reqMeta(req));
-      return res.json({
-        ok: true,
-        status: 'joined',
-        alreadyJoined: false,
-        message: "Thanks! We'll email you the moment access opens up."
-      });
-    }
-
-    // Newsletter double opt-in.
+    // Answers ride in the existing metadata (jsonb) column, the shape the form's direct save writes too;
+    // the comment and the studio picks also go to the existing feedback / product_interests columns.
+    const { firstName, studios, comment } = answers.value;
+    const intent = {
+      ...(studios?.length ? { productInterests: studios } : {}),
+      ...(comment ? { feedback: comment } : {})
+    };
     const token = newConfirmToken();
-    const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
-    if (outcome === 'already_confirmed') {
-      return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
+    const emailsOn = interestEmailsOn();
+    let outcome: string;
+    try {
+      // An address already on the list keeps its row as it is; only with emails on does an unconfirmed
+      // 'updates' row get a fresh confirm token (the link about to be sent). A store that saved nothing throws.
+      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers.value), intent, { reissueToken: emailsOn }));
+    } catch (err) {
+      console.warn('[newsletter] store failed', (err as Error)?.message);
+      return res
+        .status(503)
+        .json({ ok: false, status: 'unavailable', message: 'We could not save that just now. Please try again in a moment.' });
     }
-    const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
-    void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
-    return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
+
+    if (emailsOn) {
+      // Best-effort and never awaited: a mailer failure must not change the answer. A confirm email only goes
+      // with a token the store just wrote (a new row, or a renewed one), so its link always matches the row.
+      if (kind === 'access' && outcome === 'new') void sendAccessRequested(email, firstName, reqMeta(req));
+      if (kind === 'updates' && (outcome === 'new' || outcome === 'pending')) {
+        const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
+        void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
+      }
+    }
+    return res.status(200).json(neutralReply(kind, answers.value));
   } catch (err) {
     next(err);
   }
@@ -157,8 +189,8 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const confirmed = await confirmSubscriber(email, token);
     if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
 
-    // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    // Welcome is marketing: only once they opted in (here), and only while interest emails are on.
+    if (interestEmailsOn()) void sendNewsletterWelcome(email, undefined, reqMeta(req));
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

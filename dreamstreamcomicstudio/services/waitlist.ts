@@ -1,169 +1,176 @@
 import { supabase } from './supabase';
-import { API_BASE_URL, buildApiUrl } from './clientConfig';
+import { API_BASE_URL, buildApiUrl, turnstileEnabled } from './clientConfig';
+import {
+  INTEREST_LIMITS,
+  INTEREST_THANKS,
+  cleanBlock,
+  cleanLine,
+  interestMetadata,
+  interestThanks,
+  knownFeatures,
+  knownStudios,
+  type InterestAnswers
+} from '../shared/interest';
+
+export {
+  INTEREST_COUNT_FROM,
+  INTEREST_FEATURES,
+  INTEREST_FEATURES_QUESTION,
+  INTEREST_LIMITS,
+  INTEREST_STUDIOS
+} from '../shared/interest';
+export type { InterestFeature, InterestStudio } from '../shared/interest';
 
 /**
  * Two intents share one table:
- *   - 'updates' — "stay in the loop" newsletter capture.
- *   - 'access'  — request early access while signups are invite-only.
+ *   - 'updates' — "keep me posted" product updates.
+ *   - 'access'  — register interest while sign-up is closed.
+ * Neither sends an email today (the server holds them behind INTEREST_EMAILS).
  */
 export type WaitlistKind = 'updates' | 'access';
 
-/** Machine-readable outcome, set by the backend for 'access' signups. */
-export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists' | 'already-invited';
+/** Machine-readable outcome. 'registered' is the one answer for every valid address. */
+export type WaitlistStatus = 'registered' | 'invalid' | 'verify' | 'unavailable' | 'rate-limited';
 
-/** Products a signup can ask for first access to (server-accepted values). */
-export const PRODUCT_INTERESTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
-export type ProductInterest = (typeof PRODUCT_INTERESTS)[number];
-
-const MAX_FEEDBACK_CHARS = 1000;
-
-/** Optional intent captured with the signup — email alone always still submits. */
-export interface WaitlistIntent {
-  /** Which products the signup wants first access to. */
-  productInterests?: ProductInterest[];
-  /** Free-form "anything you'd want to see" note (≤1000 chars). */
-  feedback?: string;
-}
+/** Optional answers sent with the email (shared/interest.ts). The email alone always submits. */
+export type WaitlistAnswers = InterestAnswers;
 
 export interface WaitlistResult {
   ok: boolean;
-  /** True when the email was already on the list — treated as a soft success. */
-  alreadyJoined?: boolean;
-  /**
-   * 'account-exists' = the email already has an ACCOUNT; show a sign-in prompt instead.
-   * 'already-invited' = the email holds a pending invite; the backend re-sent the invite
-   * email — tell them to follow its instructions instead of joining the waitlist.
-   */
   status?: WaitlistStatus;
   message: string;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const DEFAULT_SUCCESS: Record<WaitlistKind, string> = {
-  updates: "You're on the list — we'll keep you posted.",
-  access: "Thanks! We'll email you the moment access opens up."
-};
+/** How long the form waits for the server before saving the row directly. */
+export const SUBSCRIBE_DEADLINE_MS = 8000;
 
 /**
- * Decide whether a backend /subscribe response is authoritative, and translate it into a
- * WaitlistResult. Returns null when the caller should fall back to the direct Supabase
- * insert (unexpected status / unparseable body). Pure + exported for unit tests.
- *
- *   - 2xx bodies are always authoritative — including ok:false outcomes like
- *     'account-exists' ("you already have an account — sign in"), which must NOT fall
- *     back to inserting a waitlist row for an existing member.
- *   - 400 validation errors are authoritative failures.
+ * The success answer per kind when no optional answers were sent, whichever path saved the row. Promises no email.
+ * With answers, register interest thanks for them too (shared/interest.ts interestThanks).
+ */
+export const NEUTRAL_SUCCESS: Record<WaitlistKind, string> = { access: INTEREST_THANKS.access, updates: INTEREST_THANKS.updates };
+const UNAVAILABLE = 'We could not save that just now. Please try again in a moment.';
+const RATE_LIMITED = 'Too many tries from this connection. Please wait a few minutes and try again.';
+
+/**
+ * Translate a /subscribe response. Returns null when the caller should save the row
+ * directly instead (no usable answer, a server error, or a bot-check refusal on a page
+ * that shows no check). Pure + exported for unit tests.
  */
 export const interpretSubscribeResponse = (
   httpOk: boolean,
   httpStatus: number,
-  data: Partial<WaitlistResult> | null
+  data: Partial<WaitlistResult> | null,
+  kind: WaitlistKind = 'access',
+  pageHasCheck: boolean = turnstileEnabled(),
+  answers: WaitlistAnswers = {}
 ): WaitlistResult | null => {
-  if (httpOk && data && typeof data.ok === 'boolean' && typeof data.message === 'string') {
-    return { ok: data.ok, alreadyJoined: data.alreadyJoined, status: data.status, message: data.message };
+  if (httpOk && data && data.ok === true) return { ok: true, status: 'registered', message: interestThanks(kind, answers) };
+  if (httpStatus === 429) return { ok: false, status: 'rate-limited', message: RATE_LIMITED };
+  if (httpStatus === 400 && data?.status === 'verify') {
+    // With no check on the page the person cannot pass one; save the row directly.
+    return pageHasCheck ? { ok: false, status: 'verify', message: data.message || 'Please complete the check and try again.' } : null;
   }
-  // Validation errors (400) are authoritative — surface them rather than falling back.
-  if (httpStatus === 400 && data?.message) return { ok: false, message: data.message };
+  if (httpStatus === 400 && typeof data?.message === 'string') return { ok: false, status: 'invalid', message: data.message };
   return null;
 };
 
 /**
- * When the backend is configured, route signups through it so we can send a confirmation
- * email (double opt-in for 'updates', thank-you for 'access') and dedupe against existing
- * accounts. Returns null on any failure so the caller falls back to the direct Supabase
- * insert below — capturing the lead must never fail.
+ * Clean the answers the way the server does (shared/interest.ts), and cut rather than refuse: the form's
+ * own maxLength already holds each field to its limit. Empty answers are left out.
  */
+export const cleanAnswers = (answers: WaitlistAnswers = {}): WaitlistAnswers => {
+  const text = (v: string | undefined, max: number, clean: (s: string) => string) => clean(v ?? '').slice(0, max).trim() || undefined;
+  const firstName = text(answers.firstName, INTEREST_LIMITS.firstNameMax, cleanLine);
+  const features = knownFeatures(answers.features ?? []);
+  const featureOther = text(answers.featureOther, INTEREST_LIMITS.otherMax, cleanLine);
+  const studios = knownStudios(answers.studios ?? []);
+  const comment = text(answers.comment, INTEREST_LIMITS.commentMax, cleanBlock);
+  return {
+    ...(firstName ? { firstName } : {}),
+    ...(features.length ? { features } : {}),
+    ...(featureOther ? { featureOther } : {}),
+    ...(studios.length ? { studios } : {}),
+    ...(comment ? { comment } : {})
+  };
+};
+
 const subscribeViaApi = async (
   email: string,
   kind: WaitlistKind,
-  metadata: Record<string, unknown>,
-  captchaToken?: string,
-  intent: WaitlistIntent = {}
+  source: string | undefined,
+  captchaToken: string | undefined,
+  answers: WaitlistAnswers
 ): Promise<WaitlistResult | null> => {
   if (!API_BASE_URL) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SUBSCRIBE_DEADLINE_MS);
   try {
     const res = await fetch(buildApiUrl('/api/newsletter/subscribe'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        email,
-        kind,
-        captchaToken,
-        source: typeof window !== 'undefined' ? window.location.pathname : undefined,
-        ...(typeof metadata.source === 'string' ? { source: metadata.source } : {}),
-        ...(intent.productInterests?.length ? { productInterests: intent.productInterests } : {}),
-        ...(intent.feedback ? { feedback: intent.feedback } : {})
-      })
+      signal: controller.signal,
+      body: JSON.stringify({ email, kind, captchaToken, ...(source ? { source } : {}), ...answers })
     });
     const data = (await res.json().catch(() => null)) as Partial<WaitlistResult> | null;
-    return interpretSubscribeResponse(res.ok, res.status, data);
+    return interpretSubscribeResponse(res.ok, res.status, data, kind, turnstileEnabled(), answers);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 };
 
+/** What is wrong with an address before anything is sent (the words the server would use), or null when it will do. */
+export const checkWaitlistEmail = (rawEmail: string): string | null => {
+  const email = rawEmail.trim().toLowerCase();
+  if (!email) return 'Please enter your email address.';
+  if (!EMAIL_REGEX.test(email) || email.length > 320) return 'That email does not look right. Please check it.';
+  return null;
+};
+
 /**
- * Add an email to the public waitlist. Never throws: callers get a friendly
- * { ok, message } back regardless of network / RLS / migration state so a
- * marketing form can render the outcome inline.
+ * Register an email (and the optional answers). Never throws: callers get { ok, message }
+ * whatever the network or database does, and every saved address gets the same answer.
  */
 export const submitWaitlistEmail = async (
   rawEmail: string,
   kind: WaitlistKind = 'updates',
   metadata: Record<string, unknown> = {},
   captchaToken?: string,
-  intent: WaitlistIntent = {}
+  answers: WaitlistAnswers = {}
 ): Promise<WaitlistResult> => {
   const email = rawEmail.trim().toLowerCase();
-  if (!email) {
-    return { ok: false, message: 'Please enter your email address.' };
-  }
-  if (!EMAIL_REGEX.test(email) || email.length > 320) {
-    return { ok: false, message: 'That email doesn’t look right — please check it.' };
-  }
+  const emailProblem = checkWaitlistEmail(email);
+  if (emailProblem) return { ok: false, status: 'invalid', message: emailProblem };
+  const clean = cleanAnswers(answers);
+  const rawSource =
+    typeof metadata.source === 'string' ? metadata.source : typeof window !== 'undefined' ? window.location.pathname : '';
+  const source = cleanLine(rawSource).slice(0, INTEREST_LIMITS.sourceMax) || undefined;
 
-  // Both intent fields are optional — sanitize to the server contract.
-  const productInterests = intent.productInterests
-    ?.filter((p): p is ProductInterest => (PRODUCT_INTERESTS as readonly string[]).includes(p));
-  const feedback = intent.feedback?.trim().slice(0, MAX_FEEDBACK_CHARS) || undefined;
-  const cleanIntent: WaitlistIntent = {
-    ...(productInterests?.length ? { productInterests } : {}),
-    ...(feedback ? { feedback } : {})
-  };
-
-  // Preferred path: the backend (sends the confirmation email + logs the capture).
-  const apiResult = await subscribeViaApi(email, kind, metadata, captchaToken, cleanIntent);
+  const apiResult = await subscribeViaApi(email, kind, source, captchaToken, clean);
   if (apiResult) return apiResult;
 
-  // Fallback: write directly to Supabase (no email, but the lead is still captured).
+  // Fallback: save the row directly (insert-only; RLS allows nothing else). Sends no email.
   try {
-    // No .select() on purpose: RLS exposes write-only access, so asking for the
-    // row back would fail. We only care whether the insert was accepted.
     const { error } = await supabase.from('waitlist_signups').insert({
       email,
       kind,
-      source: typeof window !== 'undefined' ? window.location.pathname : null,
-      metadata: { ...metadata, ...cleanIntent }
+      source: source ?? null,
+      metadata: interestMetadata(source, clean)
     });
-
     if (error) {
       const code = (error as { code?: string }).code;
-      // 23505 = unique_violation → this email already joined for this intent.
+      // 23505: already on the list for this kind. Same answer as a new address.
       if (code === '23505' || /duplicate key|already exists/i.test(error.message || '')) {
-        return {
-          ok: true,
-          alreadyJoined: true,
-          message: "You're already on the list — sit tight, we'll be in touch."
-        };
+        return { ok: true, status: 'registered', message: interestThanks(kind, clean) };
       }
-      console.warn('[waitlist] signup failed', error);
-      return { ok: false, message: 'Something went wrong on our end. Please try again shortly.' };
+      console.warn('[waitlist] save failed', (error as { code?: string }).code ?? 'unknown');
+      return { ok: false, status: 'unavailable', message: UNAVAILABLE };
     }
-
-    return { ok: true, message: DEFAULT_SUCCESS[kind] };
-  } catch (err) {
-    console.warn('[waitlist] signup error', err);
-    return { ok: false, message: 'Network hiccup — please try again.' };
+    return { ok: true, status: 'registered', message: interestThanks(kind, clean) };
+  } catch {
+    return { ok: false, status: 'unavailable', message: UNAVAILABLE };
   }
 };

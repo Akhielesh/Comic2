@@ -544,7 +544,9 @@ CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3
 
 - DS-2 (S2): index.html's body and #app-splash read --ds-canvas/--ds-ink with the skin values as fallbacks (appShell.test.ts
   pins them); the body text stays the light ink for the legacy pages. The site header is AppHeader. The App root reads the
-  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab).
+  canvas except LEGACY_PAPER_VIEWS (dashboard, learn, editor, fontlab). Since the app-wide restyle the dashboard, Learn
+  and the classic editor paint their own canvas, so the list is the dev-only font lab alone and those three views sit
+  on the canvas token in both themes (no light gutter in dark).
 - Lead decision D8: the browser chrome colour (both `theme-color` metas and `public/app.webmanifest` theme_color) is the
   Atlas paper, #ffffff light and #0a0a0a dark, pinned to the `[data-ds-skin="atlas"]` --ds-canvas by appShell.test.ts. The
   default skin's #FAF9F5 / #262624 read as a warm band above the dark Atlas page. Not changed: the manifests'
@@ -817,15 +819,23 @@ on the header's paper in both themes. The page bodies:
 
 - **Sign-in** (`AuthPage`, DS-3's card): the `Segmented` sign-in / join switch, `Field` inputs and calm status
   callouts on a `RADIUS_PANEL` card. On the comics host it centres in `calc(100dvh - var(--header-h))` and draws no
-  brand of its own (the header carries it). App keys it per request, so a header "Sign in" / "Request access" pressed
-  on the open page switches the form. Its "Request access" step (`WaitlistForm`, shared with the main site's "Stay
-  updated" card) is on the tokens too: a `FIELD_GROUP` email field, the ink submit, outline toggle chips, a `Textarea`
-  and `STATUS_SURFACE` callouts; its running text inherits the surrounding ink, so it also reads in that fixed-white
-  card in dark mode.
-- **Library** (`PublicGallery`): a `DISPLAY_SECTION` title, the search field (`FIELD_GROUP`), a `Segmented` sort and a
-  pressed "Kids-friendly" toggle, a calm sign-in note with an outline "Sign in", then 2 / 3 / 4 covers a row with the
-  title (`CARD_TITLE`), creator and counts under the art, in ink; the empty state is `EmptyState`. The rating pill on
-  a cover is DS-R1's opaque on-art `RatingBadge` (no terracotta literal).
+  brand of its own (the header carries it). App keys it per request, so a header "Sign in" / "Register interest"
+  pressed elsewhere opens the form on that step; on the sign-in page itself the header shows neither (the card's
+  `Segmented` switches, and a remount would wipe what was typed). Its "Register interest" step (`WaitlistForm` kind
+  `access`) is on the tokens too: `Field` + `Input` for the email and first name, two `Checkbox` lists, each a
+  `fieldset` with a `legend`, a "Something else" `Input`, the comment `Textarea` with its visible limit, the ink
+  submit, an email error shown at its field and one `STATUS_SURFACE` alert for everything else; its running text
+  inherits the surrounding ink. The main site's list card uses the same form as kind `updates`: one email field (its
+  label for assistive tech only) and the "Add me to the list" button. On the comics host one quiet line under the
+  card, "Sign in there", opens the main site's front page (`/?home=1`).
+- **Library** (`PublicGallery`): a `DISPLAY_SECTION` title, then "New comics" (the current Comic Studio comics,
+  `services/publicListing.ts`) above the two Studio samples. 2 / 3 / 4 covers a row with the title (`CARD_TITLE`), date
+  and counts under the art, in ink; no maker line. With one or two comics each is a wide card the shape of the samples
+  (cover left; title, date and "Read comic" right). The search field (`FIELD_GROUP`), the `Segmented` sort, the pressed
+  "Kids-friendly" toggle and the visible "N comics" line appear only when the Library lists more than
+  `LIBRARY_TOOLS_MIN` (6) comics; an empty Library shows the samples alone. No sign-in prompt: a visitor sees likes as
+  a count, a signed-in reader gets the like button. The rating pill on a cover is DS-R1's opaque on-art `RatingBadge`
+  (no terracotta literal). See `docs/features/public-library.md`.
 - **Privacy, Terms**: the `OVERLINE_DISPLAY` "Legal" eyebrow, a `DISPLAY_SECTION` title, the date as `OVERLINE`, then the
   text in a 3xl reading column on `SECTION_CARD`, styled by `LEGAL_PROSE` (the app ships no typography plugin). No
   Back button: the header's lockup goes home.

@@ -5,6 +5,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { initTelemetry } from './services/telemetry';
 import { bootDsSkin } from './services/dsSkin';
 import { initTheme } from './services/theme';
+import { signInLinkBackToMain } from './services/frontPageSignIn';
 
 import { BrowserRouter } from 'react-router-dom';
 
@@ -40,13 +41,20 @@ if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </BrowserRouter>
-  </React.StrictMode>
-);
+// A main-site sign-in link that the front page redirect carried here in its fragment (the Supabase Site URL fallback)
+// goes straight back to the main site, before anything reads it (services/frontPageSignIn.ts). Nothing renders then.
+const backToMain = signInLinkBackToMain(window.location.href);
+if (backToMain) {
+  window.location.replace(backToMain);
+} else {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(
+    <React.StrictMode>
+      <BrowserRouter>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </BrowserRouter>
+    </React.StrictMode>
+  );
+}

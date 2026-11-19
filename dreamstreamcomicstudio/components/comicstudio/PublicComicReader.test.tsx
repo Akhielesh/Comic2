@@ -554,11 +554,12 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(api.trackPublicEvent).not.toHaveBeenCalled();
   });
 
-  it('invites readers to make their own (a full navigation out of /c/*)', async () => {
+  it('names the studio it was made with, linking to its front page (a full navigation out of /c/*); no sign-up invitation while sign-up is closed', async () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload());
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
     await screen.findByRole('button', { name: /Start reading/ });
-    expect(screen.getByRole('link', { name: /make your own/i })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: 'Made with Comic Studio' })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('link', { name: /make your own/i })).toBeNull();
   });
 
   it('embeds with minimal chrome: the reader itself, "Open on DreamStream", no call to action', async () => {
@@ -568,7 +569,7 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(screen.queryByTestId('public-reader-header')).toBeNull();
     expect(screen.getByRole('link', { name: /Open on DreamStream/ })).toHaveAttribute('href', `https://comics.dreamstreamstudio.ai/c/${SLUG}`);
     expect(screen.getByRole('link', { name: /Open on DreamStream/ })).toHaveAttribute('target', '_blank');
-    expect(screen.queryByRole('link', { name: /make your own/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /make your own|Made with Comic Studio/i })).toBeNull();
   });
 });
 
