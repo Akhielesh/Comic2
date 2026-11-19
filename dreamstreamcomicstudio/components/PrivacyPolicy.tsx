@@ -52,6 +52,9 @@ export const PrivacyPolicy: React.FC<{ onBack?: () => void }> = () => {
                         <li><strong>OpenRouter:</strong> Routes Comic Studio image requests to the model you pick.</li>
                         <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
                         <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
+                        <li><strong>Research in Comic Studio:</strong> When you search, or when the Director looks up a known story, place or period for your comic, only the short search words (up to 120 characters) go to Wikipedia and Wikimedia Commons, not your pages or script. Picture previews in the results load from Wikimedia.</li>
+                        <li><strong>Live data in Chat:</strong> Your question, and for local answers your approximate city, go to the data service that answers it: MET Norway and Open-Meteo (weather), OpenStreetMap services and Foursquare (maps and places), Yahoo Finance, Stooq, Alpaca and CoinGecko (markets), Google News (news), Amadeus and aviationstack (travel), Wikipedia (facts), and the other public data services Chat uses for topics such as web search, books and papers, and public holidays.</li>
+                        <li><strong>Approximate location in Chat:</strong> When your browser does not share your location, we use the approximate city that our network provider, Cloudflare, attaches to each request. It goes to the assistant and to the services that answer you, such as weather, maps and places, and news or web search when you ask about your area. Your IP address is not sent to them.</li>
                     </ul>
                     <p>These providers process data under their own terms and policies. We do not sell personal data.</p>
 

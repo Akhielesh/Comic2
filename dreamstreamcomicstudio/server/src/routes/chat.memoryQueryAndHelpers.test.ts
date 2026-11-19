@@ -78,7 +78,6 @@ vi.mock('../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config.js')>()),
   ASSISTANT_GEMINI_API_KEY: 'test-embedding-key'
 }));
-vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
 vi.mock('../services/mcpRegistry.js', () => ({ enabledMcpConfigs: async () => [] }));
 vi.mock('../ai/tools/mcpClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/tools/mcpClient.js')>()),
