@@ -29,8 +29,9 @@ change it in the same change that alters the behaviour.
 - **Server → Wikipedia:** `GET https://en.wikipedia.org/w/rest.php/v1/search/page?q={search words}&limit=4`.
 - **Server → Wikimedia Commons:** `GET https://commons.wikimedia.org/w/api.php` with `generator=search`, file
   namespace, `{search words} filetype:bitmap`, 6 results, image URL, type, licence and artist, 320 px thumbnails.
-- Both calls carry only the search words and the app's `User-Agent`; no account, no script, no member IP (they are
-  server-to-server). The research code and route write no log line with the search words.
+- Both calls carry only the search words (2-120 characters) and the app's `User-Agent`; no account, no pages or
+  script, no member IP (they are server-to-server). Nothing checks what the words are: the member types them in the
+  sheet, and the Director writes its own, with only a prompt hint to send public search terms. The research code and route write no log line with the search words.
 - **Browser → Wikimedia:** the thumbnails load from `upload.wikimedia.org` with no referrer and no credentials, when
   the results show. The privacy page names this under "Research in Comic Studio" (`components/PrivacyPolicy.tsx`,
   section 3).

@@ -14,10 +14,13 @@ const item = (label: string) => {
 };
 
 describe('privacy policy: research and live data services', () => {
-  it('research in Comic Studio: the public search words go to Wikipedia and Wikimedia Commons, never the script', () => {
+  it('research in Comic Studio: only the short search words go to Wikipedia and Wikimedia Commons, not the pages', () => {
     const li = item('Research in Comic Studio:');
     expect(li).toHaveTextContent(/when you search, or when the Director looks up a known story, place or period for your comic/i);
-    expect(li).toHaveTextContent(/the search words \(the public name, never your script\) go to Wikipedia and Wikimedia Commons/i);
+    // What the code enforces: the query is 2-120 characters (routes/comic.ts research route, tools/research.ts) and
+    // nothing else of the comic is sent. What it does not enforce (what those words are) is not promised.
+    expect(li).toHaveTextContent(/only the short search words \(up to 120 characters\) go to Wikipedia and Wikimedia Commons, not your pages or script/i);
+    expect(li).not.toHaveTextContent(/never your script|the public name/i);
     expect(li).toHaveTextContent(/picture previews .* load from Wikimedia/i);
   });
 
@@ -36,8 +39,7 @@ describe('privacy policy: research and live data services', () => {
       'Google News',
       'Amadeus',
       'aviationstack',
-      'Wikipedia',
-      'Wikidata'
+      'Wikipedia'
     ]) {
       expect(li).toHaveTextContent(service);
     }
@@ -48,7 +50,10 @@ describe('privacy policy: research and live data services', () => {
   it('approximate location in Chat: Cloudflare’s approximate city, never the IP address', () => {
     const li = item('Approximate location in Chat:');
     expect(li).toHaveTextContent(/when your browser does not share your location, we use the approximate city that our network provider, Cloudflare, attaches to each request/i);
-    expect(li).toHaveTextContent(/goes to the assistant and to the weather, maps and places services that answer you/i);
+    // The city sits in the assistant's context, which resolves "my area" and "local news" from it, so a news or web
+    // search the assistant writes can carry it: the line says so instead of promising the country alone.
+    expect(li).toHaveTextContent(/goes to the assistant and to the services that answer you, such as weather, maps and places, and news or web search when you ask about your area/i);
+    expect(li).not.toHaveTextContent(/only the country/i);
     expect(li).toHaveTextContent(/your IP address is not sent to them/i);
   });
 
