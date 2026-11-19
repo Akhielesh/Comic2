@@ -387,13 +387,13 @@ describe('ComicReaderView', () => {
   });
 
   it('closes with the End card when the host gives one', () => {
-    const onMakeYourOwn = vi.fn();
-    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" endCard={{ onMakeYourOwn }} />);
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" endCard={{ browseLibraryHref: '/library', makeLikeThisHref: '/#register' }} />);
     press('End');
     expect(screen.getByTestId('end-card')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'The End' })).toHaveFocus();
-    fireEvent.click(screen.getByRole('button', { name: /Make your own comic/ }));
-    expect(onMakeYourOwn).toHaveBeenCalled();
+    // The host's actions pass through unchanged: the Library link is the one filled action, register interest sits beside it.
+    expect(screen.getByRole('link', { name: 'Browse the Library' })).toHaveAttribute('data-primary');
+    expect(screen.getByRole('link', { name: 'Make comics like this' })).toHaveAttribute('href', '/#register');
     fireEvent.click(screen.getByRole('button', { name: /Read again/ }));
     expect(shownKeys()).toEqual(['cover']);
   });

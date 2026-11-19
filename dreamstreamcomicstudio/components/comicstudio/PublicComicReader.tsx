@@ -24,7 +24,7 @@ import type { AssetRef, ComicDoc } from '../../shared/comic/doc';
 import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo } from '../../shared/comic/publication';
 import { canServeToOwner, isContentRating, type ContentRating } from '../../shared/comic/safety';
 import { languageSpec, sameLanguage } from '../../shared/comic/languages';
-import { COMIC_STUDIO_SKIN, COMICS_ORIGIN } from '../../services/productHost';
+import { COMIC_STUDIO_SKIN, COMICS_ORIGIN, comicsUrl } from '../../services/productHost';
 import { useComicTheme } from './useComicTheme';
 import { CANVAS_BG, FOCUS_RING } from '../chat/studioDesign';
 import { Skeleton } from '../studio/kit/Shimmer';
@@ -47,6 +47,7 @@ import { readerItems, resolvePageN } from './reader/readerModel';
 import { RatingBadge } from './safety/RatingBadge';
 import { ReportDialog } from './safety/ReportDialog';
 import { ShareButton } from './share/ShareButton';
+import { LIBRARY_HREF } from './share/shareModel';
 import { usePublicComic, type ShareBoot } from './share/usePublicComic';
 import { loadPublicComic } from './studioApi';
 
@@ -128,14 +129,6 @@ export const downloadFailedText = (err: unknown): string =>
   err instanceof ExportError && err.message.trim() ? `Couldn’t prepare the download: ${err.message.trim()}` : 'Couldn’t prepare the download. Please try again.';
 
 const englishName = (code: string) => languageSpec(code)?.english || code;
-
-const fullNavigate = (href: string) => {
-  try {
-    window.location.assign(href);
-  } catch {
-    /* sandboxed frame */
-  }
-};
 
 interface ShellProps {
   mode: 'slug' | 'project';
@@ -357,8 +350,11 @@ const ReaderShell: React.FC<ShellProps> = ({
   const endCard = useMemo(
     () => ({
       authorName: boot?.card.creator,
-      onMakeYourOwn: embed || isOwner ? undefined : () => fullNavigate(MAKE_YOUR_OWN_HREF),
-      shareUrl
+      shareUrl,
+      // The End card's one filled button when there is nothing to read next, and register interest beside it
+      // (never for the owner or inside an embed).
+      browseLibraryHref: embed ? undefined : LIBRARY_HREF,
+      makeLikeThisHref: embed || isOwner ? undefined : comicsUrl('/#register')
     }),
     [boot?.card.creator, embed, isOwner, shareUrl]
   );
