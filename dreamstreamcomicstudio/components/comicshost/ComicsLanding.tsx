@@ -1,4 +1,9 @@
-import React, { useCallback, useRef, useState } from 'react';
+// The front page of comics.dreamstreamstudio.ai: the hero (the sample reader beside it), then what members do, the six
+// looks, how it works, the models, pricing, where to read, "Register your interest", the questions and the footer.
+// Signed out, the hero's filled action takes a visitor to the form on this page (sign-up is closed); signed in, it
+// starts a comic. Everything below the looks lives in ./landing (copy, registries, pictures, sections) and its styles
+// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer.
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';
 import { useComicTheme } from '../comicstudio/useComicTheme';
@@ -10,11 +15,23 @@ import { CONTACT_HREF } from '../layout/LegalMicroLinks';
 import { getStylePreset } from '../../shared/comic/stylePresets';
 import { ComicsHeader } from './ComicsHeader';
 import { ComicSampleReader } from './ComicSampleReader';
+import { FeaturesSection } from './landing/FeaturesSection';
+import { HowItWorks } from './landing/HowItWorks';
+import { FOOTER, JOIN } from './landing/landingCopy';
+import { ModelsSection, PricingSection } from './landing/ModelsPricing';
+import { isLandingSectionId, showRegister, showSection, type LandingSectionId } from './landing/parts';
+import { ReadSection } from './landing/ReadSection';
+import { FaqSection, RegisterSection } from './landing/RegisterFaq';
 import './comicsLanding.css';
+import './landing/landing.css';
 
 export interface ComicsLandingProps {
   signedIn: boolean;
   onSignIn: () => void;
+  /**
+   * The app's own access request (the sign-in card's request step). Kept so App's mount stays as it is; the page brings
+   * its own "Register your interest" section, which the hero and the header's join row scroll to instead.
+   */
   onRequestAccess: () => void;
   onOpenComics: () => void;
   onBrowseGallery: () => void;
@@ -28,6 +45,17 @@ const TEXT_LINK = cn('ds-link inline-flex items-center text-[var(--ds-muted)] ho
 const FOOTER_LINK = cn(TEXT_LINK, DENSITY.coarseSquare, 'justify-center');
 const LOOKS = SAMPLE_LOOKS.map((id) => ({ id, name: getStylePreset(id)?.name ?? id }));
 
+/** The footer's links to this page's sections (signed in, the join link is left out). */
+const PAGE_LINKS: ReadonlyArray<{ id: LandingSectionId; label: string; signedOutOnly?: boolean }> = [
+  { id: 'features', label: FOOTER.features },
+  { id: 'how-it-works', label: FOOTER.how },
+  { id: 'models', label: FOOTER.models },
+  { id: 'pricing', label: FOOTER.pricing },
+  { id: 'read', label: FOOTER.read },
+  { id: 'register', label: FOOTER.register, signedOutOnly: true },
+  { id: 'faq', label: FOOTER.faq }
+];
+
 function LookArtwork({ look }: { look: SampleLook }) {
   return (
     <div aria-hidden data-comic-art="" className="comics-look-art">
@@ -36,19 +64,18 @@ function LookArtwork({ look }: { look: SampleLook }) {
   );
 }
 
-function focusSection(id: string) {
-  const section = document.getElementById(id);
-  section?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  section?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
-}
-
-export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onOpenAccount, onStartCreating }: ComicsLandingProps) {
+export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGallery, onOpenPrivacy, onOpenTerms, onOpenAccount, onStartCreating }: ComicsLandingProps) {
   const { theme } = useComicTheme();
   const [look, setLook] = useState<SampleLook>(SAMPLE_LOOKS[0]);
   const [comparing, setComparing] = useState(false);
   const lookTrigger = useRef<HTMLButtonElement | null>(null);
-  const showLooks = useCallback(() => focusSection('looks'), []);
   const goTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), []);
+
+  // Arriving on a section link (…/#pricing, …/#faq): show that section once.
+  useEffect(() => {
+    const id = (typeof window === 'undefined' ? '' : window.location.hash || '').replace(/^#/, '');
+    if (id !== 'top' && isLandingSectionId(id)) showSection(id);
+  }, []);
 
   return (
     <div data-testid="comics-landing" data-comic-theme={theme} className="comics-landing min-h-screen text-[var(--ds-ink)]">
@@ -57,32 +84,46 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
         page="home"
         onGoHome={goTop}
         onSignIn={onSignIn}
-        onRequestAccess={onRequestAccess}
+        onRequestAccess={showRegister}
         onOpenComics={onOpenComics}
         onBrowseGallery={onBrowseGallery}
-        onShowSection={showLooks}
+        onShowSection={showSection}
         onOpenAccount={onOpenAccount}
       />
       <main className="comics-shell-width comics-landing-column">
-        <section aria-labelledby="comics-hero-title" className="comics-hero">
+        <section id="top" aria-labelledby="comics-hero-title" className="comics-hero">
           <div className="comics-hero-copy">
             <h1 id="comics-hero-title" className={cn('comics-title', FONT_DISPLAY)}><span>Make your story</span>{' '}<span>a comic.</span></h1>
             <p className="comics-lead">Start with an idea or a script. Plan, draw and letter your pages with the Comic Director.</p>
             <div className="comics-hero-actions">
-              <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={signedIn ? (onStartCreating ?? onOpenComics) : onSignIn}>
-                Start creating
-              </Button>
-              <Button variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Browse the Library</Button>
+              {signedIn ? (
+                <>
+                  <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={onStartCreating ?? onOpenComics}>
+                    Start creating
+                  </Button>
+                  <Button variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Browse the Library</Button>
+                </>
+              ) : (
+                <>
+                  <Button data-testid="comics-hero-cta" variant="default" size="lg" className="comics-primary-action comics-hero-cta" onClick={showRegister}>
+                    {JOIN.action}
+                  </Button>
+                  <Button data-testid="comics-hero-read" variant="outline" size="lg" className="comics-hero-cta" onClick={onBrowseGallery}>Read comics</Button>
+                </>
+              )}
             </div>
             {!signedIn && (
               <p className="comics-invitation">
-                New accounts are by invitation.{' '}
-                <button type="button" className={cn(TEXT_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onRequestAccess}>Request access</button>
+                <span className="comics-invitation-line">New accounts are by invitation while we’re in beta.</span>
+                Already a member?{' '}
+                <button type="button" className={cn(TEXT_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onSignIn}>Sign in</button>
               </p>
             )}
           </div>
           <ComicSampleReader look={SAMPLE_LOOKS[0]} story="last-tram" />
         </section>
+
+        <FeaturesSection />
 
         <section id="looks" aria-labelledby="comics-looks" className="comics-looks-section">
           <div className="comics-looks-heading">
@@ -110,6 +151,13 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
             ))}
           </ul>
         </section>
+
+        <HowItWorks />
+        <ModelsSection />
+        <PricingSection />
+        <ReadSection onBrowseGallery={onBrowseGallery} />
+        <RegisterSection signedIn={signedIn} onSignIn={onSignIn} onOpenComics={onOpenComics} />
+        <FaqSection />
       </main>
 
       <Dialog open={comparing} onOpenChange={setComparing}>
@@ -141,6 +189,22 @@ export function ComicsLanding({ signedIn, onSignIn, onRequestAccess, onOpenComic
       </Dialog>
 
       <footer className="comics-shell-width comics-landing-column">
+        <nav aria-label={FOOTER.pageNav} className="landing-page-links">
+          {PAGE_LINKS.filter((link) => !(signedIn && link.signedOutOnly)).map((link) => (
+            <a
+              key={link.id}
+              href={`#${link.id}`}
+              className={FOOTER_LINK}
+              onClick={(event) => {
+                event.preventDefault();
+                if (link.id === 'register') showRegister();
+                else showSection(link.id);
+              }}
+            >
+              {link.label}
+            </a>
+          ))}
+        </nav>
         <nav aria-label="Comic Studio links" className="comics-footer-links">
           <button type="button" className={FOOTER_LINK} onClick={onBrowseGallery}>Library</button>
           <button type="button" className={FOOTER_LINK} onClick={onOpenPrivacy}>Privacy Policy</button>

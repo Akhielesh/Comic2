@@ -200,18 +200,32 @@ describe('ComicsLanding', () => {
   });
   const heroOf = () => screen.getByTestId('comics-hero-cta').closest('section') as HTMLElement;
 
-  it('routes signed-out readers to sign-in, access requests and the Library', () => {
+  it('routes signed-out visitors to the page’s own interest form, the Library and sign-in (sign-up stays closed)', () => {
     const h = handlers();
-    render(<ComicsLanding signedIn={false} {...h} />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Make your story a comic.' })).toBeInTheDocument();
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Start creating' }));
-    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Sign in' }));
-    expect(h.onSignIn).toHaveBeenCalledTimes(2);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Request access' }));
-    expect(h.onRequestAccess).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(heroOf()).getByRole('button', { name: 'Browse the Library' }));
-    expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    try {
+      render(<ComicsLanding signedIn={false} {...h} />);
+      expect(screen.getByRole('heading', { level: 1, name: 'Make your story a comic.' })).toBeInTheDocument();
+      const cta = within(heroOf()).getByRole('button', { name: 'Register your interest' });
+      expect(cta).toHaveAttribute('data-testid', 'comics-hero-cta');
+      fireEvent.click(cta);
+      // It stays on this page: it scrolls to the register section and never opens sign-in or the access request.
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(document.getElementById('register'));
+      expect(h.onSignIn).not.toHaveBeenCalled();
+      expect(h.onRequestAccess).not.toHaveBeenCalled();
+      fireEvent.click(within(heroOf()).getByRole('button', { name: 'Read comics' }));
+      expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
+      // Members keep a clear Sign in: in the header and under the hero's actions.
+      fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Sign in' }));
+      fireEvent.click(within(heroOf()).getByRole('button', { name: 'Sign in' }));
+      expect(h.onSignIn).toHaveBeenCalledTimes(2);
+      expect(within(heroOf()).queryByRole('button', { name: 'Start creating' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'My comics' })).toBeNull();
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 
   it('offers signed-in visitors creation, their comics and the Library', () => {
@@ -277,12 +291,13 @@ describe('ComicsLanding', () => {
     }
   });
 
-  it('no money and no model names, for anyone (governed users never see $ or ¢)', () => {
+  it('no money, for anyone (governed users never see $ or ¢); model names only from the registry module', () => {
     for (const signedIn of [false, true]) {
       const { container, unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
       const text = container.textContent || '';
-      expect(text).not.toMatch(/[$¢€£]/);
-      expect(text).not.toMatch(/\b(?:cost|price|pricing|credits?|usd|gemini|gpt|claude|imagen|flux|nano banana)\b/i);
+      expect(text).not.toMatch(/[$¢€£₹]/);
+      expect(text).not.toMatch(/\b(?:credits?|usd|per page|per month|free forever|discount|trial)\b/i);
+      expect(text).not.toMatch(/\b(?:claude|imagen|gemini 3|gpt-image|openrouter)\b/i);
       unmount();
     }
   });
