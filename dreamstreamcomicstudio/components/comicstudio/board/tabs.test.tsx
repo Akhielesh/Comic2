@@ -546,7 +546,7 @@ describe('StyleTab', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Lettering' }));
     const gallery = screen.getByRole('radiogroup', { name: 'Lettering style' });
     fireEvent.click(within(gallery).getByRole('radio', { name: /Manga/ }));
-    expect(studio.patch).toHaveBeenCalledWith([{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
+    expect(studio.patch).toHaveBeenCalledWith([{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: false, auto: null } }], { label: 'Change lettering style', coalesce: 'lettering-style' });
   });
 });
 

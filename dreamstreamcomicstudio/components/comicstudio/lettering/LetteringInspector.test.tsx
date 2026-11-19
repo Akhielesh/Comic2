@@ -85,7 +85,7 @@ describe('LetteringInspector', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Clear' }));
     expect(apply).toHaveBeenLastCalledWith([{ op: 'line_style', pageId: 'pg_1', lineIds: ['pg_1_l4'], patch: { fill: 'none' } }], { label: 'See-through bubble' });
     fireEvent.click(screen.getByRole('radio', { name: 'Kids storybook' }));
-    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'storybook', keepOverrides: false, auto: null } }], { label: 'Change lettering style' });
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'letter_style', patch: { presetId: 'storybook', keepOverrides: false, auto: null } }], { label: 'Change lettering style', coalesce: 'lettering-style' });
   });
 
   it('Easy offers the six drawn sound styles and applies a visible curve through one undoable line edit', () => {
@@ -257,7 +257,8 @@ describe('previews and the cover title', () => {
     const onChange = vi.fn();
     const { container } = render(<PresetGallery value="classic" onChange={onChange} />);
     expect(container.querySelectorAll('[role="radio"]')).toHaveLength(8);
-    expect(container.querySelectorAll('svg [data-testid="balloon"]').length).toBeGreaterThanOrEqual(8);
+    // Three kinds per style (a caption, a speech balloon and a shout): 8 × 3.
+    expect(container.querySelectorAll('svg [data-testid="balloon"]').length).toBeGreaterThanOrEqual(24);
     fireEvent.click(screen.getByRole('radio', { name: /Noir/ }));
     expect(onChange).toHaveBeenCalledWith('noir');
   });

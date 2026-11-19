@@ -19,6 +19,7 @@ import { stylePreviewId } from '../../../shared/comic/library';
 import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
+import { IN_ART_LETTERING_NOTE } from '../../../shared/comic/pro/types';
 import type { StudioController } from '../types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
 import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
@@ -462,17 +463,18 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
       </TabsContent>
       <TabsContent value="lettering">
       <section aria-labelledby="style-lettering-title">
-        <SectionTitle id="style-lettering-title" icon={<Type className="h-3.5 w-3.5" />} right={<span className="text-[11px] font-medium normal-case tracking-normal text-[var(--ds-muted)]">Free · instant</span>}>
+        <SectionTitle id="style-lettering-title" icon={<Type className="h-3.5 w-3.5" />}>
           Lettering style
         </SectionTitle>
-        <p className="mb-2 px-1 text-[11.5px] leading-snug text-[var(--ds-muted)]">
-          How balloons, captions and sound effects look on every page. Changing it re-letters the comic for free — nothing is redrawn.
-        </p>
-        <PresetGallery
-          value={letterPreset}
-          lang={doc.format.language}
-          onChange={(id) => void studio.patch(letteringPresetOps(id), { label: 'Change lettering style' })}
-        />
+        {/* Lettered into the art: a style would change nothing, so say so instead of offering one. A run of picks
+            (arrowing through the grid) is one undo entry (PresetGallery's LETTERING_STYLE_UNDO). */}
+        {doc.format.lettering === 'overlay' ? (
+          <PresetGallery value={letterPreset} lang={doc.format.language} onChange={(id) => void studio.patch(letteringPresetOps(id), { label: 'Change lettering style', coalesce: 'lettering-style' })} />
+        ) : (
+          <div role="note" className="rounded-[var(--ds-radius-control)] bg-[var(--ds-well)] px-3 py-2 text-[12.5px] leading-snug text-[var(--ds-ink)]">
+            {IN_ART_LETTERING_NOTE}
+          </div>
+        )}
       </section>
       </TabsContent>
     </Tabs>

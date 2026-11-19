@@ -23,6 +23,8 @@ export interface PresetOption<T extends string> {
   value: T;
   label: string;
   description?: string;
+  /** Off-tile explanation (PresetTile `hint`): the native title and the accessible description. */
+  hint?: string;
   art: React.ReactNode;
   badge?: React.ReactNode;
   disabled?: boolean;
@@ -110,6 +112,7 @@ export function PresetGrid<T extends string>(props: PresetGridProps<T>) {
           <PresetTile
             label={o.label}
             description={o.description}
+            hint={o.hint}
             art={o.art}
             aspect={aspect}
             badge={o.badge}

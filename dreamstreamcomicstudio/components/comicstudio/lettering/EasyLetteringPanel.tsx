@@ -11,7 +11,7 @@ import type { PatchOptions } from '../types';
 import { ColorField, withAlpha } from './ColorField';
 import { FontPicker } from './FontPicker';
 import { EasyShapePicker } from './ShapePicker';
-import { PresetGallery } from './PresetGallery';
+import { LETTERING_STYLE_UNDO, PresetGallery } from './PresetGallery';
 import { SfxStylePicker } from './SfxStylePicker';
 import { paintOf } from './svgMarkup';
 import {
@@ -105,8 +105,8 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
       )}
 
       <section className={ROW} aria-label="Comic lettering style">
-        <p className={ROW_LABEL}>Comic style (every balloon)</p>
-        <PresetGallery variant="chips" value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => run(presetOps(id), 'Change lettering style')} lang={lang} />
+        <p className={ROW_LABEL}>Lettering style</p>
+        <PresetGallery variant="chips" value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => apply(presetOps(id), LETTERING_STYLE_UNDO)} lang={lang} />
       </section>
 
       {!sfxOnly && (

@@ -116,7 +116,7 @@ import { LetteringInspector, PlacementFixChip, TooMuchTextChip, densePanels, rec
 import { BUSY_GRID_SIDE, hasFaceData, loadBusyGrid, reletterAroundArtOps } from '../lettering/busyGrid';
 import { LetteringToolbar } from '../lettering/LetteringToolbar';
 import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
-import { PresetGallery } from '../lettering/PresetGallery';
+import { EDITION_LETTERING_NOTE, LETTERING_STYLE_UNDO, PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { holdsOverlaysOn, useLetteringSelection } from '../lettering/useLetteringSelection';
 import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, pinKeepingSizeOps, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
@@ -2018,10 +2018,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       {/* Lettering style (whole comic) */}
       {overlayLettering && (
         <section aria-labelledby="pe-lettering" className="space-y-2">
-          <SectionTitle id="pe-lettering" icon={<Type className="h-3.5 w-3.5" />} right={<span className="text-[11px] text-[var(--ds-muted)]">Free</span>}>
+          <SectionTitle id="pe-lettering" icon={<Type className="h-3.5 w-3.5" />}>
             Lettering
           </SectionTitle>
-          <PresetGallery value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => apply(presetOps(id), { label: 'Change lettering style' })} lang={lang ?? doc.format.language} />
+          {/* A translated edition shows the styles but leaves them to the original language (one line says so). */}
+          <PresetGallery value={doc.letterStyle?.presetId ?? 'classic'} onChange={(id) => apply(presetOps(id), LETTERING_STYLE_UNDO)} lang={lang ?? doc.format.language} disabled={!!lang} />
+          {lang && <p className="px-1 text-[12px] leading-snug text-[var(--ds-muted)]">{EDITION_LETTERING_NOTE}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <GhostButton
               size="xs"
@@ -2032,9 +2034,6 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
               <RotateCcw className="h-3 w-3" aria-hidden /> Reset all balloon styles
             </GhostButton>
           </div>
-          <p className="px-1 text-[11px] leading-snug text-[var(--ds-muted)]">
-            Select a balloon on the page for fonts, colours, shapes and tails. Lettering edits are free — done by the editor, no AI cost.
-          </p>
         </section>
       )}
 
@@ -2094,14 +2093,18 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       </section>
     </>
   );
+  // In Lettering mode the lettering styles are what you came for: they lead the side panel (overlay comics only; the
+  // section is empty otherwise). Mark up keeps today's order, the AI edit first.
+  const letteringFirst = mode === 'move' && overlayLettering;
   const toolsContent = (
     <>
+      {letteringFirst && letteringStyleSection}
       {aiSection}
       {actionsSection}
       {qcSection}
       {versionsSection}
       {filmstripToolsSection}
-      {letteringStyleSection}
+      {!letteringFirst && letteringStyleSection}
       {scriptSection}
       {pro.pro && phone && pro.coach.all.length > 0 && !pro.coach.open && (
         <button type="button" data-testid="pro-tips-again" onClick={pro.coach.reopen} className={cx('tap-target self-start px-2 py-1 text-[12px] font-semibold text-[var(--ds-ink)] underline decoration-[var(--ds-hairline)] underline-offset-2 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11', RADIUS_CONTROL)}>
