@@ -21,9 +21,10 @@
     <meta name="description" content="Make comics with an AI director, then read and share them anywhere. DreamStream Studio also does AI chat and code." />
     <!-- Browser/OS chrome colour before the app runs: the Atlas skin's paper, light and dark
          (lead decision D8), pinned to the manifest's theme_color and the [data-ds-skin="atlas"]
-         --ds-canvas (tests/config/appShell.test.ts). At runtime only the studio's phone shell
-         (comicstudio/mobile/useThemeColor.ts) and the immersive reader
-         (comicstudio/immersive/useImmersive.ts) change it. -->
+         --ds-canvas (tests/config/appShell.test.ts). At runtime services/theme.ts sets both to the
+         page's own canvas after every theme change (so the bar follows the chosen look, not the OS),
+         and the studio's phone shell (comicstudio/mobile/useThemeColor.ts) and the immersive reader
+         (comicstudio/immersive/useImmersive.ts) change it while they are open. -->
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
     <link rel="manifest" href="/app.webmanifest" />

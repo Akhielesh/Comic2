@@ -35,6 +35,9 @@ import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../
 import { ComicIdeaForm, ComicWorkspaceFrame, WORKSPACE_NAV_DRAWER_BELOW } from './comicstudio/ComicCreationWorkspace';
 import { useFormFactor } from './comicstudio/mobile/useFormFactor';
 import { useComicIdeaDraft } from './comicstudio/comicIdeaDraft';
+import { ContinueCard } from './comicstudio/home/ContinueCard';
+import { OwnKeyLimitLine } from './comicstudio/home/OwnKeyLimitLine';
+import { coverCandidates, pickContinue } from './comicstudio/home/homeModel';
 
 /** How a new comic starts: the conversational Comic Studio (default) or a classic pipeline. */
 export type NewComicMode = 'studio' | 'classic' | 'pagestudio';
@@ -177,6 +180,36 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [createError, setCreateError] = useState<string | null>(null);
   const beginNewComic = () => { initialEntryChosen.current = true; setClassicForm(false); setIsCreating(true); };
   const formMode = comicWorkspace && classicForm ? 'classic' : 'studio';
+  // The frame's brand opens the member's own comics, never the visitor landing ('home' keeps meaning the landing):
+  // All comics when there are comics, the idea form when there are none. While the list is still loading it shows the
+  // loading state and lets the first-entry rule above choose once the list arrives. Ignored while a create runs (the
+  // frame's other links are disabled then too).
+  const showMyComics = () => {
+    if (createInFlightRef.current) return;
+    setClassicForm(false);
+    setCreateError(null);
+    if (!projectsLoaded) {
+      initialEntryChosen.current = false;
+      setIsCreating(false);
+      return;
+    }
+    initialEntryChosen.current = true;
+    setIsCreating(projects.length === 0);
+  };
+  // The Continue comic is chosen once per list load, not on every change to `projects`: updateProject stamps updatedAt
+  // on any change (a rename, the Featured star), so ranking live would move an old comic into the card on that click.
+  // The card shows the chosen comic's live row (a rename shows); a new choice is made when a load finishes or when the
+  // chosen comic is deleted. While a reload runs the last choice stays (adjusting state during render, no effect).
+  const [continueChoice, setContinueChoice] = useState<{ id: string | null; loaded: boolean } | null>(null);
+  if (comicWorkspace) {
+    const choiceGone = !!continueChoice?.id && !projects.some((p) => p.id === continueChoice.id);
+    if (projectsLoaded && (!continueChoice || !continueChoice.loaded || choiceGone)) {
+      setContinueChoice({ id: pickContinue(projects, Date.now())?.id ?? null, loaded: true });
+    } else if (!projectsLoaded && continueChoice?.loaded) {
+      setContinueChoice({ id: continueChoice.id, loaded: false });
+    }
+  }
+  const continueProject = comicWorkspace && continueChoice?.id ? projects.find((p) => p.id === continueChoice.id) ?? null : null;
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
@@ -348,7 +381,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const dashboard = (
     <div className={cn('max-w-7xl mx-auto p-4 medium:p-8', RISE_IN)}>
       <DataRescue />
-      <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
+      {/* Comic Studio members draw on the platform allowance: no setup checklist there (below, under the page's h1: the
+          comic to continue and a line when their own key, if they added one, is over its limit). The main dashboard
+          keeps the checklist. */}
+      {!comicWorkspace && <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />}
       {projects.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
@@ -365,6 +401,14 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             )}
           </div>
 
+        </>
+      )}
+
+      {/* After the h1 so the page outline starts at "My comics"; still above the filters and the grid. */}
+      {comicWorkspace && (
+        <>
+          {continueProject && !isCreating && <ContinueCard project={continueProject} onOpen={onOpenProject} onRead={onReadProject} />}
+          <OwnKeyLimitLine onManageKeys={() => onNavigate?.('settings', 'settings')} />
         </>
       )}
 
@@ -563,12 +607,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             )}
 	            {displayedProjects.map(project => {
 	              const firstPageStudioImage = project.state.pageStudio?.pages?.find((page) => page.imageUrl)?.imageUrl;
-	              const previewCandidates = [
-	                project.state.coverImageUrl,
-	                project.state.panels.find((panel) => panel.imageUrl)?.imageUrl,
-	                firstPageStudioImage,
-	                project.state.styleVariants.find((variant) => variant.imageUrl)?.imageUrl
-	              ].filter((value): value is string => Boolean(value));
+	              // One candidate order for the grid and the Continue card (homeModel).
+	              const previewCandidates = coverCandidates(project);
 	              const primaryPreview = previewCandidates[0];
 	              const fallbackPreviews = previewCandidates.slice(1);
 	              const hasPanelPreview = project.state.panels.some((panel) => panel.imageUrl);
@@ -751,7 +791,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   // The apex dashboard paints its own canvas and ink across the full width, so the page reads in both themes.
   if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
-    onHome={() => onNavigate?.('home')} onAccount={() => onNavigate?.('settings')}
+    onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
     navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
       onNewComic: beginNewComic,
       onAllComics: () => { initialEntryChosen.current = true; setIsCreating(false); setCreateError(null); },

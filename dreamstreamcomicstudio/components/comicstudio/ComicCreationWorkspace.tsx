@@ -1,13 +1,14 @@
 import React, { useId, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Palette, Plus, Settings, X } from 'lucide-react';
+import { ArrowRight, BookOpen, ChevronDown, FileText, Layers, Loader2, Menu, Plus, Settings, X } from 'lucide-react';
 import type { Project } from '../../types';
 import { useFormFactor } from './mobile/useFormFactor';
 import { useFocusTrap } from './board/ui';
 import { useDialogA11y } from '../studio/kit/useDialogA11y';
 import { ModalPortal } from '../modals/ModalPortal';
-import { useComicTheme } from './useComicTheme';
+import { AppearanceButton } from '../account/AppearanceControl';
 import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from '../comicshost/ComicsMark';
+import { HOME_START_HELP } from './home/homeModel';
 import '../comicshost/comicsShell.css';
 import './comicCreationWorkspace.css';
 
@@ -28,7 +29,7 @@ export function ComicProjectNavigation({ projects, activeProjectId, activeView, 
   const recentId = useId();
   const recent = [...projects].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
   return <nav className="comic-project-nav" aria-label="Your comics">
-    <button type="button" className="comic-project-new comics-primary-action" onClick={onNewComic} disabled={disabled} aria-current={activeView === 'new' ? 'page' : undefined}><Plus aria-hidden />New comic</button>
+    <button type="button" className="comic-project-new" onClick={onNewComic} disabled={disabled} aria-current={activeView === 'new' ? 'page' : undefined}><Plus aria-hidden />New comic</button>
     <button type="button" className="comic-project-recents-toggle" aria-expanded={recentOpen} aria-controls={recentId} onClick={() => setRecentOpen(!recentOpen)}><ChevronDown aria-hidden className={recentOpen ? '' : 'is-closed'} />Recent comics</button>
     {recentOpen && <div id={recentId} className="comic-project-recents">
       {recent.map((project) => <button type="button" key={project.id} disabled={disabled} onClick={() => onOpenProject(project.id)} aria-current={activeProjectId === project.id ? 'page' : undefined} title={project.name}><FileText aria-hidden /><span>{project.name || 'Untitled comic'}</span></button>)}
@@ -56,7 +57,6 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const navId = useId();
-  const { theme, setTheme } = useComicTheme();
   const modalOpen = narrow && drawerOpen;
   const close = () => setDrawerOpen(false);
   useDialogA11y(modalOpen, close);
@@ -76,7 +76,7 @@ export function ComicWorkspaceFrame({ children, title, navigation, onHome, onAcc
       <header className="comic-workspace-header">
         <button type="button" className="comic-workspace-icon" onClick={toggle} aria-expanded={narrow ? drawerOpen : wideOpen} aria-controls={navId} aria-label={narrow ? 'Open comic navigation' : wideOpen ? 'Collapse comic navigation' : 'Expand comic navigation'}><Menu aria-hidden /></button>
         <span className="comic-workspace-title">{title}</span>
-        <button type="button" className="comic-workspace-icon" onClick={() => setTheme(theme === 'paper' ? 'atlas' : 'paper')} aria-label={theme === 'paper' ? 'Use Atlas theme' : 'Use Paper theme'}><Palette aria-hidden /></button>
+        <AppearanceButton paper className="comic-workspace-icon" />
         <button type="button" className="comic-workspace-icon" onClick={onAccount} aria-label="Open account settings"><Settings aria-hidden /></button>
       </header>
       <main className="comic-workspace-content">{children}</main>
@@ -111,10 +111,10 @@ export function ComicIdeaForm({ name, idea, pending, error, onName, onIdea, onSt
       <div className="comic-idea-compose">
         <label className="sr-only" htmlFor={`${id}-idea`}>Your comic idea or script</label>
         <textarea id={`${id}-idea`} value={idea} onChange={(event) => onIdea(event.target.value)} disabled={pending} maxLength={200000} placeholder="Describe your idea or paste a script here…" aria-describedby={`${id}-help`} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && idea.trim() && !pending) { event.preventDefault(); onStart(); } }} />
-        <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start comics-primary-action" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
+        <div className="comic-idea-compose-actions"><button type="submit" className="comic-idea-start" disabled={!idea.trim() || pending}>{pending ? <><Loader2 className="animate-spin" aria-hidden />Preparing…</> : <>Start <ArrowRight aria-hidden /></>}</button></div>
       </div>
       {error && <p className="comic-idea-error" role="alert">{error}</p>}
-      <p id={`${id}-help`} className="comic-idea-help">Start prepares the conversation. Send submits your idea.</p>
+      <p id={`${id}-help`} className="comic-idea-help">{HOME_START_HELP}</p>
       <div className="comic-idea-alternatives"><button type="button" onClick={onStartBlank} disabled={pending}>Start blank</button><button type="button" onClick={onClassic} disabled={pending}>Use the classic editor</button></div>
     </form>
   </section>;

@@ -5,20 +5,26 @@ import { SmartImage } from './SmartImage';
 describe('SmartImage Component', () => {
     // Mock Image constructor
     const originalImage = window.Image;
+    // What each preloader carried when its src was set (the moment the browser starts the fetch).
+    let preloads: Array<{ src: string; fetchPriority: unknown; decoding: unknown }> = [];
 
     beforeEach(() => {
         // Reset mocks
         vi.clearAllMocks();
         vi.useFakeTimers();
+        preloads = [];
 
         // Mock Image loading
         window.Image = class {
             onload: (() => void) | null = null;
             onerror: (() => void) | null = null;
+            fetchPriority: unknown = undefined;
+            decoding: unknown = undefined;
             _src: string = '';
 
             set src(value: string) {
                 this._src = value;
+                preloads.push({ src: value, fetchPriority: this.fetchPriority, decoding: this.decoding });
                 // Simulate async loading with timeout
                 setTimeout(() => {
                     if (value === 'error-url') {
@@ -78,5 +84,28 @@ describe('SmartImage Component', () => {
         const img = screen.queryByRole('img');
         expect(img).not.toBeInTheDocument();
         // We could check for alert-circle or error text if we knew exact output.
+    });
+
+    it('gives the preloader, which makes the request, the fetch priority and decoding before its src is set', async () => {
+        render(<SmartImage src="error-url" fallbackSources={['cover.webp']} alt="Cover" fetchPriority="high" decoding="async" />);
+        // First candidate fails, then (after the re-render starts the next preloader) the fallback loads.
+        for (let step = 0; step < 2; step += 1) {
+            await act(async () => {
+                vi.advanceTimersByTime(20);
+            });
+        }
+        // The first candidate fails, so the fallback is fetched by a second preloader: both carry the hints.
+        expect(preloads).toEqual([
+            { src: 'error-url', fetchPriority: 'high', decoding: 'async' },
+            { src: 'cover.webp', fetchPriority: 'high', decoding: 'async' }
+        ]);
+        const img = screen.getByRole('img');
+        expect(img).toHaveAttribute('src', 'cover.webp');
+        expect(img).toHaveAttribute('fetchpriority', 'high');
+    });
+
+    it('preloads at the browser default priority when none is given', () => {
+        render(<SmartImage src="valid.jpg" alt="Plain" />);
+        expect(preloads).toEqual([{ src: 'valid.jpg', fetchPriority: 'auto', decoding: 'auto' }]);
     });
 });

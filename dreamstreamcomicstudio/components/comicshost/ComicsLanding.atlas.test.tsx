@@ -214,13 +214,19 @@ describe('Comics landing', () => {
     expect(header).toHaveAttribute('data-scrolled', 'true');
   });
 
-  it('can switch from Atlas to Paper and back from the header', () => {
+  it('can switch to Paper, Dark and back to Light from the header Appearance control, with no reload', () => {
     renderLanding();
     const landing = screen.getByTestId('comics-landing');
     expect(landing).toHaveAttribute('data-comic-theme', 'atlas');
-    fireEvent.click(screen.getByRole('button', { name: 'Use Paper theme' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance: Light' }));
+    const choice = () => screen.getByRole('radiogroup', { name: 'Appearance' });
+    fireEvent.click(within(choice()).getByRole('radio', { name: 'Paper' }));
     expect(landing).toHaveAttribute('data-comic-theme', 'paper');
-    fireEvent.click(screen.getByRole('button', { name: 'Use Atlas theme' }));
+    fireEvent.click(within(choice()).getByRole('radio', { name: 'Dark' }));
     expect(landing).toHaveAttribute('data-comic-theme', 'atlas');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    fireEvent.click(within(choice()).getByRole('radio', { name: 'Light' }));
+    expect(landing).toHaveAttribute('data-comic-theme', 'atlas');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 });

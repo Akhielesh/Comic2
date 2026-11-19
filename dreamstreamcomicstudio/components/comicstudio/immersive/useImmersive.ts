@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { enterFullscreen, exitFullscreen, fullscreenApi, fullscreenElement, onFullscreenChange, type FullscreenFallbackReason } from '../../../services/fullscreen';
 import { historyLayers, layerKey, useBackLayer } from '../mobile/backStack';
+import { holdThemeColor, syncThemeColorMeta } from '../../../services/theme';
 
 export { fullscreenElement };
 
@@ -101,7 +102,8 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
   }, []);
   useBackLayer(active, exitOnBack, IMMERSIVE_LAYER);
 
-  // theme-color follows the room.
+  // theme-color follows the room, held so a change of look (an OS switch on System, another tab) leaves it; on exit
+  // the look's own metas take the current canvas, not the colour saved on open.
   useEffect(() => {
     if (!active || typeof document === 'undefined' || !themeColor) return;
     let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -113,10 +115,13 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
     }
     const prev = meta.getAttribute('content');
     meta.setAttribute('content', themeColor);
+    const release = holdThemeColor();
     return () => {
+      release();
       if (!meta) return;
       if (created) meta.remove();
       else if (prev !== null) meta.setAttribute('content', prev);
+      syncThemeColorMeta();
     };
   }, [active, themeColor]);
 

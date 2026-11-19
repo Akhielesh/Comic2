@@ -12,7 +12,11 @@ import { RADIUS_ROUND } from '../chat/studioDesign';
 import { ComicsHeader, type ComicsHeaderProps } from './ComicsHeader';
 import { ComicsMark } from './ComicsMark';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  document.documentElement.classList.remove('dark', 'ds-no-transitions');
+});
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -107,10 +111,10 @@ describe('ComicsHeader', () => {
 
   it('the menu rows per state and page: section links on the landing only, Register interest only signed out', () => {
     const cases: Array<[Partial<ComicsHeaderProps>, string[]]> = [
-      [{ signedIn: false, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'Register interest', 'Use Paper theme']],
-      [{ signedIn: true, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'My comics', 'Use Paper theme']],
-      [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Register interest', 'Use Paper theme']],
-      [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics', 'Use Paper theme']]
+      [{ signedIn: false, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'Register interest']],
+      [{ signedIn: true, page: 'home' }, ['Features', 'Looks', 'Models', 'Pricing', 'Library', 'My comics']],
+      [{ signedIn: false, page: 'other' }, ['Home', 'Library', 'Register interest']],
+      [{ signedIn: true, page: 'other' }, ['Home', 'Library', 'My comics']]
     ];
     for (const [over, rows] of cases) {
       const { unmount } = render(<ComicsHeader {...props(over)} />);
@@ -147,7 +151,7 @@ describe('ComicsHeader', () => {
     expect(within(banner).queryByRole('button', { name: /^sign in$/i })).toBeNull();
     // Pressing it there remounted the card and wiped what was typed.
     expect(within(banner).queryByRole('button', { name: /^register interest$|^request access$/i })).toBeNull();
-    expect(menuRows()).toEqual(['Home', 'Library', 'Use Paper theme']);
+    expect(menuRows()).toEqual(['Home', 'Library']);
     expect(p.onRequestAccess).not.toHaveBeenCalled();
     unmount();
     const g = props({ page: 'other', current: 'gallery' });
@@ -157,6 +161,60 @@ describe('ComicsHeader', () => {
     fireEvent.click(library);
     expect(g.onBrowseGallery).toHaveBeenCalledTimes(1);
     expect(within(screen.getByRole('banner')).getByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
+  });
+
+  it('appearance: no Palette toggle; the Appearance button sits in the actions (from 600) and the compact menu ends with the Appearance group (below 600)', () => {
+    for (const over of [{ signedIn: false, page: 'home' }, { signedIn: true, page: 'other' }] as const) {
+      const { unmount } = render(<ComicsHeader {...props(over)} />);
+      const banner = screen.getByRole('banner');
+      expect(within(banner).queryByRole('button', { name: /theme/i }), JSON.stringify(over)).toBeNull();
+      const actions = banner.querySelector('[data-region="actions"]') as HTMLElement;
+      const button = within(actions).getByRole('button', { name: 'Appearance: Light' });
+      // Hidden below 600 by its class (comicsShell.css), where the menu carries the same choice. The class sits on the
+      // wrapper, so nothing of the control is left in the actions row to take a gap there.
+      const wrapper = button.parentElement as HTMLElement;
+      expect(wrapper.parentElement).toBe(actions);
+      expect(wrapper.className.split(/\s+/)).toContain('comics-header-theme');
+      const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+      const group = within(menu).getByRole('radiogroup', { name: 'Appearance', hidden: true });
+      expect(within(group).getAllByRole('radio', { hidden: true }).map((r) => r.textContent)).toEqual(['Light', 'Dark', 'Paper', 'System']);
+      // The group is the menu's last entry, after a hairline, and hidden from 600 (comicsShell.css).
+      const row = group.closest('li') as HTMLElement;
+      expect(row.className.split(/\s+/)).toContain('comics-header-menu-theme');
+      expect(row.parentElement?.lastElementChild).toBe(row);
+      expect(within(row).getByText('Appearance')).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('one overlay at a time: opening Appearance closes the menu, and pressing the menu trigger closes Appearance', () => {
+    render(<ComicsHeader {...props({ signedIn: true, page: 'other', onOpenAccount: vi.fn() })} />);
+    const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+    const trigger = screen.getByRole('button', { name: 'Account and navigation' });
+    fireEvent.click(trigger);
+    expect(menu).not.toHaveAttribute('hidden');
+    const appearance = screen.getByRole('button', { name: /^Appearance: / });
+    fireEvent.pointerDown(appearance);
+    fireEvent.click(appearance);
+    expect(appearance).toHaveAttribute('aria-expanded', 'true');
+    expect(menu).toHaveAttribute('hidden');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    expect(menu).not.toHaveAttribute('hidden');
+    expect(appearance).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelector('[data-slot="appearance-panel"]')).toBeNull();
+  });
+
+  it('choosing Dark in the compact menu darkens the page at once and keeps the menu open', () => {
+    render(<ComicsHeader {...props({ page: 'other' })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    const menu = document.querySelector('[data-slot="comics-menu"]') as HTMLElement;
+    fireEvent.click(within(menu).getByRole('radio', { name: 'Dark' }));
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(menu).not.toHaveAttribute('hidden');
+    expect(screen.getByRole('button', { name: 'Appearance: Dark' })).toBeInTheDocument();
+    document.documentElement.classList.remove('dark');
   });
 
   it('the menu opens from its trigger, runs a row and closes; Esc closes it and returns focus to the trigger', () => {

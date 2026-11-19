@@ -550,7 +550,11 @@ CL-0 (`#525252` / `#404040` light, `#e5e5e5` dark): the old blue was ΔE 6.4 / 3
 - Lead decision D8: the browser chrome colour (both `theme-color` metas and `public/app.webmanifest` theme_color) is the
   Atlas paper, #ffffff light and #0a0a0a dark, pinned to the `[data-ds-skin="atlas"]` --ds-canvas by appShell.test.ts. The
   default skin's #FAF9F5 / #262624 read as a warm band above the dark Atlas page. Not changed: the manifests'
-  background_color, `public/comics.webmanifest` and the QA page `qa/comic-qa.html`.
+  background_color, `public/comics.webmanifest` and the QA page `qa/comic-qa.html`. Since navtheme NT-Q the two static
+  metas are the first-paint colour only: after every theme change `syncThemeColorMeta()` (services/theme.ts) sets them
+  to the page's computed --ds-canvas, so the chrome follows the chosen look (Paper's included), not the OS. It leaves an
+  unscoped theme-color alone (a share page's head carries its comic's colour) and waits while a screen holds the colour
+  (`holdThemeColor()`: the immersive reader's room, an explicit `useThemeColor` colour).
 - Lead decision D9: the shell's Contact link, the home page, the comics landing (DS-3) and the studio-access refusal write
   to the one support address, `SUPPORT_EMAIL` (components/legal/contacts.ts, Atlas #263's constant). ComicReader's footer address (Atlas #263
   owns that line) and Stream Studio (live/**, owner to confirm) are unchanged.
