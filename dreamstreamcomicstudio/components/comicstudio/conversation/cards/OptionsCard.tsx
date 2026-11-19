@@ -5,7 +5,7 @@
 // When choices carry a `visual` (contract §4.7 OptionVisual), they render as picture tiles —
 // a panel-layout glyph, a page stack, a style preview, a cast avatar or a balloon swatch — so
 // "4 panels or 6?" and "which look?" are answered by seeing, not reading. Visuals are drawn
-// procedurally or from the platform library (free; no AI call).
+// procedurally or from static art (a look's picture through LookArt; free; no AI call).
 //
 // Live agent (agent-editor plan §3 A3.3): "Which line?" and "Where?" questions show the comic itself — a `balloon`
 // visual is a crop of the page around that balloon (or the line's words in a bubble while the page is not drawn), and a
@@ -17,12 +17,10 @@ import { POS9, findCharacter, type Box, type Card, type ComicDoc, type OptionCho
 import { LETTERING_PRESETS, type LetteringPresetId } from '../../../../shared/comic/lettering/style';
 import { aspectRatioOf } from '../../../../shared/comic/models';
 import { panelBoxesFor } from '../../../../shared/comic/pageGeometry';
-import { stylePreviewId } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
-import { LibraryImage } from '../../library/LibraryImage';
+import { LookArt } from '../../library/LookArt';
 import { BubblePreview } from '../../library/procedural/BubblePreview';
 import { LayoutGlyph } from '../../library/procedural/LayoutGlyph';
-import { PresetThumb } from '../../library/procedural/PresetThumb';
 import type { ComicStudioController } from '../../useStudio';
 import { sendOutcomeOf } from '../../messageQueue';
 import { CardShell, ChipButton, PrimaryButton, cx } from '../ui';
@@ -189,13 +187,7 @@ export const OptionVisualArt: React.FC<{ visual: OptionVisual; doc: ComicDoc | n
       if (!preset) return null;
       return (
         <span className="block h-full w-full overflow-hidden rounded-lg">
-          <LibraryImage
-            id={stylePreviewId(preset.id)}
-            alt=""
-            sizes="120px"
-            className="h-full w-full object-cover"
-            fallback={<PresetThumb preset={preset} />}
-          />
+          <LookArt presetId={preset.id} size="tile" alt="" />
         </span>
       );
     }

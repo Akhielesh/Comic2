@@ -7,7 +7,7 @@
 //   • "Your style references (n/8)": the shared <RefStrip> for style photos (the bug: style refs were
 //     uploaded but never visible anywhere on the board) — add, open the drawer, drop or paste;
 //   • the lettering preset gallery (the comic's balloon and caption look; free, instant, undoable);
-//   • preset tiles show the platform library preview (style.<id>) over the free procedural thumb;
+//   • preset tiles show each look's picture through LookArt (bundled sample art, at once; no library index);
 //   • option boards: the content-check veil, ≤ 480w variants, calm failures, version stacks;
 //   • prices print through formatCostForUser (governed users never see dollars); no hover-only UI.
 
@@ -15,7 +15,6 @@ import React, { useRef, useState } from 'react';
 import { ArrowDown, Check, Lock, Palette, Plus, Sparkles, Type, X } from 'lucide-react';
 import type { ComicDoc, StyleBible, StyleOption } from '../../../shared/comic/doc';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets';
-import { stylePreviewId } from '../../../shared/comic/library';
 import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
@@ -23,8 +22,7 @@ import type { StudioController } from '../types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ds/Tabs';
 import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
-import { LibraryImage } from '../library/LibraryImage';
-import { PresetThumb } from '../library/procedural/PresetThumb';
+import { LookArt } from '../library/LookArt';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { presetOps as letteringPresetOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
@@ -224,20 +222,10 @@ const OptionCard: React.FC<{ studio: StudioController; doc: ComicDoc; option: St
   );
 };
 
-/** A preset's look: the platform library preview when published, the free procedural thumb under it. */
+/** A preset's look: its picture through LookArt (static art in the first render; the button names the look). */
 const PresetArt: React.FC<{ preset: StylePreset; className?: string }> = ({ preset, className }) => (
-  <span className={cx('relative block overflow-hidden rounded-lg', className)} style={{ background: preset.swatch }} aria-hidden>
-    <LibraryImage
-      id={stylePreviewId(preset.id)}
-      alt=""
-      sizes="128px"
-      className="absolute inset-0 h-full w-full object-cover"
-      fallback={
-        <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
-          <PresetThumb preset={preset} />
-        </span>
-      }
-    />
+  <span className={cx('relative block overflow-hidden rounded-lg bg-[var(--ds-well)]', className)} aria-hidden>
+    <LookArt presetId={preset.id} size="tile" alt="" className="absolute inset-0" />
   </span>
 );
 

@@ -1,18 +1,16 @@
 // `style_presets` card (contract §13.2, assets.md §9; owner P1-LIBRARY): the director's FREE visual
-// chooser. Shows the suggested curated looks with the platform library's preview art (procedural
-// thumbnails until/unless it is published), each with its name and one-line pitch. Tapping one runs
+// chooser. Shows the suggested curated looks with each look's picture (LookArt: static art in the first
+// render, no library index), each with its name and one-line pitch. Tapping one runs
 // the free `use_preset` action: the style is drafted instantly, nothing is drawn, nothing is spent.
 
 import React from 'react';
 import { Check, Loader2, Palette } from 'lucide-react';
 import type { Card } from '../../../shared/comic/doc';
-import { stylePreviewId } from '../../../shared/comic/library';
 import { getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets';
 import type { CardProps } from '../extensions';
 import { CardShell } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
-import { LibraryImage } from './LibraryImage';
-import { PresetThumb } from './procedural/PresetThumb';
+import { LookArt } from './LookArt';
 
 import { FOCUS_RING } from '../../chat/studioDesign';
 import { cn } from '../../../lib/utils';
@@ -89,17 +87,7 @@ export const StylePresetsCard: React.FC<CardProps<StylePresetsData>> = ({ card, 
               )}
             >
               <span className="relative block aspect-[4/5] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>
-                <LibraryImage
-                  id={stylePreviewId(p.id)}
-                  alt=""
-                  sizes="(min-width: 640px) 180px, 45vw"
-                  className="absolute inset-0 h-full w-full object-cover"
-                  fallback={
-                    <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
-                      <PresetThumb preset={p} />
-                    </span>
-                  }
-                />
+                <LookArt presetId={p.id} size="tile" alt="" className="absolute inset-0" />
                 {(on || pending) && (
                   <span className="absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ds-accent-fill)] text-[var(--ds-on-accent)] shadow-sm">
                     {pending ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}

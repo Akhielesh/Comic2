@@ -1,8 +1,8 @@
 // Style panel (composer chip "🎨 Style"): the curated preset grid, "explore 3 directions
 // for my story" (cheap style boards, gated like any spend) and "describe your own".
 // Picking a preset drafts the style bible instantly (a `style` patch, no LLM).
-// Preset tiles show the platform library's real preview art when it is published, with the
-// procedural thumbnail as the instant, offline fallback (assets.md; free either way).
+// Preset tiles show each look's picture through LookArt: static art in the first render, with no
+// library index and no backend call (free either way).
 
 import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
@@ -12,9 +12,7 @@ import { STYLE_DIRECTIONS_USD, styleDirectionsUsd } from '../../../../shared/com
 import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
-import { stylePreviewId } from '../../../../shared/comic/library';
-import { LibraryImage } from '../../library/LibraryImage';
-import { PresetThumb } from '../../library/procedural/PresetThumb';
+import { LookArt } from '../../library/LookArt';
 import { useCostFormat } from '../cost';
 import type { StudioActOutcome } from '../../types';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
@@ -173,17 +171,7 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                 )}
               >
                 <span data-preset-art="" className="relative block aspect-[16/9] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>
-                  <LibraryImage
-                    id={stylePreviewId(preset.id)}
-                    alt=""
-                    sizes="(min-width: 640px) 160px, 45vw"
-                    className="absolute inset-0 h-full w-full object-cover"
-                    fallback={
-                      <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
-                        <PresetThumb preset={preset} />
-                      </span>
-                    }
-                  />
+                  <LookArt presetId={preset.id} size="tile" alt="" className="absolute inset-0" />
                 </span>
                 <span className="block bg-[var(--ds-surface-strong)] px-2.5 py-2">
                   <span className="flex items-start gap-1 text-[12px] font-semibold leading-snug text-[var(--ds-ink)]">
