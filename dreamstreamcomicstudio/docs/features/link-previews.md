@@ -72,8 +72,9 @@ real colour. (`comics-edge/scripts/gen-comics-icons.mjs` makes only the app icon
 ### Per-comic cards (made at publish)
 
 `server/src/comic/publication/ogImage.ts` `renderOgCard` draws one 1200×630 JPEG (≤ 300 KB) per published
-edition: the blurred cover as backdrop, the cover card, title, description, meta row, and at the bottom right the
-Comic Studio mark in ink with "DreamStream Studio". The mark is `ComicsMark.tsx`'s geometry with a light ink
+edition: the blurred cover as backdrop, the cover card, title (Noto Sans Bold; the per-script Noto for other scripts;
+no comic display face), description, meta row, and at the bottom right the Comic Studio mark in ink with "Comic Studio",
+the name the comics host and its own preview pictures use. The mark is `ComicsMark.tsx`'s geometry with a light ink
 tile and the page cut out in dark paper, as the product shows it on dark paper; the backdrop is always dark, so
 it reads on every cover. `ogImage.test.ts` checks the geometry against `ComicsMark.tsx`, that the drawn mark has
 no hue, and the file-name hash.

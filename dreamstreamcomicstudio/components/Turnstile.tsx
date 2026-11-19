@@ -40,6 +40,8 @@ interface TurnstileProps {
   onExpire?: () => void;
   /** Optional action label for analytics in the Turnstile dashboard. */
   action?: string;
+  /** The widget's theme: the page's own when it knows it ('auto' follows the system). Default light. */
+  theme?: 'light' | 'dark' | 'auto';
   className?: string;
 }
 
@@ -52,7 +54,7 @@ export const resetTurnstile = (): void => {
   }
 };
 
-export const Turnstile: React.FC<TurnstileProps> = ({ onToken, onExpire, action, className }) => {
+export const Turnstile: React.FC<TurnstileProps> = ({ onToken, onExpire, action, theme = 'light', className }) => {
   const ref = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | null>(null);
   const cbs = useRef({ onToken, onExpire });
@@ -70,7 +72,7 @@ export const Turnstile: React.FC<TurnstileProps> = ({ onToken, onExpire, action,
           callback: (token: string) => cbs.current.onToken(token),
           'expired-callback': () => cbs.current.onExpire?.(),
           'error-callback': () => cbs.current.onExpire?.(),
-          theme: 'light'
+          theme
         });
       })
       .catch(() => {
@@ -85,7 +87,7 @@ export const Turnstile: React.FC<TurnstileProps> = ({ onToken, onExpire, action,
       }
       widgetId.current = null;
     };
-  }, [action]);
+  }, [action, theme]);
 
   if (!TURNSTILE_SITE_KEY) return null;
   return <div ref={ref} className={className} />;

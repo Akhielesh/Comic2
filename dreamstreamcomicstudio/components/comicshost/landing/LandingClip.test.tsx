@@ -69,14 +69,17 @@ const twin: LandingMedia = { ...clip, short: 'the second clip' };
 const toggle = (name: RegExp) => screen.getByRole('button', { name });
 
 describe('LandingClip', () => {
-  it('is muted, looping, inline, waits to load, and has its poster and size', () => {
+  it('is muted, looping, inline, waits to load (its poster too, until it nears the screen), and has its size', () => {
     const { container } = render(<LandingClip media={clip} />);
     const video = container.querySelector('video')!;
     expect(video.muted).toBe(true);
     expect(video).toHaveAttribute('loop');
     expect(video).toHaveAttribute('playsinline');
     expect(video).toHaveAttribute('preload', 'none');
-    expect(video).toHaveAttribute('poster', clip.light.poster);
+    // Far down the page the poster is not asked for yet; once the clip is within a screen of view, it is.
+    expect(video).not.toHaveAttribute('poster');
+    view(video, true);
+    expect(container.querySelector('video')).toHaveAttribute('poster', clip.light.poster);
     expect(video).toHaveAttribute('width', String(clip.width));
     expect(video).toHaveAttribute('height', String(clip.height));
     expect([...video.querySelectorAll('source')].map((s) => s.getAttribute('type'))).toEqual(['video/webm', 'video/mp4']);
@@ -162,6 +165,10 @@ describe('LandingClip', () => {
     const button = toggle(/^Play:/);
     expect(button).toHaveAttribute('data-slot', 'icon-button');
     expect(button.className).toMatch(/coarse:min-h-\[var\(--ds-density-touch\)\]/);
+    // It sits in its own strip after the clip, never laid over the page art.
+    const bar = button.closest('.landing-clip-bar')!;
+    expect(bar).not.toBeNull();
+    expect(bar.previousElementSibling?.tagName).toBe('VIDEO');
   });
 });
 

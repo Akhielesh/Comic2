@@ -2,7 +2,9 @@
 // looks, how it works, the models, pricing, where to read, "Register your interest", the questions and the footer.
 // Signed out, the hero's filled action takes a visitor to the form on this page (sign-up is closed); signed in, it
 // starts a comic. Everything below the looks lives in ./landing (copy, registries, pictures, sections) and its styles
-// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer.
+// in landing/landing.css, both in this lazy chunk. Nothing here fetches or runs a timer, and nothing loads from another
+// site while a visitor only reads: the interest form loads its bot check (when the build has one) only once the visitor
+// starts using the form.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { DENSITY, FOCUS_RING, FONT_DISPLAY, RADIUS_CONTROL } from '../chat/studioDesign';
@@ -17,9 +19,9 @@ import { ComicsHeader } from './ComicsHeader';
 import { ComicSampleReader } from './ComicSampleReader';
 import { FeaturesSection } from './landing/FeaturesSection';
 import { HowItWorks } from './landing/HowItWorks';
-import { FOOTER, JOIN } from './landing/landingCopy';
+import { FOOTER, HERO, JOIN } from './landing/landingCopy';
 import { ModelsSection, PricingSection } from './landing/ModelsPricing';
-import { isLandingSectionId, showRegister, showSection, type LandingSectionId } from './landing/parts';
+import { arriveAtSection, isLandingSectionId, showRegister, showSection, type LandingSectionId } from './landing/parts';
 import { ReadSection } from './landing/ReadSection';
 import { FaqSection, RegisterSection } from './landing/RegisterFaq';
 import './comicsLanding.css';
@@ -42,7 +44,9 @@ export interface ComicsLandingProps {
 }
 
 const TEXT_LINK = cn('ds-link inline-flex items-center text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', DENSITY.coarse, RADIUS_CONTROL, FOCUS_RING);
-const FOOTER_LINK = cn(TEXT_LINK, DENSITY.coarseSquare, 'justify-center');
+/** A text button or link that stays a 44 px square target under a coarse pointer, however short its word. */
+const SQUARE_LINK = cn(TEXT_LINK, DENSITY.coarseSquare, 'justify-center');
+const FOOTER_LINK = SQUARE_LINK;
 const LOOKS = SAMPLE_LOOKS.map((id) => ({ id, name: getStylePreset(id)?.name ?? id }));
 
 /** The footer's links to this page's sections (signed in, the join link is left out). */
@@ -71,10 +75,11 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
   const lookTrigger = useRef<HTMLButtonElement | null>(null);
   const goTop = useCallback(() => window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' }), []);
 
-  // Arriving on a section link (…/#pricing, …/#faq): show that section once.
+  // Arriving on a section link (…/#pricing, …/#faq): show that section once, after the fonts and layout settle.
   useEffect(() => {
     const id = (typeof window === 'undefined' ? '' : window.location.hash || '').replace(/^#/, '');
-    if (id !== 'top' && isLandingSectionId(id)) showSection(id);
+    if (id !== 'top' && isLandingSectionId(id)) return arriveAtSection(id);
+    return undefined;
   }, []);
 
   return (
@@ -94,7 +99,7 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
         <section id="top" aria-labelledby="comics-hero-title" className="comics-hero">
           <div className="comics-hero-copy">
             <h1 id="comics-hero-title" className={cn('comics-title', FONT_DISPLAY)}><span>Make your story</span>{' '}<span>a comic.</span></h1>
-            <p className="comics-lead">Start with an idea or a script. Plan, draw and letter your pages with the Comic Director.</p>
+            <p className="comics-lead">{HERO.lead}</p>
             <div className="comics-hero-actions">
               {signedIn ? (
                 <>
@@ -114,9 +119,9 @@ export function ComicsLanding({ signedIn, onSignIn, onOpenComics, onBrowseGaller
             </div>
             {!signedIn && (
               <p className="comics-invitation">
-                <span className="comics-invitation-line">New accounts are by invitation while we’re in beta.</span>
+                <span className="comics-invitation-line">{HERO.invitation}</span>
                 Already a member?{' '}
-                <button type="button" className={cn(TEXT_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onSignIn}>Sign in</button>
+                <button type="button" className={cn(SQUARE_LINK, 'comics-invitation-link font-medium underline underline-offset-4')} onClick={onSignIn}>Sign in</button>
               </p>
             )}
           </div>

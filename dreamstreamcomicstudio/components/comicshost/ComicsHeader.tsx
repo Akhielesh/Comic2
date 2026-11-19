@@ -11,12 +11,13 @@ import { BrandLockup } from '../layout/BrandLockup';
 import { ComicsMark } from './ComicsMark';
 import './comicsShell.css';
 
-export type ComicsSectionId = 'features' | 'looks' | 'pricing';
+export type ComicsSectionId = 'features' | 'looks' | 'models' | 'pricing';
 
 /** The landing's in-page links, in page order (the header's nav from expanded and its menu below that). */
 const SECTION_LINKS: ReadonlyArray<{ id: ComicsSectionId; label: string }> = [
   { id: 'features', label: 'Features' },
   { id: 'looks', label: 'Looks' },
+  { id: 'models', label: 'Models' },
   { id: 'pricing', label: 'Pricing' }
 ];
 
@@ -167,6 +168,13 @@ export const ComicsHeader: React.FC<ComicsHeaderProps> = ({
           {!home && (
             <Button variant="ghost" className={cn(RADIUS_ROUND, 'hidden expanded:inline-flex')} onClick={onRequestAccess}>
               Request access
+            </Button>
+          )}
+          {/* The landing's join action stays one press away once the hero has scrolled off: a ghost, never a fill (the
+              hero's button is the page's one filled action). Below lg the menu carries the same row. */}
+          {home && (
+            <Button variant="ghost" className={cn(RADIUS_ROUND, 'comics-header-register hidden lg:inline-flex')} onClick={onRequestAccess}>
+              Register interest
             </Button>
           )}
           {onSignInPage ? null : (

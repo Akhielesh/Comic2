@@ -4,7 +4,8 @@
 //
 // Rules for anything added here: true today, in production, for the reader it addresses; no price, amount, allowance,
 // plan name or date; no promise of an email, a reply, early access or a time; numbers and model names are never typed:
-// a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`.
+// a `{NAME}` placeholder is filled from landingModels.ts (the studio's registries) by `fill()`. The interest form's own
+// words after a visitor sends it come from here too (REGISTER.recorded), never from the form's defaults.
 
 /** Fill `{NAME}` placeholders. A missing value throws, so a typo never ships as a literal brace. */
 export const fill = (text: string, values: Readonly<Record<string, string | number>> = {}): string =>
@@ -15,6 +16,12 @@ export const fill = (text: string, values: Readonly<Record<string, string | numb
 
 /** The join action, named the same everywhere on the page. */
 export const JOIN = { action: 'Register your interest', short: 'Register interest' } as const;
+
+/** The hero's words under the title: what the product is, in one look (an AI makes the pages, the creator steers). */
+export const HERO = {
+  lead: 'Start with an idea or a script. The Comic Director, an AI, plans, draws and letters your pages with you.',
+  invitation: 'New accounts are by invitation while we’re in beta.'
+} as const;
 
 export const FEATURES_HEAD = {
   eyebrow: 'Features',
@@ -53,7 +60,7 @@ export const FEATURES: readonly FeatureCopy[] = [
   {
     title: 'Publish and share',
     lines: [
-      'Your comic stays private until you publish it. Then share a read-only link, or list it in the public Library as well.',
+      'Your comic isn’t public until you publish it. Then share a read-only link, or list it in the public Library as well.',
       'You choose whether readers can download it and whether other sites can embed it.',
       'Export a print-ready PDF, every page as an image, or a motion comic video.'
     ]
@@ -80,11 +87,11 @@ export const MODELS = {
     },
     {
       title: 'More in the model picker',
-      body: 'The studio’s model picker also lists {OTHER_MODELS}. Which ones you can pick depends on your account.'
+      body: 'Members who use their own API key can also pick {OTHER_MODELS}.{OTHER_MODELS_STATUS}'
     },
     {
       title: 'Draft and Standard quality',
-      body: '{DRAFT} makes quick {DRAFT_SIZE} pages to try the story. {STANDARD} makes {STANDARD_SIZE} pages.'
+      body: '{DRAFT} makes quick, lower-resolution pages to try the story. {STANDARD} makes sharper, higher-resolution pages.'
     },
     {
       title: 'One model for each comic',
@@ -123,6 +130,8 @@ export const REGISTER = {
   line: 'New accounts are by invite while Comic Studio is in beta. Registering your interest costs nothing.',
   memberAsk: 'Already a member?',
   signIn: 'Sign in',
+  /** Shown once the form has recorded a visitor's interest (new or repeat): it promises nothing further. */
+  recorded: 'Thanks. Your interest is recorded.',
   signedInTitle: 'You’re a member',
   signedInLine: 'Your comics and drafts are in My comics.',
   openComics: 'Open My comics'
@@ -146,7 +155,7 @@ export const FAQ: readonly FaqCopy[] = [
   },
   {
     q: 'What happens after I register my interest?',
-    a: 'Your interest is recorded. Accounts open by invite, and there is no date yet.'
+    a: 'Your interest is recorded, and we may send one email to say we received it. Accounts open by invite, and there is no date yet.'
   },
   {
     q: 'Does it cost anything?',
@@ -154,11 +163,11 @@ export const FAQ: readonly FaqCopy[] = [
   },
   {
     q: 'Which models draw the pictures?',
-    a: 'New comics are drawn with {DEFAULT_MODEL}. The Models section lists the others the studio offers; the line-up can change.'
+    a: 'New comics are drawn with {DEFAULT_MODEL}. Members who use their own API key can pick others, listed in the Models section; the line-up can change.'
   },
   {
     q: 'Who can see my comic?',
-    a: 'Only you, until you publish it. Then you share a read-only link, and you can also list it in the public Library.'
+    a: 'It isn’t public until you publish it. If the automatic safety check flags a picture, our moderators may look at that picture. Once it’s published, you share a read-only link, and you can also list it in the public Library.'
   },
   {
     q: 'What ratings are allowed?',

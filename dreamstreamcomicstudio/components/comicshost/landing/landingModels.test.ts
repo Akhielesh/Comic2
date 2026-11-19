@@ -8,7 +8,7 @@ import { LANGUAGES } from '../../../shared/comic/languages';
 import { FREE_PLAN_IMAGE_MODEL } from '../../../shared/comic/modelLock';
 import { IMAGE_MODELS, TIER_PRESETS, getImageModel, pickableImageModels } from '../../../shared/comic/models';
 import { STYLE_PRESETS } from '../../../shared/comic/stylePresets';
-import { DEFAULT_MODEL, LANDING_VALUES, LANGS, LOOKS, OTHER_MODELS, PAGES_MAX, QUALITY, listOf } from './landingModels';
+import { DEFAULT_MODEL, LANDING_VALUES, LANGS, LOOKS, OTHER_MODELS, PAGES_MAX, QUALITY, listOf, statusNote } from './landingModels';
 
 describe('landingModels', () => {
   it('the default model is the one Draft, Standard and every account draw with, named as members see it', () => {
@@ -25,6 +25,33 @@ describe('landingModels', () => {
     expect(OTHER_MODELS.length).toBeGreaterThan(0);
     // Hidden and retired models are never named.
     for (const hidden of IMAGE_MODELS.filter((m) => !m.pickable)) expect(OTHER_MODELS).not.toContain(hidden.nickname);
+  });
+
+  it('the default model needs no status word (generally available); every other model that is not carries its status', () => {
+    // "New comics are drawn with …" names it bare, so it must be GA; if this changes, the copy must say so too.
+    expect(getImageModel(TIER_PRESETS.standard.model)!.lifecycle).toBe('ga');
+    const others = pickableImageModels().filter((m) => m.id !== TIER_PRESETS.standard.model);
+    const note = String(LANDING_VALUES.OTHER_MODELS_STATUS);
+    for (const [lifecycle, words] of [['experimental', 'experimental'], ['preview', 'in preview']] as const) {
+      const names = others.filter((m) => m.lifecycle === lifecycle).map((m) => m.nickname);
+      if (names.length) expect(note).toContain(`${listOf(names)} ${names.length === 1 ? 'is' : 'are'} ${words}.`);
+    }
+    for (const m of others.filter((o) => o.lifecycle === 'ga')) expect(note).not.toContain(m.nickname);
+    // Today: the two GPT Image 2.6 models are experimental, and the page says so.
+    expect(others.some((m) => m.lifecycle === 'experimental')).toBe(true);
+    expect(statusNote([])).toBe('');
+    expect(statusNote([{ nickname: 'A', lifecycle: 'ga' }])).toBe('');
+    expect(statusNote([{ nickname: 'A', lifecycle: 'experimental' }])).toBe(' A is experimental.');
+    expect(statusNote([{ nickname: 'A', lifecycle: 'experimental' }, { nickname: 'B', lifecycle: 'experimental' }, { nickname: 'C', lifecycle: 'preview' }])).toBe(
+      ' A and B are experimental. C is in preview.'
+    );
+  });
+
+  it('Draft draws at a lower resolution than Standard (the page says so in plain words)', () => {
+    const order = ['512', '1K', '2K', '4K'];
+    const [draft, standard] = QUALITY.map((q) => order.indexOf(q.pageSize));
+    expect(draft).toBeGreaterThanOrEqual(0);
+    expect(standard).toBeGreaterThan(draft);
   });
 
   it('the quality levels, page cap, looks and languages are the registries’ numbers', () => {

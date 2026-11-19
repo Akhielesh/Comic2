@@ -21,6 +21,23 @@ interface WaitlistFormProps {
   onJoined?: (email: string) => void;
   /** Shown when the email already has an account ('account-exists') — takes the user to sign-in. */
   onSignIn?: () => void;
+  /**
+   * 'ask' (the default) offers the optional product chips. A list sends those products with every signup and shows
+   * no chips and no question: a page about one product asks nothing about the others.
+   */
+  products?: 'ask' | readonly ProductInterest[];
+  /**
+   * The page's own words for a recorded signup, shown instead of the backend's (or the fallback's) message for every
+   * accepted outcome, new or repeat, so a page that promises nothing after a signup shows nothing that does.
+   */
+  successMessage?: string;
+  /**
+   * Load the bot check only once the visitor starts using the form (focus, typing or a press inside it), so a page
+   * that merely shows the form loads nothing from a third party. Off by default (unchanged for existing callers).
+   */
+  deferVerification?: boolean;
+  /** The bot check's theme (its own default is light). */
+  verificationTheme?: 'light' | 'dark' | 'auto';
 }
 
 /** Friendly labels for the optional "what do you want first access to?" chips. */
@@ -39,7 +56,11 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   buttonLabel = 'Notify me',
   className = '',
   onJoined,
-  onSignIn
+  onSignIn,
+  products = 'ask',
+  successMessage,
+  deferVerification = false,
+  verificationTheme
 }) => {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'account-exists' | 'already-invited'>('idle');
@@ -48,11 +69,18 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   // Optional intent: product chips + free-form note — email alone still submits.
   const [interests, setInterests] = useState<ProductInterest[]>([]);
   const [feedback, setFeedback] = useState('');
+  const askProducts = products === 'ask';
+  // The bot check mounts with the form, or (deferVerification) on the visitor's first focus, keystroke or press in it.
+  const [engaged, setEngaged] = useState(!deferVerification);
+  const engage = () => {
+    if (!engaged) setEngaged(true);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'loading') return;
     if (turnstileEnabled() && !captchaToken) {
+      engage();
       setStatus('error');
       setMessage('Please complete the verification challenge.');
       return;
@@ -60,13 +88,14 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     setStatus('loading');
     setMessage(null);
 
+    const chosen = askProducts ? interests : [...(products as readonly ProductInterest[])];
     const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined, {
-      productInterests: interests.length ? interests : undefined,
+      productInterests: chosen.length ? chosen : undefined,
       feedback: feedback.trim() || undefined
     });
     if (result.ok) {
       setStatus('success');
-      setMessage(result.message);
+      setMessage(successMessage ?? result.message);
       onJoined?.(email.trim().toLowerCase());
     } else if (result.status === 'account-exists') {
       // Already a member: don't add them to the waitlist — point them at sign-in.
@@ -105,7 +134,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   // Running text (the legend, the callouts' words) inherits the surrounding ink rather than naming it, so the form
   // also reads inside the main site's fixed-white "Stay updated" card in dark mode; every field paints its own.
   return (
-    <form onSubmit={handleSubmit} className={cn('w-full', className)}>
+    <form onSubmit={handleSubmit} onFocus={engage} onInput={engage} onPointerDown={engage} className={cn('w-full', className)}>
       <div className="flex flex-col gap-2 sm:flex-row">
         <label className={cn(FIELD_GROUP, DENSITY.coarse, 'h-10 min-w-0 flex-1 px-3')}>
           <Mail aria-hidden className="size-4 shrink-0 text-[var(--ds-muted)]" />
@@ -129,34 +158,36 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       </div>
 
       {/* Optional intent — chips + note. Email alone still submits. */}
-      <fieldset className="mt-4 min-w-0">
-        <legend className="text-[length:var(--ds-text-sm)] font-medium">
-          What do you want first access to? <span className="font-normal opacity-70">(optional)</span>
-        </legend>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {PRODUCT_OPTIONS.map(({ id, label }) => {
-            const selected = interests.includes(id);
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setInterests((prev) => (selected ? prev.filter((p) => p !== id) : [...prev, id]))}
-                className={cn(
-                  'inline-flex items-center gap-1 border px-3 py-1 text-[length:var(--ds-text-sm)] font-medium transition-colors duration-[var(--ds-motion-fast)]',
-                  'border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-pressed:border-[var(--ds-ink)] aria-pressed:bg-[var(--ds-well)] aria-pressed:text-[var(--ds-ink)]',
-                  RADIUS_PILL,
-                  DENSITY.coarse,
-                  FOCUS_RING
-                )}
-              >
-                {selected ? <Check aria-hidden className="size-3.5" /> : null}
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </fieldset>
+      {askProducts ? (
+        <fieldset className="mt-4 min-w-0">
+          <legend className="text-[length:var(--ds-text-sm)] font-medium">
+            What do you want first access to? <span className="font-normal opacity-70">(optional)</span>
+          </legend>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {PRODUCT_OPTIONS.map(({ id, label }) => {
+              const selected = interests.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setInterests((prev) => (selected ? prev.filter((p) => p !== id) : [...prev, id]))}
+                  className={cn(
+                    'inline-flex items-center gap-1 border px-3 py-1 text-[length:var(--ds-text-sm)] font-medium transition-colors duration-[var(--ds-motion-fast)]',
+                    'border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-pressed:border-[var(--ds-ink)] aria-pressed:bg-[var(--ds-well)] aria-pressed:text-[var(--ds-ink)]',
+                    RADIUS_PILL,
+                    DENSITY.coarse,
+                    FOCUS_RING
+                  )}
+                >
+                  {selected ? <Check aria-hidden className="size-3.5" /> : null}
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+      ) : null}
       <Textarea
         value={feedback}
         onChange={(e) => setFeedback(e.target.value)}
@@ -164,12 +195,12 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
         rows={2}
         placeholder="Anything you'd want to see? (optional)"
         aria-label="Anything you'd want to see? (optional)"
-        className="mt-3 resize-y"
+        className={cn(askProducts ? 'mt-3' : 'mt-4', 'resize-y')}
       />
 
-      {turnstileEnabled() && (
+      {turnstileEnabled() && engaged && (
         <div className="mt-3">
-          <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action="waitlist" />
+          <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action="waitlist" theme={verificationTheme} />
         </div>
       )}
       {status === 'error' && message && (

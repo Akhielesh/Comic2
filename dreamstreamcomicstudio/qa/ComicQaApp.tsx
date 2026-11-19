@@ -12,6 +12,8 @@
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
 //                    &share=live|live-public  (a published comic, Link only / Library + link: the studio's Share sheet
 //                                   opens on its link-first block; the link is on this origin, the preview has no picture)
+//                    &script=paper-boat  (every line rewritten from a short script for the sample art, no line twice
+//                                   on a page: the comics landing's pictures; absent: the fixture's own lines)
 //                    &history=1    (Comic History on: caps.history, and the studio surface answers History offline
 //                                   from the fake HistoryApi over the synthetic 'v5' history fixture; absent: unchanged)
 //                    &variants=0   (the fixture's pages and cover carry no stored 480w/1080w variants, as comics stored

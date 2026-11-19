@@ -1,6 +1,7 @@
-// The end of the landing: "Register your interest" (the app's own WaitlistForm, rendered as it is: its fields, its
-// questions and what it says after a visitor sends it belong to that form) and the questions, each a native
-// <details> that opens without script. Members see their way back to their comics instead of the form. Ink only.
+// The end of the landing: "Register your interest" (the app's own WaitlistForm, told to ask about Comic Studio only, to
+// say this page's own words once a visitor's interest is recorded, and to load its bot check only once the visitor
+// starts using it) and the questions, each a native <details> that opens without script. Members see their way back to
+// their comics instead of the form. Ink only.
 import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '../../../lib/utils';
@@ -12,35 +13,52 @@ import { WaitlistForm } from '../../WaitlistForm';
 import { FAQ, FAQ_HEAD, JOIN, REGISTER, fill } from './landingCopy';
 import { LANDING_VALUES } from './landingModels';
 import { showSection } from './parts';
+import { useDarkClass } from './useDarkClass';
 
-/** A quiet text link: ink, the underline draws in, 44 px under a coarse pointer. */
-export const QUIET_LINK = cn('ds-link inline-flex items-center font-medium text-[var(--ds-ink)]', DENSITY.coarse, FOCUS_RING);
+/** A quiet text link: ink, the underline draws in, a 44 px square target at least under a coarse pointer. */
+export const QUIET_LINK = cn('ds-link inline-flex items-center justify-center font-medium text-[var(--ds-ink)]', DENSITY.coarseSquare, FOCUS_RING);
 
-export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignIn, onOpenComics }) => (
-  <section id="register" aria-labelledby="landing-register" className="landing-section">
-    <div className="landing-register">
-      <h2 id="landing-register" tabIndex={-1} className={cn('landing-title focus:outline-none', FONT_DISPLAY)}>
-        {signedIn ? REGISTER.signedInTitle : REGISTER.title}
-      </h2>
-      <p className="landing-lead">{signedIn ? REGISTER.signedInLine : REGISTER.line}</p>
-      {signedIn ? (
-        <Button variant="outline" size="lg" className="landing-register-action" onClick={onOpenComics}>
-          {REGISTER.openComics}
-        </Button>
-      ) : (
-        <>
-          <WaitlistForm kind="access" source="landing" buttonLabel={JOIN.short} onSignIn={onSignIn} className="landing-register-form" />
-          <p className="landing-member">
-            {REGISTER.memberAsk}
-            <button type="button" className={QUIET_LINK} onClick={onSignIn}>
-              {REGISTER.signIn}
-            </button>
-          </p>
-        </>
-      )}
-    </div>
-  </section>
-);
+/** The interest form asks about this page's product only. */
+const LANDING_PRODUCTS = ['comic_studio'] as const;
+
+export const RegisterSection: React.FC<{ signedIn: boolean; onSignIn: () => void; onOpenComics: () => void }> = ({ signedIn, onSignIn, onOpenComics }) => {
+  const dark = useDarkClass();
+  return (
+    <section id="register" aria-labelledby="landing-register" className="landing-section">
+      <div className="landing-register">
+        <h2 id="landing-register" tabIndex={-1} className={cn('landing-title focus:outline-none', FONT_DISPLAY)}>
+          {signedIn ? REGISTER.signedInTitle : REGISTER.title}
+        </h2>
+        <p className="landing-lead">{signedIn ? REGISTER.signedInLine : REGISTER.line}</p>
+        {signedIn ? (
+          <Button variant="outline" size="lg" className="landing-register-action" onClick={onOpenComics}>
+            {REGISTER.openComics}
+          </Button>
+        ) : (
+          <>
+            <WaitlistForm
+              kind="access"
+              source="landing"
+              buttonLabel={JOIN.short}
+              onSignIn={onSignIn}
+              products={LANDING_PRODUCTS}
+              successMessage={REGISTER.recorded}
+              deferVerification
+              verificationTheme={dark ? 'dark' : 'light'}
+              className="landing-register-form"
+            />
+            <p className="landing-member">
+              {REGISTER.memberAsk}
+              <button type="button" className={QUIET_LINK} onClick={onSignIn}>
+                {REGISTER.signIn}
+              </button>
+            </p>
+          </>
+        )}
+      </div>
+    </section>
+  );
+};
 
 /** One question: a native <details> (it opens without script); its summary also states aria-expanded. */
 const FaqItem: React.FC<{ question: string; children: React.ReactNode }> = ({ question, children }) => {

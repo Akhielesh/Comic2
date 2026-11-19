@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { OG_TEMPLATE_VERSION } from '../../../../shared/comic/publication.js';
-import { OG_H, OG_MARK_INK, OG_MARK_PAPER, OG_RENDER_REV, OG_W, markSvg, ogHash, renderOgCard } from './ogImage.js';
+import { OG_H, OG_MARK_INK, OG_MARK_PAPER, OG_MARK_TEXT, OG_RENDER_REV, OG_W, markSvg, ogHash, renderOgCard } from './ogImage.js';
 
 const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const OLD_ORANGE = /#d97757/i;
@@ -30,6 +30,15 @@ describe('OG card mark', () => {
     expect([...colours].sort()).toEqual([OG_MARK_INK, OG_MARK_PAPER].map((c) => c.toUpperCase()).sort());
     for (const hex of colours) expect(new Set([hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)]).size).toBe(1);
     expect(svg).not.toMatch(OLD_ORANGE);
+  });
+
+  it('names the product the comics host names, and sets titles in the plain face (no comic display face on the card)', () => {
+    expect(OG_MARK_TEXT).toBe('Comic Studio');
+    const source = fs.readFileSync(path.join(APP, 'server/src/comic/publication/ogImage.ts'), 'utf8');
+    expect(source).not.toMatch(/Bangers/);
+    expect(source).not.toMatch(/>DreamStream Studio</);
+    // The revision moved past the card with the comic face, so no card drawn with it is reused.
+    expect(OG_RENDER_REV).not.toBe('r2-ink-mark');
   });
 
   it('a card made with the old orange mark is never reused: the template revision joins the content hash', () => {
@@ -64,7 +73,8 @@ describe('OG card mark', () => {
     }
     expect(orange).toBe(0);
     // The tile (light ink) and the page cut out of it (dark paper) are both there.
+    // (Counted on the JPEG: the exact count moves with the card's other content, so the floors leave room.)
     expect(inkLight).toBeGreaterThan(400);
-    expect(paperDark).toBeGreaterThan(150);
+    expect(paperDark).toBeGreaterThan(100);
   }, 30_000);
 });

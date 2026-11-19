@@ -1,8 +1,10 @@
 // A short, muted, looping clip of a real flow. It plays only while at least half of it is in view (an
 // IntersectionObserver, no timer) and pauses when it leaves, one clip at a time. Under reduced motion it never starts
 // by itself: the poster shows with a Play control. The Play / Pause toggle is always there (44 px under a coarse
-// pointer); once a visitor pauses, the clip stays paused when it scrolls back into view. Nothing loads until the clip
-// nears the screen (preload="none"), and a play() the browser refuses leaves the poster and Play showing, quietly.
+// pointer) in a strip under the clip, never over the art; once a visitor pauses, the clip stays paused when it scrolls
+// back into view. Nothing loads until the clip nears the screen: no file and no poster (preload="none", and the poster
+// is set only once the clip is within a screen of view), and a play() the browser refuses leaves the poster and Play
+// showing, quietly.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
 import { IconButton } from '../../ds/IconButton';
@@ -21,6 +23,28 @@ export const LandingClip: React.FC<{ media: LandingMedia }> = ({ media }) => {
   /** The visitor paused it: scrolling back into view does not restart it. */
   const heldRef = useRef(false);
   const sources = dark ? media.dark : media.light;
+  /** The clip is within a screen of view (or the browser cannot tell): only then does its poster load. */
+  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined');
+
+  useEffect(() => {
+    const video = ref.current;
+    if (near || !video) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setNear(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '100% 0px' }
+    );
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, [near, dark]);
 
   const start = useCallback(() => {
     const video = ref.current;
@@ -104,7 +128,7 @@ export const LandingClip: React.FC<{ media: LandingMedia }> = ({ media }) => {
         loop
         playsInline
         preload="none"
-        poster={sources.poster}
+        poster={near ? sources.poster : undefined}
         width={media.width}
         height={media.height}
         aria-label={media.alt}
@@ -114,16 +138,18 @@ export const LandingClip: React.FC<{ media: LandingMedia }> = ({ media }) => {
         {sources.webm ? <source src={sources.webm} type="video/webm" /> : null}
         {sources.mp4 ? <source src={sources.mp4} type="video/mp4" /> : null}
       </video>
-      <IconButton
-        label={`${playing ? 'Pause' : 'Play'}: ${name}`}
-        title={null}
-        variant="secondary"
-        size="lg"
-        className="landing-clip-toggle"
-        onClick={toggle}
-      >
-        {playing ? <Pause aria-hidden /> : <Play aria-hidden />}
-      </IconButton>
+      <div className="landing-clip-bar">
+        <IconButton
+          label={`${playing ? 'Pause' : 'Play'}: ${name}`}
+          title={null}
+          variant="secondary"
+          size="lg"
+          className="landing-clip-toggle"
+          onClick={toggle}
+        >
+          {playing ? <Pause aria-hidden /> : <Play aria-hidden />}
+        </IconButton>
+      </div>
     </div>
   );
 };

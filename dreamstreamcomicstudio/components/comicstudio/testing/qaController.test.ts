@@ -7,7 +7,7 @@ import { normalizeDoc, type Card } from '../../../shared/comic/doc';
 import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
 import { quoteRenderPages } from '../../../shared/comic/plan';
 import { noticeChipState, noticeChips } from '../conversation/cards/NoticeCard';
-import { QA_FIXTURES, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
+import { PAPER_BOAT_SCRIPT, QA_FIXTURES, QA_PUBLICATION_SLUG, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
 import { SLUG_RE } from '../../../shared/comic/publication';
 import { clearQaOps, makeQaUrlFor, parseQaParams, qaDocFromParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
 import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
@@ -28,7 +28,7 @@ describe('parseQaParams', () => {
 
   it('reads every documented parameter and rejects junk', () => {
     const p = parseQaParams('?surface=editor&fixture=deep-40p&tab=cast&page=7&lang=te&theme=dark&state=streaming&mode=pro&rtl=1&public=not-found&img=png&still=1');
-    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true });
+    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, live: null, history: false, variants: true, script: null });
     const bad = parseQaParams('?surface=admin&fixture=../../etc&tab=x&page=-3&lang=<script>&state=boom&kit=<img src=x>');
     expect(bad).toMatchObject({ surface: 'studio', fixture: 'heist-12p', tab: 'pages', page: null, lang: null, state: 'idle', kit: null });
     expect(parseQaParams('?surface=kit&kit=refs-drawer')).toMatchObject({ surface: 'kit', kit: 'refs-drawer' });
@@ -385,5 +385,22 @@ describe('useQaController', () => {
     recordQaOp('act', payload);
     payload.a.push(2);
     expect(qaOps()[0].payload).toEqual({ a: [1] });
+  });
+
+  it('script=paper-boat: every line rewritten from the sample-art script, no line twice on a page, ids and kinds kept', () => {
+    expect(parseQaParams('?fixture=heist-12p').script).toBeNull();
+    expect(parseQaParams('?script=paper-boat').script).toBe('paper-boat');
+    expect(parseQaParams('?script=other').script).toBeNull();
+    for (const fixture of QA_FIXTURES) {
+      const plain = qaDocFromParams(parseQaParams(`?fixture=${fixture}`));
+      const scripted = qaDocFromParams(parseQaParams(`?fixture=${fixture}&script=paper-boat`));
+      scripted.pages.forEach((page, i) => {
+        const lines = page.panels.flatMap((p) => p.lines);
+        const before = plain.pages[i].panels.flatMap((p) => p.lines);
+        expect(lines.map((l) => [l.id, l.kind, l.speakerId])).toEqual(before.map((l) => [l.id, l.kind, l.speakerId]));
+        for (const l of lines) expect(Object.values(PAPER_BOAT_SCRIPT).flat()).toContain(l.text);
+        expect(new Set(lines.map((l) => l.text)).size, `${fixture} page ${page.n}`).toBe(lines.length);
+      });
+    }
   });
 });

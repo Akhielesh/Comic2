@@ -5,6 +5,14 @@
  * colour comes from the recipes the components pass (the feature tiles), never from here.
  */
 
+/*
+ * The comics header is 64 px tall at every width (56 px and not sticky on a short landscape screen), but it sets
+ * --header-h on itself only; the app's :root value (48 px under 600 px wide) is what the sections below would read.
+ * Restate it on the page so a section's scroll margin clears the real header.
+ */
+.comics-landing { --header-h: 64px; }
+@media (max-height: 479px) { .comics-landing { --header-h: 56px; } }
+
 .landing-section {
   padding-block: clamp(48px, 7vw, 96px);
   border-top: 1px solid var(--ds-hairline);
@@ -62,8 +70,9 @@
 
 .landing-caption { margin-top: 10px; font-size: 13px; line-height: 1.45; color: var(--ds-muted); }
 
-.landing-clip { position: relative; }
-.landing-clip-toggle { position: absolute; left: 12px; bottom: 12px; }
+.landing-clip { display: flex; flex-direction: column; }
+/* The Play / Pause control sits in its own strip under the clip, never on the page art. */
+.landing-clip-bar { display: flex; align-items: center; padding: 8px; border-top: 1px solid var(--ds-hairline); }
 
 /* ── Features ──────────────────────────────────────────────────────────────────────────── */
 

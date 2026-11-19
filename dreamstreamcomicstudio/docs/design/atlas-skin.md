@@ -798,17 +798,27 @@ The six style previews change both sample pages while keeping the reader's place
 bundled thumbnails when a published preview is unavailable. Page turns move the visible spread, and style changes fade in
 the new art. Reduced motion makes both transitions immediate.
 
+- **Hero.** Under the title, one line says what the product is: the Comic Director, an AI, plans, draws and letters the
+  pages with the creator (`landingCopy.ts` `HERO`).
 - **Hero actions.** Sign-up is closed, so signed out the one filled action is "Register your interest": it scrolls to
-  `#register` on the same page and puts the cursor in the form. Beside it, the outline "Read comics" opens the Library;
+  `#register` on the same page and puts the cursor in the form's email field. Beside it, the outline "Read comics" opens the Library;
   under them, "Already a member? Sign in" (the header keeps its own Sign in). Signed in: "Start creating" and "Browse the
-  Library". The header's in-page links are Features, Looks and Pricing; on the landing its join row reads "Register
-  interest" and scrolls to the same form (elsewhere it is still the sign-in card's "Request access").
+  Library". The header's in-page links are Features, Looks, Models and Pricing; on the landing its join row reads
+  "Register interest" and scrolls to the same form (elsewhere it is still the sign-in card's "Request access"), and from
+  `lg` the same words sit beside Sign in as a ghost button (never a second fill), so the form is one press away from
+  anywhere on the page.
+- **Section links** (`…/#pricing`) land after the web fonts and two frames, with a jump rather than a smooth scroll, and
+  check once more that the heading clears the sticky header (`landing/parts.tsx` `arriveAtSection`). The comics header
+  is 64 px tall at every width but sets `--header-h` on itself only, so `landing.css` restates it on `.comics-landing`
+  for the sections' scroll margin.
 - **Sections below the looks** live in `components/comicshost/landing/` with their styles in `landing/landing.css`, both in
   the landing's lazy chunk: nothing about them reaches the first-load stylesheet of index.html. Every sentence is in
   `landing/landingCopy.ts`; every model name and number comes from the registries through `landing/landingModels.ts`
   (the Draft and Standard tiers' image model by the nickname members see in the picker, the picker's other pickable
-  models, the Draft and Standard page sizes, `DOC_LIMITS.pages`, `STYLE_PRESETS.length`, `LANGUAGES.length - 1`); no
-  registry id, price or benchmark leaves that module, and the Models section says the line-up can change.
+  models with the registry's own status for any that are experimental or in preview, the Draft and Standard page sizes,
+  `DOC_LIMITS.pages`, `STYLE_PRESETS.length`, `LANGUAGES.length - 1`); no registry id, price or benchmark leaves that
+  module, and the Models section says the line-up can change. The other models are offered to members who use their own
+  API key (an account without model choice draws with the default only), and the page says exactly that.
 - **Features.** Four rows, each a few lines beside one real studio screen: the Director's plan card, the page editor's
   lettering tools, the language picker and the Share sheet. Each row leads with a solid icon tile (ink, magenta, leaf,
   sky; never orange or ultramarine).
@@ -816,8 +826,13 @@ the new art. Reduced motion makes both transitions immediate.
   interest costs nothing. Models and Pricing carry no colour.
 - **Read.** The Library (a real `/?view=gallery` link) and the featured comics through their share links, kept in
   `landing/flagship.ts` (the flagship opens its English edition), beside a short clip of the reader on a phone.
-- **Register your interest** renders the app's `WaitlistForm` (`kind="access"`) as it is: the form owns its fields, its
-  questions and what it says after sending. Members see "Open My comics" instead. Below 640 px `landing.css` gives the
+- **Register your interest** renders the app's `WaitlistForm` (`kind="access"`, `source="landing"`) with three props the
+  page needs: `products={['comic_studio']}` (no product chips and no question about access to other products),
+  `successMessage` (`REGISTER.recorded`, shown for every accepted answer, new or repeat, instead of the backend's or the
+  fallback's words, which promise an email) and `deferVerification` (the bot check, when the build has a site key, loads
+  from Cloudflare only once the visitor focuses, types or presses inside the form, in the page's theme), so reading the
+  landing loads nothing from another site. `landingCopy.test.tsx` sends the form against each answer and checks the page
+  for banned words afterwards. Members see "Open My comics" instead. Below 640 px `landing.css` gives the
   form's stacked fields their own height back (a `flex-1` field in a column otherwise drew about 20 px tall in a narrow
   desktop window).
 - **Questions** are native `<details className="ds-disclosure">`; the footer adds a row of links to the page's sections.
@@ -828,8 +843,10 @@ the new art. Reduced motion makes both transitions immediate.
 alt text), `LandingClip` the clip. Files live in `public/landing/` on the same origin, light and dark for each still;
 the reader is dark in both themes, so one recording serves both. Each file stays near 120 KB (`landingMedia.test.ts`
 pins the cap, the file list, the 2x still sizes and the alt text). The clip is muted and loops, loads nothing until it nears
-the screen (`preload="none"`), plays only while at least half of it is in view (an `IntersectionObserver`, no timer),
-one clip at a time, and under reduced motion shows its poster with a Play control; a visitor's pause holds.
+the screen (`preload="none"`; its poster too is set only once the clip is within a screen of view), plays only while at
+least half of it is in view (an `IntersectionObserver`, no timer), one clip at a time, and under reduced motion shows its
+poster with a Play control; a visitor's pause holds. The Play / Pause control sits in a strip under the clip, never on
+the art.
 
 #### How the landing pictures were made
 

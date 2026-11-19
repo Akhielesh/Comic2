@@ -82,16 +82,48 @@ describe('Comics landing', () => {
     expect(within(screen.getByRole('navigation', { name: 'On this page' })).queryByRole('link', { name: 'Register interest' })).toBeNull();
   });
 
-  it('arriving on a section link shows that section once', () => {
+  it('arriving on a section link shows that section once, after the fonts and two frames, with a jump', async () => {
     const scroll = vi.fn();
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+    let releaseFonts: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => {
+      releaseFonts = resolve;
+    });
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready } });
+    const frames = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
     window.history.replaceState({}, '', '/#models');
     try {
       renderLanding();
+      // Nothing moves while the fonts are still loading (the page above has not reached its final height).
+      expect(scroll).not.toHaveBeenCalled();
+      await act(async () => {
+        releaseFonts();
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
       expect(scroll).toHaveBeenCalledTimes(1);
       expect(scroll.mock.contexts[0]).toBe(document.getElementById('models'));
+      expect(scroll.mock.calls[0][0]).toMatchObject({ block: 'start', behavior: 'auto' });
+      expect(frames.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(document.activeElement).toBe(document.getElementById('landing-models'));
     } finally {
+      frames.mockRestore();
       window.history.replaceState({}, '', '/');
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      delete (document as { fonts?: unknown }).fonts;
+    }
+  });
+
+  it('the hero’s Register your interest puts the cursor in the form’s email field', () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    try {
+      renderLanding();
+      fireEvent.click(screen.getByTestId('comics-hero-cta'));
+      const register = document.getElementById('register') as HTMLElement;
+      expect(document.activeElement).toBe(within(register).getByRole('textbox', { name: 'Email address' }));
+    } finally {
       delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
     }
   });
