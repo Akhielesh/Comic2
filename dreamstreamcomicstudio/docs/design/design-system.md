@@ -760,8 +760,9 @@ every status. The content kit has its own scene too, `qa/app/scenes/ds-content.t
 sign-in card, the tester invite, Project info and its image gallery, and the legacy share link's state views compose the
 DS primitives and recipes; their guard baselines are 0; QA scenes landing, auth, auth-signin, auth-access, shared. The
 sign-in card's "Register interest" renders `WaitlistForm` kind `access` on the page tokens: the DS Field and Input
-(email, first name, "Something else"), two Checkbox lists in `fieldset`s with legends (44 px rows under a coarse
-pointer), the comment Textarea with its visible limit and the default Button; an email error sits at its Field, the
+(email, first name), the "What would you like to make?" quick picks (native checkboxes in a `fieldset` with a legend,
+drawn as FilterChips-shaped chips, 44 px under a coarse pointer), the "Anything else?" Textarea with its visible limit,
+the "How did you hear about us?" Select, one keep-me-updated Checkbox and the default Button; an email error sits at its Field, the
 card's status callouts carry the rest. Kind `updates` (the main site's list card) is the email Field and the Button
 alone. The app
 shell has the `shell` scene (DS-2). A new primitive is not done until the gallery shows it

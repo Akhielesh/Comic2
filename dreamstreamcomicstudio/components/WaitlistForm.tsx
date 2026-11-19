@@ -1,21 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowRight, Check } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, Plus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { RADIUS_CONTROL, RADIUS_PILL, STATUS_INK, STATUS_SURFACE } from './chat/studioDesign';
 import { Button } from './ds/Button';
 import { Checkbox } from './ds/Checkbox';
 import { FIELD_LABEL, Field } from './ds/Field';
+import { FILTER_CHIP, FILTER_CHIP_ON } from './ds/FilterChips';
 import { Input, Textarea } from './ds/Input';
+import { Select } from './ds/Select';
 import {
   INTEREST_COUNT_FROM,
-  INTEREST_FEATURES,
-  INTEREST_FEATURES_QUESTION,
+  INTEREST_HEARD,
+  INTEREST_HEARD_QUESTION,
   INTEREST_LIMITS,
-  INTEREST_STUDIOS,
+  INTEREST_MAKES,
+  INTEREST_MAKES_QUESTION,
+  INTEREST_OTHER_LABEL,
+  INTEREST_UPDATES,
   checkWaitlistEmail,
   submitWaitlistEmail,
-  type InterestFeature,
-  type InterestStudio,
+  type InterestHeard,
+  type InterestMake,
   type WaitlistKind
 } from '../services/waitlist';
 import { UPDATES_CARD } from '../shared/interest';
@@ -39,45 +44,71 @@ interface WaitlistFormProps {
 
 const formatCount = (n: number) => n.toLocaleString('en');
 
-/** A list of optional checkboxes under one legend (a fieldset, so a screen reader hears the question). */
-function CheckList<T extends string>({
+const OPTIONAL = <span className="font-normal text-[var(--ds-muted)]">(optional)</span>;
+
+/** "How did you hear about us?": an empty first choice, so the answer can be cleared again, then the sources. */
+const HEARD_OPTIONS = [{ value: '', label: 'Choose one' }, ...INTEREST_HEARD.map((h) => ({ value: h.id, label: h.label }))];
+
+/** A quick pick: the kit's filter chip shape (32 px, 44 px under a coarse pointer); the native box inside is hidden. */
+const PICK = cn(
+  FILTER_CHIP,
+  'gap-1.5 select-none transition-colors duration-[var(--ds-motion-fast)] ease-[var(--ds-ease)]',
+  'has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[color:var(--ds-focus)]'
+);
+/** Not picked: ink words on the page, a control border, the hover tint. */
+const PICK_OFF = 'border-[var(--ds-control-border)] bg-[var(--ds-canvas)] text-[var(--ds-ink)] hover:border-[var(--ds-control-border-hover)] hover:bg-[var(--ds-hover)]';
+
+/**
+ * Quick picks under one question: native checkboxes (a fieldset, so a screen reader hears the question and each
+ * pick's state) drawn as chips that wrap. A pick shows its state in shape as well as fill: a plus while it is off,
+ * a tick and the ink chip once it is on.
+ */
+function QuickPicks<T extends string>({
   legend,
   options,
   picked,
   onToggle,
-  name,
-  columns = 1
+  name
 }: {
   legend: string;
   options: ReadonlyArray<{ id: T; label: string }>;
   picked: readonly T[];
   onToggle: (id: T, on: boolean) => void;
   name: string;
-  /** Two columns from sm for short labels; longer labels read better one per line. */
-  columns?: 1 | 2;
 }) {
   return (
-    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+    <fieldset className="m-0 flex min-w-0 flex-col border-0 p-0">
       <legend className={cn(FIELD_LABEL, 'mb-2 p-0')}>
-        {legend} <span className="font-normal text-[var(--ds-muted)]">(optional)</span>
+        {legend} {OPTIONAL}
       </legend>
-      <div className={cn('grid min-w-0 gap-x-4 gap-y-1', columns === 2 && 'sm:grid-cols-2')}>
-        {options.map(({ id, label }) => (
-          <Checkbox key={id} name={name} value={id} label={label} checked={picked.includes(id)} onCheckedChange={(on) => onToggle(id, on)} />
-        ))}
+      <div className="flex min-w-0 flex-wrap gap-2">
+        {options.map(({ id, label }) => {
+          const on = picked.includes(id);
+          return (
+            <label key={id} data-state={on ? 'on' : 'off'} className={cn(PICK, on ? FILTER_CHIP_ON : PICK_OFF)}>
+              <input type="checkbox" name={name} value={id} checked={on} onChange={(e) => onToggle(id, e.target.checked)} className="sr-only" />
+              {on ? (
+                <Check aria-hidden data-mark="on" strokeWidth={2.5} className="size-3.5 shrink-0" />
+              ) : (
+                <Plus aria-hidden data-mark="add" strokeWidth={2.5} className="size-3.5 shrink-0 text-[var(--ds-muted)]" />
+              )}
+              <span>{label}</span>
+            </label>
+          );
+        })}
       </div>
     </fieldset>
   );
 }
 
 /**
- * Register interest (kind 'access'): the email, then a few optional questions (first name, which Comic
- * Studio abilities they would use or like to see and something else, other studios they would try, any
- * comment) and one plain line that sign-up is not open yet. Kind 'updates' is the email alone. Built from
- * the ds primitives on the page tokens, so it reads in light and dark; no comic chrome. Every saved address
- * gets the same thank-you, which promises no email. A bad address is shown at its field (noValidate: the
- * form checks it, not the browser's bubbles); other errors are one alert. On an error everything typed
- * stays, so trying again is one press.
+ * Register interest (kind 'access'): the email, then a few optional questions a visitor can answer without knowing the
+ * product (first name; what they would like to make, as quick picks with "Anything else?"; how they heard about us),
+ * one unticked box to be kept updated, and one plain line that sign-up is not open yet. Kind 'updates' is the email
+ * alone. Built from the ds primitives on the page tokens, so it reads in light and dark; no comic chrome. The
+ * thank-you promises no email (a ticked box adds that nothing is sent yet). A bad address is shown at its field
+ * (noValidate: the form checks it, not the browser's bubbles); other errors are one alert. On an error everything
+ * typed stays, so trying again is one press.
  */
 export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   kind = 'updates',
@@ -90,10 +121,10 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const askQuestions = kind === 'access';
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
-  const [features, setFeatures] = useState<InterestFeature[]>([]);
-  const [featureOther, setFeatureOther] = useState('');
-  const [studios, setStudios] = useState<InterestStudio[]>([]);
+  const [makes, setMakes] = useState<InterestMake[]>([]);
   const [comment, setComment] = useState('');
+  const [heardFrom, setHeardFrom] = useState<InterestHeard | ''>('');
+  const [keepUpdated, setKeepUpdated] = useState(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState('');
@@ -130,10 +161,10 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     const answers = askQuestions
       ? {
           ...(firstName.trim() ? { firstName: firstName.trim() } : {}),
-          ...(features.length ? { features } : {}),
-          ...(featureOther.trim() ? { featureOther: featureOther.trim() } : {}),
-          ...(studios.length ? { studios } : {}),
-          ...(comment.trim() ? { comment: comment.trim() } : {})
+          ...(makes.length ? { makes } : {}),
+          ...(heardFrom ? { heardFrom } : {}),
+          ...(comment.trim() ? { comment: comment.trim() } : {}),
+          keepUpdated
         }
       : {};
     const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined, answers);
@@ -168,12 +199,9 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const clearError = () => {
     if (status === 'error') setStatus('idle');
   };
-  const toggleIn =
-    <T extends string>(set: React.Dispatch<React.SetStateAction<T[]>>) =>
-    (id: T, on: boolean) =>
-      set((prev) => (on ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((v) => v !== id)));
+  const toggleMake = (id: InterestMake, on: boolean) =>
+    setMakes((prev) => (on ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((v) => v !== id)));
   const label = buttonLabel ?? (askQuestions ? 'Register interest' : UPDATES_CARD.button);
-  const optional = <span className="font-normal text-[var(--ds-muted)]">(optional)</span>;
 
   const emailInput = (
     <Input
@@ -232,43 +260,46 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
         <Field label="Email address" required error={emailError ?? undefined}>
           {emailInput}
         </Field>
-        <Field label={<>First name {optional}</>}>
+        <Field label={<>First name {OPTIONAL}</>}>
           <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="given-name" maxLength={INTEREST_LIMITS.firstNameMax} />
         </Field>
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
-        <CheckList legend={INTEREST_FEATURES_QUESTION} name="features" options={INTEREST_FEATURES} picked={features} onToggle={toggleIn(setFeatures)} />
-        <Field label={<>Something else {optional}</>}>
-          <Input
-            value={featureOther}
-            onChange={(e) => setFeatureOther(e.target.value)}
-            maxLength={INTEREST_LIMITS.otherMax}
-            placeholder="A feature you would like"
-            autoComplete="off"
+        <QuickPicks legend={INTEREST_MAKES_QUESTION} name="makes" options={INTEREST_MAKES} picked={makes} onToggle={toggleMake} />
+        <Field
+          label={<>{INTEREST_OTHER_LABEL} {OPTIONAL}</>}
+          description={
+            comment.length >= INTEREST_COUNT_FROM
+              ? `${formatCount(comment.length)} of ${formatCount(INTEREST_LIMITS.commentMax)} characters`
+              : `Up to ${formatCount(INTEREST_LIMITS.commentMax)} characters.`
+          }
+        >
+          <Textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            maxLength={INTEREST_LIMITS.commentMax}
+            rows={2}
+            placeholder="An idea, a format, a question"
+            className="resize-y"
           />
         </Field>
       </div>
 
-      <CheckList
-        legend="Other studios you would try"
-        name="studios"
-        options={INTEREST_STUDIOS}
-        picked={studios}
-        onToggle={toggleIn(setStudios)}
-        columns={2}
-      />
+      <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+        <Field label={<>{INTEREST_HEARD_QUESTION} {OPTIONAL}</>}>
+          {/* The question is optional, so "Choose one" stays a real choice (not the kit's disabled placeholder): a pick
+              made by mistake can be taken back, and nothing is stored for it. Muted while nothing is chosen. */}
+          <Select
+            value={heardFrom}
+            onChange={(e) => setHeardFrom(e.target.value as InterestHeard | '')}
+            options={HEARD_OPTIONS}
+            className={heardFrom ? undefined : 'text-[var(--ds-muted)]'}
+          />
+        </Field>
+      </div>
 
-      <Field
-        label={<>Anything you would like to tell us {optional}</>}
-        description={
-          comment.length >= INTEREST_COUNT_FROM
-            ? `${formatCount(comment.length)} of ${formatCount(INTEREST_LIMITS.commentMax)} characters`
-            : `Up to ${formatCount(INTEREST_LIMITS.commentMax)} characters.`
-        }
-      >
-        <Textarea value={comment} onChange={(e) => setComment(e.target.value)} maxLength={INTEREST_LIMITS.commentMax} rows={3} className="resize-y" />
-      </Field>
+      <Checkbox name="keepUpdated" label={INTEREST_UPDATES.label} description={INTEREST_UPDATES.hint} checked={keepUpdated} onCheckedChange={setKeepUpdated} />
 
       <p className="m-0 text-pretty text-[length:var(--ds-text-sm)] leading-5 text-[var(--ds-muted)]">
         Sign-up is not open yet. Your answers shape what we build next.

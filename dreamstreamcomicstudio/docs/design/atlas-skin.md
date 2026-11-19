@@ -906,9 +906,11 @@ on the header's paper in both themes. The page bodies:
   brand of its own (the header carries it). App keys it per request, so a header "Sign in" / "Register interest"
   pressed elsewhere opens the form on that step; on the sign-in page itself the header shows neither (the card's
   `Segmented` switches, and a remount would wipe what was typed). Its "Register interest" step (`WaitlistForm` kind
-  `access`) is on the tokens too: `Field` + `Input` for the email and first name, two `Checkbox` lists, each a
-  `fieldset` with a `legend`, a "Something else" `Input`, the comment `Textarea` with its visible limit, the ink
-  submit, an email error shown at its field and one `STATUS_SURFACE` alert for everything else; its running text
+  `access`) is on the tokens too: `Field` + `Input` for the email and first name, the "What would you like to make?"
+  quick picks (native checkboxes in a `fieldset` with a `legend`, drawn as the kit's filter chips with a plus or a
+  tick), the "Anything else?" `Textarea` with its visible limit, the "How did you hear about us?" `Select`, one
+  `Checkbox` to be kept updated, the ink submit, an email error shown at its field and one `STATUS_SURFACE` alert for
+  everything else; its running text
   inherits the surrounding ink. The main site's list card uses the same form as kind `updates`: one email field (its
   label for assistive tech only) and the "Add me to the list" button. On the comics host one quiet line under the
   card, "Sign in there", opens the main site's front page (`/?home=1`).
