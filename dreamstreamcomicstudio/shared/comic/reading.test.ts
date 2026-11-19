@@ -27,7 +27,9 @@ import {
   READ_SURFACES,
   READING_ADMIN_PATH,
   READING_JOBS,
+  READ_OWN_HOSTS,
   VIEWER_DWELL_CAP_PER_PAGE,
+  acceptLanguageTags,
   channelFromReferrer,
   decodeReadBody,
   decodeReadInsights,
@@ -35,15 +37,23 @@ import {
   encodeReadBody,
   isKidsComic,
   libraryLang,
+  libraryLangFromAcceptLanguage,
   parseReadRange,
   parseReadingAdminDays,
   readChannelFromSearch,
+  readCountedEdition,
+  readEditionOf,
   readSurfaceFromSearch,
   type ReadBody,
   type ReadInsights,
   type ReadingAdminOverview
 } from './reading';
 import { PUBLIC_KIDS_AUDIENCE, SHARE_CHANNELS, SLUG_RE } from './publication';
+import { discoverLang } from './discovery';
+import { LANGUAGES, matchLanguage } from './languages';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SLUG = 'Ab3dEf6hIj9kLm2nP';
 const DAY_CODE = 'AbCdEfGhIjKlMnOpQrSt_-';
@@ -162,6 +172,20 @@ describe('encodeReadBody / decodeReadBody', () => {
     expect(decodeReadBody(pad(700, 'क'))).toBeNull();
   });
 
+  it('counts an emoji (a surrogate pair) as 4 bytes: exactly 2,048 bytes is read, 2,049 is not', () => {
+    const body = (emoji: number, x: number) => JSON.stringify({ v: 1, t: 'open', pad: '😀'.repeat(emoji) + 'x'.repeat(x) });
+    const base = body(0, 0).length;
+    const emoji = Math.floor((READ_BODY_MAX - base) / 4);
+    const rest = READ_BODY_MAX - base - emoji * 4;
+    const exact = body(emoji, rest);
+    expect(new TextEncoder().encode(exact).length).toBe(READ_BODY_MAX);
+    expect(exact.length).toBeLessThan(READ_BODY_MAX); // UTF-16 units: a unit count would read far more
+    expect(decodeReadBody(exact)).toEqual({ v: 1, t: 'open' });
+    const over = body(emoji, rest + 1);
+    expect(new TextEncoder().encode(over).length).toBe(READ_BODY_MAX + 1);
+    expect(decodeReadBody(over)).toBeNull();
+  });
+
   it('drops out-of-range pages and times, keeps the good pairs', () => {
     const body = decodeReadBody(
       JSON.stringify({
@@ -205,7 +229,7 @@ describe('encodeReadBody / decodeReadBody', () => {
       expect(decodeReadBody(JSON.stringify({ v: 1, t: 'open', lang })), String(lang)).toEqual({ v: 1, t: 'open' });
     }
     for (const mx of [0, 2.5, '4', -3]) expect(decodeReadBody(JSON.stringify({ v: 1, t: 'read', mx }))).toEqual({ v: 1, t: 'read' });
-    expect(decodeReadBody(JSON.stringify({ v: 1, t: 'open', lang: 'zh-Hans', ch: 'whatsapp' }))).toEqual({ v: 1, t: 'open', lang: 'zh-Hans', ch: 'whatsapp' });
+    expect(decodeReadBody(JSON.stringify({ v: 1, t: 'open', lang: 'zh-Hans', ch: 'whatsapp' }))).toEqual({ v: 1, t: 'open', lang: 'zh-hans', ch: 'whatsapp' });
   });
 
   it('the encoder rounds and clamps times, merges pages and drops what the edge would drop', () => {
@@ -231,16 +255,63 @@ describe('encodeReadBody / decodeReadBody', () => {
       v: 1,
       t: 'share',
       d: DAY_CODE,
-      lang: `abc-${'x'.repeat(8)}-${'y'.repeat(8)}-${'z'.repeat(8)}`,
+      lang: `abc-${'x'.repeat(8)}-${'y'.repeat(8)}`,
       ch: 'telegram',
       src: 'lib.billboard',
       dev: 'desktop',
       p: Array.from({ length: 200 }, (_, i) => [READ_PAGE_MAX - i, PAGE_MS_BATCH_CAP] as [number, number]),
       mx: READ_PAGE_MAX,
-      from: `abc-${'x'.repeat(8)}-${'y'.repeat(8)}-${'z'.repeat(8)}`
+      from: `abc-${'x'.repeat(8)}-${'y'.repeat(8)}`
     })!;
     expect(new TextEncoder().encode(text).length).toBeLessThan(READ_BODY_MAX);
-    expect(decodeReadBody(text)!.p).toHaveLength(READ_PAIRS_MAX);
+    const decoded = decodeReadBody(text)!;
+    expect(decoded.p).toHaveLength(READ_PAIRS_MAX);
+    expect(decoded.lang).toBe(`abc-${'x'.repeat(8)}-${'y'.repeat(8)}`);
+  });
+});
+
+describe('the edition a read counts under: one key per published edition', () => {
+  const editions = ['en', 'hi', 'zh-Hans'];
+
+  it('decodes lang and from in lower case, so a re-cased tag is the same key', () => {
+    expect(decodeReadBody('{"v":1,"t":"lang","lang":"ZH-HANS","from":"EN"}')).toEqual({ v: 1, t: 'lang', lang: 'zh-hans', from: 'en' });
+    expect(decodeReadBody('{"v":1,"t":"open","lang":"zh-Hans"}')!.lang).toBe(decodeReadBody('{"v":1,"t":"open","lang":"ZH-HANS"}')!.lang);
+    expect(JSON.parse(encodeReadBody({ v: 1, t: 'open', lang: 'Hi-IN' })!)).toEqual({ v: 1, t: 'open', lang: 'hi-in' });
+  });
+
+  it('takes the same language shape as Discover and the SQL guard (at most three subtags, 35 characters)', () => {
+    for (const tag of ['en', 'pt-BR', 'zh-Hans', 'sr-Latn-RS', 'qq-zzzz-yyyy-xxxx', 'aaa-bbbbbbbb-cccccccc-dddddddd', 'en_US', 'e', `en-${'x'.repeat(40)}`, 'english!']) {
+      const body = decodeReadBody(JSON.stringify({ v: 1, t: 'lang', lang: tag, from: tag }));
+      expect(body?.lang, tag).toBe(discoverLang(tag));
+      expect(body?.from, tag).toBe(discoverLang(tag));
+    }
+  });
+
+  it('readEditionOf: the published edition, matched without case; any other tag is none', () => {
+    expect(readEditionOf('ZH-HANS', editions)).toBe('zh-hans');
+    expect(readEditionOf('zh-hans', editions)).toBe('zh-hans');
+    expect(readEditionOf('HI', editions)).toBe('hi');
+    for (const lang of ['qq-zzzz-yyyy', 'zh-CN', 'hi-IN', 'te', '', undefined, null, 42, 'en '])
+      expect(readEditionOf(lang, editions), String(lang)).toBeUndefined();
+    expect(readEditionOf('en', [])).toBeUndefined();
+    expect(readEditionOf('en', ['english!', 7 as never])).toBeUndefined();
+  });
+
+  it('readCountedEdition: the read’s own edition, else the default edition, else the original; never an invented tag', () => {
+    expect(readCountedEdition('HI', editions, 'en')).toBe('hi');
+    expect(readCountedEdition('qq-zzzz-yyyy', editions, 'hi')).toBe('hi');
+    expect(readCountedEdition(undefined, editions, 'zh-Hans')).toBe('zh-hans');
+    expect(readCountedEdition('xx', editions)).toBe('en');
+    expect(readCountedEdition('xx', editions, 'te')).toBe('en'); // a default that is not published is no default
+    expect(readCountedEdition('en', [])).toBeUndefined();
+    // However many tags a client invents, one comic only ever has its published editions as keys.
+    const keys = new Set<string>();
+    for (let i = 0; i < 500; i++) {
+      const body = decodeReadBody(JSON.stringify({ v: 1, t: 'read', lang: `q${String.fromCharCode(97 + (i % 26))}-x${i}`, p: [[1, 1000]] }))!;
+      keys.add(readCountedEdition(body.lang, editions, 'en')!);
+      keys.add(readCountedEdition(['EN', 'Hi', 'ZH-HANS'][i % 3], editions, 'en')!);
+    }
+    expect([...keys].sort()).toEqual(['en', 'hi', 'zh-hans']);
   });
 });
 
@@ -267,6 +338,23 @@ describe('channelFromReferrer: the host decides, the referrer is never sent', ()
     ['www.bing.com', '/', 'search'],
     ['duckduckgo.com', '/', 'search'],
     ['mail.google.com', '/mail/u/0/', 'email'],
+    ['outlook.live.com', '/mail/0/', 'email'],
+    ['outlook.office.com', '/', 'email'],
+    ['mail.yahoo.com', '/', 'email'],
+    ['www.google.co.uk', '/', 'search'],
+    ['google.de', '/', 'search'],
+    ['docs.google.com', '/document/d/x', 'other'],
+    ['drive.google.com', '/', 'other'],
+    ['sites.google.com', '/view/x', 'other'],
+    ['groups.google.com', '/', 'other'],
+    ['com.linkedin.android', '', 'linkedin'],
+    ['com.google.android.gm', '', 'email'],
+    ['com.google.android.googlequicksearchbox', '', 'search'],
+    ['com.whatsapp', '', 'whatsapp'],
+    ['org.telegram.messenger', '', 'telegram'],
+    ['com.twitter.android', '', 'x'],
+    ['com.facebook.katana', '', 'facebook'],
+    ['com.linkedin.android.evil', '', 'other'],
     ['comics.dreamstreamstudio.ai', '/?view=gallery', 'library'],
     ['comics.dreamstreamstudio.ai', '/?lang=hi&view=gallery', 'library'],
     ['comics.dreamstreamstudio.ai', '/library', 'library'],
@@ -292,6 +380,18 @@ describe('channelFromReferrer: the host decides, the referrer is never sent', ()
   it('no referrer is a direct visit', () => {
     for (const host of [undefined, null, '', '   ']) expect(channelFromReferrer(host, '/')).toBe('direct');
     expect(channelFromReferrer('not a host!', '/')).toBe('other');
+  });
+
+  it('our own hosts are one list: the edge’s Origin check holds exactly these, or imports them', () => {
+    expect([...READ_OWN_HOSTS].sort()).toEqual(['comic.dreamstreamstudio.ai', 'comics.dreamstreamstudio.ai', 'dreamstreamstudio.ai', 'www.dreamstreamstudio.ai']);
+    for (const host of READ_OWN_HOSTS) expect(['library', 'direct']).toContain(channelFromReferrer(host, '/'));
+    const edge = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../api-proxy/src/publicComic.ts'), 'utf8');
+    if (!/\bREAD_OWN_HOSTS\b/.test(edge)) {
+      const literal = /const SITE_HOSTS = new Set\(\[([^\]]*)\]\)/.exec(edge);
+      expect(literal, 'publicComic.ts keeps its own host list: import READ_OWN_HOSTS instead').not.toBeNull();
+      const hosts = [...literal![1].matchAll(/'([^']+)'/g)].map((m) => m[1]).sort();
+      expect(hosts).toEqual([...READ_OWN_HOSTS].sort());
+    }
   });
 });
 
@@ -333,10 +433,11 @@ describe('isKidsComic', () => {
 });
 
 describe('libraryLang', () => {
-  const supported = ['en', 'hi', 'te', 'ta', 'pt', 'pt-BR', 'zh-Hans'];
-  it('is the first of the reader’s languages the catalogue supports, by primary language, else en', () => {
+  const supported = ['en', 'hi', 'te', 'ta', 'pt', 'zh-Hans'];
+  it('is the first of the reader’s languages the catalogue supports, else en', () => {
     expect(libraryLang(['te-IN', 'en-US'], supported)).toBe('te');
     expect(libraryLang(['sw', 'fr-FR', 'hi'], supported)).toBe('hi');
+    expect(libraryLang(['sw', 'hi'], supported)).toBe('hi');
     expect(libraryLang(['HI-in'], supported)).toBe('hi');
     expect(libraryLang(['sw', 'fr'], supported)).toBe('en');
     expect(libraryLang([], supported)).toBe('en');
@@ -344,10 +445,41 @@ describe('libraryLang', () => {
     expect(libraryLang(['*', '', 'not a tag', 42 as never, 'ta'], supported)).toBe('ta');
   });
 
-  it('an exact tag the catalogue has wins over a same-language one; a script tag is returned as the catalogue spells it', () => {
-    expect(libraryLang(['pt-BR'], supported)).toBe('pt-br');
-    expect(libraryLang(['pt-PT'], supported)).toBe('pt');
+  it('uses the app’s one language rule (languages.ts): Traditional Chinese is not Simplified, Shahmukhi is not Gurmukhi', () => {
+    expect(libraryLang(['zh-TW'], ['en', 'zh-Hans'])).toBe('en');
+    expect(libraryLang(['zh-Hant', 'hi'], ['en', 'hi', 'zh-Hans'])).toBe('hi');
+    expect(libraryLang(['pa-Arab'], ['en', 'pa'])).toBe('en');
+    expect(libraryLang(['pa-Arab'])).toBe('en');
     expect(libraryLang(['zh-CN'], supported)).toBe('zh-hans');
+    expect(libraryLang(['zh'])).toBe('zh-hans');
+    expect(libraryLang(['pt-BR'], supported)).toBe('pt');
+  });
+
+  it('agrees with matchLanguage (the share page’s rule) for every reader, answered as the lower-case your_lang', () => {
+    const codes = LANGUAGES.map((l) => l.code);
+    const prefs = [['zh-TW'], ['pa-Arab'], ['pa-IN'], ['ur-PK'], ['zh-CN', 'en'], ['ja-JP'], ['sw', 'hi'], ['es-419'], ['de-CH', 'fr'], ['mr'], []];
+    for (const p of prefs) expect(libraryLang(p), p.join(',')).toBe((matchLanguage(p, codes) ?? 'en').toLowerCase());
+  });
+
+  it('reads Accept-Language (the edge preload) to the same answer as navigator.languages', () => {
+    expect(acceptLanguageTags('te-IN,te;q=0.9,en-US;q=0.8,en;q=0.7')).toEqual(['te-IN', 'te', 'en-US', 'en']);
+    expect(acceptLanguageTags('en;q=0.1, hi, *;q=0.5, fr;q=0')).toEqual(['hi', 'en']);
+    expect(acceptLanguageTags('de;q=0.8, ja;q=0.8, ko;q=bad')).toEqual(['de', 'ja']);
+    for (const empty of ['', '   ', '*', null, undefined]) expect(acceptLanguageTags(empty)).toEqual([]);
+    expect(acceptLanguageTags(Array.from({ length: 40 }, (_, i) => `x${i}`).join(','))).toHaveLength(20);
+    const cases: Array<[string, string[]]> = [
+      ['te-IN,te;q=0.9,en-US;q=0.8', ['te-IN', 'te', 'en-US']],
+      ['zh-TW,zh;q=0.9', ['zh-TW', 'zh']],
+      ['zh-TW', ['zh-TW']],
+      ['pa-Arab-PK,ur;q=0.8', ['pa-Arab-PK', 'ur']],
+      ['sw,hi;q=0.5', ['sw', 'hi']],
+      ['', []]
+    ];
+    for (const [header, langs] of cases) expect(libraryLangFromAcceptLanguage(header), header).toBe(libraryLang(langs));
+    expect(libraryLangFromAcceptLanguage('zh-TW')).toBe('en');
+    expect(libraryLangFromAcceptLanguage('zh-TW,zh;q=0.9')).toBe('zh-hans');
+    expect(libraryLangFromAcceptLanguage('ur-PK,en;q=0.5')).toBe('ur');
+    expect(libraryLangFromAcceptLanguage(null)).toBe('en');
   });
 });
 
@@ -373,9 +505,9 @@ const insights = (): ReadInsights => ({
     skim: [7, 2000, 9000]
   },
   editions: [
-    { lang: 'en', reads: 90, switchedTo: 0 },
+    { lang: 'en', reads: 90 },
     { lang: 'hi', reads: 25, switchedTo: 12 },
-    { lang: 'other', reads: 5, switchedTo: 1 }
+    { lang: 'other', reads: 5 }
   ],
   channels: [
     { id: 'linkedin', reads: 70 },
@@ -431,6 +563,45 @@ describe('decodeReadInsights', () => {
     tampered.devices.push({ id: 'fridge', reads: 50 });
     tampered.editions.push({ lang: 'english!', reads: 50, switchedTo: 0 });
     expect(decodeReadInsights(tampered)).toEqual(insights());
+  });
+
+  it('a switch count under K_MIN is left out, on every edition and on other (never 1-4 readers, never a telling 0)', () => {
+    const raw = JSON.parse(JSON.stringify(insights()));
+    raw.editions = [
+      { lang: 'hi', reads: 5, switchedTo: 1 },
+      { lang: 'en', reads: 9, switchedTo: K_MIN },
+      { lang: 'te', reads: 6, switchedTo: 0 },
+      { lang: 'ta', reads: 7 },
+      { lang: 'other', reads: 1, switchedTo: K_MIN - 1 }
+    ];
+    expect(decodeReadInsights(raw)!.editions).toEqual([
+      { lang: 'hi', reads: 5 },
+      { lang: 'en', reads: 9, switchedTo: K_MIN },
+      { lang: 'te', reads: 6 },
+      { lang: 'ta', reads: 7 },
+      { lang: 'other', reads: 1 }
+    ]);
+    raw.editions = [{ lang: 'hi', reads: 9, switchedTo: -1 }, { lang: 'en', reads: 9, switchedTo: 'x' }];
+    expect(decodeReadInsights(raw)!.editions).toEqual([]);
+  });
+
+  it('keeps each edition once (in lower case, the read key), at most 20', () => {
+    const raw = JSON.parse(JSON.stringify(insights()));
+    raw.editions = [
+      { lang: 'hi', reads: 25, switchedTo: 12 },
+      { lang: 'hi', reads: 99, switchedTo: 50 },
+      { lang: 'ZH-HANS', reads: 8 },
+      { lang: 'zh-hans', reads: 30 },
+      { lang: 'other', reads: 3 },
+      { lang: 'other', reads: 40 }
+    ];
+    expect(decodeReadInsights(raw)!.editions).toEqual([
+      { lang: 'hi', reads: 25, switchedTo: 12 },
+      { lang: 'zh-hans', reads: 8 },
+      { lang: 'other', reads: 3 }
+    ]);
+    raw.editions = Array.from({ length: 30 }, (_, i) => ({ lang: `q${String.fromCharCode(97 + i)}`, reads: 9 }));
+    expect(decodeReadInsights(raw)!.editions).toHaveLength(20);
   });
 
   it('withheld: pages and the four lists are left out', () => {
@@ -534,6 +705,26 @@ describe('decodeReadingAdminOverview', () => {
     expect(decodeReadingAdminOverview(tampered)).toEqual(overview());
     const on = decodeReadingAdminOverview({ ...overview(), counting: 'on', configPresent: true })!;
     expect(on.reasons).toEqual([]);
+  });
+
+  it('keeps each job and each ranked comic once (the first), at most 100 ranked rows', () => {
+    const tampered = JSON.parse(JSON.stringify(overview()));
+    tampered.jobs.push({ name: 'comic-rank-refresh', status: 'failed', durationMs: 9 }, { name: 'comic-reading-purge-daily', status: 'failed' });
+    tampered.ranked.push({ ...tampered.ranked[0], title: 'Copy', score: 99 });
+    const out = decodeReadingAdminOverview(tampered)!;
+    expect(out.jobs).toEqual(overview().jobs);
+    expect(out.ranked).toEqual(overview().ranked);
+    const many = JSON.parse(JSON.stringify(overview()));
+    many.ranked = Array.from({ length: 130 }, (_, i) => ({ ...overview().ranked[0], slug: `Rk3dEf6hIj9kLm${String(i).padStart(3, '0')}` }));
+    expect(decodeReadingAdminOverview(many)!.ranked).toHaveLength(100);
+  });
+
+  it('keeps at most 28 days × 5 statuses = 140 health rows', () => {
+    const tampered = JSON.parse(JSON.stringify(overview()));
+    tampered.health = Array.from({ length: 200 }, (_, i) => ({ day: `2026-10-${String((i % 28) + 1).padStart(2, '0')}`, status: 'proof', n: i }));
+    const out = decodeReadingAdminOverview(tampered)!;
+    expect(out.health).toHaveLength(140);
+    expect(out.health[139].n).toBe(139);
   });
 
   it('drops ranked rows with a bad slug or numbers', () => {

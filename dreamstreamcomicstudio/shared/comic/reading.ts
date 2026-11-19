@@ -11,11 +11,12 @@
 //
 // What a read may carry is exactly ReadBody: never a slug, a referrer, an address or a lasting id. `d` is a random code
 // the browser makes again every UTC day (never for children's comics); the edge turns it, or the address and browser
-// when it is missing, into a one-day number the database deletes after two days. Runtime imports stay tiny
-// (PUBLIC_KIDS_AUDIENCE, SLUG_RE) so the Worker bundle does not grow.
+// when it is missing, into a one-day number the database deletes after two days. Runtime imports stay small
+// (PUBLIC_KIDS_AUDIENCE, SLUG_RE, and the dependency-free language registry for the Library language rule).
 
 import type { ContentRating } from './safety.js';
 import { PUBLIC_KIDS_AUDIENCE, SLUG_RE } from './publication.js';
+import { LANGUAGES, matchLanguage } from './languages.js';
 
 // ── The read event ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -90,7 +91,13 @@ export interface ReadBody {
   t: ReadEventType;
   /** The per-day code: 16 random bytes, base64url (22 characters). Never for children's comics. */
   d?: string;
-  /** The edition on screen (BCP-47 shape). */
+  /**
+   * The edition on screen: BCP-47 shape (the same as Discover's `lang` and the SQL guard, at most three subtags), lower
+   * case once decoded, so a re-cased tag is the same value. It is still only a claim: ingest (comic_read_ingest, DISC-1)
+   * counts a read under readCountedEdition(lang, card.languages, card.defaultLang), never under the tag as sent, so a
+   * comic's page-stats rows and `by_lang_q` keys are only ever its published editions, however many tags a client
+   * invents (each new key would otherwise be a new row per page per day).
+   */
   lang?: string;
   ch?: ReadChannel;
   src?: ReadSurface;
@@ -99,7 +106,10 @@ export interface ReadBody {
   p?: ReadPagePair[];
   /** The highest page reached so far. */
   mx?: number;
-  /** For `lang`: the edition switched from. */
+  /**
+   * For `lang`: the edition switched from (same shape, lower case). Ingest counts a switch only when both `from` and
+   * `lang` are published editions (readEditionOf) and differ.
+   */
   from?: string;
 }
 
@@ -134,8 +144,11 @@ export const FLUSH_EVERY_NEW_PAGES = 4;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const DAY_CODE_RE = /^[A-Za-z0-9_-]{22}$/;
-/** The same shape the share link accepts for `?lang=` (publication.ts parseShareParams). */
-const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
+/**
+ * A language tag: the shape Discover's `lang` (discovery.ts discoverLang), the edge's /event check and the SQL guard
+ * (comic_discovery.sql) accept, at most three subtags. Published editions are far shorter ('zh-Hans').
+ */
+const LANG_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const EVENT_SET = new Set<string>(READ_EVENT_TYPES);
 const CHANNEL_SET = new Set<string>(READ_CHANNELS);
@@ -147,6 +160,8 @@ const MAX_TIME_MS = 8_640_000_000_000_000;
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/gu;
 
 const isLang = (v: unknown): v is string => typeof v === 'string' && v.length <= READ_LANG_MAX && LANG_RE.test(v);
+/** A language tag in its canonical (lower-case) form, or undefined. */
+const langOf = (v: unknown): string | undefined => (isLang(v) ? v.toLowerCase() : undefined);
 const wholeIn = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const numberIn = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 const count = (v: unknown): v is number => wholeIn(v, 0, COUNT_MAX);
@@ -202,14 +217,16 @@ function readBodyOf(raw: unknown, forgiving: boolean): ReadBody | null {
   if (!isRecord(raw) || raw.v !== 1 || typeof raw.t !== 'string' || !EVENT_SET.has(raw.t)) return null;
   const body: ReadBody = { v: 1, t: raw.t as ReadEventType };
   if (typeof raw.d === 'string' && DAY_CODE_RE.test(raw.d)) body.d = raw.d;
-  if (isLang(raw.lang)) body.lang = raw.lang;
+  const lang = langOf(raw.lang);
+  if (lang) body.lang = lang;
   if (typeof raw.ch === 'string' && CHANNEL_SET.has(raw.ch)) body.ch = raw.ch as ReadChannel;
   if (typeof raw.src === 'string' && SURFACE_SET.has(raw.src)) body.src = raw.src as ReadSurface;
   if (typeof raw.dev === 'string' && DEVICE_SET.has(raw.dev)) body.dev = raw.dev as ReadDevice;
   const p = pagePairs(raw.p, forgiving);
   if (p.length) body.p = p;
   if (wholeIn(raw.mx, 1, READ_PAGE_MAX)) body.mx = raw.mx;
-  if (isLang(raw.from)) body.from = raw.from;
+  const from = langOf(raw.from);
+  if (from) body.from = from;
   return body;
 }
 
@@ -241,14 +258,50 @@ export function decodeReadBody(raw: unknown): ReadBody | null {
   return readBodyOf(value, false);
 }
 
+/**
+ * The published edition a read's `lang` stands for, in its canonical lower-case form, or undefined when `lang` is not
+ * one of `editions` (the comic's card.languages). Exact tags only, compared without case: 'ZH-HANS' is the 'zh-Hans'
+ * edition; 'zh-CN', 'hi-IN' or a made-up tag is none.
+ */
+export function readEditionOf(lang: unknown, editions: readonly unknown[]): string | undefined {
+  const tag = langOf(lang);
+  if (!tag) return undefined;
+  return editions.some((e) => langOf(e) === tag) ? tag : undefined;
+}
+
+/**
+ * The edition a read is counted under (the page-stats key, the `by_lang_q` key and the viewer's `lang`): its own `lang`
+ * when that is a published edition, else the comic's default edition when that is published, else the original
+ * (editions[0]). undefined only when the comic lists no valid edition. comic_read_ingest repeats this rule in SQL.
+ */
+export function readCountedEdition(lang: unknown, editions: readonly unknown[], defaultLang?: unknown): string | undefined {
+  return readEditionOf(lang, editions) ?? readEditionOf(defaultLang, editions) ?? editions.map(langOf).find((e) => e !== undefined);
+}
+
 // ── Channel and surface ─────────────────────────────────────────────────────────────────────────────────────────
 
-/** Our own hosts (the comics host, its alias, the main site): a referrer from here is the Library or direct. */
-const OWN_HOSTS: ReadonlySet<string> = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstudio.ai', 'dreamstreamstudio.ai', 'www.dreamstreamstudio.ai']);
+/**
+ * Our own hosts (the comics host, its alias, the main site): a referrer from here is the Library or direct. The one list:
+ * the edge's read route (api-proxy publicComic.ts, DISC-3) imports it for its "Origin is one of ours" check instead of
+ * keeping its own copy.
+ */
+export const READ_OWN_HOSTS: ReadonlySet<string> = new Set(['comics.dreamstreamstudio.ai', 'comic.dreamstreamstudio.ai', 'dreamstreamstudio.ai', 'www.dreamstreamstudio.ai']);
 const HOST_RE = /^[a-z0-9.-]{1,253}$/;
-const GOOGLE_RE = /(?:^|\.)google\.[a-z]{2,3}(?:\.[a-z]{2})?$/;
+/** Google search itself (google.<tld>, www.google.<tld>); Docs, Drive, Sites and Groups links are shares, not searches. */
+const GOOGLE_SEARCH_RE = /^(?:www\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/;
 /** Webmail hosts that would otherwise read as their company's search engine. */
 const WEBMAIL_HOSTS: ReadonlySet<string> = new Set(['mail.google.com', 'outlook.live.com', 'outlook.office.com', 'outlook.office365.com', 'mail.yahoo.com']);
+/** Android apps send `android-app://<package>/` as the referrer, so the "host" is the app's package name. */
+const ANDROID_APPS: Readonly<Record<string, ReadChannel>> = {
+  'com.linkedin.android': 'linkedin',
+  'com.google.android.gm': 'email',
+  'com.microsoft.office.outlook': 'email',
+  'com.google.android.googlequicksearchbox': 'search',
+  'com.whatsapp': 'whatsapp',
+  'org.telegram.messenger': 'telegram',
+  'com.twitter.android': 'x',
+  'com.facebook.katana': 'facebook'
+};
 
 /** `host` is `domain` or one of its subdomains. */
 const under = (host: string, domain: string): boolean => host === domain || host.endsWith(`.${domain}`);
@@ -273,14 +326,15 @@ export function channelFromReferrer(host: string | null | undefined, path?: stri
   if (typeof host !== 'string' || !host.trim()) return 'direct';
   const h = host.trim().toLowerCase().replace(/:\d{1,5}$/, '').replace(/\.$/, '');
   if (!HOST_RE.test(h)) return 'other';
-  if (OWN_HOSTS.has(h)) return isLibraryPath(path) ? 'library' : 'direct';
+  if (READ_OWN_HOSTS.has(h)) return isLibraryPath(path) ? 'library' : 'direct';
+  if (Object.prototype.hasOwnProperty.call(ANDROID_APPS, h)) return ANDROID_APPS[h];
   if (h === 'lnkd.in' || under(h, 'linkedin.com')) return 'linkedin';
   if (h === 't.co' || under(h, 'x.com') || under(h, 'twitter.com')) return 'x';
   if (under(h, 'facebook.com')) return 'facebook';
   if (h === 't.me' || under(h, 'telegram.org')) return 'telegram';
   if (under(h, 'whatsapp.com')) return 'whatsapp';
   if (WEBMAIL_HOSTS.has(h)) return 'email';
-  if (GOOGLE_RE.test(h) || under(h, 'bing.com') || under(h, 'duckduckgo.com')) return 'search';
+  if (GOOGLE_SEARCH_RE.test(h) || under(h, 'bing.com') || under(h, 'duckduckgo.com')) return 'search';
   return 'other';
 }
 
@@ -312,24 +366,56 @@ export function isKidsComic(input: { rating?: ContentRating | string | null; kin
   return input.rating === 'G' || (typeof input.kind === 'string' && input.kind.toLowerCase() === 'storybook') || input.audience === PUBLIC_KIDS_AUDIENCE;
 }
 
-const primaryOf = (tag: string): string => tag.split('-')[0];
+/** The languages a comic can be published in (languages.ts), as the Library language rule compares them. */
+export const LIBRARY_LANGUAGES: readonly string[] = LANGUAGES.map((l) => l.code);
 
 /**
- * The language the Library opens in: the first of the reader's languages (navigator.languages, or Accept-Language
- * entries) the catalogue supports, compared by primary language, else `en`. A tag the catalogue has exactly wins over
- * a same-language one; the answer is the catalogue's own tag, lower case (as Discover's `your_lang` takes it).
+ * The language the Library opens in (Discover's `your_lang`): the first of the reader's languages that `supported`
+ * holds under the app's one language rule (languages.ts matchLanguage, the rule the share page uses), else `en`; the
+ * catalogue's own tag, lower case. So 'te-IN' → 'te', 'zh-CN' → 'zh-hans', but 'zh-TW' (Traditional) and 'pa-Arab'
+ * (Shahmukhi) are not Simplified Chinese or Gurmukhi Punjabi: they fall to the next language, else `en`.
  */
-export function libraryLang(langs: readonly string[], supported: readonly string[]): string {
-  const catalogue = supported.filter(isLang).map((s) => s.toLowerCase());
-  for (const raw of langs) {
-    if (!isLang(raw)) continue;
-    const tag = raw.toLowerCase();
-    if (catalogue.includes(tag)) return tag;
-    const primary = primaryOf(tag);
-    const same = catalogue.find((s) => s === primary) ?? catalogue.find((s) => primaryOf(s) === primary);
-    if (same) return same;
+export function libraryLang(langs: readonly string[], supported: readonly string[] = LIBRARY_LANGUAGES): string {
+  const prefs = langs.filter((l): l is string => typeof l === 'string' && l.length <= READ_LANG_MAX);
+  return (matchLanguage(prefs, supported) ?? 'en').toLowerCase();
+}
+
+const ACCEPT_LANGUAGE_MAX = 1024;
+const ACCEPT_ENTRIES_MAX = 20;
+const Q_RE = /^\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\s*$/i;
+
+/**
+ * An Accept-Language header's tags, most preferred first (by q, then header order), without `*` and q=0 entries, at most
+ * 20 (the header is read up to 1 KB). An entry with a malformed q is left out.
+ */
+export function acceptLanguageTags(header: string | null | undefined): string[] {
+  if (typeof header !== 'string') return [];
+  const entries: Array<{ tag: string; q: number; i: number }> = [];
+  for (const part of header.slice(0, ACCEPT_LANGUAGE_MAX).split(',').slice(0, ACCEPT_ENTRIES_MAX)) {
+    const [rawTag, ...params] = part.split(';');
+    const tag = rawTag.trim();
+    if (!tag || tag === '*' || tag.length > READ_LANG_MAX) continue;
+    let q = 1;
+    let bad = false;
+    for (const param of params) {
+      if (!/^\s*q\s*=/i.test(param)) continue;
+      const m = Q_RE.exec(param);
+      if (m) q = Number(m[1]);
+      else bad = true;
+    }
+    if (bad || q <= 0) continue;
+    entries.push({ tag, q, i: entries.length });
   }
-  return 'en';
+  return entries.sort((a, b) => b.q - a.q || a.i - b.i).map((e) => e.tag);
+}
+
+/**
+ * The Library language from a request's Accept-Language header: exactly libraryLang over acceptLanguageTags. The comics
+ * edge's shelves preload (DISC-6E) calls this, so its `your_lang` is byte for byte the one the page then asks for from
+ * navigator.languages (browsers send the same list in both).
+ */
+export function libraryLangFromAcceptLanguage(header: string | null | undefined, supported: readonly string[] = LIBRARY_LANGUAGES): string {
+  return libraryLang(acceptLanguageTags(header), supported);
 }
 
 // ── The creator's answer: GET /api/comic/projects/:id/readers?range= ────────────────────────────────────────────
@@ -370,7 +456,12 @@ export interface ReadPages {
   linger?: [page: number, ms: number];
   skim?: [page: number, ms: number, typicalMs: number];
 }
-export interface ReadEditionBucket { lang: string; reads: number; switchedTo: number }
+/**
+ * One edition in the Readers tab. `switchedTo` (readers who switched to this edition) is present only with K_MIN or
+ * more, on `other` too: 1-4 would single out a reader's choice, and a 0 shown beside hidden 1-4s would tell them apart.
+ * DISC-7a's builder applies the same rule.
+ */
+export interface ReadEditionBucket { lang: string; reads: number; switchedTo?: number }
 export interface ReadBucket<Id extends string> { id: Id; reads: number }
 
 /**
@@ -468,10 +559,13 @@ function editionsOf(raw: unknown): ReadEditionBucket[] {
   const out: ReadEditionBucket[] = [];
   for (const e of raw) {
     if (out.length >= EDITIONS_MAX) break;
-    if (!isRecord(e) || typeof e.lang !== 'string' || !(e.lang === 'other' || isLang(e.lang)) || !count(e.reads) || !count(e.switchedTo)) continue;
-    if (out.some((o) => o.lang === e.lang)) continue;
-    if (e.lang !== 'other' && e.reads < K_MIN) continue;
-    out.push({ lang: e.lang, reads: e.reads, switchedTo: e.switchedTo });
+    if (!isRecord(e) || !count(e.reads) || (e.switchedTo !== undefined && !count(e.switchedTo))) continue;
+    const lang = e.lang === 'other' ? 'other' : langOf(e.lang);
+    if (!lang || out.some((o) => o.lang === lang)) continue;
+    if (lang !== 'other' && e.reads < K_MIN) continue;
+    const bucket: ReadEditionBucket = { lang, reads: e.reads };
+    if (typeof e.switchedTo === 'number' && e.switchedTo >= K_MIN) bucket.switchedTo = e.switchedTo;
+    out.push(bucket);
   }
   return out;
 }

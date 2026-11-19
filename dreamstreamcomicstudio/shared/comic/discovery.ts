@@ -415,11 +415,26 @@ export function parseDiscoverRelatedQuery(search: string | URLSearchParams): Dis
 }
 
 /**
+ * Slugs as a slugs query names them: slug-shaped ones only, each once, the first DISCOVER_SLUGS_MAX, in the given
+ * order. Anything else (a corrupt device entry such as 'x&sort=new') is dropped, never sent as a raw parameter.
+ */
+export function discoverSlugs(slugs: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const slug of slugs) {
+    if (out.length >= DISCOVER_SLUGS_MAX) break;
+    if (typeof slug === 'string' && SLUG_RE.test(slug) && !out.includes(slug)) out.push(slug);
+  }
+  return out;
+}
+
+/**
  * The canonical query string (fixed order, defaults left out): the edge cache key and the URL the UI requests. A slugs
- * query is `slugs=<a>,<b>` alone (slugs are base62, so the commas need no escaping).
+ * query is `slugs=<a>,<b>` alone (discoverSlugs; base62, so the commas need no escaping). A query with `slugs` present
+ * is always a slugs query: with no usable slug left it is `slugs=`, which the edge refuses (400), never the unfiltered
+ * Trending listing. Callers use discoverSlugsUrl, which answers null then, and skip the fetch.
  */
 export function discoverSearch(query: DiscoverQuery): string {
-  if (query.slugs && query.slugs.length) return `slugs=${query.slugs.join(',')}`;
+  if (query.slugs !== undefined) return `slugs=${discoverSlugs(query.slugs).join(',')}`;
   const p = new URLSearchParams();
   if (query.sort !== 'trending') p.set('sort', query.sort);
   if (query.q) p.set('q', query.q);
@@ -459,14 +474,24 @@ export const discoverListUrl = (query: Partial<DiscoverQuery> = {}): string =>
   withSearch(DISCOVER_PATH, discoverSearch({ sort: 'trending', limit: DISCOVER_LIMIT_MAX, ...query }));
 export const discoverShelvesUrl = (query: DiscoverShelvesQuery = {}): string => withSearch(DISCOVER_SHELVES_PATH, discoverShelvesSearch(query));
 export const discoverRelatedUrl = (query: DiscoverRelatedQuery): string => withSearch(DISCOVER_RELATED_PATH, discoverRelatedSearch(query));
+/**
+ * Continue reading's lookup URL for the comics a device holds (discoverSlugs: slug-shaped, each once, at most 20, in
+ * order), or null when none is left, so the row skips the fetch instead of asking for the full listing.
+ */
+export function discoverSlugsUrl(slugs: readonly unknown[]): string | null {
+  const clean = discoverSlugs(slugs);
+  return clean.length ? `${DISCOVER_PATH}?slugs=${clean.join(',')}` : null;
+}
 
 /**
  * comic_discover_list's arguments for a query (names and order exactly as the SQL declares them). A slugs query sends
  * the defaults for every filter plus `p_slugs`; any other query sends no `p_slugs` (the SQL defaults it to null), so
- * the call stays the same for the SQL as it is today.
+ * the call stays the same for the SQL as it is today. A slugs query with no usable slug throws (parseDiscoverQuery
+ * never builds one): it must never become the unfiltered listing.
  */
 export function discoverListRpcArgs(query: DiscoverQuery): Record<string, string | number | boolean | null | string[]> {
-  const slugs = query.slugs && query.slugs.length ? [...query.slugs] : null;
+  const slugs = query.slugs !== undefined ? discoverSlugs(query.slugs) : null;
+  if (slugs && !slugs.length) throw new RangeError('A slugs query needs at least one comic slug.');
   const q: DiscoverQuery = slugs ? { sort: 'trending', limit: DISCOVER_LIMIT_MAX } : query;
   const after = q.cursor ? decodeDiscoverCursor(q.sort, q.cursor) : null;
   const args: Record<string, string | number | boolean | null | string[]> = {
@@ -535,14 +560,14 @@ function buildItem(raw: unknown, readCover: CoverReader, avatarOrigin?: string):
   return item;
 }
 
-function buildItems(raw: unknown, readCover: CoverReader, max: number, avatarOrigin?: string): DiscoverItem[] {
+function buildItems(raw: unknown, readCover: CoverReader, max: number, avatarOrigin?: string, keep?: (item: DiscoverItem) => boolean): DiscoverItem[] {
   if (!Array.isArray(raw)) return [];
   const out: DiscoverItem[] = [];
   const seen = new Set<string>();
   for (const entry of raw) {
     if (out.length >= max) break;
     const item = buildItem(entry, readCover, avatarOrigin);
-    if (item && !seen.has(item.slug)) {
+    if (item && !seen.has(item.slug) && (!keep || keep(item))) {
       seen.add(item.slug);
       out.push(item);
     }
@@ -564,11 +589,21 @@ function buildShelves(raw: unknown, readCover: CoverReader, avatarOrigin?: strin
 
 const isRelatedBasis = (v: unknown): v is DiscoverRelatedBasis => typeof v === 'string' && (DISCOVER_RELATED_BASES as readonly string[]).includes(v);
 
-/** Both sides of the related answer: a known basis or nothing; `creator` only when it holds a comic. */
-function buildRelated(raw: unknown, readCover: CoverReader, avatarOrigin?: string): DiscoverRelated | null {
+/**
+ * Both sides of the related answer, holding the related rules themselves (the last allow-list, whatever the SQL
+ * sends): a known basis or nothing; every listed comic rated (G, PG or PG-13; unrated and unknown ratings dropped) and
+ * never the comic itself (`forSlug`, when given); `creator` only items with a byline, all with one username (otherwise
+ * no `creator` at all, so a comic whose creator hid their name is never tied to a named one), and only when it holds a
+ * comic; `similar` never repeats a comic `creator` lists. The cap of DISCOVER_RELATED_SIZE counts kept items.
+ */
+function buildRelated(raw: unknown, readCover: CoverReader, avatarOrigin?: string, forSlug?: string): DiscoverRelated | null {
   if (!isRecord(raw) || !isRelatedBasis(raw.basis)) return null;
-  const creator = buildItems(raw.creator, readCover, DISCOVER_RELATED_SIZE, avatarOrigin);
-  const similar = buildItems(raw.similar, readCover, DISCOVER_RELATED_SIZE, avatarOrigin);
+  const listable = (item: DiscoverItem) => item.rating !== undefined && item.slug !== forSlug;
+  let creator = buildItems(raw.creator, readCover, DISCOVER_RELATED_SIZE, avatarOrigin, (item) => listable(item) && item.creator !== undefined);
+  const byline = creator[0]?.creator?.username;
+  if (creator.some((item) => item.creator?.username !== byline)) creator = [];
+  const inCreator = new Set(creator.map((item) => item.slug));
+  const similar = buildItems(raw.similar, readCover, DISCOVER_RELATED_SIZE, avatarOrigin, (item) => listable(item) && !inCreator.has(item.slug));
   return creator.length ? { creator, similar, basis: raw.basis } : { similar, basis: raw.basis };
 }
 
@@ -607,10 +642,11 @@ export function discoverShelvesFromRpc(raw: unknown, opts: DiscoverRpcOptions): 
 
 /**
  * comic_discover_related's answer → the wire answer. The function always answers an object with a basis (unknown slugs
- * get the fallback), so anything else, `null` included, is not an answer (the Worker answers 503).
+ * get the fallback), so anything else, `null` included, is not an answer (the Worker answers 503). `forSlug`: the
+ * comic the shelves are for (the query's slug), never listed.
  */
-export function discoverRelatedFromRpc(raw: unknown, opts: DiscoverRpcOptions): DiscoverRelated | null {
-  return buildRelated(raw, rpcCover(opts.coverUrl), opts.avatarOrigin);
+export function discoverRelatedFromRpc(raw: unknown, opts: DiscoverRpcOptions, forSlug?: string): DiscoverRelated | null {
+  return buildRelated(raw, rpcCover(opts.coverUrl), opts.avatarOrigin, forSlug);
 }
 
 /** The UI's check of a listing response: the allow-list again (unknown fields dropped), or null for a non-listing. */
@@ -626,7 +662,10 @@ export function decodeDiscoverShelves(raw: unknown): DiscoverShelvesResponse | n
   return { shelves: buildShelves(raw.shelves, wireCover) };
 }
 
-/** The share page's check of the related answer: the allow-list again, and null without a known basis (hidden). */
-export function decodeDiscoverRelated(raw: unknown): DiscoverRelated | null {
-  return buildRelated(raw, wireCover);
+/**
+ * The share page's check of the related answer: the allow-list and the related rules again, and null without a known
+ * basis (hidden). `forSlug`: the comic on screen, never listed.
+ */
+export function decodeDiscoverRelated(raw: unknown, forSlug?: string): DiscoverRelated | null {
+  return buildRelated(raw, wireCover, undefined, forSlug);
 }
