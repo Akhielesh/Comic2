@@ -1,6 +1,6 @@
 // Register interest, client side: one neutral answer for every saved address, an 8 s deadline on
 // the server call, a direct save (no email) when the server cannot answer, and the same stored
-// shape whichever path saved the row.
+// shape (the consent flag included) whichever path saved the row.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const insert = vi.hoisted(() => vi.fn());
@@ -19,7 +19,7 @@ import {
   interpretSubscribeResponse,
   submitWaitlistEmail
 } from './waitlist';
-import { INTEREST_THANKS, interestMetadata } from '../shared/interest';
+import { INTEREST_THANKS, INTEREST_UPDATES, interestMetadata } from '../shared/interest';
 
 const reply = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
@@ -76,37 +76,63 @@ describe('submitWaitlistEmail', () => {
     vi.stubGlobal('fetch', fetchMock);
     const res = await submitWaitlistEmail(' A@B.co ', 'access', { source: 'auth' }, undefined, {
       firstName: '  ',
-      features: ['chat', 'chat', 'nope' as never],
-      studios: ['stream_studio'],
+      makes: ['kids', 'kids', 'nope' as never],
+      heardFrom: 'friend',
       comment: ' hi '
     });
     expect(res).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers });
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(body).toEqual({ email: 'a@b.co', kind: 'access', source: 'auth', features: ['chat'], studios: ['stream_studio'], comment: 'hi' });
+    // Register interest always says whether the box was ticked: here it was not.
+    expect(body).toEqual({ email: 'a@b.co', kind: 'access', source: 'auth', makes: ['kids'], heardFrom: 'friend', comment: 'hi', keepUpdated: false });
     expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('a ticked box travels as true and the thank-you says when they will hear; the list card never sends it', async () => {
+    const fetchMock = vi.fn(() => reply(200, { ok: true, status: 'registered', message: 'x' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ticked = await submitWaitlistEmail('a@b.co', 'access', { source: 'auth' }, undefined, { keepUpdated: true });
+    expect(ticked.message).toBe(`${INTEREST_THANKS.access} ${INTEREST_THANKS.keptUpdated}`);
+    expect(JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).keepUpdated).toBe(true);
+    await submitWaitlistEmail('a@b.co', 'updates', { source: 'home' }, undefined, { keepUpdated: true });
+    expect(JSON.parse((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).not.toHaveProperty('keepUpdated');
   });
 
   it('gives up on the server after the deadline and saves directly, with the same stored shape', async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T10:00:00.000Z'));
     vi.stubGlobal(
       'fetch',
       vi.fn((_url: string, init: RequestInit) =>
         new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
       )
     );
-    const answers = { features: ['series' as const], featureOther: 'Voice', studios: ['dashboards' as const], comment: 'Note' };
+    const answers = { makes: ['webcomic' as const], heardFrom: 'search' as const, comment: 'Note', keepUpdated: true };
     const pending = submitWaitlistEmail('a@b.co', 'access', { source: 'auth' }, undefined, answers);
     await vi.advanceTimersByTimeAsync(SUBSCRIBE_DEADLINE_MS + 1);
     const res = await pending;
-    expect(res).toEqual({ ok: true, status: 'registered', message: INTEREST_THANKS.accessWithAnswers });
+    expect(res).toEqual({ ok: true, status: 'registered', message: `${INTEREST_THANKS.accessWithAnswers} ${INTEREST_THANKS.keptUpdated}` });
+    // The consent time is when the person sent the form, not when the direct save ran after the deadline.
+    const stamped = '2026-11-19T10:00:00.000Z';
     expect(insert).toHaveBeenCalledWith({
       email: 'a@b.co',
       kind: 'access',
       source: 'auth',
-      metadata: { source: 'auth', answers: { v: 1, features: ['series'], other: 'Voice', studios: ['dashboards'], comment: 'Note' } }
+      metadata: {
+        source: 'auth',
+        answers: { v: 2, makes: ['webcomic'], heardFrom: 'search', comment: 'Note' },
+        consent: { updates: true, at: stamped, wording: INTEREST_UPDATES.label }
+      }
     });
     // The same builder the server stores with, so both paths write one shape.
-    expect(insert.mock.calls[0]?.[0].metadata).toEqual(interestMetadata('auth', answers));
+    expect(insert.mock.calls[0]?.[0].metadata).toEqual(interestMetadata('auth', answers, stamped));
+  });
+
+  it('the direct save records an unticked box as an explicit no, and the list card with no consent at all', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => reply(503, { ok: false })));
+    await submitWaitlistEmail('a@b.co', 'access', { source: 'landing' });
+    expect(insert.mock.calls[0]?.[0].metadata.consent).toMatchObject({ updates: false, wording: INTEREST_UPDATES.label });
+    await submitWaitlistEmail('a@b.co', 'updates', { source: 'home' });
+    expect(insert.mock.calls[1]?.[0].metadata).toEqual({ source: 'home' });
   });
 
   it('400 verify with no check on the page saves directly; with a check it asks again', async () => {
@@ -144,17 +170,22 @@ describe('submitWaitlistEmail', () => {
 describe('cleanAnswers', () => {
   it('cleans like the server, cuts to the caps, keeps known ids once, and leaves nothing for empty answers', () => {
     expect(cleanAnswers({})).toEqual({});
-    const long = cleanAnswers({ comment: 'x'.repeat(1200), featureOther: 'y'.repeat(200), firstName: 'z'.repeat(90) });
+    const long = cleanAnswers({ comment: 'x'.repeat(1200), firstName: 'z'.repeat(90) });
     expect(long.comment).toHaveLength(1000);
-    expect(long.featureOther).toHaveLength(120);
     expect(long.firstName).toHaveLength(80);
     expect(
       cleanAnswers({
         firstName: 'A\u0000sha',
-        featureOther: '  ',
-        studios: ['dashboards', 'dashboards', 'nope' as never],
+        makes: ['work', 'work', 'nope' as never],
+        heardFrom: 'billboard' as never,
         comment: 'One\r\nTwo\u0007'
       })
-    ).toEqual({ firstName: 'A sha', studios: ['dashboards'], comment: 'One\nTwo' });
+    ).toEqual({ firstName: 'A sha', makes: ['work'], comment: 'One\nTwo' });
+  });
+
+  it('only a real true is a ticked box', () => {
+    expect(cleanAnswers({ keepUpdated: true })).toEqual({ keepUpdated: true });
+    expect(cleanAnswers({ keepUpdated: false })).toEqual({ keepUpdated: false });
+    expect(cleanAnswers({ keepUpdated: 'yes' as never })).toEqual({ keepUpdated: false });
   });
 });

@@ -17,19 +17,21 @@ import { verifyTurnstile } from '../services/turnstile.js';
 import {
   INTEREST_LIMITS,
   INTEREST_THANKS,
+  answersForKind,
   cleanBlock,
   cleanLine,
   interestMetadata,
   interestThanks,
-  knownFeatures,
-  knownStudios,
+  knownHeard,
+  knownMakes,
   type InterestAnswers
 } from '../../../shared/interest.js';
 
 // Public, logged-out "register your interest" capture (kind 'access') and product updates
 // (kind 'updates'). Mounted with optionalAuth BEFORE the global requireAuth (like
 // /api/telemetry), so signed-out pages can call it. Writes go through the service role; the
-// client never sees tokens or the list. Sends no email unless INTEREST_EMAILS is "on".
+// client never sees tokens or the list. Sends no email unless INTEREST_EMAILS is "on"; the register-interest form's
+// "keep me updated" box is stored as a consent flag and is read by no email path.
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -71,31 +73,32 @@ const optionalList = (raw: unknown, label: string): Checked<unknown[]> => {
 
 /**
  * The optional answers, checked here whatever the client did: unknown ids dropped, each id once,
- * control characters stripped (the comment keeps its line breaks), and anything of the wrong type or
- * over its limit refused with a 400 that says what to shorten. Older forms sent `productInterests`
- * (studio picks) and `feedback` (the note); both are still read.
+ * control characters stripped (the note keeps its line breaks), and anything of the wrong type or
+ * over its limit refused with a 400 that says what to shorten. The keep-me-updated box counts only as a
+ * real `true` (answersForKind decides per kind). Older forms sent `feedback` for the note (still read), and
+ * open tabs from before the questions changed may still send `features`, `featureOther`, `studios` or
+ * `productInterests`: those are accepted and not stored, since those questions are no longer asked.
  */
 export const readInterestAnswers = (body: Record<string, unknown>): Checked<InterestAnswers> => {
-  const features = optionalList(body.features, 'Features');
-  if (!features.ok) return { ok: false, message: features.message };
-  const studios = optionalList(body.studios ?? body.productInterests, 'Studios');
-  if (!studios.ok) return { ok: false, message: studios.message };
+  const makes = optionalList(body.makes, 'What you would like to make');
+  if (!makes.ok) return { ok: false, message: makes.message };
+  if (body.heardFrom !== undefined && body.heardFrom !== null && typeof body.heardFrom !== 'string') {
+    return { ok: false, message: 'How you heard about us must be one of the choices.' };
+  }
   const firstName = optionalText(body.firstName, INTEREST_LIMITS.firstNameMax, cleanLine, 'First name');
   if (!firstName.ok) return { ok: false, message: firstName.message };
-  const other = optionalText(body.featureOther, INTEREST_LIMITS.otherMax, cleanLine, 'Something else');
-  if (!other.ok) return { ok: false, message: other.message };
-  const comment = optionalText(body.comment ?? body.feedback, INTEREST_LIMITS.commentMax, cleanBlock, 'Your comment');
+  const comment = optionalText(body.comment ?? body.feedback, INTEREST_LIMITS.commentMax, cleanBlock, 'Your note');
   if (!comment.ok) return { ok: false, message: comment.message };
-  const featureIds = knownFeatures(features.value);
-  const studioIds = knownStudios(studios.value);
+  const makeIds = knownMakes(makes.value);
+  const heardFrom = knownHeard(body.heardFrom);
   return {
     ok: true,
     value: {
       ...(firstName.value ? { firstName: firstName.value } : {}),
-      ...(featureIds.length ? { features: featureIds } : {}),
-      ...(other.value ? { featureOther: other.value } : {}),
-      ...(studioIds.length ? { studios: studioIds } : {}),
-      ...(comment.value ? { comment: comment.value } : {})
+      ...(makeIds.length ? { makes: makeIds } : {}),
+      ...(heardFrom ? { heardFrom } : {}),
+      ...(comment.value ? { comment: comment.value } : {}),
+      keepUpdated: body.keepUpdated === true
     }
   };
 };
@@ -115,8 +118,8 @@ export const neutralReply = (kind: 'access' | 'updates', answers: InterestAnswer
 const invalid = (message: string) => ({ ok: false, status: 'invalid', message });
 
 // POST /api/newsletter/subscribe
-//   { email, kind?: 'access'|'updates', source?, firstName?, features?: string[], featureOther?,
-//     studios?: string[], comment?, captchaToken? }
+//   { email, kind?: 'access'|'updates', source?, firstName?, makes?: string[], heardFrom?, comment?,
+//     keepUpdated?: boolean, captchaToken? }
 // Every valid address gets NEUTRAL_REPLY[kind]: the same status and body for a new address, one already
 // on the list, one with an account and one holding an invite. The route never looks the address up in
 // accounts or invites and never re-sends an invite, so a caller learns nothing about it.
@@ -130,8 +133,10 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     if (!EMAIL_REGEX.test(email) || email.length > 320) {
       return res.status(400).json(invalid('That email does not look right. Please check it.'));
     }
-    const answers = readInterestAnswers(body);
-    if (!answers.ok) return res.status(400).json(invalid(answers.message));
+    const read = readInterestAnswers(body);
+    if (!read.ok) return res.status(400).json(invalid(read.message));
+    // Register interest records the box (false unless ticked); the list card has none.
+    const answers = answersForKind(kind, read.value);
     // The surface tag is ours, not the person's: cleaned and cut, never a reason to refuse.
     const source = typeof body.source === 'string' ? cleanLine(body.source).slice(0, INTEREST_LIMITS.sourceMax) || undefined : undefined;
 
@@ -143,20 +148,17 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         .json({ ok: false, status: 'verify', message: 'Please complete the verification check and try again.' });
     }
 
-    // Answers ride in the existing metadata (jsonb) column, the shape the form's direct save writes too;
-    // the comment and the studio picks also go to the existing feedback / product_interests columns.
-    const { firstName, studios, comment } = answers.value;
-    const intent = {
-      ...(studios?.length ? { productInterests: studios } : {}),
-      ...(comment ? { feedback: comment } : {})
-    };
+    // Answers and the consent flag (with this moment as its time) ride in the existing metadata (jsonb) column, the
+    // shape the form's direct save writes too; the note also goes to the existing feedback column.
+    const { firstName, comment } = answers;
+    const intent = comment ? { feedback: comment } : {};
     const token = newConfirmToken();
     const emailsOn = interestEmailsOn();
     let outcome: string;
     try {
       // An address already on the list keeps its row as it is; only with emails on does an unconfirmed
       // 'updates' row get a fresh confirm token (the link about to be sent). A store that saved nothing throws.
-      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers.value), intent, { reissueToken: emailsOn }));
+      ({ outcome } = await upsertSubscriber(email, kind, token, interestMetadata(source, answers, new Date().toISOString()), intent, { reissueToken: emailsOn }));
     } catch (err) {
       console.warn('[newsletter] store failed', (err as Error)?.message);
       return res
@@ -165,6 +167,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     }
 
     if (emailsOn) {
+      // Neither branch reads the keep-me-updated box: it starts no email of its own.
       // Best-effort and never awaited: a mailer failure must not change the answer. A confirm email only goes
       // with a token the store just wrote (a new row, or a renewed one), so its link always matches the row.
       if (kind === 'access' && outcome === 'new') void sendAccessRequested(email, firstName, reqMeta(req));
@@ -173,7 +176,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
         void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
       }
     }
-    return res.status(200).json(neutralReply(kind, answers.value));
+    return res.status(200).json(neutralReply(kind, answers));
   } catch (err) {
     next(err);
   }

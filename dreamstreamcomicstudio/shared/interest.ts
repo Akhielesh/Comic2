@@ -4,51 +4,65 @@
 // row reads the same whichever path wrote it. Pure module: no imports, safe in the browser, the server and
 // tests.
 //
+// The questions are ones a visitor can answer without knowing the product: what they would like to make, how
+// they heard about us, anything else, and one unticked box to be kept updated. (Version 1 also asked which
+// Comic Studio abilities they wanted and which "other studios" they would try; nothing on the page said what
+// those studios were, so the question was dropped. Rows stored then keep their `answers.v: 1` shape.)
+//
 // Storage needs no schema change: the answers ride in the existing `metadata` jsonb column of
-// public.waitlist_signups as `metadata.answers` (see interestMetadata). The server also copies the comment
-// into the existing `feedback` column and the studio picks into `product_interests`.
+// public.waitlist_signups as `metadata.answers`, the box as `metadata.consent` (see interestMetadata). The
+// server also copies the note into the existing `feedback` column.
+
+/** The question above INTEREST_MAKES. */
+export const INTEREST_MAKES_QUESTION = 'What would you like to make?';
+
+/** INTEREST_MAKES_QUESTION's quick picks: kinds of comic, in a visitor's words. */
+export const INTEREST_MAKES = [
+  { id: 'short_story', label: 'A short story' },
+  { id: 'kids', label: 'A comic for kids' },
+  { id: 'webcomic', label: 'A webcomic series' },
+  { id: 'pitch', label: 'A pitch or storyboard' },
+  { id: 'work', label: 'Something for work' }
+] as const;
+export type InterestMake = (typeof INTEREST_MAKES)[number]['id'];
+
+/** The free-text note under the quick picks (stored as `comment`). */
+export const INTEREST_OTHER_LABEL = 'Anything else?';
+
+/** The one-choice question. */
+export const INTEREST_HEARD_QUESTION = 'How did you hear about us?';
+export const INTEREST_HEARD = [
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'friend', label: 'A friend' },
+  { id: 'search', label: 'Search' },
+  { id: 'social', label: 'Social media' },
+  { id: 'other', label: 'Other' }
+] as const;
+export type InterestHeard = (typeof INTEREST_HEARD)[number]['id'];
 
 /**
- * The question above INTEREST_FEATURES. It asks about wishes as well as use, because some of the abilities (series and
- * collections) are not built yet and must not read as if they were.
+ * The one consent box, unticked by default. Nothing is sent while interest emails are off (the server's
+ * INTEREST_EMAILS), and no email path reads this flag; it only records the person's choice, with its time and these
+ * exact words (interestMetadata), so a later list of who may be told about news is built only from a real yes.
  */
-export const INTEREST_FEATURES_QUESTION = 'What would you use, or like to see?';
+export const INTEREST_UPDATES = {
+  label: 'Keep me updated about Comic Studio news and new DreamStream studios.',
+  hint: 'Nothing is sent yet; this only records that you would like updates.'
+} as const;
 
-/** INTEREST_FEATURES_QUESTION's answers: Comic Studio abilities and what is close behind them. */
-export const INTEREST_FEATURES = [
-  { id: 'chat', label: 'Making a comic by chatting' },
-  { id: 'translations', label: 'Translations into other languages' },
-  { id: 'series', label: 'Series and collections' },
-  { id: 'library', label: 'Publishing to the public Library' },
-  { id: 'print', label: 'Printing and export' }
-] as const;
-export type InterestFeature = (typeof INTEREST_FEATURES)[number]['id'];
-
-/**
- * The other studios a person can say they would try (stored in `product_interests`). Only studios that exist are
- * offered: Code Studio was retired on 2026-10-22 (docs/decisions/0005-retire-code-studio.md). `comic_studio` and
- * `code_studio` stay accepted from older open tabs (STUDIO_IDS) but are not asked any more.
- */
-export const INTEREST_STUDIOS = [
-  { id: 'chat_studio', label: 'Chat Studio' },
-  { id: 'stream_studio', label: 'Stream Studio' },
-  { id: 'dashboards', label: 'Dashboards' }
-] as const;
-export type InterestStudio = (typeof INTEREST_STUDIOS)[number]['id'] | 'comic_studio' | 'code_studio';
-const STUDIO_IDS: readonly string[] = ['comic_studio', 'code_studio', ...INTEREST_STUDIOS.map((s) => s.id)];
-const FEATURE_IDS: readonly string[] = INTEREST_FEATURES.map((f) => f.id);
+const MAKE_IDS: readonly string[] = INTEREST_MAKES.map((m) => m.id);
+const HEARD_IDS: readonly string[] = INTEREST_HEARD.map((h) => h.id);
 
 export const INTEREST_LIMITS = {
-  /** Most entries a features or studios list may carry before the server refuses the request. */
+  /** Most entries the quick-picks list may carry before the server refuses the request. */
   listMax: 16,
-  otherMax: 120,
   commentMax: 1000,
   firstNameMax: 80,
   /** The surface tag (a path or a name); cut, never refused, since the person never typed it. */
   sourceMax: 200
 } as const;
 
-/** The comment's counter turns from the plain limit into a running count from here. */
+/** The note's counter turns from the plain limit into a running count from here. */
 export const INTEREST_COUNT_FROM = 800;
 
 // C0 and C1 controls, DEL, the line and paragraph separators, the bidi marks (U+061C, U+200E, U+200F) and the bidi
@@ -77,59 +91,87 @@ export const cleanBlock = (value: string): string =>
     .trim();
 
 /** Known ids only, each once, in the order given. */
-export const knownFeatures = (list: readonly unknown[]): InterestFeature[] =>
-  [...new Set(list.filter((v): v is string => typeof v === 'string' && FEATURE_IDS.includes(v)))] as InterestFeature[];
-export const knownStudios = (list: readonly unknown[]): InterestStudio[] =>
-  [...new Set(list.filter((v): v is string => typeof v === 'string' && STUDIO_IDS.includes(v)))] as InterestStudio[];
+export const knownMakes = (list: readonly unknown[]): InterestMake[] =>
+  [...new Set(list.filter((v): v is string => typeof v === 'string' && MAKE_IDS.includes(v)))] as InterestMake[];
+/** A known "how did you hear" id, or nothing. */
+export const knownHeard = (value: unknown): InterestHeard | undefined =>
+  typeof value === 'string' && HEARD_IDS.includes(value) ? (value as InterestHeard) : undefined;
 
 /** The optional answers, already cleaned. Every field is optional; the email alone always submits. */
 export interface InterestAnswers {
   firstName?: string;
-  features?: InterestFeature[];
-  /** A short "something else" beside the features. */
-  featureOther?: string;
-  studios?: InterestStudio[];
+  /** "What would you like to make?" quick picks. */
+  makes?: InterestMake[];
+  heardFrom?: InterestHeard;
+  /** "Anything else?" */
   comment?: string;
+  /**
+   * The keep-me-updated box. Register interest always carries it (false unless ticked: answersForKind); the main
+   * site's list card never does. It is a choice, not an answer: it never adds `answers` on its own.
+   */
+  keepUpdated?: boolean;
 }
 
-/** The version stamp inside `metadata.answers`, so a later reader knows which questions were asked. */
-export const INTEREST_ANSWERS_VERSION = 1;
+/** The version stamp inside `metadata.answers`, so a later reader knows which questions were asked (1: the old set). */
+export const INTEREST_ANSWERS_VERSION = 2;
 
 /**
- * The row's `metadata`: `{ source?, answers? }`, with `answers` only when something was answered.
- * Both paths store exactly this.
+ * The answers as a kind sends them: register interest (`access`) always says whether the box was ticked, and only a
+ * real `true` counts; the list card (`updates`) has no box, so it never carries one. Both paths call this.
  */
-export const interestMetadata = (source: string | undefined, answers: InterestAnswers): Record<string, unknown> => {
+export const answersForKind = (kind: 'access' | 'updates', answers: InterestAnswers): InterestAnswers => {
+  const { keepUpdated, ...rest } = answers;
+  return kind === 'access' ? { ...rest, keepUpdated: keepUpdated === true } : rest;
+};
+
+/**
+ * The row's `metadata`: `{ source?, answers?, consent? }`. `answers` only when something was answered;
+ * `consent: { updates, at, wording }` whenever the box was part of the form (register interest), false unless it was
+ * ticked, with the time the choice was sent and the words the person saw. Both paths store exactly this.
+ */
+export const interestMetadata = (
+  source: string | undefined,
+  answers: InterestAnswers,
+  at: string = new Date().toISOString()
+): Record<string, unknown> => {
   const stored = {
-    ...(answers.features?.length ? { features: answers.features } : {}),
-    ...(answers.featureOther ? { other: answers.featureOther } : {}),
-    ...(answers.studios?.length ? { studios: answers.studios } : {}),
+    ...(answers.makes?.length ? { makes: answers.makes } : {}),
+    ...(answers.heardFrom ? { heardFrom: answers.heardFrom } : {}),
     ...(answers.comment ? { comment: answers.comment } : {}),
     ...(answers.firstName ? { firstName: answers.firstName } : {})
   };
   return {
     ...(source ? { source } : {}),
-    ...(Object.keys(stored).length ? { answers: { v: INTEREST_ANSWERS_VERSION, ...stored } } : {})
+    ...(Object.keys(stored).length ? { answers: { v: INTEREST_ANSWERS_VERSION, ...stored } } : {}),
+    ...(answers.keepUpdated !== undefined
+      ? { consent: { updates: answers.keepUpdated === true, at, wording: INTEREST_UPDATES.label } }
+      : {})
   };
 };
 
 /**
  * The thank-you a saved address gets, per kind, whichever path saved it. It promises no email. Register interest
- * mentions the answers only when some were given: that depends on what was sent, never on the address.
+ * mentions the answers only when some were given, and adds `keptUpdated` only when the box was ticked: both depend on
+ * what was sent, never on the address.
  */
 export const INTEREST_THANKS = {
   access: 'Thank you, you are on the list.',
   accessWithAnswers: 'Thank you, you are on the list. Your answers help shape what we build next.',
-  updates: 'Thank you, you are on the list.'
+  updates: 'Thank you, you are on the list.',
+  /** After a ticked box: true today (nothing goes out) and what happens when that changes. */
+  keptUpdated: 'Nothing is sent yet; we will let you know when updates start.'
 } as const;
 
-/** True when any optional answer was given (after cleaning). */
+/** True when any optional answer was given (after cleaning). The box is a choice, not an answer. */
 export const hasInterestAnswers = (answers: InterestAnswers): boolean =>
-  Boolean(answers.firstName || answers.features?.length || answers.featureOther || answers.studios?.length || answers.comment);
+  Boolean(answers.firstName || answers.makes?.length || answers.heardFrom || answers.comment);
 
-/** The thank-you for one saved registration: by kind, and for register interest by whether answers came with it. */
-export const interestThanks = (kind: 'access' | 'updates', answers: InterestAnswers = {}): string =>
-  kind === 'updates' ? INTEREST_THANKS.updates : hasInterestAnswers(answers) ? INTEREST_THANKS.accessWithAnswers : INTEREST_THANKS.access;
+/** The thank-you for one saved registration: by kind, and for register interest by what was sent. */
+export const interestThanks = (kind: 'access' | 'updates', answers: InterestAnswers = {}): string => {
+  if (kind === 'updates') return INTEREST_THANKS.updates;
+  const base = hasInterestAnswers(answers) ? INTEREST_THANKS.accessWithAnswers : INTEREST_THANKS.access;
+  return answers.keepUpdated === true ? `${base} ${INTEREST_THANKS.keptUpdated}` : base;
+};
 
 /**
  * The main site's list card (kind 'updates', HomePage "stay-updated"). Nothing is sent while interest emails are off

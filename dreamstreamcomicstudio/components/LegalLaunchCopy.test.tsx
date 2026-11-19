@@ -26,7 +26,9 @@ describe('launch legal copy', () => {
     render(<PrivacyPolicy onBack={vi.fn()} />);
 
     const interest = screen.getByText('Register Interest Data:').closest('li');
-    expect(interest).toHaveTextContent(/email address and any optional answers \(first name, the features and studios you pick, and your comment\)/i);
+    expect(interest).toHaveTextContent(/email address and any optional answers \(first name, what you would like to make, how you heard about us, and anything else you add\)/i);
+    expect(interest).toHaveTextContent(/whether you ticked the box to be kept updated, with the time/i);
+    expect(interest).not.toHaveTextContent(/studios you pick/i);
     expect(interest).toHaveTextContent(/kept until you ask us to remove it/i);
     expect(interest).toHaveTextContent(/we do not send emails for it/i);
     const cookie = screen.getByText(/ds_member/).closest('p')!;

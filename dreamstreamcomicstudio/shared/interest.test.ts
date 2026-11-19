@@ -1,36 +1,59 @@
 // @vitest-environment node
-// The register-interest vocabulary, its cleaning and the one stored shape both paths write.
+// The register-interest questions, their cleaning, the consent flag and the one stored shape both paths write.
 import { describe, expect, it } from 'vitest';
 import {
-  INTEREST_FEATURES,
-  INTEREST_FEATURES_QUESTION,
-  INTEREST_STUDIOS,
+  INTEREST_HEARD,
+  INTEREST_HEARD_QUESTION,
+  INTEREST_MAKES,
+  INTEREST_MAKES_QUESTION,
   INTEREST_THANKS,
+  INTEREST_UPDATES,
   UPDATES_CARD,
+  answersForKind,
   cleanBlock,
   cleanLine,
   interestMetadata,
   interestThanks,
-  knownFeatures,
-  knownStudios
+  knownHeard,
+  knownMakes
 } from './interest';
 
 describe('the questions', () => {
-  it('offers the Comic Studio abilities and near plans, and only studios that exist', () => {
-    expect(INTEREST_FEATURES.map((f) => f.id)).toEqual(['chat', 'translations', 'series', 'library', 'print']);
-    expect(INTEREST_STUDIOS.map((s) => s.id)).toEqual(['chat_studio', 'stream_studio', 'dashboards']);
-    // Code Studio was retired (docs/decisions/0005-retire-code-studio.md): never asked about.
-    expect(INTEREST_STUDIOS.map((s) => s.label)).not.toContain('Code Studio');
+  it('asks what they would like to make, with a few quick picks', () => {
+    expect(INTEREST_MAKES_QUESTION).toBe('What would you like to make?');
+    expect(INTEREST_MAKES.map((m) => m.label)).toEqual([
+      'A short story',
+      'A comic for kids',
+      'A webcomic series',
+      'A pitch or storyboard',
+      'Something for work'
+    ]);
   });
 
-  it('asks about wishes as well as use, since some abilities are not built yet', () => {
-    expect(INTEREST_FEATURES_QUESTION).toBe('What would you use, or like to see?');
+  it('asks how they heard about us, as one choice', () => {
+    expect(INTEREST_HEARD_QUESTION).toBe('How did you hear about us?');
+    expect(INTEREST_HEARD.map((h) => h.label)).toEqual(['LinkedIn', 'A friend', 'Search', 'Social media', 'Other']);
   });
 
-  it('keeps known ids once, in order; an older tab may still send comic_studio or code_studio', () => {
-    expect(knownFeatures(['print', 'chat', 'print', 'nope', 3, null])).toEqual(['print', 'chat']);
-    expect(knownStudios(['comic_studio', 'dashboards', 'comic_studio', 'make_studio'])).toEqual(['comic_studio', 'dashboards']);
-    expect(knownStudios(['code_studio', 'chat_studio'])).toEqual(['code_studio', 'chat_studio']);
+  it('asks nothing about other studios, and no vague "something else"', async () => {
+    const mod = (await import('./interest')) as Record<string, unknown>;
+    for (const gone of ['INTEREST_STUDIOS', 'INTEREST_FEATURES', 'INTEREST_FEATURES_QUESTION', 'knownStudios', 'knownFeatures']) {
+      expect(mod[gone], gone).toBeUndefined();
+    }
+    const asked = [INTEREST_MAKES_QUESTION, INTEREST_HEARD_QUESTION, ...INTEREST_MAKES.map((m) => m.label), ...INTEREST_HEARD.map((h) => h.label)];
+    expect(asked.join(' ')).not.toMatch(/Chat Studio|Stream Studio|Dashboards|Code Studio|other studios|something else/i);
+  });
+
+  it('the keep-me-updated box names what it is for and says nothing is sent yet', () => {
+    expect(INTEREST_UPDATES.label).toBe('Keep me updated about Comic Studio news and new DreamStream studios.');
+    expect(INTEREST_UPDATES.hint).toMatch(/Nothing is sent yet/);
+  });
+
+  it('keeps known ids once, in order', () => {
+    expect(knownMakes(['work', 'kids', 'work', 'nope', 3, null])).toEqual(['work', 'kids']);
+    expect(knownHeard('friend')).toBe('friend');
+    expect(knownHeard('billboard')).toBeUndefined();
+    expect(knownHeard(42)).toBeUndefined();
   });
 
   it('the thank-you promises no email and says nothing about accounts or invites', () => {
@@ -39,10 +62,31 @@ describe('the questions', () => {
 
   it('the thank-you mentions answers only when some were given (by what was sent, never by the address)', () => {
     expect(interestThanks('access', {})).toBe('Thank you, you are on the list.');
-    expect(interestThanks('access', { features: [] })).not.toMatch(/answers/);
+    expect(interestThanks('access', { makes: [], keepUpdated: false })).toBe('Thank you, you are on the list.');
     expect(interestThanks('access', { comment: 'Hi' })).toMatch(/Your answers help shape what we build next\.$/);
-    expect(interestThanks('access', { studios: ['dashboards'] })).toMatch(/answers/);
+    expect(interestThanks('access', { heardFrom: 'friend' })).toMatch(/answers/);
+    expect(interestThanks('access', { makes: ['kids'] })).toMatch(/answers/);
     expect(interestThanks('updates', { comment: 'Hi' })).toBe('Thank you, you are on the list.');
+  });
+
+  it('a ticked box gets a truthful line: nothing is sent yet, they hear when updates start', () => {
+    const ticked = interestThanks('access', { keepUpdated: true });
+    expect(ticked).toBe(`Thank you, you are on the list. ${INTEREST_THANKS.keptUpdated}`);
+    expect(INTEREST_THANKS.keptUpdated).toMatch(/^Nothing is sent yet/);
+    expect(INTEREST_THANKS.keptUpdated).toMatch(/when updates start/);
+    expect(interestThanks('access', { keepUpdated: true, comment: 'Hi' })).toBe(
+      `${INTEREST_THANKS.accessWithAnswers} ${INTEREST_THANKS.keptUpdated}`
+    );
+    // Unticked never mentions updates; the list card never does either.
+    expect(interestThanks('access', { keepUpdated: false, comment: 'Hi' })).not.toMatch(/updates/);
+    expect(interestThanks('updates', { keepUpdated: true })).toBe('Thank you, you are on the list.');
+  });
+
+  it('register interest always carries the box as true or false; the list card never carries it', () => {
+    expect(answersForKind('access', {})).toEqual({ keepUpdated: false });
+    expect(answersForKind('access', { keepUpdated: 'yes' as never })).toEqual({ keepUpdated: false });
+    expect(answersForKind('access', { keepUpdated: true, comment: 'Hi' })).toEqual({ keepUpdated: true, comment: 'Hi' });
+    expect(answersForKind('updates', { keepUpdated: true, comment: 'Hi' })).toEqual({ comment: 'Hi' });
   });
 });
 
@@ -72,19 +116,40 @@ describe('cleaning', () => {
 });
 
 describe('interestMetadata', () => {
-  it('stores nothing extra for the email alone', () => {
-    expect(interestMetadata(undefined, {})).toEqual({});
-    expect(interestMetadata('auth', {})).toEqual({ source: 'auth' });
+  const AT = '2026-11-19T10:00:00.000Z';
+
+  it('stores nothing extra for the email alone on the list card', () => {
+    expect(interestMetadata(undefined, {}, AT)).toEqual({});
+    expect(interestMetadata('auth', {}, AT)).toEqual({ source: 'auth' });
   });
 
   it('stores every answer under one versioned key', () => {
     expect(
-      interestMetadata('auth', { firstName: 'Asha', features: ['chat'], featureOther: 'Voice', studios: ['dashboards'], comment: 'Hi' })
+      interestMetadata('auth', { firstName: 'Asha', makes: ['kids', 'pitch'], heardFrom: 'friend', comment: 'Hi' }, AT)
     ).toEqual({
       source: 'auth',
-      answers: { v: 1, features: ['chat'], other: 'Voice', studios: ['dashboards'], comment: 'Hi', firstName: 'Asha' }
+      answers: { v: 2, makes: ['kids', 'pitch'], heardFrom: 'friend', comment: 'Hi', firstName: 'Asha' }
     });
-    expect(interestMetadata(undefined, { features: [], studios: [] })).toEqual({});
+    expect(interestMetadata(undefined, { makes: [] }, AT)).toEqual({});
+  });
+
+  it('records the keep-me-updated choice as an explicit consent flag with the time and the words shown', () => {
+    expect(interestMetadata('landing', { keepUpdated: true }, AT)).toEqual({
+      source: 'landing',
+      consent: { updates: true, at: AT, wording: INTEREST_UPDATES.label }
+    });
+    // Unticked is recorded as false, never left out, so no one reads a missing flag as a yes.
+    expect(interestMetadata('landing', { keepUpdated: false }, AT)).toEqual({
+      source: 'landing',
+      consent: { updates: false, at: AT, wording: INTEREST_UPDATES.label }
+    });
+    // The box's choice is not an answer: it never adds an `answers` key on its own.
+    expect(interestMetadata(undefined, { keepUpdated: true }, AT)).not.toHaveProperty('answers');
+  });
+
+  it('only a real true is consent', () => {
+    expect((interestMetadata(undefined, { keepUpdated: 'true' as never }, AT).consent as { updates: boolean }).updates).toBe(false);
+    expect((interestMetadata(undefined, { keepUpdated: 1 as never }, AT).consent as { updates: boolean }).updates).toBe(false);
   });
 });
 

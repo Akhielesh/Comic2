@@ -3,23 +3,27 @@ import { API_BASE_URL, buildApiUrl, turnstileEnabled } from './clientConfig';
 import {
   INTEREST_LIMITS,
   INTEREST_THANKS,
+  answersForKind,
   cleanBlock,
   cleanLine,
   interestMetadata,
   interestThanks,
-  knownFeatures,
-  knownStudios,
+  knownHeard,
+  knownMakes,
   type InterestAnswers
 } from '../shared/interest';
 
 export {
   INTEREST_COUNT_FROM,
-  INTEREST_FEATURES,
-  INTEREST_FEATURES_QUESTION,
+  INTEREST_HEARD,
+  INTEREST_HEARD_QUESTION,
   INTEREST_LIMITS,
-  INTEREST_STUDIOS
+  INTEREST_MAKES,
+  INTEREST_MAKES_QUESTION,
+  INTEREST_OTHER_LABEL,
+  INTEREST_UPDATES
 } from '../shared/interest';
-export type { InterestFeature, InterestStudio } from '../shared/interest';
+export type { InterestHeard, InterestMake } from '../shared/interest';
 
 /**
  * Two intents share one table:
@@ -78,21 +82,21 @@ export const interpretSubscribeResponse = (
 
 /**
  * Clean the answers the way the server does (shared/interest.ts), and cut rather than refuse: the form's
- * own maxLength already holds each field to its limit. Empty answers are left out.
+ * own maxLength already holds each field to its limit. Empty answers are left out; the keep-me-updated box
+ * stays when given, true only for a real `true`.
  */
 export const cleanAnswers = (answers: WaitlistAnswers = {}): WaitlistAnswers => {
   const text = (v: string | undefined, max: number, clean: (s: string) => string) => clean(v ?? '').slice(0, max).trim() || undefined;
   const firstName = text(answers.firstName, INTEREST_LIMITS.firstNameMax, cleanLine);
-  const features = knownFeatures(answers.features ?? []);
-  const featureOther = text(answers.featureOther, INTEREST_LIMITS.otherMax, cleanLine);
-  const studios = knownStudios(answers.studios ?? []);
+  const makes = knownMakes(answers.makes ?? []);
+  const heardFrom = knownHeard(answers.heardFrom);
   const comment = text(answers.comment, INTEREST_LIMITS.commentMax, cleanBlock);
   return {
     ...(firstName ? { firstName } : {}),
-    ...(features.length ? { features } : {}),
-    ...(featureOther ? { featureOther } : {}),
-    ...(studios.length ? { studios } : {}),
-    ...(comment ? { comment } : {})
+    ...(makes.length ? { makes } : {}),
+    ...(heardFrom ? { heardFrom } : {}),
+    ...(comment ? { comment } : {}),
+    ...(answers.keepUpdated !== undefined ? { keepUpdated: answers.keepUpdated === true } : {})
   };
 };
 
@@ -144,7 +148,10 @@ export const submitWaitlistEmail = async (
   const email = rawEmail.trim().toLowerCase();
   const emailProblem = checkWaitlistEmail(email);
   if (emailProblem) return { ok: false, status: 'invalid', message: emailProblem };
-  const clean = cleanAnswers(answers);
+  // When the person sent it: the consent time if the row has to be saved directly after the server deadline.
+  const sentAt = new Date().toISOString();
+  // Register interest always says whether the box was ticked; the list card never carries it (as on the server).
+  const clean = cleanAnswers(answersForKind(kind, answers));
   const rawSource =
     typeof metadata.source === 'string' ? metadata.source : typeof window !== 'undefined' ? window.location.pathname : '';
   const source = cleanLine(rawSource).slice(0, INTEREST_LIMITS.sourceMax) || undefined;
@@ -158,7 +165,7 @@ export const submitWaitlistEmail = async (
       email,
       kind,
       source: source ?? null,
-      metadata: interestMetadata(source, clean)
+      metadata: interestMetadata(source, clean, sentAt)
     });
     if (error) {
       const code = (error as { code?: string }).code;
