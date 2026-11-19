@@ -17,7 +17,10 @@ to the right place.
 
 ## Behavior
 
-- Rendered at the top of the dashboard (`ProjectDashboard`).
+- Rendered at the top of the main dashboard (`ProjectDashboard`). Not in Comic Studio's My comics
+  (`comicWorkspace`): members there draw on the platform allowance, so it shows the comic to continue
+  (`components/comicstudio/home/ContinueCard.tsx`) and, only when the member's own key is over its
+  monthly limit, one quiet line with Manage keys (`OwnKeyLimitLine.tsx`).
 - **Hides itself when everything is ready** (no clutter), and can be dismissed for the session.
 - Re-evaluates on window focus, so it updates after you add a key / pick a model and return.
 

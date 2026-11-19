@@ -35,6 +35,9 @@ import { formatStudioProgress, isStudioV4Project, studioPageProgress } from '../
 import { ComicIdeaForm, ComicWorkspaceFrame, WORKSPACE_NAV_DRAWER_BELOW } from './comicstudio/ComicCreationWorkspace';
 import { useFormFactor } from './comicstudio/mobile/useFormFactor';
 import { useComicIdeaDraft } from './comicstudio/comicIdeaDraft';
+import { ContinueCard } from './comicstudio/home/ContinueCard';
+import { OwnKeyLimitLine } from './comicstudio/home/OwnKeyLimitLine';
+import { pickContinue } from './comicstudio/home/homeModel';
 
 /** How a new comic starts: the conversational Comic Studio (default) or a classic pipeline. */
 export type NewComicMode = 'studio' | 'classic' | 'pagestudio';
@@ -177,6 +180,23 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [createError, setCreateError] = useState<string | null>(null);
   const beginNewComic = () => { initialEntryChosen.current = true; setClassicForm(false); setIsCreating(true); };
   const formMode = comicWorkspace && classicForm ? 'classic' : 'studio';
+  // The frame's brand opens the member's own comics, never the visitor landing ('home' keeps meaning the landing):
+  // All comics when there are comics, the idea form when there are none. While the list is still loading it shows the
+  // loading state and lets the first-entry rule above choose once the list arrives. Ignored while a create runs (the
+  // frame's other links are disabled then too).
+  const showMyComics = () => {
+    if (createInFlightRef.current) return;
+    setClassicForm(false);
+    setCreateError(null);
+    if (!projectsLoaded) {
+      initialEntryChosen.current = false;
+      setIsCreating(false);
+      return;
+    }
+    initialEntryChosen.current = true;
+    setIsCreating(projects.length === 0);
+  };
+  const continueProject = useMemo(() => (comicWorkspace ? pickContinue(projects, Date.now()) : null), [comicWorkspace, projects]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
@@ -348,7 +368,16 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const dashboard = (
     <div className={cn('max-w-7xl mx-auto p-4 medium:p-8', RISE_IN)}>
       <DataRescue />
-      <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
+      {/* Comic Studio members draw on the platform allowance: no setup checklist there, only the comic to continue and
+          a line when their own key (if they added one) is over its limit. The main dashboard keeps the checklist. */}
+      {comicWorkspace ? (
+        <>
+          {continueProject && !isCreating && <ContinueCard project={continueProject} onOpen={onOpenProject} onRead={onReadProject} />}
+          <OwnKeyLimitLine onManageKeys={() => onNavigate?.('settings', 'settings')} />
+        </>
+      ) : (
+        <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
+      )}
       {projects.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
@@ -751,7 +780,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   // The apex dashboard paints its own canvas and ink across the full width, so the page reads in both themes.
   if (!comicWorkspace) return <div className={cn('min-h-full text-[var(--ds-ink)]', CANVAS_BG)}>{dashboard}</div>;
   return <ComicWorkspaceFrame title={isCreating ? (classicForm ? 'Classic editor' : 'New comic') : 'All comics'}
-    onHome={() => onNavigate?.('home')} onAccount={() => onNavigate?.('settings')}
+    onHome={showMyComics} onAccount={() => onNavigate?.('settings')}
     navigation={{ projects, activeView: isCreating ? 'new' : 'all', disabled: !!createPending,
       onNewComic: beginNewComic,
       onAllComics: () => { initialEntryChosen.current = true; setIsCreating(false); setCreateError(null); },
