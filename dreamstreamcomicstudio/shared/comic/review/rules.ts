@@ -12,20 +12,34 @@
 //     budget (textBudget) and the script registry (languages.ts).
 //
 // Format-aware and advisory: no rule asks for a panel count, an establishing panel or a minimum of words, and style
-// and pacing are notes only, so a wordless book of big quiet panels reviews clean. Pages with no art are not reviewed.
+// and pacing are notes only, so a wordless book of big quiet panels reviews clean. Pages with no art are not reviewed
+// (pageHasArt: a page drawing, or a page shown in its panel frames with a picture in every frame).
 // Findings never quote a line's words (they name the place: "Page 4, panel 2, line 1") and never carry a price.
 
-import { artModeOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type Panel, type QcReport } from '../doc.js';
+import { artModeOf, type Balloon, type Box, type ComicDoc, type KeepOut, type Line, type LineKind, type Page, type Panel, type QcReport } from '../doc.js';
 import { lintContinuity, type ContinuityIssue } from '../continuity.js';
 import { staleReasons } from '../anchors.js';
+import { balloonCount } from '../density.js';
 import { hashString } from '../hash.js';
 import { scriptOf, sameLanguage, languageSpec, SCRIPTS, type ScriptId } from '../languages.js';
-import { estimateMeasure, letteringAspect, planLettering, PLAN_W, TEXT_SLIVER, turnedOutlineBox, type LetterPlan, type Measure } from '../lettering/layout.js';
-import { KIND_FONT_SCALE, LETTER_METRICS, resolveLetterStyle } from '../lettering/style.js';
+import {
+  coverCapFor,
+  estimateMeasure,
+  LETTER_FIT_POLICY,
+  letteringAspect,
+  linkGroups,
+  planLettering,
+  PLAN_W,
+  storedFrozen,
+  TEXT_SLIVER,
+  turnedOutlineBox,
+  type LetterPlan,
+  type Measure
+} from '../lettering/layout.js';
+import { KIND_FONT_SCALE, LETTER_METRICS, proLetterOf, resolveLetterStyle } from '../lettering/style.js';
 import { panelBoxesFor } from '../pageGeometry.js';
 import { pageSpaceQc } from '../panelize/space.js';
-import { OFF_PANEL_SHOTS, PANEL_LIMITS, panelWords, textBudget, textUnitFor } from '../panelRules.js';
-import { isKidsAudience } from '../safety.js';
+import { OFF_PANEL_SHOTS, panelWords, textBudget, textUnitFor } from '../panelRules.js';
 import { normalizeLetteringText } from '../textLayout.js';
 import { lineRefsOf, whereText, type LineRef } from '../translationProblems.js';
 import { lineOrderIssues, panelOrderIssue } from '../editor/readingOrder.js';
@@ -40,6 +54,12 @@ export interface ReviewOptions {
    * planned here with `measure`.
    */
   plansFor?: (page: Page) => readonly LetterPlan[] | undefined;
+  /**
+   * Where plans the review made may be kept for the next review (createReviewPlanMemo). Absent → nothing is kept: the
+   * review holds no state of its own between calls, so a server never shares one user's pages with another's review.
+   * A caller scopes it (one per request, a render run or a session) and drops it with that scope.
+   */
+  memo?: ReviewPlanMemo;
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -78,7 +98,11 @@ const overlapOf = (a: Box, b: Box): Box | null => {
   return w > 1e-9 && h > 1e-9 ? { x, y, w, h } : null;
 };
 const inside = (b: Box, p: { x: number; y: number }): boolean => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
-const isDrawn = (page: Page): boolean => !!page.render?.asset?.path;
+/**
+ * A page with art to review: its page drawing, or, shown in its panel frames, a picture in every frame (its own source,
+ * or a cut of the page drawing; artModeOf). A page with neither has nothing to review yet.
+ */
+export const pageHasArt = (page: Page): boolean => !!page?.render?.asset?.path || artModeOf(page) === 'panels';
 const hasText = (line: Line): boolean => !!normalizeLetteringText(line.text);
 
 /** "Page 4, panel 2, line 1" / "Page 4, panel 2" / "Page 4". */
@@ -164,12 +188,14 @@ interface BookCtx {
   /** Names (cast, places, kept glossary terms and their forms) removed before the language check. */
   names: RegExp | undefined;
   unit: ReturnType<typeof textUnitFor>;
-  kidsShare: number;
   /** The comic's own look's size for a kind (before the creator's size changes), plan units, by kind|lang. */
   ownSize: (kind: LineKind, lang: string) => number;
   lint: ReadonlyMap<string, ContinuityIssue[]>;
   nameOf: (castId: string | undefined) => string | undefined;
-  /** What the lettering of every page reads from the book (format, lettering style, brief), as a memo key. */
+  /**
+   * What the lettering of every page reads from the book, as a memo key: the format, the lettering style, the coverage
+   * cap the brief sets (a children's book letters under a lower one) and the owner's cover-shrink policy.
+   */
   letteringKey: string;
 }
 
@@ -207,12 +233,6 @@ const bookCtx = (doc: ComicDoc): BookCtx => {
     list.push(issue);
     lint.set(issue.pageId, list);
   }
-  let kids = false;
-  try {
-    kids = isKidsAudience(doc);
-  } catch {
-    kids = false;
-  }
   const names = new Map((doc.cast || []).map((c) => [c.id, (c.name || '').trim()]));
   return {
     doc,
@@ -221,7 +241,6 @@ const bookCtx = (doc: ComicDoc): BookCtx => {
     overlay: doc.format?.lettering !== 'in_art',
     names: namesRe(doc),
     unit: textUnitFor(lang),
-    kidsShare: kids ? PANEL_LIMITS.coverCapKids / PANEL_LIMITS.coverCap : 1,
     ownSize: (kind, l) => {
       const key = `${kind}|${l}`;
       let v = own.get(key);
@@ -235,7 +254,7 @@ const bookCtx = (doc: ComicDoc): BookCtx => {
     },
     lint,
     nameOf: (id) => (id ? names.get(id) || undefined : undefined),
-    letteringKey: JSON.stringify([doc.format ?? null, doc.letterStyle ?? null, doc.brief ?? null])
+    letteringKey: JSON.stringify([doc.format ?? null, doc.letterStyle ?? null, coverCapFor(doc), LETTER_FIT_POLICY.coverShrink])
   };
 };
 
@@ -288,24 +307,47 @@ const add = (ctx: PageCtx, d: Draft): void => {
 
 const kindWord = (ctx: PageCtx, lineId: string): string => KIND_WORD[ctx.lines.get(lineId)?.line.kind ?? 'speech'] ?? 'balloon';
 
-/** text_over_face, no_face_data. */
+/** The busy parts of a picture besides faces (the lettering engine steers around the same kinds: lettering/place.ts). */
+const BUSY_WORDS: Partial<Record<KeepOut['kind'], string>> = { hands: 'the hands', action: 'the action', text: 'words drawn in the picture' };
+
+/** The worst cover of `outline` over one of `boxes` above `LIMIT.faceCover` of that box's area, if any. */
+const worstCover = <T extends { box: Box }>(outline: Box, boxes: readonly T[]): T | undefined => {
+  let worst: { share: number; item: T } | undefined;
+  for (const item of boxes) {
+    const hit = overlapOf(outline, item.box);
+    const share = hit ? area(hit) / area(item.box) : 0;
+    if (share > LIMIT.faceCover && (!worst || share > worst.share)) worst = { share, item };
+  }
+  return worst?.item;
+};
+
+/** text_over_face (a face: fix; the hands, the action or words in the picture: note), no_face_data. */
 function facesRule(ctx: PageCtx): void {
   if (!ctx.book.overlay || !ctx.plans.length) return;
   const qc = ctx.qc;
   if (!qc || (!Array.isArray(qc.keepOut) && !Array.isArray(qc.heads))) {
+    const n = ctx.page.n;
     add(ctx, {
       rule: 'no_face_data',
       severity: 'note',
       ref: pageRef(ctx.page),
-      text: `Page ${ctx.page.n} was checked before face checks, so faces and tails can't be checked for free.`,
+      text: qc
+        ? `Page ${n} was checked before face checks, so faces and tails can't be checked for free.`
+        : `Page ${n} hasn't had a page check yet, so faces and tails can't be checked for free.`,
       fix: 'paid_recheck'
     });
     return;
   }
   const heads = (qc.heads || []).filter((h) => h?.head && Number.isFinite(h.head.x) && Number.isFinite(h.head.y));
   const faces: { box: Box; who?: string }[] = [];
+  const busy: { box: Box; what: string }[] = [];
   for (const k of qc.keepOut || []) {
-    if (!k || k.kind !== 'face' || !k.box || !(area(k.box) > 0)) continue;
+    if (!k || !k.box || !(area(k.box) > 0)) continue;
+    if (k.kind !== 'face') {
+      const what = BUSY_WORDS[k.kind];
+      if (what) busy.push({ box: k.box, what });
+      continue;
+    }
     const head = heads.find((h) => h.panel === k.panel && inside(k.box, h.head));
     faces.push({ box: k.box, who: head?.characterId });
   }
@@ -315,22 +357,30 @@ function facesRule(ctx: PageCtx): void {
     if (faces.some((f) => inside(f.box, h.head))) continue;
     faces.push({ box: { x: h.head.x - r, y: h.head.y - r * ctx.aspect, w: 2 * r, h: 2 * r * ctx.aspect }, who: h.characterId });
   }
-  if (!faces.length) return;
+  if (!faces.length && !busy.length) return;
   for (const plan of ctx.plans) {
     const outline = planOutlineBox(plan, ctx.aspect);
-    let worst: { share: number; who?: string } | undefined;
-    for (const f of faces) {
-      const hit = overlapOf(outline, f.box);
-      const share = hit ? area(hit) / area(f.box) : 0;
-      if (share > LIMIT.faceCover && (!worst || share > worst.share)) worst = { share, who: f.who };
+    const ref = refOf(ctx, plan.lineId);
+    const face = worstCover(outline, faces);
+    if (face) {
+      const who = ctx.book.nameOf(face.who);
+      add(ctx, {
+        rule: 'text_over_face',
+        severity: 'fix',
+        ref,
+        text: `${placeOf(ref)}: the ${kindWord(ctx, plan.lineId)} covers ${who ? `${who}'s face` : 'a face'}.`,
+        fix: freeOr(ctx, plan.lineId, 'free_layout')
+      });
+      continue;
     }
-    if (!worst) continue;
-    const who = ctx.book.nameOf(worst.who);
+    // A sound effect is part of the picture: drawn over the action by design.
+    const spot = plan.kind === 'sfx' ? undefined : worstCover(outline, busy);
+    if (!spot) continue;
     add(ctx, {
       rule: 'text_over_face',
-      severity: 'fix',
-      ref: refOf(ctx, plan.lineId),
-      text: `${placeOf(refOf(ctx, plan.lineId))}: the ${kindWord(ctx, plan.lineId)} covers ${who ? `${who}'s face` : 'a face'}.`,
+      severity: 'note',
+      ref,
+      text: `${placeOf(ref)}: the ${kindWord(ctx, plan.lineId)} covers ${spot.what}.`,
       fix: freeOr(ctx, plan.lineId, 'free_layout')
     });
   }
@@ -355,11 +405,18 @@ function overlapRule(ctx: PageCtx): void {
   // Draw order: z, then plan order (the board stacks lettering the same way).
   const order = ctx.plans.map((p, i) => ({ p, i })).sort((a, b) => (a.p.z ?? 0) - (b.p.z ?? 0) || a.i - b.i);
   const outline = order.map(({ p }) => turnedOutlineBox(p));
+  // Balloons of one speech chain (linkTo) touch by design: the engine's never-over-text check skips them the same way.
+  const groupOf = linkGroups(ctx.plans.map((p) => ({ id: p.lineId, linkTo: p.linkTo })));
+  const sameChain = (a: string, b: string): boolean => {
+    const g = groupOf.get(a);
+    return !!g && g === groupOf.get(b);
+  };
   const done = new Set<string>();
   for (let top = order.length - 1; top >= 0; top -= 1) {
     for (let under = 0; under < top; under += 1) {
       const a = order[top].p;
       const b = order[under].p;
+      if (sameChain(a.lineId, b.lineId)) continue;
       const hit = overlapOf(outline[top], { x: b.x, y: b.y, w: b.w, h: b.h });
       if (!hit || hit.w <= TEXT_SLIVER || hit.h <= TEXT_SLIVER) continue;
       // The finding sits on the balloon a free fix may move: the one on top, else the one under it.
@@ -507,12 +564,23 @@ function contrastRule(ctx: PageCtx): void {
   for (const plan of ctx.plans) {
     const s = plan.style;
     if (!s || s.shape === 'none' || s.fill === 'none') continue;
-    const c = contrastOver(s.textColor, s.fill);
+    const pro = proLetterOf(s);
+    // Gradient text (Pro) is drawn in its two colours, not in textColor: the weaker one counts.
+    const inks: unknown[] = pro.fillGradient ? [pro.fillGradient.from, pro.fillGradient.to] : [s.textColor];
+    let c: number | undefined;
+    for (const ink of inks) {
+      const r = contrastOver(ink, s.fill);
+      if (r !== undefined && (c === undefined || r < c)) c = r;
+    }
     if (c === undefined || c >= LIMIT.minContrast) continue;
-    // An outline that stands out from the fill keeps the words readable.
-    const stroke = s.textStroke && s.textStroke.width >= 0.05 ? contrastOver(s.textStroke.color, s.fill) : undefined;
-    if (stroke !== undefined && stroke >= LIMIT.minContrast) continue;
-    const key = `${String(s.textColor).toLowerCase()}|${String(s.fill).toLowerCase()}`;
+    // An outline that stands out from the fill keeps the words readable: the Pro outline layers when there are any
+    // (they replace the plain outline), else the plain one.
+    const outlines = pro.strokes.length ? pro.strokes.map((l) => ({ color: l?.color, width: l?.w })) : s.textStroke ? [s.textStroke] : [];
+    const outlined = outlines.some(
+      (o) => typeof o.width === 'number' && o.width >= LIMIT.minOutline && (contrastOver(o.color, s.fill) ?? 0) >= LIMIT.minContrast
+    );
+    if (outlined) continue;
+    const key = `${inks.map((x) => String(x).toLowerCase()).join('>')}|${String(s.fill).toLowerCase()}`;
     const g = groups.get(key);
     if (g) g.count += 1;
     else groups.set(key, { lineId: plan.lineId, ratio: c, count: 1 });
@@ -558,6 +626,8 @@ function tinyRule(ctx: PageCtx): void {
   });
 }
 
+const SHARED_LETTER = /[\p{Script=Common}\p{Script=Inherited}]/u;
+
 /** wrong_language: a line not written in the comic's script (names, sound effects and a few letters aside). */
 function languageRule(ctx: PageCtx): void {
   const book = ctx.book;
@@ -569,7 +639,8 @@ function languageRule(ctx: PageCtx): void {
       // A line the author marked as another language on purpose is theirs.
       if (line.lang && !sameLanguage(line.lang, book.lang)) continue;
       const text = book.names ? line.text.replace(book.names, ' ') : line.text;
-      const letters = text.match(/\p{L}/gu) || [];
+      // Letters of no one script (the Japanese long-vowel mark ー, the Arabic tatweel) are neither the comic's nor foreign.
+      const letters = (text.match(/\p{L}/gu) || []).filter((ch) => !SHARED_LETTER.test(ch));
       if (letters.length < LIMIT.minForeign) continue;
       let own = 0;
       const others = new Map<ScriptId, number>();
@@ -597,7 +668,11 @@ function languageRule(ctx: PageCtx): void {
   }
 }
 
-/** too_many_words: a panel over 1.25 × the format's own word budget for its size (children's books budget less). */
+/**
+ * too_many_words: a panel over 1.25 × the format's own word budget for its size. The budget is the one the breakdown
+ * card (pagePlanCheck) and the lettering engine (LetterPlan.dense.fits) state for the same panel: textBudget of its
+ * area and every lettered line it carries (balloonCount), so every surface says the same number (panelRules.ts).
+ */
 function wordsRule(ctx: PageCtx): void {
   const unit = ctx.book.unit;
   ctx.page.panels.forEach((panel, i) => {
@@ -605,8 +680,7 @@ function wordsRule(ctx: PageCtx): void {
     if (!box) return;
     const words = panelWords(panel, unit);
     if (!words) return;
-    const balloons = panel.lines.filter((l) => l.kind !== 'sfx' && hasText(l)).length;
-    const budget = textBudget(box.w * box.h, Math.max(1, balloons), unit) * ctx.book.kidsShare;
+    const budget = textBudget(box.w * box.h, Math.max(1, balloonCount(panel)), unit);
     if (!(words > LIMIT.wordsOver * budget)) return;
     const noun = unit.noun;
     add(ctx, {
@@ -624,7 +698,9 @@ const CARRIED_PARTS = new Set(['continuity', 'place_look', 'prop']);
 /** continuity: the ledger's slips on this page, and what the page carries that changed since it was drawn. */
 function continuityRule(ctx: PageCtx): void {
   for (const issue of ctx.book.lint.get(ctx.page.id) ?? []) {
-    add(ctx, { rule: 'continuity', severity: 'note', ref: pageRef(ctx.page), text: issue.text, fix: 'ask', key: `${issue.kind}|${issue.castId ?? ''}|${issue.prop ?? ''}` });
+    // Two slips of one kind for one person (two fields cleared, two holders of one item) differ only in their words.
+    const key = `${issue.kind}|${issue.castId ?? ''}|${issue.prop ?? ''}|${hashString(issue.text)}`;
+    add(ctx, { rule: 'continuity', severity: 'note', ref: pageRef(ctx.page), text: issue.text, fix: 'ask', key });
   }
   const changed = staleReasons(ctx.book.doc, ctx.page).filter((r) => CARRIED_PARTS.has(r.part));
   if (changed.length) {
@@ -637,38 +713,60 @@ function continuityRule(ctx: PageCtx): void {
 // ── Lettering plans, remembered ──────────────────────────────────────────────
 //
 // Planning the lettering is most of a review's time (the rules themselves take a few milliseconds for 40 pages), and a
-// comic is reviewed again after edits that leave most pages as they were. The plans of a page are remembered per measure
-// function (LRU), keyed by everything planLettering reads: the page's own content (panels and lines, balloons, layout,
-// art mode, frame style, the drawing's size and its page check) and the book's format, lettering style and brief. The key
-// is the content itself, never an object's identity, so a page edited in place is planned again. A page shown in its
-// panel frames may read other pictures' sizes, so it is always planned afresh.
+// comic is reviewed again after edits that leave most pages as they were. A caller that reviews again (the server at the
+// end of a run, a tool, a chip) can hand in a memo: the plans of a page are kept per measure function (LRU), keyed by
+// a hash of everything planLettering reads: the page's panels and lines, stored balloons and layout, the page check's
+// geometry (panel boxes, faces, heads, and whether it is a public snapshot's geometry-only check), the page aspect, and
+// the book's format, lettering style, coverage cap and cover-shrink policy. The key is the content itself, never an
+// object's identity, so a page edited in place is planned again; what lettering never reads (the page check's findings,
+// beats, score or time) leaves the plans in place, so marking a finding "Looks fine" plans nothing again. A page shown in
+// its panel frames may read other pictures' sizes, so it is always planned afresh. The board hands in its own plans
+// (plansFor, from its planLetteringCached) and needs no memo.
 
 const PLAN_MEMO_SIZE = 200;
-const PLAN_MEMO = new WeakMap<Measure, Map<string, readonly LetterPlan[]>>();
 
+/** Plans a caller lets reviews keep between runs (createReviewPlanMemo). Opaque: pass it back in ReviewOptions.memo. */
+export interface ReviewPlanMemo {
+  readonly limit: number;
+  /** Per measure: key hash → plans, least recently used first. */
+  readonly byMeasure: WeakMap<Measure, Map<string, readonly LetterPlan[]>>;
+}
+
+/** A new, empty plan memo that keeps at most `limit` pages per measure (default 200). */
+export const createReviewPlanMemo = (limit: number = PLAN_MEMO_SIZE): ReviewPlanMemo => ({
+  limit: Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : PLAN_MEMO_SIZE,
+  byMeasure: new WeakMap()
+});
+
+/** What planLettering reads from a page (its aspect and the book's part are added by plansOf). */
 const pageKey = (page: Page): string => {
-  const r = page.render;
-  return JSON.stringify([page.n, page.layout, page.panels, page.balloons, page.frameStyle ?? null, r?.asset?.w ?? null, r?.asset?.h ?? null, r?.aspect ?? null, r?.qc ?? null]);
+  const qc = page.render?.qc;
+  const geometry = qc ? [qc.panelBoxes ?? null, qc.drawnBoxes ?? null, qc.boxesFrom ?? null, qc.keepOut ?? null, qc.heads ?? null] : null;
+  return JSON.stringify([page.layout ?? '', page.panels, page.balloons ?? [], geometry, storedFrozen(page)]);
 };
 
-const plansOf = (book: BookCtx, page: Page, aspect: number, measure: Measure): readonly LetterPlan[] => {
-  if (artModeOf(page) === 'panels') return planLettering(book.doc, page, aspect, measure);
-  let memo = PLAN_MEMO.get(measure);
-  if (!memo) PLAN_MEMO.set(measure, (memo = new Map()));
-  const key = `${book.letteringKey}|${aspect}|${pageKey(page)}`;
-  const hit = memo.get(key);
+/** Two FNV-1a hashes from different starting states and the length: a stand-in for the key that cannot plausibly collide. */
+const memoKey = (raw: string): string => `${hashString(raw)}${hashString(`\u0001${raw}`)}:${raw.length}`;
+
+const plansOf = (book: BookCtx, page: Page, aspect: number, measure: Measure, memo: ReviewPlanMemo | undefined): readonly LetterPlan[] => {
+  if (!memo || artModeOf(page) === 'panels') return planLettering(book.doc, page, aspect, measure);
+  let plans = memo.byMeasure.get(measure);
+  if (!plans) memo.byMeasure.set(measure, (plans = new Map()));
+  const key = memoKey(`${book.letteringKey}|${aspect}|${pageKey(page)}`);
+  const hit = plans.get(key);
   if (hit) {
-    memo.delete(key);
-    memo.set(key, hit);
+    plans.delete(key);
+    plans.set(key, hit);
     return hit;
   }
-  const plans = planLettering(book.doc, page, aspect, measure);
-  memo.set(key, plans);
-  if (memo.size > PLAN_MEMO_SIZE) {
-    const oldest = memo.keys().next().value;
-    if (oldest !== undefined) memo.delete(oldest);
+  const made = planLettering(book.doc, page, aspect, measure);
+  plans.set(key, made);
+  while (plans.size > memo.limit) {
+    const oldest = plans.keys().next().value;
+    if (oldest === undefined) break;
+    plans.delete(oldest);
   }
-  return plans;
+  return made;
 };
 
 function reviewPage(book: BookCtx, page: Page, opts: ReviewOptions, out: Draft[]): void {
@@ -676,7 +774,7 @@ function reviewPage(book: BookCtx, page: Page, opts: ReviewOptions, out: Draft[]
   const aspect = letteringAspect(doc, page);
   const measure = typeof opts?.measure === 'function' ? opts.measure : estimateMeasure;
   const given = book.overlay ? opts?.plansFor?.(page) : undefined;
-  const plans = book.overlay ? (given ?? plansOf(book, page, aspect, measure)) : [];
+  const plans = book.overlay ? (given ?? plansOf(book, page, aspect, measure, opts?.memo)) : [];
   const stored = new Map<string, Balloon>();
   for (const b of page.balloons || []) if (b && typeof b.lineId === 'string' && !stored.has(b.lineId)) stored.set(b.lineId, b);
   const lines = new Map<string, { line: Line; panel: Panel }>();
@@ -704,7 +802,8 @@ const posOf = (ref: LineRef | PageRef): [number, number, number] => ('lineId' in
 
 /**
  * The free review of a whole comic: every drawn page, every rule. Pure and deterministic (same comic, same report, same
- * ids); a 40-page comic reviews in a few milliseconds once its lettering is planned.
+ * ids); a 40-page comic reviews in a few milliseconds once its lettering is planned (plansFor or a memo). Planning every
+ * page cold costs about 3 ms a page with estimateMeasure.
  */
 export function reviewComicFree(doc: ComicDoc, opts: ReviewOptions): ReviewReport {
   const pages = [...(doc?.pages || [])].sort((a, b) => a.n - b.n);
@@ -712,7 +811,7 @@ export function reviewComicFree(doc: ComicDoc, opts: ReviewOptions): ReviewRepor
   const drafts: Draft[] = [];
   let checked = 0;
   for (const page of pages) {
-    if (!isDrawn(page)) continue;
+    if (!pageHasArt(page)) continue;
     checked += 1;
     reviewPage(book, page, opts, drafts);
   }

@@ -5,18 +5,21 @@
 // "page 4, panel 2, line 1") or a page and panel (PageRef). Its `fix` names the kind of help, never an op: the studio
 // (LT-11) turns the free placement fixes into ops, asks the creator about the rest, and quotes every paid one first.
 
+import { GUIDED_MAX_ZOOM, GUIDED_PAD } from '../guidedCamera.js';
 import type { LineRef } from '../translationProblems.js';
 
 export type { LineRef };
 
 /**
- * text_over_face      a balloon covers a face (or a speaker's head) the page check found
+ * text_over_face      a balloon covers a face (or a speaker's head) the page check found; covering the hands, the
+ *                     action or words drawn in the picture is a note
  * text_cut            the words do not fit their balloon (letter fit overflow), or it runs past the safe margin
  * balloon_overlap     a balloon still overlaps another balloon, or sits over another balloon's words
  * reading_order       a balloon (or a panel) is read out of turn, or sits outside its panel
  * tail_wrong_speaker  the tail points nearer another character's head than the speaker's
  * speaker_not_drawn   someone speaks in a panel the page check reads them as not drawn in
- * no_face_data        a lettered page checked before face checks: faces and tails cannot be checked for free
+ * no_face_data        a lettered page with no page check yet, or one checked before face checks: faces and tails
+ *                     cannot be checked for free
  * beats_out_of_order  a drawn panel shows another panel's moment
  * open_page_finding   a finding the page check stored that nobody has marked "Looks fine"
  * low_contrast        the words and their balloon's fill are too close in brightness to read well
@@ -114,30 +117,34 @@ export const isLineRef = (ref: LineRef | PageRef): ref is LineRef => typeof (ref
 /**
  * The review's thresholds, one table. Fractions are of the page (boxes) or of the reading view (px).
  *
- * faceCover        a balloon covers more than this share of a face box (8 %)
+ * faceCover        a balloon covers more than this share of a face box (8 %); the same share of a hands, action or
+ *                  in-picture text box is a note
  * headFaceR        the face box synthesized around a head with no face box (lettering/place.ts uses the same 0.045)
  * tailMargin       the tail is wrong only when another head is this much nearer than the speaker's (× the speaker's distance)
  * minContrast      text / fill contrast (WCAG ratio) below this reads poorly
+ * minOutline       an outline this thick (em) or more that stands out from the fill keeps low-contrast words readable
  * minReadPx        text under this many px at the reading width is small on a phone
  * readWidthPx      the phone the review reads on: 360 × 640 px
  * ownLookShare     a line counts as lettered smaller than its own look below this share of it
- * guidedPad        the guided reader's padding around a panel (components/comicstudio/immersive/guidedModel.ts)
- * guidedMaxZoom    the guided reader's largest zoom
+ * guidedPad        the guided reader's padding around a panel (guidedCamera.ts GUIDED_PAD, which guidedModel.ts uses)
+ * guidedMaxZoom    the guided reader's largest zoom (GUIDED_MAX_ZOOM)
  * scriptShare      share of a line's letters that must be in the comic's script (the translation check uses 0.6)
  * minForeign       fewer foreign letters than this are ignored (a name, an "OK")
- * wordsOver        a panel is over its budget above this many times the format's own textBudget
+ * wordsOver        a panel is over its budget above this many times the format's own textBudget (the budget the
+ *                  breakdown card and the lettering engine state for the panel)
  */
 export const REVIEW_LIMITS = {
   faceCover: 0.08,
   headFaceR: 0.045,
   tailMargin: 0.85,
   minContrast: 3,
+  minOutline: 0.05,
   minReadPx: 11,
   readWidthPx: 360,
   readHeightPx: 640,
   ownLookShare: 0.95,
-  guidedPad: 0.05,
-  guidedMaxZoom: 4,
+  guidedPad: GUIDED_PAD,
+  guidedMaxZoom: GUIDED_MAX_ZOOM,
   scriptShare: 0.6,
   minForeign: 4,
   wordsOver: 1.25

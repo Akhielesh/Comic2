@@ -193,7 +193,8 @@ export const mangaRtl = (): ComicDoc =>
         layout: 'Row 1: two equal panels. Row 2: one wide panel.',
         panels: [
           { cast: ['c_aoi'], lines: [{ who: 'c_aoi', text: '行こう。' }] },
-          { cast: ['c_ren'], lines: [{ who: 'c_ren', text: 'うん。' }] },
+          // Stretched vowels: the long-vowel mark is a letter of no one script (Common), never a foreign one.
+          { cast: ['c_ren'], lines: [{ who: 'c_ren', text: 'うーーーん、いいよー。' }] },
           { cast: ['c_ren', 'c_aoi'], shot: 'wide', lines: [{ kind: 'sfx', text: 'ガタン' }] }
         ]
       }
@@ -353,6 +354,20 @@ export const marketComic = (pages = 1): ComicDoc =>
     cast: [MIRA, ARJUN],
     pages: Array.from({ length: pages }, twoSpeakerPage)
   });
+
+/**
+ * The market comic with a speech chain: Mira's second balloon in panel 2 is linked to her first (linkTo) and stored
+ * just under it, touching it as a chain does by design. `pinned` stores both as the creator's.
+ */
+export const linkedChainComic = (pinned = false): ComicDoc => {
+  const doc = marketComic();
+  const panel = pageOf(doc, 1).panels[1];
+  panel.lines = [...panel.lines, { id: 'l_1_2_2', kind: 'speech', speakerId: 'c_mira', text: 'And the bags?' }];
+  const mine = pinned ? { pinned: true } : {};
+  putBalloon(doc, 1, { lineId: 'l_1_2_1', x: 0.06, y: 0.52, w: 0.25, ...mine });
+  putBalloon(doc, 1, { lineId: 'l_1_2_2', x: 0.08, y: 0.555, w: 0.25, linkTo: 'l_1_2_1', ...mine });
+  return doc;
+};
 
 /** A long, busy English comic for the timing test: four panels a page, two speakers each, captions and an SFX. */
 export const longComic = (pages: number): ComicDoc =>
