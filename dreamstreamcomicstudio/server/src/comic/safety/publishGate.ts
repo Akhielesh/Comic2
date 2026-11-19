@@ -21,7 +21,8 @@
 // the slowest call once instead of once per batch. The outcome never depends on which call answers
 // first: hash lines, blockers, ops and costs are put together after everything is in, in a fixed
 // order (pages as requested, then the cover, then the words). One timing line per gate
-// (comic_publish_gate_timing) carries counts and milliseconds only.
+// (comic_publish_gate_timing) carries counts and milliseconds only, and counts the checks that
+// were sent but came back unusable (a timeout, a limit, an unreadable answer) apart from verdicts.
 
 import {
   findPage,
@@ -187,38 +188,38 @@ interface ImageJudgement {
   costUsd: number;
   /** A platform check was sent for it in this gate. */
   called: boolean;
+  /** That check came back with no usable verdict (a timeout, a limit, an unreadable answer). */
+  unusable: boolean;
 }
 
 /**
  * The platform classifier over every window, TEXT_PARALLEL at a time. The strictest rating wins and
  * categories are merged; one window that can't be checked leaves the text unchecked (null). Stops
  * early once a window is unusable or rated X — nothing after it can change the outcome. The cost of
- * every window that answered is reported, even when the text ends up unchecked.
+ * every window that answered is reported, even when the text ends up unchecked; `unusable` counts the
+ * windows that were sent and came back with no answer.
  */
-async function classifyWindows(ctx: StudioContext, parts: string[], rating: ContentRating): Promise<{ verdict: TextVerdict | null; costUsd: number }> {
+async function classifyWindows(ctx: StudioContext, parts: string[], rating: ContentRating): Promise<{ verdict: TextVerdict | null; costUsd: number; unusable: number }> {
   const llm = safetyDeps().platformLlm();
-  if (!llm) return { verdict: null, costUsd: 0 };
+  if (!llm) return { verdict: null, costUsd: 0, unusable: 0 };
   let costUsd = 0;
   let assessed: SafetyVerdict['assessed'] | undefined;
   const categories = new Set<SafetyCategory>();
   let model: string | undefined;
   for (let i = 0; i < parts.length; i += TEXT_PARALLEL) {
     const batch = await Promise.all(parts.slice(i, i + TEXT_PARALLEL).map((w) => classifyText(llm, { text: w, rating, surface: 'publish', signal: ctx.signal })));
-    let unusable = false;
+    const unusable = batch.filter((c) => !c).length;
     for (const c of batch) {
-      if (!c) {
-        unusable = true;
-        continue;
-      }
+      if (!c) continue;
       costUsd += c.costUsd ?? SAFETY_TEXT_USD;
       if (!assessed || ratingRank(c.assessed) > ratingRank(assessed)) assessed = c.assessed;
       c.categories.forEach((cat) => categories.add(cat));
       model ??= c.model;
     }
-    if (unusable) return { verdict: null, costUsd };
+    if (unusable) return { verdict: null, costUsd, unusable };
     if (assessed === 'X') break;
   }
-  return { verdict: assessed ? { assessed, categories: [...categories], ...(model ? { model } : {}) } : null, costUsd };
+  return { verdict: assessed ? { assessed, categories: [...categories], ...(model ? { model } : {}) } : null, costUsd, unusable: 0 };
 }
 
 /** Gate a publish (both visibilities, every published language). */
@@ -249,11 +250,12 @@ export async function runPublishGateImpl(
   // One picture, judged on its own: nothing shared is touched here (the caller folds the parts in
   // a fixed order once every picture is in).
   const judge = async (target: RenderTarget, asset: AssetRef | undefined): Promise<ImageJudgement> => {
-    if (!asset) return { result: { status: 'unchecked', reasons: ['Not drawn yet'] }, costUsd: 0, called: false };
+    if (!asset) return { result: { status: 'unchecked', reasons: ['Not drawn yet'] }, costUsd: 0, called: false, unusable: false };
     let verdict = asset.safety;
     let op: DocOp | undefined;
     let spent = 0;
     let called = false;
+    let unusable = false;
     // A render-QC pass came from the call that also read the author's script (vision.ts), so it is
     // not vouched for until an image-only check agrees (S14). QC blocks and over-ratings stand (a
     // re-check could only loosen them); pre-filter-only operator mode keeps QC verdicts.
@@ -263,6 +265,7 @@ export async function runPublishGateImpl(
       const checked = await checkAsset(ctx, asset, rating);
       spent = checked.costUsd;
       called = checked.called;
+      unusable = checked.called && !checked.verdict;
       if (checked.verdict) {
         // Committed as by:'check' (paid once per asset); never looser than what QC saw.
         verdict = qcPass && verdict ? { ...stricterVerdict(verdict, checked.verdict), by: 'check' } : checked.verdict;
@@ -278,7 +281,8 @@ export async function runPublishGateImpl(
       ...(status !== 'pass' ? { blocker: { target, status, categories: verdict?.categories || [], ...(verdict?.notes?.[0] ? { note: verdict.notes[0] } : {}) } } : {}),
       ...(op ? { op } : {}),
       costUsd: spent,
-      called
+      called,
+      unusable
     };
   };
 
@@ -299,14 +303,18 @@ export async function runPublishGateImpl(
   // A pass the pre-filter gave on its own (pre-filter-only operator mode) was never read by a model:
   // once the classifier is on it is not reused (a block still is — it can only keep text out).
   const prefilterOnlyPass = cached?.model === 'prefilter' && cached.assessed !== 'X' && deps.classifierOn();
-  /** The words' verdict; `checked`: it was worked out in this gate (not reused, not empty). */
-  const judgeText = async (): Promise<{ verdict: TextVerdict | null; op?: DocOp; costUsd: number; checked: boolean }> => {
+  /**
+   * The words' verdict; `checked`: it was worked out in this gate (not reused, not empty);
+   * `unusable`: windows sent to the classifier that came back with no answer.
+   */
+  const judgeText = async (): Promise<{ verdict: TextVerdict | null; op?: DocOp; costUsd: number; checked: boolean; unusable: number }> => {
     if (cached && cached.hash === textHash && cached.assessed && !prefilterOnlyPass) {
-      return { verdict: { assessed: cached.assessed, categories: cached.categories || [], ...(cached.model ? { model: cached.model } : {}) }, costUsd: 0, checked: false };
+      return { verdict: { assessed: cached.assessed, categories: cached.categories || [], ...(cached.model ? { model: cached.model } : {}) }, costUsd: 0, checked: false, unusable: 0 };
     }
-    if (!words.trim()) return { verdict: { assessed: 'G', categories: [], model: 'empty' }, costUsd: 0, checked: false };
+    if (!words.trim()) return { verdict: { assessed: 'G', categories: [], model: 'empty' }, costUsd: 0, checked: false, unusable: 0 };
     let verdict: TextVerdict | null = null;
     let spent = 0;
+    let unusable = 0;
     const pre = prefilterWindows(windows, rating);
     if (pre.decision === 'block') {
       verdict = { assessed: 'X', categories: pre.categories, model: 'prefilter' };
@@ -316,12 +324,12 @@ export async function runPublishGateImpl(
       // the classifier ON is different: it never clears (below).
       if (pre.decision === 'clear') verdict = { assessed: rating, categories: [], model: 'prefilter' };
     } else {
-      ({ verdict, costUsd: spent } = await classifyWindows(ctx, windows, rating));
+      ({ verdict, costUsd: spent, unusable } = await classifyWindows(ctx, windows, rating));
     }
     const op: DocOp | undefined = verdict?.assessed
       ? { op: 'safety', patch: { text: { hash: textHash, assessed: verdict.assessed, categories: verdict.categories, at, ...(verdict.model ? { model: verdict.model } : {}) } } }
       : undefined;
-    return { verdict, ...(op ? { op } : {}), costUsd: spent, checked: true };
+    return { verdict, ...(op ? { op } : {}), costUsd: spent, checked: true, unusable };
   };
 
   // Every picture in one pool, the words alongside.
@@ -410,14 +418,17 @@ export async function runPublishGateImpl(
       })
       .catch(() => undefined);
   }
-  // Counts and milliseconds only: no words, no reasons, no user id.
+  // Counts and milliseconds only: no words, no reasons, no user id. The *Unusable counts are checks
+  // that were sent and came back with no verdict, so a needs_check line says which side failed.
   logger.info('comic_publish_gate_timing', {
     projectId: ctx.projectId,
     images: pictures.filter((p) => p.asset).length,
     imagesChecked: judged.filter((j) => j.called).length,
+    imagesUnusable: judged.filter((j) => j.unusable).length,
     imagesMs,
     textWindows: windows.length,
     textChecked: textPart.checked,
+    textUnusable: textPart.unusable,
     textMs,
     totalMs: elapsed(),
     status

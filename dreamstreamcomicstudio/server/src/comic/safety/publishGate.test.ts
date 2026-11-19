@@ -456,6 +456,26 @@ describe('runPublishGate: one pool for the pictures, the words alongside (PUB-2)
     expect(textCalls()).toHaveLength(1);
   });
 
+  it('a slow picture holds no one back: while pg_1 is still out, pg_9, pg_10, pg_11 and the cover are already sent', async () => {
+    const { doc, ctx, ids } = poolDoc(11);
+    const { held, open } = holdCalls();
+    const run = runPublishGate(ctx, doc, { pageIds: ids, includeCover: true, languages: [] });
+    await ticks();
+    const pictureIn = (h: { req: LlmRequest }) => (h.req.jsonSchema?.name === 'comic_safety_image' ? pictureOf(h.req) : undefined);
+    const slow = held.find((h) => pictureIn(h) === 'pg_1');
+    expect(slow).toBeDefined();
+    // Every other picture of the first eight answers; pg_1 (and the words) stay out.
+    for (const h of held) if (h !== slow && ids.slice(1, 8).includes(pictureIn(h) ?? '')) h.release();
+    await ticks(40);
+    expect(slow!.released).toBe(false);
+    const sent = new Set(held.map(pictureIn));
+    for (const id of ['pg_9', 'pg_10', 'pg_11', 'cover']) expect(sent.has(id)).toBe(true);
+    expect(open().filter((h) => pictureIn(h)).length).toBeLessThanOrEqual(GATE_IMAGE_PARALLEL);
+    const gate = await drive(run, open);
+    expect(gate.status).toBe('cleared');
+    expect(imageCalls()).toHaveLength(12);
+  });
+
   it('the result, checkedHash, blockers and committed verdicts are identical whichever call answers first', async () => {
     const answers = (req: LlmRequest) => {
       if (req.jsonSchema?.name !== 'comic_safety_image') return cleanAnswer(req);
@@ -547,12 +567,37 @@ describe('runPublishGate: one pool for the pictures, the words alongside (PUB-2)
     const timing = () => vi.mocked(console.info).mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"comic_publish_gate_timing"'));
     expect(timing()).toHaveLength(1);
     const line = JSON.parse(timing()[0]);
-    expect(Object.keys(line).sort()).toEqual(['event', 'images', 'imagesChecked', 'imagesMs', 'level', 'projectId', 'status', 'textChecked', 'textMs', 'textWindows', 'totalMs', 'ts']);
-    expect(line).toMatchObject({ event: 'comic_publish_gate_timing', projectId: 'proj-1', images: 12, imagesChecked: 12, textWindows: 1, textChecked: true, status: 'blocked' });
+    expect(Object.keys(line).sort()).toEqual([
+      'event',
+      'images',
+      'imagesChecked',
+      'imagesMs',
+      'imagesUnusable',
+      'level',
+      'projectId',
+      'status',
+      'textChecked',
+      'textMs',
+      'textUnusable',
+      'textWindows',
+      'totalMs',
+      'ts'
+    ]);
+    expect(line).toMatchObject({ event: 'comic_publish_gate_timing', projectId: 'proj-1', images: 12, imagesChecked: 12, imagesUnusable: 0, textWindows: 1, textChecked: true, textUnusable: 0, status: 'blocked' });
     for (const k of ['imagesMs', 'textMs', 'totalMs']) expect(Number.isInteger(line[k]) && line[k] >= 0).toBe(true);
     for (const t of ['Line on page', 'Spice Run', 'NOTE-TEXT', 'content rules', 'graphic', ctx.userId]) expect(timing()[0]).not.toContain(t);
     // The same comic again: every verdict is reused, nothing is checked.
     await runPublishGate(ctx, session.doc, { pageIds: ids, includeCover: true, languages: [] });
-    expect(JSON.parse(timing()[1])).toMatchObject({ images: 12, imagesChecked: 0, textChecked: false, status: 'blocked' });
+    expect(JSON.parse(timing()[1])).toMatchObject({ images: 12, imagesChecked: 0, imagesUnusable: 0, textChecked: false, textUnusable: 0, status: 'blocked' });
+
+    // Checks that were sent but came back unusable (a timeout, a limit, an unreadable answer) are
+    // counted apart from verdicts, so a needs_check line says which side could not answer.
+    resetSafety();
+    fakes = installSafetyFakes();
+    fakes.llm.fallback = (req) => (req.jsonSchema?.name === 'comic_safety_image' && pictureOf(req) === 'pg_6' ? (null as never) : cleanAnswer(req));
+    fakes.llm.script.safety = [null];
+    const b = poolDoc(11);
+    expect((await runPublishGate(b.ctx, b.doc, { pageIds: b.ids, includeCover: true, languages: [] })).status).toBe('needs_check');
+    expect(JSON.parse(timing()[2])).toMatchObject({ images: 12, imagesChecked: 12, imagesUnusable: 1, textWindows: 1, textChecked: true, textUnusable: 1, status: 'needs_check' });
   });
 });
