@@ -361,7 +361,27 @@ export type StudioReducerAction =
   /** Notes saved in this tab before a reload: shown, never auto-sent. */
   | { type: 'queue_restore'; notes: QueuedNote[] }
   /** "Send now" with steering off: this note moves to the head and goes alone once the director has stopped. */
-  | { type: 'queue_express'; id: string };
+  | { type: 'queue_express'; id: string }
+  // --- live turns (liveturn LT-2) ---
+  /**
+   * The studio opened a comic whose message or action streams kept running while no studio showed it
+   * (live/studioStreams.ts): those streams, the reply so far, the steps, presence and the pending bubble join this
+   * state, and the doc the streams committed replaces the loaded one only when it is newer (the GET may have been
+   * answered before the last commit). Nothing is added twice: ids already here are kept.
+   */
+  | {
+      type: 'streams_adopt';
+      streams: StreamInfo[];
+      drafts?: Record<string, string>;
+      activity?: ActivityItem[];
+      presence?: PresenceEntry[];
+      doc?: ComicDoc | null;
+      urls?: Record<string, UrlEntry>;
+      pendingMessage?: PendingUserMessage | null;
+      /** What the work hit while no studio watched (shown only when this state has no error of its own). */
+      error?: { message: string; code?: string } | null;
+      now: number;
+    };
 
 const MAX_ACTIVITY = 24;
 
@@ -860,6 +880,76 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
   };
 };
 
+// ── Live turns: adopting streams that ran while the comic was closed (liveturn LT-2) ──
+
+/** Signed URLs from two sources: per path, the one that stays valid longer. */
+const mergeUrlEntries = (current: Record<string, UrlEntry>, incoming: Record<string, UrlEntry> | undefined): Record<string, UrlEntry> => {
+  if (!incoming) return current;
+  let next: Record<string, UrlEntry> | null = null;
+  for (const [path, entry] of Object.entries(incoming)) {
+    if (!entry || typeof entry.url !== 'string' || !entry.url) continue;
+    const mine = current[path];
+    if (mine && mine.expiresAt >= entry.expiresAt) continue;
+    next = next ?? { ...current };
+    next[path] = entry;
+  }
+  return next ?? current;
+};
+
+/**
+ * A newer copy of the same comic (a GET) holds a director reply that the streams' copy has not delivered yet: a NEW
+ * assistant message with text, the same test applyOpsEvent uses for `replied`. The stream will deliver that batch
+ * later with a revision the studio already has, so it would be skipped as applied and never mark the turn replied.
+ */
+export const replyLandedBeyond = (server: ComicDoc | null | undefined, streamsDoc: ComicDoc | null | undefined): boolean => {
+  if (!server || !streamsDoc || server.id !== streamsDoc.id || server.rev <= streamsDoc.rev) return false;
+  const known = new Set(streamsDoc.conversation.map((m) => m.id));
+  return server.conversation.some((m) => m.role === 'assistant' && !known.has(m.id) && !!landedText(m));
+};
+
+/** Every message stream still waiting for its reply is answered (one director turn runs at a time; see applyOpsEvent). */
+export const markRepliesLanded = (state: StudioState): StudioState =>
+  Object.values(state.streams).some((s) => s.kind === 'message' && !s.replied)
+    ? { ...state, streams: Object.fromEntries(Object.entries(state.streams).map(([id, s]) => [id, s.kind === 'message' && !s.replied ? { ...s, replied: true } : s])) }
+    : state;
+
+const adoptStreams = (state: StudioState, action: Extract<StudioReducerAction, { type: 'streams_adopt' }>): StudioState => {
+  const current = state.base;
+  const doc = action.doc;
+  // The streams' copy wins only when it is newer than what the GET returned (never a regression, never another comic).
+  const base = doc && current && doc.id === current.id && doc.rev > current.rev ? doc : current;
+  // The GET kept is ahead of the streams and already holds the reply: the adopted turn is answered.
+  const answered = base === current && replyLandedBeyond(current, doc);
+  const streams = { ...state.streams };
+  for (const s of action.streams || []) {
+    if (s && typeof s.id === 'string' && s.id && !streams[s.id]) streams[s.id] = answered && s.kind === 'message' ? { ...s, replied: true } : { ...s };
+  }
+  const drafts = { ...state.drafts };
+  for (const [msgId, text] of Object.entries(action.drafts || {})) {
+    if (typeof text !== 'string' || !text) continue;
+    if (base && landedText(base.conversation.find((m) => m.id === msgId))) continue; // the reply already landed
+    if (!drafts[msgId] || drafts[msgId].length < text.length) drafts[msgId] = text;
+  }
+  const known = new Set(state.activity.map((a) => a.id));
+  const activity = [...state.activity, ...(action.activity || []).filter((a) => !!a && typeof a.id === 'string' && !known.has(a.id))].slice(-MAX_ACTIVITY);
+  const presenceKnown = new Set((state.presence ?? []).map((p) => p.activityId));
+  const adoptedPresence = (action.presence || []).filter((p) => !!p && !presenceKnown.has(p.activityId));
+  const presence = adoptedPresence.length ? [...(state.presence ?? []), ...adoptedPresence].slice(-MAX_PRESENCE) : state.presence;
+  const missed = !state.error && action.error && typeof action.error.message === 'string' && action.error.message ? action.error : null;
+  return withView({
+    ...state,
+    base,
+    streams,
+    drafts,
+    activity,
+    urls: mergeUrlEntries(state.urls, action.urls),
+    ...(presence !== state.presence ? { presence } : {}),
+    pendingMessage: state.pendingMessage ?? action.pendingMessage ?? null,
+    ...(missed ? { error: missed.message, errorCode: missed.code ?? null } : {}),
+    behindRev: base ? Math.max(state.behindRev, base.rev) : state.behindRev
+  });
+};
+
 // ── Reducer ──────────────────────────────────────────────────────────────────
 
 export const studioReducer = (state: StudioState, action: StudioReducerAction): StudioState => {
@@ -967,6 +1057,8 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       return { ...state, cancelling: true, ...(state.presence?.length ? { presence: [] } : {}) };
     case 'cancel_end':
       return { ...state, cancelling: false };
+    case 'streams_adopt':
+      return adoptStreams(state, action);
     default:
       return reduceQueue(state, action);
   }

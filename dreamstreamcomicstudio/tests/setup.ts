@@ -17,6 +17,14 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   })) as unknown as typeof window.matchMedia;
 }
 
+// Comic Studio's live-turn registry (components/comicstudio/live/studioStreams.ts) is page-scope on purpose: a turn
+// outlives the studio that started it. In tests that means a stream one test left open would be adopted by the next
+// test's studio for the same comic, so every test starts with it empty. The module registers its reset here only in
+// test mode; files that never load it pay nothing.
+afterEach(() => {
+  (globalThis as { __resetStudioStreamsForTests?: () => void }).__resetStudioStreamsForTests?.();
+});
+
 // No test reaches the network. A spend, quote or verdict that depends on a live provider breaks the day the
 // provider's prices or status change (stage B: the Model Lab route test read OpenRouter's live endpoint list).
 // Any fetch to a real http(s) host is refused before it leaves, and the test that was running fails and names the
