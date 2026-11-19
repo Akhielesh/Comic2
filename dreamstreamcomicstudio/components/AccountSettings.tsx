@@ -1130,7 +1130,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const tabMeta: Record<SettingsTab, { title: string; description: string }> = {
         profile: { title: 'Profile', description: 'Your public identity and personal details.' },
         security: { title: 'Security', description: 'Verification, password, and signed-in devices.' },
-        preferences: { title: 'Preferences', description: 'Appearance, generation cost policy and email.' },
+        preferences: { title: 'Preferences', description: 'Appearance, alerts, generation cost policy and email.' },
         settings: { title: 'API & Models', description: 'Bring-your-own keys, allowed sources, MCP servers, and default models.' },
         contact: { title: 'Contact', description: 'Reach the DreamStream team.' },
         legal: { title: 'Legal', description: 'Privacy policy and terms of service.' },

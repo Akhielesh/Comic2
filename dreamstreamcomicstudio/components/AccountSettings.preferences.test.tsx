@@ -95,7 +95,7 @@ describe('Settings › Preferences: Appearance', () => {
 
   it('the tab says what it holds', async () => {
     await openPreferences();
-    expect(screen.getAllByText('Appearance, generation cost policy and email.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Appearance, alerts, generation cost policy and email.').length).toBeGreaterThan(0);
   });
 
   it('shows no money: no "$" and no cents anywhere in the tab', async () => {
